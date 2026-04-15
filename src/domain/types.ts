@@ -20,16 +20,24 @@
 // deterministic dates.
 
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sun, 5 = Fri
+export type NthOfMonth = 1 | 2 | 3 | 4 | -1;
+export type WeekOfMonth = 1 | 2 | 3 | 4 | -1;
 
 export type PaymentDayPattern =
+  /** No date restriction; cash can land on the theoretical date. */
+  | { kind: 'ANY' }
   /** Fires on one or more specific days of the week (e.g. Friday; Wed+Thu). */
   | { kind: 'DOW'; days: DayOfWeek[] }
   /** Fires on a specific day-of-month (e.g. day 16). */
   | { kind: 'DOM'; day: number } // 1..31
   /** Fires on the Nth weekday of the month (e.g. 1st Friday). */
-  | { kind: 'NTH_DOW'; nth: 1 | 2 | 3 | 4 | -1; day: DayOfWeek }
+  | { kind: 'NTH_DOW'; nth: NthOfMonth; day: DayOfWeek }
+  /** Fires on multiple weekday ordinals in the month (e.g. 2nd + 4th Thursday). */
+  | { kind: 'NTH_DOW_SET'; nths: NthOfMonth[]; day: DayOfWeek }
   /** Fires on multiple day-of-month values (e.g. 10 and 25). */
-  | { kind: 'DOM_LIST'; days: number[] };
+  | { kind: 'DOM_LIST'; days: number[] }
+  /** Fires during one or more week windows of the month (e.g. 1st + 3rd week). */
+  | { kind: 'WOM'; weeks: WeekOfMonth[] };
 
 // ---------------------------------------------------------------------------
 // Payment frequency

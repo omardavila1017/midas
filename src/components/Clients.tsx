@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Client, Frequency, PaymentDayPattern, DayOfWeek } from '../domain/types';
+import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth } from '../domain/types';
 import { importClientsFromWorkbook, ImportIssue } from '../domain/importClients';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { MONTHS } from '../types';
@@ -16,6 +16,20 @@ import { Upload as UploadIcon, Trash2, AlertTriangle, Plus, Search } from 'lucid
 
 const FREQUENCIES: Frequency[] = ['Semanal', 'Quincenal', 'Mensual', 'Contado'];
 const DOW_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const NTH_OPTIONS: Array<{ value: NthOfMonth; label: string }> = [
+  { value: 1, label: 'Primer' },
+  { value: 2, label: 'Segundo' },
+  { value: 3, label: 'Tercer' },
+  { value: 4, label: 'Cuarto' },
+  { value: -1, label: 'Último' },
+];
+const WEEK_OPTIONS: Array<{ value: WeekOfMonth; label: string }> = [
+  { value: 1, label: '1a' },
+  { value: 2, label: '2da' },
+  { value: 3, label: '3ra' },
+  { value: 4, label: '4ta' },
+  { value: -1, label: 'Última' },
+];
 
 interface Props {
   clients: Client[];
@@ -156,7 +170,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                       {parsed
                         ? <span className="text-emerald-700 text-[12px]">{renderPattern(parsed)}</span>
                         : <span className="text-amber-600 text-[12px] flex items-center gap-1">
-                            <AlertTriangle className="w-3 h-3" /> sin parsear
+                            <AlertTriangle className="w-3 h-3" /> no interpretado
                           </span>}
                     </Td>
                     <Td>{c.frequency}</Td>
@@ -277,18 +291,27 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
         value={pattern.kind}
         onChange={e => {
           const kind = e.target.value as PaymentDayPattern['kind'];
-          if (kind === 'DOW') onChange({ kind, days: [5] });
+          if (kind === 'ANY') onChange({ kind });
+          else if (kind === 'DOW') onChange({ kind, days: [5] });
           else if (kind === 'DOM') onChange({ kind, day: 15 });
           else if (kind === 'DOM_LIST') onChange({ kind, days: [10, 25] });
-          else onChange({ kind: 'NTH_DOW', nth: 1, day: 5 });
+          else if (kind === 'NTH_DOW') onChange({ kind, nth: 1, day: 5 });
+          else if (kind === 'NTH_DOW_SET') onChange({ kind, nths: [2, 4], day: 4 });
+          else onChange({ kind: 'WOM', weeks: [1, 3] });
         }}
         className="input w-full"
       >
+        <option value="ANY">Cualquier día</option>
         <option value="DOW">Día(s) de semana</option>
         <option value="DOM">Día del mes</option>
         <option value="DOM_LIST">Varios días del mes</option>
         <option value="NTH_DOW">N-ésimo día de semana del mes</option>
+        <option value="NTH_DOW_SET">Varios cortes del mismo día</option>
+        <option value="WOM">Semana(s) del mes</option>
       </select>
+      {pattern.kind === 'ANY' && (
+        <div className="text-[12px] text-[#86868b]">Sin restricción de fecha exacta; el pago cae en la fecha teórica.</div>
+      )}
       {pattern.kind === 'DOW' && (
         <div className="flex gap-1">
           {DOW_LABELS.map((lbl, i) => (
@@ -331,14 +354,10 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
         <div className="flex gap-2">
           <select
             value={pattern.nth}
-            onChange={e => onChange({ ...pattern, nth: Number(e.target.value) as 1 | 2 | 3 | 4 | -1 })}
+            onChange={e => onChange({ ...pattern, nth: Number(e.target.value) as NthOfMonth })}
             className="input"
           >
-            <option value={1}>Primer</option>
-            <option value={2}>Segundo</option>
-            <option value={3}>Tercer</option>
-            <option value={4}>Cuarto</option>
-            <option value={-1}>Último</option>
+            {NTH_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
           <select
             value={pattern.day}
@@ -348,6 +367,62 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
             {DOW_LABELS.map((l, i) => <option key={l} value={i}>{l}</option>)}
           </select>
           <span className="self-center text-[12px] text-[#86868b]">del mes</span>
+        </div>
+      )}
+      {pattern.kind === 'NTH_DOW_SET' && (
+        <div className="space-y-2">
+          <div className="flex gap-1 flex-wrap">
+            {NTH_OPTIONS.map(option => (
+              <button
+                key={option.value}
+                onClick={() =>
+                  onChange({
+                    ...pattern,
+                    nths: toggleOrdered(pattern.nths, option.value),
+                  })
+                }
+                className={`px-2 py-1 text-[12px] rounded border ${
+                  pattern.nths.includes(option.value)
+                    ? 'bg-[#0071e3] text-white border-[#0071e3]'
+                    : 'bg-white border-[#d2d2d7] text-[#86868b]'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={pattern.day}
+              onChange={e => onChange({ ...pattern, day: Number(e.target.value) as DayOfWeek })}
+              className="input"
+            >
+              {DOW_LABELS.map((l, i) => <option key={l} value={i}>{l}</option>)}
+            </select>
+            <span className="text-[12px] text-[#86868b]">del mes</span>
+          </div>
+        </div>
+      )}
+      {pattern.kind === 'WOM' && (
+        <div className="flex gap-1 flex-wrap">
+          {WEEK_OPTIONS.map(option => (
+            <button
+              key={option.value}
+              onClick={() =>
+                onChange({
+                  kind: 'WOM',
+                  weeks: toggleOrdered(pattern.weeks, option.value),
+                })
+              }
+              className={`px-2 py-1 text-[12px] rounded border ${
+                pattern.weeks.includes(option.value)
+                  ? 'bg-[#0071e3] text-white border-[#0071e3]'
+                  : 'bg-white border-[#d2d2d7] text-[#86868b]'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -388,17 +463,50 @@ function IssuesPanel({ issues, onDismiss }: { issues: ImportIssue[]; onDismiss: 
 // ---------------------------------------------------------------------------
 function renderPattern(p: PaymentDayPattern): string {
   switch (p.kind) {
+    case 'ANY':
+      return 'Cualquier día';
     case 'DOW':
       return p.days.map(d => DOW_LABELS[d]).join(', ');
     case 'DOM':
       return `Día ${p.day}`;
     case 'DOM_LIST':
-      return `Días ${p.days.join(', ')}`;
+      return `Días ${formatDayList(p.days)}`;
     case 'NTH_DOW': {
       const nthLbl = p.nth === -1 ? 'Último' : ['', 'Primer', 'Segundo', 'Tercer', 'Cuarto'][p.nth];
       return `${nthLbl} ${DOW_LABELS[p.day]}`;
     }
+    case 'NTH_DOW_SET':
+      return `${formatOrdinalList(p.nths)} ${DOW_LABELS[p.day]}`;
+    case 'WOM':
+      return `${formatWeekList(p.weeks)} semana`;
   }
+}
+
+function toggleOrdered<T extends number>(values: T[], next: T): T[] {
+  const updated = values.includes(next) ? values.filter(v => v !== next) : [...values, next];
+  return [...new Set(updated)].sort((a, b) => sortPatternNumber(a) - sortPatternNumber(b)) as T[];
+}
+
+function formatDayList(days: number[]): string {
+  const sorted = [...days].sort((a, b) => a - b);
+  const isContiguous = sorted.every((day, idx) => idx === 0 || day === sorted[idx - 1] + 1);
+  if (sorted.length > 1 && isContiguous) return `${sorted[0]}-${sorted[sorted.length - 1]}`;
+  return sorted.join(', ');
+}
+
+function formatOrdinalList(nths: NthOfMonth[]): string {
+  return nths
+    .map(nth => nth === -1 ? 'Último' : ['', 'Primer', 'Segundo', 'Tercer', 'Cuarto'][nth])
+    .join(' y ');
+}
+
+function formatWeekList(weeks: WeekOfMonth[]): string {
+  const labels = weeks.map(week => week === -1 ? 'Última' : `${week}a`);
+  return labels.join(' y ');
+}
+
+function sortPatternNumber(value: number): number {
+  return value === -1 ? 99 : value;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

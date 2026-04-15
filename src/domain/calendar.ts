@@ -18,7 +18,7 @@
  * This file exposes one function: `resolveRealPaymentDate`.
  */
 
-import { PaymentDayPattern, Frequency, DayOfWeek } from './types';
+import { PaymentDayPattern, Frequency, DayOfWeek, NthOfMonth, WeekOfMonth } from './types';
 
 // ---------------------------------------------------------------------------
 // Date helpers (UTC-safe; all inputs treated as calendar dates, no TZ drift)
@@ -40,7 +40,7 @@ function dow(d: Date): DayOfWeek {
 function nthWeekdayOfMonth(
   year: number,
   month: number, // 0..11
-  nth: 1 | 2 | 3 | 4 | -1,
+  nth: NthOfMonth,
   day: DayOfWeek,
 ): Date {
   if (nth === -1) {
@@ -54,11 +54,23 @@ function nthWeekdayOfMonth(
   return addDays(first, delta + (nth - 1) * 7);
 }
 
+function matchesWeekOfMonth(date: Date, week: WeekOfMonth): boolean {
+  const day = date.getUTCDate();
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  if (week === -1) return day >= Math.max(1, lastDay - 6);
+
+  const start = (week - 1) * 7 + 1;
+  const end = Math.min(lastDay, start + 6);
+  return day >= start && day <= end;
+}
+
 // ---------------------------------------------------------------------------
 // Matcher: does `date` satisfy the pattern?
 // ---------------------------------------------------------------------------
 function dateMatchesPattern(date: Date, pattern: PaymentDayPattern): boolean {
   switch (pattern.kind) {
+    case 'ANY':
+      return true;
     case 'DOW':
       return pattern.days.includes(dow(date));
     case 'DOM':
@@ -74,6 +86,18 @@ function dateMatchesPattern(date: Date, pattern: PaymentDayPattern): boolean {
       );
       return target.getTime() === date.getTime();
     }
+    case 'NTH_DOW_SET':
+      return pattern.nths.some(nth => {
+        const target = nthWeekdayOfMonth(
+          date.getUTCFullYear(),
+          date.getUTCMonth(),
+          nth,
+          pattern.day,
+        );
+        return target.getTime() === date.getTime();
+      });
+    case 'WOM':
+      return pattern.weeks.some(week => matchesWeekOfMonth(date, week));
   }
 }
 
