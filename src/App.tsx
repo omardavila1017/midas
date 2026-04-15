@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { FlowPlan, Proposal, Scenario, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions } from './domain/types';
+import { loadClientsCatalog } from './domain/loadClientsCatalog';
 import Upload from './components/Upload';
 import Dashboard from './components/Dashboard';
 import ProposalCreator from './components/ProposalCreator';
@@ -27,6 +28,18 @@ export default function App() {
   });
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+
+  // Auto-load clients from clientes-db.json on first mount (only if no clients loaded yet)
+  useEffect(() => {
+    if (catalogLoaded || clients.length > 0) return;
+    loadClientsCatalog().then(loaded => {
+      if (loaded.length > 0) {
+        setClients(loaded);
+        setCatalogLoaded(true);
+      }
+    });
+  }, [catalogLoaded, clients.length]);
 
   /* ── Animated page key for re-mount on tab change ── */
   const [pageKey, setPageKey] = useState(0);

@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth } from '../domain/types';
+import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth, CashFlowAssumptions } from '../domain/types';
 import { importClientsFromWorkbook, ImportIssue } from '../domain/importClients';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
+import { projectClientMonth } from '../domain/collectionEngine';
 import { MONTHS } from '../types';
-import { Upload as UploadIcon, Trash2, AlertTriangle, Plus, Search } from 'lucide-react';
+import { Upload as UploadIcon, Trash2, AlertTriangle, Plus, Search, TrendingUp } from 'lucide-react';
 
 /**
  * Clientes tab.
@@ -49,6 +50,21 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
     () => clients.reduce((a, c) => a + c.monthlyBilling.reduce((s, v) => s + v, 0), 0),
     [clients],
   );
+
+  // Calculate avg lag per client (credit real vs nominal)
+  const lagMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const year = new Date().getFullYear();
+    const assumptions: CashFlowAssumptions = { year, globalCompliance: 1, factorajeDays: 30 };
+    for (const c of clients) {
+      const events = projectClientMonth(c, year, 3, assumptions); // April sample
+      if (events.length > 0) {
+        const avgLag = events.reduce((s, e) => s + e.lagDays, 0) / events.length;
+        map.set(c.id, avgLag);
+      }
+    }
+    return map;
+  }, [clients]);
 
   const filtered = useMemo(() => {
     if (!query) return clients;
@@ -134,13 +150,15 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
               <Th>Patrón</Th>
               <Th>Frecuencia</Th>
               <Th className="text-right">Crédito</Th>
+              <Th className="text-right">Lag</Th>
+              <Th className="text-right">Crédito Real</Th>
               <Th className="text-right">Anual</Th>
               <Th className="w-10" />
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={7} className="text-center text-[#86868b] py-10">
+              <tr><td colSpan={9} className="text-center text-[#86868b] py-10">
                 {clients.length === 0
                   ? 'Sin clientes. Importa tu Excel o agrega uno manual.'
                   : 'Sin coincidencias.'}
@@ -150,6 +168,8 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
               const annual = c.monthlyBilling.reduce((s, v) => s + v, 0);
               const parsed = c.paymentDayRaw ? parsePaymentDay(c.paymentDayRaw) : c.paymentDay;
               const isOpen = expandedId === c.id;
+              const avgLag = lagMap.get(c.id) ?? 0;
+              const realCredit = c.creditDays + Math.round(avgLag);
               return (
                 <>
                   <tr
@@ -175,6 +195,16 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                     </Td>
                     <Td>{c.frequency}</Td>
                     <Td className="text-right tabular-nums">{c.creditDays}d</Td>
+                    <Td className="text-right tabular-nums">
+                      {avgLag > 0
+                        ? <span className="text-[#ff3b30] text-[12px] font-medium">+{avgLag.toFixed(0)}d</span>
+                        : <span className="text-[#34c759] text-[12px]">0d</span>}
+                    </Td>
+                    <Td className="text-right tabular-nums">
+                      {realCredit > c.creditDays
+                        ? <span className="font-semibold text-[#ff3b30]">{realCredit}d</span>
+                        : <span className="text-[#34c759]">{realCredit}d</span>}
+                    </Td>
                     <Td className="text-right tabular-nums font-medium">{fmt(annual)}</Td>
                     <Td>
                       <button
@@ -187,7 +217,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                   </tr>
                   {isOpen && (
                     <tr className="border-t border-[#d2d2d7]/40 bg-[#fbfbfd]">
-                      <td colSpan={7} className="px-4 py-4">
+                      <td colSpan={9} className="px-4 py-4">
                         <ClientEditor client={c} onChange={onUpdate} />
                       </td>
                     </tr>

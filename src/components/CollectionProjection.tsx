@@ -20,15 +20,17 @@ interface Props {
   onAssumptionsChange: (a: CashFlowAssumptions) => void;
 }
 
-type ViewMode = 'month' | 'client';
+type ViewMode = 'month' | 'client' | 'calendar';
 type FactorajeFilter = 'all' | 'yes' | 'no';
 const FREQUENCIES: Frequency[] = ['Semanal', 'Quincenal', 'Mensual', 'Contado'];
+const DOW_HEADERS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
 export default function CollectionProjection({ clients, assumptions, onAssumptionsChange }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
-  const [view, setView] = useState<ViewMode>('month');
+  const [view, setView] = useState<ViewMode>('calendar');
   const [showSettings, setShowSettings] = useState(false);
 
   // Filtered clients
@@ -184,6 +186,10 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       <div className="flex items-center justify-between animate-card-in stagger-3">
         <nav className="flex bg-[#f5f5f7] rounded-full p-0.5 text-[13px]">
           <button
+            onClick={() => setView('calendar')}
+            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'calendar' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
+          >Calendario</button>
+          <button
             onClick={() => setView('month')}
             className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'month' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
           >Por mes</button>
@@ -195,6 +201,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       </div>
 
       {/* ── Main view ─────────────────────────────────────── */}
+      {view === 'calendar' && <CalendarView events={events} clients={filteredClients} year={assumptions.year} />}
       {view === 'month' && <MonthView events={events} total={total} />}
       {view === 'client' && <ClientView events={events} clients={filteredClients} total={total} />}
 
@@ -206,6 +213,233 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 // ---------------------------------------------------------------------------
 // Views
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Calendar View — month grid showing daily projected collections
+// ---------------------------------------------------------------------------
+function CalendarView({ events, clients, year }: { events: CollectionEvent[]; clients: Client[]; year: number }) {
+  const [month, setMonth] = useState(() => {
+    const now = new Date();
+    return now.getFullYear() === year ? now.getMonth() : 0;
+  });
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  const byId = new Map(clients.map(c => [c.id, c]));
+
+  // Bucket events by real date (ISO string)
+  const byDay = useMemo(() => {
+    const map: Record<string, CollectionEvent[]> = {};
+    for (const e of events) {
+      const m = Number(e.realDate.slice(5, 7)) - 1;
+      if (m === month) {
+        if (!map[e.realDate]) map[e.realDate] = [];
+        map[e.realDate].push(e);
+      }
+    }
+    return map;
+  }, [events, month]);
+
+  // Weekly totals for this month
+  const weeklyTotals = useMemo(() => {
+    const weeks: Record<string, number> = {};
+    for (const [date, evts] of Object.entries(byDay)) {
+      const d = new Date(date + 'T12:00:00');
+      const weekStart = new Date(d);
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+      const key = weekStart.toISOString().slice(0, 10);
+      weeks[key] = (weeks[key] || 0) + evts.reduce((s, e) => s + e.amount, 0);
+    }
+    return weeks;
+  }, [byDay]);
+
+  const monthTotal = Object.values(byDay).flat().reduce((s, e) => s + e.amount, 0);
+  const monthEvents = Object.values(byDay).flat().length;
+  const uniqueClients = new Set(Object.values(byDay).flat().map(e => e.clientId)).size;
+
+  // Calendar grid (Monday-start)
+  const firstDay = new Date(Date.UTC(year, month, 1));
+  const lastDay = new Date(Date.UTC(year, month + 1, 0));
+  const startPad = (firstDay.getUTCDay() + 6) % 7;
+  const days: Date[] = [];
+  for (let i = -startPad; i < lastDay.getUTCDate() + (7 - ((lastDay.getUTCDay() + 6) % 7 + 1) % 7); i++) {
+    days.push(new Date(Date.UTC(year, month, i + 1)));
+  }
+  // Ensure grid is complete rows of 7
+  while (days.length % 7 !== 0) days.push(new Date(Date.UTC(year, month, days.length - startPad + 1)));
+
+  const maxDayAmount = Math.max(
+    ...Object.values(byDay).map(evts => evts.reduce((s, e) => s + e.amount, 0)),
+    1,
+  );
+
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const selectedEvents = selectedDay ? (byDay[selectedDay] || []) : [];
+  const selectedTotal = selectedEvents.reduce((s, e) => s + e.amount, 0);
+
+  const prevMonth = () => { setMonth(m => m <= 0 ? 11 : m - 1); setSelectedDay(null); };
+  const nextMonth = () => { setMonth(m => m >= 11 ? 0 : m + 1); setSelectedDay(null); };
+
+  return (
+    <div className="space-y-4">
+      {/* Month summary cards */}
+      <div className="grid grid-cols-3 gap-4 animate-card-in stagger-4">
+        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Cobranza del mes</div>
+          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{fmt(monthTotal)}</div>
+          <div className="text-[12px] text-[#86868b] mt-0.5">{monthEvents} pagos esperados</div>
+        </div>
+        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Promedio diario (hábiles)</div>
+          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{fmt(monthTotal / 22)}</div>
+        </div>
+        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Clientes con pago</div>
+          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{uniqueClients}</div>
+        </div>
+      </div>
+
+      {/* Calendar header */}
+      <div className="flex items-center justify-between">
+        <button onClick={prevMonth} className="p-2 rounded-lg hover:bg-[#f5f5f7] transition-colors hover-press">
+          <svg className="w-5 h-5 text-[#86868b]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+        </button>
+        <h2 className="text-lg font-semibold text-[#1d1d1f]">{MONTH_NAMES[month]} {year}</h2>
+        <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-[#f5f5f7] transition-colors hover-press">
+          <svg className="w-5 h-5 text-[#86868b]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+
+      {/* Calendar grid */}
+      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
+        <div className="grid grid-cols-7 border-b border-[#d2d2d7]/40">
+          {DOW_HEADERS.map(d => (
+            <div key={d} className="px-2 py-2 text-center text-[11px] font-medium text-[#86868b] bg-[#fbfbfd] uppercase tracking-wide">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7">
+          {days.map((d, i) => {
+            const iso = d.toISOString().slice(0, 10);
+            const isCurrentMonth = d.getUTCMonth() === month;
+            const dayEvents = byDay[iso] || [];
+            const dayTotal = dayEvents.reduce((s, e) => s + e.amount, 0);
+            const intensity = dayTotal > 0 ? Math.max(0.08, Math.min(0.85, dayTotal / maxDayAmount)) : 0;
+            const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
+            const isToday = iso === todayISO;
+            const isSelected = selectedDay === iso;
+
+            return (
+              <div
+                key={i}
+                className={`min-h-[84px] border-b border-r border-[#d2d2d7]/30 p-1.5 cursor-pointer transition-all duration-150
+                  ${!isCurrentMonth ? 'bg-[#fbfbfd] opacity-30' : ''}
+                  ${isWeekend && isCurrentMonth ? 'bg-[#fbfbfd]' : ''}
+                  ${isSelected ? 'ring-2 ring-[#0071e3] ring-inset' : ''}
+                  ${isToday && !isSelected ? 'ring-2 ring-[#34c759] ring-inset' : ''}
+                  ${isCurrentMonth ? 'hover:bg-[#f5f5f7]/60' : ''}
+                `}
+                onClick={() => isCurrentMonth && setSelectedDay(isSelected ? null : iso)}
+              >
+                <div className="flex justify-between items-start">
+                  <span className={`text-[12px] font-medium ${
+                    isToday
+                      ? 'bg-[#34c759] text-white w-5 h-5 rounded-full flex items-center justify-center text-[11px]'
+                      : isCurrentMonth ? 'text-[#1d1d1f]' : 'text-[#d2d2d7]'
+                  }`}>
+                    {d.getUTCDate()}
+                  </span>
+                  {dayEvents.length > 0 && (
+                    <span className="text-[10px] text-[#86868b]">{dayEvents.length}</span>
+                  )}
+                </div>
+                {dayTotal > 0 && isCurrentMonth && (
+                  <div className="mt-1">
+                    <div
+                      className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums"
+                      style={{
+                        backgroundColor: `rgba(0, 113, 227, ${intensity})`,
+                        color: intensity > 0.45 ? 'white' : '#0071e3',
+                      }}
+                    >
+                      {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmt(dayTotal)}
+                    </div>
+                    {dayEvents.length <= 3 && (
+                      <div className="mt-0.5">
+                        {dayEvents.slice(0, 2).map((e, j) => (
+                          <div key={j} className="text-[10px] text-[#86868b] truncate leading-tight">
+                            {byId.get(e.clientId)?.name.split(' ')[0] ?? '?'}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Day detail panel */}
+      {selectedDay && selectedEvents.length > 0 && (
+        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 animate-slide-down">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="font-semibold text-[14px] text-[#1d1d1f]">
+              {new Date(selectedDay + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </h3>
+            <span className="text-lg font-semibold tabular-nums text-[#0071e3]">{fmt(selectedTotal)}</span>
+          </div>
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {selectedEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
+              const c = byId.get(e.clientId);
+              return (
+                <div key={i} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[#f5f5f7] hover:bg-[#ebebed] transition-colors">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[13px] font-medium text-[#1d1d1f] truncate">{c?.name ?? e.clientId}</div>
+                    <div className="text-[11px] text-[#86868b]">
+                      {c?.paymentDayRaw ?? '—'} · {c?.creditDays}d crédito
+                      {e.lagDays > 0 && <span className="text-[#ff3b30] font-medium"> (+{e.lagDays}d lag)</span>}
+                    </div>
+                  </div>
+                  <div className="text-right ml-3">
+                    <div className="text-[13px] font-semibold tabular-nums text-[#1d1d1f]">{fmt(e.amount)}</div>
+                    <div className="text-[10px] text-[#86868b]">Fact: {e.invoiceDate.slice(5)}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Weekly breakdown */}
+      {Object.keys(weeklyTotals).length > 0 && (
+        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
+          <h3 className="text-[13px] font-semibold text-[#1d1d1f] mb-3">Cobranza semanal</h3>
+          <div className="space-y-2">
+            {Object.entries(weeklyTotals).sort(([a], [b]) => a.localeCompare(b)).map(([week, total]) => {
+              const pct = monthTotal ? (total / monthTotal) * 100 : 0;
+              return (
+                <div key={week} className="grid grid-cols-[90px_1fr_100px_50px] items-center gap-3">
+                  <span className="text-[12px] text-[#86868b]">
+                    Sem. {new Date(week + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
+                  </span>
+                  <div className="h-5 bg-[#f5f5f7] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#0071e3] to-[#40a9ff] rounded-full transition-all"
+                      style={{ width: `${Math.min(100, pct)}%` }}
+                    />
+                  </div>
+                  <span className="text-[13px] font-medium tabular-nums text-right">{fmt(total)}</span>
+                  <span className="text-[11px] text-[#86868b] text-right">{pct.toFixed(0)}%</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function MonthView({ events, total }: { events: CollectionEvent[]; total: number }) {
   const monthly = new Array(12).fill(0);
