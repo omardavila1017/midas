@@ -7,14 +7,15 @@ import ProposalCreator from './components/ProposalCreator';
 import Simulator from './components/Simulator';
 import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
-import { LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap, Users, Calendar } from 'lucide-react';
+import Clients from './components/Clients';
+import { LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap, Users, Calendar, UserSquare } from 'lucide-react';
 
 export default function App() {
   const [plan, setPlan] = useState<FlowPlan | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [clients] = useState<Client[]>([]); // TODO: wire client catalog import
+  const [clients, setClients] = useState<Client[]>([]);
   const [assumptions, setAssumptions] = useState<CashFlowAssumptions>({
     year: new Date().getFullYear(),
     globalCompliance: 1,
@@ -31,12 +32,17 @@ export default function App() {
   const updateProvider = (p: Provider) => setProviders(prev => prev.map(x => x.id === p.id ? p : x));
   const deleteProvider = (id: string) => setProviders(prev => prev.filter(x => x.id !== id));
 
+  const addClient = (c: Client) => setClients(prev => [...prev, c]);
+  const updateClient = (c: Client) => setClients(prev => prev.map(x => x.id === c.id ? c : x));
+  const deleteClient = (id: string) => setClients(prev => prev.filter(x => x.id !== id));
+
   if (!plan) {
     return <Upload onPlanLoaded={setPlan} />;
   }
 
   const tabs: { id: TabId; label: string; icon: any }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'clients', label: 'Clientes', icon: UserSquare },
     { id: 'collections', label: 'Cobranza', icon: Calendar },
     { id: 'providers', label: 'Proveedores', icon: Users },
     { id: 'proposals', label: 'Propuestas', icon: Lightbulb },
@@ -87,6 +93,15 @@ export default function App() {
 
       <main className="max-w-[1400px] mx-auto px-8 py-6">
         {activeTab === 'dashboard' && <Dashboard plan={plan} proposals={proposals} />}
+        {activeTab === 'clients' && (
+          <Clients
+            clients={clients}
+            onReplace={setClients}
+            onAdd={addClient}
+            onUpdate={updateClient}
+            onDelete={deleteClient}
+          />
+        )}
         {activeTab === 'collections' && (
           <CollectionProjection
             clients={clients}

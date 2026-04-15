@@ -53,8 +53,10 @@ export interface Client {
   frequency: Frequency;
   /** Days of credit granted from invoice date. */
   creditDays: number;
-  /** Monthly billing baseline. Engine divides by frequency to get per-event amount. */
-  monthlyBilling: number;
+  /** Monthly billing — one value per calendar month (Jan..Dec).
+   *  Captures seasonality from historical data. Engine divides each month's
+   *  value by `eventsPerMonth(frequency)` to get the per-event amount. */
+  monthlyBilling: number[]; // length 12
   /** If true, invoice is discounted via factoraje: pays ~2–3 days after invoice
    * regardless of the payment-day rule. */
   factoraje?: boolean;

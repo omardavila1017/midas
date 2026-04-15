@@ -46,7 +46,8 @@ export function projectClientMonth(
 ): CollectionEvent[] {
   const events: CollectionEvent[] = [];
   const splits = eventsPerMonth(client.frequency);
-  const perEvent = client.monthlyBilling / splits;
+  const monthBilling = client.monthlyBilling[invoiceMonth] ?? 0;
+  const perEvent = monthBilling / splits;
 
   // Compliance shrinks the amount; does NOT change dates. Rationale: the
   // engine projects cash; uncollected portion shows up as shrinkage, not as
