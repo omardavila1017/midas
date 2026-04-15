@@ -5,6 +5,7 @@ import Upload from './components/Upload';
 import Dashboard from './components/Dashboard';
 import ProposalCreator from './components/ProposalCreator';
 import Simulator from './components/Simulator';
+import CXP from './components/CXP';
 import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
@@ -47,6 +48,7 @@ export default function App() {
     { id: 'providers', label: 'Proveedores', icon: Users },
     { id: 'proposals', label: 'Propuestas', icon: Lightbulb },
     { id: 'simulator', label: 'Simulador', icon: FlaskConical },
+    { id: 'cxp', label: 'CXP', icon: Clock },
   ];
 
   return (
@@ -134,6 +136,7 @@ export default function App() {
             onSaveScenario={saveScenario}
           />
         )}
+        {activeTab === 'cxp' && <CXP />}
       </main>
     </div>
   );
