@@ -49,7 +49,7 @@ export interface DrillDownLevel {
   month: number | null; // null = full year
 }
 
-export type TabId = 'dashboard' | 'proposals' | 'simulator' | 'providers' | 'collections' | 'cxp';
+export type TabId = 'dashboard' | 'proposals' | 'simulator' | 'providers' | 'collections' | 'clients';
 
 export const MONTHS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 export const MONTHS_FULL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
