@@ -3,7 +3,7 @@ import { Client, CashFlowAssumptions, Frequency, CollectionEvent } from '../doma
 import { projectYear } from '../domain/collectionEngine';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { MONTHS } from '../types';
-import { Search, AlertCircle, Info } from 'lucide-react';
+import { Search, Info } from 'lucide-react';
 
 /**
  * Proyección de Cobranza — digestible view over the engine output.
@@ -98,17 +98,6 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
         />
       </div>
 
-      {factorajeNoop && (
-        <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-[13px] text-amber-800">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-          <div>
-            <strong>Cambiar "Días factoraje" no afecta el resultado</strong> porque ningún cliente
-            tiene factoraje activo. Marca el checkbox "Factoraje" en la pestaña Clientes para los
-            clientes que aplican (o importa nuevamente — se autodetecta por la palabra "factoraje"
-            en la columna día de pago).
-          </div>
-        </div>
-      )}
       {unparsedCount > 0 && (
         <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-[13px] text-blue-800">
           <Info className="w-4 h-4 flex-shrink-0 mt-0.5" />

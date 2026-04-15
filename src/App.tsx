@@ -9,7 +9,10 @@ import CXP from './components/CXP';
 import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
-import { LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap, Users, Calendar, UserSquare } from 'lucide-react';
+import {
+  LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap,
+  Users, Calendar, UserSquare, Clock, FileSpreadsheet,
+} from 'lucide-react';
 
 export default function App() {
   const [plan, setPlan] = useState<FlowPlan | null>(null);
@@ -22,7 +25,8 @@ export default function App() {
     globalCompliance: 1,
     factorajeDays: 3,
   });
-  const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  const [activeTab, setActiveTab] = useState<TabId>('clients');
+  const [showUpload, setShowUpload] = useState(false);
 
   const addProposal = (p: Proposal) => setProposals(prev => [...prev, p]);
   const updateProposal = (p: Proposal) => setProposals(prev => prev.map(x => x.id === p.id ? p : x));
@@ -37,17 +41,20 @@ export default function App() {
   const updateClient = (c: Client) => setClients(prev => prev.map(x => x.id === c.id ? c : x));
   const deleteClient = (id: string) => setClients(prev => prev.filter(x => x.id !== id));
 
-  if (!plan) {
-    return <Upload onPlanLoaded={setPlan} />;
+  // The Upload screen is opt-in now: the app shell always renders so the user
+  // can jump directly to Clientes / Cobranza / Proveedores without first
+  // loading a FlowPlan.
+  if (showUpload) {
+    return <Upload onPlanLoaded={p => { setPlan(p); setShowUpload(false); setActiveTab('dashboard'); }} />;
   }
 
-  const tabs: { id: TabId; label: string; icon: any }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  const tabs: { id: TabId; label: string; icon: any; needsPlan?: boolean }[] = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, needsPlan: true },
     { id: 'clients', label: 'Clientes', icon: UserSquare },
     { id: 'collections', label: 'Cobranza', icon: Calendar },
     { id: 'providers', label: 'Proveedores', icon: Users },
-    { id: 'proposals', label: 'Propuestas', icon: Lightbulb },
-    { id: 'simulator', label: 'Simulador', icon: FlaskConical },
+    { id: 'proposals', label: 'Propuestas', icon: Lightbulb, needsPlan: true },
+    { id: 'simulator', label: 'Simulador', icon: FlaskConical, needsPlan: true },
     { id: 'cxp', label: 'CXP', icon: Clock },
   ];
 
@@ -63,7 +70,9 @@ export default function App() {
               <span className="text-[15px] font-semibold text-[#1d1d1f] tracking-tight">FlowSense</span>
             </div>
             <div className="h-4 w-px bg-[#d2d2d7]" />
-            <span className="text-[13px] text-[#86868b] font-medium">{plan.name} — {plan.year}</span>
+            <span className="text-[13px] text-[#86868b] font-medium">
+              {plan ? `${plan.name} — ${plan.year}` : 'Sin plan cargado'}
+            </span>
           </div>
 
           <nav className="flex items-center bg-[#f5f5f7] rounded-full p-0.5">
@@ -84,17 +93,21 @@ export default function App() {
           </nav>
 
           <button
-            onClick={() => { setPlan(null); setProposals([]); setScenarios([]); }}
+            onClick={() => setShowUpload(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] text-[#86868b] hover:text-[#1d1d1f] rounded-full hover:bg-[#f5f5f7] transition"
           >
             <ArrowUpFromLine className="w-3.5 h-3.5" />
-            Nuevo Plan
+            {plan ? 'Nuevo Plan' : 'Cargar Plan'}
           </button>
         </div>
       </header>
 
       <main className="max-w-[1400px] mx-auto px-8 py-6">
-        {activeTab === 'dashboard' && <Dashboard plan={plan} proposals={proposals} />}
+        {activeTab === 'dashboard' && (
+          plan
+            ? <Dashboard plan={plan} proposals={proposals} />
+            : <PlanRequired onUpload={() => setShowUpload(true)} feature="Dashboard" />
+        )}
         {activeTab === 'clients' && (
           <Clients
             clients={clients}
@@ -120,24 +133,51 @@ export default function App() {
           />
         )}
         {activeTab === 'proposals' && (
-          <ProposalCreator
-            plan={plan}
-            proposals={proposals}
-            onAdd={addProposal}
-            onUpdate={updateProposal}
-            onDelete={deleteProposal}
-          />
+          plan
+            ? <ProposalCreator
+                plan={plan}
+                proposals={proposals}
+                onAdd={addProposal}
+                onUpdate={updateProposal}
+                onDelete={deleteProposal}
+              />
+            : <PlanRequired onUpload={() => setShowUpload(true)} feature="Propuestas" />
         )}
         {activeTab === 'simulator' && (
-          <Simulator
-            plan={plan}
-            proposals={proposals}
-            scenarios={scenarios}
-            onSaveScenario={saveScenario}
-          />
+          plan
+            ? <Simulator
+                plan={plan}
+                proposals={proposals}
+                scenarios={scenarios}
+                onSaveScenario={saveScenario}
+              />
+            : <PlanRequired onUpload={() => setShowUpload(true)} feature="Simulador" />
         )}
         {activeTab === 'cxp' && <CXP />}
       </main>
+    </div>
+  );
+}
+
+function PlanRequired({ onUpload, feature }: { onUpload: () => void; feature: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-24 text-center">
+      <div className="w-14 h-14 rounded-2xl bg-[#f5f5f7] flex items-center justify-center mb-4">
+        <FileSpreadsheet className="w-6 h-6 text-[#86868b]" />
+      </div>
+      <h2 className="text-xl font-semibold text-[#1d1d1f] tracking-tight">
+        {feature} requiere un Plan de Flujo
+      </h2>
+      <p className="text-[13px] text-[#86868b] mt-1 max-w-sm">
+        Carga tu Excel de necesidad de flujo para usar esta pestaña. Mientras tanto puedes trabajar
+        en Clientes, Cobranza y Proveedores.
+      </p>
+      <button
+        onClick={onUpload}
+        className="mt-5 flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed]"
+      >
+        <ArrowUpFromLine className="w-3.5 h-3.5" /> Cargar Plan
+      </button>
     </div>
   );
 }
