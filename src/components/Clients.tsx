@@ -1,11 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
-import * as XLSX from 'xlsx';
+import { useMemo, useState } from 'react';
 import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth, CashFlowAssumptions } from '../domain/types';
-import { importClientsFromWorkbook, ImportIssue } from '../domain/importClients';
+import { ImportIssue } from '../domain/importClients';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { projectClientMonth } from '../domain/collectionEngine';
 import { MONTHS } from '../types';
-import { Upload as UploadIcon, Trash2, AlertTriangle, Plus, Search, TrendingUp } from 'lucide-react';
+import { Trash2, AlertTriangle, Plus, Search } from 'lucide-react';
 
 /**
  * Clientes tab.
@@ -41,7 +40,6 @@ interface Props {
 }
 
 export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete }: Props) {
-  const fileRef = useRef<HTMLInputElement>(null);
   const [issues, setIssues] = useState<ImportIssue[]>([]);
   const [query, setQuery] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -72,14 +70,6 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
     return clients.filter(c => c.name.toLowerCase().includes(q));
   }, [clients, query]);
 
-  const handleFile = async (file: File) => {
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
-    const result = importClientsFromWorkbook(wb);
-    onReplace(result.clients);
-    setIssues(result.issues);
-  };
-
   const addBlank = () => {
     onAdd({
       id: crypto.randomUUID(),
@@ -105,24 +95,11 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => fileRef.current?.click()}
+            onClick={addBlank}
             className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed] hover-press"
           >
-            <UploadIcon className="w-3.5 h-3.5" /> Importar Excel
+            <Plus className="w-3.5 h-3.5" /> Nuevo Cliente
           </button>
-          <button
-            onClick={addBlank}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-lg border border-[#d2d2d7] bg-white text-[13px] font-medium hover:bg-[#f5f5f7] hover-press"
-          >
-            <Plus className="w-3.5 h-3.5" /> Nuevo
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls"
-            className="hidden"
-            onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])}
-          />
         </div>
       </header>
 
