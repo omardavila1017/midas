@@ -152,6 +152,7 @@ export default function App() {
           {activeTab === 'providers' && (
             <Providers
               providers={providers}
+              onReplace={setProviders}
               onAdd={addProvider}
               onUpdate={updateProvider}
               onDelete={deleteProvider}

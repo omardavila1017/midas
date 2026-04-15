@@ -68,13 +68,9 @@ export interface Client {
 // ---------------------------------------------------------------------------
 // Provider catalog — exactly three fields, as requested
 // ---------------------------------------------------------------------------
-export type ProviderType =
-  | 'Servicio'
-  | 'Insumo'
-  | 'Renta'
-  | 'Nómina externa'
-  | 'CAPEX'
-  | 'Otro';
+/** Free-form to fit real catalogs (DIESEL, Filiales, Servicios, Bancario…).
+ *  UI suggests common values but the user can type anything. */
+export type ProviderType = string;
 
 export type ProviderRisk = 'Alto' | 'Medio' | 'Bajo';
 
