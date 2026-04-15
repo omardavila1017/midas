@@ -4,7 +4,8 @@ import Upload from './components/Upload';
 import Dashboard from './components/Dashboard';
 import ProposalCreator from './components/ProposalCreator';
 import Simulator from './components/Simulator';
-import { LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap } from 'lucide-react';
+import CXP from './components/CXP';
+import { LayoutDashboard, Lightbulb, FlaskConical, Clock, ArrowUpFromLine, Zap } from 'lucide-react';
 
 export default function App() {
   const [plan, setPlan] = useState<FlowPlan | null>(null);
@@ -25,6 +26,7 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'proposals', label: 'Propuestas', icon: Lightbulb },
     { id: 'simulator', label: 'Simulador', icon: FlaskConical },
+    { id: 'cxp', label: 'CXP', icon: Clock },
   ];
 
   return (
@@ -91,6 +93,7 @@ export default function App() {
             onSaveScenario={saveScenario}
           />
         )}
+        {activeTab === 'cxp' && <CXP />}
       </main>
     </div>
   );
