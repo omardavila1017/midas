@@ -6,8 +6,9 @@
  *         real date, ISO week, and lag days.
  *
  * Assumes:
- *   - The invoice hits on the 1st of its month (simplifying assumption; the
- *     engine can be extended to accept per-month invoice dates).
+ *   - The first invoice of each billing month is issued on day 1.
+ *   - Additional invoices in the same month follow the billing cycle cadence
+ *     (weekly = +7d, quincenal = +14d, mensual = next month).
  *   - Monthly billing is split evenly across `eventsPerMonth(frequency)`
  *     events.
  *
@@ -17,6 +18,7 @@
 
 import { Client, CollectionEvent, CashFlowAssumptions } from './types';
 import {
+  MAX_SCAN_DAYS,
   resolveRealPaymentDate,
   advanceOneCycle,
   eventsPerMonth,
@@ -25,9 +27,23 @@ import {
 } from './calendar';
 
 const DAY_MS = 86_400_000;
+const AVG_DAYS_PER_MONTH = 30;
 
 function daysBetween(a: Date, b: Date): number {
   return Math.round((b.getTime() - a.getTime()) / DAY_MS);
+}
+
+function seasonalityMonthIndex(invoiceMonth: number): number {
+  return ((invoiceMonth % 12) + 12) % 12;
+}
+
+function isoYear(isoDate: string): number {
+  return Number(isoDate.slice(0, 4));
+}
+
+function lookbackMonths(clients: Client[]): number {
+  const maxCreditDays = clients.reduce((max, client) => Math.max(max, client.creditDays), 0);
+  return Math.max(1, Math.ceil((maxCreditDays + MAX_SCAN_DAYS) / AVG_DAYS_PER_MONTH));
 }
 
 /**
@@ -46,7 +62,7 @@ export function projectClientMonth(
 ): CollectionEvent[] {
   const events: CollectionEvent[] = [];
   const splits = eventsPerMonth(client.frequency);
-  const monthBilling = client.monthlyBilling[invoiceMonth] ?? 0;
+  const monthBilling = client.monthlyBilling[seasonalityMonthIndex(invoiceMonth)] ?? 0;
   const perEvent = monthBilling / splits;
 
   // Compliance shrinks the amount; does NOT change dates. Rationale: the
@@ -70,6 +86,7 @@ export function projectClientMonth(
 
     events.push({
       clientId: client.id,
+      invoiceDate: toISODate(invoiceDate),
       theoreticalDate: toISODate(theoretical),
       realDate: toISODate(real),
       amount,
@@ -85,19 +102,25 @@ export function projectClientMonth(
 }
 
 /**
- * Project all clients across the full assumption year.
+ * Project cash-in events whose REAL collection date falls inside the
+ * assumption year.
+ *
+ * To avoid dropping January cash that comes from invoices issued in prior
+ * months, the engine looks back far enough to cover max credit days plus the
+ * maximum payment-pattern lag, then filters by `realDate` year.
  */
 export function projectYear(
   clients: Client[],
   assumptions: CashFlowAssumptions,
 ): CollectionEvent[] {
   const all: CollectionEvent[] = [];
+  const startOffset = -lookbackMonths(clients);
   for (const c of clients) {
-    for (let m = 0; m < 12; m++) {
+    for (let m = startOffset; m < 12; m++) {
       all.push(...projectClientMonth(c, assumptions.year, m, assumptions));
     }
   }
-  return all;
+  return all.filter(event => isoYear(event.realDate) === assumptions.year);
 }
 
 /**

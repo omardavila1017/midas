@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Client, CashFlowAssumptions, Frequency, CollectionEvent } from '../domain/types';
 import { projectYear } from '../domain/collectionEngine';
-import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { MONTHS } from '../types';
 import { Search, Settings2, ChevronDown } from 'lucide-react';
 
@@ -70,7 +69,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
         <div>
           <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight">Proyección de cobranza</h1>
           <p className="text-[13px] text-[#86868b] mt-1">
-            Cuánto y cuándo entra el efectivo, aplicando la regla de "siguiente ciclo".
+            La factura nace por ciclo de facturación; luego corre el crédito y el cobro cae en el siguiente día válido del patrón.
           </p>
         </div>
       </header>
@@ -198,6 +197,8 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       {/* ── Main view ─────────────────────────────────────── */}
       {view === 'month' && <MonthView events={events} total={total} />}
       {view === 'client' && <ClientView events={events} clients={filteredClients} total={total} />}
+
+      <DetailView events={events} clients={filteredClients} />
     </div>
   );
 }
@@ -335,14 +336,28 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
 
 function DetailView({ events, clients }: { events: CollectionEvent[]; clients: Client[] }) {
   const byId = new Map(clients.map(c => [c.id, c]));
-  const sorted = [...events].sort((a, b) => a.realDate.localeCompare(b.realDate));
+  const sorted = [...events].sort((a, b) =>
+    a.realDate.localeCompare(b.realDate) ||
+    a.invoiceDate.localeCompare(b.invoiceDate) ||
+    a.clientId.localeCompare(b.clientId),
+  );
   return (
     <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden hover-lift">
+      <div className="px-4 py-3 border-b border-[#d2d2d7]/40 flex items-center justify-between">
+        <div>
+          <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Detalle de eventos</h3>
+          <p className="text-[12px] text-[#86868b] mt-0.5">
+            Secuencia auditada: fecha de factura, fecha teórica por crédito y fecha real de cobro.
+          </p>
+        </div>
+        <span className="text-[12px] text-[#86868b]">{Math.min(sorted.length, 1000).toLocaleString('es-MX')} eventos</span>
+      </div>
       <div className="max-h-[560px] overflow-y-auto">
         <table className="w-full text-[13px]">
           <thead className="bg-[#f5f5f7] text-[#86868b] text-left sticky top-0">
             <tr>
               <th className="px-4 py-2">Cliente</th>
+              <th className="px-4 py-2">Factura</th>
               <th className="px-4 py-2">Teórica</th>
               <th className="px-4 py-2">Real</th>
               <th className="px-4 py-2 text-right">Lag</th>
@@ -357,6 +372,7 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
               return (
                 <tr key={i} className="border-t border-[#d2d2d7]/40 hover-row">
                   <td className="px-4 py-2">{c?.name ?? e.clientId}</td>
+                  <td className="px-4 py-2 text-[#86868b]">{e.invoiceDate}</td>
                   <td className="px-4 py-2 text-[#86868b]">{e.theoreticalDate}</td>
                   <td className="px-4 py-2 font-medium">{e.realDate}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{e.lagDays}d</td>

@@ -107,7 +107,7 @@ function dateMatchesPattern(date: Date, pattern: PaymentDayPattern): boolean {
 // 62 days is a safe upper bound that also tolerates "Quincenal + Mensual" edge
 // cases (e.g. second-half quincena after a month-end).
 // ---------------------------------------------------------------------------
-const MAX_SCAN_DAYS = 93;
+export const MAX_SCAN_DAYS = 93;
 
 /**
  * Resolve the real cash-in date from the theoretical date using the

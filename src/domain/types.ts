@@ -103,6 +103,8 @@ export interface Provider {
 // ---------------------------------------------------------------------------
 export interface CollectionEvent {
   clientId: string;
+  /** When the invoice is issued according to the billing cycle. */
+  invoiceDate: string; // ISO date
   /** When the invoice would be due by contract (invoice + credit days). */
   theoreticalDate: string; // ISO date
   /** When the cash actually lands, after applying payment-day + frequency rules. */
