@@ -23,7 +23,7 @@ export default function App() {
   const [assumptions, setAssumptions] = useState<CashFlowAssumptions>({
     year: new Date().getFullYear(),
     globalCompliance: 1,
-    factorajeDays: 3,
+    factorajeDays: 30,
   });
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);

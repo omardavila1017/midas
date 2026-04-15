@@ -65,8 +65,8 @@ export interface Client {
    *  Captures seasonality from historical data. Engine divides each month's
    *  value by `eventsPerMonth(frequency)` to get the per-event amount. */
   monthlyBilling: number[]; // length 12
-  /** If true, invoice is discounted via factoraje: pays ~2–3 days after invoice
-   * regardless of the payment-day rule. */
+  /** If true, invoice is modeled via factoraje and pays after the configured
+   * factoraje term, regardless of the payment-day rule. */
   factoraje?: boolean;
   /** Expected compliance rate (0..1). 1 means "always pays on day". */
   complianceRate?: number;
@@ -124,6 +124,6 @@ export interface CashFlowAssumptions {
   year: number;
   /** Global compliance override (0..1). Per-client value takes precedence. */
   globalCompliance: number;
-  /** Days from invoice to cash when factoraje applies. */
+  /** Days from invoice to cash when factoraje applies. Default is 30. */
   factorajeDays: number;
 }

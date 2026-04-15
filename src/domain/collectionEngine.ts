@@ -79,7 +79,7 @@ export function projectClientMonth(
     // Theoretical cash date = invoice + credit days.
     const theoretical = new Date(invoiceDate.getTime() + client.creditDays * DAY_MS);
 
-    // Factoraje short-circuits the payment-day rule.
+    // Factoraje uses its own term from invoice date and ignores payment-day.
     const real = client.factoraje
       ? new Date(invoiceDate.getTime() + assumptions.factorajeDays * DAY_MS)
       : resolveRealPaymentDate(theoretical, client.paymentDay, client.frequency);
