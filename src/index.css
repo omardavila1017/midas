@@ -56,6 +56,17 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.15);
 }
 
+/* Shared form input used by Providers / CollectionProjection */
+.input {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
 /* Smooth transitions globally */
 button, a, input, select, textarea {
   transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
