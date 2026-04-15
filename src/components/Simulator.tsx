@@ -182,7 +182,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
   return (
     <div className="flex gap-6 min-h-[calc(100vh-140px)]">
       {/* LEFT COLUMN: Proposals */}
-      <div className="w-[340px] flex-shrink-0 flex flex-col bg-white rounded-2xl border border-[#d2d2d7]/40 shadow-sm overflow-hidden">
+      <div className="w-[340px] flex-shrink-0 flex flex-col bg-white rounded-2xl border border-[#d2d2d7]/40 shadow-sm overflow-hidden animate-slide-down hover-lift">
         <div className="p-5 border-b border-[#e8e8ed]">
           <h2 className="text-[15px] font-semibold text-[#1d1d1f] mb-4 flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-[#f0e6ff] flex items-center justify-center">
@@ -247,7 +247,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
                 <button
                   key={proposal.id}
                   onClick={() => toggleProposal(proposal.id)}
-                  className={`w-full text-left p-3.5 rounded-xl transition-all ${
+                  className={`w-full text-left p-3.5 rounded-xl transition-all hover-press ${
                     isSelected
                       ? 'bg-[#e8f4fd] border border-[#0071e3]/20'
                       : 'bg-[#f5f5f7] border border-transparent hover:bg-[#e8e8ed]'
@@ -323,24 +323,24 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
           <div className="space-y-5">
             {/* KPIs */}
             <div className="grid grid-cols-4 gap-4">
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm">
+              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm animate-card-in hover-lift stagger-1">
                 <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Propuestas Activas</p>
                 <p className="text-[24px] font-bold text-[#0071e3]">{kpis?.activeCount}</p>
               </div>
 
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm">
+              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm animate-card-in hover-lift stagger-2">
                 <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Impacto Anual</p>
                 <p className="text-[22px] font-bold text-[#34c759] font-mono">{formatCurrency(kpis?.annualImpact || 0)}</p>
               </div>
 
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm">
+              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm animate-card-in hover-lift stagger-3">
                 <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Caja Mínima</p>
                 <p className={`text-[22px] font-bold font-mono ${(kpis?.minCaja || 0) > 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}`}>
                   {formatCurrency(kpis?.minCaja || 0)}
                 </p>
               </div>
 
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm">
+              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm animate-card-in hover-lift stagger-4">
                 <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Liquidez</p>
                 {kpis?.hasDeficit ? (
                   <div className="flex items-center gap-2">
@@ -361,7 +361,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
             </div>
 
             {/* Chart */}
-            <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-6 shadow-sm">
+            <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-6 shadow-sm animate-card-in hover-lift stagger-5">
               <h3 className="text-[16px] font-semibold text-[#1d1d1f] mb-5">Proyección de Caja Simulada</h3>
               <ResponsiveContainer width="100%" height={350}>
                 <AreaChart data={chartData}>
@@ -415,7 +415,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
             </div>
 
             {/* Impact Table */}
-            <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-6 shadow-sm overflow-x-auto">
+            <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-6 shadow-sm overflow-x-auto animate-card-in hover-lift stagger-6">
               <h3 className="text-[16px] font-semibold text-[#1d1d1f] mb-5">Detalle de Impacto Mensual</h3>
               <table className="w-full text-[12px]">
                 <thead>
@@ -429,7 +429,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b border-[#f5f5f7]">
+                  <tr className="border-b border-[#f5f5f7] hover-row">
                     <td className="py-2.5 px-3 text-[#6e6e73]">Caja Base</td>
                     {tableData.map((row, i) => (
                       <td key={i} className="text-right py-2.5 px-2 text-[#86868b] font-mono">
@@ -437,7 +437,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
                       </td>
                     ))}
                   </tr>
-                  <tr className="border-b border-[#f5f5f7] bg-[#e8f4fd]/30">
+                  <tr className="border-b border-[#f5f5f7] bg-[#e8f4fd]/30 hover-row">
                     <td className="py-2.5 px-3 text-[#0071e3] font-medium">Impacto Propuestas</td>
                     {tableData.map((row, i) => (
                       <td key={i} className="text-right py-2.5 px-2 text-[#0071e3] font-mono font-medium">
@@ -445,7 +445,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
                       </td>
                     ))}
                   </tr>
-                  <tr className="border-b border-[#f5f5f7]">
+                  <tr className="border-b border-[#f5f5f7] hover-row">
                     <td className="py-2.5 px-3 text-[#1d1d1f] font-bold">Caja Simulada</td>
                     {tableData.map((row, i) => (
                       <td
@@ -458,7 +458,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
                       </td>
                     ))}
                   </tr>
-                  <tr>
+                  <tr className="hover-row">
                     <td className="py-2.5 px-3 text-[#86868b]">Delta</td>
                     {tableData.map((row, i) => (
                       <td
@@ -477,7 +477,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
             <div className="flex gap-3">
               <button
                 onClick={copySummary}
-                className="flex-1 flex items-center justify-center gap-2 bg-white border border-[#d2d2d7]/60 hover:bg-[#f5f5f7] text-[#1d1d1f] rounded-xl px-4 py-3 transition font-medium text-[13px] shadow-sm"
+                className="flex-1 flex items-center justify-center gap-2 bg-white border border-[#d2d2d7]/60 hover:bg-[#f5f5f7] text-[#1d1d1f] rounded-xl px-4 py-3 transition font-medium text-[13px] shadow-sm hover-press"
               >
                 {copiedSummary ? (
                   <>
@@ -493,7 +493,7 @@ const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProp
               </button>
               <button
                 onClick={() => setShowSaveModal(true)}
-                className="flex-1 flex items-center justify-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] text-white rounded-xl px-4 py-3 transition font-medium text-[13px] shadow-sm"
+                className="flex-1 flex items-center justify-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] text-white rounded-xl px-4 py-3 transition font-medium text-[13px] shadow-sm hover-press"
               >
                 <Save size={16} />
                 Guardar Escenario

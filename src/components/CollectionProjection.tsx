@@ -87,15 +87,17 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Kpi label="Total proyectado" value={fmt(totalAnnual)} accent />
-        <Kpi label="Lag promedio" value={`${avgLag.toFixed(1)} días`} />
-        <Kpi label="Clientes" value={`${filteredClients.length} / ${clients.length}`} />
-        <Kpi label="Eventos" value={monthScoped.length.toString()} />
-        <Kpi
-          label="Con factoraje"
-          value={factorajeCount.toString()}
-          warn={factorajeNoop}
-        />
+        <div className="animate-card-in stagger-1"><Kpi label="Total proyectado" value={fmt(totalAnnual)} accent /></div>
+        <div className="animate-card-in stagger-2"><Kpi label="Lag promedio" value={`${avgLag.toFixed(1)} días`} /></div>
+        <div className="animate-card-in stagger-3"><Kpi label="Clientes" value={`${filteredClients.length} / ${clients.length}`} /></div>
+        <div className="animate-card-in stagger-4"><Kpi label="Eventos" value={monthScoped.length.toString()} /></div>
+        <div className="animate-card-in stagger-5">
+          <Kpi
+            label="Con factoraje"
+            value={factorajeCount.toString()}
+            warn={factorajeNoop}
+          />
+        </div>
       </div>
 
       {unparsedCount > 0 && (
@@ -109,7 +111,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       )}
 
       {/* Assumptions */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 flex flex-wrap gap-6 items-end">
+      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 flex flex-wrap gap-6 items-end hover-lift">
         <Field label="Año">
           <input
             type="number"
@@ -137,7 +139,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       </div>
 
       {/* Filter bar */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 space-y-3">
+      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 space-y-3 hover-lift">
         <div className="flex flex-wrap gap-3 items-center">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-4 h-4 text-[#86868b] absolute left-3 top-1/2 -translate-y-1/2" />
@@ -199,7 +201,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           <button
             key={v}
             onClick={() => setView(v)}
-            className={`px-4 py-1 rounded-full font-medium ${
+            className={`px-4 py-1 rounded-full font-medium hover-press ${
               view === v ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'
             }`}
           >{lbl}</button>
@@ -225,7 +227,7 @@ function MonthlyView({ events, totalScope }: { events: CollectionEvent[]; totalS
   const max = Math.max(...monthly, 1);
 
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 space-y-2">
+    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 space-y-2 hover-lift">
       {MONTHS.map((m, i) => {
         const v = monthly[i];
         const pct = (v / max) * 100;
@@ -255,7 +257,7 @@ function WeeklyView({ events }: { events: CollectionEvent[] }) {
   const rows = weekly.slice(1);
   const max = Math.max(...rows, 1);
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 overflow-x-auto">
+    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 overflow-x-auto hover-lift">
       <div className="flex items-end gap-1 h-48">
         {rows.map((v, i) => (
           <div key={i} className="flex flex-col items-center gap-1 flex-1 min-w-[14px]">
@@ -298,7 +300,7 @@ function ByClientView({ events, clients }: { events: CollectionEvent[]; clients:
   const grandTotal = rows.reduce((s, r) => s + r.total, 0);
 
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden">
+    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden hover-lift">
       <table className="w-full text-[13px]">
         <thead className="bg-[#f5f5f7] text-[#86868b] text-left text-[12px] uppercase tracking-wide">
           <tr>
@@ -312,7 +314,7 @@ function ByClientView({ events, clients }: { events: CollectionEvent[]; clients:
         </thead>
         <tbody>
           {rows.map(({ c, total, events, avgLag }) => (
-            <tr key={c.id} className="border-t border-[#d2d2d7]/40">
+            <tr key={c.id} className="border-t border-[#d2d2d7]/40 hover-row">
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   {c.factoraje && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">F</span>}
@@ -341,7 +343,7 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
   const byId = new Map(clients.map(c => [c.id, c]));
   const sorted = [...events].sort((a, b) => a.realDate.localeCompare(b.realDate));
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden">
+    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden hover-lift">
       <div className="max-h-[560px] overflow-y-auto">
         <table className="w-full text-[13px]">
           <thead className="bg-[#f5f5f7] text-[#86868b] text-left sticky top-0">
@@ -359,7 +361,7 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
             {sorted.slice(0, 1000).map((e, i) => {
               const c = byId.get(e.clientId);
               return (
-                <tr key={i} className="border-t border-[#d2d2d7]/40">
+                <tr key={i} className="border-t border-[#d2d2d7]/40 hover-row">
                   <td className="px-4 py-2">{c?.name ?? e.clientId}</td>
                   <td className="px-4 py-2 text-[#86868b]">{e.theoreticalDate}</td>
                   <td className="px-4 py-2 font-medium">{e.realDate}</td>
@@ -410,7 +412,7 @@ function Chip({
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`px-3 py-1 rounded-full text-[12px] font-medium border transition-colors ${
+      className={`px-3 py-1 rounded-full text-[12px] font-medium border transition-colors hover-press ${
         disabled ? 'opacity-40 cursor-not-allowed border-[#d2d2d7]' :
         active ? 'bg-[#0071e3] text-white border-[#0071e3]' :
         'bg-white text-[#86868b] border-[#d2d2d7] hover:text-[#1d1d1f]'

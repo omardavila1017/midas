@@ -223,7 +223,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
           return (
             <div
               key={idx}
-              className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-5 shadow-sm hover:shadow-md transition-shadow"
+              className={`bg-white rounded-2xl border border-[#d2d2d7]/40 p-5 shadow-sm hover:shadow-md transition-shadow animate-card-in hover-lift ${['stagger-1', 'stagger-2', 'stagger-3', 'stagger-4'][idx]}`}
             >
               <div className="flex items-start justify-between mb-3">
                 <p className="text-[12px] font-medium text-[#86868b] uppercase tracking-wide">{kpi.label}</p>
@@ -243,7 +243,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
       </div>
 
       {/* Main Chart */}
-      <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm">
+      <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm animate-card-in hover-lift stagger-5">
         <h2 className="text-[16px] font-semibold text-[#1d1d1f] mb-5">
           Flujo de Efectivo Mensual — {plan.year}
         </h2>
@@ -305,7 +305,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
 
       {/* Drill-Down Section */}
       {drillPath.length > 0 && currentMonth !== null && (
-        <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm">
+        <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm animate-card-in hover-lift stagger-6">
           {/* Breadcrumb */}
           <div className="flex items-center gap-1.5 mb-5 flex-wrap">
             <button
@@ -341,7 +341,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
                 <div
                   key={concept.id}
                   onClick={() => isClickable && handleConceptClick(concept, currentMonth!)}
-                  className={`group flex items-center gap-4 py-2 px-3 rounded-xl transition ${
+                  className={`group flex items-center gap-4 py-2 px-3 rounded-xl transition hover-row ${
                     isClickable ? 'cursor-pointer hover:bg-[#f5f5f7]' : ''
                   }`}
                 >
@@ -381,7 +381,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
       )}
 
       {/* Monthly Summary Table */}
-      <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm">
+      <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm animate-card-in hover-lift stagger-7">
         <h2 className="text-[16px] font-semibold text-[#1d1d1f] mb-5">Resumen Mensual</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]">
@@ -404,7 +404,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
               {monthlySummaryRows.map((row, rowIdx) => (
                 <tr
                   key={rowIdx}
-                  className="border-b border-[#f5f5f7] hover:bg-[#fbfbfd] transition"
+                  className="border-b border-[#f5f5f7] hover:bg-[#fbfbfd] transition hover-row"
                 >
                   <td className="py-3 px-3 font-medium text-[#1d1d1f]">{row.label}</td>
                   {row.data.map((value, colIdx) => (

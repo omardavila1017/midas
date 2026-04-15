@@ -65,7 +65,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
     <div className="space-y-6">
       <header className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight">Clientes</h1>
+          <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight animate-fade-in">Clientes</h1>
           <p className="text-[13px] text-[#86868b] mt-1">
             {clients.length} clientes · facturación anual {fmt(totalAnnual)}
             {issues.length > 0 && (
@@ -76,13 +76,13 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
         <div className="flex gap-2">
           <button
             onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed]"
+            className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed] hover-press"
           >
             <UploadIcon className="w-3.5 h-3.5" /> Importar Excel
           </button>
           <button
             onClick={addBlank}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-lg border border-[#d2d2d7] bg-white text-[13px] font-medium hover:bg-[#f5f5f7]"
+            className="flex items-center gap-1.5 px-4 h-9 rounded-lg border border-[#d2d2d7] bg-white text-[13px] font-medium hover:bg-[#f5f5f7] hover-press"
           >
             <Plus className="w-3.5 h-3.5" /> Nuevo
           </button>
@@ -97,7 +97,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
       </header>
 
       {/* Issues panel */}
-      {issues.length > 0 && <IssuesPanel issues={issues} onDismiss={() => setIssues([])} />}
+      {issues.length > 0 && <div className="animate-slide-down"><IssuesPanel issues={issues} onDismiss={() => setIssues([])} /></div>}
 
       {/* Search */}
       <div className="relative">
@@ -132,7 +132,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                   : 'Sin coincidencias.'}
               </td></tr>
             )}
-            {filtered.map(c => {
+            {filtered.map((c, idx) => {
               const annual = c.monthlyBilling.reduce((s, v) => s + v, 0);
               const parsed = c.paymentDayRaw ? parsePaymentDay(c.paymentDayRaw) : c.paymentDay;
               const isOpen = expandedId === c.id;
@@ -140,7 +140,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                 <>
                   <tr
                     key={c.id}
-                    className="border-t border-[#d2d2d7]/40 hover:bg-[#f5f5f7]/40 cursor-pointer"
+                    className={`border-t border-[#d2d2d7]/40 hover:bg-[#f5f5f7]/40 cursor-pointer hover-row stagger-${Math.min(idx + 1, 10)}`}
                     onClick={() => setExpandedId(isOpen ? null : c.id)}
                   >
                     <Td>
@@ -359,7 +359,7 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
 // ---------------------------------------------------------------------------
 function IssuesPanel({ issues, onDismiss }: { issues: ImportIssue[]; onDismiss: () => void }) {
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 hover-lift">
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2 text-amber-800 font-medium text-[13px]">
           <AlertTriangle className="w-4 h-4" /> {issues.length} avisos de importación

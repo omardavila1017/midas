@@ -68,20 +68,20 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
 
   return (
     <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-6">
-      <div className="w-full max-w-lg">
+      <div className="w-full max-w-lg animate-page-in">
         {/* Logo and Header */}
         <div className="text-center mb-10">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center shadow-lg shadow-blue-200">
+          <div className="flex items-center justify-center gap-3 mb-4 animate-scale-in">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center shadow-lg shadow-blue-200/40">
               <Zap className="text-white" size={24} />
             </div>
           </div>
-          <h1 className="text-[28px] font-bold text-[#1d1d1f] tracking-tight mb-1">FlowSense</h1>
-          <p className="text-[15px] text-[#86868b]">Análisis de Flujo de Efectivo</p>
+          <h1 className="text-[28px] font-bold text-[#1d1d1f] tracking-[-0.02em] mb-1 animate-card-in stagger-1">FlowSense</h1>
+          <p className="text-[15px] text-[#86868b] animate-card-in stagger-2">Análisis de Flujo de Efectivo</p>
         </div>
 
         {/* Main Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/40 p-8">
+        <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/40 p-8 animate-card-in stagger-3 hover-lift">
           {!loading && !success && !error && (
             <>
               {/* Drag & Drop Zone */}
@@ -140,7 +140,7 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
 
           {/* Success State */}
           {success && (
-            <div className="text-center py-14">
+            <div className="text-center py-14 animate-scale-in">
               <div className="w-14 h-14 rounded-full bg-[#e8faf0] flex items-center justify-center mx-auto mb-4">
                 <CheckCircle className="text-[#34c759]" size={28} />
               </div>
@@ -151,7 +151,7 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
 
           {/* Error State */}
           {error && !loading && (
-            <div className="bg-[#fff5f5] border border-red-100 rounded-xl p-5">
+            <div className="bg-[#fff5f5] border border-red-100 rounded-xl p-5 animate-slide-down">
               <div className="flex items-start gap-3">
                 <div className="w-8 h-8 rounded-full bg-[#ffe5e5] flex items-center justify-center flex-shrink-0 mt-0.5">
                   <AlertCircle className="text-[#ff3b30]" size={16} />

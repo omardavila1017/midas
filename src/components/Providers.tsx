@@ -57,7 +57,7 @@ export default function Providers({ providers, onAdd, onUpdate, onDelete }: Prop
       </div>
 
       {/* Form row */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 grid grid-cols-[1fr_160px_140px_160px_auto] gap-3 items-end">
+      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 grid grid-cols-[1fr_160px_140px_160px_auto] gap-3 items-end animate-card-in">
         <Field label="Proveedor">
           <input
             value={draft.name}
@@ -83,14 +83,14 @@ export default function Providers({ providers, onAdd, onUpdate, onDelete }: Prop
         </Field>
         <button
           onClick={add}
-          className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed]"
+          className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed] hover-press"
         >
           <Plus className="w-3.5 h-3.5" /> Agregar
         </button>
       </div>
 
       {/* Table */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden">
+      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden animate-card-in">
         <table className="w-full text-[13px]">
           <thead className="bg-[#f5f5f7] text-[#86868b] text-left">
             <tr>
@@ -106,7 +106,7 @@ export default function Providers({ providers, onAdd, onUpdate, onDelete }: Prop
               <tr><td colSpan={5} className="text-center text-[#86868b] py-10">Sin proveedores. Agrega uno arriba.</td></tr>
             )}
             {providers.map(p => (
-              <tr key={p.id} className="border-t border-[#d2d2d7]/40 hover:bg-[#f5f5f7]/50">
+              <tr key={p.id} className="border-t border-[#d2d2d7]/40 hover:bg-[#f5f5f7]/50 hover-row">
                 <Td>
                   <input
                     value={p.name}
@@ -132,7 +132,7 @@ export default function Providers({ providers, onAdd, onUpdate, onDelete }: Prop
                   </select>
                 </Td>
                 <Td>
-                  <button onClick={() => onDelete(p.id)} className="text-[#86868b] hover:text-red-600">
+                  <button onClick={() => onDelete(p.id)} className="text-[#86868b] hover:text-red-600 hover-press">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </Td>

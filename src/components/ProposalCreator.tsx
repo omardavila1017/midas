@@ -185,7 +185,7 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
     <div className="space-y-5">
       {/* Category Summary Cards */}
       <div className="grid grid-cols-4 gap-4">
-        {CATEGORIES.map((cat) => {
+        {CATEGORIES.map((cat, idx) => {
           const Icon = CATEGORY_ICONS[cat];
           const totals = categoryTotals[cat] || { count: 0, impact: 0 };
           const isActive = filterCategory === cat;
@@ -193,7 +193,7 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
             <div
               key={cat}
               onClick={() => setFilterCategory(isActive ? null : cat)}
-              className={`bg-white rounded-2xl border p-5 cursor-pointer transition-all hover:shadow-md ${
+              className={`bg-white rounded-2xl border p-5 cursor-pointer transition-all hover:shadow-md animate-card-in hover-lift ${['stagger-1', 'stagger-2', 'stagger-3', 'stagger-4'][idx]} ${
                 isActive
                   ? 'border-[#0071e3] shadow-md ring-1 ring-[#0071e3]/20'
                   : 'border-[#d2d2d7]/40 shadow-sm'
@@ -277,7 +277,7 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
 
       {/* Proposal Form */}
       {showForm && (
-        <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-7 shadow-sm space-y-6">
+        <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-7 shadow-sm space-y-6 animate-card-in hover-lift stagger-5">
           <div className="flex items-center justify-between">
             <h3 className="text-[17px] font-semibold text-[#1d1d1f]">
               {editingId ? 'Editar Propuesta' : 'Nueva Propuesta'}
@@ -483,14 +483,14 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
           <div className="flex justify-end gap-3 pt-4 border-t border-[#e8e8ed]">
             <button
               onClick={cancelForm}
-              className="px-5 py-2.5 text-[13px] text-[#6e6e73] hover:text-[#1d1d1f] font-medium rounded-full hover:bg-[#f5f5f7] transition"
+              className="px-5 py-2.5 text-[13px] text-[#6e6e73] hover:text-[#1d1d1f] font-medium rounded-full hover:bg-[#f5f5f7] transition hover-press"
             >
               Cancelar
             </button>
             <button
               onClick={handleSave}
               disabled={!formData.name.trim() || formData.monthlyAmount <= 0}
-              className="flex items-center gap-2 px-6 py-2.5 bg-[#0071e3] hover:bg-[#0077ED] disabled:bg-[#d2d2d7] disabled:text-[#86868b] text-white font-medium rounded-full transition text-[13px] shadow-sm"
+              className="flex items-center gap-2 px-6 py-2.5 bg-[#0071e3] hover:bg-[#0077ED] disabled:bg-[#d2d2d7] disabled:text-[#86868b] text-white font-medium rounded-full transition text-[13px] shadow-sm hover-press"
             >
               <Save className="w-4 h-4" />
               {editingId ? 'Guardar Cambios' : 'Crear Propuesta'}
@@ -501,7 +501,7 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
 
       {/* Proposals Table */}
       {filteredProposals.length > 0 ? (
-        <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl overflow-hidden shadow-sm">
+        <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl overflow-hidden shadow-sm animate-card-in hover-lift stagger-6">
           <table className="w-full text-[13px]">
             <thead>
               <tr className="border-b border-[#e8e8ed] bg-[#fbfbfd]">
@@ -521,7 +521,7 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
               {filteredProposals.map((proposal) => (
                 <tr
                   key={proposal.id}
-                  className="border-b border-[#f5f5f7] hover:bg-[#fbfbfd] transition"
+                  className="border-b border-[#f5f5f7] hover:bg-[#fbfbfd] transition hover-row"
                 >
                   <td className="py-3.5 px-5">
                     <p className="font-medium text-[#1d1d1f] text-[13px]">{proposal.name}</p>
@@ -565,14 +565,14 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
                     <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => openEditForm(proposal)}
-                        className="p-2 text-[#86868b] hover:text-[#0071e3] transition rounded-lg hover:bg-[#e8f4fd]"
+                        className="p-2 text-[#86868b] hover:text-[#0071e3] transition rounded-lg hover:bg-[#e8f4fd] hover-press"
                         title="Editar"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => onDelete(proposal.id)}
-                        className="p-2 text-[#86868b] hover:text-[#ff3b30] transition rounded-lg hover:bg-[#fff5f5]"
+                        className="p-2 text-[#86868b] hover:text-[#ff3b30] transition rounded-lg hover:bg-[#fff5f5] hover-press"
                         title="Eliminar"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -603,7 +603,7 @@ const ProposalCreator = ({ plan, proposals, onAdd, onUpdate, onDelete }: Proposa
           </div>
         </div>
       ) : (
-        <div className="text-center py-20 bg-white border border-[#d2d2d7]/40 rounded-2xl shadow-sm">
+        <div className="text-center py-20 bg-white border border-[#d2d2d7]/40 rounded-2xl shadow-sm animate-fade-in">
           <div className="w-14 h-14 rounded-2xl bg-[#f5f5f7] flex items-center justify-center mx-auto mb-4">
             <Plus className="text-[#c7c7cc]" size={24} />
           </div>
