@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Client, CashFlowAssumptions, Frequency, CollectionEvent, ConfirmedPayment, eventKey } from '../domain/types';
 import { projectYear } from '../domain/collectionEngine';
+import { extractPaymentEvents, PaymentEvent } from '../domain/netCashFlowEngine';
+import { CXPRecord } from '../domain/persistence';
 import { MONTHS } from '../types';
 import { Search, Settings2, ChevronDown, Check, X, Download } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
@@ -22,6 +24,7 @@ interface Props {
   confirmedPayments: ConfirmedPayment[];
   onConfirm: (p: ConfirmedPayment) => void;
   onUnconfirm: (key: string) => void;
+  cxpRecords?: CXPRecord[];
 }
 
 type ViewMode = 'month' | 'client' | 'calendar';
@@ -30,7 +33,7 @@ const FREQUENCIES: Frequency[] = ['Semanal', 'Quincenal', 'Mensual', 'Contado'];
 const DOW_HEADERS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [] }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -51,6 +54,11 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   const events = useMemo(
     () => projectYear(filteredClients, assumptions),
     [filteredClients, assumptions],
+  );
+
+  const paymentEvents = useMemo(
+    () => extractPaymentEvents(cxpRecords).filter(p => p.date.startsWith(String(assumptions.year))),
+    [cxpRecords, assumptions.year],
   );
 
   const total = events.reduce((a, e) => a + e.amount, 0);
@@ -213,6 +221,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           confirmedPayments={confirmedPayments}
           onConfirm={onConfirm}
           onUnconfirm={onUnconfirm}
+          payments={paymentEvents}
         />
       )}
       {view === 'month' && <MonthView events={events} total={total} />}
@@ -235,13 +244,14 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 //   Blue   = projected (future, not yet confirmed)
 //   Amber  = past-due (date already passed, not confirmed = didn't pay yet)
 // ---------------------------------------------------------------------------
-function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onUnconfirm }: {
+function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onUnconfirm, payments }: {
   events: CollectionEvent[];
   clients: Client[];
   year: number;
   confirmedPayments: ConfirmedPayment[];
   onConfirm: (p: ConfirmedPayment) => void;
   onUnconfirm: (key: string) => void;
+  payments: PaymentEvent[];
 }) {
   const [month, setMonth] = useState(() => {
     const now = new Date();
@@ -272,6 +282,23 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
     }
     return map;
   }, [events, month]);
+
+  // Pagos by day for this month
+  const paymentsByDay = useMemo(() => {
+    const map: Record<string, PaymentEvent[]> = {};
+    for (const p of payments) {
+      const m = Number(p.date.slice(5, 7)) - 1;
+      if (m === month) {
+        if (!map[p.date]) map[p.date] = [];
+        map[p.date].push(p);
+      }
+    }
+    return map;
+  }, [payments, month]);
+
+  const monthPagos = Object.values(paymentsByDay).flat().reduce((s, p) => s + p.amount, 0);
+  const monthIva = allMonthEventsIvaSum(byDay, byId);
+  const monthNeto = (allMonthEventsTotal(byDay)) - monthPagos;
 
   // Weekly totals for this month
   const weeklyTotals = useMemo(() => {

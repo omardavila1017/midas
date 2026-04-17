@@ -11,6 +11,7 @@ import CXP from './components/CXP';
 import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
+import CashFlowDetail from './components/CashFlowDetail';
 // NetCashFlowDashboard disabled — needs real JDE data to be useful
 // import NetCashFlowDashboard from './components/NetCashFlowDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -31,6 +32,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
   cobros: [
     { id: 'clients',     label: 'Clientes', icon: UserSquare },
     { id: 'collections', label: 'Cobranza', icon: UserSquare },
+    { id: 'netflow',     label: 'Flujo',    icon: LayoutDashboard },
   ],
   pagos: [
     { id: 'providers', label: 'Proveedores', icon: Users },
@@ -44,7 +46,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
-  clients: 'cobros', collections: 'cobros',
+  clients: 'cobros', collections: 'cobros', netflow: 'cobros',
   providers: 'pagos', cxp: 'pagos',
   dashboard: 'plan', proposals: 'plan', simulator: 'plan',
 };
@@ -307,6 +309,14 @@ export default function App() {
             )}
             {activeTab === 'cxp' && (
               <CXP records={cxpRecords} onRecordsChange={setCxpRecords} />
+            )}
+            {activeTab === 'netflow' && (
+              <CashFlowDetail
+                clients={clients}
+                cxpRecords={cxpRecords}
+                assumptions={assumptions}
+                confirmedPayments={confirmedPayments}
+              />
             )}
           </ErrorBoundary>
         </div>
