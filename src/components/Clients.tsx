@@ -4,7 +4,8 @@ import { ImportIssue } from '../domain/importClients';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { projectClientMonth } from '../domain/collectionEngine';
 import { MONTHS } from '../types';
-import { Trash2, AlertTriangle, Plus, Search } from 'lucide-react';
+import { Trash2, AlertTriangle, Plus, Search, Download } from 'lucide-react';
+import { toCSV, downloadFile } from '../utils/export';
 
 /**
  * Clientes tab.
@@ -81,6 +82,19 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
     });
   };
 
+  const handleExport = () => {
+    const rows = clients.map(c => ({
+      Nombre: c.name,
+      'Día de Pago': c.paymentDayRaw ?? '',
+      Frecuencia: c.frequency,
+      'Días Crédito': c.creditDays,
+      'Venta Mensual': c.monthlyBilling[0],
+      Factoraje: c.factoraje ? 'Sí' : 'No',
+      Compliance: c.complianceRate ?? 1,
+    }));
+    downloadFile(toCSV(rows), 'clientes-flowsense.csv');
+  };
+
   return (
     <div className="space-y-6">
       <header className="flex items-end justify-between">
@@ -94,6 +108,13 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
           </p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={handleExport}
+            title="Exportar catálogo"
+            className="p-2 h-9 rounded-lg hover:bg-[#f5f5f7] text-[#86868b] hover:text-[#1d1d1f] transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
           <button
             onClick={addBlank}
             className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed] hover-press"

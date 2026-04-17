@@ -619,7 +619,7 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                   return (
                     <div key={i}
                       className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[#f5f5f7] rounded-lg transition-all duration-200"
-                      onClick={() => { clearDrill(); setSearch(s.nombre.slice(0, 20)); setTab('proveedores'); setExpandedSupplier(s.nombre); setProvPage(0); }}>
+                      onClick={() => { clearDrill(); setSearchTerm(s.nombre.slice(0, 20)); setTab('proveedores'); setExpandedSupplier(s.nombre); setProvPage(0); }}>
                       <span className="text-[11px] font-mono text-[#86868b] w-4 text-right">{i + 1}</span>
                       <div className="flex-1 min-w-0">
                         <p className="text-[12px] font-medium text-[#0071e3] truncate">{s.nombre}</p>
@@ -881,12 +881,26 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
    Main CXP Component
    ═══════════════════════════════════════════════════════════════════════ */
 
-const CXP = () => {
-  const [view, setView] = useState<CXPView>('upload');
-  const [records, setRecords] = useState<CXPRecord[]>([]);
+interface CXPProps {
+  records?: CXPRecord[];
+  onRecordsChange?: (records: CXPRecord[]) => void;
+}
 
-  const handleLoaded = useCallback((data: CXPRecord[]) => { setRecords(data); setView('dashboard'); }, []);
-  const handleReset = useCallback(() => { setRecords([]); setView('upload'); }, []);
+const CXP = ({ records: externalRecords, onRecordsChange }: CXPProps) => {
+  const [view, setView] = useState<CXPView>(externalRecords && externalRecords.length > 0 ? 'dashboard' : 'upload');
+  const [records, setRecords] = useState<CXPRecord[]>(externalRecords || []);
+
+  const handleLoaded = useCallback((data: CXPRecord[]) => {
+    setRecords(data);
+    onRecordsChange?.(data);
+    setView('dashboard');
+  }, [onRecordsChange]);
+
+  const handleReset = useCallback(() => {
+    setRecords([]);
+    onRecordsChange?.([]);
+    setView('upload');
+  }, [onRecordsChange]);
 
   if (view === 'upload') {
     return (

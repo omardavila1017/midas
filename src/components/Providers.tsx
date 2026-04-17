@@ -21,10 +21,10 @@ const TYPE_SUGGESTIONS = [
 const RISKS: ProviderRisk[] = ['Alto', 'Medio', 'Bajo'];
 const PERIODS: ProviderPaymentPeriod[] = ['Contado', '15 días', '30 días', '45 días', '60 días', '90 días'];
 
-const RISK_STYLES: Record<ProviderRisk, string> = {
-  Alto: 'bg-red-50 text-red-700 border-red-200',
-  Medio: 'bg-amber-50 text-amber-700 border-amber-200',
-  Bajo: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+const RISK_STYLES: Record<ProviderRisk, { bg: string; text: string; border: string }> = {
+  Alto: { bg: '#ff3b3010', text: '#ff3b30', border: '#ff3b3040' },
+  Medio: { bg: '#ff9f0a10', text: '#ff9f0a', border: '#ff9f0a40' },
+  Bajo: { bg: '#34c75910', text: '#34c759', border: '#34c75940' },
 };
 
 interface Props {
@@ -202,7 +202,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                   />
                 </Td>
                 <Td>
-                  <div className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[12px] ${RISK_STYLES[p.risk]}`}>
+                  <div className="inline-flex items-center px-2 py-0.5 rounded-full border text-[12px]" style={{ backgroundColor: RISK_STYLES[p.risk].bg, color: RISK_STYLES[p.risk].text, borderColor: RISK_STYLES[p.risk].border }}>
                     <select
                       value={p.risk}
                       onChange={e => onUpdate({ ...p, risk: e.target.value as ProviderRisk })}

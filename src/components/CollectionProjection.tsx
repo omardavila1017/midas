@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Client, CashFlowAssumptions, Frequency, CollectionEvent } from '../domain/types';
+import { Client, CashFlowAssumptions, Frequency, CollectionEvent, ConfirmedPayment, eventKey } from '../domain/types';
 import { projectYear } from '../domain/collectionEngine';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown } from 'lucide-react';
+import { Search, Settings2, ChevronDown, Check, X, Download } from 'lucide-react';
+import { toCSV, downloadFile } from '../utils/export';
 
 /**
  * Proyección de Cobranza — simplified layout.
@@ -18,6 +19,9 @@ interface Props {
   clients: Client[];
   assumptions: CashFlowAssumptions;
   onAssumptionsChange: (a: CashFlowAssumptions) => void;
+  confirmedPayments: ConfirmedPayment[];
+  onConfirm: (p: ConfirmedPayment) => void;
+  onUnconfirm: (key: string) => void;
 }
 
 type ViewMode = 'month' | 'client' | 'calendar';
@@ -26,7 +30,7 @@ const FREQUENCIES: Frequency[] = ['Semanal', 'Quincenal', 'Mensual', 'Contado'];
 const DOW_HEADERS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -201,7 +205,16 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       </div>
 
       {/* ── Main view ─────────────────────────────────────── */}
-      {view === 'calendar' && <CalendarView events={events} clients={filteredClients} year={assumptions.year} />}
+      {view === 'calendar' && (
+        <CalendarView
+          events={events}
+          clients={filteredClients}
+          year={assumptions.year}
+          confirmedPayments={confirmedPayments}
+          onConfirm={onConfirm}
+          onUnconfirm={onUnconfirm}
+        />
+      )}
       {view === 'month' && <MonthView events={events} total={total} />}
       {view === 'client' && <ClientView events={events} clients={filteredClients} total={total} />}
 
@@ -215,9 +228,21 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Calendar View — month grid showing daily projected collections
+// Calendar View — month grid with real vs projected tracking
+//
+// Colors:
+//   Green  = confirmed (user clicked checkmark = "sí pagó")
+//   Blue   = projected (future, not yet confirmed)
+//   Amber  = past-due (date already passed, not confirmed = didn't pay yet)
 // ---------------------------------------------------------------------------
-function CalendarView({ events, clients, year }: { events: CollectionEvent[]; clients: Client[]; year: number }) {
+function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onUnconfirm }: {
+  events: CollectionEvent[];
+  clients: Client[];
+  year: number;
+  confirmedPayments: ConfirmedPayment[];
+  onConfirm: (p: ConfirmedPayment) => void;
+  onUnconfirm: (key: string) => void;
+}) {
   const [month, setMonth] = useState(() => {
     const now = new Date();
     return now.getFullYear() === year ? now.getMonth() : 0;
@@ -225,6 +250,15 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   const byId = new Map(clients.map(c => [c.id, c]));
+  const confirmedSet = useMemo(() => new Set(confirmedPayments.map(p => p.key)), [confirmedPayments]);
+  const todayISO = new Date().toISOString().slice(0, 10);
+
+  const monthEventsList = useMemo(() => {
+    return events.filter(e => {
+      const m = Number(e.realDate.slice(5, 7)) - 1;
+      return m === month;
+    });
+  }, [events, month]);
 
   // Bucket events by real date (ISO string)
   const byDay = useMemo(() => {
@@ -252,9 +286,17 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
     return weeks;
   }, [byDay]);
 
-  const monthTotal = Object.values(byDay).flat().reduce((s, e) => s + e.amount, 0);
-  const monthEvents = Object.values(byDay).flat().length;
-  const uniqueClients = new Set(Object.values(byDay).flat().map(e => e.clientId)).size;
+  const allMonthEvents = Object.values(byDay).flat();
+  const monthTotal = allMonthEvents.reduce((s, e) => s + e.amount, 0);
+  const monthEvents = allMonthEvents.length;
+  const uniqueClients = new Set(allMonthEvents.map(e => e.clientId)).size;
+
+  // Split: confirmed (real) vs projected
+  const confirmedTotal = allMonthEvents
+    .filter(e => confirmedSet.has(eventKey(e)))
+    .reduce((s, e) => s + e.amount, 0);
+  const projectedTotal = monthTotal - confirmedTotal;
+  const confirmedCount = allMonthEvents.filter(e => confirmedSet.has(eventKey(e))).length;
 
   // Calendar grid (Monday-start)
   const firstDay = new Date(Date.UTC(year, month, 1));
@@ -264,7 +306,6 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
   for (let i = -startPad; i < lastDay.getUTCDate() + (7 - ((lastDay.getUTCDay() + 6) % 7 + 1) % 7); i++) {
     days.push(new Date(Date.UTC(year, month, i + 1)));
   }
-  // Ensure grid is complete rows of 7
   while (days.length % 7 !== 0) days.push(new Date(Date.UTC(year, month, days.length - startPad + 1)));
 
   const maxDayAmount = Math.max(
@@ -272,29 +313,55 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
     1,
   );
 
-  const todayISO = new Date().toISOString().slice(0, 10);
   const selectedEvents = selectedDay ? (byDay[selectedDay] || []) : [];
   const selectedTotal = selectedEvents.reduce((s, e) => s + e.amount, 0);
 
   const prevMonth = () => { setMonth(m => m <= 0 ? 11 : m - 1); setSelectedDay(null); };
   const nextMonth = () => { setMonth(m => m >= 11 ? 0 : m + 1); setSelectedDay(null); };
 
+  const handleExport = () => {
+    const rows = monthEventsList.map(e => {
+      const c = byId.get(e.clientId);
+      return {
+        Cliente: c?.name ?? e.clientId,
+        'Fecha Cobro': e.realDate,
+        'Fecha Factura': e.invoiceDate,
+        Monto: e.amount,
+        'Días Lag': e.lagDays,
+        'Regla Pago': c?.paymentDayRaw ?? '',
+        Confirmado: confirmedSet.has(eventKey(e)) ? 'Sí' : 'No',
+      };
+    });
+    downloadFile(toCSV(rows), `cobranza-${year}-${String(month + 1).padStart(2, '0')}.csv`);
+  };
+
   return (
     <div className="space-y-4">
       {/* Month summary cards */}
-      <div className="grid grid-cols-3 gap-4 animate-card-in stagger-4">
+      <div className="grid grid-cols-4 gap-4 animate-card-in stagger-4">
         <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Cobranza del mes</div>
+          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Cobranza total</div>
           <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{fmt(monthTotal)}</div>
-          <div className="text-[12px] text-[#86868b] mt-0.5">{monthEvents} pagos esperados</div>
+          <div className="text-[12px] text-[#86868b] mt-0.5">{monthEvents} pagos · {uniqueClients} clientes</div>
+        </div>
+        <div className="bg-white border border-[#34c759]/40 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[#34c759]">Cobrado (real)</div>
+          <div className="text-2xl font-semibold tabular-nums text-[#34c759] mt-1">{fmt(confirmedTotal)}</div>
+          <div className="text-[12px] text-[#86868b] mt-0.5">{confirmedCount} pagos confirmados</div>
+        </div>
+        <div className="bg-white border border-[#0071e3]/30 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[#0071e3]">Proyectado</div>
+          <div className="text-2xl font-semibold tabular-nums text-[#0071e3] mt-1">{fmt(projectedTotal)}</div>
+          <div className="text-[12px] text-[#86868b] mt-0.5">{monthEvents - confirmedCount} pendientes</div>
         </div>
         <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Promedio diario (hábiles)</div>
-          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{fmt(monthTotal / 22)}</div>
-        </div>
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Clientes con pago</div>
-          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{uniqueClients}</div>
+          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">% Avance</div>
+          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">
+            {monthTotal > 0 ? `${((confirmedTotal / monthTotal) * 100).toFixed(0)}%` : '—'}
+          </div>
+          <div className="mt-1.5 h-2 bg-[#f5f5f7] rounded-full overflow-hidden">
+            <div className="h-full bg-[#34c759] rounded-full transition-all" style={{ width: `${monthTotal > 0 ? (confirmedTotal / monthTotal) * 100 : 0}%` }} />
+          </div>
         </div>
       </div>
 
@@ -304,9 +371,18 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
           <svg className="w-5 h-5 text-[#86868b]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
         </button>
         <h2 className="text-lg font-semibold text-[#1d1d1f]">{MONTH_NAMES[month]} {year}</h2>
-        <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-[#f5f5f7] transition-colors hover-press">
-          <svg className="w-5 h-5 text-[#86868b]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={handleExport}
+            title="Exportar mes"
+            className="p-1.5 rounded-lg hover:bg-[#f5f5f7] text-[#86868b] hover:text-[#1d1d1f] transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-[#f5f5f7] transition-colors hover-press">
+            <svg className="w-5 h-5 text-[#86868b]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          </button>
+        </div>
       </div>
 
       {/* Calendar grid */}
@@ -326,6 +402,34 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
             const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
             const isToday = iso === todayISO;
             const isSelected = selectedDay === iso;
+            const isPast = iso < todayISO;
+
+            // Color logic per day
+            const dayConfirmed = dayEvents.filter(e => confirmedSet.has(eventKey(e)));
+            const dayPending = dayEvents.filter(e => !confirmedSet.has(eventKey(e)));
+            const allConfirmed = dayEvents.length > 0 && dayConfirmed.length === dayEvents.length;
+            const someConfirmed = dayConfirmed.length > 0 && dayPending.length > 0;
+            const hasPastDue = isPast && dayPending.length > 0;
+
+            // Pick dominant color for the pill
+            let pillBg: string, pillFg: string;
+            if (allConfirmed) {
+              // All paid → green
+              pillBg = `rgba(52, 199, 89, ${intensity + 0.15})`;
+              pillFg = intensity > 0.35 ? 'white' : '#15803d';
+            } else if (hasPastDue && dayConfirmed.length === 0) {
+              // All past-due → amber
+              pillBg = `rgba(255, 159, 10, ${intensity + 0.1})`;
+              pillFg = intensity > 0.35 ? 'white' : '#92400e';
+            } else if (someConfirmed) {
+              // Mix → split indicator
+              pillBg = `rgba(0, 113, 227, ${intensity})`;
+              pillFg = intensity > 0.45 ? 'white' : '#0071e3';
+            } else {
+              // Future projected → blue
+              pillBg = `rgba(0, 113, 227, ${intensity})`;
+              pillFg = intensity > 0.45 ? 'white' : '#0071e3';
+            }
 
             return (
               <div
@@ -348,21 +452,25 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
                     {d.getUTCDate()}
                   </span>
                   {dayEvents.length > 0 && (
-                    <span className="text-[10px] text-[#86868b]">{dayEvents.length}</span>
+                    <div className="flex items-center gap-0.5">
+                      {allConfirmed && <Check className="w-3 h-3 text-[#34c759]" />}
+                      {hasPastDue && !allConfirmed && <span className="w-1.5 h-1.5 rounded-full bg-[#ff9f0a]" />}
+                      <span className="text-[10px] text-[#86868b]">{dayEvents.length}</span>
+                    </div>
                   )}
                 </div>
                 {dayTotal > 0 && isCurrentMonth && (
                   <div className="mt-1">
-                    <div
-                      className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums"
-                      style={{
-                        backgroundColor: `rgba(0, 113, 227, ${intensity})`,
-                        color: intensity > 0.45 ? 'white' : '#0071e3',
-                      }}
-                    >
+                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
                       {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmt(dayTotal)}
                     </div>
-                    {dayEvents.length <= 3 && (
+                    {someConfirmed && (
+                      <div className="flex gap-0.5 mt-0.5">
+                        <div className="h-1 rounded-full bg-[#34c759] flex-1" style={{ flex: dayConfirmed.length }} />
+                        <div className={`h-1 rounded-full ${hasPastDue ? 'bg-[#ff9f0a]' : 'bg-[#0071e3]'} flex-1`} style={{ flex: dayPending.length }} />
+                      </div>
+                    )}
+                    {!someConfirmed && dayEvents.length <= 3 && (
                       <div className="mt-0.5">
                         {dayEvents.slice(0, 2).map((e, j) => (
                           <div key={j} className="text-[10px] text-[#86868b] truncate leading-tight">
@@ -391,17 +499,54 @@ function CalendarView({ events, clients, year }: { events: CollectionEvent[]; cl
           <div className="space-y-1.5 max-h-72 overflow-y-auto">
             {selectedEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
               const c = byId.get(e.clientId);
+              const key = eventKey(e);
+              const isConfirmed = confirmedSet.has(key);
+              const isPastDue = !isConfirmed && e.realDate < todayISO;
+              const rowBg = isConfirmed
+                ? 'bg-[#34c759]/10 border border-[#34c759]/30'
+                : isPastDue
+                  ? 'bg-[#ff9500]/10 border border-[#ff9500]/30'
+                  : 'bg-[#f5f5f7] border border-transparent';
               return (
-                <div key={i} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[#f5f5f7] hover:bg-[#ebebed] transition-colors">
+                <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-lg ${rowBg} hover:brightness-95 transition-all`}>
+                  {/* Confirm / Unconfirm toggle */}
+                  <button
+                    onClick={() => {
+                      if (isConfirmed) {
+                        onUnconfirm(key);
+                      } else {
+                        onConfirm({
+                          key,
+                          clientId: e.clientId,
+                          realDate: e.realDate,
+                          invoiceDate: e.invoiceDate,
+                          amount: e.amount,
+                          confirmedAt: new Date().toISOString(),
+                        });
+                      }
+                    }}
+                    title={isConfirmed ? 'Desmarcar cobro' : 'Marcar como cobrado'}
+                    className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-all ${
+                      isConfirmed
+                        ? 'bg-[#34c759] text-white shadow-sm shadow-[#34c759]/30'
+                        : isPastDue
+                          ? 'border-2 border-[#ff9500] text-[#ff9500] hover:bg-[#ff9500] hover:text-white'
+                          : 'border-2 border-[#d2d2d7] text-[#d2d2d7] hover:border-[#0071e3] hover:text-[#0071e3]'
+                    }`}
+                  >
+                    {isConfirmed ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> : <span className="w-2 h-2" />}
+                  </button>
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-medium text-[#1d1d1f] truncate">{c?.name ?? e.clientId}</div>
                     <div className="text-[11px] text-[#86868b]">
                       {c?.paymentDayRaw ?? '—'} · {c?.creditDays}d crédito
                       {e.lagDays > 0 && <span className="text-[#ff3b30] font-medium"> (+{e.lagDays}d lag)</span>}
+                      {isConfirmed && <span className="text-[#34c759] font-medium"> · Cobrado ✓</span>}
+                      {isPastDue && <span className="text-[#ff9500] font-medium"> · Vencido</span>}
                     </div>
                   </div>
                   <div className="text-right ml-3">
-                    <div className="text-[13px] font-semibold tabular-nums text-[#1d1d1f]">{fmt(e.amount)}</div>
+                    <div className={`text-[13px] font-semibold tabular-nums ${isConfirmed ? 'text-[#34c759]' : 'text-[#1d1d1f]'}`}>{fmt(e.amount)}</div>
                     <div className="text-[10px] text-[#86868b]">Fact: {e.invoiceDate.slice(5)}</div>
                   </div>
                 </div>

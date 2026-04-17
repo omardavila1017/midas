@@ -117,6 +117,24 @@ export interface CollectionEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Payment confirmation (real vs projected tracking)
+// ---------------------------------------------------------------------------
+export interface ConfirmedPayment {
+  /** Unique key: `${clientId}::${realDate}::${invoiceDate}` */
+  key: string;
+  clientId: string;
+  realDate: string;    // ISO date — when it was projected
+  invoiceDate: string; // ISO date — which invoice
+  amount: number;      // confirmed amount (may differ from projected)
+  confirmedAt: string; // ISO datetime — when user clicked the checkmark
+}
+
+/** Build the canonical key for a collection event. */
+export function eventKey(e: { clientId: string; realDate: string; invoiceDate: string }): string {
+  return `${e.clientId}::${e.realDate}::${e.invoiceDate}`;
+}
+
+// ---------------------------------------------------------------------------
 // Scenario assumptions (layer 1)
 // ---------------------------------------------------------------------------
 export interface CashFlowAssumptions {
