@@ -50,6 +50,14 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
     [clients],
   );
 
+  const totalIva = useMemo(
+    () => clients.reduce((a, c) => {
+      const rate = (c.ivaRate ?? 16) / 100;
+      return a + c.monthlyBilling.reduce((s, v) => s + v, 0) * rate;
+    }, 0),
+    [clients],
+  );
+
   // Calculate avg lag per client (credit real vs nominal)
   const lagMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -79,6 +87,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
       frequency: 'Mensual',
       creditDays: 30,
       monthlyBilling: new Array(12).fill(0),
+      ivaRate: 16,
     });
   };
 
@@ -101,7 +110,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
         <div>
           <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight animate-fade-in">Clientes</h1>
           <p className="text-[13px] text-[#86868b] mt-1">
-            {clients.length} clientes · facturación anual {fmt(totalAnnual)}
+            {clients.length} clientes · facturación anual {fmt(totalAnnual)} · IVA {fmt(totalIva)}
             {issues.length > 0 && (
               <span className="ml-2 text-amber-600">· {issues.length} avisos de importación</span>
             )}
@@ -151,12 +160,13 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
               <Th className="text-right">Lag</Th>
               <Th className="text-right">Crédito Real</Th>
               <Th className="text-right">Anual</Th>
+              <Th className="text-right">IVA</Th>
               <Th className="w-10" />
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={9} className="text-center text-[#86868b] py-10">
+              <tr><td colSpan={10} className="text-center text-[#86868b] py-10">
                 {clients.length === 0
                   ? 'Sin clientes. Importa tu Excel o agrega uno manual.'
                   : 'Sin coincidencias.'}
@@ -164,6 +174,8 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
             )}
             {filtered.map((c, idx) => {
               const annual = c.monthlyBilling.reduce((s, v) => s + v, 0);
+              const ivaRate = c.ivaRate ?? 16;
+              const ivaAmount = annual * ivaRate / 100;
               const parsed = c.paymentDayRaw ? parsePaymentDay(c.paymentDayRaw) : c.paymentDay;
               const isOpen = expandedId === c.id;
               const avgLag = lagMap.get(c.id) ?? 0;
@@ -179,6 +191,9 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                       <div className="flex items-center gap-2">
                         {c.factoraje && <span className="text-[11px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Factoraje</span>}
                         <span className="font-medium">{c.name}</span>
+                        <span className={`text-[11px] px-1.5 py-0.5 rounded ${ivaRate === 8 ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                          IVA {ivaRate}%
+                        </span>
                       </div>
                     </Td>
                     <Td>
@@ -204,6 +219,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                         : <span className="text-[#34c759]">{realCredit}d</span>}
                     </Td>
                     <Td className="text-right tabular-nums font-medium">{fmt(annual)}</Td>
+                    <Td className="text-right tabular-nums text-[#86868b]">{fmt(ivaAmount)}</Td>
                     <Td>
                       <button
                         onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
@@ -235,6 +251,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
 // ---------------------------------------------------------------------------
 function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Client) => void }) {
   const update = (patch: Partial<Client>) => onChange({ ...client, ...patch });
+  const ivaRate = (client.ivaRate ?? 16) / 100;
 
   return (
     <div className="grid grid-cols-[1fr_1fr] gap-6">
@@ -246,7 +263,7 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
         <Field label="Patrón de pago">
           <PatternEditor pattern={client.paymentDay} onChange={p => update({ paymentDay: p })} />
         </Field>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-4 gap-3">
           <Field label="Frecuencia">
             <select
               value={client.frequency}
@@ -263,6 +280,16 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
               onChange={e => update({ creditDays: Number(e.target.value) })}
               className="input w-full"
             />
+          </Field>
+          <Field label="Tasa IVA">
+            <select
+              value={client.ivaRate ?? 16}
+              onChange={e => update({ ivaRate: Number(e.target.value) as 8 | 16 })}
+              className="input w-full"
+            >
+              <option value={16}>16% — General</option>
+              <option value={8}>8% — Frontera Norte</option>
+            </select>
           </Field>
           <Field label="Cumplimiento">
             <input
@@ -284,25 +311,47 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
         </label>
       </div>
 
-      {/* Right column — seasonality */}
-      <div>
-        <div className="text-[12px] text-[#86868b] mb-1.5">Facturación mensual</div>
-        <div className="grid grid-cols-6 gap-1.5">
-          {MONTHS.map((m, i) => (
-            <label key={m} className="flex flex-col">
-              <span className="text-[11px] text-[#86868b] text-center">{m}</span>
-              <input
-                type="number"
-                value={client.monthlyBilling[i] ?? 0}
-                onChange={e => {
-                  const next = [...client.monthlyBilling];
-                  next[i] = Number(e.target.value);
-                  update({ monthlyBilling: next });
-                }}
-                className="input text-right tabular-nums text-[12px] px-1.5"
-              />
-            </label>
-          ))}
+      {/* Right column — seasonality + IVA */}
+      <div className="space-y-3">
+        <div>
+          <div className="text-[12px] text-[#86868b] mb-1.5">Facturación mensual (sin IVA)</div>
+          <div className="grid grid-cols-6 gap-1.5">
+            {MONTHS.map((m, i) => (
+              <label key={m} className="flex flex-col">
+                <span className="text-[11px] text-[#86868b] text-center">{m}</span>
+                <input
+                  type="number"
+                  value={client.monthlyBilling[i] ?? 0}
+                  onChange={e => {
+                    const next = [...client.monthlyBilling];
+                    next[i] = Number(e.target.value);
+                    update({ monthlyBilling: next });
+                  }}
+                  className="input text-right tabular-nums text-[12px] px-1.5"
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="bg-[#f5f5f7] rounded-lg px-3 py-2 text-[12px] grid grid-cols-3 gap-x-4">
+          <div>
+            <div className="text-[#86868b]">Base gravable anual</div>
+            <div className="font-semibold tabular-nums text-[#1d1d1f]">
+              {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0))}
+            </div>
+          </div>
+          <div>
+            <div className="text-[#86868b]">IVA ({(client.ivaRate ?? 16)}%)</div>
+            <div className="font-semibold tabular-nums text-[#0071e3]">
+              {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * ivaRate)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[#86868b]">Total con IVA</div>
+            <div className="font-semibold tabular-nums text-[#1d1d1f]">
+              {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * (1 + ivaRate))}
+            </div>
+          </div>
         </div>
       </div>
     </div>

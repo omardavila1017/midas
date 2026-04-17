@@ -71,6 +71,8 @@ export interface Client {
   /** Expected compliance rate (0..1). 1 means "always pays on day". */
   complianceRate?: number;
   notes?: string;
+  /** IVA rate applied to this client's invoices. 8 = frontera norte, 16 = general. */
+  ivaRate?: 8 | 16;
 }
 
 // ---------------------------------------------------------------------------
