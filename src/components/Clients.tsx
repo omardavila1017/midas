@@ -99,7 +99,6 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
       'Días Crédito': c.creditDays,
       'Venta Mensual': c.monthlyBilling[0],
       Factoraje: c.factoraje ? 'Sí' : 'No',
-      Compliance: c.complianceRate ?? 1,
     }));
     downloadFile(toCSV(rows), 'clientes-flowsense.csv');
   };
@@ -263,7 +262,7 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
         <Field label="Patrón de pago">
           <PatternEditor pattern={client.paymentDay} onChange={p => update({ paymentDay: p })} />
         </Field>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <Field label="Frecuencia">
             <select
               value={client.frequency}
@@ -290,15 +289,6 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
               <option value={16}>16% — General</option>
               <option value={8}>8% — Frontera Norte</option>
             </select>
-          </Field>
-          <Field label="Cumplimiento">
-            <input
-              type="number" min={0} max={1} step={0.05}
-              value={client.complianceRate ?? ''}
-              placeholder="global"
-              onChange={e => update({ complianceRate: e.target.value === '' ? undefined : Number(e.target.value) })}
-              className="input w-full"
-            />
           </Field>
         </div>
         <label className="flex items-center gap-2 text-[13px]">
