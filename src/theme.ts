@@ -20,8 +20,8 @@ export const color = {
   gray950: 'oklch(18% 0.008 255)',   // near-black text
   gray900: 'oklch(22% 0.008 255)',   // headings
   gray700: 'oklch(40% 0.008 255)',   // secondary text
-  gray500: 'oklch(56% 0.008 255)',   // tertiary / captions
-  gray400: 'oklch(64% 0.008 255)',   // placeholders
+  gray500: 'oklch(50% 0.008 255)',   // secondary text
+  gray400: 'oklch(55% 0.008 255)',   // labels / muted text
   gray300: 'oklch(78% 0.006 255)',   // borders
   gray200: 'oklch(88% 0.004 255)',   // subtle borders
   gray100: 'oklch(94% 0.003 255)',   // surface secondary
@@ -74,8 +74,8 @@ export const hex = {
   primaryMuted: '#e8f4fd',
   gray950:      '#1d1d1f',
   gray700:      '#515154',
-  gray500:      '#6e6e73',
-  gray400:      '#86868b',
+  gray500:      '#636366',
+  gray400:      '#6e6e73',
   gray300:      '#b0b0b5',
   gray200:      '#d2d2d7',
   gray100:      '#e8e8ed',

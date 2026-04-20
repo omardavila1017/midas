@@ -20,8 +20,8 @@
   --gray-950: oklch(18% 0.008 255);
   --gray-900: oklch(22% 0.008 255);
   --gray-700: oklch(40% 0.008 255);
-  --gray-500: oklch(56% 0.008 255);
-  --gray-400: oklch(64% 0.008 255);
+  --gray-500: oklch(50% 0.008 255);
+  --gray-400: oklch(55% 0.008 255);
   --gray-300: oklch(78% 0.006 255);
   --gray-200: oklch(88% 0.004 255);
   --gray-100: oklch(94% 0.003 255);
@@ -237,6 +237,16 @@ table, [data-numeric] {
 .hover-row:hover {
   background-color: var(--primary-subtle);
 }
+
+/* Minimum touch target (WCAG 2.5.8) */
+.touch-target-44 {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Value sign indicators — color + symbol */
+.value-positive::before { content: '▲ '; font-size: 0.65em; vertical-align: middle; }
+.value-negative::before { content: '▼ '; font-size: 0.65em; vertical-align: middle; }
 
 /* ═══════════════════════════════════════════════
    SCROLLBAR

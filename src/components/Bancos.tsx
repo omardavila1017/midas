@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   Landmark,
   Loader2,
@@ -556,8 +556,6 @@ const Bancos = ({
   );
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const autoFetched = useRef(false);
-
   const handleLoaded = useCallback(
     (result: BankAccountStatement[], q: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat }) => {
       onStatementsChange(result);
@@ -567,30 +565,12 @@ const Bancos = ({
     [onStatementsChange, onLastQueryChange],
   );
 
-  // ── Auto-fetch latest data on mount (today + SWIFT) ──
-  // Only fires once if there's no existing data loaded.
+  // ── Auto-switch to dashboard when data arrives from App-level fetch ──
   useEffect(() => {
-    if (autoFetched.current) return;
-    if (statements.length > 0 && lastQuery) return; // already have data
-    autoFetched.current = true;
-
-    const today = todayISO();
-    const defaultFormat: BankStatementFormat = 'SWIFT';
-
-    (async () => {
-      try {
-        const res = await fetchBankStatements({
-          fechaEstadoCuenta: today,
-          formatoElectronico: defaultFormat,
-        });
-        if (res.length > 0) {
-          handleLoaded(res, { fechaEstadoCuenta: today, formatoElectronico: defaultFormat });
-        }
-      } catch {
-        // Silently fail — user can still use the form to query manually
-      }
-    })();
-  }, [statements.length, lastQuery, handleLoaded]);
+    if (statements.length > 0 && lastQuery && view === 'form') {
+      setView('dashboard');
+    }
+  }, [statements.length, lastQuery, view]);
 
   const handleReset = useCallback(() => {
     onStatementsChange([]);

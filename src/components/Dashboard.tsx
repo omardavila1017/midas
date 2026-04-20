@@ -105,11 +105,13 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
       label: 'Variación',
       data: variacionValues,
       getColor: (val: number) => (val >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'),
+      showSign: true,
     },
     {
       label: 'Caja Final',
       data: cajaFinalValues,
       getColor: (val: number) => (val < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'),
+      showSign: true,
     },
   ];
 
@@ -217,7 +219,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
           return (
             <div
               key={idx}
-              className={`bg-white rounded-2xl border border-[var(--gray-200)]/40 p-5 shadow-sm hover:shadow-md transition-shadow animate-card-in hover-lift ${['stagger-1', 'stagger-2', 'stagger-3', 'stagger-4'][idx]}`}
+              className={`bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm hover:shadow-md transition-shadow animate-card-in hover-lift ${['stagger-1', 'stagger-2', 'stagger-3', 'stagger-4'][idx]}`}
             >
               <div className="flex items-start justify-between mb-3">
                 <p className="text-[12px] font-medium text-[var(--gray-400)] uppercase tracking-wide">{kpi.label}</p>
@@ -237,10 +239,15 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
       </div>
 
       {/* Main Chart */}
-      <div className="bg-white rounded-2xl border border-[var(--gray-200)]/40 p-6 shadow-sm animate-card-in hover-lift stagger-5">
-        <h2 className="text-[16px] font-semibold text-[var(--gray-950)] mb-5">
-          Flujo de Efectivo Mensual — {plan.year}
-        </h2>
+      <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-6 shadow-sm animate-card-in hover-lift stagger-5">
+        <div className="flex items-baseline justify-between mb-5">
+          <h2 className="text-[16px] font-semibold text-[var(--gray-950)]">
+            Flujo de Efectivo Mensual — {plan.year}
+          </h2>
+          <span className="text-[11px] font-medium" style={{ color: 'var(--gray-400)' }}>
+            Haz clic en un mes para ver el desglose
+          </span>
+        </div>
         <ResponsiveContainer width="100%" height={380}>
           <ComposedChart
             data={mainChartData}
@@ -299,7 +306,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
 
       {/* Drill-Down Section */}
       {drillPath.length > 0 && currentMonth !== null && (
-        <div className="bg-white rounded-2xl border border-[var(--gray-200)]/40 p-6 shadow-sm animate-card-in hover-lift stagger-6">
+        <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-6 shadow-sm animate-card-in hover-lift stagger-6">
           {/* Breadcrumb */}
           <div className="flex items-center gap-1.5 mb-5 flex-wrap">
             <button
@@ -375,18 +382,24 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
       )}
 
       {/* Monthly Summary Table */}
-      <div className="bg-white rounded-2xl border border-[var(--gray-200)]/40 p-6 shadow-sm animate-card-in hover-lift stagger-7">
-        <h2 className="text-[16px] font-semibold text-[var(--gray-950)] mb-5">Resumen Mensual</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]">
+      <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-6 shadow-sm animate-card-in hover-lift stagger-7">
+        <div className="flex items-baseline justify-between mb-5">
+          <h2 className="text-[16px] font-semibold text-[var(--gray-950)]">Resumen Mensual</h2>
+          <span className="text-[11px] font-medium" style={{ color: 'var(--gray-400)' }}>
+            Clic en mes para desglose
+          </span>
+        </div>
+        <div className="overflow-x-auto -mx-2 px-2" style={{ scrollbarWidth: 'thin' }}>
+          <table className="w-full text-[12.5px]">
             <thead>
               <tr className="border-b border-[var(--gray-100)]">
-                <th className="text-left py-3 px-3 text-[var(--gray-400)] font-semibold">Concepto</th>
+                <th className="text-left py-3 px-3 text-[var(--gray-400)] font-semibold sticky left-0 bg-white z-10">Concepto</th>
                 {MONTHS.map((month, idx) => (
                   <th
                     key={month}
-                    className="text-right py-3 px-2 text-[var(--gray-400)] font-semibold cursor-pointer hover:text-[var(--primary)] transition"
+                    className="text-right py-3 px-2 text-[var(--gray-400)] font-semibold cursor-pointer hover:text-[var(--primary)] transition whitespace-nowrap"
                     onClick={() => handleMonthClick(idx)}
+                    title={`Ver desglose de ${month}`}
                   >
                     {month}
                   </th>
@@ -400,17 +413,23 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
                   key={rowIdx}
                   className="border-b border-[var(--gray-50)] hover:bg-[var(--surface-alt)] transition hover-row"
                 >
-                  <td className="py-3 px-3 font-medium text-[var(--gray-950)]">{row.label}</td>
-                  {row.data.map((value, colIdx) => (
-                    <td
-                      key={colIdx}
-                      className={`text-right py-3 px-2 font-mono ${
-                        row.getColor ? row.getColor(value) : row.color
-                      }`}
-                    >
-                      {fmtCurrency(value)}
-                    </td>
-                  ))}
+                  <td className="py-3 px-3 font-medium text-[var(--gray-950)] sticky left-0 bg-white z-10">{row.label}</td>
+                  {row.data.map((value, colIdx) => {
+                    const signPrefix = (row as any).showSign && value !== 0
+                      ? (value > 0 ? '+ ' : '- ')
+                      : '';
+                    const displayVal = (row as any).showSign && value < 0 ? Math.abs(value) : value;
+                    return (
+                      <td
+                        key={colIdx}
+                        className={`text-right py-3 px-2 font-mono whitespace-nowrap ${
+                          row.getColor ? row.getColor(value) : row.color
+                        }`}
+                      >
+                        {signPrefix}{fmtCurrency(displayVal)}
+                      </td>
+                    );
+                  })}
                   <td
                     className={`text-right py-3 px-3 font-mono font-semibold ${
                       row.getColor

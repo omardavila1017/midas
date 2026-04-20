@@ -1,13 +1,5 @@
-export function formatCurrency(value: number): string {
-  const sign = value < 0 ? '-' : '';
-  const absValue = Math.abs(value);
-  return `${sign}$${absValue.toFixed(2)} M`;
-}
-
-export function formatCompactNumber(value: number): string {
-  return value.toLocaleString('es-MX', { maximumFractionDigits: 0 });
-}
-
-export function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(0)}%`;
-}
+/**
+ * DEPRECATED — use imports from '../formatters' directly.
+ * These re-exports exist only for backward compatibility.
+ */
+export { fmtCurrency as formatCurrency, fmtCompact as formatCompactNumber, fmtPct as formatPercent } from '../formatters';
