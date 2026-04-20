@@ -22,7 +22,7 @@ export interface JdeClientConfig {
   timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 function resolveBaseUrl(override?: string): string {
   const fromEnv = import.meta.env.VITE_JDE_BASE_URL as string | undefined;
