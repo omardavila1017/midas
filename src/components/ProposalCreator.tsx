@@ -489,8 +489,9 @@ export default function ProposalCreator({
             <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Cómo funciona</p>
             <h1 className="mt-1 text-[24px] font-semibold text-[#1d1d1f]">Simular decisiones sin perder el pronóstico original</h1>
             <p className="mt-2 max-w-[880px] text-[13px] text-[#6e6e73]">
-              Siempre existe un <strong>Escenario Base</strong>. Desde ahí creas una propuesta, dentro de la propuesta un escenario,
-              y dentro del escenario activas simulaciones. Cada cambio recalcula el forecast y siempre se compara contra el Base.
+              Siempre existe un <strong>Escenario Base</strong>. Desde ahí creas una <strong>simulación</strong>, dentro de esa simulación
+              guardas uno o varios <strong>escenarios</strong>, y a cada escenario le asignas <strong>propuestas</strong> que actúan como ajustes financieros.
+              Cada cambio recalcula el forecast y siempre se compara contra el Base.
             </p>
           </div>
           <div className="rounded-2xl bg-[#f5f5f7] p-3">
@@ -500,18 +501,18 @@ export default function ProposalCreator({
 
         <div className="mt-5 grid grid-cols-4 gap-3">
           <StepCard index="1" title="Ver Base" description="El pronóstico original siempre está visible y no se borra." />
-          <StepCard index="2" title="Crear Propuesta" description="Agrupa una decisión financiera: ventas, gastos, equipos, pagos." />
-          <StepCard index="3" title="Crear Escenario" description="Prueba variantes conservadoras, realistas, optimistas o personalizadas." />
-          <StepCard index="4" title="Agregar Simulaciones" description="Activa reglas de negocio y compara el impacto contra Base." />
+          <StepCard index="2" title="Crear Simulación" description="Define el contenedor donde vas a guardar y correr distintos escenarios." />
+          <StepCard index="3" title="Crear Escenario" description="Agrupa varias propuestas financieras en una hipótesis guardada." />
+          <StepCard index="4" title="Agregar Propuestas" description="Activa ajustes reutilizables y compara el impacto contra Base." />
         </div>
       </div>
 
       <div className="grid grid-cols-[300px,minmax(0,1fr),420px] gap-5">
         <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
-            title="Base y Propuestas"
-            subtitle="El Escenario Base se mantiene fijo. Las propuestas cuelgan aparte."
-            actionLabel="Nueva propuesta"
+            title="Base y Simulaciones"
+            subtitle="El Escenario Base se mantiene fijo. Las simulaciones agrupan escenarios."
+            actionLabel="Nueva simulación"
             onAction={openNewProposal}
           />
 
@@ -527,7 +528,7 @@ export default function ProposalCreator({
               <div>
                 <p className="text-[13px] font-semibold">{BASE_SCENARIO_NAME}</p>
                 <p className={`mt-1 text-[11px] ${activeScenario?.id === BASE_SCENARIO_ID ? 'text-white/75' : 'text-[#86868b]'}`}>
-                  Pronóstico original sin simulaciones ni overrides. Punto de comparación permanente.
+                  Pronóstico original sin propuestas aplicadas ni overrides. Punto de comparación permanente.
                 </p>
               </div>
               <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
@@ -545,14 +546,14 @@ export default function ProposalCreator({
               <input
                 value={proposalForm.name}
                 onChange={(event) => setProposalForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Nombre de la propuesta"
+                placeholder="Nombre de la simulación"
                 className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={proposalForm.description}
                 onChange={(event) => setProposalForm((current) => ({ ...current, description: event.target.value }))}
                 rows={3}
-                placeholder="Qué decisión se quiere analizar"
+                placeholder="Qué iniciativa o análisis quieres correr"
                 className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
               <select
@@ -578,8 +579,8 @@ export default function ProposalCreator({
           <div className="space-y-2">
             {proposals.length === 0 && (
               <EmptyState
-                title="Sin propuestas aún"
-                description="Empieza creando una propuesta para abrir escenarios y simulaciones."
+                title="Sin simulaciones aún"
+                description="Empieza creando una simulación para abrir escenarios y correr propuestas."
               />
             )}
             {proposals.map((proposal) => {
@@ -612,7 +613,7 @@ export default function ProposalCreator({
                           openEditProposal(proposal);
                         }}
                         className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#1d1d1f]"
-                        title="Editar propuesta"
+                        title="Editar simulación"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
@@ -622,7 +623,7 @@ export default function ProposalCreator({
                           onDelete(proposal.id);
                         }}
                         className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#ff3b30]"
-                        title="Eliminar propuesta"
+                        title="Eliminar simulación"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -637,7 +638,7 @@ export default function ProposalCreator({
         <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
             title="Escenarios"
-            subtitle={activeProposal ? `Propuesta activa: ${activeProposal.name}` : 'Selecciona una propuesta para trabajar escenarios.'}
+            subtitle={activeProposal ? `Simulación activa: ${activeProposal.name}` : 'Selecciona una simulación para trabajar escenarios.'}
             actionLabel={activeProposal ? 'Nuevo escenario' : undefined}
             onAction={activeProposal ? () => openNewScenario() : undefined}
           />
@@ -714,15 +715,15 @@ export default function ProposalCreator({
 
           {!activeProposal && (
             <EmptyState
-              title="Primero elige una propuesta"
-              description="Cada propuesta puede tener escenarios conservador, realista, optimista o personalizado."
+              title="Primero elige una simulación"
+              description="Cada simulación puede tener escenarios conservador, realista, optimista o personalizado."
             />
           )}
 
           {activeProposal && proposalScenarios.length === 0 && !showScenarioForm && (
             <EmptyState
               title="Sin escenarios"
-              description="Crea el primer escenario para probar decisiones financieras sobre esta propuesta."
+              description="Crea el primer escenario para probar distintas combinaciones de propuestas dentro de esta simulación."
             />
           )}
 
@@ -751,7 +752,7 @@ export default function ProposalCreator({
                       <div className="mt-2 flex items-center gap-2 text-[11px] text-[#6e6e73]">
                         <span>{Math.round(scenario.probability * 100)}%</span>
                         <span>•</span>
-                        <span>{scenario.simulationIds.length} simulaciones activas</span>
+                        <span>{scenario.simulationIds.length} propuestas activas</span>
                         <span>•</span>
                         <span>{scenario.horizonMonths} meses</span>
                       </div>
@@ -787,18 +788,18 @@ export default function ProposalCreator({
 
         <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
-            title="Biblioteca de Simulaciones"
+            title="Biblioteca de Propuestas"
             subtitle={isBaseScenario(activeScenario)
-              ? 'Selecciona un escenario de propuesta para activar simulaciones.'
-              : `Escenario activo: ${activeScenario?.name ?? '—'}`}
-            actionLabel="Nueva simulación"
+              ? 'Selecciona un escenario para activar propuestas.'
+              : `Escenario activo: ${activeScenario?.name ?? '—'} · Si editas una propuesta, se actualiza en todos los escenarios donde esté asignada.`}
+            actionLabel="Nueva propuesta"
             onAction={openNewSimulation}
           />
 
           <input
             value={simulationSearch}
             onChange={(event) => setSimulationSearch(event.target.value)}
-            placeholder="Buscar simulación..."
+            placeholder="Buscar propuesta..."
             className="w-full rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
           />
 
@@ -807,19 +808,19 @@ export default function ProposalCreator({
               <input
                 value={simulationForm.name}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Nombre de la simulación"
+                placeholder="Nombre de la propuesta"
                 className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={simulationForm.description}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, description: event.target.value }))}
                 rows={3}
-                placeholder="Describe la decisión financiera"
+                placeholder="Describe el ajuste financiero"
                 className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
 
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Tipo de simulación">
+                <Field label="Tipo de propuesta">
                   <select
                     value={simulationForm.type}
                     onChange={(event) => setSimulationForm((current) => ({ ...current, type: event.target.value as SimulationType }))}
@@ -1023,8 +1024,8 @@ export default function ProposalCreator({
           <div className="space-y-2 max-h-[760px] overflow-y-auto pr-1">
             {filteredSimulations.length === 0 && (
               <EmptyState
-                title="Sin simulaciones"
-                description="Crea reglas reutilizables como aumento de ventas, retraso en cobranza o cobro en parcialidades."
+                title="Sin propuestas"
+                description="Crea ajustes reutilizables como aumento de ventas, retraso en cobranza o cobro en parcialidades."
               />
             )}
 
@@ -1053,7 +1054,7 @@ export default function ProposalCreator({
                           ? 'border-[#0071e3] bg-[#0071e3] text-white'
                           : 'border-[#d2d2d7] bg-white text-transparent'
                       } ${isBaseScenario(activeScenario) ? 'cursor-not-allowed opacity-50' : ''}`}
-                      title={isBaseScenario(activeScenario) ? 'Selecciona un escenario de propuesta' : 'Activar / desactivar simulación'}
+                      title={isBaseScenario(activeScenario) ? 'Selecciona un escenario para asignar propuestas' : 'Activar / desactivar propuesta'}
                     >
                       <Check className="w-3.5 h-3.5" />
                     </button>
@@ -1076,14 +1077,14 @@ export default function ProposalCreator({
                       <button
                         onClick={() => openEditSimulation(simulation)}
                         className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#1d1d1f]"
-                        title="Editar simulación"
+                        title="Editar propuesta"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => onDeleteSimulation(simulation.id)}
                         className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#ff3b30]"
-                        title="Eliminar simulación"
+                        title="Eliminar propuesta"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
