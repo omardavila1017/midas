@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { FlowPlan, Proposal, Scenario, TabId } from './types';
+import { FlowPlan, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
+import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { loadClientsCatalog } from './domain/loadClientsCatalog';
 import { fetchCompanies, type Company, JdeApiError, type BankAccountStatement, type BankStatementFormat } from './services/jde';
 import Upload from './components/Upload';
@@ -74,6 +74,9 @@ export default function App() {
   const [plan, setPlan] = useState<FlowPlan | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [simulations, setSimulations] = useState<Simulation[]>([]);
+  const [activeProposalId, setActiveProposalId] = useState<string | null>(null);
+  const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [assumptions, setAssumptions] = useState<CashFlowAssumptions>({
@@ -83,7 +86,7 @@ export default function App() {
   });
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
-  const [forecastOverrides, setForecastOverrides] = useState<ForecastOverride[]>([]);
+  const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -121,11 +124,14 @@ export default function App() {
       if (stored.plan) setPlan(stored.plan);
       if (stored.proposals.length) setProposals(stored.proposals);
       if (stored.scenarios.length) setScenarios(stored.scenarios);
+      if (stored.simulations.length) setSimulations(stored.simulations);
+      setActiveProposalId(stored.activeProposalId ?? null);
+      setActiveScenarioId(stored.activeScenarioId ?? null);
       if (stored.providers.length) setProviders(stored.providers);
       if (stored.clients.length) setClients(stored.clients);
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
-      if (stored.forecastOverrides?.length) setForecastOverrides(stored.forecastOverrides);
+      if (stored.scenarioCellOverrides?.length) setScenarioCellOverrides(stored.scenarioCellOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
     }
@@ -142,17 +148,65 @@ export default function App() {
     });
   }, [catalogLoaded, clients.length]);
 
+  useEffect(() => {
+    if (proposals.length === 0) {
+      if (activeProposalId !== null) setActiveProposalId(null);
+      return;
+    }
+
+    if (!activeProposalId || !proposals.some((proposal) => proposal.id === activeProposalId)) {
+      setActiveProposalId(proposals[0].id);
+    }
+  }, [activeProposalId, proposals]);
+
+  useEffect(() => {
+    if (!activeProposalId) {
+      if (activeScenarioId !== null && scenarios.length > 0) {
+        setActiveScenarioId(scenarios[0].id);
+      }
+      return;
+    }
+
+    const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === activeProposalId);
+    if (proposalScenarios.length === 0) {
+      if (activeScenarioId !== null) setActiveScenarioId(null);
+      return;
+    }
+
+    if (!activeScenarioId || !proposalScenarios.some((scenario) => scenario.id === activeScenarioId)) {
+      setActiveScenarioId(
+        proposals.find((proposal) => proposal.id === activeProposalId)?.activeScenarioId
+          ?? proposalScenarios[0].id,
+      );
+    }
+  }, [activeProposalId, activeScenarioId, proposals, scenarios]);
+
   // Auto-save to localStorage (debounced by 500ms)
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveStore({
+      const store: FlowSenseStore = {
         plan, proposals, scenarios, providers, clients,
-        assumptions, confirmedPayments, cxpRecords, forecastOverrides,
+        simulations, activeProposalId, activeScenarioId,
+        assumptions, confirmedPayments, cxpRecords, scenarioCellOverrides,
         lastSaved: new Date().toISOString(),
-      });
+      };
+      saveStore(store);
     }, 500);
     return () => clearTimeout(timer);
-  }, [plan, proposals, scenarios, providers, clients, assumptions, confirmedPayments, cxpRecords, forecastOverrides]);
+  }, [
+    plan,
+    proposals,
+    scenarios,
+    simulations,
+    activeProposalId,
+    activeScenarioId,
+    providers,
+    clients,
+    assumptions,
+    confirmedPayments,
+    cxpRecords,
+    scenarioCellOverrides,
+  ]);
 
   // ── JDE: load companies on mount ──
   const loadCompanies = useCallback(async () => {
@@ -202,10 +256,80 @@ export default function App() {
     if (prevTab.current !== activeTab) { setPageKey(k => k + 1); prevTab.current = activeTab; }
   }, [activeTab]);
 
-  const addProposal = (p: Proposal) => setProposals(prev => [...prev, p]);
+  const addProposal = (p: Proposal) => {
+    setProposals(prev => [...prev, p]);
+    setActiveProposalId(p.id);
+  };
   const updateProposal = (p: Proposal) => setProposals(prev => prev.map(x => x.id === p.id ? p : x));
-  const deleteProposal = (id: string) => setProposals(prev => prev.filter(x => x.id !== id));
-  const saveScenario = (s: Scenario) => setScenarios(prev => [...prev, s]);
+  const deleteProposal = (id: string) => {
+    const nextProposals = proposals.filter(x => x.id !== id);
+    const nextScenarios = scenarios.filter(x => x.proposalId !== id);
+    const nextScenarioIds = new Set(nextScenarios.map((scenario) => scenario.id));
+    setProposals(nextProposals);
+    setScenarios(nextScenarios);
+    setActiveProposalId(current => current === id ? (nextProposals[0]?.id ?? null) : current);
+    setActiveScenarioId(current => {
+      if (!current) return nextScenarios[0]?.id ?? null;
+      return nextScenarioIds.has(current) ? current : (nextScenarios[0]?.id ?? null);
+    });
+    setScenarioCellOverrides(prev => prev.filter(override => nextScenarioIds.has(override.scenarioId)));
+  };
+  const saveScenario = (s: Scenario) => {
+    setScenarios(prev => [...prev, s]);
+    setActiveProposalId(s.proposalId);
+    setActiveScenarioId(s.id);
+    setProposals(prev => prev.map((proposal) => (
+      proposal.id === s.proposalId
+        ? { ...proposal, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
+        : proposal
+    )));
+  };
+  const updateScenario = (s: Scenario) => {
+    setScenarios(prev => prev.map(x => x.id === s.id ? s : x));
+    setProposals(prev => prev.map((proposal) => (
+      proposal.id === s.proposalId && proposal.activeScenarioId === s.id
+        ? { ...proposal, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
+        : proposal
+    )));
+  };
+  const deleteScenario = (id: string) => {
+    const nextScenarios = scenarios.filter(x => x.id !== id);
+    setScenarios(nextScenarios);
+    setActiveScenarioId(current => current === id ? (nextScenarios[0]?.id ?? null) : current);
+    setScenarioCellOverrides(prev => prev.filter(override => override.scenarioId !== id));
+    setProposals(prev => prev.map((proposal) => (
+      proposal.activeScenarioId === id
+        ? { ...proposal, activeScenarioId: nextScenarios.find((scenario) => scenario.proposalId === proposal.id)?.id }
+        : proposal
+    )));
+  };
+  const addSimulation = (simulation: Simulation) => setSimulations(prev => [...prev, simulation]);
+  const updateSimulation = (simulation: Simulation) => setSimulations(prev => prev.map(item => item.id === simulation.id ? simulation : item));
+  const deleteSimulation = (id: string) => {
+    setSimulations(prev => prev.filter(item => item.id !== id));
+    setScenarios(prev => prev.map((scenario) => ({
+      ...scenario,
+      simulationIds: scenario.simulationIds.filter(simulationId => simulationId !== id),
+    })));
+  };
+  const selectProposal = (proposalId: string) => {
+    setActiveProposalId(proposalId);
+    const proposal = proposals.find((item) => item.id === proposalId);
+    const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === proposalId);
+    setActiveScenarioId(proposal?.activeScenarioId ?? proposalScenarios[0]?.id ?? null);
+  };
+  const selectScenario = (scenarioId: string | null) => {
+    setActiveScenarioId(scenarioId);
+    if (!scenarioId) return;
+    const scenario = scenarios.find((item) => item.id === scenarioId);
+    if (!scenario) return;
+    setActiveProposalId(scenario.proposalId);
+    setProposals(prev => prev.map((proposal) => (
+      proposal.id === scenario.proposalId
+        ? { ...proposal, activeScenarioId: scenarioId, updatedAt: new Date().toISOString() }
+        : proposal
+    )));
+  };
 
   const addProvider = (p: Provider) => setProviders(prev => [...prev, p]);
   const updateProvider = (p: Provider) => setProviders(prev => prev.map(x => x.id === p.id ? p : x));
@@ -283,7 +407,8 @@ export default function App() {
               onClick={() => {
                 const json = exportStore({
                   plan, proposals, scenarios, providers, clients,
-                  assumptions, confirmedPayments, cxpRecords,
+                  simulations, activeProposalId, activeScenarioId,
+                  assumptions, confirmedPayments, cxpRecords, scenarioCellOverrides,
                   lastSaved: new Date().toISOString(),
                 });
                 const blob = new Blob([json], { type: 'application/json' });
@@ -379,9 +504,21 @@ export default function App() {
                 ? <ProposalCreator
                     plan={plan}
                     proposals={proposals}
+                    scenarios={scenarios}
+                    simulations={simulations}
+                    activeProposalId={activeProposalId}
+                    activeScenarioId={activeScenarioId}
+                    onSelectProposal={selectProposal}
+                    onSelectScenario={selectScenario}
                     onAdd={addProposal}
                     onUpdate={updateProposal}
                     onDelete={deleteProposal}
+                    onAddScenario={saveScenario}
+                    onUpdateScenario={updateScenario}
+                    onDeleteScenario={deleteScenario}
+                    onAddSimulation={addSimulation}
+                    onUpdateSimulation={updateSimulation}
+                    onDeleteSimulation={deleteSimulation}
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Propuestas" />
             )}
@@ -391,7 +528,13 @@ export default function App() {
                     plan={plan}
                     proposals={proposals}
                     scenarios={scenarios}
-                    onSaveScenario={saveScenario}
+                    simulations={simulations}
+                    overrides={scenarioCellOverrides}
+                    activeProposalId={activeProposalId}
+                    activeScenarioId={activeScenarioId}
+                    onSelectProposal={selectProposal}
+                    onSelectScenario={selectScenario}
+                    onUpdateScenario={updateScenario}
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Simulador" />
             )}
@@ -424,8 +567,15 @@ export default function App() {
                 ? <Forecast
                     plan={plan}
                     view={activeTab}
-                    overrides={forecastOverrides}
-                    onOverridesChange={setForecastOverrides}
+                    proposals={proposals}
+                    scenarios={scenarios}
+                    simulations={simulations}
+                    activeProposalId={activeProposalId}
+                    activeScenarioId={activeScenarioId}
+                    overrides={scenarioCellOverrides}
+                    onSelectProposal={selectProposal}
+                    onSelectScenario={selectScenario}
+                    onOverridesChange={setScenarioCellOverrides}
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Pronóstico" />
             )}

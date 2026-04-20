@@ -1,307 +1,438 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
-import { FlowPlan, FlowConcept, MONTHS, ForecastOverride, overrideKey } from '../types';
-import { ChevronDown, ChevronRight, Download, TrendingUp, TrendingDown, Wallet, MessageSquare, RotateCcw, X } from 'lucide-react';
-import { toCSV, downloadFile } from '../utils/export';
-
-/**
- * Pronóstico — vista tipo Fathom con celdas editables tipo Excel.
- *
- * Indicadores de celda:
- *   ⚪ base (sin cambios)
- *   🟡 override manual
- *   💬 tiene comentario
- *   Doble clic → editor inline
- *   Tooltip → valor base, override, comentario, botón restaurar
- */
-
-type ForecastView = 'pnl' | 'cashflow' | 'drivers';
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  RotateCcw,
+  X,
+} from 'lucide-react';
+import {
+  EvaluatedCell,
+  FlowConcept,
+  FlowPlan,
+  ForecastLayerMode,
+  Proposal,
+  ROLE_TARGET_EXPENSE,
+  ROLE_TARGET_INCOME,
+  ROLE_TARGET_LABELS,
+  Scenario,
+  ScenarioCellOverride,
+  Simulation,
+  TabId,
+  scenarioCellKey,
+} from '../types';
+import { evaluateScenario } from '../domain/scenarioEngine';
+import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 
 interface Props {
   plan: FlowPlan;
-  view: ForecastView;
-  overrides: ForecastOverride[];
-  onOverridesChange: (next: ForecastOverride[]) => void;
+  view: Extract<TabId, 'pnl' | 'cashflow' | 'drivers'>;
+  proposals: Proposal[];
+  scenarios: Scenario[];
+  simulations: Simulation[];
+  activeProposalId: string | null;
+  activeScenarioId: string | null;
+  overrides: ScenarioCellOverride[];
+  onSelectProposal: (proposalId: string) => void;
+  onSelectScenario: (scenarioId: string | null) => void;
+  onOverridesChange: (next: ScenarioCellOverride[]) => void;
 }
 
-interface RollingMonth {
-  monthIndex: number;
-  year: number;
-  label: string;
-  ym: string; // "2026-04"
-}
-
-function buildRollingWindow(): RollingMonth[] {
-  const today = new Date();
-  const startMonth = today.getMonth();
-  const startYear = today.getFullYear();
-  const out: RollingMonth[] = [];
-  for (let i = 0; i < 12; i++) {
-    const m = (startMonth + i) % 12;
-    const y = startYear + Math.floor((startMonth + i) / 12);
-    out.push({
-      monthIndex: m,
-      year: y,
-      label: `${MONTHS[m]} ${String(y).slice(2)}`,
-      ym: `${y}-${String(m + 1).padStart(2, '0')}`,
-    });
+function buildChildrenIndex(plan: FlowPlan): Map<string, FlowConcept[]> {
+  const childrenById = new Map<string, FlowConcept[]>();
+  for (const concept of plan.concepts) {
+    if (!concept.parentId) continue;
+    const children = childrenById.get(concept.parentId) ?? [];
+    children.push(concept);
+    childrenById.set(concept.parentId, children);
   }
-  return out;
+  for (const [parentId, children] of childrenById.entries()) {
+    childrenById.set(parentId, children.sort((a, b) => a.sortOrder - b.sortOrder));
+  }
+  return childrenById;
 }
 
-function baseValue(concept: FlowConcept, month: RollingMonth, planYear: number): number {
-  if (month.year !== planYear) return 0;
-  return concept.monthlyData[month.monthIndex] ?? 0;
+function displayValue(cell: EvaluatedCell, mode: ForecastLayerMode): number {
+  switch (mode) {
+    case 'base':
+      return cell.baseValue;
+    case 'simulated':
+      return cell.simulatedValue;
+    case 'manual':
+      return cell.finalValue;
+    case 'diff':
+      return cell.finalValue - cell.baseValue;
+  }
 }
 
-export default function Forecast({ plan, view, overrides, onOverridesChange }: Props) {
-  const window = useMemo(() => buildRollingWindow(), []);
+export default function Forecast({
+  plan,
+  view,
+  proposals,
+  scenarios,
+  simulations,
+  activeProposalId,
+  activeScenarioId,
+  overrides,
+  onSelectProposal,
+  onSelectScenario,
+  onOverridesChange,
+}: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState<{ conceptId: string; ym: string } | null>(null);
-  const [popover, setPopover] = useState<{ conceptId: string; ym: string } | null>(null);
+  const [editing, setEditing] = useState<{ conceptId: string; yearMonth: string } | null>(null);
+  const [popover, setPopover] = useState<{ conceptId: string; yearMonth: string } | null>(null);
+  const [layerMode, setLayerMode] = useState<ForecastLayerMode>('manual');
 
-  const overridesMap = useMemo(() => {
-    const m = new Map<string, ForecastOverride>();
-    for (const o of overrides) m.set(o.key, o);
-    return m;
-  }, [overrides]);
+  const childrenById = useMemo(() => buildChildrenIndex(plan), [plan]);
+  const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
+  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
+    ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? null;
 
-  const valueFor = (c: FlowConcept, month: RollingMonth): number => {
-    const k = overrideKey(c.id, month.ym);
-    const ov = overridesMap.get(k);
-    if (ov) return ov.overrideValue;
-    return baseValue(c, month, plan.year);
+  const baseEvaluation = useMemo(() => {
+    if (!activeProposal || !activeScenario) return null;
+    return evaluateScenario(plan, activeProposal, activeScenario, [], []);
+  }, [activeProposal, activeScenario, plan]);
+
+  const simulatedEvaluation = useMemo(() => {
+    if (!activeProposal || !activeScenario) return null;
+    return evaluateScenario(plan, activeProposal, activeScenario, simulations, []);
+  }, [activeProposal, activeScenario, plan, simulations]);
+
+  const finalEvaluation = useMemo(() => {
+    if (!activeProposal || !activeScenario) return null;
+    return evaluateScenario(plan, activeProposal, activeScenario, simulations, overrides);
+  }, [activeProposal, activeScenario, overrides, plan, simulations]);
+
+  const months = finalEvaluation?.months ?? [];
+  const roots = useMemo(
+    () => plan.concepts.filter((concept) => !concept.parentId).sort((a, b) => a.sortOrder - b.sortOrder),
+    [plan.concepts],
+  );
+  const ingresosRoots = roots.filter((concept) => concept.conceptType === 'ingreso');
+  const egresosRoots = roots.filter((concept) => concept.conceptType === 'egreso');
+  const allRoots = roots.filter((concept) => concept.conceptType !== 'reserva');
+
+  useEffect(() => {
+    setEditing(null);
+    setPopover(null);
+  }, [activeScenarioId, activeProposalId, layerMode, view]);
+
+  if (!activeProposal || !activeScenario || !baseEvaluation || !simulatedEvaluation || !finalEvaluation) {
+    return (
+      <div className="rounded-2xl border border-dashed border-[#d2d2d7] bg-white px-6 py-20 text-center">
+        <h2 className="text-[18px] font-semibold text-[#1d1d1f]">No hay escenario activo</h2>
+        <p className="mt-2 text-[13px] text-[#86868b]">
+          Selecciona una propuesta y un escenario en el módulo de Propuestas para habilitar el pronóstico.
+        </p>
+      </div>
+    );
+  }
+
+  const metrics =
+    layerMode === 'base'
+      ? baseEvaluation.metrics
+      : layerMode === 'simulated'
+        ? simulatedEvaluation.metrics
+        : layerMode === 'manual'
+          ? finalEvaluation.metrics
+          : {
+              ingresos: finalEvaluation.metrics.ingresos.map((value, index) => value - (baseEvaluation.metrics.ingresos[index] ?? 0)),
+              egresos: finalEvaluation.metrics.egresos.map((value, index) => value - (baseEvaluation.metrics.egresos[index] ?? 0)),
+              flujoNeto: finalEvaluation.metrics.flujoNeto.map((value, index) => value - (baseEvaluation.metrics.flujoNeto[index] ?? 0)),
+              cajaFinal: finalEvaluation.metrics.cajaFinal.map((value, index) => value - (baseEvaluation.metrics.cajaFinal[index] ?? 0)),
+              cobranza: finalEvaluation.metrics.cobranza.map((value, index) => value - (baseEvaluation.metrics.cobranza[index] ?? 0)),
+              pagosProveedores: finalEvaluation.metrics.pagosProveedores.map((value, index) => value - (baseEvaluation.metrics.pagosProveedores[index] ?? 0)),
+              saldosFinales: finalEvaluation.metrics.saldosFinales.map((value, index) => value - (baseEvaluation.metrics.saldosFinales[index] ?? 0)),
+            };
+
+  const directOverrides = overrides.filter((override) => override.scenarioId === activeScenario.id);
+  const directOverrideCount = directOverrides.length;
+  const commentCount = directOverrides.filter((override) => override.comment).length;
+
+  const roleRows = [
+    { id: ROLE_TARGET_INCOME, label: ROLE_TARGET_LABELS[ROLE_TARGET_INCOME], category: 'ingreso' as const },
+    { id: ROLE_TARGET_EXPENSE, label: ROLE_TARGET_LABELS[ROLE_TARGET_EXPENSE], category: 'egreso' as const },
+  ].filter((roleRow) => {
+    return months.some((month) => {
+      const cell = finalEvaluation.cells.get(scenarioCellKey(activeScenario.id, roleRow.id, month.ym));
+      return cell ? (cell.finalValue !== 0 || cell.simulatedValue !== 0 || cell.baseValue !== 0) : false;
+    });
+  });
+
+  const handleClearScenarioOverrides = () => {
+    onOverridesChange(overrides.filter((override) => override.scenarioId !== activeScenario.id));
   };
 
-  const rowTotal = (c: FlowConcept): number =>
-    window.reduce((s, m) => s + valueFor(c, m), 0);
+  const applyOverride = (conceptId: string, yearMonth: string, manualValue: number) => {
+    const cell = finalEvaluation.cells.get(scenarioCellKey(activeScenario.id, conceptId, yearMonth));
+    if (!cell || !cell.isEditable) return;
+    const existing = overrides.find((override) => override.key === scenarioCellKey(activeScenario.id, conceptId, yearMonth));
+    const nextKey = scenarioCellKey(activeScenario.id, conceptId, yearMonth);
 
-  const toggle = (id: string) => {
-    const next = new Set(expanded);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setExpanded(next);
-  };
-
-  const applyOverride = (conceptId: string, month: RollingMonth, newValue: number, comment?: string) => {
-    const k = overrideKey(conceptId, month.ym);
-    const concept = plan.concepts.find(c => c.id === conceptId);
-    if (!concept) return;
-    const original = baseValue(concept, month, plan.year);
-    if (newValue === original && !comment) {
-      // revert
-      onOverridesChange(overrides.filter(o => o.key !== k));
+    if (manualValue === cell.simulatedValue && !existing?.comment) {
+      onOverridesChange(overrides.filter((override) => override.key !== nextKey));
       return;
     }
-    const existing = overridesMap.get(k);
-    const next: ForecastOverride = {
-      key: k,
+
+    const nextOverride: ScenarioCellOverride = {
+      key: nextKey,
+      scenarioId: activeScenario.id,
       conceptId,
-      yearMonth: month.ym,
-      originalValue: existing?.originalValue ?? original,
-      overrideValue: newValue,
-      comment: comment ?? existing?.comment,
+      yearMonth,
+      baseValue: cell.baseValue,
+      simulatedValue: cell.simulatedValue,
+      manualValue,
+      comment: existing?.comment,
       editedAt: new Date().toISOString(),
     };
-    onOverridesChange([...overrides.filter(o => o.key !== k), next]);
+
+    onOverridesChange([...overrides.filter((override) => override.key !== nextKey), nextOverride]);
   };
 
-  const restoreOverride = (k: string) => {
-    onOverridesChange(overrides.filter(o => o.key !== k));
-    setPopover(null);
-  };
+  const setComment = (conceptId: string, yearMonth: string, comment: string) => {
+    const cell = finalEvaluation.cells.get(scenarioCellKey(activeScenario.id, conceptId, yearMonth));
+    if (!cell || !cell.isEditable) return;
 
-  const setComment = (conceptId: string, month: RollingMonth, comment: string) => {
-    const k = overrideKey(conceptId, month.ym);
-    const existing = overridesMap.get(k);
-    const concept = plan.concepts.find(c => c.id === conceptId);
-    if (!concept) return;
-    if (!existing && !comment) return;
+    const existing = overrides.find((override) => override.key === scenarioCellKey(activeScenario.id, conceptId, yearMonth));
+    const nextKey = scenarioCellKey(activeScenario.id, conceptId, yearMonth);
+
+    if (!existing && !comment.trim()) return;
+
     if (existing) {
-      const updated = { ...existing, comment: comment || undefined, editedAt: new Date().toISOString() };
-      onOverridesChange([...overrides.filter(o => o.key !== k), updated]);
-    } else {
-      const original = baseValue(concept, month, plan.year);
-      const next: ForecastOverride = {
-        key: k, conceptId, yearMonth: month.ym,
-        originalValue: original, overrideValue: original,
-        comment, editedAt: new Date().toISOString(),
+      const nextOverride: ScenarioCellOverride = {
+        ...existing,
+        baseValue: cell.baseValue,
+        simulatedValue: cell.simulatedValue,
+        manualValue: existing.manualValue,
+        comment: comment.trim() || undefined,
+        editedAt: new Date().toISOString(),
       };
-      onOverridesChange([...overrides, next]);
+      onOverridesChange([...overrides.filter((override) => override.key !== nextKey), nextOverride]);
+      return;
     }
-  };
 
-  // Raíces por tipo
-  const roots = plan.concepts.filter(c => !c.parentId);
-  const ingresos = roots.filter(c => c.conceptType === 'ingreso');
-  const egresos = roots.filter(c => c.conceptType === 'egreso');
-
-  // Totales por mes (usan valueFor → incluye overrides)
-  const sumFor = (cs: FlowConcept[], m: RollingMonth) => cs.reduce((s, c) => s + valueFor(c, m), 0);
-  const ingresosPorMes = window.map(m => sumFor(ingresos, m));
-  const egresosPorMes = window.map(m => sumFor(egresos, m));
-  const netoPorMes = window.map((_, i) => ingresosPorMes[i] - egresosPorMes[i]);
-
-  const cajaPorMes: number[] = [];
-  let saldo = plan.cajaInicial;
-  for (const n of netoPorMes) { saldo += n; cajaPorMes.push(saldo); }
-
-  const totalIngresos = ingresosPorMes.reduce((a, b) => a + b, 0);
-  const totalEgresos = egresosPorMes.reduce((a, b) => a + b, 0);
-  const totalNeto = totalIngresos - totalEgresos;
-
-  const handleExport = () => {
-    const rows: Record<string, string | number>[] = [];
-    const pushRow = (label: string, vals: number[]) => {
-      const row: Record<string, string | number> = { Concepto: label };
-      window.forEach((m, i) => { row[m.label] = vals[i]; });
-      row['Total'] = vals.reduce((a, b) => a + b, 0);
-      rows.push(row);
+    const nextOverride: ScenarioCellOverride = {
+      key: nextKey,
+      scenarioId: activeScenario.id,
+      conceptId,
+      yearMonth,
+      baseValue: cell.baseValue,
+      simulatedValue: cell.simulatedValue,
+      manualValue: cell.simulatedValue,
+      comment: comment.trim(),
+      editedAt: new Date().toISOString(),
     };
-    if (view === 'pnl') {
-      pushRow('Ingresos', ingresosPorMes);
-      pushRow('Egresos', egresosPorMes);
-      pushRow('Utilidad Neta', netoPorMes);
-    } else if (view === 'cashflow') {
-      pushRow('Entradas', ingresosPorMes);
-      pushRow('Salidas', egresosPorMes);
-      pushRow('Flujo Neto', netoPorMes);
-      pushRow('Caja al cierre', cajaPorMes);
-    }
-    downloadFile(toCSV(rows), `${view}-${new Date().toISOString().slice(0, 10)}.csv`);
+    onOverridesChange([...overrides, nextOverride]);
   };
 
-  const overrideCount = overrides.length;
-  const commentCount = overrides.filter(o => o.comment).length;
-
-  const clearAllOverrides = () => {
-    if (confirm(`¿Restaurar las ${overrideCount} celdas editadas a su valor original?`)) {
-      onOverridesChange([]);
-    }
+  const restoreOverride = (conceptId: string, yearMonth: string) => {
+    const key = scenarioCellKey(activeScenario.id, conceptId, yearMonth);
+    onOverridesChange(overrides.filter((override) => override.key !== key));
+    setPopover(null);
   };
 
   return (
     <div className="space-y-5" onClick={() => setPopover(null)}>
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight">
-            {view === 'pnl' && 'Estado de Resultados'}
-            {view === 'cashflow' && 'Flujo de Caja'}
-            {view === 'drivers' && 'Drivers'}
-          </h1>
-          <p className="text-[13px] text-[#86868b] mt-1">
-            Ventana mensual rodante · 12 meses desde {window[0].label} · doble clic en celda para editar
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {overrideCount > 0 && (
+      <header className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-[24px] font-semibold text-[#1d1d1f]">
+              {view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers'}
+            </h1>
+            <p className="mt-1 text-[13px] text-[#86868b]">
+              Pronóstico unificado por escenario. Doble clic en celdas hoja para editar manualmente.
+            </p>
+          </div>
+          {directOverrideCount > 0 && (
             <button
-              onClick={clearAllOverrides}
-              className="flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[#ff9500]/40 bg-[#ff9500]/10 text-[13px] text-[#ff9500] hover:bg-[#ff9500]/20"
+              onClick={handleClearScenarioOverrides}
+              className="inline-flex items-center gap-2 rounded-full border border-[#ff9500]/40 bg-[#ff9500]/10 px-3 py-2 text-[12px] font-medium text-[#ff9500]"
             >
-              <RotateCcw className="w-3.5 h-3.5" /> Restaurar {overrideCount}
+              <RotateCcw className="w-3.5 h-3.5" />
+              Restaurar {directOverrideCount}
             </button>
           )}
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[#d2d2d7] text-[13px] text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+        </div>
+
+        <div className="mt-5 grid grid-cols-[240px,240px,minmax(0,1fr)] gap-4">
+          <select
+            value={activeProposal.id}
+            onChange={(event) => onSelectProposal(event.target.value)}
+            className="rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
           >
-            <Download className="w-3.5 h-3.5" /> Exportar
-          </button>
+            {proposals.map((proposal) => (
+              <option key={proposal.id} value={proposal.id}>{proposal.name}</option>
+            ))}
+          </select>
+          <select
+            value={activeScenario.id}
+            onChange={(event) => onSelectScenario(event.target.value)}
+            className="rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
+          >
+            {scenarios
+              .filter((scenario) => scenario.proposalId === activeProposal.id)
+              .map((scenario) => (
+                <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
+              ))}
+          </select>
+          <div className="flex items-center justify-end rounded-xl bg-[#f5f5f7] p-1">
+            {(['base', 'simulated', 'manual', 'diff'] as ForecastLayerMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setLayerMode(mode)}
+                className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
+                  layerMode === mode
+                    ? 'bg-white text-[#1d1d1f] shadow-sm'
+                    : 'text-[#6e6e73]'
+                }`}
+              >
+                {mode === 'base' ? 'Base' : mode === 'simulated' ? 'Simulado' : mode === 'manual' ? 'Manual' : 'Diff'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-4 text-[12px] text-[#86868b]">
+          <LegendDot color="bg-[#d2d2d7]" label="Base" />
+          <LegendDot color="bg-[#0071e3]" label="Impactada por simulación" />
+          <LegendDot color="bg-[#ff9500]" label={`Ajuste manual${directOverrideCount > 0 ? ` (${directOverrideCount})` : ''}`} />
+          <span className="inline-flex items-center gap-1.5">
+            <MessageSquare className="w-3.5 h-3.5 text-[#0071e3]" />
+            Comentarios{commentCount > 0 ? ` (${commentCount})` : ''}
+          </span>
         </div>
       </header>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 text-[12px] text-[#86868b]">
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#d2d2d7]" /> Base</span>
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#ff9500]" /> Editada manualmente {overrideCount > 0 && <span className="text-[#ff9500] font-medium">({overrideCount})</span>}</span>
-        <span className="flex items-center gap-1.5"><MessageSquare className="w-3 h-3 text-[#0071e3]" /> Con comentario {commentCount > 0 && <span className="text-[#0071e3] font-medium">({commentCount})</span>}</span>
+      <div className="grid grid-cols-6 gap-4">
+        <KpiCard label="Ingresos" value={metrics.ingresos.reduce((sum, value) => sum + value, 0)} tone="pos" />
+        <KpiCard label="Egresos" value={metrics.egresos.reduce((sum, value) => sum + value, 0)} tone="neg" />
+        <KpiCard label="Flujo Neto" value={metrics.flujoNeto.reduce((sum, value) => sum + value, 0)} tone="neutral" />
+        <KpiCard label="Caja Final" value={metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0} tone="cash" />
+        <KpiCard label="Cobranza" value={metrics.cobranza.reduce((sum, value) => sum + value, 0)} tone="pos" />
+        <KpiCard label="Pagos Prov." value={metrics.pagosProveedores.reduce((sum, value) => sum + value, 0)} tone="neg" />
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-4 gap-4">
-        <Kpi label="Ingresos (12m)" value={totalIngresos} tone="pos" icon={TrendingUp} />
-        <Kpi label="Egresos (12m)" value={totalEgresos} tone="neg" icon={TrendingDown} />
-        <Kpi label="Utilidad Neta" value={totalNeto} tone={totalNeto >= 0 ? 'pos' : 'neg'} />
-        <Kpi label="Caja al final" value={cajaPorMes[cajaPorMes.length - 1] ?? plan.cajaInicial} tone="cash" icon={Wallet} />
-      </div>
-
-      {/* Main table */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden">
+      <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-[13px]">
-            <thead className="bg-[#fbfbfd] text-[11px] uppercase tracking-wide text-[#86868b] border-b border-[#d2d2d7]/40">
+          <table className="w-full min-w-[980px] text-[13px]">
+            <thead className="border-b border-[#e8e8ed] bg-[#fbfbfd]">
               <tr>
-                <th className="text-left px-4 py-2.5 sticky left-0 bg-[#fbfbfd] min-w-[220px] font-medium">Concepto</th>
-                {window.map(m => (
-                  <th key={m.ym} className="text-right px-3 py-2.5 font-medium whitespace-nowrap min-w-[100px]">{m.label}</th>
+                <th className="sticky left-0 min-w-[240px] bg-[#fbfbfd] px-4 py-2.5 text-left font-medium text-[#86868b]">Concepto</th>
+                {months.map((month) => (
+                  <th key={month.ym} className="px-3 py-2.5 text-right font-medium text-[#86868b]">{month.label}</th>
                 ))}
-                <th className="text-right px-4 py-2.5 font-medium bg-[#f5f5f7]">Total</th>
+                <th className="bg-[#f5f5f7] px-4 py-2.5 text-right font-medium text-[#86868b]">Total</th>
               </tr>
             </thead>
             <tbody>
               {view === 'drivers' ? (
-                <DriversBody
-                  concepts={plan.concepts}
-                  window={window}
-                  valueFor={valueFor}
-                  rowTotal={rowTotal}
-                  overridesMap={overridesMap}
-                  expanded={expanded}
-                  toggle={toggle}
-                  editing={editing}
-                  setEditing={setEditing}
-                  popover={popover}
-                  setPopover={setPopover}
-                  applyOverride={applyOverride}
-                  restoreOverride={restoreOverride}
-                  setComment={setComment}
-                  plan={plan}
-                />
+                <>
+                  {allRoots.map((root) => (
+                    <ConceptRow
+                      key={root.id}
+                      concept={root}
+                      depth={0}
+                      activeScenario={activeScenario}
+                      evaluation={finalEvaluation}
+                      months={months}
+                      childrenById={childrenById}
+                      expanded={expanded}
+                      onToggle={(conceptId) => toggleExpanded(setExpanded, conceptId)}
+                      layerMode={layerMode}
+                      editing={editing}
+                      setEditing={setEditing}
+                      popover={popover}
+                      setPopover={setPopover}
+                      applyOverride={applyOverride}
+                      restoreOverride={restoreOverride}
+                      setComment={setComment}
+                    />
+                  ))}
+                </>
               ) : (
                 <>
-                  <CategoryBlock
-                    label={view === 'pnl' ? 'Ingresos' : 'Entradas'}
+                  <CategoryHeader label={view === 'pnl' ? 'Ingresos' : 'Entradas'} colSpan={months.length + 1} />
+                  {ingresosRoots.map((root) => (
+                    <ConceptRow
+                      key={root.id}
+                      concept={root}
+                      depth={0}
+                      activeScenario={activeScenario}
+                      evaluation={finalEvaluation}
+                      months={months}
+                      childrenById={childrenById}
+                      expanded={expanded}
+                      onToggle={(conceptId) => toggleExpanded(setExpanded, conceptId)}
+                      layerMode={layerMode}
+                      editing={editing}
+                      setEditing={setEditing}
+                      popover={popover}
+                      setPopover={setPopover}
+                      applyOverride={applyOverride}
+                      restoreOverride={restoreOverride}
+                      setComment={setComment}
+                    />
+                  ))}
+                  {roleRows.filter((row) => row.category === 'ingreso').map((row) => (
+                    <RoleRow
+                      key={row.id}
+                      rowId={row.id}
+                      label={row.label}
+                      activeScenario={activeScenario}
+                      evaluation={finalEvaluation}
+                      months={months}
+                      layerMode={layerMode}
+                    />
+                  ))}
+                  <MetricTotalRow
+                    label={view === 'pnl' ? 'Total Ingresos' : 'Total Entradas'}
+                    values={metrics.ingresos}
                     tone="pos"
-                    roots={ingresos}
-                    totals={ingresosPorMes}
-                    window={window}
-                    valueFor={valueFor}
-                    rowTotal={rowTotal}
-                    overridesMap={overridesMap}
-                    expanded={expanded}
-                    toggle={toggle}
-                    editing={editing}
-                    setEditing={setEditing}
-                    popover={popover}
-                    setPopover={setPopover}
-                    applyOverride={applyOverride}
-                    restoreOverride={restoreOverride}
-                    setComment={setComment}
-                    plan={plan}
                   />
-                  <CategoryBlock
-                    label={view === 'pnl' ? 'Egresos' : 'Salidas'}
+
+                  <CategoryHeader label={view === 'pnl' ? 'Egresos' : 'Salidas'} colSpan={months.length + 1} />
+                  {egresosRoots.map((root) => (
+                    <ConceptRow
+                      key={root.id}
+                      concept={root}
+                      depth={0}
+                      activeScenario={activeScenario}
+                      evaluation={finalEvaluation}
+                      months={months}
+                      childrenById={childrenById}
+                      expanded={expanded}
+                      onToggle={(conceptId) => toggleExpanded(setExpanded, conceptId)}
+                      layerMode={layerMode}
+                      editing={editing}
+                      setEditing={setEditing}
+                      popover={popover}
+                      setPopover={setPopover}
+                      applyOverride={applyOverride}
+                      restoreOverride={restoreOverride}
+                      setComment={setComment}
+                    />
+                  ))}
+                  {roleRows.filter((row) => row.category === 'egreso').map((row) => (
+                    <RoleRow
+                      key={row.id}
+                      rowId={row.id}
+                      label={row.label}
+                      activeScenario={activeScenario}
+                      evaluation={finalEvaluation}
+                      months={months}
+                      layerMode={layerMode}
+                    />
+                  ))}
+                  <MetricTotalRow
+                    label={view === 'pnl' ? 'Total Egresos' : 'Total Salidas'}
+                    values={metrics.egresos}
                     tone="neg"
-                    roots={egresos}
-                    totals={egresosPorMes}
-                    window={window}
-                    valueFor={valueFor}
-                    rowTotal={rowTotal}
-                    overridesMap={overridesMap}
-                    expanded={expanded}
-                    toggle={toggle}
-                    editing={editing}
-                    setEditing={setEditing}
-                    popover={popover}
-                    setPopover={setPopover}
-                    applyOverride={applyOverride}
-                    restoreOverride={restoreOverride}
-                    setComment={setComment}
-                    plan={plan}
                   />
-                  <TotalRow
+                  <MetricTotalRow
                     label={view === 'pnl' ? 'Utilidad Neta' : 'Flujo Neto'}
-                    values={netoPorMes}
-                    emphasis
+                    values={metrics.flujoNeto}
+                    tone="neutral"
                   />
                 </>
               )}
@@ -309,195 +440,308 @@ export default function Forecast({ plan, view, overrides, onOverridesChange }: P
             {view === 'cashflow' && (
               <tfoot className="border-t-2 border-[#1d1d1f]/10 bg-[#fbfbfd]">
                 <tr>
-                  <td className="px-4 py-2.5 font-semibold text-[#1d1d1f] sticky left-0 bg-[#fbfbfd]">Caja inicial</td>
-                  {window.map((_, i) => (
-                    <td key={i} className="px-3 py-2.5 text-right tabular-nums text-[#86868b]">
-                      {i === 0 ? fmt(plan.cajaInicial) : fmt(cajaPorMes[i - 1])}
+                  <td className="sticky left-0 bg-[#fbfbfd] px-4 py-2.5 font-semibold text-[#1d1d1f]">Caja inicial</td>
+                  {months.map((month, index) => (
+                    <td key={month.ym} className="px-3 py-2.5 text-right tabular-nums text-[#6e6e73]">
+                      {layerMode === 'diff'
+                        ? formatCompactNumber(index === 0 ? 0 : metrics.cajaFinal[index - 1] ?? 0)
+                        : formatCompactNumber(index === 0 ? plan.cajaInicial : metrics.cajaFinal[index - 1] ?? 0)}
                     </td>
                   ))}
-                  <td className="px-4 py-2.5 text-right tabular-nums text-[#86868b] bg-[#f5f5f7]">{fmt(plan.cajaInicial)}</td>
+                  <td className="bg-[#f5f5f7] px-4 py-2.5 text-right tabular-nums text-[#6e6e73]">
+                    {layerMode === 'diff' ? '0' : formatCompactNumber(plan.cajaInicial)}
+                  </td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-2.5 font-semibold text-[#1d1d1f] sticky left-0 bg-[#fbfbfd]">Caja al cierre</td>
-                  {cajaPorMes.map((v, i) => (
-                    <td key={i} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${v < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>
-                      {fmt(v)}
+                  <td className="sticky left-0 bg-[#fbfbfd] px-4 py-2.5 font-semibold text-[#1d1d1f]">Caja al cierre</td>
+                  {metrics.cajaFinal.map((value, index) => (
+                    <td key={`${months[index]?.ym ?? index}-cash`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${value < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>
+                      {layerMode === 'diff' && value > 0 ? '+' : ''}{formatCompactNumber(value)}
                     </td>
                   ))}
-                  <td className={`px-4 py-2.5 text-right tabular-nums font-semibold bg-[#f5f5f7] ${cajaPorMes[cajaPorMes.length - 1] < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>
-                    {fmt(cajaPorMes[cajaPorMes.length - 1] ?? 0)}
+                  <td className={`bg-[#f5f5f7] px-4 py-2.5 text-right tabular-nums font-semibold ${(metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0) < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>
+                    {(layerMode === 'diff' && (metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0) > 0) ? '+' : ''}
+                    {formatCompactNumber(metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0)}
                   </td>
                 </tr>
               </tfoot>
             )}
           </table>
         </div>
-      </div>
-
-      {plan.concepts.length === 0 && (
-        <div className="text-center py-10 text-[13px] text-[#86868b]">
-          No hay conceptos cargados en el FlowPlan.
-        </div>
-      )}
+      </section>
     </div>
   );
 }
 
-// ────────────────────────────────────────────────────────────────
-// Sub-components
-// ────────────────────────────────────────────────────────────────
-
-interface RowCtx {
-  window: RollingMonth[];
-  valueFor: (c: FlowConcept, m: RollingMonth) => number;
-  rowTotal: (c: FlowConcept) => number;
-  overridesMap: Map<string, ForecastOverride>;
-  expanded: Set<string>;
-  toggle: (id: string) => void;
-  editing: { conceptId: string; ym: string } | null;
-  setEditing: (e: { conceptId: string; ym: string } | null) => void;
-  popover: { conceptId: string; ym: string } | null;
-  setPopover: (p: { conceptId: string; ym: string } | null) => void;
-  applyOverride: (conceptId: string, month: RollingMonth, newValue: number, comment?: string) => void;
-  restoreOverride: (k: string) => void;
-  setComment: (conceptId: string, month: RollingMonth, comment: string) => void;
-  plan: FlowPlan;
+function toggleExpanded(
+  setExpanded: Dispatch<SetStateAction<Set<string>>>,
+  conceptId: string,
+) {
+  setExpanded((current) => {
+    const next = new Set(current);
+    if (next.has(conceptId)) next.delete(conceptId);
+    else next.add(conceptId);
+    return next;
+  });
 }
 
-function CategoryBlock({
-  label, tone, roots, totals, ...ctx
-}: RowCtx & {
-  label: string;
-  tone: 'pos' | 'neg';
-  roots: FlowConcept[];
-  totals: number[];
-}) {
-  const total = totals.reduce((a, b) => a + b, 0);
-  const toneCls = tone === 'pos' ? 'text-[#34c759]' : 'text-[#ff3b30]';
+function CategoryHeader({ label, colSpan }: { label: string; colSpan: number }) {
   return (
-    <>
-      <tr className="bg-[#fbfbfd]/60 border-t border-[#d2d2d7]/40">
-        <td className="px-4 py-2 text-[11px] uppercase tracking-wide text-[#86868b] font-semibold sticky left-0 bg-[#fbfbfd]/60">{label}</td>
-        {ctx.window.map((_, i) => <td key={i} />)}
-        <td className="bg-[#f5f5f7]" />
-      </tr>
-      {roots.map(c => (
-        <ConceptRow key={c.id} concept={c} depth={0} {...ctx} />
-      ))}
-      <tr className="border-t border-[#d2d2d7]/40">
-        <td className={`px-4 py-2.5 font-semibold sticky left-0 bg-white ${toneCls}`}>Total {label}</td>
-        {totals.map((v, i) => (
-          <td key={i} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${toneCls}`}>{fmt(v)}</td>
-        ))}
-        <td className={`px-4 py-2.5 text-right tabular-nums font-semibold bg-[#f5f5f7] ${toneCls}`}>{fmt(total)}</td>
-      </tr>
-    </>
+    <tr className="border-t border-[#d2d2d7]/40 bg-[#fbfbfd]/70">
+      <td className="sticky left-0 bg-[#fbfbfd]/70 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#86868b]">
+        {label}
+      </td>
+      <td colSpan={colSpan} />
+    </tr>
   );
 }
 
+function RoleRow({
+  rowId,
+  label,
+  activeScenario,
+  evaluation,
+  months,
+  layerMode,
+}: {
+  rowId: string;
+  label: string;
+  activeScenario: Scenario;
+  evaluation: ReturnType<typeof evaluateScenario>;
+  months: ReturnType<typeof evaluateScenario>['months'];
+  layerMode: ForecastLayerMode;
+}) {
+  const total = months.reduce((sum, month) => {
+    const cell = evaluation.cells.get(scenarioCellKey(activeScenario.id, rowId, month.ym));
+    return sum + (cell ? displayValue(cell, layerMode) : 0);
+  }, 0);
+
+  return (
+    <tr className="border-t border-[#d2d2d7]/30 bg-[#f5f5f7]/50">
+      <td className="sticky left-0 bg-[#f5f5f7]/50 px-4 py-2 text-[#1d1d1f]">{label}</td>
+      {months.map((month) => {
+        const cell = evaluation.cells.get(scenarioCellKey(activeScenario.id, rowId, month.ym));
+        const value = cell ? displayValue(cell, layerMode) : 0;
+        return (
+          <td key={month.ym} className="px-3 py-2 text-right tabular-nums text-[#0071e3]">
+            {value === 0 ? '—' : `${layerMode === 'diff' && value > 0 ? '+' : ''}${formatCompactNumber(value)}`}
+          </td>
+        );
+      })}
+      <td className="bg-[#f5f5f7] px-4 py-2 text-right tabular-nums text-[#0071e3]">
+        {total === 0 ? '—' : `${layerMode === 'diff' && total > 0 ? '+' : ''}${formatCompactNumber(total)}`}
+      </td>
+    </tr>
+  );
+}
+
+interface RowProps {
+  concept: FlowConcept;
+  depth: number;
+  activeScenario: Scenario;
+  evaluation: ReturnType<typeof evaluateScenario>;
+  months: ReturnType<typeof evaluateScenario>['months'];
+  childrenById: Map<string, FlowConcept[]>;
+  expanded: Set<string>;
+  onToggle: (conceptId: string) => void;
+  layerMode: ForecastLayerMode;
+  editing: { conceptId: string; yearMonth: string } | null;
+  setEditing: (editing: { conceptId: string; yearMonth: string } | null) => void;
+  popover: { conceptId: string; yearMonth: string } | null;
+  setPopover: (popover: { conceptId: string; yearMonth: string } | null) => void;
+  applyOverride: (conceptId: string, yearMonth: string, manualValue: number) => void;
+  restoreOverride: (conceptId: string, yearMonth: string) => void;
+  setComment: (conceptId: string, yearMonth: string, comment: string) => void;
+}
+
 function ConceptRow({
-  concept, depth, ...ctx
-}: RowCtx & { concept: FlowConcept; depth: number }) {
-  const hasChildren = (concept.children?.length ?? 0) > 0;
-  const isOpen = ctx.expanded.has(concept.id);
-  const total = ctx.rowTotal(concept);
+  concept,
+  depth,
+  activeScenario,
+  evaluation,
+  months,
+  childrenById,
+  expanded,
+  onToggle,
+  layerMode,
+  editing,
+  setEditing,
+  popover,
+  setPopover,
+  applyOverride,
+  restoreOverride,
+  setComment,
+}: RowProps) {
+  const children = childrenById.get(concept.id) ?? [];
+  const hasChildren = children.length > 0;
+  const isOpen = expanded.has(concept.id);
+  const total = months.reduce((sum, month) => {
+    const cell = evaluation.cells.get(scenarioCellKey(activeScenario.id, concept.id, month.ym));
+    return sum + (cell ? displayValue(cell, layerMode) : 0);
+  }, 0);
 
   return (
     <>
       <tr className="border-t border-[#d2d2d7]/30 hover:bg-[#f5f5f7]/60">
-        <td className="px-4 py-2 sticky left-0 bg-white" style={{ paddingLeft: 16 + depth * 16 }}>
+        <td className="sticky left-0 bg-white px-4 py-2" style={{ paddingLeft: 16 + depth * 16 }}>
           <div className="flex items-center gap-1.5">
             {hasChildren ? (
-              <button onClick={() => ctx.toggle(concept.id)} className="p-0.5 rounded hover:bg-[#e8e8ed]">
-                {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-[#86868b]" /> : <ChevronRight className="w-3.5 h-3.5 text-[#86868b]" />}
+              <button onClick={() => onToggle(concept.id)} className="rounded p-0.5 hover:bg-[#e8e8ed]">
+                {isOpen ? (
+                  <ChevronDown className="w-3.5 h-3.5 text-[#86868b]" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5 text-[#86868b]" />
+                )}
               </button>
-            ) : <span className="w-4" />}
+            ) : (
+              <span className="w-4" />
+            )}
             <span className="text-[#1d1d1f]">{concept.name}</span>
           </div>
         </td>
-        {ctx.window.map(m => (
-          <EditableCell key={m.ym} concept={concept} month={m} {...ctx} />
-        ))}
-        <td className="px-4 py-2 text-right tabular-nums font-medium bg-[#f5f5f7]">{fmt(total)}</td>
+        {months.map((month) => {
+          const cell = evaluation.cells.get(scenarioCellKey(activeScenario.id, concept.id, month.ym));
+          if (!cell) return <td key={month.ym} />;
+          return (
+            <EditableCell
+              key={month.ym}
+              cell={cell}
+              label={concept.name}
+              layerMode={layerMode}
+              editing={editing}
+              setEditing={setEditing}
+              popover={popover}
+              setPopover={setPopover}
+              applyOverride={applyOverride}
+              restoreOverride={restoreOverride}
+              setComment={setComment}
+            />
+          );
+        })}
+        <td className="bg-[#f5f5f7] px-4 py-2 text-right tabular-nums font-medium">
+          {total === 0 ? '—' : `${layerMode === 'diff' && total > 0 ? '+' : ''}${formatCompactNumber(total)}`}
+        </td>
       </tr>
-      {isOpen && concept.children?.map(child => (
-        <ConceptRow key={child.id} concept={child} depth={depth + 1} {...ctx} />
+      {isOpen && children.map((child) => (
+        <ConceptRow
+          key={child.id}
+          concept={child}
+          depth={depth + 1}
+          activeScenario={activeScenario}
+          evaluation={evaluation}
+          months={months}
+          childrenById={childrenById}
+          expanded={expanded}
+          onToggle={onToggle}
+          layerMode={layerMode}
+          editing={editing}
+          setEditing={setEditing}
+          popover={popover}
+          setPopover={setPopover}
+          applyOverride={applyOverride}
+          restoreOverride={restoreOverride}
+          setComment={setComment}
+        />
       ))}
     </>
   );
 }
 
 function EditableCell({
-  concept, month, valueFor, overridesMap, editing, setEditing, popover, setPopover,
-  applyOverride, restoreOverride, setComment, plan,
-}: RowCtx & { concept: FlowConcept; month: RollingMonth }) {
-  const k = overrideKey(concept.id, month.ym);
-  const ov = overridesMap.get(k);
-  const v = valueFor(concept, month);
-  const isEditing = editing?.conceptId === concept.id && editing?.ym === month.ym;
-  const isPopoverOpen = popover?.conceptId === concept.id && popover?.ym === month.ym;
-  const isOverridden = !!ov && ov.overrideValue !== ov.originalValue;
-  const hasComment = !!ov?.comment;
-
-  const [draft, setDraft] = useState<string>(String(v));
+  cell,
+  label,
+  layerMode,
+  editing,
+  setEditing,
+  popover,
+  setPopover,
+  applyOverride,
+  restoreOverride,
+  setComment,
+}: {
+  cell: EvaluatedCell;
+  label: string;
+  layerMode: ForecastLayerMode;
+  editing: { conceptId: string; yearMonth: string } | null;
+  setEditing: (editing: { conceptId: string; yearMonth: string } | null) => void;
+  popover: { conceptId: string; yearMonth: string } | null;
+  setPopover: (popover: { conceptId: string; yearMonth: string } | null) => void;
+  applyOverride: (conceptId: string, yearMonth: string, manualValue: number) => void;
+  restoreOverride: (conceptId: string, yearMonth: string) => void;
+  setComment: (conceptId: string, yearMonth: string, comment: string) => void;
+}) {
+  const isEditing = editing?.conceptId === cell.conceptId && editing.yearMonth === cell.yearMonth;
+  const isPopoverOpen = popover?.conceptId === cell.conceptId && popover.yearMonth === cell.yearMonth;
+  const [draft, setDraft] = useState(String(cell.finalValue));
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (isEditing) {
-      setDraft(String(v));
-      setTimeout(() => inputRef.current?.select(), 0);
-    }
-  }, [isEditing]);
+    if (!isEditing) return;
+    setDraft(String(cell.finalValue));
+    setTimeout(() => inputRef.current?.select(), 0);
+  }, [cell.finalValue, isEditing]);
+
+  const value = displayValue(cell, layerMode);
+  const colorClass = cell.hasManualDelta
+    ? 'bg-[#ff9500]/10 text-[#ff9500]'
+    : cell.hasSimulationDelta
+      ? 'bg-[#0071e3]/8 text-[#0071e3]'
+      : 'text-[#1d1d1f]';
 
   const commit = () => {
     const cleaned = draft.replace(/[^0-9.\-]/g, '');
-    const n = Number(cleaned);
-    if (!isNaN(n)) applyOverride(concept.id, month, n);
+    const nextValue = Number(cleaned);
+    if (!Number.isNaN(nextValue)) {
+      applyOverride(cell.conceptId, cell.yearMonth, nextValue);
+    }
     setEditing(null);
   };
 
-  const cellBg = isOverridden ? 'bg-[#ff9500]/8' : '';
-  const cellText = isOverridden ? 'text-[#ff9500] font-semibold' : 'text-[#1d1d1f]';
-
   return (
     <td
-      className={`px-3 py-2 text-right tabular-nums relative cursor-cell group ${cellBg} ${cellText}`}
-      onDoubleClick={(e) => { e.stopPropagation(); setEditing({ conceptId: concept.id, ym: month.ym }); }}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (!isEditing) setPopover(isPopoverOpen ? null : { conceptId: concept.id, ym: month.ym });
+      className={`relative cursor-cell px-3 py-2 text-right tabular-nums ${colorClass}`}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        if (!cell.isEditable) return;
+        setEditing({ conceptId: cell.conceptId, yearMonth: cell.yearMonth });
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        setPopover(isPopoverOpen ? null : { conceptId: cell.conceptId, yearMonth: cell.yearMonth });
       }}
     >
       {isEditing ? (
         <input
           ref={inputRef}
-          type="text"
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
-          onKeyDown={e => {
-            if (e.key === 'Enter') commit();
-            else if (e.key === 'Escape') setEditing(null);
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commit();
+            if (event.key === 'Escape') setEditing(null);
           }}
-          className="w-full text-right tabular-nums bg-white border border-[#0071e3] rounded px-1 py-0.5 outline-none"
+          className="w-full rounded border border-[#0071e3] bg-white px-1 py-0.5 text-right outline-none"
         />
       ) : (
         <>
-          <span className="inline-flex items-center gap-1 justify-end">
-            {isOverridden && <span className="w-1.5 h-1.5 rounded-full bg-[#ff9500] flex-shrink-0" />}
-            {hasComment && <MessageSquare className="w-3 h-3 text-[#0071e3] flex-shrink-0" />}
-            <span>{v === 0 ? <span className="text-[#d2d2d7]">—</span> : fmt(v)}</span>
+          <span className="inline-flex items-center justify-end gap-1">
+            {(cell.hasManualDelta || cell.hasSimulationDelta) && (
+              <span className={`h-1.5 w-1.5 rounded-full ${cell.hasManualDelta ? 'bg-[#ff9500]' : 'bg-[#0071e3]'}`} />
+            )}
+            {cell.comment && <MessageSquare className="w-3 h-3 text-[#0071e3]" />}
+            <span>{value === 0 ? '—' : `${layerMode === 'diff' && value > 0 ? '+' : ''}${formatCompactNumber(value)}`}</span>
           </span>
           {isPopoverOpen && (
             <CellPopover
-              concept={concept}
-              month={month}
-              ov={ov}
-              plan={plan}
+              cell={cell}
+              label={label}
               onClose={() => setPopover(null)}
-              onEdit={() => { setPopover(null); setEditing({ conceptId: concept.id, ym: month.ym }); }}
-              onRestore={() => ov && restoreOverride(k)}
-              onSetComment={(c) => setComment(concept.id, month, c)}
+              onEdit={() => {
+                setPopover(null);
+                if (cell.isEditable) setEditing({ conceptId: cell.conceptId, yearMonth: cell.yearMonth });
+              }}
+              onRestore={() => restoreOverride(cell.conceptId, cell.yearMonth)}
+              onSetComment={(comment) => setComment(cell.conceptId, cell.yearMonth, comment)}
             />
           )}
         </>
@@ -507,134 +751,183 @@ function EditableCell({
 }
 
 function CellPopover({
-  concept, month, ov, plan, onClose, onEdit, onRestore, onSetComment,
+  cell,
+  label,
+  onClose,
+  onEdit,
+  onRestore,
+  onSetComment,
 }: {
-  concept: FlowConcept;
-  month: RollingMonth;
-  ov: ForecastOverride | undefined;
-  plan: FlowPlan;
+  cell: EvaluatedCell;
+  label: string;
   onClose: () => void;
   onEdit: () => void;
   onRestore: () => void;
-  onSetComment: (c: string) => void;
+  onSetComment: (comment: string) => void;
 }) {
-  const [commentDraft, setCommentDraft] = useState(ov?.comment ?? '');
-  const originalValue = ov?.originalValue ?? baseValue(concept, month, plan.year);
-  const currentValue = ov?.overrideValue ?? originalValue;
-  const isOverridden = !!ov && ov.overrideValue !== ov.originalValue;
-  const delta = currentValue - originalValue;
+  const [commentDraft, setCommentDraft] = useState(cell.comment ?? '');
+  const totalSimulationDelta = cell.simulationContributions.reduce((sum, contribution) => sum + contribution.delta, 0);
+  const finalDelta = cell.finalValue - cell.baseValue;
 
   return (
     <div
-      className="absolute right-0 top-full mt-1 z-50 w-72 bg-white border border-[#d2d2d7] rounded-xl shadow-xl p-3 text-left"
-      onClick={(e) => e.stopPropagation()}
+      className="absolute right-0 top-full z-50 mt-1 w-80 rounded-xl border border-[#d2d2d7] bg-white p-3 text-left shadow-xl"
+      onClick={(event) => event.stopPropagation()}
     >
-      <div className="flex items-start justify-between gap-2 mb-2">
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">{month.label}</div>
-          <div className="text-[13px] font-medium text-[#1d1d1f] truncate">{concept.name}</div>
+          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">{cell.yearMonth}</div>
+          <div className="text-[13px] font-medium text-[#1d1d1f]">{label}</div>
         </div>
-        <button onClick={onClose} className="text-[#86868b] hover:text-[#1d1d1f]"><X className="w-4 h-4" /></button>
-      </div>
-
-      <div className="space-y-1.5 mb-3 text-[12px]">
-        <div className="flex justify-between">
-          <span className="text-[#86868b]">Valor base</span>
-          <span className="tabular-nums text-[#1d1d1f]">{fmt(originalValue)}</span>
-        </div>
-        {isOverridden && (
-          <>
-            <div className="flex justify-between">
-              <span className="text-[#ff9500]">Valor editado</span>
-              <span className="tabular-nums font-semibold text-[#ff9500]">{fmt(currentValue)}</span>
-            </div>
-            <div className="flex justify-between pt-1 border-t border-[#d2d2d7]/40">
-              <span className="text-[#86868b]">Δ</span>
-              <span className={`tabular-nums font-medium ${delta >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}`}>
-                {delta >= 0 ? '+' : ''}{fmt(delta)}
-              </span>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="mb-3">
-        <label className="text-[11px] uppercase tracking-wide text-[#86868b] mb-1 block">Comentario</label>
-        <textarea
-          value={commentDraft}
-          onChange={e => setCommentDraft(e.target.value)}
-          onBlur={() => onSetComment(commentDraft)}
-          placeholder="Nota o explicación…"
-          rows={2}
-          className="w-full text-[12px] border border-[#d2d2d7] rounded-lg px-2 py-1.5 outline-none focus:border-[#0071e3] resize-none"
-        />
-      </div>
-
-      <div className="flex gap-2">
-        <button
-          onClick={onEdit}
-          className="flex-1 h-7 rounded-lg bg-[#0071e3] text-white text-[12px] font-medium hover:bg-[#0077ed]"
-        >
-          Editar valor
+        <button onClick={onClose} className="text-[#86868b] hover:text-[#1d1d1f]">
+          <X className="w-4 h-4" />
         </button>
-        {isOverridden && (
+      </div>
+
+      <div className="space-y-1.5 text-[12px]">
+        <PopoverRow label="Valor base" value={cell.baseValue} />
+        <PopoverRow label="Delta simulación" value={totalSimulationDelta} accent="sim" />
+        <PopoverRow label="Valor simulado" value={cell.simulatedValue} />
+        <PopoverRow label="Delta manual" value={cell.manualDelta} accent="manual" />
+        <PopoverRow label="Valor final" value={cell.finalValue} accent="final" />
+        <PopoverRow label="Δ vs base" value={finalDelta} accent="delta" />
+      </div>
+
+      {cell.simulationContributions.length > 0 && (
+        <div className="mt-3 rounded-lg bg-[#f5f5f7] p-2">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-[#86868b]">Simulaciones</p>
+          <div className="mt-2 space-y-1 text-[11px]">
+            {cell.simulationContributions.map((contribution) => (
+              <div key={contribution.simulationId} className="flex items-center justify-between gap-3">
+                <span className="text-[#6e6e73]">{contribution.simulationName}</span>
+                <span className={contribution.delta >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}>
+                  {contribution.delta > 0 ? '+' : ''}{formatCompactNumber(contribution.delta)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {cell.isEditable && (
+        <div className="mt-3">
+          <label className="mb-1 block text-[11px] uppercase tracking-wide text-[#86868b]">Comentario</label>
+          <textarea
+            value={commentDraft}
+            onChange={(event) => setCommentDraft(event.target.value)}
+            onBlur={() => onSetComment(commentDraft)}
+            rows={2}
+            className="w-full resize-none rounded-lg border border-[#d2d2d7] px-2 py-1.5 text-[12px] outline-none focus:border-[#0071e3]"
+            placeholder="Nota o explicación..."
+          />
+        </div>
+      )}
+
+      <div className="mt-3 flex gap-2">
+        {cell.isEditable && (
+          <button
+            onClick={onEdit}
+            className="flex-1 rounded-lg bg-[#0071e3] px-3 py-2 text-[12px] font-medium text-white"
+          >
+            Editar
+          </button>
+        )}
+        {cell.isOverridden && (
           <button
             onClick={onRestore}
-            className="flex items-center gap-1 h-7 px-2 rounded-lg border border-[#d2d2d7] text-[12px] text-[#86868b] hover:text-[#ff9500] hover:border-[#ff9500]"
+            className="inline-flex items-center gap-1 rounded-lg border border-[#d2d2d7] px-3 py-2 text-[12px] text-[#6e6e73]"
           >
-            <RotateCcw className="w-3 h-3" /> Restaurar
+            <RotateCcw className="w-3 h-3" />
+            Restaurar
           </button>
         )}
       </div>
-
-      {ov?.editedAt && (
-        <div className="text-[10px] text-[#86868b] mt-2 text-right">
-          Editado {new Date(ov.editedAt).toLocaleString('es-MX', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-        </div>
-      )}
     </div>
   );
 }
 
-function DriversBody({ concepts, ...ctx }: RowCtx & { concepts: FlowConcept[] }) {
-  const roots = concepts.filter(c => !c.parentId);
-  return <>{roots.map(c => <ConceptRow key={c.id} concept={c} depth={0} {...ctx} />)}</>;
+function PopoverRow({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: number;
+  accent?: 'sim' | 'manual' | 'final' | 'delta';
+}) {
+  const colorClass =
+    accent === 'sim' ? 'text-[#0071e3]' :
+    accent === 'manual' ? 'text-[#ff9500]' :
+    accent === 'delta' ? (value >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]') :
+    accent === 'final' ? 'text-[#1d1d1f] font-semibold' :
+    'text-[#1d1d1f]';
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[#86868b]">{label}</span>
+      <span className={`font-mono ${colorClass}`}>{value > 0 && accent === 'delta' ? '+' : ''}{formatCompactNumber(value)}</span>
+    </div>
+  );
 }
 
-function TotalRow({ label, values, emphasis }: { label: string; values: number[]; emphasis?: boolean }) {
-  const total = values.reduce((a, b) => a + b, 0);
+function MetricTotalRow({
+  label,
+  values,
+  tone,
+}: {
+  label: string;
+  values: number[];
+  tone: 'pos' | 'neg' | 'neutral';
+}) {
+  const total = values.reduce((sum, value) => sum + value, 0);
+  const colorClass =
+    tone === 'pos' ? 'text-[#34c759]' :
+    tone === 'neg' ? 'text-[#ff3b30]' :
+    'text-[#1d1d1f]';
+
   return (
-    <tr className={`border-t-2 border-[#1d1d1f]/10 ${emphasis ? 'bg-[#fbfbfd]' : ''}`}>
-      <td className="px-4 py-3 font-semibold text-[#1d1d1f] sticky left-0 bg-[#fbfbfd]">{label}</td>
-      {values.map((v, i) => (
-        <td key={i} className={`px-3 py-3 text-right tabular-nums font-semibold ${v < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>{fmt(v)}</td>
+    <tr className="border-t border-[#d2d2d7]/40">
+      <td className={`sticky left-0 bg-white px-4 py-2.5 font-semibold ${colorClass}`}>{label}</td>
+      {values.map((value, index) => (
+        <td key={`${label}-${index}`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${colorClass}`}>
+          {value === 0 ? '—' : formatCompactNumber(value)}
+        </td>
       ))}
-      <td className={`px-4 py-3 text-right tabular-nums font-semibold bg-[#f5f5f7] ${total < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>{fmt(total)}</td>
+      <td className={`bg-[#f5f5f7] px-4 py-2.5 text-right tabular-nums font-semibold ${colorClass}`}>
+        {total === 0 ? '—' : formatCompactNumber(total)}
+      </td>
     </tr>
   );
 }
 
-function Kpi({ label, value, tone, icon: Icon }: {
-  label: string;
-  value: number;
-  tone: 'pos' | 'neg' | 'cash';
-  icon?: React.ComponentType<{ className?: string }>;
-}) {
-  const color =
-    tone === 'pos' ? 'text-[#34c759]' :
-    tone === 'neg' ? 'text-[#ff3b30]' :
-    'text-[#0071e3]';
+function LegendDot({ color, label }: { color: string; label: string }) {
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-[11px] uppercase tracking-wide text-[#86868b]">{label}</div>
-        {Icon && <Icon className={`w-4 h-4 ${color}`} />}
-      </div>
-      <div className={`text-2xl font-semibold tabular-nums mt-1 ${color}`}>{fmt(value)}</div>
-    </div>
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`h-2 w-2 rounded-full ${color}`} />
+      {label}
+    </span>
   );
 }
 
-function fmt(n: number): string {
-  return n.toLocaleString('es-MX', { maximumFractionDigits: 0 });
+function KpiCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'pos' | 'neg' | 'neutral' | 'cash';
+}) {
+  const colorClass =
+    tone === 'pos' ? 'text-[#34c759]' :
+    tone === 'neg' ? 'text-[#ff3b30]' :
+    tone === 'cash' ? 'text-[#0071e3]' :
+    'text-[#1d1d1f]';
+
+  return (
+    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm">
+      <p className="text-[11px] uppercase tracking-wide text-[#86868b]">{label}</p>
+      <p className={`mt-2 text-[22px] font-semibold ${colorClass}`}>{formatCurrency(value)}</p>
+    </div>
+  );
 }

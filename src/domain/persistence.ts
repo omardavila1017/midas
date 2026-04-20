@@ -1,24 +1,24 @@
 /**
- * Persistence Layer — localStorage-based state management for FlowSense
+ * Persistence layer for FlowSense.
  *
- * Handles serialization, deserialization, and validation of the entire app state.
- * All data is stored under the key 'flowsense-v1' with version tracking for
- * future migration support.
- *
- * Usage:
- *   - On app init: const store = loadStore() ?? getDefaultStore()
- *   - After state change: saveStore({ plan, proposals, ... })
- *   - For data export: const json = exportStore()
- *   - For data import: const store = importStore(json)
+ * v2 migrates the legacy "proposal impact" model into:
+ *   Proposal -> Scenario -> Simulation
+ * and moves forecast overrides to scenario scope.
  */
 
-import { FlowPlan, Proposal, Scenario, ForecastOverride } from '../types';
+import {
+  FlowPlan,
+  Proposal,
+  ROLE_TARGET_EXPENSE,
+  ROLE_TARGET_INCOME,
+  Scenario,
+  ScenarioCellOverride,
+  Simulation,
+  SimulationCategory,
+  scenarioCellKey,
+} from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 
-/**
- * CXP Record — represents a single accounts payable entry.
- * Extracted from CSV uploads in CXP.tsx.
- */
 export interface CXPRecord {
   cia: string;
   noProveedor: string;
@@ -50,43 +50,214 @@ export interface CXPRecord {
   mas180: number;
 }
 
-/**
- * Complete app state shape — contains all mutable user data.
- */
 export interface FlowSenseStore {
   plan: FlowPlan | null;
   proposals: Proposal[];
   scenarios: Scenario[];
+  simulations: Simulation[];
+  scenarioCellOverrides: ScenarioCellOverride[];
+  activeProposalId: string | null;
+  activeScenarioId: string | null;
   providers: Provider[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
   cxpRecords: CXPRecord[];
-  forecastOverrides: ForecastOverride[];
-  lastSaved: string; // ISO 8601 datetime
+  lastSaved: string;
 }
 
-/**
- * Current storage schema version.
- * Increment when making breaking changes to FlowSenseStore shape.
- */
-const STORE_VERSION = 1;
+interface LegacyProposal {
+  id: string;
+  category: SimulationCategory;
+  name: string;
+  monthlyAmount: number;
+  probability: number;
+  startMonth: number;
+  distribution: 'Mensual' | 'Semestral' | 'Único';
+  status: Proposal['status'];
+  annualImpact: number;
+  monthlyImpact: number[];
+  responsible: string;
+  notes: string;
+  createdAt: string;
+}
 
-/**
- * localStorage key for all FlowSense data.
- */
-const STORAGE_KEY = 'flowsense-v1';
+interface LegacyScenario {
+  id: string;
+  name: string;
+  description: string;
+  selectedProposalIds: string[];
+  createdAt: string;
+}
 
-/**
- * Returns a fresh, empty store with sensible defaults.
- * Use this as a fallback when loading fails or on first run.
- */
+interface LegacyForecastOverride {
+  key: string;
+  conceptId: string;
+  yearMonth: string;
+  originalValue: number;
+  overrideValue: number;
+  comment?: string;
+  editedAt: string;
+}
+
+interface LegacyFlowSenseStore {
+  plan: FlowPlan | null;
+  proposals: LegacyProposal[];
+  scenarios: LegacyScenario[];
+  providers: Provider[];
+  clients: Client[];
+  assumptions: CashFlowAssumptions;
+  confirmedPayments: ConfirmedPayment[];
+  cxpRecords: CXPRecord[];
+  forecastOverrides: LegacyForecastOverride[];
+  lastSaved: string;
+}
+
+const STORE_VERSION = 2;
+const STORAGE_KEY = 'flowsense-v2';
+const LEGACY_STORAGE_KEY = 'flowsense-v1';
+
+function isoNow(): string {
+  return new Date().toISOString();
+}
+
+function firstPlanMonth(plan: FlowPlan | null): string {
+  return `${plan?.year ?? new Date().getFullYear()}-01`;
+}
+
+function expenseLikeCategory(category: SimulationCategory): boolean {
+  return category !== 'Incremento de Ingresos';
+}
+
+function migrateLegacyProposalToSimulation(legacy: LegacyProposal): Simulation {
+  const effects = legacy.monthlyImpact
+    .map((value, monthOffset) => ({ value, monthOffset }))
+    .filter((item) => item.value !== 0)
+    .map((item, index) => ({
+      id: `${legacy.id}-effect-${index}`,
+      type: 'concept_delta' as const,
+      conceptId: expenseLikeCategory(legacy.category)
+        ? ROLE_TARGET_EXPENSE
+        : ROLE_TARGET_INCOME,
+      monthOffsets: [item.monthOffset],
+      mode: 'absolute' as const,
+      value: expenseLikeCategory(legacy.category) ? -item.value : item.value,
+    }));
+
+  return {
+    id: `simulation-${legacy.id}`,
+    name: legacy.name,
+    description: legacy.notes || `${legacy.category}${legacy.responsible ? ` · ${legacy.responsible}` : ''}`,
+    category: legacy.category,
+    effects,
+    createdAt: legacy.createdAt ?? isoNow(),
+    updatedAt: legacy.createdAt ?? isoNow(),
+  };
+}
+
+function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseStore {
+  const plan = legacy.plan ?? null;
+  const now = isoNow();
+  const simulations = (legacy.proposals ?? []).map(migrateLegacyProposalToSimulation);
+
+  const needsMigratedContainer =
+    simulations.length > 0 ||
+    (legacy.scenarios?.length ?? 0) > 0 ||
+    (legacy.forecastOverrides?.length ?? 0) > 0;
+
+  const proposals: Proposal[] = needsMigratedContainer
+    ? [
+        {
+          id: 'proposal-migrated',
+          name: 'Propuesta migrada',
+          description: 'Contenedor generado automáticamente desde el modelo legacy.',
+          status: 'Pendiente',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]
+    : [];
+
+  const migratedScenariosFromLegacy = (legacy.scenarios ?? []).map<Scenario>((scenario) => ({
+    id: scenario.id,
+    proposalId: 'proposal-migrated',
+    name: scenario.name,
+    description: scenario.description,
+    probability: 1,
+    startYearMonth: firstPlanMonth(plan),
+    horizonMonths: 12,
+    simulationIds: scenario.selectedProposalIds.map((proposalId) => `simulation-${proposalId}`),
+    createdAt: scenario.createdAt ?? now,
+    updatedAt: scenario.createdAt ?? now,
+  }));
+
+  const fallbackScenario: Scenario | null = needsMigratedContainer && migratedScenariosFromLegacy.length === 0
+    ? {
+        id: 'scenario-migrated-default',
+        proposalId: 'proposal-migrated',
+        name: 'Escenario migrado',
+        description: 'Escenario generado para conservar simulaciones y overrides legacy.',
+        probability: 1,
+        startYearMonth: firstPlanMonth(plan),
+        horizonMonths: 12,
+        simulationIds: [],
+        createdAt: now,
+        updatedAt: now,
+      }
+    : null;
+
+  const scenarios = fallbackScenario
+    ? [fallbackScenario]
+    : migratedScenariosFromLegacy;
+
+  if (proposals[0] && scenarios[0]) {
+    proposals[0].activeScenarioId = scenarios[0].id;
+  }
+
+  const defaultScenarioId = scenarios[0]?.id ?? null;
+  const scenarioCellOverrides: ScenarioCellOverride[] = (legacy.forecastOverrides ?? []).map((override) => ({
+    key: scenarioCellKey(
+      defaultScenarioId ?? 'scenario-migrated-default',
+      override.conceptId,
+      override.yearMonth,
+    ),
+    scenarioId: defaultScenarioId ?? 'scenario-migrated-default',
+    conceptId: override.conceptId,
+    yearMonth: override.yearMonth,
+    baseValue: override.originalValue,
+    simulatedValue: override.originalValue,
+    manualValue: override.overrideValue,
+    comment: override.comment,
+    editedAt: override.editedAt ?? now,
+  }));
+
+  return {
+    plan,
+    proposals,
+    scenarios,
+    simulations,
+    scenarioCellOverrides,
+    activeProposalId: proposals[0]?.id ?? null,
+    activeScenarioId: scenarios[0]?.id ?? null,
+    providers: Array.isArray(legacy.providers) ? legacy.providers : [],
+    clients: Array.isArray(legacy.clients) ? legacy.clients : [],
+    assumptions: validateAssumptions(legacy.assumptions),
+    confirmedPayments: Array.isArray(legacy.confirmedPayments) ? legacy.confirmedPayments : [],
+    cxpRecords: Array.isArray(legacy.cxpRecords) ? legacy.cxpRecords : [],
+    lastSaved: legacy.lastSaved ?? now,
+  };
+}
+
 export function getDefaultStore(): FlowSenseStore {
   const currentYear = new Date().getFullYear();
   return {
     plan: null,
     proposals: [],
     scenarios: [],
+    simulations: [],
+    scenarioCellOverrides: [],
+    activeProposalId: null,
+    activeScenarioId: null,
     providers: [],
     clients: [],
     assumptions: {
@@ -96,17 +267,10 @@ export function getDefaultStore(): FlowSenseStore {
     },
     confirmedPayments: [],
     cxpRecords: [],
-    forecastOverrides: [],
-    lastSaved: new Date().toISOString(),
+    lastSaved: isoNow(),
   };
 }
 
-/**
- * Saves the complete store to localStorage.
- *
- * @param store The current application state
- * @throws May throw if localStorage is full or unavailable
- */
 export function saveStore(store: FlowSenseStore): void {
   const payload = {
     version: STORE_VERSION,
@@ -118,174 +282,134 @@ export function saveStore(store: FlowSenseStore): void {
   } catch (error) {
     console.error('Failed to save store to localStorage:', error);
     throw new Error(
-      `Failed to save app state: ${error instanceof Error ? error.message : 'Unknown error'}`
+      `Failed to save app state: ${error instanceof Error ? error.message : 'Unknown error'}`,
     );
   }
 }
 
-/**
- * Loads the store from localStorage.
- * Returns null if the key doesn't exist, is empty, or corrupt.
- * Falls back to defaults for missing fields.
- *
- * @returns The loaded store, or null if not found/corrupt
- */
-export function loadStore(): FlowSenseStore | null {
+function parseStoredPayload(raw: string): { version: number; data: unknown } | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-
-    const payload = JSON.parse(raw);
-
-    // Validate version
-    if (payload.version !== STORE_VERSION) {
-      console.warn(
-        `Store version mismatch: found ${payload.version}, expected ${STORE_VERSION}. ` +
-        'Using defaults and discarding old data.'
-      );
-      return null;
-    }
-
-    const data = payload.data as Partial<FlowSenseStore>;
-
-    // Merge with defaults for any missing fields
-    const store: FlowSenseStore = {
-      plan: data.plan ?? null,
-      proposals: Array.isArray(data.proposals) ? data.proposals : [],
-      scenarios: Array.isArray(data.scenarios) ? data.scenarios : [],
-      providers: Array.isArray(data.providers) ? data.providers : [],
-      clients: Array.isArray(data.clients) ? data.clients : [],
-      assumptions: {
-        year: data.assumptions?.year ?? new Date().getFullYear(),
-        globalCompliance: data.assumptions?.globalCompliance ?? 1,
-        factorajeDays: data.assumptions?.factorajeDays ?? 30,
-      },
-      confirmedPayments: Array.isArray(data.confirmedPayments)
-        ? data.confirmedPayments
-        : [],
-      cxpRecords: Array.isArray(data.cxpRecords) ? data.cxpRecords : [],
-      forecastOverrides: Array.isArray(data.forecastOverrides) ? data.forecastOverrides : [],
-      lastSaved: data.lastSaved ?? new Date().toISOString(),
-    };
-
-    return store;
-  } catch (error) {
-    console.error('Failed to load store from localStorage:', error);
+    const payload = JSON.parse(raw) as { version?: number; data?: unknown };
+    if (typeof payload.version !== 'number' || payload.data === undefined) return null;
+    return { version: payload.version, data: payload.data };
+  } catch {
     return null;
   }
 }
 
-/**
- * Removes the store from localStorage entirely.
- * Use when the user explicitly clears/resets the app.
- */
+function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
+  const defaults = getDefaultStore();
+
+  const proposals = validateArray<Proposal>(data.proposals, 'proposals');
+  const scenarios = validateArray<Scenario>(data.scenarios, 'scenarios');
+
+  return {
+    plan: data.plan ?? null,
+    proposals,
+    scenarios,
+    simulations: validateArray<Simulation>(data.simulations, 'simulations'),
+    scenarioCellOverrides: validateArray<ScenarioCellOverride>(
+      data.scenarioCellOverrides,
+      'scenarioCellOverrides',
+    ),
+    activeProposalId: data.activeProposalId ?? proposals[0]?.id ?? null,
+    activeScenarioId: data.activeScenarioId ?? scenarios[0]?.id ?? null,
+    providers: validateArray<Provider>(data.providers, 'providers'),
+    clients: validateArray<Client>(data.clients, 'clients'),
+    assumptions: validateAssumptions(data.assumptions),
+    confirmedPayments: validateArray<ConfirmedPayment>(
+      data.confirmedPayments,
+      'confirmedPayments',
+    ),
+    cxpRecords: validateArray<CXPRecord>(data.cxpRecords, 'cxpRecords'),
+    lastSaved: validateISODate(data.lastSaved, 'lastSaved'),
+  };
+}
+
+export function loadStore(): FlowSenseStore | null {
+  const sources = [STORAGE_KEY, LEGACY_STORAGE_KEY];
+
+  for (const key of sources) {
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
+
+    const payload = parseStoredPayload(raw);
+    if (!payload) continue;
+
+    if (payload.version === STORE_VERSION) {
+      return normalizeV2Store(payload.data as Partial<FlowSenseStore>);
+    }
+
+    if (payload.version === 1) {
+      return migrateLegacyStore(payload.data as Partial<LegacyFlowSenseStore>);
+    }
+  }
+
+  return null;
+}
+
 export function clearStore(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
   } catch (error) {
     console.error('Failed to clear store from localStorage:', error);
   }
 }
 
-/**
- * Exports the store as a JSON string suitable for download or sharing.
- * Includes version info and pretty formatting for readability.
- *
- * @param store The store to export
- * @returns JSON string with 2-space indentation
- */
 export function exportStore(store: FlowSenseStore): string {
   const payload = {
     version: STORE_VERSION,
-    exportedAt: new Date().toISOString(),
+    exportedAt: isoNow(),
     data: store,
   };
 
   return JSON.stringify(payload, null, 2);
 }
 
-/**
- * Imports a previously exported store from a JSON string.
- * Validates structure and version before accepting.
- *
- * @param json A JSON string previously generated by exportStore()
- * @returns The parsed and validated store
- * @throws If JSON is invalid, version mismatch, or required fields are missing
- */
 export function importStore(json: string): FlowSenseStore {
   let payload: unknown;
-
-  // Parse JSON
   try {
     payload = JSON.parse(json);
   } catch (error) {
     throw new Error(
-      `Invalid JSON: ${error instanceof Error ? error.message : 'Unknown error'}`
+      `Invalid JSON: ${error instanceof Error ? error.message : 'Unknown error'}`,
     );
   }
 
-  // Validate structure
   if (typeof payload !== 'object' || payload === null) {
     throw new Error('JSON must be an object');
   }
 
   const obj = payload as Record<string, unknown>;
-
-  // Check version
-  if (obj.version !== STORE_VERSION) {
-    throw new Error(
-      `Version mismatch: imported data is v${obj.version}, app expects v${STORE_VERSION}`
-    );
+  if (typeof obj.version !== 'number') {
+    throw new Error('Missing or invalid "version" field');
   }
-
   if (typeof obj.data !== 'object' || obj.data === null) {
     throw new Error('Missing or invalid "data" field');
   }
 
-  const data = obj.data as Partial<FlowSenseStore>;
+  if (obj.version === STORE_VERSION) {
+    return normalizeV2Store(obj.data as Partial<FlowSenseStore>);
+  }
 
-  // Validate and reconstruct
-  const store: FlowSenseStore = {
-    plan: data.plan ?? null,
-    proposals: validateArray(data.proposals, 'proposals'),
-    scenarios: validateArray(data.scenarios, 'scenarios'),
-    providers: validateArray(data.providers, 'providers'),
-    clients: validateArray(data.clients, 'clients'),
-    assumptions: validateAssumptions(data.assumptions),
-    confirmedPayments: validateArray(data.confirmedPayments, 'confirmedPayments'),
-    cxpRecords: validateArray(data.cxpRecords, 'cxpRecords'),
-    forecastOverrides: validateArray(data.forecastOverrides, 'forecastOverrides'),
-    lastSaved: validateISODate(data.lastSaved, 'lastSaved'),
-  };
+  if (obj.version === 1) {
+    return migrateLegacyStore(obj.data as Partial<LegacyFlowSenseStore>);
+  }
 
-  return store;
+  throw new Error(`Unsupported version: ${obj.version}`);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Helpers — validation and type guards
-// ─────────────────────────────────────────────────────────────────────────
-
-/**
- * Validates that a value is an array, returning it or an empty array.
- */
 function validateArray<T>(value: unknown, fieldName: string): T[] {
   if (!Array.isArray(value)) {
-    console.warn(
-      `Field "${fieldName}" is not an array; using default empty array`
-    );
+    console.warn(`Field "${fieldName}" is not an array; using default empty array`);
     return [];
   }
   return value;
 }
 
-/**
- * Validates CashFlowAssumptions structure, using defaults for missing fields.
- */
-function validateAssumptions(
-  value: unknown
-): CashFlowAssumptions {
+function validateAssumptions(value: unknown): CashFlowAssumptions {
   if (typeof value !== 'object' || value === null) {
-    console.warn('assumptions is not an object; using defaults');
     return {
       year: new Date().getFullYear(),
       globalCompliance: 1,
@@ -294,7 +418,6 @@ function validateAssumptions(
   }
 
   const obj = value as Record<string, unknown>;
-
   return {
     year:
       typeof obj.year === 'number' && obj.year > 1900
@@ -311,19 +434,12 @@ function validateAssumptions(
   };
 }
 
-/**
- * Validates that a value is a valid ISO 8601 datetime string.
- */
 function validateISODate(value: unknown, fieldName: string): string {
   if (typeof value === 'string') {
-    try {
-      new Date(value).toISOString();
-      return value;
-    } catch {
-      // Fall through to default
-    }
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return value;
   }
 
   console.warn(`Field "${fieldName}" is not a valid ISO date; using current time`);
-  return new Date().toISOString();
+  return isoNow();
 }

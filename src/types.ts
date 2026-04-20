@@ -3,7 +3,7 @@ export interface FlowPlan {
   year: number;
   cajaInicial: number;
   concepts: FlowConcept[];
-  weekDates: string[]; // ISO dates for each week
+  weekDates: string[];
 }
 
 export interface FlowConcept {
@@ -14,65 +14,225 @@ export interface FlowConcept {
   responsible: string | null;
   conceptType: 'ingreso' | 'egreso' | 'resumen' | 'reserva';
   sortOrder: number;
-  weeklyData: number[]; // 52 values
-  monthlyData: number[]; // 12 values
+  weeklyData: number[];
+  monthlyData: number[];
   children?: FlowConcept[];
+}
+
+export type ProposalStatus =
+  | 'Pendiente'
+  | 'En proceso'
+  | 'Aprobada'
+  | 'Descartada';
+
+export type SimulationCategory =
+  | 'Reducción de Costos'
+  | 'Incremento de Ingresos'
+  | 'Diferimiento'
+  | 'Renegociación';
+
+export type SimulationEffectMode = 'absolute' | 'percent';
+
+export const ROLE_TARGET_INCOME = '__role__:income';
+export const ROLE_TARGET_EXPENSE = '__role__:expense';
+export const ROLE_TARGET_COLLECTIONS = '__role__:collections';
+export const ROLE_TARGET_PROVIDER_PAYMENTS = '__role__:provider-payments';
+
+export const ROLE_TARGET_LABELS: Record<string, string> = {
+  [ROLE_TARGET_INCOME]: 'Ajuste general ingresos',
+  [ROLE_TARGET_EXPENSE]: 'Ajuste general egresos',
+  [ROLE_TARGET_COLLECTIONS]: 'Ajuste general cobranza',
+  [ROLE_TARGET_PROVIDER_PAYMENTS]: 'Ajuste general pagos proveedores',
+};
+
+export interface ConceptDeltaEffect {
+  id: string;
+  type: 'concept_delta';
+  conceptId: string;
+  monthOffsets: number[];
+  mode: SimulationEffectMode;
+  value: number;
+}
+
+export type SimulationEffect = ConceptDeltaEffect;
+
+export interface Simulation {
+  id: string;
+  name: string;
+  description: string;
+  category: SimulationCategory;
+  effects: SimulationEffect[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Proposal {
   id: string;
-  category: 'Reducción de Costos' | 'Incremento de Ingresos' | 'Diferimiento' | 'Renegociación';
   name: string;
-  monthlyAmount: number; // estimated monthly impact in $M (positive = improvement)
-  probability: number; // 0-1
-  startMonth: number; // 1-12
-  distribution: 'Mensual' | 'Semestral' | 'Único';
-  status: 'Pendiente' | 'En proceso' | 'Aprobada' | 'Descartada';
-  annualImpact: number; // calculated from monthlyAmount × probability × distribution
-  monthlyImpact: number[]; // 12 values, calculated
-  responsible: string; // who owns this proposal
-  notes: string;
+  description: string;
+  status: ProposalStatus;
+  activeScenarioId?: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface Scenario {
   id: string;
+  proposalId: string;
   name: string;
   description: string;
-  selectedProposalIds: string[];
+  probability: number;
+  startYearMonth: string;
+  horizonMonths: number;
+  simulationIds: string[];
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface DrillDownLevel {
   label: string;
   conceptId: string | null;
-  month: number | null; // null = full year
+  month: number | null;
 }
 
-export type TabId = 'dashboard' | 'proposals' | 'simulator' | 'providers' | 'collections' | 'clients' | 'cxp' | 'bancos' | 'netflow' | 'pnl' | 'cashflow' | 'drivers';
+export type TabId =
+  | 'dashboard'
+  | 'proposals'
+  | 'simulator'
+  | 'providers'
+  | 'collections'
+  | 'clients'
+  | 'cxp'
+  | 'bancos'
+  | 'netflow'
+  | 'pnl'
+  | 'cashflow'
+  | 'drivers';
 
-/**
- * Forecast cell override — Excel-like manual edit on a Forecast cell.
- * key: `${conceptId}::${yyyy-mm}` (rolling window friendly).
- */
-export interface ForecastOverride {
+export interface ScenarioCellOverride {
+  key: string;
+  scenarioId: string;
+  conceptId: string;
+  yearMonth: string;
+  baseValue: number;
+  simulatedValue: number;
+  manualValue: number;
+  comment?: string;
+  editedAt: string;
+}
+
+export function scenarioCellKey(
+  scenarioId: string,
+  conceptId: string,
+  yearMonth: string,
+): string {
+  return `${scenarioId}::${conceptId}::${yearMonth}`;
+}
+
+export interface ScenarioMonth {
+  monthIndex: number;
+  year: number;
+  label: string;
+  ym: string;
+}
+
+export interface SimulationContribution {
+  simulationId: string;
+  simulationName: string;
+  delta: number;
+}
+
+export interface EvaluatedCell {
   key: string;
   conceptId: string;
-  yearMonth: string;     // "2026-04"
-  originalValue: number;
-  overrideValue: number;
+  yearMonth: string;
+  monthIndex: number;
+  baseValue: number;
+  simulatedValue: number;
+  finalValue: number;
+  manualDelta: number;
+  override?: ScenarioCellOverride;
   comment?: string;
-  editedAt: string;      // ISO datetime
+  simulationContributions: SimulationContribution[];
+  hasSimulationDelta: boolean;
+  hasManualDelta: boolean;
+  isOverridden: boolean;
+  isEditable: boolean;
 }
 
-export function overrideKey(conceptId: string, yearMonth: string): string {
-  return `${conceptId}::${yearMonth}`;
+export interface ScenarioMetrics {
+  ingresos: number[];
+  egresos: number[];
+  flujoNeto: number[];
+  cajaFinal: number[];
+  cobranza: number[];
+  pagosProveedores: number[];
+  saldosFinales: number[];
 }
 
-export const MONTHS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-export const MONTHS_FULL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+export interface ScenarioKpis {
+  ingresos12m: number;
+  egresos12m: number;
+  flujoNeto12m: number;
+  cajaFinal: number;
+  cajaMinima: number;
+  cobranza12m: number;
+  pagosProveedores12m: number;
+}
 
-export const CATEGORY_COLORS: Record<string, string> = {
+export interface ScenarioComparisonSnapshot {
+  scenarioId: string;
+  proposalId: string;
+  diffByCellKey: Map<string, number>;
+  kpiDiff: Partial<Record<keyof ScenarioKpis, number>>;
+}
+
+export interface EvaluatedScenario {
+  proposalId: string;
+  scenarioId: string;
+  months: ScenarioMonth[];
+  valuesByConceptId: Map<string, number[]>;
+  baseValuesByConceptId: Map<string, number[]>;
+  cells: Map<string, EvaluatedCell>;
+  diffVsBase: Map<string, number>;
+  changedKeys: Set<string>;
+  metrics: ScenarioMetrics;
+  kpis: ScenarioKpis;
+}
+
+export type ForecastLayerMode = 'base' | 'simulated' | 'manual' | 'diff';
+
+export const MONTHS = [
+  'Ene',
+  'Feb',
+  'Mar',
+  'Abr',
+  'May',
+  'Jun',
+  'Jul',
+  'Ago',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dic',
+];
+
+export const MONTHS_FULL = [
+  'Enero',
+  'Febrero',
+  'Marzo',
+  'Abril',
+  'Mayo',
+  'Junio',
+  'Julio',
+  'Agosto',
+  'Septiembre',
+  'Octubre',
+  'Noviembre',
+  'Diciembre',
+];
+
+export const CATEGORY_COLORS: Record<SimulationCategory, string> = {
   'Reducción de Costos': '#0071e3',
   'Incremento de Ingresos': '#34c759',
   'Diferimiento': '#ff9f0a',

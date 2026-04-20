@@ -1,766 +1,511 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  AreaChart,
   Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ReferenceLine,
-  BarChart,
-  Bar,
-  Cell,
 } from 'recharts';
 import {
-  FlaskConical,
-  Save,
-  Copy,
   Check,
-  X,
-  TrendingUp,
-  AlertTriangle,
-  CheckCircle,
   ChevronDown,
   ChevronRight,
-  Layers,
+  Columns2,
+  FlaskConical,
 } from 'lucide-react';
-import { FlowPlan, Proposal, Scenario } from '../types';
-import { simulateCashFlow, formatCurrency } from '../utils/calculations';
+import {
+  CATEGORY_COLORS,
+  FlowPlan,
+  Proposal,
+  Scenario,
+  ScenarioCellOverride,
+  Simulation,
+} from '../types';
+import {
+  compareScenarioEvaluations,
+  evaluateScenario,
+  resolveConceptLabel,
+} from '../domain/scenarioEngine';
+import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 
 interface SimulatorProps {
   plan: FlowPlan;
   proposals: Proposal[];
   scenarios: Scenario[];
-  onSaveScenario: (s: Scenario) => void;
+  simulations: Simulation[];
+  overrides: ScenarioCellOverride[];
+  activeProposalId: string | null;
+  activeScenarioId: string | null;
+  onSelectProposal: (proposalId: string) => void;
+  onSelectScenario: (scenarioId: string | null) => void;
+  onUpdateScenario: (scenario: Scenario) => void;
 }
 
-const MONTHS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+const KPI_CONFIG = [
+  { key: 'ingresos12m', label: 'Ingresos 12m', color: 'text-[#0071e3]' },
+  { key: 'egresos12m', label: 'Egresos 12m', color: 'text-[#ff3b30]' },
+  { key: 'flujoNeto12m', label: 'Flujo Neto', color: 'text-[#34c759]' },
+  { key: 'cajaFinal', label: 'Caja Final', color: 'text-[#1d1d1f]' },
+  { key: 'cajaMinima', label: 'Caja Mínima', color: 'text-[#af52de]' },
+  { key: 'cobranza12m', label: 'Cobranza', color: 'text-[#0071e3]' },
+  { key: 'pagosProveedores12m', label: 'Pagos Proveedores', color: 'text-[#ff9500]' },
+] as const;
 
-const CATEGORY_COLORS: Record<string, string> = {
-  'Reducción de Costos': '#0071e3',
-  'Incremento de Ingresos': '#34c759',
-  'Diferimiento': '#ff9f0a',
-  'Renegociación': '#af52de',
-};
+export default function Simulator({
+  plan,
+  proposals,
+  scenarios,
+  simulations,
+  overrides,
+  activeProposalId,
+  activeScenarioId,
+  onSelectProposal,
+  onSelectScenario,
+  onUpdateScenario,
+}: SimulatorProps) {
+  const [simulationSearch, setSimulationSearch] = useState('');
+  const [compareScenarioIds, setCompareScenarioIds] = useState<string[]>([]);
+  const [treeOpen, setTreeOpen] = useState<Set<string>>(() => new Set(proposals.map((proposal) => proposal.id)));
 
-/* ────────────────────────────────────────────
-   Summary rows for the Flujo Resumido table.
-   Each maps to an excelRow in the FlowPlan.
-   ──────────────────────────────────────────── */
-const SUMMARY_ROWS: { row: number; label: string; style: 'income' | 'expense' | 'subtotal' | 'total' }[] = [
-  { row: 7,   label: 'Ingresos',              style: 'income' },
-  { row: 14,  label: 'Nómina',                style: 'expense' },
-  { row: 32,  label: 'Diésel',                style: 'expense' },
-  { row: 33,  label: 'Gas',                   style: 'expense' },
-  { row: 35,  label: 'Distribuidores',        style: 'expense' },
-  { row: 37,  label: 'Impuestos',             style: 'expense' },
-  { row: 75,  label: 'Gastos Operativos',     style: 'expense' },
-  { row: 76,  label: 'Asesores',              style: 'expense' },
-  { row: 83,  label: 'Proyectos',             style: 'expense' },
-  { row: 88,  label: 'Pasivos Financieros',   style: 'expense' },
-  { row: 114, label: 'Variación en Caja',     style: 'subtotal' },
-  { row: 115, label: 'Caja Final',            style: 'total' },
-];
+  const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
+  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
+    ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? null;
 
-const Simulator = ({ plan, proposals, scenarios, onSaveScenario }: SimulatorProps) => {
-  const [selectedProposalIds, setSelectedProposalIds] = useState<Set<string>>(new Set());
-  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
-  const [showSaveModal, setShowSaveModal] = useState(false);
-  const [scenarioName, setScenarioName] = useState('');
-  const [scenarioDescription, setScenarioDescription] = useState('');
-  const [copiedSummary, setCopiedSummary] = useState(false);
-  const [showFlowTable, setShowFlowTable] = useState(true);
+  const activeEvaluation = useMemo(() => {
+    if (!activeProposal || !activeScenario) return null;
+    return evaluateScenario(plan, activeProposal, activeScenario, simulations, overrides);
+  }, [activeProposal, activeScenario, overrides, plan, simulations]);
 
-  const availableProposals = useMemo(
-    () => proposals.filter((p) => p.status !== 'Descartada'),
-    [proposals]
-  );
+  const baseEvaluation = useMemo(() => {
+    if (!activeProposal || !activeScenario) return null;
+    return evaluateScenario(plan, activeProposal, activeScenario, [], []);
+  }, [activeProposal, activeScenario, plan]);
 
-  const filteredProposals = useMemo(() => {
-    if (!categoryFilter) return availableProposals;
-    return availableProposals.filter((p) => p.category === categoryFilter);
-  }, [availableProposals, categoryFilter]);
-
-  const activeProposals = useMemo(
-    () => availableProposals.filter((p) => selectedProposalIds.has(p.id)),
-    [availableProposals, selectedProposalIds]
-  );
-
-  const toggleProposal = useCallback((id: string) => {
-    setSelectedProposalIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  const toggleSelectAll = useCallback(() => {
-    if (selectedProposalIds.size === filteredProposals.length) {
-      setSelectedProposalIds(new Set());
-    } else {
-      setSelectedProposalIds(new Set(filteredProposals.map((p) => p.id)));
-    }
-  }, [filteredProposals, selectedProposalIds.size]);
-
-  const loadScenario = useCallback((scenario: Scenario) => {
-    setSelectedProposalIds(new Set(scenario.selectedProposalIds));
-  }, []);
-
-  /* ── Base data from FlowPlan ── */
-  const baseCashFlowData = useMemo(() => {
-    const cajaFinalConcept = plan.concepts.find((c) => c.excelRow === 115);
-    const variacionConcept = plan.concepts.find((c) => c.excelRow === 114);
-    const baseCaja = cajaFinalConcept?.monthlyData || Array(12).fill(0);
-    const baseVariacion = variacionConcept?.monthlyData || Array(12).fill(0);
-    const cajaInicial = plan.cajaInicial || 0;
-    return { baseCaja, baseVariacion, cajaInicial };
-  }, [plan]);
-
-  /* ── Simulation result ── */
-  const simulationResult = useMemo(() => {
-    if (activeProposals.length === 0) return null;
-    return simulateCashFlow(
-      baseCashFlowData.baseCaja,
-      baseCashFlowData.baseVariacion,
-      baseCashFlowData.cajaInicial,
-      activeProposals
+  const filteredSimulations = useMemo(() => {
+    const query = simulationSearch.trim().toLowerCase();
+    if (!query) return simulations;
+    return simulations.filter((simulation) =>
+      simulation.name.toLowerCase().includes(query) ||
+      simulation.description.toLowerCase().includes(query),
     );
-  }, [baseCashFlowData, activeProposals]);
+  }, [simulationSearch, simulations]);
 
-  /* ── KPIs ── */
-  const kpis = useMemo(() => {
-    if (!simulationResult) return null;
-    const { simulatedCaja } = simulationResult;
-    const annualImpact = activeProposals.reduce((sum, p) => sum + p.annualImpact, 0);
-    const minCaja = simulatedCaja.length > 0 ? Math.min(...simulatedCaja) : 0;
-    const baseMinCaja = baseCashFlowData.baseCaja.length > 0 ? Math.min(...baseCashFlowData.baseCaja) : 0;
-    const hasDeficit = simulatedCaja.some((c) => c < 0);
-    const deficitMonths = simulatedCaja.map((c, i) => (c < 0 ? MONTHS[i] : null)).filter(Boolean);
-    return { activeCount: activeProposals.length, annualImpact, minCaja, baseMinCaja, hasDeficit, deficitMonths };
-  }, [simulationResult, activeProposals, baseCashFlowData.baseCaja]);
-
-  /* ── Chart data ── */
+  const assignedSimulationIds = new Set(activeScenario?.simulationIds ?? []);
   const chartData = useMemo(() => {
-    const simulatedCaja = simulationResult?.simulatedCaja;
-    return MONTHS.map((month, i) => ({
-      month,
-      cajaBase: baseCashFlowData.baseCaja[i] || 0,
-      cajaSimulada: simulatedCaja ? simulatedCaja[i] || 0 : baseCashFlowData.baseCaja[i] || 0,
+    if (!activeEvaluation || !baseEvaluation) return [];
+    return activeEvaluation.months.map((month, index) => ({
+      month: month.label,
+      base: baseEvaluation.metrics.cajaFinal[index] ?? 0,
+      escenario: activeEvaluation.metrics.cajaFinal[index] ?? 0,
+      diff: (activeEvaluation.metrics.cajaFinal[index] ?? 0) - (baseEvaluation.metrics.cajaFinal[index] ?? 0),
     }));
-  }, [simulationResult, baseCashFlowData.baseCaja]);
+  }, [activeEvaluation, baseEvaluation]);
 
-  /* ── Impact bar chart data ── */
-  const impactBarData = useMemo(() => {
-    if (!simulationResult) return [];
-    return MONTHS.map((month, i) => ({
-      month,
-      impacto: simulationResult.cumulativeImpact[i] || 0,
+  const metricRows = useMemo(() => {
+    if (!activeEvaluation || !baseEvaluation) return [];
+    return activeEvaluation.months.map((month, index) => ({
+      month: month.label,
+      ingresos: activeEvaluation.metrics.ingresos[index] ?? 0,
+      egresos: activeEvaluation.metrics.egresos[index] ?? 0,
+      flujoNeto: activeEvaluation.metrics.flujoNeto[index] ?? 0,
+      cajaFinal: activeEvaluation.metrics.cajaFinal[index] ?? 0,
+      cobranza: activeEvaluation.metrics.cobranza[index] ?? 0,
+      pagosProveedores: activeEvaluation.metrics.pagosProveedores[index] ?? 0,
+      deltaCaja: (activeEvaluation.metrics.cajaFinal[index] ?? 0) - (baseEvaluation.metrics.cajaFinal[index] ?? 0),
     }));
-  }, [simulationResult]);
+  }, [activeEvaluation, baseEvaluation]);
 
-  /* ── Impact detail table ── */
-  const tableData = useMemo(() => {
-    if (!simulationResult) return [];
-    const { simulatedCaja, totalImpact, cumulativeImpact } = simulationResult;
-    return MONTHS.map((month, i) => ({
-      month,
-      cajaBase: baseCashFlowData.baseCaja[i] || 0,
-      impacto: totalImpact[i] || 0,
-      impactoAcumulado: cumulativeImpact[i] || 0,
-      cajaSimulada: simulatedCaja[i] || 0,
-      delta: (simulatedCaja[i] || 0) - (baseCashFlowData.baseCaja[i] || 0),
-    }));
-  }, [simulationResult, baseCashFlowData.baseCaja]);
+  const compareEvaluations = useMemo(() => {
+    if (!activeEvaluation) return [];
+    return compareScenarioIds
+      .map((scenarioId) => {
+        const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
+        if (!scenario) return null;
+        const proposal = proposals.find((candidate) => candidate.id === scenario.proposalId);
+        if (!proposal) return null;
+        const evaluation = evaluateScenario(plan, proposal, scenario, simulations, overrides);
+        const diff = compareScenarioEvaluations(evaluation, activeEvaluation);
+        return { proposal, scenario, evaluation, diff };
+      })
+      .filter(Boolean) as Array<{
+        proposal: Proposal;
+        scenario: Scenario;
+        evaluation: NonNullable<typeof activeEvaluation>;
+        diff: ReturnType<typeof compareScenarioEvaluations>;
+      }>;
+  }, [activeEvaluation, compareScenarioIds, overrides, plan, proposals, scenarios, simulations]);
 
-  /* ── Summary flow rows from plan concepts ── */
-  const summaryFlowData = useMemo(() => {
-    return SUMMARY_ROWS.map(({ row, label, style }) => {
-      const concept = plan.concepts.find((c) => c.excelRow === row);
-      return {
-        row,
-        label,
-        style,
-        data: concept?.monthlyData || Array(12).fill(0),
-      };
-    }).filter((r) => {
-      // Keep rows that have at least some non-zero data, or are subtotal/total
-      if (r.style === 'subtotal' || r.style === 'total') return true;
-      return r.data.some((v) => v !== 0);
+  const toggleSimulationAssignment = (simulationId: string) => {
+    if (!activeScenario) return;
+    const exists = assignedSimulationIds.has(simulationId);
+    onUpdateScenario({
+      ...activeScenario,
+      simulationIds: exists
+        ? activeScenario.simulationIds.filter((id) => id !== simulationId)
+        : [...activeScenario.simulationIds, simulationId],
+      updatedAt: new Date().toISOString(),
     });
-  }, [plan]);
-
-  /* ── Text summary ── */
-  const generateSummary = useCallback(() => {
-    const date = new Date().toLocaleDateString('es-ES');
-    const proposalDetails = activeProposals
-      .map((p, i) => `${i + 1}. ${p.name} — Impacto: ${formatCurrency(p.annualImpact)}/año (prob: ${(p.probability * 100).toFixed(0)}%)`)
-      .join('\n');
-    const flowDetails = tableData.map((row) => `${row.month}: ${formatCurrency(row.cajaSimulada)}`).join(' | ');
-    return `FlowSense — Simulación: ${date}\nPlan: ${plan.name}\nPropuestas seleccionadas: ${activeProposals.length}\nImpacto anual total: ${formatCurrency(kpis?.annualImpact || 0)}\n\nPropuestas:\n${proposalDetails}\n\nFlujo Simulado:\n${flowDetails}`;
-  }, [activeProposals, tableData, kpis, plan.name]);
-
-  const copySummary = useCallback(() => {
-    const summary = generateSummary();
-    navigator.clipboard.writeText(summary);
-    setCopiedSummary(true);
-    setTimeout(() => setCopiedSummary(false), 2000);
-  }, [generateSummary]);
-
-  const handleSaveScenario = useCallback(() => {
-    if (!scenarioName.trim()) return;
-    const newScenario: Scenario = {
-      id: `scenario-${Date.now()}`,
-      name: scenarioName,
-      description: scenarioDescription,
-      selectedProposalIds: Array.from(selectedProposalIds),
-      createdAt: new Date().toISOString(),
-    };
-    onSaveScenario(newScenario);
-    setScenarioName('');
-    setScenarioDescription('');
-    setShowSaveModal(false);
-  }, [scenarioName, scenarioDescription, selectedProposalIds, onSaveScenario]);
-
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3.5 shadow-lg shadow-black/5">
-          <p className="text-[13px] font-semibold text-[#1d1d1f] mb-1.5">{label}</p>
-          {payload.map((entry: any, idx: number) => (
-            <p key={idx} style={{ color: entry.color || entry.stroke }} className="font-mono text-[12px] leading-5">
-              {entry.name}: {formatCurrency(entry.value)}
-            </p>
-          ))}
-        </div>
-      );
-    }
-    return null;
   };
 
-  const hasSimulation = activeProposals.length > 0;
+  const toggleCompareScenario = (scenarioId: string) => {
+    setCompareScenarioIds((current) => {
+      if (current.includes(scenarioId)) {
+        return current.filter((item) => item !== scenarioId);
+      }
+      if (current.length >= 2) return current;
+      return [...current, scenarioId];
+    });
+  };
+
+  const toggleTree = (proposalId: string) => {
+    setTreeOpen((current) => {
+      const next = new Set(current);
+      if (next.has(proposalId)) next.delete(proposalId);
+      else next.add(proposalId);
+      return next;
+    });
+  };
+
+  if (!activeProposal || !activeScenario || !activeEvaluation || !baseEvaluation) {
+    return (
+      <div className="rounded-2xl border border-dashed border-[#d2d2d7] bg-white px-6 py-20 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#f5f5f7]">
+          <FlaskConical className="w-5 h-5 text-[#86868b]" />
+        </div>
+        <h2 className="text-[18px] font-semibold text-[#1d1d1f]">No hay escenario activo</h2>
+        <p className="mt-2 text-[13px] text-[#86868b]">
+          Crea una propuesta y al menos un escenario en la pestaña de Propuestas.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex gap-6 min-h-[calc(100vh-140px)]">
-      {/* ═══════════════ LEFT COLUMN: Proposals ═══════════════ */}
-      <div className="w-[320px] flex-shrink-0 flex flex-col bg-white rounded-2xl border border-[#d2d2d7]/40 shadow-sm overflow-hidden animate-slide-down hover-lift">
-        <div className="p-5 border-b border-[#e8e8ed]">
-          <h2 className="text-[15px] font-semibold text-[#1d1d1f] mb-4 flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#f0e6ff] flex items-center justify-center">
-              <FlaskConical size={14} className="text-[#af52de]" />
-            </div>
-            Propuestas ({availableProposals.length})
-          </h2>
-
-          {availableProposals.length > 0 && (
-            <button
-              onClick={toggleSelectAll}
-              className="w-full mb-3 px-3 py-2 bg-[#e8f4fd] hover:bg-[#d6ecfc] text-[#0071e3] rounded-xl transition text-[13px] font-medium hover-press"
-            >
-              {selectedProposalIds.size === filteredProposals.length ? 'Deseleccionar Todo' : 'Seleccionar Todo'}
-            </button>
-          )}
-
-          {/* Category Filter */}
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              onClick={() => setCategoryFilter(null)}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition hover-press ${
-                categoryFilter === null
-                  ? 'bg-[#1d1d1f] text-white'
-                  : 'bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed]'
-              }`}
-            >
-              Todos
-            </button>
-            {Object.keys(CATEGORY_COLORS).map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setCategoryFilter(cat)}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition hover-press ${
-                  categoryFilter === cat
-                    ? 'bg-[#1d1d1f] text-white'
-                    : 'bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed]'
-                }`}
-              >
-                {cat.split(' ')[0]}
-              </button>
-            ))}
-          </div>
+    <div className="grid grid-cols-[280px,minmax(0,1fr),360px] gap-5 min-h-[calc(100vh-180px)]">
+      <aside className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Árbol de trabajo</p>
+          <h2 className="mt-1 text-[16px] font-semibold text-[#1d1d1f]">Propuestas y escenarios</h2>
         </div>
-
-        {/* Proposals List */}
-        {availableProposals.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center p-6 text-center">
-            <div>
-              <div className="w-12 h-12 rounded-2xl bg-[#f5f5f7] flex items-center justify-center mx-auto mb-3">
-                <AlertTriangle className="text-[#c7c7cc]" size={20} />
-              </div>
-              <p className="text-[13px] text-[#6e6e73]">No hay propuestas creadas.</p>
-              <p className="text-[11px] text-[#86868b] mt-1">Ve a Propuestas para crear la primera.</p>
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
-            {filteredProposals.map((proposal, idx) => {
-              const isSelected = selectedProposalIds.has(proposal.id);
-              return (
+        <div className="space-y-2">
+          {proposals.map((proposal) => {
+            const isOpen = treeOpen.has(proposal.id);
+            const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === proposal.id);
+            return (
+              <div key={proposal.id} className="rounded-xl border border-[#d2d2d7]/50 bg-[#fbfbfd]">
                 <button
-                  key={proposal.id}
-                  onClick={() => toggleProposal(proposal.id)}
-                  className={`w-full text-left p-3 rounded-xl transition-all animate-card-in hover-press ${
-                    ['stagger-1','stagger-2','stagger-3','stagger-4','stagger-5','stagger-6','stagger-7','stagger-8'][idx % 8]
-                  } ${
-                    isSelected
-                      ? 'bg-[#e8f4fd] border border-[#0071e3]/20'
-                      : 'bg-[#f5f5f7] border border-transparent hover:bg-[#e8e8ed]'
-                  }`}
+                  onClick={() => {
+                    toggleTree(proposal.id);
+                    onSelectProposal(proposal.id);
+                  }}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
                 >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-0.5 relative ${
-                        isSelected ? 'bg-[#0071e3]' : 'bg-[#c7c7cc]'
-                      }`}
-                    >
-                      <div
-                        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-all ${
-                          isSelected ? 'left-[18px]' : 'left-0.5'
-                        }`}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <div
-                          className="w-2 h-2 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: CATEGORY_COLORS[proposal.category] }}
-                        />
-                        <p className="font-medium text-[#1d1d1f] text-[13px] truncate">{proposal.name}</p>
-                      </div>
-                      <div className="flex gap-3 text-[11px] text-[#86868b]">
-                        <span>Prob: {(proposal.probability * 100).toFixed(0)}%</span>
-                        <span>{formatCurrency(proposal.annualImpact)}/año</span>
-                      </div>
-                    </div>
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-[#1d1d1f] truncate">{proposal.name}</p>
+                    <p className="text-[11px] text-[#86868b]">{proposalScenarios.length} escenarios</p>
                   </div>
+                  {isOpen ? (
+                    <ChevronDown className="w-4 h-4 text-[#86868b]" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-[#86868b]" />
+                  )}
                 </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Saved Scenarios */}
-        {scenarios.length > 0 && (
-          <div className="border-t border-[#e8e8ed] p-4 animate-fade-in">
-            <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Escenarios Guardados</p>
-            <div className="space-y-1.5 max-h-28 overflow-y-auto">
-              {scenarios.map((scenario) => (
-                <button
-                  key={scenario.id}
-                  onClick={() => loadScenario(scenario)}
-                  className="w-full px-3 py-2 text-left bg-[#f5f5f7] hover:bg-[#e8e8ed] rounded-lg transition text-[12px] text-[#6e6e73] hover:text-[#1d1d1f] truncate hover-press"
-                  title={scenario.description}
-                >
-                  {scenario.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ═══════════════ RIGHT COLUMN — stable layout, no mount/unmount ═══════════════ */}
-      <div className="flex-1 overflow-y-auto">
-          <div className="space-y-5">
-            {/* ── KPIs — always rendered, values animate smoothly ── */}
-            <div className="grid grid-cols-4 gap-4">
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm hover-lift">
-                <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Propuestas</p>
-                <p className="text-[26px] font-bold text-[#0071e3] tracking-tight transition-all duration-300">{kpis?.activeCount ?? 0}</p>
-                <p className="text-[11px] text-[#86868b] mt-1">activas</p>
-              </div>
-
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm hover-lift">
-                <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Impacto Anual</p>
-                <p className="text-[22px] font-bold text-[#34c759] font-mono transition-all duration-300">{formatCurrency(kpis?.annualImpact || 0)}</p>
-                <p className="text-[11px] text-[#86868b] mt-1">beneficio estimado</p>
-              </div>
-
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm hover-lift">
-                <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Caja Mínima</p>
-                <p className={`text-[22px] font-bold font-mono transition-all duration-300 ${
-                  hasSimulation
-                    ? ((kpis?.minCaja || 0) > 0 ? 'text-[#34c759]' : 'text-[#ff3b30]')
-                    : 'text-[#1d1d1f]'
-                }`}>
-                  {formatCurrency(hasSimulation ? (kpis?.minCaja || 0) : (baseCashFlowData.baseCaja.length > 0 ? Math.min(...baseCashFlowData.baseCaja) : 0))}
-                </p>
-                <p className="text-[11px] text-[#86868b] mt-1 transition-opacity duration-300" style={{ opacity: hasSimulation ? 1 : 0.5 }}>
-                  {hasSimulation ? `base: ${formatCurrency(kpis?.baseMinCaja || 0)}` : 'línea base'}
-                </p>
-              </div>
-
-              <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-5 shadow-sm hover-lift">
-                <p className="text-[11px] text-[#86868b] font-semibold uppercase tracking-wider mb-2">Liquidez</p>
-                {hasSimulation && kpis?.hasDeficit ? (
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-[#ffe5e5] flex items-center justify-center transition-colors duration-300">
-                        <X className="text-[#ff3b30]" size={12} />
-                      </div>
-                      <span className="text-[13px] text-[#ff3b30] font-semibold">Déficit</span>
-                    </div>
-                    <p className="text-[11px] text-[#86868b] mt-1">{(kpis.deficitMonths as string[]).join(', ')}</p>
-                  </div>
-                ) : hasSimulation ? (
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-full bg-[#e8faf0] flex items-center justify-center transition-colors duration-300">
-                      <CheckCircle className="text-[#34c759]" size={12} />
-                    </div>
-                    <span className="text-[13px] text-[#34c759] font-semibold">Asegurada</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-full bg-[#f5f5f7] flex items-center justify-center transition-colors duration-300">
-                      <TrendingUp className="text-[#86868b]" size={12} />
-                    </div>
-                    <span className="text-[13px] text-[#86868b] font-medium">Selecciona propuestas</span>
+                {isOpen && (
+                  <div className="border-t border-[#d2d2d7]/40 px-2 py-2 space-y-1">
+                    {proposalScenarios.map((scenario) => {
+                      const isActive = scenario.id === activeScenario.id;
+                      return (
+                        <button
+                          key={scenario.id}
+                          onClick={() => {
+                            onSelectProposal(proposal.id);
+                            onSelectScenario(scenario.id);
+                          }}
+                          className={`w-full rounded-lg px-3 py-2 text-left transition ${
+                            isActive
+                              ? 'bg-[#e8faf0] text-[#248a3d]'
+                              : 'text-[#6e6e73] hover:bg-white hover:text-[#1d1d1f]'
+                          }`}
+                        >
+                          <p className="text-[12px] font-medium">{scenario.name}</p>
+                          <p className="text-[10px]">{scenario.simulationIds.length} simulaciones</p>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      <main className="space-y-5">
+        <header className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-6">
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Workbench activo</p>
+              <h1 className="mt-1 text-[24px] font-semibold text-[#1d1d1f]">{activeScenario.name}</h1>
+              <p className="mt-1 text-[13px] text-[#86868b]">
+                {activeProposal.name} · {Math.round(activeScenario.probability * 100)}% probabilidad · {activeScenario.horizonMonths} meses
+              </p>
             </div>
-
-            {/* ── Area Chart — ALWAYS visible, stable ── */}
-            <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl p-6 shadow-sm hover-lift">
-              <h3 className="text-[15px] font-semibold text-[#1d1d1f] mb-5 transition-all duration-300">
-                {hasSimulation ? 'Proyección de Caja — Base vs Simulada' : `Proyección de Caja — ${plan.name}`}
-              </h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="colorCajaBase" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#86868b" stopOpacity={0.12} />
-                      <stop offset="95%" stopColor="#86868b" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="colorCajaSimulada" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#0071e3" stopOpacity={0.18} />
-                      <stop offset="95%" stopColor="#0071e3" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#e8e8ed" strokeDasharray="0" vertical={false} />
-                  <XAxis dataKey="month" tick={{ fill: '#86868b', fontSize: 11 }} axisLine={{ stroke: '#e8e8ed' }} tickLine={false} />
-                  <YAxis tick={{ fill: '#86868b', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v.toFixed(0)}M`} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <ReferenceLine y={0} stroke="#ff3b30" strokeDasharray="5 5" strokeOpacity={0.4} />
-                  <Area type="monotone" dataKey="cajaBase" stroke={hasSimulation ? '#c7c7cc' : '#0071e3'} strokeWidth={2} fillOpacity={1} fill={hasSimulation ? 'url(#colorCajaBase)' : 'url(#colorCajaSimulada)'} name="Caja Base" dot={hasSimulation ? false : { fill: '#0071e3', r: 3, strokeWidth: 2, stroke: '#fff' }} animationDuration={600} />
-                  <Area type="monotone" dataKey="cajaSimulada" stroke="#0071e3" strokeWidth={2.5} fillOpacity={hasSimulation ? 1 : 0} fill="url(#colorCajaSimulada)" name="Caja Simulada" dot={hasSimulation ? { fill: '#0071e3', r: 3, strokeWidth: 2, stroke: '#fff' } : false} animationDuration={600} />
-                </AreaChart>
-              </ResponsiveContainer>
+            <div className="rounded-xl bg-[#f5f5f7] px-3 py-2 text-right">
+              <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Cambios detectados</p>
+              <p className="mt-1 text-[20px] font-semibold text-[#1d1d1f]">{activeEvaluation.changedKeys.size}</p>
             </div>
+          </div>
+        </header>
 
-            {/* ── Cumulative Impact Bar Chart — smooth show/hide ── */}
-            <div
-              className="bg-white border border-[#d2d2d7]/40 rounded-2xl shadow-sm hover-lift overflow-hidden"
-              style={{
-                maxHeight: hasSimulation ? 340 : 0,
-                padding: hasSimulation ? 24 : 0,
-                opacity: hasSimulation ? 1 : 0,
-                marginTop: hasSimulation ? undefined : 0,
-                marginBottom: hasSimulation ? undefined : 0,
-                borderWidth: hasSimulation ? 1 : 0,
-                transition: 'max-height 0.4s cubic-bezier(0.22,1,0.36,1), padding 0.3s ease, opacity 0.3s ease, margin 0.3s ease, border-width 0.3s ease',
-              }}
-            >
-              <h3 className="text-[15px] font-semibold text-[#1d1d1f] mb-1">Impacto Acumulado por Mes</h3>
-              <p className="text-[12px] text-[#86868b] mb-4">Efecto acumulado de propuestas sobre la caja</p>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={hasSimulation ? impactBarData : []}>
-                  <CartesianGrid stroke="#e8e8ed" strokeDasharray="0" vertical={false} />
-                  <XAxis dataKey="month" tick={{ fill: '#86868b', fontSize: 11 }} axisLine={{ stroke: '#e8e8ed' }} tickLine={false} />
-                  <YAxis tick={{ fill: '#86868b', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v.toFixed(1)}M`} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="impacto" name="Impacto Acumulado" radius={[6, 6, 0, 0]} animationDuration={500}>
-                    {(hasSimulation ? impactBarData : []).map((entry, index) => (
-                      <Cell key={index} fill={entry.impacto >= 0 ? '#34c759' : '#ff3b30'} fillOpacity={0.85} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+        <div className="grid grid-cols-4 gap-4">
+          {KPI_CONFIG.map((kpi) => (
+            <div key={kpi.key} className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm">
+              <p className="text-[11px] uppercase tracking-wide text-[#86868b]">{kpi.label}</p>
+              <p className={`mt-2 text-[22px] font-semibold ${kpi.color}`}>
+                {formatCurrency(activeEvaluation.kpis[kpi.key])}
+              </p>
+              <p className="mt-1 text-[11px] text-[#86868b]">
+                Base: {formatCurrency(baseEvaluation.kpis[kpi.key])}
+              </p>
             </div>
+          ))}
+        </div>
 
-            {/* ═══════════════ FLUJO RESUMIDO TABLE ═══════════════ */}
-            <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl shadow-sm overflow-hidden hover-lift">
-              <button
-                onClick={() => setShowFlowTable(!showFlowTable)}
-                className="w-full flex items-center justify-between px-6 py-4 hover:bg-[#fbfbfd] transition"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-[#e8f4fd] flex items-center justify-center">
-                    <Layers size={16} className="text-[#0071e3]" />
-                  </div>
-                  <div className="text-left">
-                    <h3 className="text-[15px] font-semibold text-[#1d1d1f]">Flujo Resumido</h3>
-                    <p className="text-[11px] text-[#86868b]">Desglose de flujo base + impacto simulado</p>
-                  </div>
-                </div>
-                {showFlowTable
-                  ? <ChevronDown size={18} className="text-[#86868b]" />
-                  : <ChevronRight size={18} className="text-[#86868b]" />
-                }
-              </button>
-
-              {showFlowTable && (
-                <div className="overflow-x-auto border-t border-[#e8e8ed] animate-slide-down">
-                  <table className="w-full text-[12px] min-w-[900px]">
-                    <thead>
-                      <tr className="border-b border-[#e8e8ed] bg-[#fbfbfd]">
-                        <th className="text-left py-2.5 px-4 text-[#86868b] font-semibold sticky left-0 bg-[#fbfbfd] z-10 min-w-[160px]">
-                          Concepto
-                        </th>
-                        {MONTHS.map((m) => (
-                          <th key={m} className="text-right py-2.5 px-2 text-[#86868b] font-semibold min-w-[72px]">{m}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summaryFlowData.map((row, ri) => {
-                        const isSubtotal = row.style === 'subtotal';
-                        const isTotal = row.style === 'total';
-                        const isIncome = row.style === 'income';
-                        return (
-                          <tr
-                            key={row.row}
-                            className={`border-b hover-row transition ${
-                              isTotal ? 'border-[#e8e8ed] bg-[#fbfbfd]' :
-                              isSubtotal ? 'border-[#e8e8ed]' :
-                              'border-[#f5f5f7]'
-                            }`}
-                          >
-                            <td className={`py-2 px-4 sticky left-0 z-10 ${
-                              isTotal ? 'font-bold text-[#1d1d1f] bg-[#fbfbfd]' :
-                              isSubtotal ? 'font-semibold text-[#1d1d1f] bg-white' :
-                              isIncome ? 'text-[#34c759] font-medium bg-white' :
-                              'text-[#6e6e73] bg-white'
-                            }`}>
-                              {row.label}
-                            </td>
-                            {row.data.map((val, i) => (
-                              <td key={i} className={`text-right py-2 px-2 font-mono ${
-                                isTotal ? 'font-bold text-[#1d1d1f]' :
-                                isSubtotal ? 'font-semibold text-[#1d1d1f]' :
-                                isIncome ? 'text-[#34c759]' :
-                                val < 0 ? 'text-[#ff3b30]' : 'text-[#6e6e73]'
-                              }`}>
-                                {formatCurrency(val)}
-                              </td>
-                            ))}
-                          </tr>
-                        );
-                      })}
-
-                      {/* ── Separator + Impact row ── */}
-                      <tr className="border-b border-[#0071e3]/20 bg-[#e8f4fd]/40">
-                        <td className="py-2.5 px-4 sticky left-0 z-10 bg-[#e8f4fd]/40 font-semibold text-[#0071e3]">
-                          + Impacto Propuestas
-                        </td>
-                        {(simulationResult?.totalImpact || Array(12).fill(0)).map((val, i) => (
-                          <td key={i} className="text-right py-2.5 px-2 font-mono font-semibold text-[#0071e3]">
-                            {val !== 0 ? formatCurrency(val) : '—'}
-                          </td>
-                        ))}
-                      </tr>
-
-                      {/* Cumulative Impact row */}
-                      <tr className="border-b border-[#0071e3]/20 bg-[#e8f4fd]/20">
-                        <td className="py-2 px-4 sticky left-0 z-10 bg-[#e8f4fd]/20 text-[#0071e3] text-[11px]">
-                          Impacto Acumulado
-                        </td>
-                        {(simulationResult?.cumulativeImpact || Array(12).fill(0)).map((val, i) => (
-                          <td key={i} className="text-right py-2 px-2 font-mono text-[#0071e3] text-[11px]">
-                            {val !== 0 ? formatCurrency(val) : '—'}
-                          </td>
-                        ))}
-                      </tr>
-
-                      {/* ── Variación Simulada ── */}
-                      <tr className="border-b border-[#e8e8ed] hover-row">
-                        <td className="py-2.5 px-4 sticky left-0 z-10 bg-white font-semibold text-[#1d1d1f]">
-                          Variación Simulada
-                        </td>
-                        {(simulationResult?.simulatedVariacion || Array(12).fill(0)).map((val, i) => (
-                          <td key={i} className={`text-right py-2.5 px-2 font-mono font-semibold ${
-                            val > 0 ? 'text-[#34c759]' : val < 0 ? 'text-[#ff3b30]' : 'text-[#6e6e73]'
-                          }`}>
-                            {formatCurrency(val)}
-                          </td>
-                        ))}
-                      </tr>
-
-                      {/* ── Caja Final Simulada ── */}
-                      <tr className="bg-gradient-to-r from-[#0071e3]/5 to-transparent">
-                        <td className="py-3 px-4 sticky left-0 z-10 bg-[#e8f4fd]/30 font-bold text-[#0071e3] text-[13px]">
-                          Caja Final Simulada
-                        </td>
-                        {(simulationResult?.simulatedCaja || Array(12).fill(0)).map((val, i) => (
-                          <td key={i} className={`text-right py-3 px-2 font-mono font-bold text-[13px] ${
-                            val > 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'
-                          }`}>
-                            {formatCurrency(val)}
-                          </td>
-                        ))}
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )}
+        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Caja base vs escenario</h2>
+              <p className="text-[12px] text-[#86868b]">Cada cambio en simulaciones y celdas recalcula el flujo completo.</p>
             </div>
+            <div className="rounded-full bg-[#f5f5f7] px-3 py-1 text-[12px] text-[#6e6e73]">
+              {activeScenario.simulationIds.length} simulaciones activas
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="sim-base" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#c7c7cc" stopOpacity={0.2} />
+                  <stop offset="95%" stopColor="#c7c7cc" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="sim-scenario" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#0071e3" stopOpacity={0.18} />
+                  <stop offset="95%" stopColor="#0071e3" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#e8e8ed" vertical={false} />
+              <XAxis dataKey="month" tick={{ fill: '#86868b', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#e8e8ed' }} />
+              <YAxis tick={{ fill: '#86868b', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} />
+              <Tooltip
+                formatter={(value: number) => formatCurrency(value)}
+                contentStyle={{ borderRadius: 16, borderColor: '#d2d2d7' }}
+              />
+              <Area type="monotone" dataKey="base" stroke="#c7c7cc" strokeWidth={2} fill="url(#sim-base)" name="Base" />
+              <Area type="monotone" dataKey="escenario" stroke="#0071e3" strokeWidth={2.5} fill="url(#sim-scenario)" name="Escenario" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </section>
 
-            {/* ── Impact Detail Table — smooth show/hide ── */}
-            <div
-              className="bg-white border border-[#d2d2d7]/40 rounded-2xl shadow-sm overflow-x-auto hover-lift"
-              style={{
-                maxHeight: hasSimulation ? 600 : 0,
-                padding: hasSimulation ? 24 : 0,
-                opacity: hasSimulation ? 1 : 0,
-                borderWidth: hasSimulation ? 1 : 0,
-                transition: 'max-height 0.4s cubic-bezier(0.22,1,0.36,1), padding 0.3s ease, opacity 0.3s ease, border-width 0.3s ease',
-                overflow: 'hidden',
-              }}
-            >
-              <h3 className="text-[15px] font-semibold text-[#1d1d1f] mb-4">Detalle de Impacto</h3>
-              <table className="w-full text-[12px]">
+        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Detalle mensual</h2>
+              <p className="text-[12px] text-[#86868b]">Impacto unificado en ingresos, egresos, cobranza, pagos y saldos finales.</p>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded-full bg-[#f5f5f7] px-3 py-1 text-[12px] text-[#6e6e73]">
+              <Columns2 className="w-3.5 h-3.5" />
+              {activeEvaluation.months.length} columnas
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-[12px]">
+              <thead>
+                <tr className="border-b border-[#e8e8ed] bg-[#fbfbfd]">
+                  <th className="sticky left-0 min-w-[170px] bg-[#fbfbfd] px-4 py-2.5 text-left font-medium text-[#86868b]">Métrica</th>
+                  {metricRows.map((row) => (
+                    <th key={row.month} className="px-2 py-2.5 text-right font-medium text-[#86868b]">{row.month}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <MetricTableRow label="Ingresos" values={metricRows.map((row) => row.ingresos)} tone="pos" />
+                <MetricTableRow label="Egresos" values={metricRows.map((row) => row.egresos)} tone="neg" />
+                <MetricTableRow label="Flujo Neto" values={metricRows.map((row) => row.flujoNeto)} tone="neutral" />
+                <MetricTableRow label="Cobranza" values={metricRows.map((row) => row.cobranza)} tone="pos" />
+                <MetricTableRow label="Pagos Proveedores" values={metricRows.map((row) => row.pagosProveedores)} tone="neg" />
+                <MetricTableRow label="Caja Final" values={metricRows.map((row) => row.cajaFinal)} tone="emphasis" />
+                <MetricTableRow label="Δ Caja vs Base" values={metricRows.map((row) => row.deltaCaja)} tone="diff" />
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm space-y-4">
+          <div>
+            <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Comparar escenarios</h2>
+            <p className="text-[12px] text-[#86868b]">Selecciona hasta 2 escenarios adicionales para ver cuál mejora más el resultado financiero.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {scenarios
+              .filter((scenario) => scenario.id !== activeScenario.id)
+              .map((scenario) => {
+                const proposal = proposals.find((item) => item.id === scenario.proposalId);
+                const selected = compareScenarioIds.includes(scenario.id);
+                return (
+                  <button
+                    key={scenario.id}
+                    onClick={() => toggleCompareScenario(scenario.id)}
+                    className={`rounded-xl border px-3 py-3 text-left transition ${
+                      selected
+                        ? 'border-[#0071e3] bg-[#e8f4fd]'
+                        : 'border-[#d2d2d7]/50 bg-[#fbfbfd]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[13px] font-semibold text-[#1d1d1f]">{scenario.name}</p>
+                        <p className="text-[11px] text-[#86868b]">{proposal?.name ?? 'Sin propuesta'}</p>
+                      </div>
+                      <span className={`flex h-5 w-5 items-center justify-center rounded-md border ${
+                        selected ? 'border-[#0071e3] bg-[#0071e3] text-white' : 'border-[#d2d2d7]'
+                      }`}>
+                        <Check className="w-3.5 h-3.5" />
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+          </div>
+
+          {compareEvaluations.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-[12px]">
                 <thead>
-                  <tr className="border-b border-[#e8e8ed]">
-                    <th className="text-left py-2.5 px-3 text-[#86868b] font-semibold">Concepto</th>
-                    {MONTHS.map((month) => (
-                      <th key={month} className="text-right py-2.5 px-2 text-[#86868b] font-semibold">{month}</th>
+                  <tr className="border-b border-[#e8e8ed] bg-[#fbfbfd]">
+                    <th className="px-4 py-2.5 text-left font-medium text-[#86868b]">KPI</th>
+                    <th className="px-4 py-2.5 text-right font-medium text-[#86868b]">{activeScenario.name}</th>
+                    {compareEvaluations.map(({ scenario }) => (
+                      <th key={scenario.id} className="px-4 py-2.5 text-right font-medium text-[#86868b]">
+                        {scenario.name}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b border-[#f5f5f7] hover-row">
-                    <td className="py-2.5 px-3 text-[#6e6e73]">Caja Base</td>
-                    {tableData.map((row, i) => (
-                      <td key={i} className="text-right py-2.5 px-2 text-[#86868b] font-mono">{formatCurrency(row.cajaBase)}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b border-[#f5f5f7] hover-row">
-                    <td className="py-2.5 px-3 text-[#6e6e73]">Impacto Mensual</td>
-                    {tableData.map((row, i) => (
-                      <td key={i} className="text-right py-2.5 px-2 text-[#0071e3] font-mono">{formatCurrency(row.impacto)}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b border-[#f5f5f7] bg-[#e8f4fd]/20 hover-row">
-                    <td className="py-2.5 px-3 text-[#0071e3] font-medium">Impacto Acumulado</td>
-                    {tableData.map((row, i) => (
-                      <td key={i} className="text-right py-2.5 px-2 text-[#0071e3] font-mono font-medium">{formatCurrency(row.impactoAcumulado)}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b border-[#f5f5f7] hover-row">
-                    <td className="py-2.5 px-3 text-[#1d1d1f] font-bold">Caja Simulada</td>
-                    {tableData.map((row, i) => (
-                      <td key={i} className={`text-right py-2.5 px-2 font-mono font-bold ${row.cajaSimulada > 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}`}>
-                        {formatCurrency(row.cajaSimulada)}
+                  {KPI_CONFIG.map((kpi) => (
+                    <tr key={kpi.key} className="border-b border-[#f5f5f7]">
+                      <td className="px-4 py-3 font-medium text-[#1d1d1f]">{kpi.label}</td>
+                      <td className="px-4 py-3 text-right font-mono text-[#1d1d1f]">
+                        {formatCurrency(activeEvaluation.kpis[kpi.key])}
                       </td>
-                    ))}
-                  </tr>
-                  <tr className="hover-row">
-                    <td className="py-2.5 px-3 text-[#86868b]">Delta vs Base</td>
-                    {tableData.map((row, i) => (
-                      <td key={i} className={`text-right py-2.5 px-2 font-mono ${row.delta > 0 ? 'text-[#34c759]' : row.delta < 0 ? 'text-[#ff3b30]' : 'text-[#86868b]'}`}>
-                        {row.delta > 0 ? '+' : ''}{formatCurrency(row.delta)}
-                      </td>
-                    ))}
-                  </tr>
+                      {compareEvaluations.map(({ scenario, evaluation, diff }) => (
+                        <td key={scenario.id} className="px-4 py-3 text-right font-mono">
+                          <div className="text-[#1d1d1f]">{formatCurrency(evaluation.kpis[kpi.key])}</div>
+                          <div className={(diff.kpiDiff[kpi.key] ?? 0) >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}>
+                            {(diff.kpiDiff[kpi.key] ?? 0) >= 0 ? '+' : ''}{formatCurrency(diff.kpiDiff[kpi.key] ?? 0)}
+                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
+          )}
+        </section>
+      </main>
 
-            {/* ── Action Buttons — smooth show/hide ── */}
-            <div
-              className="flex gap-3"
-              style={{
-                maxHeight: hasSimulation ? 60 : 0,
-                opacity: hasSimulation ? 1 : 0,
-                overflow: 'hidden',
-                transition: 'max-height 0.3s ease, opacity 0.3s ease',
-              }}
-            >
-              <button
-                onClick={copySummary}
-                className="flex-1 flex items-center justify-center gap-2 bg-white border border-[#d2d2d7]/60 hover:bg-[#f5f5f7] text-[#1d1d1f] rounded-xl px-4 py-3 transition font-medium text-[13px] shadow-sm hover-press"
-              >
-                {copiedSummary ? (
-                  <>
-                    <Check size={16} className="text-[#34c759]" />
-                    <span className="text-[#34c759]">Copiado</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy size={16} />
-                    Exportar Resumen
-                  </>
-                )}
-              </button>
-              <button
-                onClick={() => setShowSaveModal(true)}
-                className="flex-1 flex items-center justify-center gap-2 bg-[#0071e3] hover:bg-[#0077ED] text-white rounded-xl px-4 py-3 transition font-medium text-[13px] shadow-sm hover-press"
-              >
-                <Save size={16} />
-                Guardar Escenario
-              </button>
-            </div>
-          </div>
-      </div>
-
-      {/* ═══════════════ Save Scenario Modal ═══════════════ */}
-      {showSaveModal && (
-        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div className="bg-white border border-[#d2d2d7]/40 rounded-2xl max-w-md w-full p-7 shadow-2xl animate-scale-in">
-            <h3 className="text-[17px] font-semibold text-[#1d1d1f] mb-5">Guardar Escenario</h3>
-            <div className="space-y-4 mb-6">
-              <div>
-                <label className="block text-[12px] font-semibold text-[#86868b] mb-2 uppercase tracking-wider">Nombre</label>
-                <input
-                  type="text"
-                  value={scenarioName}
-                  onChange={(e) => setScenarioName(e.target.value)}
-                  placeholder="Ej: Escenario Optimista"
-                  className="w-full bg-[#f5f5f7] border border-[#d2d2d7]/40 rounded-xl px-4 py-2.5 text-[14px] text-[#1d1d1f] placeholder-[#c7c7cc] focus:border-[#0071e3] focus:bg-white"
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-[12px] font-semibold text-[#86868b] mb-2 uppercase tracking-wider">Descripción (opcional)</label>
-                <textarea
-                  value={scenarioDescription}
-                  onChange={(e) => setScenarioDescription(e.target.value)}
-                  placeholder="Describe este escenario..."
-                  className="w-full bg-[#f5f5f7] border border-[#d2d2d7]/40 rounded-xl px-4 py-2.5 text-[14px] text-[#1d1d1f] placeholder-[#c7c7cc] focus:border-[#0071e3] focus:bg-white resize-none h-24"
-                />
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setShowSaveModal(false); setScenarioName(''); setScenarioDescription(''); }}
-                className="flex-1 px-4 py-2.5 bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[#6e6e73] rounded-xl transition font-medium text-[13px] hover-press"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSaveScenario}
-                disabled={!scenarioName.trim()}
-                className="flex-1 px-4 py-2.5 bg-[#0071e3] hover:bg-[#0077ED] disabled:bg-[#d2d2d7] disabled:text-[#86868b] text-white rounded-xl transition font-medium text-[13px] flex items-center justify-center gap-2 hover-press"
-              >
-                <Save size={14} />
-                Guardar
-              </button>
-            </div>
-          </div>
+      <aside className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Biblioteca</p>
+          <h2 className="mt-1 text-[16px] font-semibold text-[#1d1d1f]">Simulaciones activables</h2>
         </div>
-      )}
+        <input
+          value={simulationSearch}
+          onChange={(event) => setSimulationSearch(event.target.value)}
+          placeholder="Buscar simulación..."
+          className="w-full rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
+        />
+        <div className="space-y-2 max-h-[calc(100vh-260px)] overflow-y-auto pr-1">
+          {filteredSimulations.map((simulation) => {
+            const assigned = assignedSimulationIds.has(simulation.id);
+            const effect = simulation.effects[0];
+            return (
+              <button
+                key={simulation.id}
+                onClick={() => toggleSimulationAssignment(simulation.id)}
+                className={`w-full rounded-xl border px-3 py-3 text-left transition ${
+                  assigned
+                    ? 'border-[#0071e3] bg-[#e8f4fd]'
+                    : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:bg-white'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-md border ${
+                    assigned ? 'border-[#0071e3] bg-[#0071e3] text-white' : 'border-[#d2d2d7] bg-white text-transparent'
+                  }`}>
+                    <Check className="w-3.5 h-3.5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }}
+                      />
+                      <p className="truncate text-[13px] font-semibold text-[#1d1d1f]">{simulation.name}</p>
+                    </div>
+                    <p className="mt-1 text-[11px] text-[#86868b] line-clamp-2">{simulation.description || 'Sin descripción'}</p>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[#6e6e73]">
+                      <span className="rounded-full border border-[#d2d2d7]/60 bg-white px-2 py-0.5">{simulation.category}</span>
+                      {effect && (
+                        <>
+                          <span className="rounded-full border border-[#d2d2d7]/60 bg-white px-2 py-0.5">
+                            {resolveConceptLabel(plan, effect.conceptId)}
+                          </span>
+                          <span className="rounded-full border border-[#d2d2d7]/60 bg-white px-2 py-0.5">
+                            {effect.mode === 'percent' ? `${(effect.value * 100).toFixed(0)}%` : effect.value}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
     </div>
   );
-};
+}
 
-export default Simulator;
+function MetricTableRow({
+  label,
+  values,
+  tone,
+}: {
+  label: string;
+  values: number[];
+  tone: 'pos' | 'neg' | 'neutral' | 'emphasis' | 'diff';
+}) {
+  const colorClass =
+    tone === 'pos' ? 'text-[#34c759]' :
+    tone === 'neg' ? 'text-[#ff3b30]' :
+    tone === 'emphasis' ? 'text-[#1d1d1f] font-semibold' :
+    tone === 'diff' ? 'text-[#0071e3]' :
+    'text-[#6e6e73]';
+
+  return (
+    <tr className="border-b border-[#f5f5f7]">
+      <td className="sticky left-0 bg-white px-4 py-3 font-medium text-[#1d1d1f]">{label}</td>
+      {values.map((value, index) => (
+        <td key={`${label}-${index}`} className={`px-2 py-3 text-right font-mono ${colorClass}`}>
+          {tone === 'diff' && value > 0 ? '+' : ''}{formatCurrency(value)}
+        </td>
+      ))}
+    </tr>
+  );
+}
