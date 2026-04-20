@@ -125,6 +125,18 @@ function isoNow(): string {
   return new Date().toISOString();
 }
 
+function startOfMonthIso(yearMonth: string): string {
+  return `${yearMonth}-01`;
+}
+
+function endOfMonthIso(yearMonth: string): string {
+  const [yearRaw, monthRaw] = yearMonth.split('-');
+  const year = Number(yearRaw);
+  const monthIndex = Math.max(0, Math.min(11, Number(monthRaw) - 1));
+  const date = new Date(Date.UTC(year, monthIndex + 1, 0));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
 function firstPlanMonth(plan: FlowPlan | null): string {
   return `${plan?.year ?? new Date().getFullYear()}-01`;
 }
@@ -171,6 +183,10 @@ function migrateLegacyProposalToSimulation(
     endYearMonth: impactedMonths.length > 0
       ? `${baseYear}-${String((impactedMonths[impactedMonths.length - 1]?.monthOffset ?? 0) + 1).padStart(2, '0')}`
       : `${baseYear}-${String(Math.max(1, legacy.startMonth)).padStart(2, '0')}`,
+    startDate: startOfMonthIso(`${baseYear}-${String((impactedMonths[0]?.monthOffset ?? 0) + 1).padStart(2, '0')}`),
+    endDate: impactedMonths.length > 0
+      ? endOfMonthIso(`${baseYear}-${String((impactedMonths[impactedMonths.length - 1]?.monthOffset ?? 0) + 1).padStart(2, '0')}`)
+      : endOfMonthIso(`${baseYear}-${String(Math.max(1, legacy.startMonth)).padStart(2, '0')}`),
     frequency: legacy.distribution === 'Mensual'
       ? 'monthly'
       : legacy.distribution === 'Semestral'
@@ -416,6 +432,14 @@ function normalizeSimulation(
     typeof simulation.endYearMonth === 'string' && simulation.endYearMonth.includes('-')
       ? simulation.endYearMonth
       : startYearMonth;
+  const startDate =
+    typeof simulation.startDate === 'string' && simulation.startDate.length === 10
+      ? simulation.startDate
+      : startOfMonthIso(startYearMonth);
+  const endDate =
+    typeof simulation.endDate === 'string' && simulation.endDate.length === 10
+      ? simulation.endDate
+      : endOfMonthIso(endYearMonth);
 
   const normalized: Simulation = {
     id: simulation.id ?? `simulation-${Date.now()}`,
@@ -428,6 +452,8 @@ function normalizeSimulation(
       : [defaultTargetId],
     startYearMonth,
     endYearMonth,
+    startDate,
+    endDate,
     frequency: simulation.frequency ?? 'monthly',
     operation: simulation.operation ?? (expenseLikeCategory(category) ? 'decrease' : 'increase'),
     amount: typeof simulation.amount === 'number' ? simulation.amount : undefined,

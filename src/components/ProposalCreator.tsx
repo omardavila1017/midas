@@ -78,8 +78,8 @@ interface SimulationFormState {
   type: SimulationType;
   operation: SimulationOperation;
   targetIds: string[];
-  startYearMonth: string;
-  endYearMonth: string;
+  startDate: string;
+  endDate: string;
   frequency: SimulationFrequency;
   amount: number;
   percent: number;
@@ -174,8 +174,8 @@ function simulationDefaults(plan: FlowPlan): SimulationFormState {
     type: 'percent_adjustment',
     operation: 'increase',
     targetIds: [ROLE_TARGET_INCOME],
-    startYearMonth: `${plan.year}-01`,
-    endYearMonth: `${plan.year}-12`,
+    startDate: `${plan.year}-01-01`,
+    endDate: `${plan.year}-12-31`,
     frequency: 'monthly',
     amount: 0,
     percent: 10,
@@ -201,6 +201,28 @@ function formatYearMonthLabel(yearMonth: string): string {
   const year = Number(yearRaw);
   const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
   return `${MONTHS[monthIndex]} ${String(year).slice(2)}`;
+}
+
+function formatDateLabel(date: string): string {
+  if (!date) return 'sin fecha';
+  const [yearRaw, monthRaw, dayRaw] = date.split('-');
+  const year = Number(yearRaw);
+  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
+  const day = Number(dayRaw) || 1;
+  return `${day} ${MONTHS[monthIndex]} ${String(year).slice(2)}`;
+}
+
+function yearMonthFromDate(date: string): string {
+  return date.slice(0, 7);
+}
+
+function endOfMonthFromDate(date: string): string {
+  const yearMonth = yearMonthFromDate(date);
+  const [yearRaw, monthRaw] = yearMonth.split('-');
+  const year = Number(yearRaw);
+  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
+  const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  return `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
 }
 
 function resolveSimulationTargetIds(simulation: Partial<Simulation>): string[] {
@@ -356,6 +378,8 @@ function buildSimulationFromForm(
 ): Simulation {
   const timestamp = now();
   const simulationId = existing?.id ?? `simulation-${Date.now()}`;
+  const startDate = form.startDate;
+  const safeEndDate = form.endDate < startDate ? startDate : form.endDate;
   const simulation: Simulation = {
     id: simulationId,
     name: form.name.trim(),
@@ -363,10 +387,10 @@ function buildSimulationFromForm(
     category: form.category,
     type: form.type,
     targetIds: form.targetIds,
-    startYearMonth: form.startYearMonth,
-    endYearMonth: form.type === 'installment_plan' || form.type === 'timing_shift' || form.type === 'pause_expense'
-      ? form.endYearMonth
-      : form.endYearMonth,
+    startYearMonth: yearMonthFromDate(startDate),
+    endYearMonth: yearMonthFromDate(safeEndDate),
+    startDate,
+    endDate: safeEndDate,
     frequency: form.type === 'timing_shift'
       ? 'monthly'
       : form.type === 'pause_expense'
@@ -454,7 +478,7 @@ export default function ProposalCreator({
     const targetSuffix = simulationForm.targetIds.length > 2 ? ' y más' : '';
 
     if (simulationForm.type === 'percent_adjustment') {
-      return `${simulationForm.operation === 'decrease' ? 'Reducir' : 'Incrementar'} ${targetLabel || 'los conceptos elegidos'}${targetSuffix} en ${simulationForm.percent}% desde ${formatYearMonthLabel(simulationForm.startYearMonth)} hasta ${formatYearMonthLabel(simulationForm.endYearMonth)}.`;
+      return `${simulationForm.operation === 'decrease' ? 'Reducir' : 'Incrementar'} ${targetLabel || 'los conceptos elegidos'}${targetSuffix} en ${simulationForm.percent}% desde ${formatDateLabel(simulationForm.startDate)} hasta ${formatDateLabel(simulationForm.endDate)}.`;
     }
 
     if (simulationForm.type === 'amount_adjustment') {
@@ -462,7 +486,7 @@ export default function ProposalCreator({
     }
 
     if (simulationForm.type === 'recurring_series') {
-      return `Crear un flujo recurrente de ${simulationForm.amount} sobre ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatYearMonthLabel(simulationForm.startYearMonth)}.`;
+      return `Crear un flujo recurrente de ${simulationForm.amount} sobre ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatDateLabel(simulationForm.startDate)}.`;
     }
 
     if (simulationForm.type === 'installment_plan') {
@@ -473,7 +497,7 @@ export default function ProposalCreator({
       return `Mover ${simulationForm.shiftRatio}% del flujo de ${targetLabel || 'los conceptos elegidos'}${targetSuffix} ${simulationForm.shiftMonths >= 0 ? `${simulationForm.shiftMonths} meses hacia adelante` : `${Math.abs(simulationForm.shiftMonths)} meses hacia atrás`}.`;
     }
 
-    return `Pausar ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatYearMonthLabel(simulationForm.startYearMonth)} hasta ${formatYearMonthLabel(simulationForm.endYearMonth)}.`;
+    return `Pausar ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatDateLabel(simulationForm.startDate)} hasta ${formatDateLabel(simulationForm.endDate)}.`;
   }, [plan, simulationForm]);
 
   useEffect(() => {
@@ -628,8 +652,8 @@ export default function ProposalCreator({
       type: simulation.type ?? 'amount_adjustment',
       operation: simulation.operation ?? 'increase',
       targetIds,
-      startYearMonth: simulation.startYearMonth ?? `${plan.year}-01`,
-      endYearMonth: simulation.endYearMonth ?? simulation.startYearMonth ?? `${plan.year}-12`,
+      startDate: simulation.startDate ?? `${simulation.startYearMonth ?? `${plan.year}-01`}-01`,
+      endDate: simulation.endDate ?? endOfMonthFromDate(`${simulation.endYearMonth ?? simulation.startYearMonth ?? `${plan.year}-12`}-01`),
       frequency: simulation.frequency ?? 'monthly',
       amount: simulation.amount ?? 0,
       percent: Math.abs((simulation.percent ?? 0) * 100),
@@ -1185,37 +1209,40 @@ export default function ProposalCreator({
                 </div>
               )}
 
-              {simulationForm.type !== 'pause_expense' && (
-                <div className="grid grid-cols-3 gap-3">
-                  <Field label="Inicio">
-                    <input
-                      type="month"
-                      value={simulationForm.startYearMonth}
-                      onChange={(event) => setSimulationForm((current) => ({ ...current, startYearMonth: event.target.value }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
-                  </Field>
-                  <Field label="Fin">
-                    <input
-                      type="month"
-                      value={simulationForm.endYearMonth}
-                      onChange={(event) => setSimulationForm((current) => ({ ...current, endYearMonth: event.target.value }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
-                  </Field>
-                  <Field label="Frecuencia">
-                    <select
-                      value={simulationForm.frequency}
-                      onChange={(event) => setSimulationForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    >
-                      {FREQUENCIES.map((frequency) => (
-                        <option key={frequency.value} value={frequency.value}>{frequency.label}</option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-              )}
+              <div className="grid grid-cols-3 gap-3">
+                <Field label="Empieza a impactar desde">
+                  <input
+                    type="date"
+                    value={simulationForm.startDate}
+                    onChange={(event) => setSimulationForm((current) => ({
+                      ...current,
+                      startDate: event.target.value,
+                      endDate: current.endDate < event.target.value ? event.target.value : current.endDate,
+                    }))}
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                  />
+                </Field>
+                <Field label="Termina en">
+                  <input
+                    type="date"
+                    value={simulationForm.endDate}
+                    min={simulationForm.startDate}
+                    onChange={(event) => setSimulationForm((current) => ({ ...current, endDate: event.target.value }))}
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                  />
+                </Field>
+                <Field label="Frecuencia">
+                  <select
+                    value={simulationForm.frequency}
+                    onChange={(event) => setSimulationForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                  >
+                    {FREQUENCIES.map((frequency) => (
+                      <option key={frequency.value} value={frequency.value}>{frequency.label}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
 
               <Field label="Forma de cobro / pago (opcional)">
                 <input

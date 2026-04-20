@@ -63,6 +63,7 @@ El estado global sigue en `App.tsx` con `useState`.
 - `scenarioCellOverrides`
 - `activeProposalId`
 - `activeScenarioId`
+- `forecastGranularity`
 - `providers`
 - `clients`
 - `assumptions`
@@ -204,6 +205,8 @@ Simulation {
   targetIds[],
   startYearMonth,
   endYearMonth?,
+  startDate?,
+  endDate?,
   frequency?,
   operation?,
   amount?,
@@ -265,18 +268,31 @@ La fuente de verdad del forecast es `src/domain/scenarioEngine.ts`.
 ### Función principal
 
 ```ts
-evaluateScenario(plan, proposal, scenario, simulations, overrides)
+evaluateScenario(plan, proposal, scenario, simulations, overrides, { granularity? })
 ```
 
 ### Pipeline actual
 
-1. construir meses del escenario
+1. construir periodos del escenario
 2. construir índices de conceptos
 3. cargar base del plan
 4. aplicar propuestas activas
 5. aplicar overrides manuales
 6. recalcular métricas agregadas
 7. producir celdas, diffs, KPIs y cambios detectados
+
+### Granularidades soportadas
+
+- `monthly`: usa `monthlyData`
+- `weekly`: usa `plan.weekDates` + `weeklyData`
+- `daily`: reparte cada semana en 7 días para dar visibilidad operativa día a día
+
+Reglas relevantes:
+
+- el forecast mensual sigue siendo la capa editable para overrides manuales
+- semana y día son vistas derivadas del mismo motor, no cálculos separados
+- una propuesta con `startDate` a mitad del mes se prorratea según el traslape con cada periodo visible
+- los montos puntuales se colocan en el periodo que contiene la fecha exacta
 
 ### Métricas derivadas
 

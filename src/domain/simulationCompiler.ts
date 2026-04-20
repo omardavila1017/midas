@@ -17,6 +17,84 @@ function now(): string {
   return new Date().toISOString();
 }
 
+function parseIsoDate(value: string): Date {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+
+function formatIsoDate(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+function startOfMonth(yearMonth: string): string {
+  return `${yearMonth}-01`;
+}
+
+function endOfMonth(yearMonth: string): string {
+  const { year, monthIndex } = parseYearMonth(yearMonth);
+  return formatIsoDate(new Date(Date.UTC(year, monthIndex + 1, 0)));
+}
+
+function yearMonthFromDate(date: string): string {
+  return date.slice(0, 7);
+}
+
+function addMonthsToDate(date: string, offset: number): string {
+  const parsed = parseIsoDate(date);
+  const year = parsed.getUTCFullYear();
+  const monthIndex = parsed.getUTCMonth();
+  const day = parsed.getUTCDate();
+  const absolute = monthIndex + offset;
+  const nextMonthIndex = ((absolute % 12) + 12) % 12;
+  const nextYear = year + Math.floor(absolute / 12);
+  const daysInTargetMonth = new Date(Date.UTC(nextYear, nextMonthIndex + 1, 0)).getUTCDate();
+  return formatIsoDate(new Date(Date.UTC(nextYear, nextMonthIndex, Math.min(day, daysInTargetMonth))));
+}
+
+function maxIsoDate(left: string, right: string): string {
+  return left > right ? left : right;
+}
+
+function minIsoDate(left: string, right: string): string {
+  return left < right ? left : right;
+}
+
+function normalizeSimulationStartDate(simulation: Simulation): string {
+  if (typeof simulation.startDate === 'string' && simulation.startDate.length === 10) {
+    return simulation.startDate;
+  }
+  return startOfMonth(simulation.startYearMonth);
+}
+
+function normalizeSimulationEndDate(simulation: Simulation, startDate: string): string {
+  if (typeof simulation.endDate === 'string' && simulation.endDate.length === 10) {
+    return simulation.endDate;
+  }
+
+  if (typeof simulation.endYearMonth === 'string' && simulation.endYearMonth.includes('-')) {
+    return endOfMonth(simulation.endYearMonth);
+  }
+
+  if ((simulation.frequency ?? 'once') === 'once') {
+    return startDate;
+  }
+
+  return endOfMonth(simulation.startYearMonth);
+}
+
+function effectWindowForMonth(
+  yearMonth: string,
+  simulationStartDate: string,
+  simulationEndDate: string,
+): { startDate: string; endDate: string } | null {
+  const windowStart = maxIsoDate(startOfMonth(yearMonth), simulationStartDate);
+  const windowEnd = minIsoDate(endOfMonth(yearMonth), simulationEndDate);
+  if (windowEnd < windowStart) return null;
+  return {
+    startDate: windowStart,
+    endDate: windowEnd,
+  };
+}
+
 export function createBaseScenario(plan: FlowPlan | null): Scenario {
   return {
     id: BASE_SCENARIO_ID,
@@ -208,6 +286,8 @@ export function buildSimulationEffects(
 ): SimulationEffect[] {
   const targetIds = simulation.targetIds.length > 0 ? simulation.targetIds : [ROLE_TARGET_INCOME];
   const effects: SimulationEffect[] = [];
+  const simulationStartDate = normalizeSimulationStartDate(simulation);
+  const simulationEndDate = normalizeSimulationEndDate(simulation, simulationStartDate);
 
   if (simulation.type === 'pause_expense') {
     const months = enumerateYearMonths(
@@ -216,13 +296,19 @@ export function buildSimulationEffects(
       'monthly',
     );
     for (const targetId of targetIds) {
-      effects.push({
-        id: effectId(simulation, targetId, 'pause'),
-        type: 'concept_delta',
-        conceptId: targetId,
-        yearMonths: months,
-        mode: 'percent',
-        value: -1,
+      months.forEach((yearMonth, index) => {
+        const window = effectWindowForMonth(yearMonth, simulationStartDate, simulationEndDate);
+        if (!window) return;
+        effects.push({
+          id: effectId(simulation, targetId, `pause-${index}`),
+          type: 'concept_delta',
+          conceptId: targetId,
+          yearMonths: [yearMonth],
+          startDate: window.startDate,
+          endDate: window.endDate,
+          mode: 'percent',
+          value: -1,
+        });
       });
     }
     return effects;
@@ -235,13 +321,19 @@ export function buildSimulationEffects(
       simulation.frequency ?? 'monthly',
     );
     for (const targetId of targetIds) {
-      effects.push({
-        id: effectId(simulation, targetId, 'percent'),
-        type: 'concept_delta',
-        conceptId: targetId,
-        yearMonths: months,
-        mode: 'percent',
-        value: signedPercent(simulation),
+      months.forEach((yearMonth, index) => {
+        const window = effectWindowForMonth(yearMonth, simulationStartDate, simulationEndDate);
+        if (!window) return;
+        effects.push({
+          id: effectId(simulation, targetId, `percent-${index}`),
+          type: 'concept_delta',
+          conceptId: targetId,
+          yearMonths: [yearMonth],
+          startDate: window.startDate,
+          endDate: window.endDate,
+          mode: 'percent',
+          value: signedPercent(simulation),
+        });
       });
     }
     return effects;
@@ -254,29 +346,39 @@ export function buildSimulationEffects(
       simulation.frequency ?? (simulation.type === 'recurring_series' ? 'monthly' : 'once'),
     );
     for (const targetId of targetIds) {
-      effects.push({
-        id: effectId(simulation, targetId, 'amount'),
-        type: 'concept_delta',
-        conceptId: targetId,
-        yearMonths: months,
-        mode: 'absolute',
-        value: signedAmount(simulation),
+      months.forEach((yearMonth, index) => {
+        const occurrenceDate = addMonthsToDate(
+          simulationStartDate,
+          index * (frequencyStep(simulation.frequency ?? (simulation.type === 'recurring_series' ? 'monthly' : 'once')) || 1),
+        );
+        effects.push({
+          id: effectId(simulation, targetId, `amount-${index}`),
+          type: 'concept_delta',
+          conceptId: targetId,
+          yearMonths: [yearMonthFromDate(occurrenceDate)],
+          startDate: occurrenceDate,
+          endDate: occurrenceDate,
+          mode: 'absolute',
+          value: signedAmount(simulation),
+        });
       });
     }
     return effects;
   }
 
   if (simulation.type === 'installment_plan') {
-    const start = simulation.startYearMonth;
     const allocations = buildInstallmentAllocation(simulation);
     const step = frequencyStep(simulation.frequency ?? 'monthly') || 1;
     for (const targetId of targetIds) {
       allocations.forEach((ratio, index) => {
+        const occurrenceDate = addMonthsToDate(simulationStartDate, index * step);
         effects.push({
           id: effectId(simulation, targetId, `installment-${index}`),
           type: 'concept_delta',
           conceptId: targetId,
-          yearMonths: [addYearMonths(start, index * step)],
+          yearMonths: [yearMonthFromDate(occurrenceDate)],
+          startDate: occurrenceDate,
+          endDate: occurrenceDate,
           mode: 'absolute',
           value: signedAmount(simulation) * ratio,
         });
@@ -296,18 +398,25 @@ export function buildSimulationEffects(
 
     for (const targetId of targetIds) {
       const baseSeries = resolveTargetBaseSeries(plan, targetId);
-      for (const month of months) {
+      for (const [index, month] of months.entries()) {
         const { year, monthIndex } = parseYearMonth(month);
         if (year !== plan.year) continue;
         const baseAmount = baseSeries[monthIndex] ?? 0;
         const movedAmount = baseAmount * shiftRatio;
         if (movedAmount === 0) continue;
+        const sourceDate = addMonthsToDate(
+          simulationStartDate,
+          index * (frequencyStep(simulation.frequency ?? 'monthly') || 1),
+        );
+        const targetDate = addMonthsToDate(sourceDate, shiftMonths);
 
         effects.push({
           id: effectId(simulation, targetId, `shift-out-${month}`),
           type: 'concept_delta',
           conceptId: targetId,
           yearMonths: [month],
+          startDate: sourceDate,
+          endDate: sourceDate,
           mode: 'absolute',
           value: -movedAmount,
         });
@@ -315,7 +424,9 @@ export function buildSimulationEffects(
           id: effectId(simulation, targetId, `shift-in-${month}`),
           type: 'concept_delta',
           conceptId: targetId,
-          yearMonths: [addYearMonths(month, shiftMonths)],
+          yearMonths: [yearMonthFromDate(targetDate)],
+          startDate: targetDate,
+          endDate: targetDate,
           mode: 'absolute',
           value: movedAmount,
         });

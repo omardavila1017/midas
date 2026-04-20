@@ -55,6 +55,7 @@ export type SimulationFrequency =
 export type SimulationOperation = 'increase' | 'decrease';
 
 export type SimulationEffectMode = 'absolute' | 'percent';
+export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 
 export const ROLE_TARGET_INCOME = '__role__:income';
 export const ROLE_TARGET_EXPENSE = '__role__:expense';
@@ -74,6 +75,8 @@ export interface ConceptDeltaEffect {
   conceptId: string;
   monthOffsets?: number[];
   yearMonths?: string[];
+  startDate?: string;
+  endDate?: string;
   mode: SimulationEffectMode;
   value: number;
 }
@@ -89,6 +92,8 @@ export interface Simulation {
   targetIds: string[];
   startYearMonth: string;
   endYearMonth?: string;
+  startDate?: string;
+  endDate?: string;
   frequency?: SimulationFrequency;
   operation?: SimulationOperation;
   amount?: number;
@@ -174,6 +179,9 @@ export interface ScenarioMonth {
   year: number;
   label: string;
   ym: string;
+  granularity: ForecastGranularity;
+  startDate: string;
+  endDate: string;
 }
 
 export interface SimulationContribution {
@@ -187,6 +195,10 @@ export interface EvaluatedCell {
   conceptId: string;
   yearMonth: string;
   monthIndex: number;
+  granularity: ForecastGranularity;
+  periodLabel: string;
+  periodStartDate: string;
+  periodEndDate: string;
   baseValue: number;
   simulatedValue: number;
   finalValue: number;
@@ -230,6 +242,7 @@ export interface ScenarioComparisonSnapshot {
 export interface EvaluatedScenario {
   proposalId: string;
   scenarioId: string;
+  granularity: ForecastGranularity;
   months: ScenarioMonth[];
   valuesByConceptId: Map<string, number[]>;
   baseValuesByConceptId: Map<string, number[]>;

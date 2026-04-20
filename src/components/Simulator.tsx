@@ -21,6 +21,7 @@ import {
   BASE_SCENARIO_NAME,
   CATEGORY_COLORS,
   FlowPlan,
+  ForecastGranularity,
   Proposal,
   Scenario,
   ScenarioCellOverride,
@@ -42,6 +43,8 @@ interface SimulatorProps {
   overrides: ScenarioCellOverride[];
   activeProposalId: string | null;
   activeScenarioId: string | null;
+  granularity?: ForecastGranularity;
+  onGranularityChange?: (granularity: ForecastGranularity) => void;
   onSelectProposal: (proposalId: string) => void;
   onSelectScenario: (scenarioId: string | null) => void;
   onUpdateScenario: (scenario: Scenario) => void;
@@ -74,6 +77,8 @@ export default function Simulator({
   overrides,
   activeProposalId,
   activeScenarioId,
+  granularity = 'monthly',
+  onGranularityChange,
   onSelectProposal,
   onSelectScenario,
   onUpdateScenario,
@@ -98,13 +103,14 @@ export default function Simulator({
       activeScenario,
       isBaseScenario(activeScenario) ? [] : simulations,
       isBaseScenario(activeScenario) ? [] : overrides,
+      { granularity },
     );
-  }, [activeScenario, effectiveProposal, overrides, plan, simulations]);
+  }, [activeScenario, effectiveProposal, granularity, overrides, plan, simulations]);
 
   const baseEvaluation = useMemo(() => {
     if (!activeScenario) return null;
-    return evaluateScenario(plan, effectiveProposal, activeScenario, [], []);
-  }, [activeScenario, effectiveProposal, plan]);
+    return evaluateScenario(plan, effectiveProposal, activeScenario, [], [], { granularity });
+  }, [activeScenario, effectiveProposal, granularity, plan]);
 
   const filteredSimulations = useMemo(() => {
     const query = simulationSearch.trim().toLowerCase();
@@ -148,7 +154,7 @@ export default function Simulator({
         if (!scenario) return null;
         const proposal = proposals.find((candidate) => candidate.id === scenario.proposalId)
           ?? VIRTUAL_BASE_PROPOSAL;
-        const evaluation = evaluateScenario(plan, proposal, scenario, simulations, overrides);
+        const evaluation = evaluateScenario(plan, proposal, scenario, simulations, overrides, { granularity });
         const diff = compareScenarioEvaluations(evaluation, activeEvaluation);
         return { proposal, scenario, evaluation, diff };
       })
@@ -158,7 +164,7 @@ export default function Simulator({
         evaluation: NonNullable<typeof activeEvaluation>;
         diff: ReturnType<typeof compareScenarioEvaluations>;
       }>;
-  }, [activeEvaluation, compareScenarioIds, overrides, plan, proposals, scenarios, simulations]);
+  }, [activeEvaluation, compareScenarioIds, granularity, overrides, plan, proposals, scenarios, simulations]);
 
   const toggleSimulationAssignment = (simulationId: string) => {
     if (!activeScenario || isBaseScenario(activeScenario)) return;
@@ -292,9 +298,26 @@ export default function Simulator({
                   : `Simulación ${effectiveProposal.name} · ${Math.round(activeScenario.probability * 100)}% probabilidad · ${activeScenario.horizonMonths} meses`}
               </p>
             </div>
-            <div className="rounded-xl bg-[var(--gray-50)] px-3 py-2 text-right">
-              <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cambios detectados</p>
-              <p className="mt-1 text-[20px] font-semibold text-[var(--gray-950)]">{activeEvaluation.changedKeys.size}</p>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-1">
+                {(['monthly', 'weekly', 'daily'] as ForecastGranularity[]).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => onGranularityChange?.(mode)}
+                    className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
+                      granularity === mode
+                        ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                        : 'text-[var(--gray-500)]'
+                    }`}
+                  >
+                    {mode === 'monthly' ? 'Mes' : mode === 'weekly' ? 'Semana' : 'Día'}
+                  </button>
+                ))}
+              </div>
+              <div className="rounded-xl bg-[var(--gray-50)] px-3 py-2 text-right">
+                <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cambios detectados</p>
+                <p className="mt-1 text-[20px] font-semibold text-[var(--gray-950)]">{activeEvaluation.changedKeys.size}</p>
+              </div>
             </div>
           </div>
         </header>
@@ -317,7 +340,9 @@ export default function Simulator({
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Caja base vs escenario</h2>
-              <p className="text-[12px] text-[var(--gray-400)]">Cada cambio en propuestas y celdas recalcula el flujo completo.</p>
+              <p className="text-[12px] text-[var(--gray-400)]">
+                Cada cambio en propuestas y celdas recalcula el flujo completo en vista {granularity === 'monthly' ? 'mensual' : granularity === 'weekly' ? 'semanal' : 'diaria'}.
+              </p>
             </div>
             <div className="rounded-full bg-[var(--gray-50)] px-3 py-1 text-[12px] text-[var(--gray-500)]">
               {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.simulationIds.length} propuestas activas`}
@@ -336,7 +361,7 @@ export default function Simulator({
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="#e8e8ed" vertical={false} />
-              <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} />
+              <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} minTickGap={24} />
               <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} />
               <Tooltip
                 formatter={(value: number) => formatCurrency(value)}
@@ -351,8 +376,10 @@ export default function Simulator({
         <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Detalle mensual</h2>
-              <p className="text-[12px] text-[var(--gray-400)]">Impacto unificado en ingresos, egresos, cobranza, pagos y saldos finales.</p>
+              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Detalle del flujo</h2>
+              <p className="text-[12px] text-[var(--gray-400)]">
+                Impacto unificado en ingresos, egresos, cobranza, pagos y saldos finales por {granularity === 'monthly' ? 'mes' : granularity === 'weekly' ? 'semana' : 'día'}.
+              </p>
             </div>
             <div className="inline-flex items-center gap-2 rounded-full bg-[var(--gray-50)] px-3 py-1 text-[12px] text-[var(--gray-500)]">
               <Columns2 className="w-3.5 h-3.5" />

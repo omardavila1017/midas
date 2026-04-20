@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BASE_SCENARIO_ID, FlowPlan, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId } from './types';
+import { BASE_SCENARIO_ID, FlowPlan, ForecastGranularity, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { loadClientsCatalog } from './domain/loadClientsCatalog';
@@ -89,6 +89,7 @@ export default function App() {
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
+  const [forecastGranularity, setForecastGranularity] = useState<ForecastGranularity>('monthly');
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -581,6 +582,8 @@ export default function App() {
                     overrides={scenarioCellOverrides}
                     activeProposalId={activeProposalId}
                     activeScenarioId={activeScenarioId}
+                    granularity={forecastGranularity}
+                    onGranularityChange={setForecastGranularity}
                     onSelectProposal={selectProposal}
                     onSelectScenario={selectScenario}
                     onUpdateScenario={updateScenario}
@@ -626,6 +629,8 @@ export default function App() {
                     activeProposalId={activeProposalId}
                     activeScenarioId={activeScenarioId}
                     overrides={scenarioCellOverrides}
+                    granularity={forecastGranularity}
+                    onGranularityChange={setForecastGranularity}
                     onSelectProposal={selectProposal}
                     onSelectScenario={selectScenario}
                     onOverridesChange={setScenarioCellOverrides}

@@ -13,6 +13,7 @@ import {
   EvaluatedCell,
   FlowConcept,
   FlowPlan,
+  ForecastGranularity,
   ForecastLayerMode,
   Proposal,
   ROLE_TARGET_EXPENSE,
@@ -37,6 +38,8 @@ interface Props {
   activeProposalId: string | null;
   activeScenarioId: string | null;
   overrides: ScenarioCellOverride[];
+  granularity?: ForecastGranularity;
+  onGranularityChange?: (granularity: ForecastGranularity) => void;
   onSelectProposal: (proposalId: string) => void;
   onSelectScenario: (scenarioId: string | null) => void;
   onOverridesChange: (next: ScenarioCellOverride[]) => void;
@@ -78,6 +81,8 @@ export default function Forecast({
   activeProposalId,
   activeScenarioId,
   overrides,
+  granularity = 'monthly',
+  onGranularityChange,
   onSelectProposal,
   onSelectScenario,
   onOverridesChange,
@@ -102,12 +107,12 @@ export default function Forecast({
     createdAt: '',
     updatedAt: '',
   };
-  const editingAllowed = !isBaseScenario(activeScenario);
+  const editingAllowed = !isBaseScenario(activeScenario) && granularity === 'monthly';
 
   const baseEvaluation = useMemo(() => {
     if (!activeScenario) return null;
-    return evaluateScenario(plan, effectiveProposal, activeScenario, [], []);
-  }, [activeScenario, effectiveProposal, plan]);
+    return evaluateScenario(plan, effectiveProposal, activeScenario, [], [], { granularity });
+  }, [activeScenario, effectiveProposal, granularity, plan]);
 
   const simulatedEvaluation = useMemo(() => {
     if (!activeScenario) return null;
@@ -117,8 +122,9 @@ export default function Forecast({
       activeScenario,
       isBaseScenario(activeScenario) ? [] : simulations,
       [],
+      { granularity },
     );
-  }, [activeScenario, effectiveProposal, plan, simulations]);
+  }, [activeScenario, effectiveProposal, granularity, plan, simulations]);
 
   const finalEvaluation = useMemo(() => {
     if (!activeScenario) return null;
@@ -128,8 +134,9 @@ export default function Forecast({
       activeScenario,
       isBaseScenario(activeScenario) ? [] : simulations,
       isBaseScenario(activeScenario) ? [] : overrides,
+      { granularity },
     );
-  }, [activeScenario, effectiveProposal, overrides, plan, simulations]);
+  }, [activeScenario, effectiveProposal, granularity, overrides, plan, simulations]);
 
   const months = finalEvaluation?.months ?? [];
   const roots = useMemo(
@@ -143,7 +150,7 @@ export default function Forecast({
   useEffect(() => {
     setEditing(null);
     setPopover(null);
-  }, [activeScenarioId, activeProposalId, layerMode, view]);
+  }, [activeScenarioId, activeProposalId, granularity, layerMode, view]);
 
   if (!activeScenario || !baseEvaluation || !simulatedEvaluation || !finalEvaluation) {
     return (
@@ -271,7 +278,9 @@ export default function Forecast({
               {view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers'}
             </h1>
             <p className="mt-1 text-[13px] text-[var(--gray-400)]">
-              Pronóstico unificado por escenario y propuestas activas. Doble clic en celdas hoja para editar manualmente.
+              Pronóstico unificado por escenario y propuestas activas. {granularity === 'monthly'
+                ? 'Doble clic en celdas hoja para editar manualmente.'
+                : `Vista ${granularity === 'weekly' ? 'semanal' : 'diaria'} activa: solo lectura para mantener los overrides manuales consistentes.`}
             </p>
           </div>
           {directOverrideCount > 0 && (
@@ -285,7 +294,7 @@ export default function Forecast({
           )}
         </div>
 
-        <div className="mt-5 grid grid-cols-[240px,240px,minmax(0,1fr)] gap-4">
+        <div className="mt-5 grid grid-cols-[220px,220px,220px,minmax(0,1fr)] gap-4">
           <button
             onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
             className={`rounded-xl border px-3 py-2.5 text-left text-[13px] font-medium transition ${
@@ -321,6 +330,21 @@ export default function Forecast({
                 <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
               ))}
           </select>
+          <div className="flex items-center justify-between rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-1">
+            {(['monthly', 'weekly', 'daily'] as ForecastGranularity[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => onGranularityChange?.(mode)}
+                className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
+                  granularity === mode
+                    ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                    : 'text-[var(--gray-500)]'
+                }`}
+              >
+                {mode === 'monthly' ? 'Mes' : mode === 'weekly' ? 'Semana' : 'Día'}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center justify-end rounded-xl bg-[var(--gray-50)] p-1">
             {(['base', 'simulated', 'manual', 'diff'] as ForecastLayerMode[]).map((mode) => (
               <button
@@ -349,6 +373,11 @@ export default function Forecast({
           {isBaseScenario(activeScenario) && (
             <span className="rounded-full bg-[var(--gray-50)] px-2.5 py-1 text-[11px] text-[var(--gray-500)]">
               Solo lectura: el Base no admite edición manual
+            </span>
+          )}
+          {granularity !== 'monthly' && (
+            <span className="rounded-full bg-[var(--gray-50)] px-2.5 py-1 text-[11px] text-[var(--gray-500)]">
+              Los ajustes manuales se editan en vista mensual y se reflejan en el resto de vistas.
             </span>
           )}
         </div>
@@ -838,7 +867,12 @@ function CellPopover({
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">{cell.yearMonth}</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">{cell.periodLabel}</div>
+          <div className="text-[10px] text-[var(--gray-400)]">
+            {cell.periodStartDate === cell.periodEndDate
+              ? cell.periodStartDate
+              : `${cell.periodStartDate} → ${cell.periodEndDate}`}
+          </div>
           <div className="text-[13px] font-medium text-[var(--gray-950)]">{label}</div>
         </div>
         <button onClick={onClose} className="text-[var(--gray-400)] hover:text-[var(--gray-950)]">

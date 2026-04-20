@@ -69,6 +69,7 @@ Campos importantes:
 - `scenarioCellOverrides`
 - `activeProposalId`
 - `activeScenarioId`
+- `forecastGranularity`
 
 Selección activa:
 
@@ -136,6 +137,8 @@ Simulation {
   targetIds[],
   startYearMonth,
   endYearMonth?,
+  startDate?,
+  endDate?,
   frequency?,
   operation?,
   amount?,
@@ -185,7 +188,7 @@ El orden actual es:
 La función principal es:
 
 ```ts
-evaluateScenario(plan, proposal, scenario, simulations, overrides)
+evaluateScenario(plan, proposal, scenario, simulations, overrides, { granularity? })
 ```
 
 ### Reglas importantes del motor
@@ -194,6 +197,10 @@ evaluateScenario(plan, proposal, scenario, simulations, overrides)
 - Solo celdas hoja son editables manualmente.
 - Subtotales y filas derivadas no deben aceptar override.
 - El Base no admite edición manual.
+- El mismo motor soporta `monthly`, `weekly` y `daily`.
+- La vista semanal sale de `weeklyData`.
+- La vista diaria se deriva repartiendo cada semana en 7 días.
+- Los overrides manuales siguen siendo mensuales y se reflejan en semana / día.
 
 ### Targets sintéticos
 

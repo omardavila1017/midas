@@ -20,6 +20,7 @@ El proyecto ya no está en modo stub. Hoy incluye:
   - overrides manuales por escenario
   - comentarios por celda
   - diff vs base
+  - vista por mes, semana y día
 
 ## Terminología importante
 
@@ -80,6 +81,9 @@ Reglas importantes:
 - Los overrides viven por `scenarioId`
 - Los cambios manuales de una celda no contaminan otros escenarios
 - Si editas una propuesta, se actualiza en todos los escenarios donde esté asignada
+- La vista semanal usa `weeklyData` real del Excel
+- La vista diaria se deriva distribuyendo el flujo semanal en días
+- Los overrides manuales se editan en vista mensual y se reflejan en semana / día
 
 ## Formulario de propuestas
 
@@ -93,6 +97,8 @@ Ejemplos:
 - se puede seleccionar uno o varios conceptos
 
 Además, el formulario muestra una vista rápida del impacto esperado antes de guardar.
+
+La propuesta también puede arrancar desde una fecha exacta (`YYYY-MM-DD`), no solo por mes. Eso permite que los incrementos porcentuales y pausas de gasto empiecen a mitad del mes y se prorrateen correctamente en el forecast.
 
 ## Setup
 

@@ -3,6 +3,7 @@ import {
   EvaluatedScenario,
   FlowConcept,
   FlowPlan,
+  ForecastGranularity,
   MONTHS,
   Proposal,
   ROLE_TARGET_COLLECTIONS,
@@ -43,25 +44,111 @@ interface TargetOption {
   group: 'roles' | 'concepts';
 }
 
+interface ScenarioEvaluationOptions {
+  granularity?: ForecastGranularity;
+}
+
 function cloneSeriesMap(source: Map<string, number[]>): Map<string, number[]> {
   return new Map(Array.from(source.entries(), ([key, values]) => [key, [...values]]));
 }
 
-function addMonths(year: number, monthIndex: number, offset: number): ScenarioMonth {
+function parseYearMonth(yearMonth: string): { year: number; monthIndex: number } {
+  const [yearRaw, monthRaw] = yearMonth.split('-');
+  return {
+    year: Number(yearRaw),
+    monthIndex: Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1)),
+  };
+}
+
+function formatYearMonth(year: number, monthIndex: number): string {
+  return `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+}
+
+function addYearMonths(yearMonth: string, offset: number): string {
+  const { year, monthIndex } = parseYearMonth(yearMonth);
   const absoluteMonth = monthIndex + offset;
   const targetMonth = ((absoluteMonth % 12) + 12) % 12;
   const targetYear = year + Math.floor(absoluteMonth / 12);
+  return formatYearMonth(targetYear, targetMonth);
+}
+
+function parseIsoDate(value: string): Date {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+
+function formatIsoDate(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+function addDays(dateIso: string, offset: number): string {
+  const date = parseIsoDate(dateIso);
+  date.setUTCDate(date.getUTCDate() + offset);
+  return formatIsoDate(date);
+}
+
+function addMonthsToDate(dateIso: string, offset: number): string {
+  const parsed = parseIsoDate(dateIso);
+  const year = parsed.getUTCFullYear();
+  const monthIndex = parsed.getUTCMonth();
+  const day = parsed.getUTCDate();
+  const absolute = monthIndex + offset;
+  const nextMonthIndex = ((absolute % 12) + 12) % 12;
+  const nextYear = year + Math.floor(absolute / 12);
+  const daysInMonth = new Date(Date.UTC(nextYear, nextMonthIndex + 1, 0)).getUTCDate();
+  return formatIsoDate(new Date(Date.UTC(nextYear, nextMonthIndex, Math.min(day, daysInMonth))));
+}
+
+function startOfMonth(yearMonth: string): string {
+  return `${yearMonth}-01`;
+}
+
+function endOfMonth(yearMonth: string): string {
+  const { year, monthIndex } = parseYearMonth(yearMonth);
+  return formatIsoDate(new Date(Date.UTC(year, monthIndex + 1, 0)));
+}
+
+function firstScenarioDate(plan: FlowPlan, scenario?: Pick<Scenario, 'startYearMonth'>): string {
+  return startOfMonth(scenario?.startYearMonth ?? `${plan.year}-01`);
+}
+
+function lastScenarioDate(plan: FlowPlan, scenario?: Pick<Scenario, 'startYearMonth' | 'horizonMonths'>): string {
+  const startYearMonth = scenario?.startYearMonth ?? `${plan.year}-01`;
+  const horizonMonths = Math.max(1, Math.min(24, scenario?.horizonMonths ?? 12));
+  return endOfMonth(addYearMonths(startYearMonth, horizonMonths - 1));
+}
+
+function shortDateLabel(dateIso: string): string {
+  const date = parseIsoDate(dateIso);
+  return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`;
+}
+
+function addMonthlyPeriod(year: number, monthIndex: number, offset: number): ScenarioMonth {
+  const absoluteMonth = monthIndex + offset;
+  const targetMonth = ((absoluteMonth % 12) + 12) % 12;
+  const targetYear = year + Math.floor(absoluteMonth / 12);
+  const ym = formatYearMonth(targetYear, targetMonth);
   return {
     monthIndex: targetMonth,
     year: targetYear,
     label: `${MONTHS[targetMonth]} ${String(targetYear).slice(2)}`,
-    ym: `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}`,
+    ym,
+    granularity: 'monthly',
+    startDate: startOfMonth(ym),
+    endDate: endOfMonth(ym),
+  };
+}
+
+function scenarioRange(plan: FlowPlan, scenario?: Pick<Scenario, 'startYearMonth' | 'horizonMonths'>) {
+  return {
+    startDate: firstScenarioDate(plan, scenario),
+    endDate: lastScenarioDate(plan, scenario),
   };
 }
 
 export function buildScenarioMonths(
   plan: FlowPlan,
   scenario?: Pick<Scenario, 'startYearMonth' | 'horizonMonths'>,
+  granularity: ForecastGranularity = 'monthly',
 ): ScenarioMonth[] {
   const defaultStart = `${plan.year}-01`;
   const [yearRaw, monthRaw] = (scenario?.startYearMonth ?? defaultStart).split('-');
@@ -69,9 +156,49 @@ export function buildScenarioMonths(
   const startMonthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
   const horizonMonths = Math.max(1, Math.min(24, scenario?.horizonMonths ?? 12));
 
-  return Array.from({ length: horizonMonths }, (_, offset) =>
-    addMonths(startYear, startMonthIndex, offset),
-  );
+  if (granularity === 'monthly') {
+    return Array.from({ length: horizonMonths }, (_, offset) =>
+      addMonthlyPeriod(startYear, startMonthIndex, offset),
+    );
+  }
+
+  const { startDate, endDate } = scenarioRange(plan, scenario);
+
+  if (granularity === 'weekly') {
+    const periods: ScenarioMonth[] = [];
+    plan.weekDates.forEach((weekStartDate) => {
+      const weekEndDate = addDays(weekStartDate, 6);
+      if (weekEndDate < startDate || weekStartDate > endDate) return;
+      const weekStart = parseIsoDate(weekStartDate);
+      periods.push({
+        monthIndex: weekStart.getUTCMonth(),
+        year: weekStart.getUTCFullYear(),
+        label: `Sem ${shortDateLabel(weekStartDate)}`,
+        ym: `week:${weekStartDate}`,
+        granularity: 'weekly',
+        startDate: weekStartDate,
+        endDate: weekEndDate,
+      });
+    });
+    return periods;
+  }
+
+  const periods: ScenarioMonth[] = [];
+  let cursor = startDate;
+  while (cursor <= endDate) {
+    const date = parseIsoDate(cursor);
+    periods.push({
+      monthIndex: date.getUTCMonth(),
+      year: date.getUTCFullYear(),
+      label: shortDateLabel(cursor),
+      ym: cursor,
+      granularity: 'daily',
+      startDate: cursor,
+      endDate: cursor,
+    });
+    cursor = addDays(cursor, 1);
+  }
+  return periods;
 }
 
 function buildConceptIndexes(plan: FlowPlan): ConceptIndexes {
@@ -151,15 +278,6 @@ function buildConceptIndexes(plan: FlowPlan): ConceptIndexes {
   };
 }
 
-function baseValueForMonth(
-  concept: FlowConcept,
-  month: ScenarioMonth,
-  planYear: number,
-): number {
-  if (month.year !== planYear) return 0;
-  return concept.monthlyData[month.monthIndex] ?? 0;
-}
-
 function appendContribution(
   map: Map<string, { simulationId: string; simulationName: string; delta: number }[]>,
   cellKey: string,
@@ -182,10 +300,10 @@ function addSeries(target: number[], source: number[]): number[] {
   return Array.from({ length }, (_, index) => (target[index] ?? 0) + (source[index] ?? 0));
 }
 
-function sumSeries(valuesByConceptId: Map<string, number[]>, conceptIds: string[], months: number): number[] {
-  let total = Array(months).fill(0);
+function sumSeries(valuesByConceptId: Map<string, number[]>, conceptIds: string[], periods: number): number[] {
+  let total = Array(periods).fill(0);
   for (const conceptId of conceptIds) {
-    total = addSeries(total, valuesByConceptId.get(conceptId) ?? Array(months).fill(0));
+    total = addSeries(total, valuesByConceptId.get(conceptId) ?? Array(periods).fill(0));
   }
   return total;
 }
@@ -251,15 +369,155 @@ export function getSimulationTargetOptions(plan: FlowPlan): TargetOption[] {
   return [...roleOptions, ...conceptOptions];
 }
 
+function buildWeekIndexByStartDate(plan: FlowPlan): Map<string, number> {
+  return new Map(plan.weekDates.map((weekDate, index) => [weekDate, index]));
+}
+
+function buildDayToWeekIndex(plan: FlowPlan): Map<string, number> {
+  const index = new Map<string, number>();
+  plan.weekDates.forEach((weekDate, weekIndex) => {
+    for (let offset = 0; offset < 7; offset += 1) {
+      index.set(addDays(weekDate, offset), weekIndex);
+    }
+  });
+  return index;
+}
+
+function baseValueForPeriod(
+  concept: FlowConcept,
+  period: ScenarioMonth,
+  planYear: number,
+  weekIndexByStartDate: Map<string, number>,
+  dayToWeekIndex: Map<string, number>,
+): number {
+  if (period.granularity === 'monthly') {
+    if (period.year !== planYear) return 0;
+    return concept.monthlyData[period.monthIndex] ?? 0;
+  }
+
+  if (period.granularity === 'weekly') {
+    const weekIndex = weekIndexByStartDate.get(period.startDate);
+    return weekIndex === undefined ? 0 : (concept.weeklyData[weekIndex] ?? 0);
+  }
+
+  const weekIndex = dayToWeekIndex.get(period.startDate);
+  return weekIndex === undefined ? 0 : ((concept.weeklyData[weekIndex] ?? 0) / 7);
+}
+
+function periodContainsDate(period: ScenarioMonth, dateIso: string): boolean {
+  return dateIso >= period.startDate && dateIso <= period.endDate;
+}
+
+function inclusiveDaySpan(startDate: string, endDate: string): number {
+  const start = parseIsoDate(startDate).getTime();
+  const end = parseIsoDate(endDate).getTime();
+  return Math.max(1, Math.round((end - start) / 86400000) + 1);
+}
+
+function overlapRatio(period: ScenarioMonth, startDate: string, endDate: string): number {
+  const overlapStart = period.startDate > startDate ? period.startDate : startDate;
+  const overlapEnd = period.endDate < endDate ? period.endDate : endDate;
+  if (overlapEnd < overlapStart) return 0;
+  return inclusiveDaySpan(overlapStart, overlapEnd) / inclusiveDaySpan(period.startDate, period.endDate);
+}
+
+function resolveLegacyYearMonthForOffset(
+  scenario: Scenario,
+  monthOffset: number,
+): string {
+  return addYearMonths(scenario.startYearMonth, monthOffset);
+}
+
+function normalizeEffectDateWindow(
+  effect: Simulation['effects'][number],
+  scenario: Scenario,
+): { startDate: string; endDate: string } | null {
+  if (effect.startDate && effect.endDate) {
+    return {
+      startDate: effect.startDate,
+      endDate: effect.endDate,
+    };
+  }
+
+  if (effect.startDate) {
+    return {
+      startDate: effect.startDate,
+      endDate: effect.endDate ?? effect.startDate,
+    };
+  }
+
+  const yearMonth = effect.yearMonths?.[0]
+    ?? (typeof effect.monthOffsets?.[0] === 'number'
+      ? resolveLegacyYearMonthForOffset(scenario, effect.monthOffsets[0])
+      : null);
+
+  if (!yearMonth) return null;
+
+  return effect.mode === 'percent'
+    ? { startDate: startOfMonth(yearMonth), endDate: endOfMonth(yearMonth) }
+    : { startDate: startOfMonth(yearMonth), endDate: startOfMonth(yearMonth) };
+}
+
+function resolvePeriodIndexesForEffect(
+  periods: ScenarioMonth[],
+  effect: Simulation['effects'][number],
+  scenario: Scenario,
+): Array<{ periodIndex: number; weight: number }> {
+  const explicitWindow = normalizeEffectDateWindow(effect, scenario);
+
+  if (explicitWindow) {
+    const isPointEffect = explicitWindow.startDate === explicitWindow.endDate && effect.mode === 'absolute';
+    const indexes: Array<{ periodIndex: number; weight: number }> = [];
+
+    periods.forEach((period, periodIndex) => {
+      const weight = isPointEffect
+        ? (periodContainsDate(period, explicitWindow.startDate) ? 1 : 0)
+        : overlapRatio(period, explicitWindow.startDate, explicitWindow.endDate);
+      if (weight > 0) {
+        indexes.push({ periodIndex, weight });
+      }
+    });
+
+    return indexes;
+  }
+
+  if (effect.yearMonths && effect.yearMonths.length > 0) {
+    const yearMonthSet = new Set(effect.yearMonths);
+    return periods
+      .map((period, periodIndex) => ({
+        periodIndex,
+        weight: period.granularity === 'monthly'
+          ? (yearMonthSet.has(period.ym) ? 1 : 0)
+          : (yearMonthSet.has(period.startDate.slice(0, 7))
+            ? (effect.mode === 'percent'
+              ? overlapRatio(period, `${period.startDate.slice(0, 7)}-01`, endOfMonth(period.startDate.slice(0, 7)))
+              : (period.startDate.endsWith('-01') ? 1 : 0))
+            : 0),
+      }))
+      .filter((item) => item.weight > 0);
+  }
+
+  if (effect.monthOffsets && effect.monthOffsets.length > 0) {
+    const yearMonths = effect.monthOffsets.map((offset) => resolveLegacyYearMonthForOffset(scenario, offset));
+    return resolvePeriodIndexesForEffect(periods, { ...effect, yearMonths }, scenario);
+  }
+
+  return periods.map((_, periodIndex) => ({ periodIndex, weight: 1 }));
+}
+
 export function evaluateScenario(
   plan: FlowPlan,
   proposal: Proposal,
   scenario: Scenario,
   simulations: Simulation[],
   overrides: ScenarioCellOverride[],
+  options?: ScenarioEvaluationOptions,
 ): EvaluatedScenario {
-  const months = buildScenarioMonths(plan, scenario);
+  const granularity = options?.granularity ?? 'monthly';
+  const months = buildScenarioMonths(plan, scenario, granularity);
   const monthIndexByYm = new Map(months.map((month, index) => [month.ym, index]));
+  const weekIndexByStartDate = buildWeekIndexByStartDate(plan);
+  const dayToWeekIndex = buildDayToWeekIndex(plan);
   const indexes = buildConceptIndexes(plan);
   const trackedConceptIds = [
     ...plan.concepts.map((concept) => concept.id),
@@ -285,9 +543,10 @@ export function evaluateScenario(
     if (!concept) continue;
     baseValuesByConceptId.set(
       conceptId,
-      months.map((month) => baseValueForMonth(concept, month, plan.year)),
+      months.map((month) => baseValueForPeriod(concept, month, plan.year, weekIndexByStartDate, dayToWeekIndex)),
     );
   }
+
   const effectBaseValuesByConceptId = cloneSeriesMap(baseValuesByConceptId);
   effectBaseValuesByConceptId.set(
     ROLE_TARGET_INCOME,
@@ -321,7 +580,7 @@ export function evaluateScenario(
     targetId: string,
     monthOffset: number,
     delta: number,
-    options?: { simulationId: string; simulationName: string; yearMonth: string },
+    optionsWithSimulation?: { simulationId: string; simulationName: string; yearMonth: string },
   ) => {
     if (delta === 0) return;
 
@@ -329,12 +588,12 @@ export function evaluateScenario(
       const series = valuesByConceptId.get(conceptId);
       if (!series) return;
       series[monthOffset] = (series[monthOffset] ?? 0) + delta;
-      if (options) {
+      if (optionsWithSimulation) {
         appendContribution(
           simulationContributionMap,
-          `${conceptId}::${options.yearMonth}`,
-          options.simulationId,
-          options.simulationName,
+          `${conceptId}::${optionsWithSimulation.yearMonth}`,
+          optionsWithSimulation.simulationId,
+          optionsWithSimulation.simulationName,
           delta,
         );
       }
@@ -364,40 +623,36 @@ export function evaluateScenario(
   for (const simulation of activeSimulations) {
     for (const effect of simulation.effects) {
       if (effect.type !== 'concept_delta') continue;
-      const monthOffsets = effect.yearMonths && effect.yearMonths.length > 0
-        ? effect.yearMonths
-            .map((yearMonth) => monthIndexByYm.get(yearMonth))
-            .filter((value): value is number => value !== undefined)
-        : (effect.monthOffsets && effect.monthOffsets.length > 0
-            ? effect.monthOffsets
-            : months.map((_, index) => index));
 
-      for (const monthOffset of monthOffsets) {
-        if (monthOffset < 0 || monthOffset >= months.length) continue;
-        const yearMonth = months[monthOffset].ym;
+      const targetPeriods = resolvePeriodIndexesForEffect(months, effect, scenario);
+      for (const { periodIndex, weight } of targetPeriods) {
+        if (periodIndex < 0 || periodIndex >= months.length) continue;
+        const periodKey = months[periodIndex].ym;
         const baseSeries = effectBaseValuesByConceptId.get(effect.conceptId) ?? Array(months.length).fill(0);
-        const baseValue = baseSeries[monthOffset] ?? 0;
+        const baseValue = baseSeries[periodIndex] ?? 0;
         const delta =
           effect.mode === 'percent'
-            ? baseValue * effect.value
-            : effect.value;
+            ? baseValue * effect.value * weight
+            : effect.value * weight;
 
-        applyDelta(simulatedValuesByConceptId, effect.conceptId, monthOffset, delta, {
+        applyDelta(simulatedValuesByConceptId, effect.conceptId, periodIndex, delta, {
           simulationId: simulation.id,
           simulationName: simulation.name,
-          yearMonth,
+          yearMonth: periodKey,
         });
-        applyDelta(finalValuesByConceptId, effect.conceptId, monthOffset, delta, {
+        applyDelta(finalValuesByConceptId, effect.conceptId, periodIndex, delta, {
           simulationId: simulation.id,
           simulationName: simulation.name,
-          yearMonth,
+          yearMonth: periodKey,
         });
       }
     }
   }
 
   const overrideMap = new Map<string, ScenarioCellOverride>();
+  const overrideEditingEnabled = granularity === 'monthly';
   for (const override of overrides) {
+    if (!overrideEditingEnabled) continue;
     if (override.scenarioId !== scenario.id) continue;
     const monthOffset = monthIndexByYm.get(override.yearMonth);
     if (monthOffset === undefined) continue;
@@ -459,6 +714,10 @@ export function evaluateScenario(
         conceptId,
         yearMonth: month.ym,
         monthIndex: month.monthIndex,
+        granularity,
+        periodLabel: month.label,
+        periodStartDate: month.startDate,
+        periodEndDate: month.endDate,
         baseValue: baseSeries[monthOffset] ?? 0,
         simulatedValue: simulatedSeries[monthOffset] ?? 0,
         finalValue: finalSeries[monthOffset] ?? 0,
@@ -469,7 +728,7 @@ export function evaluateScenario(
         hasSimulationDelta: contributions.some((item) => item.delta !== 0),
         hasManualDelta: (manualSeries[monthOffset] ?? 0) !== 0 || Boolean(override?.comment),
         isOverridden: Boolean(override),
-        isEditable: indexes.editableConceptIds.has(conceptId),
+        isEditable: granularity === 'monthly' && indexes.editableConceptIds.has(conceptId),
       };
       cells.set(key, cell);
       diffVsBase.set(key, diff);
@@ -518,6 +777,7 @@ export function evaluateScenario(
   return {
     proposalId: proposal.id,
     scenarioId: scenario.id,
+    granularity,
     months,
     valuesByConceptId: finalValuesByConceptId,
     baseValuesByConceptId,
