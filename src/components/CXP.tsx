@@ -1059,6 +1059,12 @@ const CXP = ({
     }
   }, [activeCias, onReplaceAll]);
 
+  // When the user switches company, allow auto-fetch to retry this cia
+  // (the attempt-guard is only to prevent infinite retries within one selection).
+  useEffect(() => {
+    autoFetchAttempted.current.delete(selectedCia);
+  }, [selectedCia]);
+
   // Auto-fetch on cia change when we have a token and the cia isn't cached yet.
   useEffect(() => {
     if (selectedCia === 'all') return;
