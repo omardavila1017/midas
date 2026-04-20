@@ -77,6 +77,11 @@ const VIEW_OPTIONS: { value: ForecastView; label: string }[] = [
   { value: 'drivers', label: 'Drivers' },
 ];
 
+const STICKY_CONCEPT_WIDTH = 'w-[240px] min-w-[240px] max-w-[240px]';
+const STICKY_CONCEPT_SHADOW = 'border-r border-[var(--gray-100)] shadow-[10px_0_14px_-14px_rgba(15,23,42,0.22)]';
+const STICKY_CONCEPT_HEADER = `sticky left-0 z-30 ${STICKY_CONCEPT_WIDTH} bg-[var(--surface-alt)] ${STICKY_CONCEPT_SHADOW}`;
+const STICKY_CONCEPT_CELL = `sticky left-0 z-10 overflow-hidden ${STICKY_CONCEPT_WIDTH} ${STICKY_CONCEPT_SHADOW}`;
+
 export default function Forecast({
   plan,
   proposals,
@@ -417,7 +422,7 @@ export default function Forecast({
           <table className="w-full min-w-[980px] text-[13px]">
             <thead className="border-b border-[#e8e8ed] bg-[var(--surface-alt)]">
               <tr>
-                <th className="sticky left-0 min-w-[240px] bg-[var(--surface-alt)] px-4 py-2.5 text-left font-medium text-[var(--gray-400)]">Concepto</th>
+                <th className={`${STICKY_CONCEPT_HEADER} px-4 py-2.5 text-left font-medium text-[var(--gray-400)]`}>Concepto</th>
                 {months.map((month) => (
                   <th key={month.ym} className="px-3 py-2.5 text-right font-medium text-[var(--gray-400)]">{month.label}</th>
                 ))}
@@ -542,7 +547,7 @@ export default function Forecast({
             {view === 'cashflow' && (
               <tfoot className="border-t-2 border-[#1d1d1f]/10 bg-[var(--surface-alt)]">
                 <tr>
-                  <td className="sticky left-0 bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--gray-950)]">Caja inicial</td>
+                  <td className={`${STICKY_CONCEPT_CELL} bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--gray-950)]`}>Caja inicial</td>
                   {months.map((month, index) => (
                     <td key={month.ym} className="px-3 py-2.5 text-right tabular-nums text-[var(--gray-500)]">
                       {layerMode === 'diff'
@@ -555,7 +560,7 @@ export default function Forecast({
                   </td>
                 </tr>
                 <tr>
-                  <td className="sticky left-0 bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--gray-950)]">Caja al cierre</td>
+                  <td className={`${STICKY_CONCEPT_CELL} bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--gray-950)]`}>Caja al cierre</td>
                   {metrics.cajaFinal.map((value, index) => (
                     <td key={`${months[index]?.ym ?? index}-cash`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${value < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'}`}>
                       {layerMode === 'diff' && value > 0 ? '+' : ''}{formatCompactNumber(value)}
@@ -589,8 +594,8 @@ function toggleExpanded(
 
 function CategoryHeader({ label, colSpan }: { label: string; colSpan: number }) {
   return (
-    <tr className="border-t border-[var(--gray-200)] bg-[var(--surface-alt)]/70">
-      <td className="sticky left-0 bg-[var(--surface-alt)]/70 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">
+    <tr className="border-t border-[var(--gray-200)] bg-[var(--surface-alt)]">
+      <td className={`${STICKY_CONCEPT_CELL} bg-[var(--surface-alt)] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--gray-400)]`}>
         {label}
       </td>
       <td colSpan={colSpan} />
@@ -619,8 +624,8 @@ function RoleRow({
   }, 0);
 
   return (
-    <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--gray-50)]/50">
-      <td className="sticky left-0 bg-[var(--gray-50)]/50 px-4 py-2 text-[var(--gray-950)]">{label}</td>
+    <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--gray-50)]">
+      <td className={`${STICKY_CONCEPT_CELL} bg-[var(--gray-50)] px-4 py-2 text-[var(--gray-950)]`}>{label}</td>
       {months.map((month) => {
         const cell = evaluation.cells.get(scenarioCellKey(activeScenario.id, rowId, month.ym));
         const value = cell ? displayValue(cell, layerMode) : 0;
@@ -687,8 +692,8 @@ function ConceptRow({
   return (
     <>
       <tr className="border-t border-[var(--gray-200)]/30 hover:bg-[var(--gray-50)]/60">
-        <td className="sticky left-0 bg-white px-4 py-2" style={{ paddingLeft: 16 + depth * 16 }}>
-          <div className="flex items-center gap-1.5">
+        <td className={`${STICKY_CONCEPT_CELL} bg-white px-4 py-2`} style={{ paddingLeft: 16 + depth * 16 }}>
+          <div className="flex min-w-0 items-center gap-1.5">
             {hasChildren ? (
               <button onClick={() => onToggle(concept.id)} className="rounded p-0.5 hover:bg-[var(--gray-100)]">
                 {isOpen ? (
@@ -700,7 +705,7 @@ function ConceptRow({
             ) : (
               <span className="w-4" />
             )}
-            <span className="text-[var(--gray-950)]">{concept.name}</span>
+            <span className="truncate text-[var(--gray-950)]" title={concept.name}>{concept.name}</span>
           </div>
         </td>
         {months.map((month) => {
@@ -1003,7 +1008,7 @@ function MetricTotalRow({
 
   return (
     <tr className="border-t border-[var(--gray-200)]">
-      <td className={`sticky left-0 bg-white px-4 py-2.5 font-semibold ${colorClass}`}>{label}</td>
+      <td className={`${STICKY_CONCEPT_CELL} bg-white px-4 py-2.5 font-semibold ${colorClass}`}>{label}</td>
       {values.map((value, index) => (
         <td key={`${label}-${index}`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${colorClass}`}>
           {value === 0 ? '—' : formatCompactNumber(value)}

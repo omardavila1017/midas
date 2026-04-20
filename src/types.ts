@@ -142,6 +142,7 @@ export interface DrillDownLevel {
 
 export type TabId =
   | 'dashboard'
+  | 'kpis'
   | 'scenarios'
   | 'forecast'
   | 'providers'

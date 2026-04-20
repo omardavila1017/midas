@@ -86,8 +86,9 @@ describe('Forecast', () => {
 
     expect(screen.getByText('Drivers')).toBeTruthy();
 
-    const firstValueCell = container.querySelector('tbody tr td:nth-child(2)') as HTMLElement;
-    fireEvent.doubleClick(firstValueCell);
+    const firstEditableCell = container.querySelector('td.cursor-cell') as HTMLElement | null;
+    expect(firstEditableCell).toBeTruthy();
+    fireEvent.doubleClick(firstEditableCell as HTMLElement);
 
     const input = await screen.findByDisplayValue('100');
     fireEvent.change(input, { target: { value: '120' } });
