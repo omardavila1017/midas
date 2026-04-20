@@ -275,6 +275,7 @@ export default function App() {
                 confirmedPayments={confirmedPayments}
                 onConfirm={confirmPayment}
                 onUnconfirm={unconfirmPayment}
+                cxpRecords={cxpRecords}
               />
             )}
             {activeTab === 'providers' && (
