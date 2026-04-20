@@ -49,7 +49,7 @@ export interface DrillDownLevel {
   month: number | null; // null = full year
 }
 
-export type TabId = 'dashboard' | 'proposals' | 'simulator' | 'providers' | 'collections' | 'clients' | 'cxp' | 'netflow' | 'pnl' | 'cashflow' | 'drivers';
+export type TabId = 'dashboard' | 'proposals' | 'simulator' | 'providers' | 'collections' | 'clients' | 'cxp' | 'bancos' | 'netflow' | 'pnl' | 'cashflow' | 'drivers';
 
 /**
  * Forecast cell override — Excel-like manual edit on a Forecast cell.
