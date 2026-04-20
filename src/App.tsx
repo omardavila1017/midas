@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BASE_SCENARIO_ID, FlowPlan, ForecastGranularity, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId } from './types';
+import { BASE_SCENARIO_ID, FlowPlan, ForecastGranularity, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId, ForecastView } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { loadClientsCatalog } from './domain/loadClientsCatalog';
 import { fetchCompanies, type Company, JdeApiError, type BankAccountStatement, type BankStatementFormat } from './services/jde';
 import Upload from './components/Upload';
 import Dashboard from './components/Dashboard';
-import ProposalCreator from './components/ProposalCreator';
-import Simulator from './components/Simulator';
+import ScenarioWorkbench from './components/ScenarioWorkbench';
 import CXP from './components/CXP';
 import Bancos from './components/Bancos';
 import Providers from './components/Providers';
@@ -25,13 +24,12 @@ import {
 } from 'lucide-react';
 import { hex } from './theme';
 
-type SectionId = 'cobros' | 'pagos' | 'plan' | 'forecast';
+type SectionId = 'cobros' | 'pagos' | 'plan';
 
 const SECTIONS: { id: SectionId; label: string; icon: any }[] = [
   { id: 'cobros',   label: 'Cobros',     icon: UserSquare },
   { id: 'pagos',    label: 'Pagos',      icon: Users },
   { id: 'plan',     label: 'Plan',       icon: LayoutDashboard },
-  { id: 'forecast', label: 'Pronóstico', icon: LineChart },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPlan?: boolean }[]> = {
@@ -47,28 +45,21 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
   ],
   plan: [
     { id: 'dashboard',  label: 'Dashboard',   icon: LayoutDashboard, needsPlan: true },
-    { id: 'proposals',  label: 'Propuestas',  icon: Lightbulb, needsPlan: true },
-    { id: 'simulator',  label: 'Simulador',   icon: FlaskConical, needsPlan: true },
-  ],
-  forecast: [
-    { id: 'pnl',       label: 'P&L',        icon: LineChart,  needsPlan: true },
-    { id: 'cashflow',  label: 'Flujo de Caja', icon: DollarSign, needsPlan: true },
-    { id: 'drivers',   label: 'Drivers',    icon: Sliders,    needsPlan: true },
+    { id: 'forecast',   label: 'Pronóstico',  icon: LineChart, needsPlan: true },
+    { id: 'scenarios',  label: 'Escenarios',  icon: FlaskConical, needsPlan: true },
   ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'cobros', collections: 'cobros', netflow: 'cobros',
   providers: 'pagos', cxp: 'pagos', bancos: 'pagos',
-  dashboard: 'plan', proposals: 'plan', simulator: 'plan',
-  pnl: 'forecast', cashflow: 'forecast', drivers: 'forecast',
+  dashboard: 'plan', forecast: 'plan', scenarios: 'plan',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
   cobros: 'clients',
   pagos: 'providers',
   plan: 'dashboard',
-  forecast: 'pnl',
 };
 
 export default function App() {
@@ -549,13 +540,14 @@ export default function App() {
                 onDelete={deleteProvider}
               />
             )}
-            {activeTab === 'proposals' && (
+            {activeTab === 'scenarios' && (
               plan
-                ? <ProposalCreator
+                ? <ScenarioWorkbench
                     plan={plan}
                     proposals={proposals}
                     scenarios={scenarios}
                     simulations={simulations}
+                    overrides={scenarioCellOverrides}
                     activeProposalId={activeProposalId}
                     activeScenarioId={activeScenarioId}
                     onSelectProposal={selectProposal}
@@ -582,8 +574,6 @@ export default function App() {
                     overrides={scenarioCellOverrides}
                     activeProposalId={activeProposalId}
                     activeScenarioId={activeScenarioId}
-                    granularity={forecastGranularity}
-                    onGranularityChange={setForecastGranularity}
                     onSelectProposal={selectProposal}
                     onSelectScenario={selectScenario}
                     onUpdateScenario={updateScenario}
@@ -618,11 +608,10 @@ export default function App() {
                 confirmedPayments={confirmedPayments}
               />
             )}
-            {(activeTab === 'pnl' || activeTab === 'cashflow' || activeTab === 'drivers') && (
+            {activeTab === 'forecast' && (
               plan
                 ? <Forecast
                     plan={plan}
-                    view={activeTab}
                     proposals={proposals}
                     scenarios={scenarios}
                     simulations={simulations}

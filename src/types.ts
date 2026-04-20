@@ -142,17 +142,16 @@ export interface DrillDownLevel {
 
 export type TabId =
   | 'dashboard'
-  | 'proposals'
-  | 'simulator'
+  | 'scenarios'
+  | 'forecast'
   | 'providers'
   | 'collections'
   | 'clients'
   | 'cxp'
   | 'bancos'
-  | 'netflow'
-  | 'pnl'
-  | 'cashflow'
-  | 'drivers';
+  | 'netflow';
+
+export type ForecastView = 'pnl' | 'cashflow' | 'drivers';
 
 export interface ScenarioCellOverride {
   key: string;

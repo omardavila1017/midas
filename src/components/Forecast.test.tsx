@@ -72,7 +72,6 @@ describe('Forecast', () => {
     const { container } = render(
       <Forecast
         plan={createLeafOnlyPlan()}
-        view="drivers"
         proposals={[proposal]}
         scenarios={[scenario]}
         simulations={[]}

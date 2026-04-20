@@ -15,6 +15,7 @@ import {
   FlowPlan,
   ForecastGranularity,
   ForecastLayerMode,
+  ForecastView,
   Proposal,
   ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
@@ -22,7 +23,6 @@ import {
   Scenario,
   ScenarioCellOverride,
   Simulation,
-  TabId,
   scenarioCellKey,
 } from '../types';
 import { evaluateScenario } from '../domain/scenarioEngine';
@@ -31,7 +31,6 @@ import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 
 interface Props {
   plan: FlowPlan;
-  view: Extract<TabId, 'pnl' | 'cashflow' | 'drivers'>;
   proposals: Proposal[];
   scenarios: Scenario[];
   simulations: Simulation[];
@@ -72,9 +71,14 @@ function displayValue(cell: EvaluatedCell, mode: ForecastLayerMode): number {
   }
 }
 
+const VIEW_OPTIONS: { value: ForecastView; label: string }[] = [
+  { value: 'pnl', label: 'P&L' },
+  { value: 'cashflow', label: 'Flujo de Caja' },
+  { value: 'drivers', label: 'Drivers' },
+];
+
 export default function Forecast({
   plan,
-  view,
   proposals,
   scenarios,
   simulations,
@@ -87,6 +91,7 @@ export default function Forecast({
   onSelectScenario,
   onOverridesChange,
 }: Props) {
+  const [view, setView] = useState<ForecastView>('pnl');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<{ conceptId: string; yearMonth: string } | null>(null);
   const [popover, setPopover] = useState<{ conceptId: string; yearMonth: string } | null>(null);
@@ -151,6 +156,8 @@ export default function Forecast({
     setEditing(null);
     setPopover(null);
   }, [activeScenarioId, activeProposalId, granularity, layerMode, view]);
+
+  const viewTitle = view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers';
 
   if (!activeScenario || !baseEvaluation || !simulatedEvaluation || !finalEvaluation) {
     return (
@@ -272,16 +279,24 @@ export default function Forecast({
   return (
     <div className="space-y-5" onClick={() => setPopover(null)}>
       <header className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-[24px] font-semibold text-[var(--gray-950)]">
-              {view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers'}
-            </h1>
-            <p className="mt-1 text-[13px] text-[var(--gray-400)]">
-              Pronóstico unificado por escenario y propuestas activas. {granularity === 'monthly'
-                ? 'Doble clic en celdas hoja para editar manualmente.'
-                : `Vista ${granularity === 'weekly' ? 'semanal' : 'diaria'} activa: solo lectura para mantener los overrides manuales consistentes.`}
-            </p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <h1 className="text-[24px] font-semibold text-[var(--gray-950)]">{viewTitle}</h1>
+            <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-1">
+              {VIEW_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setView(opt.value)}
+                  className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
+                    view === opt.value
+                      ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                      : 'text-[var(--gray-500)]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
           {directOverrideCount > 0 && (
             <button
@@ -293,11 +308,14 @@ export default function Forecast({
             </button>
           )}
         </div>
+        <p className="mt-2 text-[13px] text-[var(--gray-400)]">
+          Pronóstico unificado por escenario y ajustes activos. Doble clic en celdas hoja para editar manualmente.
+        </p>
 
-        <div className="mt-5 grid grid-cols-[220px,220px,220px,minmax(0,1fr)] gap-4">
+        <div className="mt-5 grid grid-cols-[240px,240px,minmax(0,1fr)] gap-4">
           <button
             onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
-            className={`rounded-xl border px-3 py-2.5 text-left text-[13px] font-medium transition ${
+            className={`rounded-xl border px-3 py-2 text-[13px] font-medium transition ${
               isBaseScenario(activeScenario)
                 ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
                 : 'border-[var(--gray-200)] bg-[var(--surface-alt)] text-[var(--gray-950)]'
@@ -309,9 +327,9 @@ export default function Forecast({
             value={activeProposal?.id ?? ''}
             onChange={(event) => onSelectProposal(event.target.value)}
             disabled={proposals.length === 0}
-            className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
+            className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2 text-[13px]"
           >
-            {proposals.length === 0 && <option value="">Sin simulaciones</option>}
+            {proposals.length === 0 && <option value="">Sin escenarios</option>}
             {proposals.map((proposal) => (
               <option key={proposal.id} value={proposal.id}>{proposal.name}</option>
             ))}
@@ -319,7 +337,7 @@ export default function Forecast({
           <select
             value={activeScenario.id}
             onChange={(event) => onSelectScenario(event.target.value)}
-            className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
+            className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2 text-[13px]"
           >
             {baseScenario && (
               <option value={baseScenario.id}>{baseScenario.name}</option>
@@ -330,21 +348,6 @@ export default function Forecast({
                 <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
               ))}
           </select>
-          <div className="flex items-center justify-between rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-1">
-            {(['monthly', 'weekly', 'daily'] as ForecastGranularity[]).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => onGranularityChange?.(mode)}
-                className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
-                  granularity === mode
-                    ? 'bg-white text-[var(--gray-950)] shadow-sm'
-                    : 'text-[var(--gray-500)]'
-                }`}
-              >
-                {mode === 'monthly' ? 'Mes' : mode === 'weekly' ? 'Semana' : 'Día'}
-              </button>
-            ))}
-          </div>
           <div className="flex items-center justify-end rounded-xl bg-[var(--gray-50)] p-1">
             {(['base', 'simulated', 'manual', 'diff'] as ForecastLayerMode[]).map((mode) => (
               <button
@@ -362,9 +365,9 @@ export default function Forecast({
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-4 text-[12px] text-[var(--gray-400)]">
+        <div className="mt-4 flex flex-wrap items-center gap-4 text-[12px] text-[var(--gray-400)]">
           <LegendDot color="bg-[#d2d2d7]" label="Base" />
-          <LegendDot color="bg-[var(--primary)]" label="Impactada por propuesta" />
+          <LegendDot color="bg-[var(--primary)]" label="Impactada por ajuste" />
           <LegendDot color="bg-[#ff9500]" label={`Ajuste manual${directOverrideCount > 0 ? ` (${directOverrideCount})` : ''}`} />
           <span className="inline-flex items-center gap-1.5">
             <MessageSquare className="w-3.5 h-3.5 text-[var(--primary)]" />
