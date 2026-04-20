@@ -12,7 +12,7 @@
  *   - For data import: const store = importStore(json)
  */
 
-import { FlowPlan, Proposal, Scenario } from '../types';
+import { FlowPlan, Proposal, Scenario, ForecastOverride } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 
 /**
@@ -62,6 +62,7 @@ export interface FlowSenseStore {
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
   cxpRecords: CXPRecord[];
+  forecastOverrides: ForecastOverride[];
   lastSaved: string; // ISO 8601 datetime
 }
 
@@ -95,6 +96,7 @@ export function getDefaultStore(): FlowSenseStore {
     },
     confirmedPayments: [],
     cxpRecords: [],
+    forecastOverrides: [],
     lastSaved: new Date().toISOString(),
   };
 }
@@ -162,6 +164,7 @@ export function loadStore(): FlowSenseStore | null {
         ? data.confirmedPayments
         : [],
       cxpRecords: Array.isArray(data.cxpRecords) ? data.cxpRecords : [],
+      forecastOverrides: Array.isArray(data.forecastOverrides) ? data.forecastOverrides : [],
       lastSaved: data.lastSaved ?? new Date().toISOString(),
     };
 
@@ -251,6 +254,7 @@ export function importStore(json: string): FlowSenseStore {
     assumptions: validateAssumptions(data.assumptions),
     confirmedPayments: validateArray(data.confirmedPayments, 'confirmedPayments'),
     cxpRecords: validateArray(data.cxpRecords, 'cxpRecords'),
+    forecastOverrides: validateArray(data.forecastOverrides, 'forecastOverrides'),
     lastSaved: validateISODate(data.lastSaved, 'lastSaved'),
   };
 

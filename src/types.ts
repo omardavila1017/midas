@@ -51,6 +51,24 @@ export interface DrillDownLevel {
 
 export type TabId = 'dashboard' | 'proposals' | 'simulator' | 'providers' | 'collections' | 'clients' | 'cxp' | 'bancos' | 'netflow' | 'pnl' | 'cashflow' | 'drivers';
 
+/**
+ * Forecast cell override — Excel-like manual edit on a Forecast cell.
+ * key: `${conceptId}::${yyyy-mm}` (rolling window friendly).
+ */
+export interface ForecastOverride {
+  key: string;
+  conceptId: string;
+  yearMonth: string;     // "2026-04"
+  originalValue: number;
+  overrideValue: number;
+  comment?: string;
+  editedAt: string;      // ISO datetime
+}
+
+export function overrideKey(conceptId: string, yearMonth: string): string {
+  return `${conceptId}::${yearMonth}`;
+}
+
 export const MONTHS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 export const MONTHS_FULL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
