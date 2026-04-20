@@ -12,20 +12,22 @@ import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
+import Forecast from './components/Forecast';
 // NetCashFlowDashboard disabled — needs real JDE data to be useful
 // import NetCashFlowDashboard from './components/NetCashFlowDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
 import {
   LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap,
-  Users, UserSquare, FileSpreadsheet, Download,
+  Users, UserSquare, FileSpreadsheet, Download, LineChart, DollarSign, Sliders,
 } from 'lucide-react';
 
-type SectionId = 'cobros' | 'pagos' | 'plan';
+type SectionId = 'cobros' | 'pagos' | 'plan' | 'forecast';
 
 const SECTIONS: { id: SectionId; label: string; icon: any }[] = [
-  { id: 'cobros', label: 'Cobros', icon: UserSquare },
-  { id: 'pagos',  label: 'Pagos',  icon: Users },
-  { id: 'plan',   label: 'Plan',   icon: LayoutDashboard },
+  { id: 'cobros',   label: 'Cobros',     icon: UserSquare },
+  { id: 'pagos',    label: 'Pagos',      icon: Users },
+  { id: 'plan',     label: 'Plan',       icon: LayoutDashboard },
+  { id: 'forecast', label: 'Pronóstico', icon: LineChart },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPlan?: boolean }[]> = {
@@ -43,18 +45,25 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
     { id: 'proposals',  label: 'Propuestas',  icon: Lightbulb, needsPlan: true },
     { id: 'simulator',  label: 'Simulador',   icon: FlaskConical, needsPlan: true },
   ],
+  forecast: [
+    { id: 'pnl',       label: 'P&L',        icon: LineChart,  needsPlan: true },
+    { id: 'cashflow',  label: 'Flujo de Caja', icon: DollarSign, needsPlan: true },
+    { id: 'drivers',   label: 'Drivers',    icon: Sliders,    needsPlan: true },
+  ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'cobros', collections: 'cobros', netflow: 'cobros',
   providers: 'pagos', cxp: 'pagos',
   dashboard: 'plan', proposals: 'plan', simulator: 'plan',
+  pnl: 'forecast', cashflow: 'forecast', drivers: 'forecast',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
   cobros: 'clients',
   pagos: 'providers',
   plan: 'dashboard',
+  forecast: 'pnl',
 };
 
 export default function App() {
@@ -318,6 +327,11 @@ export default function App() {
                 assumptions={assumptions}
                 confirmedPayments={confirmedPayments}
               />
+            )}
+            {(activeTab === 'pnl' || activeTab === 'cashflow' || activeTab === 'drivers') && (
+              plan
+                ? <Forecast plan={plan} view={activeTab} />
+                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Pronóstico" />
             )}
           </ErrorBoundary>
         </div>
