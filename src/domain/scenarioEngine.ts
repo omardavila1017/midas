@@ -265,6 +265,14 @@ export function evaluateScenario(
     ...plan.concepts.map((concept) => concept.id),
     ...ROLE_TARGET_IDS,
   ];
+  const cobranzaBaseIds =
+    indexes.collectionsConceptIds.length > 0
+      ? indexes.collectionsConceptIds
+      : indexes.rootIncomeIds;
+  const pagosBaseIds =
+    indexes.providerPaymentConceptIds.length > 0
+      ? indexes.providerPaymentConceptIds
+      : indexes.rootExpenseIds;
 
   const baseValuesByConceptId = new Map<string, number[]>();
   for (const conceptId of trackedConceptIds) {
@@ -280,6 +288,23 @@ export function evaluateScenario(
       months.map((month) => baseValueForMonth(concept, month, plan.year)),
     );
   }
+  const effectBaseValuesByConceptId = cloneSeriesMap(baseValuesByConceptId);
+  effectBaseValuesByConceptId.set(
+    ROLE_TARGET_INCOME,
+    sumSeries(baseValuesByConceptId, indexes.rootIncomeIds, months.length),
+  );
+  effectBaseValuesByConceptId.set(
+    ROLE_TARGET_EXPENSE,
+    sumSeries(baseValuesByConceptId, indexes.rootExpenseIds, months.length),
+  );
+  effectBaseValuesByConceptId.set(
+    ROLE_TARGET_COLLECTIONS,
+    sumSeries(baseValuesByConceptId, cobranzaBaseIds, months.length),
+  );
+  effectBaseValuesByConceptId.set(
+    ROLE_TARGET_PROVIDER_PAYMENTS,
+    sumSeries(baseValuesByConceptId, pagosBaseIds, months.length),
+  );
 
   const simulatedValuesByConceptId = cloneSeriesMap(baseValuesByConceptId);
   const finalValuesByConceptId = cloneSeriesMap(baseValuesByConceptId);
@@ -350,7 +375,7 @@ export function evaluateScenario(
       for (const monthOffset of monthOffsets) {
         if (monthOffset < 0 || monthOffset >= months.length) continue;
         const yearMonth = months[monthOffset].ym;
-        const baseSeries = baseValuesByConceptId.get(effect.conceptId) ?? Array(months.length).fill(0);
+        const baseSeries = effectBaseValuesByConceptId.get(effect.conceptId) ?? Array(months.length).fill(0);
         const baseValue = baseSeries[monthOffset] ?? 0;
         const delta =
           effect.mode === 'percent'
@@ -470,15 +495,6 @@ export function evaluateScenario(
     saldo += flujo;
     cajaFinal.push(saldo);
   }
-
-  const cobranzaBaseIds =
-    indexes.collectionsConceptIds.length > 0
-      ? indexes.collectionsConceptIds
-      : indexes.rootIncomeIds;
-  const pagosBaseIds =
-    indexes.providerPaymentConceptIds.length > 0
-      ? indexes.providerPaymentConceptIds
-      : indexes.rootExpenseIds;
 
   const cobranza = addSeries(
     sumSeries(finalValuesByConceptId, cobranzaBaseIds, months.length),

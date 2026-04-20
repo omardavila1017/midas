@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   Check,
@@ -18,8 +18,10 @@ import {
   FlowPlan,
   MONTHS,
   Proposal,
+  ROLE_TARGET_COLLECTIONS,
   ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
+  ROLE_TARGET_PROVIDER_PAYMENTS,
   Scenario,
   Simulation,
   SimulationCategory,
@@ -32,7 +34,7 @@ import {
   cloneProposalWithActiveScenario,
   isBaseScenario,
 } from '../domain/simulationCompiler';
-import { getSimulationTargetOptions, resolveConceptLabel } from '../domain/scenarioEngine';
+import { resolveConceptLabel } from '../domain/scenarioEngine';
 
 interface ProposalCreatorProps {
   plan: FlowPlan;
@@ -193,6 +195,13 @@ function parseCustomAllocation(input: string): number[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
+function formatYearMonthLabel(yearMonth: string): string {
+  const [yearRaw, monthRaw] = yearMonth.split('-');
+  const year = Number(yearRaw);
+  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
+  return `${MONTHS[monthIndex]} ${String(year).slice(2)}`;
+}
+
 function resolveSimulationTargetIds(simulation: Partial<Simulation>): string[] {
   const defaultTarget =
     simulation.category && simulation.category !== 'Incremento de Ingresos'
@@ -201,6 +210,142 @@ function resolveSimulationTargetIds(simulation: Partial<Simulation>): string[] {
   return Array.isArray(simulation.targetIds) && simulation.targetIds.length > 0
     ? simulation.targetIds
     : [defaultTarget];
+}
+
+interface DynamicTargetOption {
+  id: string;
+  label: string;
+}
+
+interface DynamicTargetConfig {
+  label: string;
+  helper: string;
+  options: DynamicTargetOption[];
+  defaultTargetIds: string[];
+}
+
+function buildLeafConceptOptions(
+  plan: FlowPlan,
+  conceptType: 'ingreso' | 'egreso',
+): DynamicTargetOption[] {
+  const parentIds = new Set(
+    plan.concepts
+      .map((concept) => concept.parentId)
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  return plan.concepts
+    .filter((concept) =>
+      concept.conceptType === conceptType &&
+      !parentIds.has(concept.id),
+    )
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((concept) => ({
+      id: concept.id,
+      label: concept.name,
+    }));
+}
+
+function buildDynamicTargetConfig(
+  plan: FlowPlan,
+  form: Pick<SimulationFormState, 'type' | 'category'>,
+): DynamicTargetConfig {
+  const incomeOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_INCOME, label: 'Todos los ingresos' },
+    ...buildLeafConceptOptions(plan, 'ingreso'),
+  ];
+  const expenseOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_EXPENSE, label: 'Todos los gastos' },
+    ...buildLeafConceptOptions(plan, 'egreso'),
+  ];
+  const collectionOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_COLLECTIONS, label: 'Toda la cobranza' },
+    ...buildLeafConceptOptions(plan, 'ingreso'),
+  ];
+  const paymentOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_PROVIDER_PAYMENTS, label: 'Todos los pagos a proveedores' },
+    ...buildLeafConceptOptions(plan, 'egreso'),
+  ];
+  const mixedOptions = [...incomeOptions, ...expenseOptions];
+
+  if (form.type === 'pause_expense') {
+    return {
+      label: '¿Qué gastos quieres pausar?',
+      helper: 'Selecciona uno o varios rubros de gasto que quieres detener temporalmente.',
+      options: expenseOptions,
+      defaultTargetIds: [ROLE_TARGET_EXPENSE],
+    };
+  }
+
+  if (form.type === 'timing_shift') {
+    if (form.category === 'Incremento de Ingresos') {
+      return {
+        label: '¿Qué cobranza quieres mover?',
+        helper: 'Úsalo para adelantar o atrasar cobros de uno o varios ingresos.',
+        options: collectionOptions,
+        defaultTargetIds: [ROLE_TARGET_COLLECTIONS],
+      };
+    }
+
+    if (form.category === 'Reducción de Costos') {
+      return {
+        label: '¿Qué pagos quieres mover?',
+        helper: 'Úsalo para adelantar o diferir pagos a proveedores o gastos específicos.',
+        options: paymentOptions,
+        defaultTargetIds: [ROLE_TARGET_PROVIDER_PAYMENTS],
+      };
+    }
+
+    return {
+      label: '¿Qué flujo quieres mover?',
+      helper: 'Selecciona si vas a mover cobranza, pagos o conceptos específicos.',
+      options: [...collectionOptions, ...paymentOptions],
+      defaultTargetIds: [ROLE_TARGET_COLLECTIONS],
+    };
+  }
+
+  if (form.type === 'installment_plan') {
+    if (form.category === 'Incremento de Ingresos') {
+      return {
+        label: '¿Qué ingresos quieres cobrar en parcialidades?',
+        helper: 'Selecciona uno o varios ingresos y reparte el monto en varios cobros.',
+        options: incomeOptions,
+        defaultTargetIds: [ROLE_TARGET_INCOME],
+      };
+    }
+
+    return {
+      label: '¿Qué gastos quieres pagar en parcialidades?',
+      helper: 'Selecciona uno o varios gastos y reparte el monto en varios pagos.',
+      options: expenseOptions,
+      defaultTargetIds: [ROLE_TARGET_EXPENSE],
+    };
+  }
+
+  if (form.category === 'Incremento de Ingresos') {
+    return {
+      label: '¿Qué tipos de ingreso quieres ajustar?',
+      helper: 'Puedes seleccionar un ingreso específico o aplicar el ajuste a todos los ingresos.',
+      options: incomeOptions,
+      defaultTargetIds: [ROLE_TARGET_INCOME],
+    };
+  }
+
+  if (form.category === 'Reducción de Costos') {
+    return {
+      label: '¿Qué tipos de gasto quieres ajustar?',
+      helper: 'Puedes seleccionar un gasto específico o aplicar el ajuste a todos los gastos.',
+      options: expenseOptions,
+      defaultTargetIds: [ROLE_TARGET_EXPENSE],
+    };
+  }
+
+  return {
+    label: '¿Qué conceptos quieres ajustar?',
+    helper: 'Selecciona uno o varios conceptos sobre los que quieras aplicar la propuesta.',
+    options: mixedOptions,
+    defaultTargetIds: [ROLE_TARGET_INCOME],
+  };
 }
 
 function buildSimulationFromForm(
@@ -285,7 +430,10 @@ export default function ProposalCreator({
     .filter((scenario) => !isBaseScenario(scenario) && scenario.proposalId === activeProposalId)
     .sort((a, b) => a.name.localeCompare(b.name));
   const assignedSimulationIds = new Set(activeScenario?.simulationIds ?? []);
-  const targetOptions = useMemo(() => getSimulationTargetOptions(plan), [plan]);
+  const dynamicTargetConfig = useMemo(
+    () => buildDynamicTargetConfig(plan, simulationForm),
+    [plan, simulationForm.type, simulationForm.category],
+  );
   const simulationTypeMeta = SIMULATION_TYPES.find((item) => item.value === simulationForm.type);
 
   const filteredSimulations = useMemo(() => {
@@ -297,6 +445,57 @@ export default function ProposalCreator({
       simulation.comments?.toLowerCase().includes(query),
     );
   }, [simulationSearch, simulations]);
+  const proposalPreview = useMemo(() => {
+    const targetLabel = simulationForm.targetIds
+      .slice(0, 2)
+      .map((id) => resolveConceptLabel(plan, id))
+      .join(', ');
+    const targetSuffix = simulationForm.targetIds.length > 2 ? ' y más' : '';
+
+    if (simulationForm.type === 'percent_adjustment') {
+      return `${simulationForm.operation === 'decrease' ? 'Reducir' : 'Incrementar'} ${targetLabel || 'los conceptos elegidos'}${targetSuffix} en ${simulationForm.percent}% desde ${formatYearMonthLabel(simulationForm.startYearMonth)} hasta ${formatYearMonthLabel(simulationForm.endYearMonth)}.`;
+    }
+
+    if (simulationForm.type === 'amount_adjustment') {
+      return `${simulationForm.operation === 'decrease' ? 'Reducir' : 'Agregar'} ${simulationForm.amount} a ${targetLabel || 'los conceptos elegidos'}${targetSuffix} con frecuencia ${FREQUENCIES.find((item) => item.value === simulationForm.frequency)?.label.toLowerCase() ?? 'mensual'}.`;
+    }
+
+    if (simulationForm.type === 'recurring_series') {
+      return `Crear un flujo recurrente de ${simulationForm.amount} sobre ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatYearMonthLabel(simulationForm.startYearMonth)}.`;
+    }
+
+    if (simulationForm.type === 'installment_plan') {
+      return `Distribuir ${simulationForm.amount} en ${simulationForm.installments} parcialidades para ${targetLabel || 'los conceptos elegidos'}${targetSuffix}.`;
+    }
+
+    if (simulationForm.type === 'timing_shift') {
+      return `Mover ${simulationForm.shiftRatio}% del flujo de ${targetLabel || 'los conceptos elegidos'}${targetSuffix} ${simulationForm.shiftMonths >= 0 ? `${simulationForm.shiftMonths} meses hacia adelante` : `${Math.abs(simulationForm.shiftMonths)} meses hacia atrás`}.`;
+    }
+
+    return `Pausar ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatYearMonthLabel(simulationForm.startYearMonth)} hasta ${formatYearMonthLabel(simulationForm.endYearMonth)}.`;
+  }, [plan, simulationForm]);
+
+  useEffect(() => {
+    const allowedTargetIds = new Set(dynamicTargetConfig.options.map((option) => option.id));
+    setSimulationForm((current) => {
+      const nextTargetIds = current.targetIds.filter((targetId) => allowedTargetIds.has(targetId));
+      const resolvedTargetIds = nextTargetIds.length > 0
+        ? nextTargetIds
+        : dynamicTargetConfig.defaultTargetIds;
+
+      if (
+        resolvedTargetIds.length === current.targetIds.length &&
+        resolvedTargetIds.every((targetId, index) => targetId === current.targetIds[index])
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        targetIds: resolvedTargetIds,
+      };
+    });
+  }, [dynamicTargetConfig]);
 
   const openNewProposal = () => {
     setEditingProposalId(null);
@@ -459,6 +658,9 @@ export default function ProposalCreator({
   const toggleTarget = (targetId: string) => {
     setSimulationForm((current) => {
       const exists = current.targetIds.includes(targetId);
+      const allowedTargetIds = new Set(dynamicTargetConfig.options.map((option) => option.id));
+      if (!allowedTargetIds.has(targetId)) return current;
+
       return {
         ...current,
         targetIds: exists
@@ -507,9 +709,33 @@ export default function ProposalCreator({
         </div>
       </div>
 
+      <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-3 gap-3">
+          <ContextPill
+            step="Paso 1"
+            title="Simulación"
+            value={activeProposal?.name ?? 'Elige o crea una simulación'}
+            helper="Es el contenedor donde guardas el análisis."
+          />
+          <ContextPill
+            step="Paso 2"
+            title="Escenario"
+            value={activeScenario && !isBaseScenario(activeScenario) ? activeScenario.name : 'Elige o crea un escenario'}
+            helper="Cada escenario junta propuestas distintas."
+          />
+          <ContextPill
+            step="Paso 3"
+            title="Propuestas"
+            value={isBaseScenario(activeScenario) ? '0 propuestas activas' : `${assignedSimulationIds.size} propuestas activas`}
+            helper="Marca las propuestas que quieres aplicar."
+          />
+        </div>
+      </div>
+
       <div className="grid grid-cols-[300px,minmax(0,1fr),420px] gap-5">
         <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
+            stepLabel="Paso 1"
             title="Base y Simulaciones"
             subtitle="El Escenario Base se mantiene fijo. Las simulaciones agrupan escenarios."
             actionLabel="Nueva simulación"
@@ -637,6 +863,7 @@ export default function ProposalCreator({
 
         <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
+            stepLabel="Paso 2"
             title="Escenarios"
             subtitle={activeProposal ? `Simulación activa: ${activeProposal.name}` : 'Selecciona una simulación para trabajar escenarios.'}
             actionLabel={activeProposal ? 'Nuevo escenario' : undefined}
@@ -730,6 +957,9 @@ export default function ProposalCreator({
           <div className="space-y-2">
             {proposalScenarios.map((scenario) => {
               const selected = activeScenario?.id === scenario.id;
+              const appliedProposalNames = scenario.simulationIds
+                .map((simulationId) => simulations.find((simulation) => simulation.id === simulationId)?.name)
+                .filter(Boolean) as string[];
               return (
                 <button
                   key={scenario.id}
@@ -756,6 +986,16 @@ export default function ProposalCreator({
                         <span>•</span>
                         <span>{scenario.horizonMonths} meses</span>
                       </div>
+                      {appliedProposalNames.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-[#6e6e73]">
+                          {appliedProposalNames.slice(0, 2).map((name) => (
+                            <Badge key={name}>{name}</Badge>
+                          ))}
+                          {appliedProposalNames.length > 2 && (
+                            <Badge>+{appliedProposalNames.length - 2} más</Badge>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-1">
                       <button
@@ -788,6 +1028,7 @@ export default function ProposalCreator({
 
         <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
+            stepLabel="Paso 3"
             title="Biblioteca de Propuestas"
             subtitle={isBaseScenario(activeScenario)
               ? 'Selecciona un escenario para activar propuestas.'
@@ -850,6 +1091,11 @@ export default function ProposalCreator({
                   <p className="mt-1">{simulationTypeMeta.description}</p>
                 </div>
               )}
+
+              <div className="rounded-xl border border-[#0071e3]/15 bg-[#e8f4fd]/65 p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-[#0071e3]">Vista rápida</p>
+                <p className="mt-1 text-[13px] text-[#1d1d1f]">{proposalPreview}</p>
+              </div>
 
               {!['timing_shift', 'pause_expense'].includes(simulationForm.type) && (
                 <div className="grid grid-cols-2 gap-3">
@@ -979,24 +1225,27 @@ export default function ProposalCreator({
                 />
               </Field>
 
-              <Field label="Categorías o conceptos afectados">
-                <div className="flex flex-wrap gap-2 rounded-xl border border-[#d2d2d7] bg-white p-2">
-                  {targetOptions.map((target) => {
-                    const selected = simulationForm.targetIds.includes(target.id);
-                    return (
-                      <button
-                        key={target.id}
-                        onClick={() => toggleTarget(target.id)}
-                        className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
-                          selected
-                            ? 'bg-[#0071e3] text-white'
-                            : 'bg-[#f5f5f7] text-[#6e6e73]'
-                        }`}
-                      >
-                        {target.label}
-                      </button>
-                    );
-                  })}
+              <Field label={dynamicTargetConfig.label}>
+                <div className="space-y-2">
+                  <p className="text-[12px] text-[#6e6e73]">{dynamicTargetConfig.helper}</p>
+                  <div className="flex flex-wrap gap-2 rounded-xl border border-[#d2d2d7] bg-white p-2">
+                    {dynamicTargetConfig.options.map((target) => {
+                      const selected = simulationForm.targetIds.includes(target.id);
+                      return (
+                        <button
+                          key={target.id}
+                          onClick={() => toggleTarget(target.id)}
+                          className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
+                            selected
+                              ? 'bg-[#0071e3] text-white'
+                              : 'bg-[#f5f5f7] text-[#6e6e73]'
+                          }`}
+                        >
+                          {target.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </Field>
 
@@ -1122,11 +1371,13 @@ function StepCard({
 }
 
 function SectionHeader({
+  stepLabel,
   title,
   subtitle,
   actionLabel,
   onAction,
 }: {
+  stepLabel?: string;
   title: string;
   subtitle: string;
   actionLabel?: string;
@@ -1135,6 +1386,9 @@ function SectionHeader({
   return (
     <div className="flex items-start justify-between gap-3">
       <div>
+        {stepLabel && (
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[#0071e3]">{stepLabel}</p>
+        )}
         <h2 className="text-[15px] font-semibold text-[#1d1d1f]">{title}</h2>
         <p className="mt-1 text-[12px] text-[#86868b]">{subtitle}</p>
       </div>
@@ -1147,6 +1401,27 @@ function SectionHeader({
           {actionLabel}
         </button>
       )}
+    </div>
+  );
+}
+
+function ContextPill({
+  step,
+  title,
+  value,
+  helper,
+}: {
+  step: string;
+  title: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-3">
+      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#0071e3]">{step}</p>
+      <p className="mt-1 text-[12px] font-medium text-[#6e6e73]">{title}</p>
+      <p className="mt-2 text-[14px] font-semibold text-[#1d1d1f]">{value}</p>
+      <p className="mt-1 text-[11px] text-[#86868b]">{helper}</p>
     </div>
   );
 }
