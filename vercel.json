@@ -1,0 +1,20 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/jde/:path*",
+      "destination": "https://JDE_PUBLIC_URL_HERE/JDEdwards/:path*"
+    },
+    {
+      "source": "/((?!assets/).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/jde/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
+  ]
+}
