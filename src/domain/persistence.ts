@@ -20,6 +20,7 @@ import {
 } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 import { buildSimulationEffects, ensureBaseScenario } from './simulationCompiler';
+import { DEFAULT_ACTIVE_KPI_IDS } from './kpiCatalog';
 
 export interface CXPRecord {
   cia: string;
@@ -57,6 +58,7 @@ export interface FlowSenseStore {
   proposals: Proposal[];
   scenarios: Scenario[];
   simulations: Simulation[];
+  activeKpiIds: string[];
   scenarioCellOverrides: ScenarioCellOverride[];
   activeProposalId: string | null;
   activeScenarioId: string | null;
@@ -285,6 +287,7 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
     proposals,
     scenarios,
     simulations,
+    activeKpiIds: [...DEFAULT_ACTIVE_KPI_IDS],
     scenarioCellOverrides,
     activeProposalId: null,
     activeScenarioId: BASE_SCENARIO_ID,
@@ -305,6 +308,7 @@ export function getDefaultStore(): FlowSenseStore {
     proposals: [],
     scenarios: ensureBaseScenario(null, []),
     simulations: [],
+    activeKpiIds: [...DEFAULT_ACTIVE_KPI_IDS],
     scenarioCellOverrides: [],
     activeProposalId: null,
     activeScenarioId: BASE_SCENARIO_ID,
@@ -349,7 +353,6 @@ function parseStoredPayload(raw: string): { version: number; data: unknown } | n
 }
 
 function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
-  const defaults = getDefaultStore();
   const plan = data.plan ?? null;
 
   const proposals = validateArray<Proposal>(data.proposals, 'proposals');
@@ -371,6 +374,9 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
     proposals,
     scenarios,
     simulations,
+    activeKpiIds: Array.isArray(data.activeKpiIds)
+      ? data.activeKpiIds.filter((value): value is string => typeof value === 'string')
+      : [...DEFAULT_ACTIVE_KPI_IDS],
     scenarioCellOverrides: validateArray<ScenarioCellOverride>(
       data.scenarioCellOverrides,
       'scenarioCellOverrides',

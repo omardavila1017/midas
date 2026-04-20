@@ -14,6 +14,8 @@ import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
 import Forecast from './components/Forecast';
+import KpiCenter from './components/KpiCenter';
+import { DEFAULT_ACTIVE_KPI_IDS } from './domain/kpiCatalog';
 // NetCashFlowDashboard disabled — needs real JDE data to be useful
 // import NetCashFlowDashboard from './components/NetCashFlowDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -46,6 +48,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
   ],
   plan: [
     { id: 'dashboard',  label: 'Dashboard',   icon: LayoutDashboard, needsPlan: true },
+    { id: 'kpis',       label: 'KPIs',        icon: Sliders },
     { id: 'forecast',   label: 'Pronóstico',  icon: LineChart, needsPlan: true },
     { id: 'scenarios',  label: 'Escenarios',  icon: FlaskConical, needsPlan: true },
   ],
@@ -54,7 +57,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'cobros', collections: 'cobros', netflow: 'cobros',
   providers: 'pagos', cxp: 'pagos', bancos: 'pagos',
-  dashboard: 'plan', forecast: 'plan', scenarios: 'plan',
+  dashboard: 'plan', kpis: 'plan', forecast: 'plan', scenarios: 'plan',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -82,6 +85,7 @@ export default function App() {
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
   const [forecastGranularity, setForecastGranularity] = useState<ForecastGranularity>('monthly');
+  const [activeKpiIds, setActiveKpiIds] = useState<string[]>([...DEFAULT_ACTIVE_KPI_IDS]);
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -128,6 +132,7 @@ export default function App() {
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
       if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
       if (stored.scenarioCellOverrides?.length) setScenarioCellOverrides(stored.scenarioCellOverrides);
+      if (stored.activeKpiIds) setActiveKpiIds(stored.activeKpiIds);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
     }
@@ -188,6 +193,7 @@ export default function App() {
       const store: FlowSenseStore = {
         plan, proposals, scenarios, providers, clients,
         simulations, activeProposalId, activeScenarioId,
+        activeKpiIds,
         assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
         scenarioCellOverrides,
         lastSaved: new Date().toISOString(),
@@ -202,6 +208,7 @@ export default function App() {
     simulations,
     activeProposalId,
     activeScenarioId,
+    activeKpiIds,
     providers,
     clients,
     assumptions,
@@ -555,6 +562,7 @@ export default function App() {
                 const json = exportStore({
                   plan, proposals, scenarios, providers, clients,
                   simulations, activeProposalId, activeScenarioId,
+                  activeKpiIds,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
                   scenarioCellOverrides,
                   lastSaved: new Date().toISOString(),
@@ -634,6 +642,23 @@ export default function App() {
               plan
                 ? <Dashboard plan={plan} proposals={proposals} />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Dashboard" />
+            )}
+            {activeTab === 'kpis' && (
+              <KpiCenter
+                clients={clients}
+                assumptions={assumptions}
+                confirmedPayments={confirmedPayments}
+                plan={plan}
+                proposals={proposals}
+                scenarios={scenarios}
+                simulations={simulations}
+                overrides={scenarioCellOverrides}
+                activeProposalId={activeProposalId}
+                activeScenarioId={activeScenarioId}
+                activeKpiIds={activeKpiIds}
+                onActiveKpiIdsChange={setActiveKpiIds}
+                defaultKpiIds={DEFAULT_ACTIVE_KPI_IDS}
+              />
             )}
             {activeTab === 'clients' && (
               <Clients
