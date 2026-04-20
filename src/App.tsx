@@ -690,22 +690,6 @@ export default function App() {
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Propuestas" />
             )}
-            {activeTab === 'simulator' && (
-              plan
-                ? <Simulator
-                    plan={plan}
-                    proposals={proposals}
-                    scenarios={scenarios}
-                    simulations={simulations}
-                    overrides={scenarioCellOverrides}
-                    activeProposalId={activeProposalId}
-                    activeScenarioId={activeScenarioId}
-                    onSelectProposal={selectProposal}
-                    onSelectScenario={selectScenario}
-                    onUpdateScenario={updateScenario}
-                  />
-                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Simulador" />
-            )}
             {activeTab === 'cxp' && (
               <CXP
                 records={cxpRecords}

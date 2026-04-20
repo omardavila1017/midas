@@ -10,15 +10,12 @@ import {
 } from 'recharts';
 import {
   Check,
-  ChevronDown,
-  ChevronUp,
   FlaskConical,
   Pencil,
   Plus,
   Trash2,
   X,
 } from 'lucide-react';
-import { hex } from '../theme';
 import {
   BASE_SCENARIO_ID,
   BASE_SCENARIO_NAME,
@@ -115,6 +112,62 @@ function formatYearMonthLabel(ym: string): string {
   return `${MONTHS[Math.max(0, Math.min(11, (Number(m) || 1) - 1))]} ${String(y).slice(2)}`;
 }
 
+function formatDateLabel(date: string): string {
+  if (!date) return 'sin fecha';
+  const [yearRaw, monthRaw, dayRaw] = date.split('-');
+  const year = Number(yearRaw);
+  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
+  const day = Number(dayRaw) || 1;
+  return `${day} ${MONTHS[monthIndex]} ${String(year).slice(2)}`;
+}
+
+function yearMonthFromDate(date: string): string {
+  return date.slice(0, 7);
+}
+
+function endOfMonthFromDate(date: string): string {
+  const yearMonth = yearMonthFromDate(date);
+  const [yearRaw, monthRaw] = yearMonth.split('-');
+  const year = Number(yearRaw);
+  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
+  const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  return `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
+}
+
+function firstOfMonth(date: string): string {
+  return `${yearMonthFromDate(date)}-01`;
+}
+
+function snapToMonday(date: string): string {
+  const current = new Date(`${date}T12:00:00Z`);
+  const weekday = current.getUTCDay();
+  const offset = weekday === 0 ? -6 : 1 - weekday;
+  current.setUTCDate(current.getUTCDate() + offset);
+  return current.toISOString().slice(0, 10);
+}
+
+function inferStartPrecision(simulation: Simulation): 'day' | 'week' | 'month' {
+  const startDate = simulation.startDate ?? `${simulation.startYearMonth ?? `${new Date().getFullYear()}-01`}-01`;
+  if (startDate.endsWith('-01')) return 'month';
+  if (snapToMonday(startDate) === startDate) return 'week';
+  return 'day';
+}
+
+function formatSimulationWindow(simulation: Simulation): string {
+  const startYearMonth = simulation.startYearMonth ?? yearMonthFromDate(simulation.startDate ?? `${new Date().getFullYear()}-01-01`);
+  const endYearMonth = simulation.endYearMonth ?? startYearMonth;
+  const startDate = simulation.startDate ?? `${startYearMonth}-01`;
+  const endDate = simulation.endDate ?? endOfMonthFromDate(`${endYearMonth}-01`);
+
+  if (startDate.endsWith('-01') && endOfMonthFromDate(endDate) === endDate) {
+    if (startYearMonth === endYearMonth) return formatYearMonthLabel(startYearMonth);
+    return `${formatYearMonthLabel(startYearMonth)} → ${formatYearMonthLabel(endYearMonth)}`;
+  }
+
+  if (startDate === endDate) return formatDateLabel(startDate);
+  return `${formatDateLabel(startDate)} → ${formatDateLabel(endDate)}`;
+}
+
 function parseCustomAllocation(input: string): number[] | undefined {
   const values = input.split(',').map(c => Number(c.trim())).filter(v => !isNaN(v) && v > 0);
   return values.length > 0 ? values : undefined;
@@ -160,8 +213,10 @@ interface AdjustmentForm {
   type: SimulationType;
   operation: SimulationOperation;
   targetIds: string[];
-  startYearMonth: string;
-  endYearMonth: string;
+  startDate: string;
+  endDate: string;
+  startPrecision: 'day' | 'week' | 'month';
+  assignedScenarioIds: string[];
   frequency: SimulationFrequency;
   amount: number;
   percent: number;
@@ -173,15 +228,17 @@ interface AdjustmentForm {
   comments: string;
 }
 
-function defaultAdjustmentForm(plan: FlowPlan): AdjustmentForm {
+function defaultAdjustmentForm(plan: FlowPlan, assignedScenarioIds: string[] = []): AdjustmentForm {
   return {
     name: '', description: '',
     category: 'Incremento de Ingresos',
     type: 'percent_adjustment',
     operation: 'increase',
     targetIds: [ROLE_TARGET_INCOME],
-    startYearMonth: `${plan.year}-01`,
-    endYearMonth: `${plan.year}-12`,
+    startDate: `${plan.year}-01-01`,
+    endDate: `${plan.year}-12-31`,
+    startPrecision: 'month',
+    assignedScenarioIds,
     frequency: 'monthly',
     amount: 0, percent: 10, installments: 4,
     customAllocationText: '', shiftMonths: 1, shiftRatio: 100,
@@ -191,6 +248,8 @@ function defaultAdjustmentForm(plan: FlowPlan): AdjustmentForm {
 
 function buildSimulationFromForm(plan: FlowPlan, form: AdjustmentForm, existing?: Simulation): Simulation {
   const ts = now();
+  const startDate = form.startDate;
+  const safeEndDate = form.endDate < startDate ? startDate : form.endDate;
   const sim: Simulation = {
     id: existing?.id ?? `simulation-${Date.now()}`,
     name: form.name.trim(),
@@ -198,8 +257,10 @@ function buildSimulationFromForm(plan: FlowPlan, form: AdjustmentForm, existing?
     category: form.category,
     type: form.type,
     targetIds: form.targetIds,
-    startYearMonth: form.startYearMonth,
-    endYearMonth: form.endYearMonth,
+    startYearMonth: yearMonthFromDate(startDate),
+    endYearMonth: yearMonthFromDate(safeEndDate),
+    startDate,
+    endDate: safeEndDate,
     frequency: form.type === 'timing_shift' || form.type === 'pause_expense' ? 'monthly' : form.frequency,
     operation: form.type === 'pause_expense' ? 'decrease' : form.operation,
     amount: form.type === 'percent_adjustment' || form.type === 'pause_expense' || form.type === 'timing_shift' ? undefined : form.amount,
@@ -242,6 +303,19 @@ export default function ScenarioWorkbench({
   const activeProposal = proposals.find(p => p.id === activeProposalId) ?? null;
   const activeScenario = scenarios.find(s => s.id === activeScenarioId) ?? baseScenario ?? null;
   const effectiveProposal = isBaseScenario(activeScenario) ? VIRTUAL_BASE : (activeProposal ?? VIRTUAL_BASE);
+  const editableScenarios = useMemo(
+    () => scenarios.filter((scenario) => !isBaseScenario(scenario)),
+    [scenarios],
+  );
+  const scenarioLabelsById = useMemo(() => new Map(
+    editableScenarios.map((scenario) => {
+      const proposalName = proposals.find((proposal) => proposal.id === scenario.proposalId)?.name?.trim() ?? '';
+      const label = proposalName && proposalName !== scenario.name
+        ? `${proposalName} · ${scenario.name}`
+        : scenario.name;
+      return [scenario.id, label];
+    }),
+  ), [editableScenarios, proposals]);
 
   // For each proposal, get the first (auto) scenario
   const scenarioForProposal = (proposalId: string) =>
@@ -297,6 +371,30 @@ export default function ScenarioWorkbench({
     });
   }, [targetConfig]);
 
+  const resolveAssignedScenarioIds = (simulationId: string): string[] => (
+    editableScenarios
+      .filter((scenario) => scenario.simulationIds.includes(simulationId))
+      .map((scenario) => scenario.id)
+  );
+
+  const syncSimulationAssignments = (simulationId: string, nextScenarioIds: string[]) => {
+    const selectedIds = new Set(nextScenarioIds);
+
+    editableScenarios.forEach((scenario) => {
+      const exists = scenario.simulationIds.includes(simulationId);
+      const shouldExist = selectedIds.has(scenario.id);
+      if (exists === shouldExist) return;
+
+      onUpdateScenario({
+        ...scenario,
+        simulationIds: shouldExist
+          ? [...new Set([...scenario.simulationIds, simulationId])]
+          : scenario.simulationIds.filter((id) => id !== simulationId),
+        updatedAt: now(),
+      });
+    });
+  };
+
   /* ── Handlers ── */
 
   const createScenario = () => {
@@ -334,7 +432,10 @@ export default function ScenarioWorkbench({
 
   const openNewAdjustment = () => {
     setEditingId(null);
-    setForm(defaultAdjustmentForm(plan));
+    setForm(defaultAdjustmentForm(
+      plan,
+      activeScenario && !isBaseScenario(activeScenario) ? [activeScenario.id] : [],
+    ));
     setPanelOpen(true);
   };
 
@@ -346,8 +447,10 @@ export default function ScenarioWorkbench({
       type: sim.type ?? 'amount_adjustment',
       operation: sim.operation ?? 'increase',
       targetIds: sim.targetIds?.length ? sim.targetIds : [ROLE_TARGET_INCOME],
-      startYearMonth: sim.startYearMonth ?? `${plan.year}-01`,
-      endYearMonth: sim.endYearMonth ?? `${plan.year}-12`,
+      startDate: sim.startDate ?? `${sim.startYearMonth ?? `${plan.year}-01`}-01`,
+      endDate: sim.endDate ?? endOfMonthFromDate(`${sim.endYearMonth ?? sim.startYearMonth ?? `${plan.year}-12`}-01`),
+      startPrecision: inferStartPrecision(sim),
+      assignedScenarioIds: resolveAssignedScenarioIds(sim.id),
       frequency: sim.frequency ?? 'monthly',
       amount: sim.amount ?? 0,
       percent: Math.abs((sim.percent ?? 0) * 100),
@@ -362,7 +465,7 @@ export default function ScenarioWorkbench({
   };
 
   const saveAdjustment = () => {
-    if (!form.name.trim() || form.targetIds.length === 0) return;
+    if (!form.name.trim() || form.targetIds.length === 0 || form.assignedScenarioIds.length === 0) return;
     const existing = editingId ? simulations.find(s => s.id === editingId) : undefined;
     const sim = buildSimulationFromForm(plan, form, existing);
 
@@ -370,15 +473,8 @@ export default function ScenarioWorkbench({
       onUpdateSimulation(sim);
     } else {
       onAddSimulation(sim);
-      // Auto-assign to active scenario
-      if (activeScenario && !isBaseScenario(activeScenario)) {
-        onUpdateScenario({
-          ...activeScenario,
-          simulationIds: [...activeScenario.simulationIds, sim.id],
-          updatedAt: now(),
-        });
-      }
     }
+    syncSimulationAssignments(sim.id, form.assignedScenarioIds);
     setPanelOpen(false);
     setEditingId(null);
   };
@@ -402,6 +498,15 @@ export default function ScenarioWorkbench({
       targetIds: prev.targetIds.includes(id)
         ? prev.targetIds.filter(t => t !== id)
         : [...prev.targetIds, id],
+    }));
+  };
+
+  const toggleAssignedScenario = (scenarioId: string) => {
+    setForm((prev) => ({
+      ...prev,
+      assignedScenarioIds: prev.assignedScenarioIds.includes(scenarioId)
+        ? prev.assignedScenarioIds.filter((id) => id !== scenarioId)
+        : [...prev.assignedScenarioIds, scenarioId],
     }));
   };
 
@@ -555,7 +660,7 @@ export default function ScenarioWorkbench({
             <p className="text-[12px] text-[var(--gray-400)]">
               {isBase
                 ? 'Selecciona un escenario para ver y editar sus ajustes financieros.'
-                : 'Cada ajuste modifica el pronóstico. Agrega, edita o elimina según necesites.'}
+                : 'Cada ajuste modifica el pronóstico. Puedes reutilizarlo en varios escenarios y definir si arranca por mes, semana o día.'}
             </p>
           </div>
           {!isBase && (
@@ -593,6 +698,8 @@ export default function ScenarioWorkbench({
             {assignedSimulations.map(sim => {
               const targetLabel = sim.targetIds?.slice(0, 2).map(id => resolveConceptLabel(plan, id)).join(', ') ?? '';
               const typeMeta = SIMULATION_TYPES.find(t => t.value === sim.type);
+              const assignedScenarioLabels = resolveAssignedScenarioIds(sim.id)
+                .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
               return (
                 <div key={sim.id} className="flex items-center gap-4 rounded-xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)] px-4 py-3 group">
                   <div className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[sim.category] }} />
@@ -604,7 +711,10 @@ export default function ScenarioWorkbench({
                       <Badge>{targetLabel}{(sim.targetIds?.length ?? 0) > 2 ? ' +' : ''}</Badge>
                       {sim.percent != null && <Badge>{Math.round(Math.abs(sim.percent) * 100)}%</Badge>}
                       {sim.amount != null && <Badge>${sim.amount.toLocaleString()}</Badge>}
-                      <Badge>{formatYearMonthLabel(sim.startYearMonth)} → {formatYearMonthLabel(sim.endYearMonth ?? sim.startYearMonth)}</Badge>
+                      <Badge>{formatSimulationWindow(sim)}</Badge>
+                      {assignedScenarioLabels.length > 1 && (
+                        <Badge>{`Compartido en ${assignedScenarioLabels.length} escenarios`}</Badge>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
@@ -614,7 +724,7 @@ export default function ScenarioWorkbench({
                     <button onClick={() => removeAdjustmentFromScenario(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Quitar del escenario">
                       <X className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => deleteAdjustment(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Eliminar permanentemente">
+                    <button onClick={() => deleteAdjustment(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Eliminar permanentemente de todos los escenarios">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -792,30 +902,125 @@ export default function ScenarioWorkbench({
               )}
 
               {/* Period + Frequency */}
-              {form.type !== 'pause_expense' && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-[12px] font-medium text-[var(--gray-500)]">Precisión de inicio:</span>
+                  <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-0.5 gap-0.5">
+                    {(['day', 'week', 'month'] as const).map((precision) => (
+                      <button
+                        key={precision}
+                        type="button"
+                        onClick={() => setForm((current) => {
+                          let newStart = current.startDate;
+                          if (precision === 'week') newStart = snapToMonday(current.startDate);
+                          if (precision === 'month') newStart = firstOfMonth(current.startDate);
+                          return {
+                            ...current,
+                            startPrecision: precision,
+                            startDate: newStart,
+                            endDate: current.endDate < newStart ? newStart : current.endDate,
+                          };
+                        })}
+                        className={`rounded-lg px-3 py-1 text-[11px] font-medium transition ${
+                          form.startPrecision === precision
+                            ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                            : 'text-[var(--gray-500)]'
+                        }`}
+                      >
+                        {precision === 'day' ? 'Día' : precision === 'week' ? 'Semana' : 'Mes'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="grid grid-cols-3 gap-4">
-                  <Field label="Inicio">
-                    <input type="month" value={form.startYearMonth}
-                      onChange={e => setForm(p => ({ ...p, startYearMonth: e.target.value }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
+                  <Field label={form.startPrecision === 'day' ? 'Inicia el día' : form.startPrecision === 'week' ? 'Inicia la semana del' : 'Inicia en el mes'}>
+                    {form.startPrecision === 'month' ? (
+                      <input
+                        type="month"
+                        value={form.startDate.slice(0, 7)}
+                        onChange={(event) => {
+                          const nextStart = firstOfMonth(`${event.target.value}-01`);
+                          setForm((current) => ({
+                            ...current,
+                            startDate: nextStart,
+                            endDate: current.endDate < nextStart ? nextStart : current.endDate,
+                          }));
+                        }}
+                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                      />
+                    ) : (
+                      <input
+                        type="date"
+                        value={form.startDate}
+                        onChange={(event) => {
+                          let nextStart = event.target.value;
+                          if (form.startPrecision === 'week') nextStart = snapToMonday(nextStart);
+                          setForm((current) => ({
+                            ...current,
+                            startDate: nextStart,
+                            endDate: current.endDate < nextStart ? nextStart : current.endDate,
+                          }));
+                        }}
+                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                      />
+                    )}
                   </Field>
-                  <Field label="Fin">
-                    <input type="month" value={form.endYearMonth}
-                      onChange={e => setForm(p => ({ ...p, endYearMonth: e.target.value }))}
+                  <Field label="Termina en">
+                    <input
+                      type="date"
+                      value={form.endDate}
+                      min={form.startDate}
+                      onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))}
                       className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     />
                   </Field>
                   <Field label="Frecuencia">
-                    <select value={form.frequency}
-                      onChange={e => setForm(p => ({ ...p, frequency: e.target.value as SimulationFrequency }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                    <select
+                      value={form.frequency}
+                      disabled={form.type === 'timing_shift' || form.type === 'pause_expense'}
+                      onChange={(event) => setForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] disabled:bg-[var(--surface-alt)] disabled:text-[var(--gray-400)]"
                     >
-                      {FREQUENCIES.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                      {FREQUENCIES.map((frequency) => <option key={frequency.value} value={frequency.value}>{frequency.label}</option>)}
                     </select>
                   </Field>
                 </div>
-              )}
+                {form.startPrecision === 'week' && (
+                  <p className="text-[11px] text-[var(--gray-400)]">
+                    El ajuste empieza el lunes {form.startDate}. Si eliges cualquier otro día se ajusta al inicio de esa semana.
+                  </p>
+                )}
+              </div>
+
+              {/* Scenario assignments */}
+              <Field label="¿En qué escenarios aplica?">
+                <div className="space-y-2">
+                  <p className="text-[12px] text-[var(--gray-500)]">
+                    Selecciona uno o varios escenarios para reutilizar este ajuste sin duplicarlo.
+                  </p>
+                  <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-3">
+                    {editableScenarios.map((scenario) => {
+                      const selected = form.assignedScenarioIds.includes(scenario.id);
+                      const label = scenarioLabelsById.get(scenario.id) ?? scenario.name;
+                      return (
+                        <button
+                          key={scenario.id}
+                          type="button"
+                          onClick={() => toggleAssignedScenario(scenario.id)}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
+                            selected
+                              ? 'bg-[var(--primary)] text-white'
+                              : 'bg-white text-[var(--gray-500)] border border-[var(--gray-200)]'
+                          }`}
+                        >
+                          {selected && <Check className="w-3.5 h-3.5" />}
+                          <span>{label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </Field>
 
               {/* Targets */}
               <Field label="¿A qué conceptos aplica?">
@@ -869,7 +1074,7 @@ export default function ScenarioWorkbench({
               </button>
               <button
                 onClick={saveAdjustment}
-                disabled={!form.name.trim() || form.targetIds.length === 0}
+                disabled={!form.name.trim() || form.targetIds.length === 0 || form.assignedScenarioIds.length === 0}
                 className="rounded-xl bg-[#1d1d1f] px-5 py-2.5 text-[13px] font-medium text-white disabled:opacity-40"
               >
                 {editingId ? 'Guardar cambios' : 'Agregar ajuste'}
