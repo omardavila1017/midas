@@ -753,6 +753,24 @@ export default function App() {
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Propuestas" />
             )}
+            {activeTab === 'forecast' && (
+              plan
+                ? <Forecast
+                    plan={plan}
+                    proposals={proposals}
+                    scenarios={scenarios}
+                    simulations={simulations}
+                    activeProposalId={activeProposalId}
+                    activeScenarioId={activeScenarioId}
+                    overrides={scenarioCellOverrides}
+                    granularity={forecastGranularity}
+                    onGranularityChange={setForecastGranularity}
+                    onSelectProposal={selectProposal}
+                    onSelectScenario={selectScenario}
+                    onOverridesChange={setScenarioCellOverrides}
+                  />
+                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Pronóstico" />
+            )}
             {/* Simulator tab removed — functionality lives in ScenarioWorkbench */}
             {activeTab === 'cxp' && (
               <CXP
