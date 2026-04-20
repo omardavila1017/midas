@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   Upload as UploadIcon,
   FileSpreadsheet,
@@ -18,8 +18,9 @@ import {
   Filter,
   RotateCcw,
   Database,
+  RefreshCw,
 } from 'lucide-react';
-import { fetchAgedBalances, JdeApiError } from '../services/jde';
+import { fetchAgedBalances, JdeApiError, type Company } from '../services/jde';
 import {
   BarChart,
   Bar,
@@ -946,39 +947,317 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
 };
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Main CXP Component
+   Main CXP Component — per-cia cache + auto-fetch
    ═══════════════════════════════════════════════════════════════════════ */
 
 interface CXPProps {
-  records?: CXPRecord[];
-  onRecordsChange?: (records: CXPRecord[]) => void;
-  selectedCia?: string;
+  records: CXPRecord[];
+  loadedCias: Record<string, string>;
+  companies: Company[];
+  selectedCia: string;
+  onMergeCia: (cia: string, records: CXPRecord[]) => void;
+  onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
+  onReset: () => void;
 }
 
-const CXP = ({ records: externalRecords, onRecordsChange, selectedCia }: CXPProps) => {
-  const [view, setView] = useState<CXPView>(externalRecords && externalRecords.length > 0 ? 'dashboard' : 'upload');
-  const [records, setRecords] = useState<CXPRecord[]>(externalRecords || []);
+const CXP = ({
+  records,
+  loadedCias,
+  companies,
+  selectedCia,
+  onMergeCia,
+  onReplaceAll,
+  onReset,
+}: CXPProps) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showCsv, setShowCsv] = useState(false);
+  const csvInput = useRef<HTMLInputElement>(null);
+  const autoFetchAttempted = useRef<Set<string>>(new Set());
 
-  const handleLoaded = useCallback((data: CXPRecord[]) => {
-    setRecords(data);
-    onRecordsChange?.(data);
-    setView('dashboard');
-  }, [onRecordsChange]);
+  const activeCias = useMemo(
+    () => companies.filter(c => c.activa !== false).map(c => c.cia),
+    [companies],
+  );
+  const loadedCiaList = useMemo(() => Object.keys(loadedCias), [loadedCias]);
 
-  const handleReset = useCallback(() => {
-    setRecords([]);
-    onRecordsChange?.([]);
-    setView('upload');
-  }, [onRecordsChange]);
+  // Visible records = filtered by header's selectedCia
+  const visibleRecords = useMemo(() => {
+    if (selectedCia === 'all') return records;
+    return records.filter(r => r.cia === selectedCia);
+  }, [records, selectedCia]);
 
-  if (view === 'upload') {
+  const hasData = visibleRecords.length > 0;
+  const isCurrentCiaLoaded = selectedCia === 'all'
+    ? loadedCiaList.length > 0
+    : loadedCias[selectedCia] !== undefined;
+
+  const loadSingle = useCallback(async (cia: string) => {
+    setLoading(true); setError(null);
+    try {
+      const data = await fetchAgedBalances({ cia });
+      onMergeCia(cia, data as CXPRecord[]);
+    } catch (e) {
+      if (e instanceof JdeApiError) {
+        const hint = e.status === 401 ? ' — revisa VITE_JDE_TOKEN en .env.local' : '';
+        setError(`JDE ${e.status}: ${e.message}${hint}`);
+      } else {
+        setError(e instanceof Error ? e.message : 'Error al consultar JDE');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [onMergeCia]);
+
+  const loadAll = useCallback(async () => {
+    if (activeCias.length === 0) {
+      setError('No hay compañías activas en el catálogo.');
+      return;
+    }
+    setLoading(true); setError(null);
+    try {
+      const results = await Promise.allSettled(
+        activeCias.map(cia => fetchAgedBalances({ cia })),
+      );
+      const merged: CXPRecord[] = [];
+      const succeededCias: string[] = [];
+      const failures: { cia: string; reason: string }[] = [];
+      results.forEach((r, i) => {
+        const cia = activeCias[i];
+        if (r.status === 'fulfilled') {
+          merged.push(...(r.value as CXPRecord[]));
+          succeededCias.push(cia);
+        } else {
+          const reason = r.reason instanceof JdeApiError
+            ? `${r.reason.status}: ${r.reason.message}`
+            : (r.reason instanceof Error ? r.reason.message : String(r.reason));
+          failures.push({ cia, reason });
+        }
+      });
+      if (succeededCias.length > 0) {
+        onReplaceAll(merged, succeededCias);
+      }
+      if (failures.length > 0) {
+        const summary = failures.slice(0, 3).map(f => `${f.cia} (${f.reason})`).join('; ');
+        const more = failures.length > 3 ? ` y ${failures.length - 3} más` : '';
+        setError(`Fallaron ${failures.length}/${activeCias.length}: ${summary}${more}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [activeCias, onReplaceAll]);
+
+  // Auto-fetch on cia change when we have a token and the cia isn't cached yet.
+  useEffect(() => {
+    if (selectedCia === 'all') return;
+    if (loadedCias[selectedCia]) return;
+    if (autoFetchAttempted.current.has(selectedCia)) return;
+    if (loading) return;
+    autoFetchAttempted.current.add(selectedCia);
+    loadSingle(selectedCia);
+  }, [selectedCia, loadedCias, loading, loadSingle]);
+
+  // Allow re-attempting auto-fetch after a manual reset.
+  useEffect(() => {
+    if (loadedCiaList.length === 0 && !loading) {
+      autoFetchAttempted.current.clear();
+    }
+  }, [loadedCiaList.length, loading]);
+
+  const refresh = useCallback(() => {
+    if (selectedCia === 'all') {
+      loadAll();
+    } else {
+      loadSingle(selectedCia);
+    }
+  }, [selectedCia, loadAll, loadSingle]);
+
+  const handleCsvFile = useCallback(async (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      setError('Solo archivos .csv');
+      return;
+    }
+    setLoading(true); setError(null);
+    try {
+      const text = await file.text();
+      const recs = parseCXP(text);
+      const ciasInCsv = Array.from(new Set(recs.map(r => r.cia).filter(Boolean)));
+      if (ciasInCsv.length > 0) {
+        onReplaceAll(recs, ciasInCsv);
+      }
+      setShowCsv(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al procesar');
+    } finally {
+      setLoading(false);
+    }
+  }, [onReplaceAll]);
+
+  const scopeLabel = selectedCia === 'all'
+    ? (loadedCiaList.length > 0
+        ? `Consolidado · ${loadedCiaList.length} compañía${loadedCiaList.length !== 1 ? 's' : ''}`
+        : 'Todas las compañías')
+    : `Compañía ${selectedCia}`;
+
+  const lastSyncLabel = selectedCia === 'all'
+    ? (loadedCiaList.length > 0 ? 'Última sincronización por compañía' : null)
+    : (loadedCias[selectedCia]
+        ? `Sincronizado ${new Date(loadedCias[selectedCia]).toLocaleString('es-MX')}`
+        : null);
+
+  const missingActiveCias = selectedCia === 'all'
+    ? activeCias.filter(c => !loadedCias[c])
+    : [];
+
+  // ── Empty state (no data for current scope) ──
+  if (!hasData && !isCurrentCiaLoaded) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center p-6">
-        <CXPUpload onDataLoaded={handleLoaded} selectedCia={selectedCia} />
+        <div className="w-full max-w-3xl mx-auto">
+          <div className="text-center mb-8">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200/50">
+              <Clock className="text-white" size={26} />
+            </div>
+            <h1 className="text-[28px] font-bold text-[#1d1d1f] tracking-tight">Cuentas por Pagar</h1>
+            <p className="text-[15px] text-[#86868b] mt-1">Antigüedad de saldos · {scopeLabel}</p>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/40 p-8">
+            {loading ? (
+              <div className="text-center py-14">
+                <Loader2 className="w-8 h-8 text-[#0071e3] animate-spin mx-auto mb-3" />
+                <p className="text-[15px] font-medium text-[#1d1d1f]">
+                  {selectedCia === 'all'
+                    ? `Consultando JDE para ${activeCias.length} compañías…`
+                    : `Consultando JDE (compañía ${selectedCia})…`}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="border-2 border-[#0071e3]/30 bg-[#f5fbff] rounded-2xl p-10 text-center hover:border-[#0071e3] hover:bg-[#e8f4fd] transition-all">
+                  <Database className="w-10 h-10 mx-auto mb-3 text-[#0071e3]" />
+                  <p className="text-[15px] font-semibold text-[#1d1d1f]">Consultar desde JDE</p>
+                  <p className="text-[12px] text-[#86868b] mt-1">{scopeLabel}</p>
+                  <button
+                    onClick={() => selectedCia === 'all' ? loadAll() : loadSingle(selectedCia)}
+                    disabled={loading || (selectedCia === 'all' && activeCias.length === 0)}
+                    className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[#0071e3] text-white text-[13.5px] font-medium hover:bg-[#0077ed] shadow-sm shadow-[#0071e3]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    <Database className="w-4 h-4" />
+                    {selectedCia === 'all' ? 'Consultar todas' : 'Consultar antigüedad'}
+                  </button>
+                </div>
+
+                <div
+                  onClick={() => csvInput.current?.click()}
+                  className="border-2 border-dashed border-[#d2d2d7] rounded-2xl p-10 text-center cursor-pointer hover:border-[#0071e3] hover:bg-[#fbfbfd] transition-all"
+                >
+                  <FileSpreadsheet className="w-10 h-10 text-[#86868b] mx-auto mb-3" />
+                  <p className="text-[15px] font-semibold text-[#1d1d1f]">Subir CSV</p>
+                  <p className="text-[13px] text-[#86868b] mt-1">Opcional · si JDE no está disponible</p>
+                  <input
+                    ref={csvInput} type="file" accept=".csv" className="hidden"
+                    onChange={e => e.target.files?.[0] && handleCsvFile(e.target.files[0])}
+                  />
+                </div>
+              </div>
+            )}
+
+            {error && !loading && (
+              <div className="mt-4 bg-[#fff5f5] border border-red-100 rounded-xl p-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="text-[#ff3b30] flex-shrink-0 mt-0.5" size={18} />
+                  <div className="flex-1">
+                    <p className="text-[13px] font-semibold text-[#1d1d1f]">Error al consultar JDE</p>
+                    <p className="text-[12px] text-[#6e6e73] mt-1">{error}</p>
+                    <button
+                      onClick={refresh}
+                      className="mt-2 text-[12px] font-medium text-[#0071e3] hover:text-[#0077ed]"
+                    >
+                      Intentar de nuevo
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     );
   }
-  return <CXPDashboard records={records} onReset={handleReset} />;
+
+  // ── Dashboard view ──
+  return (
+    <div className="space-y-4">
+      {/* Scope + actions bar */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#e8f4fd] border border-[#0071e3]/20 text-[12px] font-medium text-[#0071e3]">
+            <Building2 className="w-3.5 h-3.5" />
+            {scopeLabel}
+          </div>
+          {lastSyncLabel && (
+            <span className="text-[11px] text-[#86868b]">{lastSyncLabel}</span>
+          )}
+          {missingActiveCias.length > 0 && !loading && (
+            <button
+              onClick={loadAll}
+              className="text-[11px] font-medium text-[#0071e3] hover:text-[#0077ed] underline underline-offset-2"
+              title={`Faltan: ${missingActiveCias.join(', ')}`}
+            >
+              Completar {missingActiveCias.length} faltantes
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={refresh}
+            disabled={loading}
+            className="flex items-center gap-1.5 text-[12px] text-[#6e6e73] hover:text-[#0071e3] disabled:opacity-40 transition"
+          >
+            {loading
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <RefreshCw className="w-3.5 h-3.5" />}
+            Actualizar
+          </button>
+          <button
+            onClick={() => csvInput.current?.click()}
+            className="flex items-center gap-1.5 text-[12px] text-[#6e6e73] hover:text-[#0071e3] transition"
+          >
+            <UploadIcon className="w-3.5 h-3.5" />
+            Subir CSV
+          </button>
+          <button
+            onClick={onReset}
+            className="flex items-center gap-1.5 text-[12px] text-[#86868b] hover:text-[#ff3b30] transition"
+          >
+            <X className="w-3.5 h-3.5" />
+            Limpiar
+          </button>
+          <input
+            ref={csvInput} type="file" accept=".csv" className="hidden"
+            onChange={e => e.target.files?.[0] && handleCsvFile(e.target.files[0])}
+          />
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-[#fff5f5] border border-red-100 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[12.5px] text-[#ff3b30] font-medium">
+            <AlertCircle className="w-3.5 h-3.5" /> {error}
+          </div>
+          <button
+            onClick={() => setError(null)}
+            className="text-[11px] text-[#6e6e73] hover:text-[#ff3b30]"
+          >
+            Cerrar
+          </button>
+        </div>
+      )}
+
+      <CXPDashboard records={visibleRecords} onReset={onReset} />
+    </div>
+  );
 };
 
 export default CXP;
