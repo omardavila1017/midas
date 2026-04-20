@@ -4,7 +4,7 @@
 
 Este archivo resume el contexto operativo real de `flowsense` para cualquier agente que vaya a tocar el proyecto.
 
-No asumas que `README.md` o `ARCHITECTURE.md` están totalmente actualizados: hoy contienen partes históricas del proyecto. La fuente de verdad del comportamiento actual está en:
+`README.md` y `ARCHITECTURE.md` ya fueron alineados con el estado actual del repo, pero el código sigue siendo la fuente final de verdad. Los archivos más importantes para validar comportamiento son:
 
 - `src/App.tsx`
 - `src/types.ts`

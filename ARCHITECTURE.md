@@ -2,238 +2,526 @@
 
 ## Overview
 
-FlowSense is a React-based cash flow analysis platform for Mexican transportation companies. It provides Excel upload, interactive dashboards with drill-down capabilities, proposal management, and scenario simulation.
+FlowSense es una SPA en React + Vite para analizar flujo de efectivo, proyectar escenarios y comparar decisiones financieras antes de ejecutarlas.
 
-## Core Data Flow
+El proyecto mezcla tres tipos de capacidad:
 
-```
-Excel Upload → FlowPlan → Dashboard (visualization)
-           ↓
-           ├→ ProposalCreator (create improvements)
-           │     ↓
-           └→ Simulator (combine & test scenarios)
-```
+1. operación diaria:
+   - clientes
+   - cobranza
+   - proveedores
+   - CXP
+   - bancos
+2. planeación:
+   - dashboard del plan
+   - simulaciones, escenarios y propuestas
+3. forecast:
+   - P&L
+   - flujo de caja
+   - drivers
 
-## Component Hierarchy
+## Navegación principal
 
-### App.tsx (Root)
-- **State**: plan, proposals, scenarios, activeTab
-- **Role**: Layout shell, tab management, state orchestration
-- **Children**: Upload | Dashboard | ProposalCreator | Simulator
+La navegación está centralizada en `src/App.tsx`.
 
-### Upload Component
-**Input**: Excel file
-**Output**: FlowPlan object
-**Responsibilities**:
-- File validation & parsing (xlsx)
-- Extract planning period & initial cash
-- Build hierarchical concept tree
-- Generate 52-week dates + monthly aggregation
+Secciones:
 
-**Expected Props**:
-```typescript
-interface UploadProps {
-  onPlanLoaded: (plan: FlowPlan) => void;
-}
-```
+- `Cobros`
+  - `Clientes`
+  - `Cobranza`
+  - `Flujo`
+- `Pagos`
+  - `Proveedores`
+  - `CXP`
+  - `Bancos`
+- `Plan`
+  - `Dashboard`
+  - `Propuestas`
+  - `Simulador`
+- `Pronóstico`
+  - `P&L`
+  - `Flujo de Caja`
+  - `Drivers`
 
-### Dashboard Component
-**Input**: FlowPlan, Proposal[]
-**Output**: None (display-only)
-**Responsibilities**:
-- Tree visualization of concepts
-- Month/week selection
-- Drill-down into subcategories
-- KPI cards (cash balance trend, top inflows/outflows)
-- Monthly bar/line charts
-- Proposal impact overlay
+El shell también administra:
 
-**Expected Props**:
-```typescript
-interface DashboardProps {
-  plan: FlowPlan;
-  proposals: Proposal[];
-}
-```
+- selector de compañía JDE
+- carga de plan
+- exportación del store
+- persistencia en `localStorage`
 
-### ProposalCreator Component
-**Input**: FlowPlan, Proposal[]
-**Output**: New/updated Proposal objects
-**Responsibilities**:
-- Proposal form (category, percentage, probability, distribution)
-- Automatic impact calculation from FlowPlan data
-- List view with edit/delete
-- Status management (Pending → In Progress → Approved)
+## Arquitectura de estado
 
-**Expected Props**:
-```typescript
-interface ProposalCreatorProps {
-  plan: FlowPlan;
-  proposals: Proposal[];
-  onAdd: (proposal: Proposal) => void;
-  onUpdate: (proposal: Proposal) => void;
-  onDelete: (id: string) => void;
-}
-```
+El estado global sigue en `App.tsx` con `useState`.
 
-### Simulator Component
-**Input**: FlowPlan, Proposal[], Scenario[]
-**Output**: Scenario objects + combined impact visualization
-**Responsibilities**:
-- Checkboxes to select which proposals apply
-- Combined cash flow projection
-- Before/after comparison
-- Save scenarios with names
-- Compare multiple scenarios side-by-side
+### Estado principal
 
-**Expected Props**:
-```typescript
-interface SimulatorProps {
-  plan: FlowPlan;
-  proposals: Proposal[];
-  scenarios: Scenario[];
-  onSaveScenario: (scenario: Scenario) => void;
-}
-```
+- `plan`
+- `proposals`
+- `scenarios`
+- `simulations`
+- `scenarioCellOverrides`
+- `activeProposalId`
+- `activeScenarioId`
+- `providers`
+- `clients`
+- `assumptions`
+- `confirmedPayments`
+- `cxpRecords`
+- `cxpLoadedCias`
 
-## Data Structures
+### Estado de integración JDE
+
+- `companies`
+- `selectedCia`
+- `companiesLoading`
+- `companiesError`
+- `bankStatements`
+- `bankLastQuery`
+
+### Persistencia
+
+La capa de persistencia está en `src/domain/persistence.ts`.
+
+Responsabilidades:
+
+- cargar store desde `localStorage`
+- normalizar stores incompletos
+- migrar stores legacy
+- guardar automáticamente cambios
+- importar y exportar estado completo
+
+## Semántica de negocio actual
+
+Esta parte es crítica porque la UI y los tipos internos no coinciden completamente.
+
+### Cómo lo ve el usuario
+
+- `Simulación`: contenedor superior del análisis
+- `Escenario`: combinación guardada dentro de una simulación
+- `Propuesta`: ajuste financiero reusable aplicado a escenarios
+- `Escenario Base`: forecast original y punto de comparación
+
+### Cómo está tipado hoy
+
+- `Proposal` = simulación
+- `Scenario` = escenario
+- `Simulation` = propuesta
+
+Además:
+
+- `Scenario.simulationIds` guarda IDs de propuestas
+- `EvaluatedCell.simulationContributions` representa contribuciones de propuestas
+
+Este desajuste es deuda técnica conocida. La UI ya está corregida, pero el código interno todavía conserva los nombres viejos.
+
+## Modelo de datos
+
+Tipos base en `src/types.ts`.
 
 ### FlowPlan
-Represents one uploaded Excel file with its full cash flow plan.
 
-```typescript
-{
-  name: "Q2 2024 Plan",
-  year: 2024,
-  cajaInicial: 500000,              // Starting cash (MXN)
-  concepts: [...],                  // Hierarchical tree
-  weekDates: ["2024-01-01", ...]   // 52 ISO date strings
-}
-```
+Plan cargado desde Excel.
+
+Incluye:
+
+- nombre
+- año
+- caja inicial
+- conceptos jerárquicos
+- fechas de semanas
 
 ### FlowConcept
-Individual line item (income/expense category).
 
-```typescript
-{
-  id: "ingresos_001",
-  excelRow: 5,                      // Source row for audit
-  name: "Ingresos por Fletes",
-  parentId: null,                   // null = root level
-  responsible: "Gerencia Comercial",
-  conceptType: "ingreso",           // 'ingreso'|'egreso'|'resumen'|'reserva'
-  sortOrder: 1,
-  weeklyData: [50000, 52000, ...],  // 52 weeks
-  monthlyData: [400000, 420000, ...],  // 12 months (sum)
-  children: [...]                   // SubConcepts
-}
-```
+Línea del flujo de efectivo.
 
-**Hierarchy Rules**:
-- Concepts can nest up to N levels deep
-- Children's totals feed up to parent
-- "resumen" types are typically parent aggregations
-- "reserva" types are safety/contingency buffers
+Campos clave:
+
+- `id`
+- `excelRow`
+- `name`
+- `parentId`
+- `responsible`
+- `conceptType`
+- `weeklyData`
+- `monthlyData`
+
+Tipos de concepto:
+
+- `ingreso`
+- `egreso`
+- `resumen`
+- `reserva`
 
 ### Proposal
-Improvement initiative with projected impact.
 
-```typescript
-{
-  id: "prop_001",
-  conceptId: "egresos_combustible",  // Links to concept being improved
-  conceptName: "Combustible",
-  category: "Reducción de Costos",  // Cost reduction proposal
-  name: "Optimizar rutas de distribución",
-  reductionPct: 0.15,               // 15% savings
-  probability: 0.80,                // 80% confidence
-  startMonth: 2,                    // Begin in February
-  distribution: "Mensual",          // Gradual rollout
-  status: "En proceso",
-  monthlyRealAmount: 50000,         // Avg monthly spend
-  annualImpact: 90000,              // 15% × 50k × 12 × 80% probability
-  monthlyImpact: [0, 6000, 6000, ...], // Month-by-month impact
-  notes: "Requires driver training",
-  createdAt: "2024-01-15T10:30:00Z"
-}
-```
+Contenedor superior de análisis.
 
-**Impact Calculation Logic**:
-```
-monthlyImpact[m] = {
-  if m < startMonth: 0
-  if m === startMonth: monthlyRealAmount × reductionPct × probability × (distribution factor)
-  if m > startMonth: monthlyRealAmount × reductionPct × probability
+```ts
+Proposal {
+  id,
+  name,
+  description,
+  status,
+  activeScenarioId?,
+  createdAt,
+  updatedAt
 }
-annualImpact = sum(monthlyImpact)
 ```
 
 ### Scenario
-Named "what-if" combining multiple proposals.
 
-```typescript
-{
-  id: "scen_q2_aggressive",
-  name: "Agresivo Q2",
-  description: "All cost reductions + new revenue stream",
-  selectedProposalIds: ["prop_001", "prop_003", "prop_005"],
-  createdAt: "2024-01-20T14:00:00Z"
+Agrupación guardada dentro de una simulación.
+
+```ts
+Scenario {
+  id,
+  proposalId,
+  kind,
+  name,
+  description,
+  probability,
+  startYearMonth,
+  horizonMonths,
+  simulationIds[],
+  locked?,
+  createdAt,
+  updatedAt
 }
 ```
 
-## Styling
+### Simulation
 
-- **Framework**: Tailwind CSS with dark slate theme
-- **Color Palette**:
-  - Background: `bg-slate-950` (dark navy)
-  - Cards/Panels: `bg-slate-800` with `border-slate-700`
-  - Primary accent: `text-cyan-400` (bright cyan)
-  - Text: `text-slate-300` (light gray)
+Ajuste financiero reusable.
 
-- **Icons**: Lucide React (lightweight SVG icons)
-  - Dashboard: `LayoutDashboard`
-  - Proposals: `PlusCircle`
-  - Simulator: `FlaskConical`
-  - Upload: `Upload`
+```ts
+Simulation {
+  id,
+  name,
+  description,
+  category,
+  type,
+  targetIds[],
+  startYearMonth,
+  endYearMonth?,
+  frequency?,
+  operation?,
+  amount?,
+  percent?,
+  installments?,
+  customAllocation?,
+  shiftMonths?,
+  shiftRatio?,
+  paymentLabel?,
+  comments?,
+  effects[],
+  createdAt,
+  updatedAt
+}
+```
 
-- **Charts**: Recharts for line/bar/area visualizations
+### ScenarioCellOverride
 
-## State Management Strategy
+Edición manual tipo Excel por escenario.
 
-**Current (MVP)**: React useState in App.tsx
-- Pros: Minimal, no boilerplate
-- Cons: Not scalable beyond MVP
+```ts
+ScenarioCellOverride {
+  key,
+  scenarioId,
+  conceptId,
+  yearMonth,
+  baseValue,
+  simulatedValue,
+  manualValue,
+  comment?,
+  editedAt
+}
+```
 
-**Future**: Consider Context API or Zustand if:
-- Components need deep prop drilling
-- Undo/redo functionality needed
-- Persistent state across sessions
+## Escenario Base
 
-## Excel Parsing Strategy
+El escenario base es un caso especial y debe mantenerse así en toda modificación futura.
 
-Upload component should:
-1. Use `xlsx` library to read Excel file
-2. Identify plan metadata (name, year, cajaInicial) from sheet header
-3. Parse rows for concepts:
-   - Column A: Concept name
-   - Column B: Type (ingreso/egreso)
-   - Column C: Responsible party
-   - Columns D-AG: 52 weeks (or 12 months)
-4. Build hierarchy based on indentation/grouping
-5. Auto-generate IDs, compute monthly sums
-6. Validate: 52 week cols or 12 month cols, numeric values
+Reglas:
 
-## Performance Considerations
+- siempre existe
+- siempre es visible
+- no se borra
+- no recibe propuestas
+- no admite overrides
+- sirve como comparación permanente
 
-- **Large Plans**: 1000+ concepts → virtualize tree display
-- **Charts**: Use Recharts with responsiveContainer for responsive sizing
-- **Scenario Comparison**: Pre-calculate impacts at creation time, not render time
+Implementación relevante:
 
-## Future Enhancements
+- `BASE_SCENARIO_ID`
+- `BASE_SCENARIO_NAME`
+- `ensureBaseScenario()`
+- `isBaseScenario()`
 
-1. **Backend Integration**: Export scenarios to API, store plans in DB
-2. **Collaboration**: Share plans/proposals with team
-3. **Comments/Approval**: Track who approved what and when
-4. **Sensitivity Analysis**: Monte Carlo simulation of scenarios
-5. **Export**: PDF reports, Excel rollups
-6. **Audit Trail**: Log all changes, restore previous versions
+## Motor financiero
+
+La fuente de verdad del forecast es `src/domain/scenarioEngine.ts`.
+
+### Función principal
+
+```ts
+evaluateScenario(plan, proposal, scenario, simulations, overrides)
+```
+
+### Pipeline actual
+
+1. construir meses del escenario
+2. construir índices de conceptos
+3. cargar base del plan
+4. aplicar propuestas activas
+5. aplicar overrides manuales
+6. recalcular métricas agregadas
+7. producir celdas, diffs, KPIs y cambios detectados
+
+### Métricas derivadas
+
+- ingresos
+- egresos
+- flujo neto
+- caja final
+- cobranza
+- pagos a proveedores
+- saldos finales
+
+### KPIs principales
+
+- ingresos 12m
+- egresos 12m
+- flujo neto 12m
+- caja final
+- caja mínima
+- cobranza 12m
+- pagos a proveedores 12m
+
+### Regla de edición manual
+
+Solo conceptos hoja son editables.
+
+No deben aceptar override:
+
+- subtotales
+- filas resumen
+- reservas
+- métricas derivadas
+
+## Compilación de propuestas
+
+La capa de compilación está en `src/domain/simulationCompiler.ts`.
+
+Convierte propuestas de negocio a efectos homogéneos del motor.
+
+### Tipos soportados en v1
+
+- `percent_adjustment`
+- `amount_adjustment`
+- `recurring_series`
+- `installment_plan`
+- `timing_shift`
+- `pause_expense`
+
+Todos se compilan a `concept_delta`.
+
+### Targets sintéticos globales
+
+- `ROLE_TARGET_INCOME`
+- `ROLE_TARGET_EXPENSE`
+- `ROLE_TARGET_COLLECTIONS`
+- `ROLE_TARGET_PROVIDER_PAYMENTS`
+
+Esto permite aplicar ajustes generales, por ejemplo:
+
+- `+10% ingresos`
+- `-8% egresos`
+- atraso en cobranza
+- movimiento de pagos a proveedores
+
+## Bug histórico importante
+
+Los porcentajes sobre agregados globales no se reflejaban correctamente porque usaban base `0` en targets sintéticos.
+
+Eso ya fue corregido en `scenarioEngine.ts` con una base agregada separada para:
+
+- ingresos
+- egresos
+- cobranza
+- pagos a proveedores
+
+Si tocas el motor, no reviertas esto.
+
+## Propuestas: arquitectura de UI
+
+La pantalla de Propuestas está en `src/components/ProposalCreator.tsx`.
+
+### Objetivo actual
+
+Hacer que el flujo sea entendible para usuarios no técnicos.
+
+### Estructura actual
+
+1. bloque explicativo superior
+2. resumen de contexto:
+   - simulación activa
+   - escenario activo
+   - número de propuestas activas
+3. columna izquierda:
+   - escenario base
+   - simulaciones
+4. columna central:
+   - escenarios
+5. columna derecha:
+   - biblioteca de propuestas
+
+### Comportamiento dinámico del formulario
+
+El selector de conceptos cambia según:
+
+- tipo de propuesta
+- categoría
+
+Ejemplos:
+
+- ingresos: solo conceptos de ingreso
+- costos: solo conceptos de egreso
+- timing shift de cobranza: conceptos relevantes de cobranza
+- timing shift de pagos: conceptos relevantes de pagos
+
+Además, el formulario incluye:
+
+- pasos visibles
+- ayuda contextual
+- vista rápida del impacto esperado
+
+## Simulator
+
+La pantalla `src/components/Simulator.tsx` funciona como workbench analítico.
+
+### Responsabilidades
+
+- árbol de simulaciones y escenarios
+- KPIs del escenario activo
+- comparación vs Base
+- detalle mensual
+- comparación entre escenarios
+- activación o desactivación de propuestas por escenario
+
+## Forecast
+
+La tabla de forecast vive en `src/components/Forecast.tsx`.
+
+### Capas de visualización
+
+- `base`
+- `simulated`
+- `manual`
+- `diff`
+
+### Elementos clave
+
+- selector de simulación
+- selector de escenario
+- toggles de vista
+- tabla tipo Excel
+- popover por celda
+
+### Origen visual de las celdas
+
+- base
+- propuesta aplicada
+- ajuste manual
+- comentario
+
+### Popover
+
+Muestra:
+
+- valor base
+- delta de propuestas
+- valor simulado
+- delta manual
+- valor final
+- diff vs base
+- comentarios
+
+## Integración con JDE
+
+Servicios en `src/services/`.
+
+### Módulos
+
+- `jdeClient.ts`: cliente base
+- `jde.ts`: funciones de negocio
+- `jdeTypes.ts`: tipos de respuesta
+
+### Uso actual
+
+- catálogo de compañías
+- CXP
+- bancos
+
+La app usa proxy de Vite para evitar problemas de CORS.
+
+## Ingesta de datos
+
+### Excel
+
+La carga del plan está soportada por:
+
+- `src/components/Upload.tsx`
+- `src/utils/excelParser.ts`
+
+### Catálogo de clientes
+
+Auto-carga inicial desde:
+
+- `src/domain/loadClientsCatalog.ts`
+
+## Testing
+
+Cobertura actual:
+
+- `src/domain/persistence.test.ts`
+- `src/domain/scenarioEngine.test.ts`
+- `src/components/Forecast.test.tsx`
+
+Casos cubiertos:
+
+- migración y normalización de persistencia
+- stacking de propuestas
+- overrides por escenario
+- restauración de celdas
+- porcentajes sobre targets agregados
+- smoke test de edición de forecast
+
+## Deuda técnica conocida
+
+### 1. Nombres internos desalineados
+
+La UI ya usa la terminología correcta, pero el código interno todavía no.
+
+### 2. Estado global en `App.tsx`
+
+Funciona, pero ya concentra mucha responsabilidad.
+
+Si el módulo sigue creciendo, conviene moverlo a una store dedicada.
+
+### 3. Documentación histórica
+
+Antes había docs de MVP con componentes stub. Ya no reflejan el estado real. Mantén este archivo y `README.md` sincronizados con el código.
+
+## Reglas para cambios futuros
+
+- No rompas el `Escenario Base`
+- No hagas overrides globales; siguen siendo por escenario
+- No conviertas el formulario de propuestas en un selector plano otra vez
+- Mantén la UI simple y guiada
+- Verifica siempre con:
+
+```bash
+npm test
+npm run build
+```
