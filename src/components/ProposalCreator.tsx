@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   Check,
@@ -19,8 +19,10 @@ import {
   FlowPlan,
   MONTHS,
   Proposal,
+  ROLE_TARGET_COLLECTIONS,
   ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
+  ROLE_TARGET_PROVIDER_PAYMENTS,
   Scenario,
   Simulation,
   SimulationCategory,
@@ -33,7 +35,7 @@ import {
   cloneProposalWithActiveScenario,
   isBaseScenario,
 } from '../domain/simulationCompiler';
-import { getSimulationTargetOptions, resolveConceptLabel } from '../domain/scenarioEngine';
+import { resolveConceptLabel } from '../domain/scenarioEngine';
 
 interface ProposalCreatorProps {
   plan: FlowPlan;
@@ -194,6 +196,13 @@ function parseCustomAllocation(input: string): number[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
+function formatYearMonthLabel(yearMonth: string): string {
+  const [yearRaw, monthRaw] = yearMonth.split('-');
+  const year = Number(yearRaw);
+  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
+  return `${MONTHS[monthIndex]} ${String(year).slice(2)}`;
+}
+
 function resolveSimulationTargetIds(simulation: Partial<Simulation>): string[] {
   const defaultTarget =
     simulation.category && simulation.category !== 'Incremento de Ingresos'
@@ -202,6 +211,142 @@ function resolveSimulationTargetIds(simulation: Partial<Simulation>): string[] {
   return Array.isArray(simulation.targetIds) && simulation.targetIds.length > 0
     ? simulation.targetIds
     : [defaultTarget];
+}
+
+interface DynamicTargetOption {
+  id: string;
+  label: string;
+}
+
+interface DynamicTargetConfig {
+  label: string;
+  helper: string;
+  options: DynamicTargetOption[];
+  defaultTargetIds: string[];
+}
+
+function buildLeafConceptOptions(
+  plan: FlowPlan,
+  conceptType: 'ingreso' | 'egreso',
+): DynamicTargetOption[] {
+  const parentIds = new Set(
+    plan.concepts
+      .map((concept) => concept.parentId)
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  return plan.concepts
+    .filter((concept) =>
+      concept.conceptType === conceptType &&
+      !parentIds.has(concept.id),
+    )
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((concept) => ({
+      id: concept.id,
+      label: concept.name,
+    }));
+}
+
+function buildDynamicTargetConfig(
+  plan: FlowPlan,
+  form: Pick<SimulationFormState, 'type' | 'category'>,
+): DynamicTargetConfig {
+  const incomeOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_INCOME, label: 'Todos los ingresos' },
+    ...buildLeafConceptOptions(plan, 'ingreso'),
+  ];
+  const expenseOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_EXPENSE, label: 'Todos los gastos' },
+    ...buildLeafConceptOptions(plan, 'egreso'),
+  ];
+  const collectionOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_COLLECTIONS, label: 'Toda la cobranza' },
+    ...buildLeafConceptOptions(plan, 'ingreso'),
+  ];
+  const paymentOptions: DynamicTargetOption[] = [
+    { id: ROLE_TARGET_PROVIDER_PAYMENTS, label: 'Todos los pagos a proveedores' },
+    ...buildLeafConceptOptions(plan, 'egreso'),
+  ];
+  const mixedOptions = [...incomeOptions, ...expenseOptions];
+
+  if (form.type === 'pause_expense') {
+    return {
+      label: '¿Qué gastos quieres pausar?',
+      helper: 'Selecciona uno o varios rubros de gasto que quieres detener temporalmente.',
+      options: expenseOptions,
+      defaultTargetIds: [ROLE_TARGET_EXPENSE],
+    };
+  }
+
+  if (form.type === 'timing_shift') {
+    if (form.category === 'Incremento de Ingresos') {
+      return {
+        label: '¿Qué cobranza quieres mover?',
+        helper: 'Úsalo para adelantar o atrasar cobros de uno o varios ingresos.',
+        options: collectionOptions,
+        defaultTargetIds: [ROLE_TARGET_COLLECTIONS],
+      };
+    }
+
+    if (form.category === 'Reducción de Costos') {
+      return {
+        label: '¿Qué pagos quieres mover?',
+        helper: 'Úsalo para adelantar o diferir pagos a proveedores o gastos específicos.',
+        options: paymentOptions,
+        defaultTargetIds: [ROLE_TARGET_PROVIDER_PAYMENTS],
+      };
+    }
+
+    return {
+      label: '¿Qué flujo quieres mover?',
+      helper: 'Selecciona si vas a mover cobranza, pagos o conceptos específicos.',
+      options: [...collectionOptions, ...paymentOptions],
+      defaultTargetIds: [ROLE_TARGET_COLLECTIONS],
+    };
+  }
+
+  if (form.type === 'installment_plan') {
+    if (form.category === 'Incremento de Ingresos') {
+      return {
+        label: '¿Qué ingresos quieres cobrar en parcialidades?',
+        helper: 'Selecciona uno o varios ingresos y reparte el monto en varios cobros.',
+        options: incomeOptions,
+        defaultTargetIds: [ROLE_TARGET_INCOME],
+      };
+    }
+
+    return {
+      label: '¿Qué gastos quieres pagar en parcialidades?',
+      helper: 'Selecciona uno o varios gastos y reparte el monto en varios pagos.',
+      options: expenseOptions,
+      defaultTargetIds: [ROLE_TARGET_EXPENSE],
+    };
+  }
+
+  if (form.category === 'Incremento de Ingresos') {
+    return {
+      label: '¿Qué tipos de ingreso quieres ajustar?',
+      helper: 'Puedes seleccionar un ingreso específico o aplicar el ajuste a todos los ingresos.',
+      options: incomeOptions,
+      defaultTargetIds: [ROLE_TARGET_INCOME],
+    };
+  }
+
+  if (form.category === 'Reducción de Costos') {
+    return {
+      label: '¿Qué tipos de gasto quieres ajustar?',
+      helper: 'Puedes seleccionar un gasto específico o aplicar el ajuste a todos los gastos.',
+      options: expenseOptions,
+      defaultTargetIds: [ROLE_TARGET_EXPENSE],
+    };
+  }
+
+  return {
+    label: '¿Qué conceptos quieres ajustar?',
+    helper: 'Selecciona uno o varios conceptos sobre los que quieras aplicar la propuesta.',
+    options: mixedOptions,
+    defaultTargetIds: [ROLE_TARGET_INCOME],
+  };
 }
 
 function buildSimulationFromForm(
@@ -286,7 +431,10 @@ export default function ProposalCreator({
     .filter((scenario) => !isBaseScenario(scenario) && scenario.proposalId === activeProposalId)
     .sort((a, b) => a.name.localeCompare(b.name));
   const assignedSimulationIds = new Set(activeScenario?.simulationIds ?? []);
-  const targetOptions = useMemo(() => getSimulationTargetOptions(plan), [plan]);
+  const dynamicTargetConfig = useMemo(
+    () => buildDynamicTargetConfig(plan, simulationForm),
+    [plan, simulationForm.type, simulationForm.category],
+  );
   const simulationTypeMeta = SIMULATION_TYPES.find((item) => item.value === simulationForm.type);
 
   const filteredSimulations = useMemo(() => {
@@ -298,6 +446,57 @@ export default function ProposalCreator({
       simulation.comments?.toLowerCase().includes(query),
     );
   }, [simulationSearch, simulations]);
+  const proposalPreview = useMemo(() => {
+    const targetLabel = simulationForm.targetIds
+      .slice(0, 2)
+      .map((id) => resolveConceptLabel(plan, id))
+      .join(', ');
+    const targetSuffix = simulationForm.targetIds.length > 2 ? ' y más' : '';
+
+    if (simulationForm.type === 'percent_adjustment') {
+      return `${simulationForm.operation === 'decrease' ? 'Reducir' : 'Incrementar'} ${targetLabel || 'los conceptos elegidos'}${targetSuffix} en ${simulationForm.percent}% desde ${formatYearMonthLabel(simulationForm.startYearMonth)} hasta ${formatYearMonthLabel(simulationForm.endYearMonth)}.`;
+    }
+
+    if (simulationForm.type === 'amount_adjustment') {
+      return `${simulationForm.operation === 'decrease' ? 'Reducir' : 'Agregar'} ${simulationForm.amount} a ${targetLabel || 'los conceptos elegidos'}${targetSuffix} con frecuencia ${FREQUENCIES.find((item) => item.value === simulationForm.frequency)?.label.toLowerCase() ?? 'mensual'}.`;
+    }
+
+    if (simulationForm.type === 'recurring_series') {
+      return `Crear un flujo recurrente de ${simulationForm.amount} sobre ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatYearMonthLabel(simulationForm.startYearMonth)}.`;
+    }
+
+    if (simulationForm.type === 'installment_plan') {
+      return `Distribuir ${simulationForm.amount} en ${simulationForm.installments} parcialidades para ${targetLabel || 'los conceptos elegidos'}${targetSuffix}.`;
+    }
+
+    if (simulationForm.type === 'timing_shift') {
+      return `Mover ${simulationForm.shiftRatio}% del flujo de ${targetLabel || 'los conceptos elegidos'}${targetSuffix} ${simulationForm.shiftMonths >= 0 ? `${simulationForm.shiftMonths} meses hacia adelante` : `${Math.abs(simulationForm.shiftMonths)} meses hacia atrás`}.`;
+    }
+
+    return `Pausar ${targetLabel || 'los conceptos elegidos'}${targetSuffix} desde ${formatYearMonthLabel(simulationForm.startYearMonth)} hasta ${formatYearMonthLabel(simulationForm.endYearMonth)}.`;
+  }, [plan, simulationForm]);
+
+  useEffect(() => {
+    const allowedTargetIds = new Set(dynamicTargetConfig.options.map((option) => option.id));
+    setSimulationForm((current) => {
+      const nextTargetIds = current.targetIds.filter((targetId) => allowedTargetIds.has(targetId));
+      const resolvedTargetIds = nextTargetIds.length > 0
+        ? nextTargetIds
+        : dynamicTargetConfig.defaultTargetIds;
+
+      if (
+        resolvedTargetIds.length === current.targetIds.length &&
+        resolvedTargetIds.every((targetId, index) => targetId === current.targetIds[index])
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        targetIds: resolvedTargetIds,
+      };
+    });
+  }, [dynamicTargetConfig]);
 
   const openNewProposal = () => {
     setEditingProposalId(null);
@@ -460,6 +659,9 @@ export default function ProposalCreator({
   const toggleTarget = (targetId: string) => {
     setSimulationForm((current) => {
       const exists = current.targetIds.includes(targetId);
+      const allowedTargetIds = new Set(dynamicTargetConfig.options.map((option) => option.id));
+      if (!allowedTargetIds.has(targetId)) return current;
+
       return {
         ...current,
         targetIds: exists
@@ -490,8 +692,9 @@ export default function ProposalCreator({
             <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cómo funciona</p>
             <h1 className="mt-1 text-[24px] font-semibold text-[var(--gray-950)]">Simular decisiones sin perder el pronóstico original</h1>
             <p className="mt-2 max-w-[880px] text-[13px] text-[var(--gray-500)]">
-              Siempre existe un <strong>Escenario Base</strong>. Desde ahí creas una propuesta, dentro de la propuesta un escenario,
-              y dentro del escenario activas simulaciones. Cada cambio recalcula el forecast y siempre se compara contra el Base.
+              Siempre existe un <strong>Escenario Base</strong>. Desde ahí creas una <strong>simulación</strong>, dentro de esa simulación
+              guardas uno o varios <strong>escenarios</strong>, y a cada escenario le asignas <strong>propuestas</strong> que actúan como ajustes financieros.
+              Cada cambio recalcula el forecast y siempre se compara contra el Base.
             </p>
           </div>
           <div className="rounded-2xl bg-[var(--gray-50)] p-3">
@@ -501,18 +704,42 @@ export default function ProposalCreator({
 
         <div className="mt-5 grid grid-cols-4 gap-3">
           <StepCard index="1" title="Ver Base" description="El pronóstico original siempre está visible y no se borra." />
-          <StepCard index="2" title="Crear Propuesta" description="Agrupa una decisión financiera: ventas, gastos, equipos, pagos." />
-          <StepCard index="3" title="Crear Escenario" description="Prueba variantes conservadoras, realistas, optimistas o personalizadas." />
-          <StepCard index="4" title="Agregar Simulaciones" description="Activa reglas de negocio y compara el impacto contra Base." />
+          <StepCard index="2" title="Crear Simulación" description="Define el contenedor donde vas a guardar y correr distintos escenarios." />
+          <StepCard index="3" title="Crear Escenario" description="Agrupa varias propuestas financieras en una hipótesis guardada." />
+          <StepCard index="4" title="Agregar Propuestas" description="Activa ajustes reutilizables y compara el impacto contra Base." />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm">
+        <div className="grid grid-cols-3 gap-3">
+          <ContextPill
+            step="Paso 1"
+            title="Simulación"
+            value={activeProposal?.name ?? 'Elige o crea una simulación'}
+            helper="Es el contenedor donde guardas el análisis."
+          />
+          <ContextPill
+            step="Paso 2"
+            title="Escenario"
+            value={activeScenario && !isBaseScenario(activeScenario) ? activeScenario.name : 'Elige o crea un escenario'}
+            helper="Cada escenario junta propuestas distintas."
+          />
+          <ContextPill
+            step="Paso 3"
+            title="Propuestas"
+            value={isBaseScenario(activeScenario) ? '0 propuestas activas' : `${assignedSimulationIds.size} propuestas activas`}
+            helper="Marca las propuestas que quieres aplicar."
+          />
         </div>
       </div>
 
       <div className="grid grid-cols-[300px,minmax(0,1fr),420px] gap-5">
         <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
-            title="Base y Propuestas"
-            subtitle="El Escenario Base se mantiene fijo. Las propuestas cuelgan aparte."
-            actionLabel="Nueva propuesta"
+            stepLabel="Paso 1"
+            title="Base y Simulaciones"
+            subtitle="El Escenario Base se mantiene fijo. Las simulaciones agrupan escenarios."
+            actionLabel="Nueva simulación"
             onAction={openNewProposal}
           />
 
@@ -528,7 +755,7 @@ export default function ProposalCreator({
               <div>
                 <p className="text-[13px] font-semibold">{BASE_SCENARIO_NAME}</p>
                 <p className={`mt-1 text-[11px] ${activeScenario?.id === BASE_SCENARIO_ID ? 'text-white/75' : 'text-[var(--gray-400)]'}`}>
-                  Pronóstico original sin simulaciones ni overrides. Punto de comparación permanente.
+                  Pronóstico original sin propuestas aplicadas ni overrides. Punto de comparación permanente.
                 </p>
               </div>
               <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
@@ -546,14 +773,14 @@ export default function ProposalCreator({
               <input
                 value={proposalForm.name}
                 onChange={(event) => setProposalForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Nombre de la propuesta"
+                placeholder="Nombre de la simulación"
                 className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={proposalForm.description}
                 onChange={(event) => setProposalForm((current) => ({ ...current, description: event.target.value }))}
                 rows={3}
-                placeholder="Qué decisión se quiere analizar"
+                placeholder="Qué iniciativa o análisis quieres correr"
                 className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
               <select
@@ -579,8 +806,8 @@ export default function ProposalCreator({
           <div className="space-y-2">
             {proposals.length === 0 && (
               <EmptyState
-                title="Sin propuestas aún"
-                description="Empieza creando una propuesta para abrir escenarios y simulaciones."
+                title="Sin simulaciones aún"
+                description="Empieza creando una simulación para abrir escenarios y correr propuestas."
               />
             )}
             {proposals.map((proposal) => {
@@ -613,7 +840,7 @@ export default function ProposalCreator({
                           openEditProposal(proposal);
                         }}
                         className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]"
-                        title="Editar propuesta"
+                        title="Editar simulación"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
@@ -623,7 +850,7 @@ export default function ProposalCreator({
                           onDelete(proposal.id);
                         }}
                         className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
-                        title="Eliminar propuesta"
+                        title="Eliminar simulación"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -637,8 +864,9 @@ export default function ProposalCreator({
 
         <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
+            stepLabel="Paso 2"
             title="Escenarios"
-            subtitle={activeProposal ? `Propuesta activa: ${activeProposal.name}` : 'Selecciona una propuesta para trabajar escenarios.'}
+            subtitle={activeProposal ? `Simulación activa: ${activeProposal.name}` : 'Selecciona una simulación para trabajar escenarios.'}
             actionLabel={activeProposal ? 'Nuevo escenario' : undefined}
             onAction={activeProposal ? () => openNewScenario() : undefined}
           />
@@ -715,21 +943,24 @@ export default function ProposalCreator({
 
           {!activeProposal && (
             <EmptyState
-              title="Primero elige una propuesta"
-              description="Cada propuesta puede tener escenarios conservador, realista, optimista o personalizado."
+              title="Primero elige una simulación"
+              description="Cada simulación puede tener escenarios conservador, realista, optimista o personalizado."
             />
           )}
 
           {activeProposal && proposalScenarios.length === 0 && !showScenarioForm && (
             <EmptyState
               title="Sin escenarios"
-              description="Crea el primer escenario para probar decisiones financieras sobre esta propuesta."
+              description="Crea el primer escenario para probar distintas combinaciones de propuestas dentro de esta simulación."
             />
           )}
 
           <div className="space-y-2">
             {proposalScenarios.map((scenario) => {
               const selected = activeScenario?.id === scenario.id;
+              const appliedProposalNames = scenario.simulationIds
+                .map((simulationId) => simulations.find((simulation) => simulation.id === simulationId)?.name)
+                .filter(Boolean) as string[];
               return (
                 <button
                   key={scenario.id}
@@ -752,10 +983,20 @@ export default function ProposalCreator({
                       <div className="mt-2 flex items-center gap-2 text-[11px] text-[var(--gray-500)]">
                         <span>{Math.round(scenario.probability * 100)}%</span>
                         <span>•</span>
-                        <span>{scenario.simulationIds.length} simulaciones activas</span>
+                        <span>{scenario.simulationIds.length} propuestas activas</span>
                         <span>•</span>
                         <span>{scenario.horizonMonths} meses</span>
                       </div>
+                      {appliedProposalNames.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-[#6e6e73]">
+                          {appliedProposalNames.slice(0, 2).map((name) => (
+                            <Badge key={name}>{name}</Badge>
+                          ))}
+                          {appliedProposalNames.length > 2 && (
+                            <Badge>+{appliedProposalNames.length - 2} más</Badge>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-1">
                       <button
@@ -788,18 +1029,19 @@ export default function ProposalCreator({
 
         <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
-            title="Biblioteca de Simulaciones"
+            stepLabel="Paso 3"
+            title="Biblioteca de Propuestas"
             subtitle={isBaseScenario(activeScenario)
-              ? 'Selecciona un escenario de propuesta para activar simulaciones.'
-              : `Escenario activo: ${activeScenario?.name ?? '—'}`}
-            actionLabel="Nueva simulación"
+              ? 'Selecciona un escenario para activar propuestas.'
+              : `Escenario activo: ${activeScenario?.name ?? '—'} · Si editas una propuesta, se actualiza en todos los escenarios donde esté asignada.`}
+            actionLabel="Nueva propuesta"
             onAction={openNewSimulation}
           />
 
           <input
             value={simulationSearch}
             onChange={(event) => setSimulationSearch(event.target.value)}
-            placeholder="Buscar simulación..."
+            placeholder="Buscar propuesta..."
             className="w-full rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
           />
 
@@ -808,19 +1050,19 @@ export default function ProposalCreator({
               <input
                 value={simulationForm.name}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Nombre de la simulación"
+                placeholder="Nombre de la propuesta"
                 className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={simulationForm.description}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, description: event.target.value }))}
                 rows={3}
-                placeholder="Describe la decisión financiera"
+                placeholder="Describe el ajuste financiero"
                 className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
 
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Tipo de simulación">
+                <Field label="Tipo de propuesta">
                   <select
                     value={simulationForm.type}
                     onChange={(event) => setSimulationForm((current) => ({ ...current, type: event.target.value as SimulationType }))}
@@ -850,6 +1092,11 @@ export default function ProposalCreator({
                   <p className="mt-1">{simulationTypeMeta.description}</p>
                 </div>
               )}
+
+              <div className="rounded-xl border border-[#0071e3]/15 bg-[#e8f4fd]/65 p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-[#0071e3]">Vista rápida</p>
+                <p className="mt-1 text-[13px] text-[#1d1d1f]">{proposalPreview}</p>
+              </div>
 
               {!['timing_shift', 'pause_expense'].includes(simulationForm.type) && (
                 <div className="grid grid-cols-2 gap-3">
@@ -979,24 +1226,27 @@ export default function ProposalCreator({
                 />
               </Field>
 
-              <Field label="Categorías o conceptos afectados">
-                <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--gray-200)] bg-white p-2">
-                  {targetOptions.map((target) => {
-                    const selected = simulationForm.targetIds.includes(target.id);
-                    return (
-                      <button
-                        key={target.id}
-                        onClick={() => toggleTarget(target.id)}
-                        className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
-                          selected
-                            ? 'bg-[var(--primary)] text-white'
-                            : 'bg-[var(--gray-50)] text-[var(--gray-500)]'
-                        }`}
-                      >
-                        {target.label}
-                      </button>
-                    );
-                  })}
+              <Field label={dynamicTargetConfig.label}>
+                <div className="space-y-2">
+                  <p className="text-[12px] text-[var(--gray-500)]">{dynamicTargetConfig.helper}</p>
+                  <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--gray-200)] bg-white p-2">
+                    {dynamicTargetConfig.options.map((target) => {
+                      const selected = simulationForm.targetIds.includes(target.id);
+                      return (
+                        <button
+                          key={target.id}
+                          onClick={() => toggleTarget(target.id)}
+                          className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
+                            selected
+                              ? 'bg-[var(--primary)] text-white'
+                              : 'bg-[var(--gray-50)] text-[var(--gray-500)]'
+                          }`}
+                        >
+                          {target.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </Field>
 
@@ -1024,8 +1274,8 @@ export default function ProposalCreator({
           <div className="space-y-2 max-h-[760px] overflow-y-auto pr-1">
             {filteredSimulations.length === 0 && (
               <EmptyState
-                title="Sin simulaciones"
-                description="Crea reglas reutilizables como aumento de ventas, retraso en cobranza o cobro en parcialidades."
+                title="Sin propuestas"
+                description="Crea ajustes reutilizables como aumento de ventas, retraso en cobranza o cobro en parcialidades."
               />
             )}
 
@@ -1054,7 +1304,7 @@ export default function ProposalCreator({
                           ? 'border-[var(--primary)] bg-[var(--primary)] text-white'
                           : 'border-[var(--gray-200)] bg-white text-transparent'
                       } ${isBaseScenario(activeScenario) ? 'cursor-not-allowed opacity-50' : ''}`}
-                      title={isBaseScenario(activeScenario) ? 'Selecciona un escenario de propuesta' : 'Activar / desactivar simulación'}
+                      title={isBaseScenario(activeScenario) ? 'Selecciona un escenario para asignar propuestas' : 'Activar / desactivar propuesta'}
                     >
                       <Check className="w-3.5 h-3.5" />
                     </button>
@@ -1077,14 +1327,14 @@ export default function ProposalCreator({
                       <button
                         onClick={() => openEditSimulation(simulation)}
                         className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]"
-                        title="Editar simulación"
+                        title="Editar propuesta"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => onDeleteSimulation(simulation.id)}
                         className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
-                        title="Eliminar simulación"
+                        title="Eliminar propuesta"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -1122,11 +1372,13 @@ function StepCard({
 }
 
 function SectionHeader({
+  stepLabel,
   title,
   subtitle,
   actionLabel,
   onAction,
 }: {
+  stepLabel?: string;
   title: string;
   subtitle: string;
   actionLabel?: string;
@@ -1135,6 +1387,9 @@ function SectionHeader({
   return (
     <div className="flex items-start justify-between gap-3">
       <div>
+        {stepLabel && (
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--primary)]">{stepLabel}</p>
+        )}
         <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">{title}</h2>
         <p className="mt-1 text-[12px] text-[var(--gray-400)]">{subtitle}</p>
       </div>
@@ -1147,6 +1402,27 @@ function SectionHeader({
           {actionLabel}
         </button>
       )}
+    </div>
+  );
+}
+
+function ContextPill({
+  step,
+  title,
+  value,
+  helper,
+}: {
+  step: string;
+  title: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-3">
+      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#0071e3]">{step}</p>
+      <p className="mt-1 text-[12px] font-medium text-[#6e6e73]">{title}</p>
+      <p className="mt-2 text-[14px] font-semibold text-[#1d1d1f]">{value}</p>
+      <p className="mt-1 text-[11px] text-[#86868b]">{helper}</p>
     </div>
   );
 }

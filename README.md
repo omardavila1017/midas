@@ -1,127 +1,209 @@
 # FlowSense
 
-A cash flow analysis platform for Mexican transportation companies. Upload weekly cash flow plans in Excel, explore interactive dashboards, create proposals, and simulate scenarios.
+FlowSense es una plataforma de análisis y simulación de flujo de efectivo para empresas de transporte en México. Combina carga de planes desde Excel, módulos operativos de cobranza y pagos, integración con JDE y un motor de pronóstico con escenarios, propuestas y edición tipo Excel.
 
-## Project Structure
+## Estado actual
 
-```
-FlowSense/
-├── src/
-│   ├── components/
-│   │   ├── Upload.tsx              # Excel file upload interface (stub)
-│   │   ├── Dashboard.tsx           # Main cash flow visualization (stub)
-│   │   ├── ProposalCreator.tsx    # Create/manage improvement proposals (stub)
-│   │   └── Simulator.tsx           # Scenario simulation tool (stub)
-│   ├── App.tsx                     # Main app layout with tabs
-│   ├── types.ts                    # TypeScript interfaces for data models
-│   ├── main.tsx                    # React entry point
-│   └── index.css                   # Global styles + Tailwind
-├── index.html                      # HTML template
-├── vite.config.ts                  # Vite configuration
-├── tsconfig.json                   # TypeScript configuration
-├── tailwind.config.js              # Tailwind CSS configuration
-├── postcss.config.js               # PostCSS configuration
-├── package.json                    # Dependencies
-└── .gitignore                      # Git ignore rules
-```
+El proyecto ya no está en modo stub. Hoy incluye:
+
+- carga y parseo de planes de flujo desde Excel
+- dashboard del plan
+- módulos de clientes, cobranza y flujo neto
+- módulos de proveedores, CXP y bancos
+- simulación financiera con:
+  - `Escenario Base`
+  - `Simulación` como contenedor superior
+  - `Escenario` como agrupación guardada
+  - `Propuesta` como ajuste financiero reusable
+- forecast unificado con:
+  - impacto por propuestas
+  - overrides manuales por escenario
+  - comentarios por celda
+  - diff vs base
+
+## Terminología importante
+
+La interfaz y el código no usan exactamente los mismos nombres.
+
+| Lo que ve el usuario | Tipo interno actual | Qué representa |
+|---|---|---|
+| Simulación | `Proposal` | Contenedor superior del análisis |
+| Escenario | `Scenario` | Agrupación guardada dentro de una simulación |
+| Propuesta | `Simulation` | Ajuste financiero reusable que se asigna a escenarios |
+| Escenario Base | `Scenario` especial | Pronóstico original, fijo y de solo lectura |
+
+Si vas a tocar la lógica, ten esto presente para no invertir otra vez la semántica.
+
+## Flujo funcional
+
+### Plan
+
+El usuario puede cargar un plan desde Excel y navegar:
+
+- `Dashboard`
+- `Propuestas`
+- `Simulador`
+- `Pronóstico`
+
+### Cobros
+
+- `Clientes`
+- `Cobranza`
+- `Flujo`
+
+### Pagos
+
+- `Proveedores`
+- `CXP`
+- `Bancos`
+
+### Pronóstico
+
+- `P&L`
+- `Flujo de Caja`
+- `Drivers`
+
+## Pronóstico y simulación
+
+El motor financiero actual trabaja así:
+
+1. Base del plan
+2. Aplicar propuestas activas del escenario
+3. Aplicar overrides manuales por celda
+4. Recalcular métricas, KPIs, flujo neto, caja final y diff vs base
+
+Reglas importantes:
+
+- El `Escenario Base` siempre existe
+- El Base no se puede borrar
+- El Base no admite overrides manuales
+- Los overrides viven por `scenarioId`
+- Los cambios manuales de una celda no contaminan otros escenarios
+- Si editas una propuesta, se actualiza en todos los escenarios donde esté asignada
+
+## Formulario de propuestas
+
+La creación de propuestas es dinámica.
+
+Ejemplos:
+
+- si eliges incremento de ingresos, el formulario muestra tipos de ingreso
+- si eliges reducción de costos, muestra tipos de gasto
+- si eliges mover cobros o pagos, muestra cobranza o pagos relevantes
+- se puede seleccionar uno o varios conceptos
+
+Además, el formulario muestra una vista rápida del impacto esperado antes de guardar.
 
 ## Setup
 
 ```bash
 npm install
-npm run dev        # Start dev server
-npm run build      # Build for production
-npm run preview    # Preview production build
+npm run dev
 ```
 
-## Consumo de APIs JDE (localhost)
+Scripts disponibles:
 
-La app lee el catálogo de compañías, la antigüedad de saldos (CXP) y los
-estados de cuenta bancarios directamente desde los APIs de JD Edwards.
+```bash
+npm run dev
+npm test
+npm run build
+npm run preview
+```
+
+## Integración con JDE
+
+La app consume APIs de JD Edwards para:
+
+- catálogo de compañías
+- antigüedad de saldos de CXP
+- estados de cuenta bancarios
 
 ### Arranque rápido
 
 ```bash
 cp .env.example .env.local
-# edita .env.local — coloca el Bearer token real en VITE_JDE_TOKEN
+# editar .env.local con el token real
 npm install
 npm run dev
-# http://localhost:5173
 ```
 
-La máquina que corre el dev server debe poder alcanzar `srv-desarrollo:90`. Si
-no tiene acceso directo:
+Por defecto el proyecto usa el proxy de Vite hacia `/api/jde/*`.
 
-- Sobrescribe `VITE_JDE_UPSTREAM` en `.env.local` apuntando a un host alcanzable
-  (túnel SSH `http://localhost:8090`, mock, etc.); el proxy de Vite reenviará
-  `/api/jde/*` hacia ahí.
-- Alternativamente, fija `VITE_JDE_BASE_URL` a una URL pública final (el host
-  tendrá que permitir CORS).
+Variables relevantes:
 
-### Endpoints consumidos
+- `VITE_JDE_TOKEN`
+- `VITE_JDE_UPSTREAM`
+- `VITE_JDE_BASE_URL`
 
-| Endpoint | Método | Dónde se usa |
+### Endpoints usados
+
+| Endpoint | Método | Uso |
 |---|---|---|
-| `/JDEdwards/Empresas` | GET | Selector de compañía en el header |
-| `/JDEdwards/AntiguedadSaldos` | POST | Pagos → CXP → "Consultar Antigüedad" |
-| `/JDEdwards/Bancos` | POST | Pagos → Bancos |
+| `/JDEdwards/Empresas` | GET | Selector de compañía |
+| `/JDEdwards/AntiguedadSaldos` | POST | CXP |
+| `/JDEdwards/Bancos` | POST | Bancos |
 
-### Troubleshooting
+### Troubleshooting rápido
 
-- **401 Unauthorized** → falta o es inválido `VITE_JDE_TOKEN`. Edita
-  `.env.local` y reinicia `npm run dev`.
-- **Network error / timeout** → el host `srv-desarrollo:90` no es alcanzable.
-  Prueba `curl http://srv-desarrollo:90/JDEdwards/Empresas` desde la máquina;
-  si falla, ajusta `/etc/hosts` o cambia `VITE_JDE_UPSTREAM`.
-- **CORS** → asegúrate de usar el proxy (`VITE_JDE_BASE_URL=/api/jde`, valor
-  por defecto). No llames al host directo desde el navegador.
-- **0 registros devueltos** → verifica que la compañía seleccionada en el
-  header tenga saldos abiertos, o que la fecha/formato enviado a Bancos sea
-  válido para el día de consulta.
-- **Ambiente productivo** → cuando JDE publique la URL productiva, actualiza
-  `VITE_JDE_BASE_URL` y `VITE_JDE_TOKEN` en `.env.local` (no subir el token
-  al repo).
+- `401 Unauthorized`: falta o es inválido `VITE_JDE_TOKEN`
+- timeout o network error: el host upstream no es alcanzable
+- CORS: usa el proxy de Vite, no pegues al host directo desde el browser
 
-## Architecture
+## Estructura del proyecto
 
-- **Tech Stack**: React 18 + Vite + TypeScript + Tailwind CSS
-- **Charts**: Recharts for data visualization
-- **Icons**: Lucide React for UI icons
-- **Excel Parsing**: XLSX for reading Excel files
-- **State Management**: Simple React useState (no context needed for MVP)
+```text
+src/
+  components/
+    App shell, dashboard, proposals, simulator, forecast, bancos, cxp, clients, providers
+  domain/
+    persistence, scenarioEngine, simulationCompiler, collectionEngine, netCashFlowEngine
+  services/
+    jde, jdeClient, jdeTypes
+  utils/
+    calculations, excelParser, export
+```
 
-## Data Models
+Archivos clave:
 
-### FlowPlan
-Main data structure containing:
-- Plan name and year
-- Initial cash balance (cajaInicial)
-- Hierarchical flow concepts (income/expense/summary)
-- 52 weeks of data + 12 months aggregations
+- `src/App.tsx`: shell principal, tabs y estado global
+- `src/types.ts`: tipos base del dominio
+- `src/domain/persistence.ts`: store, migraciones y normalización
+- `src/domain/scenarioEngine.ts`: motor unificado del forecast
+- `src/domain/simulationCompiler.ts`: compila propuestas a efectos
+- `src/components/ProposalCreator.tsx`: gestión de simulaciones, escenarios y propuestas
+- `src/components/Simulator.tsx`: comparación y workbench
+- `src/components/Forecast.tsx`: tabla tipo Excel y overrides
 
-### FlowConcept
-Individual cash flow line items with:
-- Parent-child relationships for drilling down
-- Weekly and monthly data arrays
-- Type classification (ingreso/egreso/resumen/reserva)
-- Responsible party tracking
+## Persistencia
 
-### Proposal
-Improvement initiative with:
-- Categories: Cost Reduction, Revenue Growth, Deferment, Renegotiation
-- Probability and impact calculations
-- Monthly impact simulation
+El estado se guarda en `localStorage` con store versionado.
 
-### Scenario
-What-if analysis combining multiple proposals.
+Puntos importantes:
 
-## Component Status
+- el store actual es `flowsense-v2`
+- al cargar, siempre se reinyecta el `Escenario Base`
+- las propuestas legacy se normalizan si les faltan campos nuevos
+- los overrides también se migran al nuevo alcance por escenario
 
-All components are currently stubs with proper TypeScript interfaces. Each accepts the correct props from App.tsx and renders a placeholder div. Ready for implementation by specialized agents.
+## Tests
 
-## Next Steps
+Actualmente hay cobertura sobre:
 
-1. Implement Upload component (Excel parsing, FlowPlan construction)
-2. Build Dashboard (tree visualization, drill-down, key metrics)
-3. Create ProposalCreator (form, list management, impact calc)
-4. Build Simulator (scenario selection, impact aggregation)
+- persistencia y migración
+- stacking de propuestas
+- overrides por escenario
+- restauración de celdas
+- porcentajes sobre targets agregados
+- smoke test del forecast editable
+
+Ejecuta siempre:
+
+```bash
+npm test
+npm run build
+```
+
+## Documentación adicional
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md): diseño técnico más detallado
+- [CLAUDE.md](./CLAUDE.md): contexto operativo para agentes que modifiquen el repo

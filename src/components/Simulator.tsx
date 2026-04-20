@@ -199,7 +199,7 @@ export default function Simulator({
         </div>
         <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">No hay escenario activo</h2>
         <p className="mt-2 text-[13px] text-[var(--gray-400)]">
-          Crea una propuesta y al menos un escenario en la pestaña de Propuestas.
+          Crea una simulación y al menos un escenario en la pestaña de Propuestas.
         </p>
       </div>
     );
@@ -210,7 +210,7 @@ export default function Simulator({
       <aside className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
         <div>
           <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Árbol de trabajo</p>
-          <h2 className="mt-1 text-[16px] font-semibold text-[var(--gray-950)]">Propuestas y escenarios</h2>
+          <h2 className="mt-1 text-[16px] font-semibold text-[var(--gray-950)]">Simulaciones y escenarios</h2>
         </div>
         <div className="space-y-2">
           {baseScenario && (
@@ -268,7 +268,7 @@ export default function Simulator({
                           }`}
                         >
                           <p className="text-[12px] font-medium">{scenario.name}</p>
-                          <p className="text-[10px]">{scenario.simulationIds.length} simulaciones</p>
+                          <p className="text-[10px]">{scenario.simulationIds.length} propuestas</p>
                         </button>
                       );
                     })}
@@ -288,8 +288,8 @@ export default function Simulator({
               <h1 className="mt-1 text-[24px] font-semibold text-[var(--gray-950)]">{activeScenario.name}</h1>
               <p className="mt-1 text-[13px] text-[var(--gray-400)]">
                 {isBaseScenario(activeScenario)
-                  ? 'Pronóstico original sin simulaciones.'
-                  : `${effectiveProposal.name} · ${Math.round(activeScenario.probability * 100)}% probabilidad · ${activeScenario.horizonMonths} meses`}
+                  ? 'Pronóstico original sin propuestas aplicadas.'
+                  : `Simulación ${effectiveProposal.name} · ${Math.round(activeScenario.probability * 100)}% probabilidad · ${activeScenario.horizonMonths} meses`}
               </p>
             </div>
             <div className="rounded-xl bg-[var(--gray-50)] px-3 py-2 text-right">
@@ -317,10 +317,10 @@ export default function Simulator({
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Caja base vs escenario</h2>
-              <p className="text-[12px] text-[var(--gray-400)]">Cada cambio en simulaciones y celdas recalcula el flujo completo.</p>
+              <p className="text-[12px] text-[var(--gray-400)]">Cada cambio en propuestas y celdas recalcula el flujo completo.</p>
             </div>
             <div className="rounded-full bg-[var(--gray-50)] px-3 py-1 text-[12px] text-[var(--gray-500)]">
-              {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.simulationIds.length} simulaciones activas`}
+              {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.simulationIds.length} propuestas activas`}
             </div>
           </div>
           <ResponsiveContainer width="100%" height={300}>
@@ -460,12 +460,12 @@ export default function Simulator({
       <aside className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
         <div>
           <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Biblioteca</p>
-          <h2 className="mt-1 text-[16px] font-semibold text-[var(--gray-950)]">Simulaciones activables</h2>
+          <h2 className="mt-1 text-[16px] font-semibold text-[var(--gray-950)]">Propuestas activables</h2>
         </div>
         <input
           value={simulationSearch}
           onChange={(event) => setSimulationSearch(event.target.value)}
-          placeholder="Buscar simulación..."
+          placeholder="Buscar propuesta..."
           className="w-full rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
         />
         <div className="space-y-2 max-h-[calc(100vh-260px)] overflow-y-auto pr-1">

@@ -150,7 +150,7 @@ export default function Forecast({
       <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-white px-6 py-20 text-center">
         <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">No hay escenario activo</h2>
         <p className="mt-2 text-[13px] text-[var(--gray-400)]">
-          Selecciona una propuesta y un escenario en el módulo de Propuestas para habilitar el pronóstico.
+          Selecciona una simulación y un escenario en el módulo de Propuestas para habilitar el pronóstico.
         </p>
       </div>
     );
@@ -271,7 +271,7 @@ export default function Forecast({
               {view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers'}
             </h1>
             <p className="mt-1 text-[13px] text-[var(--gray-400)]">
-              Pronóstico unificado por escenario. Doble clic en celdas hoja para editar manualmente.
+              Pronóstico unificado por escenario y propuestas activas. Doble clic en celdas hoja para editar manualmente.
             </p>
           </div>
           {directOverrideCount > 0 && (
@@ -302,7 +302,7 @@ export default function Forecast({
             disabled={proposals.length === 0}
             className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
           >
-            {proposals.length === 0 && <option value="">Sin propuestas</option>}
+            {proposals.length === 0 && <option value="">Sin simulaciones</option>}
             {proposals.map((proposal) => (
               <option key={proposal.id} value={proposal.id}>{proposal.name}</option>
             ))}
@@ -340,7 +340,7 @@ export default function Forecast({
 
         <div className="mt-5 flex flex-wrap items-center gap-4 text-[12px] text-[var(--gray-400)]">
           <LegendDot color="bg-[#d2d2d7]" label="Base" />
-          <LegendDot color="bg-[var(--primary)]" label="Impactada por simulación" />
+          <LegendDot color="bg-[var(--primary)]" label="Impactada por propuesta" />
           <LegendDot color="bg-[#ff9500]" label={`Ajuste manual${directOverrideCount > 0 ? ` (${directOverrideCount})` : ''}`} />
           <span className="inline-flex items-center gap-1.5">
             <MessageSquare className="w-3.5 h-3.5 text-[var(--primary)]" />
@@ -828,7 +828,7 @@ function CellPopover({
   onSetComment: (comment: string) => void;
 }) {
   const [commentDraft, setCommentDraft] = useState(cell.comment ?? '');
-  const totalSimulationDelta = cell.simulationContributions.reduce((sum, contribution) => sum + contribution.delta, 0);
+  const totalProposalDelta = cell.simulationContributions.reduce((sum, contribution) => sum + contribution.delta, 0);
   const finalDelta = cell.finalValue - cell.baseValue;
 
   return (
@@ -848,7 +848,7 @@ function CellPopover({
 
       <div className="space-y-1.5 text-[12px]">
         <PopoverRow label="Valor base" value={cell.baseValue} />
-        <PopoverRow label="Delta simulación" value={totalSimulationDelta} accent="sim" />
+        <PopoverRow label="Delta propuestas" value={totalProposalDelta} accent="sim" />
         <PopoverRow label="Valor simulado" value={cell.simulatedValue} />
         <PopoverRow label="Delta manual" value={cell.manualDelta} accent="manual" />
         <PopoverRow label="Valor final" value={cell.finalValue} accent="final" />
@@ -857,7 +857,7 @@ function CellPopover({
 
       {cell.simulationContributions.length > 0 && (
         <div className="mt-3 rounded-lg bg-[var(--gray-50)] p-2">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Simulaciones</p>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Propuestas aplicadas</p>
           <div className="mt-2 space-y-1 text-[11px]">
             {cell.simulationContributions.map((contribution) => (
               <div key={contribution.simulationId} className="flex items-center justify-between gap-3">
