@@ -80,6 +80,7 @@ interface SimulationFormState {
   targetIds: string[];
   startDate: string;
   endDate: string;
+  startPrecision: 'day' | 'week' | 'month';
   frequency: SimulationFrequency;
   amount: number;
   percent: number;
@@ -176,6 +177,7 @@ function simulationDefaults(plan: FlowPlan): SimulationFormState {
     targetIds: [ROLE_TARGET_INCOME],
     startDate: `${plan.year}-01-01`,
     endDate: `${plan.year}-12-31`,
+    startPrecision: 'month',
     frequency: 'monthly',
     amount: 0,
     percent: 10,
@@ -186,6 +188,18 @@ function simulationDefaults(plan: FlowPlan): SimulationFormState {
     paymentLabel: '',
     comments: '',
   };
+}
+
+function snapToMonday(dateIso: string): string {
+  const d = new Date(`${dateIso}T12:00:00Z`);
+  const day = d.getUTCDay(); // 0=Sun
+  const offset = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + offset);
+  return d.toISOString().slice(0, 10);
+}
+
+function firstOfMonth(dateIso: string): string {
+  return `${dateIso.slice(0, 7)}-01`;
 }
 
 function parseCustomAllocation(input: string): number[] | undefined {
@@ -654,6 +668,7 @@ export default function ProposalCreator({
       targetIds,
       startDate: simulation.startDate ?? `${simulation.startYearMonth ?? `${plan.year}-01`}-01`,
       endDate: simulation.endDate ?? endOfMonthFromDate(`${simulation.endYearMonth ?? simulation.startYearMonth ?? `${plan.year}-12`}-01`),
+      startPrecision: 'month',
       frequency: simulation.frequency ?? 'monthly',
       amount: simulation.amount ?? 0,
       percent: Math.abs((simulation.percent ?? 0) * 100),
@@ -1209,39 +1224,90 @@ export default function ProposalCreator({
                 </div>
               )}
 
-              <div className="grid grid-cols-3 gap-3">
-                <Field label="Empieza a impactar desde">
-                  <input
-                    type="date"
-                    value={simulationForm.startDate}
-                    onChange={(event) => setSimulationForm((current) => ({
-                      ...current,
-                      startDate: event.target.value,
-                      endDate: current.endDate < event.target.value ? event.target.value : current.endDate,
-                    }))}
-                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                  />
-                </Field>
-                <Field label="Termina en">
-                  <input
-                    type="date"
-                    value={simulationForm.endDate}
-                    min={simulationForm.startDate}
-                    onChange={(event) => setSimulationForm((current) => ({ ...current, endDate: event.target.value }))}
-                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                  />
-                </Field>
-                <Field label="Frecuencia">
-                  <select
-                    value={simulationForm.frequency}
-                    onChange={(event) => setSimulationForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
-                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                  >
-                    {FREQUENCIES.map((frequency) => (
-                      <option key={frequency.value} value={frequency.value}>{frequency.label}</option>
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-[12px] font-medium text-[var(--gray-500)]">Precisión de inicio:</span>
+                  <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-0.5 gap-0.5">
+                    {(['day', 'week', 'month'] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setSimulationForm((current) => {
+                          let newStart = current.startDate;
+                          if (p === 'week') newStart = snapToMonday(current.startDate);
+                          if (p === 'month') newStart = firstOfMonth(current.startDate);
+                          return { ...current, startPrecision: p, startDate: newStart };
+                        })}
+                        className={`rounded-lg px-3 py-1 text-[11px] font-medium transition ${
+                          simulationForm.startPrecision === p
+                            ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                            : 'text-[var(--gray-500)]'
+                        }`}
+                      >
+                        {p === 'day' ? 'Día' : p === 'week' ? 'Semana' : 'Mes'}
+                      </button>
                     ))}
-                  </select>
-                </Field>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <Field label={simulationForm.startPrecision === 'day' ? 'Inicia el día' : simulationForm.startPrecision === 'week' ? 'Inicia la semana del' : 'Inicia en el mes'}>
+                    {simulationForm.startPrecision === 'month' ? (
+                      <input
+                        type="month"
+                        value={simulationForm.startDate.slice(0, 7)}
+                        onChange={(event) => {
+                          const newStart = firstOfMonth(event.target.value + '-01');
+                          setSimulationForm((current) => ({
+                            ...current,
+                            startDate: newStart,
+                            endDate: current.endDate < newStart ? newStart : current.endDate,
+                          }));
+                        }}
+                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                      />
+                    ) : (
+                      <input
+                        type="date"
+                        value={simulationForm.startDate}
+                        onChange={(event) => {
+                          let newStart = event.target.value;
+                          if (simulationForm.startPrecision === 'week') newStart = snapToMonday(newStart);
+                          setSimulationForm((current) => ({
+                            ...current,
+                            startDate: newStart,
+                            endDate: current.endDate < newStart ? newStart : current.endDate,
+                          }));
+                        }}
+                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                      />
+                    )}
+                  </Field>
+                  <Field label="Termina en">
+                    <input
+                      type="date"
+                      value={simulationForm.endDate}
+                      min={simulationForm.startDate}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, endDate: event.target.value }))}
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                    />
+                  </Field>
+                  <Field label="Frecuencia">
+                    <select
+                      value={simulationForm.frequency}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
+                    >
+                      {FREQUENCIES.map((frequency) => (
+                        <option key={frequency.value} value={frequency.value}>{frequency.label}</option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+                {simulationForm.startPrecision === 'week' && (
+                  <p className="text-[11px] text-[var(--gray-400)]">
+                    La propuesta empieza el lunes {simulationForm.startDate}. Selecciona cualquier día y se ajusta automáticamente al inicio de esa semana.
+                  </p>
+                )}
               </div>
 
               <Field label="Forma de cobro / pago (opcional)">

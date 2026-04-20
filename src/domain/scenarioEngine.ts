@@ -86,6 +86,32 @@ function addDays(dateIso: string, offset: number): string {
   return formatIsoDate(date);
 }
 
+function snapToMonday(dateIso: string): string {
+  const date = parseIsoDate(dateIso);
+  const day = date.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const daysToMonday = day === 0 ? -6 : 1 - day;
+  date.setUTCDate(date.getUTCDate() + daysToMonday);
+  return formatIsoDate(date);
+}
+
+function daysInMonth(year: number, monthIndex: number): number {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+}
+
+function syntheticWeekValue(concept: FlowConcept, period: ScenarioMonth, planYear: number): number {
+  let total = 0;
+  let cursor = period.startDate;
+  while (cursor <= period.endDate) {
+    const year = parseInt(cursor.slice(0, 4), 10);
+    const monthIndex = parseInt(cursor.slice(5, 7), 10) - 1;
+    if (year === planYear) {
+      total += (concept.monthlyData[monthIndex] ?? 0) / daysInMonth(year, monthIndex);
+    }
+    cursor = addDays(cursor, 1);
+  }
+  return total;
+}
+
 function addMonthsToDate(dateIso: string, offset: number): string {
   const parsed = parseIsoDate(dateIso);
   const year = parsed.getUTCFullYear();
@@ -166,20 +192,41 @@ export function buildScenarioMonths(
 
   if (granularity === 'weekly') {
     const periods: ScenarioMonth[] = [];
-    plan.weekDates.forEach((weekStartDate) => {
-      const weekEndDate = addDays(weekStartDate, 6);
-      if (weekEndDate < startDate || weekStartDate > endDate) return;
-      const weekStart = parseIsoDate(weekStartDate);
-      periods.push({
-        monthIndex: weekStart.getUTCMonth(),
-        year: weekStart.getUTCFullYear(),
-        label: `Sem ${shortDateLabel(weekStartDate)}`,
-        ym: `week:${weekStartDate}`,
-        granularity: 'weekly',
-        startDate: weekStartDate,
-        endDate: weekEndDate,
+    const weekSource = plan.weekDates.length > 0 ? plan.weekDates : null;
+
+    if (weekSource) {
+      weekSource.forEach((weekStartDate) => {
+        const weekEndDate = addDays(weekStartDate, 6);
+        if (weekEndDate < startDate || weekStartDate > endDate) return;
+        const weekStart = parseIsoDate(weekStartDate);
+        periods.push({
+          monthIndex: weekStart.getUTCMonth(),
+          year: weekStart.getUTCFullYear(),
+          label: `Sem ${shortDateLabel(weekStartDate)}`,
+          ym: `week:${weekStartDate}`,
+          granularity: 'weekly',
+          startDate: weekStartDate,
+          endDate: weekEndDate,
+        });
       });
-    });
+    } else {
+      // Generate synthetic weeks from the scenario range
+      let cursor = snapToMonday(startDate);
+      while (cursor <= endDate) {
+        const weekEndDate = addDays(cursor, 6);
+        const weekStart = parseIsoDate(cursor);
+        periods.push({
+          monthIndex: weekStart.getUTCMonth(),
+          year: weekStart.getUTCFullYear(),
+          label: `Sem ${shortDateLabel(cursor)}`,
+          ym: `week:${cursor}`,
+          granularity: 'weekly',
+          startDate: cursor,
+          endDate: weekEndDate,
+        });
+        cursor = addDays(cursor, 7);
+      }
+    }
     return periods;
   }
 
@@ -397,11 +444,17 @@ function baseValueForPeriod(
 
   if (period.granularity === 'weekly') {
     const weekIndex = weekIndexByStartDate.get(period.startDate);
-    return weekIndex === undefined ? 0 : (concept.weeklyData[weekIndex] ?? 0);
+    if (weekIndex !== undefined) return concept.weeklyData[weekIndex] ?? 0;
+    return syntheticWeekValue(concept, period, planYear);
   }
 
   const weekIndex = dayToWeekIndex.get(period.startDate);
-  return weekIndex === undefined ? 0 : ((concept.weeklyData[weekIndex] ?? 0) / 7);
+  if (weekIndex !== undefined) return (concept.weeklyData[weekIndex] ?? 0) / 7;
+  // Synthetic daily value from monthly data
+  const year = parseInt(period.startDate.slice(0, 4), 10);
+  const monthIndex = parseInt(period.startDate.slice(5, 7), 10) - 1;
+  if (year !== planYear) return 0;
+  return (concept.monthlyData[monthIndex] ?? 0) / daysInMonth(year, monthIndex);
 }
 
 function periodContainsDate(period: ScenarioMonth, dateIso: string): boolean {

@@ -312,7 +312,7 @@ export default function Forecast({
           Pronóstico unificado por escenario y ajustes activos. Doble clic en celdas hoja para editar manualmente.
         </p>
 
-        <div className="mt-5 grid grid-cols-[240px,240px,minmax(0,1fr)] gap-4">
+        <div className="mt-5 grid grid-cols-[200px,200px,minmax(0,1fr),auto] gap-4">
           <button
             onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
             className={`rounded-xl border px-3 py-2 text-[13px] font-medium transition ${
@@ -348,20 +348,37 @@ export default function Forecast({
                 <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
               ))}
           </select>
-          <div className="flex items-center justify-end rounded-xl bg-[var(--gray-50)] p-1">
-            {(['base', 'simulated', 'manual', 'diff'] as ForecastLayerMode[]).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setLayerMode(mode)}
-                className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
-                  layerMode === mode
-                    ? 'bg-white text-[var(--gray-950)] shadow-sm'
-                    : 'text-[var(--gray-500)]'
-                }`}
-              >
-                {mode === 'base' ? 'Base' : mode === 'simulated' ? 'Simulado' : mode === 'manual' ? 'Manual' : 'Diff'}
-              </button>
-            ))}
+          <div className="flex items-center gap-2 justify-end">
+            <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-1">
+              {(['monthly', 'weekly', 'daily'] as ForecastGranularity[]).map((g) => (
+                <button
+                  key={g}
+                  onClick={() => onGranularityChange?.(g)}
+                  className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
+                    granularity === g
+                      ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                      : 'text-[var(--gray-500)]'
+                  }`}
+                >
+                  {g === 'monthly' ? 'Mes' : g === 'weekly' ? 'Semana' : 'Día'}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-1">
+              {(['base', 'simulated', 'manual', 'diff'] as ForecastLayerMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setLayerMode(mode)}
+                  className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
+                    layerMode === mode
+                      ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                      : 'text-[var(--gray-500)]'
+                  }`}
+                >
+                  {mode === 'base' ? 'Base' : mode === 'simulated' ? 'Simulado' : mode === 'manual' ? 'Manual' : 'Diff'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
