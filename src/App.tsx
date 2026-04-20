@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { FlowPlan, Proposal, Scenario, TabId } from './types';
+import { FlowPlan, Proposal, Scenario, TabId, ForecastOverride } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { loadClientsCatalog } from './domain/loadClientsCatalog';
@@ -79,6 +79,7 @@ export default function App() {
   });
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
+  const [forecastOverrides, setForecastOverrides] = useState<ForecastOverride[]>([]);
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -97,6 +98,7 @@ export default function App() {
       if (stored.clients.length) setClients(stored.clients);
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
+      if (stored.forecastOverrides?.length) setForecastOverrides(stored.forecastOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
     }
@@ -118,12 +120,12 @@ export default function App() {
     const timer = setTimeout(() => {
       saveStore({
         plan, proposals, scenarios, providers, clients,
-        assumptions, confirmedPayments, cxpRecords,
+        assumptions, confirmedPayments, cxpRecords, forecastOverrides,
         lastSaved: new Date().toISOString(),
       });
     }, 500);
     return () => clearTimeout(timer);
-  }, [plan, proposals, scenarios, providers, clients, assumptions, confirmedPayments, cxpRecords]);
+  }, [plan, proposals, scenarios, providers, clients, assumptions, confirmedPayments, cxpRecords, forecastOverrides]);
 
   /* ── Animated page key for re-mount on tab change ── */
   const [pageKey, setPageKey] = useState(0);
@@ -330,7 +332,12 @@ export default function App() {
             )}
             {(activeTab === 'pnl' || activeTab === 'cashflow' || activeTab === 'drivers') && (
               plan
-                ? <Forecast plan={plan} view={activeTab} />
+                ? <Forecast
+                    plan={plan}
+                    view={activeTab}
+                    overrides={forecastOverrides}
+                    onOverridesChange={setForecastOverrides}
+                  />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Pronóstico" />
             )}
           </ErrorBoundary>
