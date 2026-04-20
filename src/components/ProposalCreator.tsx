@@ -18,6 +18,7 @@ import {
   FlowPlan,
   MONTHS,
   Proposal,
+  ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
   Scenario,
   Simulation,
@@ -190,6 +191,16 @@ function parseCustomAllocation(input: string): number[] | undefined {
     .map((chunk) => Number(chunk.trim()))
     .filter((value) => !Number.isNaN(value) && value > 0);
   return values.length > 0 ? values : undefined;
+}
+
+function resolveSimulationTargetIds(simulation: Partial<Simulation>): string[] {
+  const defaultTarget =
+    simulation.category && simulation.category !== 'Incremento de Ingresos'
+      ? ROLE_TARGET_EXPENSE
+      : ROLE_TARGET_INCOME;
+  return Array.isArray(simulation.targetIds) && simulation.targetIds.length > 0
+    ? simulation.targetIds
+    : [defaultTarget];
 }
 
 function buildSimulationFromForm(
@@ -408,16 +419,17 @@ export default function ProposalCreator({
   };
 
   const openEditSimulation = (simulation: Simulation) => {
+    const targetIds = resolveSimulationTargetIds(simulation);
     setEditingSimulationId(simulation.id);
     setSimulationForm({
       name: simulation.name,
       description: simulation.description,
-      category: simulation.category,
-      type: simulation.type,
+      category: simulation.category ?? 'Incremento de Ingresos',
+      type: simulation.type ?? 'amount_adjustment',
       operation: simulation.operation ?? 'increase',
-      targetIds: simulation.targetIds,
-      startYearMonth: simulation.startYearMonth,
-      endYearMonth: simulation.endYearMonth ?? simulation.startYearMonth,
+      targetIds,
+      startYearMonth: simulation.startYearMonth ?? `${plan.year}-01`,
+      endYearMonth: simulation.endYearMonth ?? simulation.startYearMonth ?? `${plan.year}-12`,
       frequency: simulation.frequency ?? 'monthly',
       amount: simulation.amount ?? 0,
       percent: Math.abs((simulation.percent ?? 0) * 100),
@@ -1018,6 +1030,11 @@ export default function ProposalCreator({
 
             {filteredSimulations.map((simulation) => {
               const selected = assignedSimulationIds.has(simulation.id);
+              const targetIds = resolveSimulationTargetIds(simulation);
+              const targetLabel = targetIds
+                .slice(0, 2)
+                .map((id) => resolveConceptLabel(plan, id))
+                .join(', ');
               return (
                 <div
                   key={simulation.id}
@@ -1047,9 +1064,9 @@ export default function ProposalCreator({
                       </div>
                       <p className="mt-1 line-clamp-2 text-[11px] text-[#86868b]">{simulation.description || 'Sin descripción'}</p>
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[#6e6e73]">
-                        <Badge>{SIMULATION_TYPES.find((item) => item.value === simulation.type)?.label ?? simulation.type}</Badge>
+                        <Badge>{SIMULATION_TYPES.find((item) => item.value === simulation.type)?.label ?? 'Simulación'}</Badge>
                         <Badge>{simulation.operation === 'decrease' ? 'Reducir' : 'Incrementar'}</Badge>
-                        <Badge>{simulation.targetIds.slice(0, 2).map((id) => resolveConceptLabel(plan, id)).join(', ')}{simulation.targetIds.length > 2 ? ' +' : ''}</Badge>
+                        <Badge>{targetLabel}{targetIds.length > 2 ? ' +' : ''}</Badge>
                         {simulation.percent !== undefined && <Badge>{Math.round(Math.abs(simulation.percent) * 100)}%</Badge>}
                         {simulation.amount !== undefined && <Badge>{simulation.amount}</Badge>}
                         {simulation.installments && <Badge>{simulation.installments} parcialidades</Badge>}

@@ -19,7 +19,7 @@ import {
   scenarioCellKey,
 } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
-import { ensureBaseScenario } from './simulationCompiler';
+import { buildSimulationEffects, ensureBaseScenario } from './simulationCompiler';
 
 export interface CXPRecord {
   cia: string;
@@ -334,10 +334,11 @@ function parseStoredPayload(raw: string): { version: number; data: unknown } | n
 
 function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
   const defaults = getDefaultStore();
+  const plan = data.plan ?? null;
 
   const proposals = validateArray<Proposal>(data.proposals, 'proposals');
   const scenarios = ensureBaseScenario(
-    data.plan ?? null,
+    plan,
     validateArray<Scenario>(data.scenarios, 'scenarios').map((scenario) => ({
       ...scenario,
       kind: scenario.kind ?? (scenario.id === BASE_SCENARIO_ID ? 'base' : 'proposal'),
@@ -345,12 +346,15 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
       locked: scenario.id === BASE_SCENARIO_ID ? true : scenario.locked,
     })),
   );
+  const simulations = validateArray<Simulation>(data.simulations, 'simulations').map((simulation) =>
+    normalizeSimulation(simulation, plan),
+  );
 
   return {
-    plan: data.plan ?? null,
+    plan,
     proposals,
     scenarios,
-    simulations: validateArray<Simulation>(data.simulations, 'simulations'),
+    simulations,
     scenarioCellOverrides: validateArray<ScenarioCellOverride>(
       data.scenarioCellOverrides,
       'scenarioCellOverrides',
@@ -370,6 +374,82 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
     cxpLoadedCias: validateStringMap(data.cxpLoadedCias),
     lastSaved: validateISODate(data.lastSaved, 'lastSaved'),
   };
+}
+
+function firstSimulationYearMonth(
+  simulation: Partial<Simulation>,
+  plan: FlowPlan | null,
+): string {
+  if (typeof simulation.startYearMonth === 'string' && simulation.startYearMonth.includes('-')) {
+    return simulation.startYearMonth;
+  }
+
+  const effectYearMonths = (simulation.effects ?? [])
+    .flatMap((effect) => effect.yearMonths ?? [])
+    .filter((value): value is string => typeof value === 'string' && value.includes('-'))
+    .sort();
+
+  if (effectYearMonths[0]) return effectYearMonths[0];
+
+  const firstMonthOffset = (simulation.effects ?? [])
+    .flatMap((effect) => effect.monthOffsets ?? [])
+    .find((value): value is number => typeof value === 'number' && value >= 0);
+
+  if (firstMonthOffset !== undefined) {
+    const baseYear = plan?.year ?? new Date().getFullYear();
+    return `${baseYear}-${String(firstMonthOffset + 1).padStart(2, '0')}`;
+  }
+
+  return firstPlanMonth(plan);
+}
+
+function normalizeSimulation(
+  simulation: Partial<Simulation>,
+  plan: FlowPlan | null,
+): Simulation {
+  const category = simulation.category ?? 'Incremento de Ingresos';
+  const defaultTargetId = expenseLikeCategory(category)
+    ? ROLE_TARGET_EXPENSE
+    : ROLE_TARGET_INCOME;
+  const startYearMonth = firstSimulationYearMonth(simulation, plan);
+  const endYearMonth =
+    typeof simulation.endYearMonth === 'string' && simulation.endYearMonth.includes('-')
+      ? simulation.endYearMonth
+      : startYearMonth;
+
+  const normalized: Simulation = {
+    id: simulation.id ?? `simulation-${Date.now()}`,
+    name: simulation.name ?? 'Simulación sin nombre',
+    description: simulation.description ?? '',
+    category,
+    type: simulation.type ?? 'amount_adjustment',
+    targetIds: Array.isArray(simulation.targetIds) && simulation.targetIds.length > 0
+      ? simulation.targetIds
+      : [defaultTargetId],
+    startYearMonth,
+    endYearMonth,
+    frequency: simulation.frequency ?? 'monthly',
+    operation: simulation.operation ?? (expenseLikeCategory(category) ? 'decrease' : 'increase'),
+    amount: typeof simulation.amount === 'number' ? simulation.amount : undefined,
+    percent: typeof simulation.percent === 'number' ? simulation.percent : undefined,
+    installments: typeof simulation.installments === 'number' ? simulation.installments : undefined,
+    customAllocation: Array.isArray(simulation.customAllocation)
+      ? simulation.customAllocation.filter((value): value is number => typeof value === 'number')
+      : undefined,
+    shiftMonths: typeof simulation.shiftMonths === 'number' ? simulation.shiftMonths : undefined,
+    shiftRatio: typeof simulation.shiftRatio === 'number' ? simulation.shiftRatio : undefined,
+    paymentLabel: typeof simulation.paymentLabel === 'string' ? simulation.paymentLabel : undefined,
+    comments: typeof simulation.comments === 'string' ? simulation.comments : undefined,
+    effects: Array.isArray(simulation.effects) ? simulation.effects : [],
+    createdAt: validateISODate(simulation.createdAt, 'simulation.createdAt'),
+    updatedAt: validateISODate(simulation.updatedAt, 'simulation.updatedAt'),
+  };
+
+  if (normalized.effects.length === 0 && plan) {
+    normalized.effects = buildSimulationEffects(plan, normalized);
+  }
+
+  return normalized;
 }
 
 export function loadStore(): FlowSenseStore | null {

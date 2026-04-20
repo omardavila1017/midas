@@ -73,4 +73,55 @@ describe('persistence migration', () => {
     expect(migrated.activeProposalId).toBe(null);
     expect(migrated.activeScenarioId).toBe('scenario-base');
   });
+
+  it('normalizes v2 simulations that were saved without the new fields', () => {
+    const v2Json = JSON.stringify({
+      version: 2,
+      data: {
+        plan: createTestPlan(),
+        proposals: [],
+        scenarios: [],
+        simulations: [
+          {
+            id: 'simulation-legacy-v2',
+            name: 'Simulación vieja',
+            description: 'Guardada antes de targetIds',
+            category: 'Reducción de Costos',
+            effects: [
+              {
+                id: 'effect-1',
+                type: 'concept_delta',
+                conceptId: '__role__:expense',
+                monthOffsets: [0],
+                mode: 'absolute',
+                value: -50,
+              },
+            ],
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+        scenarioCellOverrides: [],
+        activeProposalId: null,
+        activeScenarioId: 'scenario-base',
+        providers: [],
+        clients: [],
+        assumptions: {
+          year: 2026,
+          globalCompliance: 1,
+          factorajeDays: 30,
+        },
+        confirmedPayments: [],
+        cxpRecords: [],
+        lastSaved: '2026-01-03T00:00:00.000Z',
+      },
+    });
+
+    const normalized = importStore(v2Json);
+
+    expect(normalized.simulations).toHaveLength(1);
+    expect(normalized.simulations[0].type).toBe('amount_adjustment');
+    expect(normalized.simulations[0].targetIds).toEqual(['__role__:expense']);
+    expect(normalized.simulations[0].startYearMonth).toBe('2026-01');
+  });
 });
