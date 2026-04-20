@@ -7,6 +7,7 @@
  */
 
 import {
+  BASE_SCENARIO_ID,
   FlowPlan,
   Proposal,
   ROLE_TARGET_EXPENSE,
@@ -18,6 +19,7 @@ import {
   scenarioCellKey,
 } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
+import { ensureBaseScenario } from './simulationCompiler';
 
 export interface CXPRecord {
   cia: string;
@@ -129,7 +131,15 @@ function expenseLikeCategory(category: SimulationCategory): boolean {
   return category !== 'Incremento de Ingresos';
 }
 
-function migrateLegacyProposalToSimulation(legacy: LegacyProposal): Simulation {
+function migrateLegacyProposalToSimulation(
+  legacy: LegacyProposal,
+  plan: FlowPlan | null,
+): Simulation {
+  const baseYear = plan?.year ?? new Date().getFullYear();
+  const impactedMonths = legacy.monthlyImpact
+    .map((value, monthOffset) => ({ value, monthOffset }))
+    .filter((item) => item.value !== 0);
+
   const effects = legacy.monthlyImpact
     .map((value, monthOffset) => ({ value, monthOffset }))
     .filter((item) => item.value !== 0)
@@ -149,6 +159,24 @@ function migrateLegacyProposalToSimulation(legacy: LegacyProposal): Simulation {
     name: legacy.name,
     description: legacy.notes || `${legacy.category}${legacy.responsible ? ` · ${legacy.responsible}` : ''}`,
     category: legacy.category,
+    type: 'amount_adjustment',
+    targetIds: [
+      expenseLikeCategory(legacy.category)
+        ? ROLE_TARGET_EXPENSE
+        : ROLE_TARGET_INCOME,
+    ],
+    startYearMonth: `${baseYear}-${String((impactedMonths[0]?.monthOffset ?? 0) + 1).padStart(2, '0')}`,
+    endYearMonth: impactedMonths.length > 0
+      ? `${baseYear}-${String((impactedMonths[impactedMonths.length - 1]?.monthOffset ?? 0) + 1).padStart(2, '0')}`
+      : `${baseYear}-${String(Math.max(1, legacy.startMonth)).padStart(2, '0')}`,
+    frequency: legacy.distribution === 'Mensual'
+      ? 'monthly'
+      : legacy.distribution === 'Semestral'
+        ? 'semiannual'
+        : 'once',
+    operation: expenseLikeCategory(legacy.category) ? 'decrease' : 'increase',
+    amount: legacy.monthlyAmount * legacy.probability,
+    comments: legacy.notes,
     effects,
     createdAt: legacy.createdAt ?? isoNow(),
     updatedAt: legacy.createdAt ?? isoNow(),
@@ -158,7 +186,7 @@ function migrateLegacyProposalToSimulation(legacy: LegacyProposal): Simulation {
 function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseStore {
   const plan = legacy.plan ?? null;
   const now = isoNow();
-  const simulations = (legacy.proposals ?? []).map(migrateLegacyProposalToSimulation);
+  const simulations = (legacy.proposals ?? []).map((proposal) => migrateLegacyProposalToSimulation(proposal, plan));
 
   const needsMigratedContainer =
     simulations.length > 0 ||
@@ -181,6 +209,7 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
   const migratedScenariosFromLegacy = (legacy.scenarios ?? []).map<Scenario>((scenario) => ({
     id: scenario.id,
     proposalId: 'proposal-migrated',
+    kind: 'proposal',
     name: scenario.name,
     description: scenario.description,
     probability: 1,
@@ -192,9 +221,10 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
   }));
 
   const fallbackScenario: Scenario | null = needsMigratedContainer && migratedScenariosFromLegacy.length === 0
-    ? {
+      ? {
         id: 'scenario-migrated-default',
         proposalId: 'proposal-migrated',
+        kind: 'proposal',
         name: 'Escenario migrado',
         description: 'Escenario generado para conservar simulaciones y overrides legacy.',
         probability: 1,
@@ -206,15 +236,16 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
       }
     : null;
 
-  const scenarios = fallbackScenario
+  const proposalScenarios = fallbackScenario
     ? [fallbackScenario]
     : migratedScenariosFromLegacy;
+  const scenarios = ensureBaseScenario(plan, proposalScenarios);
 
   if (proposals[0] && scenarios[0]) {
     proposals[0].activeScenarioId = scenarios[0].id;
   }
 
-  const defaultScenarioId = scenarios[0]?.id ?? null;
+  const defaultScenarioId = proposalScenarios[0]?.id ?? BASE_SCENARIO_ID;
   const scenarioCellOverrides: ScenarioCellOverride[] = (legacy.forecastOverrides ?? []).map((override) => ({
     key: scenarioCellKey(
       defaultScenarioId ?? 'scenario-migrated-default',
@@ -237,8 +268,8 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
     scenarios,
     simulations,
     scenarioCellOverrides,
-    activeProposalId: proposals[0]?.id ?? null,
-    activeScenarioId: scenarios[0]?.id ?? null,
+    activeProposalId: null,
+    activeScenarioId: BASE_SCENARIO_ID,
     providers: Array.isArray(legacy.providers) ? legacy.providers : [],
     clients: Array.isArray(legacy.clients) ? legacy.clients : [],
     assumptions: validateAssumptions(legacy.assumptions),
@@ -253,11 +284,11 @@ export function getDefaultStore(): FlowSenseStore {
   return {
     plan: null,
     proposals: [],
-    scenarios: [],
+    scenarios: ensureBaseScenario(null, []),
     simulations: [],
     scenarioCellOverrides: [],
     activeProposalId: null,
-    activeScenarioId: null,
+    activeScenarioId: BASE_SCENARIO_ID,
     providers: [],
     clients: [],
     assumptions: {
@@ -301,7 +332,15 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
   const defaults = getDefaultStore();
 
   const proposals = validateArray<Proposal>(data.proposals, 'proposals');
-  const scenarios = validateArray<Scenario>(data.scenarios, 'scenarios');
+  const scenarios = ensureBaseScenario(
+    data.plan ?? null,
+    validateArray<Scenario>(data.scenarios, 'scenarios').map((scenario) => ({
+      ...scenario,
+      kind: scenario.kind ?? (scenario.id === BASE_SCENARIO_ID ? 'base' : 'proposal'),
+      proposalId: scenario.id === BASE_SCENARIO_ID ? null : scenario.proposalId,
+      locked: scenario.id === BASE_SCENARIO_ID ? true : scenario.locked,
+    })),
+  );
 
   return {
     plan: data.plan ?? null,
@@ -312,8 +351,10 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
       data.scenarioCellOverrides,
       'scenarioCellOverrides',
     ),
-    activeProposalId: data.activeProposalId ?? proposals[0]?.id ?? null,
-    activeScenarioId: data.activeScenarioId ?? scenarios[0]?.id ?? null,
+    activeProposalId: data.activeScenarioId === BASE_SCENARIO_ID
+      ? null
+      : (data.activeProposalId ?? proposals[0]?.id ?? null),
+    activeScenarioId: data.activeScenarioId ?? BASE_SCENARIO_ID,
     providers: validateArray<Provider>(data.providers, 'providers'),
     clients: validateArray<Client>(data.clients, 'clients'),
     assumptions: validateAssumptions(data.assumptions),

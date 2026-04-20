@@ -64,12 +64,13 @@ describe('persistence migration', () => {
     expect(migrated.proposals[0].id).toBe('proposal-migrated');
     expect(migrated.simulations).toHaveLength(1);
     expect(migrated.simulations[0].effects[0].conceptId).toBe('__role__:expense');
-    expect(migrated.scenarios).toHaveLength(1);
-    expect(migrated.scenarios[0].simulationIds).toEqual(['simulation-legacy-proposal-1']);
+    expect(migrated.scenarios).toHaveLength(2);
+    expect(migrated.scenarios[0].id).toBe('scenario-base');
+    expect(migrated.scenarios[1].simulationIds).toEqual(['simulation-legacy-proposal-1']);
     expect(migrated.scenarioCellOverrides).toHaveLength(1);
     expect(migrated.scenarioCellOverrides[0].scenarioId).toBe('legacy-scenario-1');
     expect(migrated.scenarioCellOverrides[0].manualValue).toBe(120);
-    expect(migrated.activeProposalId).toBe('proposal-migrated');
-    expect(migrated.activeScenarioId).toBe('legacy-scenario-1');
+    expect(migrated.activeProposalId).toBe(null);
+    expect(migrated.activeScenarioId).toBe('scenario-base');
   });
 });

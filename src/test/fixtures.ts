@@ -77,6 +77,7 @@ export function createTestScenario(overrides?: Partial<Scenario>): Scenario {
   return {
     id: 'scenario-1',
     proposalId: 'proposal-1',
+    kind: 'proposal',
     name: 'Escenario Base',
     description: 'Escenario para pruebas',
     probability: 1,
@@ -96,6 +97,13 @@ export function createTestSimulations(): Simulation[] {
       name: 'Incremento 10%',
       description: 'Aumenta ingresos un 10%',
       category: 'Incremento de Ingresos',
+      type: 'percent_adjustment',
+      targetIds: ['concept-income-leaf'],
+      startYearMonth: '2026-01',
+      endYearMonth: '2026-01',
+      frequency: 'monthly',
+      operation: 'increase',
+      percent: 0.1,
       effects: [
         {
           id: 'effect-1',
@@ -114,6 +122,13 @@ export function createTestSimulations(): Simulation[] {
       name: 'Incremento $5',
       description: 'Suma 5 al mismo concepto',
       category: 'Incremento de Ingresos',
+      type: 'amount_adjustment',
+      targetIds: ['concept-income-leaf'],
+      startYearMonth: '2026-01',
+      endYearMonth: '2026-01',
+      frequency: 'once',
+      operation: 'increase',
+      amount: 5,
       effects: [
         {
           id: 'effect-2',

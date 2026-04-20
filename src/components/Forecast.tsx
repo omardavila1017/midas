@@ -7,6 +7,8 @@ import {
   X,
 } from 'lucide-react';
 import {
+  BASE_SCENARIO_ID,
+  BASE_SCENARIO_NAME,
   EvaluatedCell,
   FlowConcept,
   FlowPlan,
@@ -22,6 +24,7 @@ import {
   scenarioCellKey,
 } from '../types';
 import { evaluateScenario } from '../domain/scenarioEngine';
+import { isBaseScenario } from '../domain/simulationCompiler';
 import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 
 interface Props {
@@ -84,25 +87,48 @@ export default function Forecast({
   const [layerMode, setLayerMode] = useState<ForecastLayerMode>('manual');
 
   const childrenById = useMemo(() => buildChildrenIndex(plan), [plan]);
+  const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
   const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
     ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? baseScenario
     ?? null;
+  const effectiveProposal = activeProposal ?? {
+    id: 'proposal-base',
+    name: BASE_SCENARIO_NAME,
+    description: 'Pronóstico original',
+    status: 'Pendiente' as const,
+    createdAt: '',
+    updatedAt: '',
+  };
+  const editingAllowed = !isBaseScenario(activeScenario);
 
   const baseEvaluation = useMemo(() => {
-    if (!activeProposal || !activeScenario) return null;
-    return evaluateScenario(plan, activeProposal, activeScenario, [], []);
-  }, [activeProposal, activeScenario, plan]);
+    if (!activeScenario) return null;
+    return evaluateScenario(plan, effectiveProposal, activeScenario, [], []);
+  }, [activeScenario, effectiveProposal, plan]);
 
   const simulatedEvaluation = useMemo(() => {
-    if (!activeProposal || !activeScenario) return null;
-    return evaluateScenario(plan, activeProposal, activeScenario, simulations, []);
-  }, [activeProposal, activeScenario, plan, simulations]);
+    if (!activeScenario) return null;
+    return evaluateScenario(
+      plan,
+      effectiveProposal,
+      activeScenario,
+      isBaseScenario(activeScenario) ? [] : simulations,
+      [],
+    );
+  }, [activeScenario, effectiveProposal, plan, simulations]);
 
   const finalEvaluation = useMemo(() => {
-    if (!activeProposal || !activeScenario) return null;
-    return evaluateScenario(plan, activeProposal, activeScenario, simulations, overrides);
-  }, [activeProposal, activeScenario, overrides, plan, simulations]);
+    if (!activeScenario) return null;
+    return evaluateScenario(
+      plan,
+      effectiveProposal,
+      activeScenario,
+      isBaseScenario(activeScenario) ? [] : simulations,
+      isBaseScenario(activeScenario) ? [] : overrides,
+    );
+  }, [activeScenario, effectiveProposal, overrides, plan, simulations]);
 
   const months = finalEvaluation?.months ?? [];
   const roots = useMemo(
@@ -118,7 +144,7 @@ export default function Forecast({
     setPopover(null);
   }, [activeScenarioId, activeProposalId, layerMode, view]);
 
-  if (!activeProposal || !activeScenario || !baseEvaluation || !simulatedEvaluation || !finalEvaluation) {
+  if (!activeScenario || !baseEvaluation || !simulatedEvaluation || !finalEvaluation) {
     return (
       <div className="rounded-2xl border border-dashed border-[#d2d2d7] bg-white px-6 py-20 text-center">
         <h2 className="text-[18px] font-semibold text-[#1d1d1f]">No hay escenario activo</h2>
@@ -161,10 +187,12 @@ export default function Forecast({
   });
 
   const handleClearScenarioOverrides = () => {
+    if (!editingAllowed) return;
     onOverridesChange(overrides.filter((override) => override.scenarioId !== activeScenario.id));
   };
 
   const applyOverride = (conceptId: string, yearMonth: string, manualValue: number) => {
+    if (!editingAllowed) return;
     const cell = finalEvaluation.cells.get(scenarioCellKey(activeScenario.id, conceptId, yearMonth));
     if (!cell || !cell.isEditable) return;
     const existing = overrides.find((override) => override.key === scenarioCellKey(activeScenario.id, conceptId, yearMonth));
@@ -191,6 +219,7 @@ export default function Forecast({
   };
 
   const setComment = (conceptId: string, yearMonth: string, comment: string) => {
+    if (!editingAllowed) return;
     const cell = finalEvaluation.cells.get(scenarioCellKey(activeScenario.id, conceptId, yearMonth));
     if (!cell || !cell.isEditable) return;
 
@@ -256,11 +285,23 @@ export default function Forecast({
         </div>
 
         <div className="mt-5 grid grid-cols-[240px,240px,minmax(0,1fr)] gap-4">
+          <button
+            onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
+            className={`rounded-xl border px-3 py-2.5 text-left text-[13px] font-medium transition ${
+              isBaseScenario(activeScenario)
+                ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+                : 'border-[#d2d2d7] bg-[#fbfbfd] text-[#1d1d1f]'
+            }`}
+          >
+            {BASE_SCENARIO_NAME}
+          </button>
           <select
-            value={activeProposal.id}
+            value={activeProposal?.id ?? ''}
             onChange={(event) => onSelectProposal(event.target.value)}
+            disabled={proposals.length === 0}
             className="rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
           >
+            {proposals.length === 0 && <option value="">Sin propuestas</option>}
             {proposals.map((proposal) => (
               <option key={proposal.id} value={proposal.id}>{proposal.name}</option>
             ))}
@@ -270,8 +311,11 @@ export default function Forecast({
             onChange={(event) => onSelectScenario(event.target.value)}
             className="rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
           >
+            {baseScenario && (
+              <option value={baseScenario.id}>{baseScenario.name}</option>
+            )}
             {scenarios
-              .filter((scenario) => scenario.proposalId === activeProposal.id)
+              .filter((scenario) => activeProposal ? scenario.proposalId === activeProposal.id : false)
               .map((scenario) => (
                 <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
               ))}
@@ -301,6 +345,11 @@ export default function Forecast({
             <MessageSquare className="w-3.5 h-3.5 text-[#0071e3]" />
             Comentarios{commentCount > 0 ? ` (${commentCount})` : ''}
           </span>
+          {isBaseScenario(activeScenario) && (
+            <span className="rounded-full bg-[#f5f5f7] px-2.5 py-1 text-[11px] text-[#6e6e73]">
+              Solo lectura: el Base no admite edición manual
+            </span>
+          )}
         </div>
       </header>
 
@@ -344,6 +393,7 @@ export default function Forecast({
                       setEditing={setEditing}
                       popover={popover}
                       setPopover={setPopover}
+                      editingAllowed={editingAllowed}
                       applyOverride={applyOverride}
                       restoreOverride={restoreOverride}
                       setComment={setComment}
@@ -369,6 +419,7 @@ export default function Forecast({
                       setEditing={setEditing}
                       popover={popover}
                       setPopover={setPopover}
+                      editingAllowed={editingAllowed}
                       applyOverride={applyOverride}
                       restoreOverride={restoreOverride}
                       setComment={setComment}
@@ -408,6 +459,7 @@ export default function Forecast({
                       setEditing={setEditing}
                       popover={popover}
                       setPopover={setPopover}
+                      editingAllowed={editingAllowed}
                       applyOverride={applyOverride}
                       restoreOverride={restoreOverride}
                       setComment={setComment}
@@ -549,6 +601,7 @@ interface RowProps {
   setEditing: (editing: { conceptId: string; yearMonth: string } | null) => void;
   popover: { conceptId: string; yearMonth: string } | null;
   setPopover: (popover: { conceptId: string; yearMonth: string } | null) => void;
+  editingAllowed: boolean;
   applyOverride: (conceptId: string, yearMonth: string, manualValue: number) => void;
   restoreOverride: (conceptId: string, yearMonth: string) => void;
   setComment: (conceptId: string, yearMonth: string, comment: string) => void;
@@ -568,6 +621,7 @@ function ConceptRow({
   setEditing,
   popover,
   setPopover,
+  editingAllowed,
   applyOverride,
   restoreOverride,
   setComment,
@@ -607,6 +661,7 @@ function ConceptRow({
               key={month.ym}
               cell={cell}
               label={concept.name}
+              editingAllowed={editingAllowed}
               layerMode={layerMode}
               editing={editing}
               setEditing={setEditing}
@@ -638,6 +693,7 @@ function ConceptRow({
           setEditing={setEditing}
           popover={popover}
           setPopover={setPopover}
+          editingAllowed={editingAllowed}
           applyOverride={applyOverride}
           restoreOverride={restoreOverride}
           setComment={setComment}
@@ -650,6 +706,7 @@ function ConceptRow({
 function EditableCell({
   cell,
   label,
+  editingAllowed,
   layerMode,
   editing,
   setEditing,
@@ -661,6 +718,7 @@ function EditableCell({
 }: {
   cell: EvaluatedCell;
   label: string;
+  editingAllowed: boolean;
   layerMode: ForecastLayerMode;
   editing: { conceptId: string; yearMonth: string } | null;
   setEditing: (editing: { conceptId: string; yearMonth: string } | null) => void;
@@ -702,7 +760,7 @@ function EditableCell({
       className={`relative cursor-cell px-3 py-2 text-right tabular-nums ${colorClass}`}
       onDoubleClick={(event) => {
         event.stopPropagation();
-        if (!cell.isEditable) return;
+        if (!cell.isEditable || !editingAllowed) return;
         setEditing({ conceptId: cell.conceptId, yearMonth: cell.yearMonth });
       }}
       onClick={(event) => {
@@ -735,10 +793,11 @@ function EditableCell({
             <CellPopover
               cell={cell}
               label={label}
+              editingAllowed={editingAllowed}
               onClose={() => setPopover(null)}
               onEdit={() => {
                 setPopover(null);
-                if (cell.isEditable) setEditing({ conceptId: cell.conceptId, yearMonth: cell.yearMonth });
+                if (cell.isEditable && editingAllowed) setEditing({ conceptId: cell.conceptId, yearMonth: cell.yearMonth });
               }}
               onRestore={() => restoreOverride(cell.conceptId, cell.yearMonth)}
               onSetComment={(comment) => setComment(cell.conceptId, cell.yearMonth, comment)}
@@ -753,6 +812,7 @@ function EditableCell({
 function CellPopover({
   cell,
   label,
+  editingAllowed,
   onClose,
   onEdit,
   onRestore,
@@ -760,6 +820,7 @@ function CellPopover({
 }: {
   cell: EvaluatedCell;
   label: string;
+  editingAllowed: boolean;
   onClose: () => void;
   onEdit: () => void;
   onRestore: () => void;
@@ -809,7 +870,7 @@ function CellPopover({
         </div>
       )}
 
-      {cell.isEditable && (
+      {cell.isEditable && editingAllowed && (
         <div className="mt-3">
           <label className="mb-1 block text-[11px] uppercase tracking-wide text-[#86868b]">Comentario</label>
           <textarea
@@ -824,7 +885,7 @@ function CellPopover({
       )}
 
       <div className="mt-3 flex gap-2">
-        {cell.isEditable && (
+        {cell.isEditable && editingAllowed && (
           <button
             onClick={onEdit}
             className="flex-1 rounded-lg bg-[#0071e3] px-3 py-2 text-[12px] font-medium text-white"

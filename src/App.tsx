@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { FlowPlan, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId } from './types';
+import { BASE_SCENARIO_ID, FlowPlan, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { loadClientsCatalog } from './domain/loadClientsCatalog';
@@ -154,10 +154,15 @@ export default function App() {
       return;
     }
 
+    if (activeScenarioId === BASE_SCENARIO_ID) {
+      if (activeProposalId !== null) setActiveProposalId(null);
+      return;
+    }
+
     if (!activeProposalId || !proposals.some((proposal) => proposal.id === activeProposalId)) {
       setActiveProposalId(proposals[0].id);
     }
-  }, [activeProposalId, proposals]);
+  }, [activeProposalId, activeScenarioId, proposals]);
 
   useEffect(() => {
     if (!activeProposalId) {
@@ -285,6 +290,7 @@ export default function App() {
     )));
   };
   const updateScenario = (s: Scenario) => {
+    if (s.id === BASE_SCENARIO_ID) return;
     setScenarios(prev => prev.map(x => x.id === s.id ? s : x));
     setProposals(prev => prev.map((proposal) => (
       proposal.id === s.proposalId && proposal.activeScenarioId === s.id
@@ -293,6 +299,7 @@ export default function App() {
     )));
   };
   const deleteScenario = (id: string) => {
+    if (id === BASE_SCENARIO_ID) return;
     const nextScenarios = scenarios.filter(x => x.id !== id);
     setScenarios(nextScenarios);
     setActiveScenarioId(current => current === id ? (nextScenarios[0]?.id ?? null) : current);
@@ -323,7 +330,8 @@ export default function App() {
     if (!scenarioId) return;
     const scenario = scenarios.find((item) => item.id === scenarioId);
     if (!scenario) return;
-    setActiveProposalId(scenario.proposalId);
+    setActiveProposalId(scenario.proposalId ?? null);
+    if (scenario.id === BASE_SCENARIO_ID) return;
     setProposals(prev => prev.map((proposal) => (
       proposal.id === scenario.proposalId
         ? { ...proposal, activeScenarioId: scenarioId, updatedAt: new Date().toISOString() }

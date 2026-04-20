@@ -52,6 +52,7 @@ function createScenario(): Scenario {
   return {
     id: 'scenario-smoke',
     proposalId: 'proposal-smoke',
+    kind: 'proposal',
     name: 'Escenario Smoke',
     description: '',
     probability: 1,

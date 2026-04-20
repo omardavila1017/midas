@@ -339,9 +339,13 @@ export function evaluateScenario(
   for (const simulation of activeSimulations) {
     for (const effect of simulation.effects) {
       if (effect.type !== 'concept_delta') continue;
-      const monthOffsets = effect.monthOffsets.length > 0
-        ? effect.monthOffsets
-        : months.map((_, index) => index);
+      const monthOffsets = effect.yearMonths && effect.yearMonths.length > 0
+        ? effect.yearMonths
+            .map((yearMonth) => monthIndexByYm.get(yearMonth))
+            .filter((value): value is number => value !== undefined)
+        : (effect.monthOffsets && effect.monthOffsets.length > 0
+            ? effect.monthOffsets
+            : months.map((_, index) => index));
 
       for (const monthOffset of monthOffsets) {
         if (monthOffset < 0 || monthOffset >= months.length) continue;

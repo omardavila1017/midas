@@ -1,25 +1,37 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import {
+  ArrowRight,
   Check,
   CopyPlus,
-  FlaskConical,
   FolderTree,
+  FlaskConical,
   Layers,
   Pencil,
   Plus,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import {
+  BASE_SCENARIO_ID,
+  BASE_SCENARIO_NAME,
   CATEGORY_COLORS,
   FlowPlan,
   MONTHS,
   Proposal,
-  ROLE_TARGET_LABELS,
+  ROLE_TARGET_INCOME,
   Scenario,
   Simulation,
   SimulationCategory,
+  SimulationFrequency,
+  SimulationOperation,
+  SimulationType,
 } from '../types';
-import { getSimulationTargetOptions } from '../domain/scenarioEngine';
+import {
+  buildSimulationEffects,
+  cloneProposalWithActiveScenario,
+  isBaseScenario,
+} from '../domain/simulationCompiler';
+import { getSimulationTargetOptions, resolveConceptLabel } from '../domain/scenarioEngine';
 
 interface ProposalCreatorProps {
   plan: FlowPlan;
@@ -59,24 +71,73 @@ interface SimulationFormState {
   name: string;
   description: string;
   category: SimulationCategory;
-  targetId: string;
-  mode: 'absolute' | 'percent';
-  value: number;
-  monthOffsets: number[];
+  type: SimulationType;
+  operation: SimulationOperation;
+  targetIds: string[];
+  startYearMonth: string;
+  endYearMonth: string;
+  frequency: SimulationFrequency;
+  amount: number;
+  percent: number;
+  installments: number;
+  customAllocationText: string;
+  shiftMonths: number;
+  shiftRatio: number;
+  paymentLabel: string;
+  comments: string;
 }
 
+const PROPOSAL_STATUSES: Proposal['status'][] = ['Pendiente', 'En proceso', 'Aprobada', 'Descartada'];
+const SCENARIO_PRESETS = ['Conservador', 'Realista', 'Optimista', 'Personalizado'];
 const SIMULATION_CATEGORIES: SimulationCategory[] = [
   'Incremento de Ingresos',
   'Reducción de Costos',
   'Diferimiento',
   'Renegociación',
 ];
-
-const PROPOSAL_STATUSES: Proposal['status'][] = [
-  'Pendiente',
-  'En proceso',
-  'Aprobada',
-  'Descartada',
+const FREQUENCIES: { value: SimulationFrequency; label: string }[] = [
+  { value: 'once', label: 'Única vez' },
+  { value: 'monthly', label: 'Mensual' },
+  { value: 'bimonthly', label: 'Bimestral' },
+  { value: 'quarterly', label: 'Trimestral' },
+  { value: 'semiannual', label: 'Semestral' },
+  { value: 'annual', label: 'Anual' },
+];
+const SIMULATION_TYPES: {
+  value: SimulationType;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: 'percent_adjustment',
+    label: 'Ajuste porcentual',
+    description: 'Aumenta o reduce ingresos, gastos, cobranza o pagos por un porcentaje.',
+  },
+  {
+    value: 'amount_adjustment',
+    label: 'Ajuste por monto',
+    description: 'Agrega o quita un monto puntual o repetido a los conceptos elegidos.',
+  },
+  {
+    value: 'recurring_series',
+    label: 'Ingreso / gasto recurrente',
+    description: 'Crea flujos mensuales, bimestrales o trimestrales durante un periodo.',
+  },
+  {
+    value: 'installment_plan',
+    label: 'Cobro / pago en parcialidades',
+    description: 'Distribuye un monto total en 2, 3, 4 o más parcialidades.',
+  },
+  {
+    value: 'timing_shift',
+    label: 'Atrasar / adelantar',
+    description: 'Mueve cobros o pagos existentes hacia adelante o hacia atrás en el calendario.',
+  },
+  {
+    value: 'pause_expense',
+    label: 'Pausar o eliminar gasto',
+    description: 'Aplica una reducción del 100% al gasto seleccionado durante el periodo.',
+  },
 ];
 
 function now(): string {
@@ -93,7 +154,7 @@ function proposalDefaults(): ProposalFormState {
 
 function scenarioDefaults(plan: FlowPlan): ScenarioFormState {
   return {
-    name: 'Escenario Base',
+    name: 'Conservador',
     description: '',
     probability: 100,
     startYearMonth: `${plan.year}-01`,
@@ -102,16 +163,78 @@ function scenarioDefaults(plan: FlowPlan): ScenarioFormState {
 }
 
 function simulationDefaults(plan: FlowPlan): SimulationFormState {
-  const targetOptions = getSimulationTargetOptions(plan);
   return {
     name: '',
     description: '',
     category: 'Incremento de Ingresos',
-    targetId: targetOptions[0]?.id ?? '',
-    mode: 'absolute',
-    value: 0,
-    monthOffsets: Array.from({ length: 12 }, (_, index) => index),
+    type: 'percent_adjustment',
+    operation: 'increase',
+    targetIds: [ROLE_TARGET_INCOME],
+    startYearMonth: `${plan.year}-01`,
+    endYearMonth: `${plan.year}-12`,
+    frequency: 'monthly',
+    amount: 0,
+    percent: 10,
+    installments: 4,
+    customAllocationText: '',
+    shiftMonths: 1,
+    shiftRatio: 100,
+    paymentLabel: '',
+    comments: '',
   };
+}
+
+function parseCustomAllocation(input: string): number[] | undefined {
+  const values = input
+    .split(',')
+    .map((chunk) => Number(chunk.trim()))
+    .filter((value) => !Number.isNaN(value) && value > 0);
+  return values.length > 0 ? values : undefined;
+}
+
+function buildSimulationFromForm(
+  plan: FlowPlan,
+  form: SimulationFormState,
+  existing?: Simulation,
+): Simulation {
+  const timestamp = now();
+  const simulationId = existing?.id ?? `simulation-${Date.now()}`;
+  const simulation: Simulation = {
+    id: simulationId,
+    name: form.name.trim(),
+    description: form.description.trim(),
+    category: form.category,
+    type: form.type,
+    targetIds: form.targetIds,
+    startYearMonth: form.startYearMonth,
+    endYearMonth: form.type === 'installment_plan' || form.type === 'timing_shift' || form.type === 'pause_expense'
+      ? form.endYearMonth
+      : form.endYearMonth,
+    frequency: form.type === 'timing_shift'
+      ? 'monthly'
+      : form.type === 'pause_expense'
+        ? 'monthly'
+        : form.frequency,
+    operation: form.type === 'pause_expense' ? 'decrease' : form.operation,
+    amount: form.type === 'percent_adjustment' || form.type === 'pause_expense' || form.type === 'timing_shift'
+      ? undefined
+      : form.amount,
+    percent: form.type === 'percent_adjustment' ? form.percent / 100 : undefined,
+    installments: form.type === 'installment_plan' ? form.installments : undefined,
+    customAllocation: form.type === 'installment_plan'
+      ? parseCustomAllocation(form.customAllocationText)
+      : undefined,
+    shiftMonths: form.type === 'timing_shift' ? form.shiftMonths : undefined,
+    shiftRatio: form.type === 'timing_shift' ? form.shiftRatio / 100 : undefined,
+    paymentLabel: form.paymentLabel.trim() || undefined,
+    comments: form.comments.trim() || undefined,
+    effects: [],
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+  };
+
+  simulation.effects = buildSimulationEffects(plan, simulation);
+  return simulation;
 }
 
 export default function ProposalCreator({
@@ -133,46 +256,36 @@ export default function ProposalCreator({
   onUpdateSimulation,
   onDeleteSimulation,
 }: ProposalCreatorProps) {
-  const [proposalForm, setProposalForm] = useState<ProposalFormState>(proposalDefaults);
-  const [scenarioForm, setScenarioForm] = useState<ScenarioFormState>(() => scenarioDefaults(plan));
-  const [simulationForm, setSimulationForm] = useState<SimulationFormState>(() => simulationDefaults(plan));
-  const [editingProposalId, setEditingProposalId] = useState<string | null>(null);
-  const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
-  const [editingSimulationId, setEditingSimulationId] = useState<string | null>(null);
   const [showProposalForm, setShowProposalForm] = useState(false);
   const [showScenarioForm, setShowScenarioForm] = useState(false);
   const [showSimulationForm, setShowSimulationForm] = useState(false);
+  const [editingProposalId, setEditingProposalId] = useState<string | null>(null);
+  const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
+  const [editingSimulationId, setEditingSimulationId] = useState<string | null>(null);
+  const [proposalForm, setProposalForm] = useState<ProposalFormState>(proposalDefaults);
+  const [scenarioForm, setScenarioForm] = useState<ScenarioFormState>(() => scenarioDefaults(plan));
+  const [simulationForm, setSimulationForm] = useState<SimulationFormState>(() => simulationDefaults(plan));
   const [simulationSearch, setSimulationSearch] = useState('');
 
-  useEffect(() => {
-    setScenarioForm((current) => ({
-      ...current,
-      startYearMonth: current.startYearMonth || `${plan.year}-01`,
-    }));
-  }, [plan.year]);
-
-  const targetOptions = useMemo(() => getSimulationTargetOptions(plan), [plan]);
+  const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
   const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? null;
+  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? baseScenario ?? null;
   const proposalScenarios = scenarios
-    .filter((scenario) => scenario.proposalId === activeProposalId)
+    .filter((scenario) => !isBaseScenario(scenario) && scenario.proposalId === activeProposalId)
     .sort((a, b) => a.name.localeCompare(b.name));
-  const activeScenario = proposalScenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? proposalScenarios[0]
-    ?? null;
   const assignedSimulationIds = new Set(activeScenario?.simulationIds ?? []);
+  const targetOptions = useMemo(() => getSimulationTargetOptions(plan), [plan]);
+  const simulationTypeMeta = SIMULATION_TYPES.find((item) => item.value === simulationForm.type);
 
   const filteredSimulations = useMemo(() => {
     const query = simulationSearch.trim().toLowerCase();
     if (!query) return simulations;
     return simulations.filter((simulation) =>
       simulation.name.toLowerCase().includes(query) ||
-      simulation.description.toLowerCase().includes(query),
+      simulation.description.toLowerCase().includes(query) ||
+      simulation.comments?.toLowerCase().includes(query),
     );
   }, [simulationSearch, simulations]);
-
-  const proposalCount = proposals.length;
-  const scenarioCount = scenarios.length;
-  const simulationCount = simulations.length;
 
   const openNewProposal = () => {
     setEditingProposalId(null);
@@ -207,41 +320,27 @@ export default function ProposalCreator({
       onSelectProposal(existing.id);
     } else {
       const proposalId = `proposal-${Date.now()}`;
-      const defaultScenarioId = `scenario-${Date.now()}-base`;
       onAdd({
         id: proposalId,
         name: proposalForm.name.trim(),
         description: proposalForm.description.trim(),
         status: proposalForm.status,
-        activeScenarioId: defaultScenarioId,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      });
-      onAddScenario({
-        id: defaultScenarioId,
-        proposalId,
-        name: 'Escenario Base',
-        description: 'Escenario inicial generado al crear la propuesta.',
-        probability: 1,
-        startYearMonth: `${plan.year}-01`,
-        horizonMonths: 12,
-        simulationIds: [],
         createdAt: timestamp,
         updatedAt: timestamp,
       });
       onSelectProposal(proposalId);
     }
 
-    setProposalForm(proposalDefaults());
     setShowProposalForm(false);
     setEditingProposalId(null);
+    setProposalForm(proposalDefaults());
   };
 
-  const openNewScenario = () => {
+  const openNewScenario = (preset?: string) => {
     setEditingScenarioId(null);
     setScenarioForm({
       ...scenarioDefaults(plan),
-      name: proposalScenarios.length === 0 ? 'Escenario Base' : `Escenario ${proposalScenarios.length + 1}`,
+      name: preset ?? `Escenario ${proposalScenarios.length + 1}`,
     });
     setShowScenarioForm(true);
   };
@@ -264,8 +363,8 @@ export default function ProposalCreator({
 
     if (editingScenarioId) {
       const existing = scenarios.find((scenario) => scenario.id === editingScenarioId);
-      if (!existing) return;
-      onUpdateScenario({
+      if (!existing || isBaseScenario(existing)) return;
+      const updated: Scenario = {
         ...existing,
         name: scenarioForm.name.trim(),
         description: scenarioForm.description.trim(),
@@ -273,13 +372,16 @@ export default function ProposalCreator({
         startYearMonth: scenarioForm.startYearMonth,
         horizonMonths: scenarioForm.horizonMonths,
         updatedAt: timestamp,
-      });
-      onSelectScenario(existing.id);
+      };
+      onUpdateScenario(updated);
+      onUpdate(cloneProposalWithActiveScenario(activeProposal, updated.id));
+      onSelectScenario(updated.id);
     } else {
       const scenarioId = `scenario-${Date.now()}`;
-      onAddScenario({
+      const created: Scenario = {
         id: scenarioId,
         proposalId: activeProposal.id,
+        kind: 'proposal',
         name: scenarioForm.name.trim(),
         description: scenarioForm.description.trim(),
         probability: scenarioForm.probability / 100,
@@ -288,13 +390,15 @@ export default function ProposalCreator({
         simulationIds: [],
         createdAt: timestamp,
         updatedAt: timestamp,
-      });
+      };
+      onAddScenario(created);
+      onUpdate(cloneProposalWithActiveScenario(activeProposal, created.id));
       onSelectScenario(scenarioId);
     }
 
-    setScenarioForm(scenarioDefaults(plan));
-    setEditingScenarioId(null);
     setShowScenarioForm(false);
+    setEditingScenarioId(null);
+    setScenarioForm(scenarioDefaults(plan));
   };
 
   const openNewSimulation = () => {
@@ -304,127 +408,145 @@ export default function ProposalCreator({
   };
 
   const openEditSimulation = (simulation: Simulation) => {
-    const effect = simulation.effects[0];
     setEditingSimulationId(simulation.id);
     setSimulationForm({
       name: simulation.name,
       description: simulation.description,
       category: simulation.category,
-      targetId: effect?.conceptId ?? targetOptions[0]?.id ?? '',
-      mode: effect?.mode ?? 'absolute',
-      value: effect?.value ?? 0,
-      monthOffsets: effect?.monthOffsets?.length ? effect.monthOffsets : Array.from({ length: 12 }, (_, index) => index),
+      type: simulation.type,
+      operation: simulation.operation ?? 'increase',
+      targetIds: simulation.targetIds,
+      startYearMonth: simulation.startYearMonth,
+      endYearMonth: simulation.endYearMonth ?? simulation.startYearMonth,
+      frequency: simulation.frequency ?? 'monthly',
+      amount: simulation.amount ?? 0,
+      percent: Math.abs((simulation.percent ?? 0) * 100),
+      installments: simulation.installments ?? 4,
+      customAllocationText: simulation.customAllocation?.join(', ') ?? '',
+      shiftMonths: simulation.shiftMonths ?? 1,
+      shiftRatio: Math.round((simulation.shiftRatio ?? 1) * 100),
+      paymentLabel: simulation.paymentLabel ?? '',
+      comments: simulation.comments ?? '',
     });
     setShowSimulationForm(true);
   };
 
   const saveSimulation = () => {
-    if (!simulationForm.name.trim() || !simulationForm.targetId) return;
-    const timestamp = now();
-    const simulationId = editingSimulationId ?? `simulation-${Date.now()}`;
-    const nextSimulation: Simulation = {
-      id: simulationId,
-      name: simulationForm.name.trim(),
-      description: simulationForm.description.trim(),
-      category: simulationForm.category,
-      effects: [
-        {
-          id: `${simulationId}-effect-0`,
-          type: 'concept_delta',
-          conceptId: simulationForm.targetId,
-          monthOffsets: [...simulationForm.monthOffsets].sort((a, b) => a - b),
-          mode: simulationForm.mode,
-          value: simulationForm.value,
-        },
-      ],
-      createdAt: editingSimulationId
-        ? simulations.find((simulation) => simulation.id === editingSimulationId)?.createdAt ?? timestamp
-        : timestamp,
-      updatedAt: timestamp,
-    };
-
-    if (editingSimulationId) onUpdateSimulation(nextSimulation);
-    else onAddSimulation(nextSimulation);
-
-    setSimulationForm(simulationDefaults(plan));
-    setEditingSimulationId(null);
+    if (!simulationForm.name.trim() || simulationForm.targetIds.length === 0) return;
+    const existing = editingSimulationId
+      ? simulations.find((simulation) => simulation.id === editingSimulationId)
+      : undefined;
+    const simulation = buildSimulationFromForm(plan, simulationForm, existing);
+    if (existing) onUpdateSimulation(simulation);
+    else onAddSimulation(simulation);
     setShowSimulationForm(false);
+    setEditingSimulationId(null);
+    setSimulationForm(simulationDefaults(plan));
+  };
+
+  const toggleTarget = (targetId: string) => {
+    setSimulationForm((current) => {
+      const exists = current.targetIds.includes(targetId);
+      return {
+        ...current,
+        targetIds: exists
+          ? current.targetIds.filter((item) => item !== targetId)
+          : [...current.targetIds, targetId],
+      };
+    });
   };
 
   const toggleSimulationAssignment = (simulationId: string) => {
-    if (!activeScenario) return;
+    if (!activeScenario || isBaseScenario(activeScenario)) return;
     const exists = assignedSimulationIds.has(simulationId);
-    onUpdateScenario({
+    const nextScenario: Scenario = {
       ...activeScenario,
       simulationIds: exists
         ? activeScenario.simulationIds.filter((id) => id !== simulationId)
         : [...activeScenario.simulationIds, simulationId],
       updatedAt: now(),
-    });
-  };
-
-  const toggleMonthOffset = (monthIndex: number) => {
-    setSimulationForm((current) => {
-      const exists = current.monthOffsets.includes(monthIndex);
-      return {
-        ...current,
-        monthOffsets: exists
-          ? current.monthOffsets.filter((value) => value !== monthIndex)
-          : [...current.monthOffsets, monthIndex].sort((a, b) => a - b),
-      };
-    });
+    };
+    onUpdateScenario(nextScenario);
   };
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-3 gap-4">
-        <SummaryCard
-          title="Propuestas"
-          value={proposalCount}
-          subtitle="Contenedores activos"
-          icon={<FolderTree className="w-4 h-4 text-[#0071e3]" />}
-        />
-        <SummaryCard
-          title="Escenarios"
-          value={scenarioCount}
-          subtitle="Variantes persistidas"
-          icon={<Layers className="w-4 h-4 text-[#34c759]" />}
-        />
-        <SummaryCard
-          title="Simulaciones"
-          value={simulationCount}
-          subtitle="Biblioteca reusable"
-          icon={<FlaskConical className="w-4 h-4 text-[#af52de]" />}
-        />
+      <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm">
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Cómo funciona</p>
+            <h1 className="mt-1 text-[24px] font-semibold text-[#1d1d1f]">Simular decisiones sin perder el pronóstico original</h1>
+            <p className="mt-2 max-w-[880px] text-[13px] text-[#6e6e73]">
+              Siempre existe un <strong>Escenario Base</strong>. Desde ahí creas una propuesta, dentro de la propuesta un escenario,
+              y dentro del escenario activas simulaciones. Cada cambio recalcula el forecast y siempre se compara contra el Base.
+            </p>
+          </div>
+          <div className="rounded-2xl bg-[#f5f5f7] p-3">
+            <Sparkles className="w-5 h-5 text-[#0071e3]" />
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-4 gap-3">
+          <StepCard index="1" title="Ver Base" description="El pronóstico original siempre está visible y no se borra." />
+          <StepCard index="2" title="Crear Propuesta" description="Agrupa una decisión financiera: ventas, gastos, equipos, pagos." />
+          <StepCard index="3" title="Crear Escenario" description="Prueba variantes conservadoras, realistas, optimistas o personalizadas." />
+          <StepCard index="4" title="Agregar Simulaciones" description="Activa reglas de negocio y compara el impacto contra Base." />
+        </div>
       </div>
 
-      <div className="grid grid-cols-[300px,minmax(0,1fr),380px] gap-5">
-        <section className="bg-white border border-[#d2d2d7]/50 rounded-2xl p-4 space-y-3 shadow-sm">
-          <PanelHeader
-            title="Propuestas"
-            subtitle="Selecciona una propuesta para editar sus escenarios."
-            actionLabel="Nueva"
+      <div className="grid grid-cols-[300px,minmax(0,1fr),420px] gap-5">
+        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+          <SectionHeader
+            title="Base y Propuestas"
+            subtitle="El Escenario Base se mantiene fijo. Las propuestas cuelgan aparte."
+            actionLabel="Nueva propuesta"
             onAction={openNewProposal}
           />
+
+          <button
+            onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
+            className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+              activeScenario?.id === BASE_SCENARIO_ID
+                ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+                : 'border-[#d2d2d7]/60 bg-[#fbfbfd] hover:bg-white'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[13px] font-semibold">{BASE_SCENARIO_NAME}</p>
+                <p className={`mt-1 text-[11px] ${activeScenario?.id === BASE_SCENARIO_ID ? 'text-white/75' : 'text-[#86868b]'}`}>
+                  Pronóstico original sin simulaciones ni overrides. Punto de comparación permanente.
+                </p>
+              </div>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                activeScenario?.id === BASE_SCENARIO_ID
+                  ? 'bg-white/15 text-white'
+                  : 'bg-[#f5f5f7] text-[#6e6e73]'
+              }`}>
+                Fijo
+              </span>
+            </div>
+          </button>
+
           {showProposalForm && (
-            <div className="rounded-xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-3 space-y-3">
+            <div className="rounded-2xl border border-[#d2d2d7]/60 bg-[#fbfbfd] p-3 space-y-3">
               <input
                 value={proposalForm.name}
                 onChange={(event) => setProposalForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Nombre de la propuesta"
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
+                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={proposalForm.description}
                 onChange={(event) => setProposalForm((current) => ({ ...current, description: event.target.value }))}
-                placeholder="Objetivo, alcance, notas..."
                 rows={3}
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px] resize-none"
+                placeholder="Qué decisión se quiere analizar"
+                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
               <select
                 value={proposalForm.status}
                 onChange={(event) => setProposalForm((current) => ({ ...current, status: event.target.value as Proposal['status'] }))}
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
+                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
               >
                 {PROPOSAL_STATUSES.map((status) => (
                   <option key={status} value={status}>{status}</option>
@@ -440,29 +562,33 @@ export default function ProposalCreator({
               />
             </div>
           )}
+
           <div className="space-y-2">
             {proposals.length === 0 && (
-              <EmptyBlock title="Sin propuestas" description="Crea la primera propuesta para habilitar escenarios y simulaciones." />
+              <EmptyState
+                title="Sin propuestas aún"
+                description="Empieza creando una propuesta para abrir escenarios y simulaciones."
+              />
             )}
             {proposals.map((proposal) => {
-              const isActive = proposal.id === activeProposal?.id;
               const proposalScenarioCount = scenarios.filter((scenario) => scenario.proposalId === proposal.id).length;
+              const selected = activeProposal?.id === proposal.id;
               return (
                 <button
                   key={proposal.id}
                   onClick={() => onSelectProposal(proposal.id)}
                   className={`w-full rounded-xl border px-3 py-3 text-left transition ${
-                    isActive
+                    selected
                       ? 'border-[#0071e3] bg-[#e8f4fd]'
-                      : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:border-[#0071e3]/40 hover:bg-white'
+                      : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:bg-white'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[13px] font-semibold text-[#1d1d1f] truncate">{proposal.name}</p>
-                      <p className="text-[11px] text-[#86868b] mt-1 line-clamp-2">{proposal.description || 'Sin descripción'}</p>
-                      <div className="flex items-center gap-2 mt-2 text-[11px] text-[#6e6e73]">
-                        <span>{proposalScenarioCount} escenario{proposalScenarioCount === 1 ? '' : 's'}</span>
+                      <p className="truncate text-[13px] font-semibold text-[#1d1d1f]">{proposal.name}</p>
+                      <p className="mt-1 line-clamp-2 text-[11px] text-[#86868b]">{proposal.description || 'Sin descripción'}</p>
+                      <div className="mt-2 flex items-center gap-2 text-[11px] text-[#6e6e73]">
+                        <span>{proposalScenarioCount} escenarios</span>
                         <span>•</span>
                         <span>{proposal.status}</span>
                       </div>
@@ -496,60 +622,72 @@ export default function ProposalCreator({
           </div>
         </section>
 
-        <section className="bg-white border border-[#d2d2d7]/50 rounded-2xl p-4 space-y-3 shadow-sm">
-          <PanelHeader
+        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+          <SectionHeader
             title="Escenarios"
-            subtitle={activeProposal ? `Propuesta activa: ${activeProposal.name}` : 'Selecciona una propuesta.'}
-            actionLabel="Nuevo"
-            onAction={activeProposal ? openNewScenario : undefined}
+            subtitle={activeProposal ? `Propuesta activa: ${activeProposal.name}` : 'Selecciona una propuesta para trabajar escenarios.'}
+            actionLabel={activeProposal ? 'Nuevo escenario' : undefined}
+            onAction={activeProposal ? () => openNewScenario() : undefined}
           />
+
+          {activeProposal && (
+            <div className="grid grid-cols-4 gap-2">
+              {SCENARIO_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  onClick={() => openNewScenario(preset)}
+                  className="rounded-xl border border-[#d2d2d7]/60 bg-[#fbfbfd] px-3 py-2 text-[12px] font-medium text-[#6e6e73] hover:bg-white hover:text-[#1d1d1f]"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          )}
+
           {showScenarioForm && activeProposal && (
-            <div className="rounded-xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-3 space-y-3">
+            <div className="rounded-2xl border border-[#d2d2d7]/60 bg-[#fbfbfd] p-3 space-y-3">
               <input
                 value={scenarioForm.name}
                 onChange={(event) => setScenarioForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Nombre del escenario"
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
+                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={scenarioForm.description}
                 onChange={(event) => setScenarioForm((current) => ({ ...current, description: event.target.value }))}
-                placeholder="Hipótesis principales del escenario..."
                 rows={3}
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px] resize-none"
+                placeholder="Hipótesis del escenario"
+                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
               <div className="grid grid-cols-3 gap-3">
-                <label className="space-y-1">
-                  <span className="text-[11px] text-[#86868b]">Probabilidad</span>
+                <Field label="Probabilidad">
                   <input
                     type="number"
                     min={0}
                     max={100}
                     value={scenarioForm.probability}
                     onChange={(event) => setScenarioForm((current) => ({ ...current, probability: Number(event.target.value) || 0 }))}
-                    className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
+                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
                   />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-[11px] text-[#86868b]">Inicio</span>
+                </Field>
+                <Field label="Inicio">
                   <input
                     type="month"
                     value={scenarioForm.startYearMonth}
                     onChange={(event) => setScenarioForm((current) => ({ ...current, startYearMonth: event.target.value }))}
-                    className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
+                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
                   />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-[11px] text-[#86868b]">Horizonte</span>
+                </Field>
+                <Field label="Horizonte">
                   <input
                     type="number"
                     min={1}
                     max={24}
                     value={scenarioForm.horizonMonths}
                     onChange={(event) => setScenarioForm((current) => ({ ...current, horizonMonths: Number(event.target.value) || 12 }))}
-                    className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
+                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
                   />
-                </label>
+                </Field>
               </div>
               <InlineActions
                 onCancel={() => {
@@ -561,42 +699,49 @@ export default function ProposalCreator({
               />
             </div>
           )}
+
           {!activeProposal && (
-            <EmptyBlock title="Selecciona una propuesta" description="Los escenarios viven dentro de una propuesta activa." />
+            <EmptyState
+              title="Primero elige una propuesta"
+              description="Cada propuesta puede tener escenarios conservador, realista, optimista o personalizado."
+            />
           )}
-          {activeProposal && proposalScenarios.length === 0 && (
-            <EmptyBlock title="Sin escenarios" description="Crea el primer escenario para empezar a asignar simulaciones." />
+
+          {activeProposal && proposalScenarios.length === 0 && !showScenarioForm && (
+            <EmptyState
+              title="Sin escenarios"
+              description="Crea el primer escenario para probar decisiones financieras sobre esta propuesta."
+            />
           )}
+
           <div className="space-y-2">
             {proposalScenarios.map((scenario) => {
-              const isActive = scenario.id === activeScenario?.id;
+              const selected = activeScenario?.id === scenario.id;
               return (
                 <button
                   key={scenario.id}
                   onClick={() => onSelectScenario(scenario.id)}
                   className={`w-full rounded-xl border px-3 py-3 text-left transition ${
-                    isActive
+                    selected
                       ? 'border-[#34c759] bg-[#e8faf0]'
-                      : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:border-[#34c759]/40 hover:bg-white'
+                      : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:bg-white'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="text-[13px] font-semibold text-[#1d1d1f] truncate">{scenario.name}</p>
-                        {isActive && (
-                          <span className="rounded-full bg-[#34c759]/15 px-2 py-0.5 text-[10px] font-medium text-[#248a3d]">
-                            Activo
-                          </span>
+                        <p className="truncate text-[13px] font-semibold text-[#1d1d1f]">{scenario.name}</p>
+                        {selected && (
+                          <span className="rounded-full bg-[#34c759]/15 px-2 py-0.5 text-[10px] font-medium text-[#248a3d]">Activo</span>
                         )}
                       </div>
-                      <p className="text-[11px] text-[#86868b] mt-1 line-clamp-2">{scenario.description || 'Sin descripción'}</p>
-                      <div className="flex items-center gap-2 mt-2 text-[11px] text-[#6e6e73]">
+                      <p className="mt-1 line-clamp-2 text-[11px] text-[#86868b]">{scenario.description || 'Sin descripción'}</p>
+                      <div className="mt-2 flex items-center gap-2 text-[11px] text-[#6e6e73]">
                         <span>{Math.round(scenario.probability * 100)}%</span>
                         <span>•</span>
-                        <span>{scenario.horizonMonths} meses</span>
+                        <span>{scenario.simulationIds.length} simulaciones activas</span>
                         <span>•</span>
-                        <span>{scenario.simulationIds.length} simulaciones</span>
+                        <span>{scenario.horizonMonths} meses</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -628,95 +773,230 @@ export default function ProposalCreator({
           </div>
         </section>
 
-        <section className="bg-white border border-[#d2d2d7]/50 rounded-2xl p-4 space-y-3 shadow-sm">
-          <PanelHeader
+        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+          <SectionHeader
             title="Biblioteca de Simulaciones"
-            subtitle={activeScenario ? `Asignando al escenario: ${activeScenario.name}` : 'Selecciona un escenario para asignar simulaciones.'}
-            actionLabel="Nueva"
+            subtitle={isBaseScenario(activeScenario)
+              ? 'Selecciona un escenario de propuesta para activar simulaciones.'
+              : `Escenario activo: ${activeScenario?.name ?? '—'}`}
+            actionLabel="Nueva simulación"
             onAction={openNewSimulation}
           />
+
           <input
             value={simulationSearch}
             onChange={(event) => setSimulationSearch(event.target.value)}
             placeholder="Buscar simulación..."
             className="w-full rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
           />
+
           {showSimulationForm && (
-            <div className="rounded-xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-3 space-y-3">
+            <div className="rounded-2xl border border-[#d2d2d7]/60 bg-[#fbfbfd] p-3 space-y-3">
               <input
                 value={simulationForm.name}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Nombre de la simulación"
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
+                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={simulationForm.description}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, description: event.target.value }))}
-                placeholder="Qué cambia y por qué"
                 rows={3}
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px] resize-none"
+                placeholder="Describe la decisión financiera"
+                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
+
               <div className="grid grid-cols-2 gap-3">
-                <select
-                  value={simulationForm.category}
-                  onChange={(event) => setSimulationForm((current) => ({ ...current, category: event.target.value as SimulationCategory }))}
-                  className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
-                >
-                  {SIMULATION_CATEGORIES.map((category) => (
-                    <option key={category} value={category}>{category}</option>
-                  ))}
-                </select>
-                <select
-                  value={simulationForm.targetId}
-                  onChange={(event) => setSimulationForm((current) => ({ ...current, targetId: event.target.value }))}
-                  className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
-                >
-                  {targetOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.group === 'roles' ? `General · ${option.label}` : option.label}
-                    </option>
-                  ))}
-                </select>
+                <Field label="Tipo de simulación">
+                  <select
+                    value={simulationForm.type}
+                    onChange={(event) => setSimulationForm((current) => ({ ...current, type: event.target.value as SimulationType }))}
+                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                  >
+                    {SIMULATION_TYPES.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Categoría">
+                  <select
+                    value={simulationForm.category}
+                    onChange={(event) => setSimulationForm((current) => ({ ...current, category: event.target.value as SimulationCategory }))}
+                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                  >
+                    {SIMULATION_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                </Field>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <select
-                  value={simulationForm.mode}
-                  onChange={(event) => setSimulationForm((current) => ({ ...current, mode: event.target.value as 'absolute' | 'percent' }))}
-                  className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
-                >
-                  <option value="absolute">Valor absoluto</option>
-                  <option value="percent">Porcentaje</option>
-                </select>
+
+              {simulationTypeMeta && (
+                <div className="rounded-xl bg-white p-3 text-[12px] text-[#6e6e73]">
+                  <p className="font-medium text-[#1d1d1f]">{simulationTypeMeta.label}</p>
+                  <p className="mt-1">{simulationTypeMeta.description}</p>
+                </div>
+              )}
+
+              {!['timing_shift', 'pause_expense'].includes(simulationForm.type) && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Operación">
+                    <select
+                      value={simulationForm.operation}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, operation: event.target.value as SimulationOperation }))}
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    >
+                      <option value="increase">Incrementar / Agregar</option>
+                      <option value="decrease">Reducir / Quitar</option>
+                    </select>
+                  </Field>
+                  <Field label={simulationForm.type === 'percent_adjustment' ? 'Porcentaje' : 'Monto'}>
+                    <input
+                      type="number"
+                      step={simulationForm.type === 'percent_adjustment' ? 1 : 0.01}
+                      value={simulationForm.type === 'percent_adjustment' ? simulationForm.percent : simulationForm.amount}
+                      onChange={(event) => setSimulationForm((current) => (
+                        simulationForm.type === 'percent_adjustment'
+                          ? { ...current, percent: Number(event.target.value) || 0 }
+                          : { ...current, amount: Number(event.target.value) || 0 }
+                      ))}
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    />
+                  </Field>
+                </div>
+              )}
+
+              {simulationForm.type === 'timing_shift' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Mover meses">
+                    <input
+                      type="number"
+                      min={-12}
+                      max={12}
+                      value={simulationForm.shiftMonths}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, shiftMonths: Number(event.target.value) || 0 }))}
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    />
+                  </Field>
+                  <Field label="% del flujo a mover">
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={simulationForm.shiftRatio}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, shiftRatio: Number(event.target.value) || 0 }))}
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    />
+                  </Field>
+                </div>
+              )}
+
+              {simulationForm.type === 'installment_plan' && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Monto total">
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={simulationForm.amount}
+                        onChange={(event) => setSimulationForm((current) => ({ ...current, amount: Number(event.target.value) || 0 }))}
+                        className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      />
+                    </Field>
+                    <Field label="Parcialidades">
+                      <input
+                        type="number"
+                        min={2}
+                        max={24}
+                        value={simulationForm.installments}
+                        onChange={(event) => setSimulationForm((current) => ({ ...current, installments: Number(event.target.value) || 2 }))}
+                        className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Porcentajes personalizados (opcional)">
+                    <input
+                      value={simulationForm.customAllocationText}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, customAllocationText: event.target.value }))}
+                      placeholder="Ej. 25, 25, 25, 25"
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    />
+                  </Field>
+                </div>
+              )}
+
+              {simulationForm.type !== 'pause_expense' && (
+                <div className="grid grid-cols-3 gap-3">
+                  <Field label="Inicio">
+                    <input
+                      type="month"
+                      value={simulationForm.startYearMonth}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, startYearMonth: event.target.value }))}
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    />
+                  </Field>
+                  <Field label="Fin">
+                    <input
+                      type="month"
+                      value={simulationForm.endYearMonth}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, endYearMonth: event.target.value }))}
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    />
+                  </Field>
+                  <Field label="Frecuencia">
+                    <select
+                      value={simulationForm.frequency}
+                      onChange={(event) => setSimulationForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
+                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    >
+                      {FREQUENCIES.map((frequency) => (
+                        <option key={frequency.value} value={frequency.value}>{frequency.label}</option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+              )}
+
+              <Field label="Forma de cobro / pago (opcional)">
                 <input
-                  type="number"
-                  step={simulationForm.mode === 'percent' ? 0.01 : 0.1}
-                  value={simulationForm.value}
-                  onChange={(event) => setSimulationForm((current) => ({ ...current, value: Number(event.target.value) || 0 }))}
-                  className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[13px]"
-                  placeholder={simulationForm.mode === 'percent' ? '0.10' : '10'}
+                  value={simulationForm.paymentLabel}
+                  onChange={(event) => setSimulationForm((current) => ({ ...current, paymentLabel: event.target.value }))}
+                  placeholder="Ej. 4 pagos mensuales, anticipo 30%, contraentrega..."
+                  className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
                 />
-              </div>
-              <div className="space-y-2">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-[#86868b]">Meses afectados</p>
-                <div className="flex flex-wrap gap-2">
-                  {MONTHS.map((month, index) => {
-                    const selected = simulationForm.monthOffsets.includes(index);
+              </Field>
+
+              <Field label="Categorías o conceptos afectados">
+                <div className="flex flex-wrap gap-2 rounded-xl border border-[#d2d2d7] bg-white p-2">
+                  {targetOptions.map((target) => {
+                    const selected = simulationForm.targetIds.includes(target.id);
                     return (
                       <button
-                        key={month}
-                        onClick={() => toggleMonthOffset(index)}
-                        className={`rounded-full px-3 py-1 text-[11px] font-medium transition ${
+                        key={target.id}
+                        onClick={() => toggleTarget(target.id)}
+                        className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
                           selected
                             ? 'bg-[#0071e3] text-white'
-                            : 'bg-white border border-[#d2d2d7] text-[#6e6e73]'
+                            : 'bg-[#f5f5f7] text-[#6e6e73]'
                         }`}
                       >
-                        {month}
+                        {target.label}
                       </button>
                     );
                   })}
                 </div>
-              </div>
+              </Field>
+
+              <Field label="Comentarios o justificación">
+                <textarea
+                  value={simulationForm.comments}
+                  onChange={(event) => setSimulationForm((current) => ({ ...current, comments: event.target.value }))}
+                  rows={3}
+                  placeholder="Contexto, riesgos, supuestos..."
+                  className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
+                />
+              </Field>
+
               <InlineActions
                 onCancel={() => {
                   setShowSimulationForm(false);
@@ -727,57 +1007,52 @@ export default function ProposalCreator({
               />
             </div>
           )}
-          <div className="space-y-2 max-h-[640px] overflow-y-auto pr-1">
+
+          <div className="space-y-2 max-h-[760px] overflow-y-auto pr-1">
             {filteredSimulations.length === 0 && (
-              <EmptyBlock title="Sin simulaciones" description="Crea simulaciones reutilizables y asígnalas a cualquier escenario." />
+              <EmptyState
+                title="Sin simulaciones"
+                description="Crea reglas reutilizables como aumento de ventas, retraso en cobranza o cobro en parcialidades."
+              />
             )}
+
             {filteredSimulations.map((simulation) => {
-              const effect = simulation.effects[0];
-              const assigned = assignedSimulationIds.has(simulation.id);
+              const selected = assignedSimulationIds.has(simulation.id);
               return (
                 <div
                   key={simulation.id}
                   className={`rounded-xl border px-3 py-3 transition ${
-                    assigned
-                      ? 'border-[#0071e3]/30 bg-[#e8f4fd]/60'
+                    selected
+                      ? 'border-[#0071e3]/30 bg-[#e8f4fd]/70'
                       : 'border-[#d2d2d7]/50 bg-[#fbfbfd]'
                   }`}
                 >
                   <div className="flex items-start gap-3">
                     <button
                       onClick={() => toggleSimulationAssignment(simulation.id)}
-                      disabled={!activeScenario}
+                      disabled={isBaseScenario(activeScenario)}
                       className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-md border transition ${
-                        assigned
+                        selected
                           ? 'border-[#0071e3] bg-[#0071e3] text-white'
                           : 'border-[#d2d2d7] bg-white text-transparent'
-                      } ${!activeScenario ? 'cursor-not-allowed opacity-50' : ''}`}
-                      title={activeScenario ? 'Asignar / quitar del escenario activo' : 'Selecciona un escenario'}
+                      } ${isBaseScenario(activeScenario) ? 'cursor-not-allowed opacity-50' : ''}`}
+                      title={isBaseScenario(activeScenario) ? 'Selecciona un escenario de propuesta' : 'Activar / desactivar simulación'}
                     >
                       <Check className="w-3.5 h-3.5" />
                     </button>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <div
-                          className="h-2.5 w-2.5 rounded-full"
-                          style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }}
-                        />
-                        <p className="text-[13px] font-semibold text-[#1d1d1f] truncate">{simulation.name}</p>
+                        <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }} />
+                        <p className="truncate text-[13px] font-semibold text-[#1d1d1f]">{simulation.name}</p>
                       </div>
-                      <p className="text-[11px] text-[#86868b] mt-1 line-clamp-2">{simulation.description || 'Sin descripción'}</p>
+                      <p className="mt-1 line-clamp-2 text-[11px] text-[#86868b]">{simulation.description || 'Sin descripción'}</p>
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[#6e6e73]">
-                        <span className="rounded-full bg-white px-2 py-0.5 border border-[#d2d2d7]/70">
-                          {simulation.category}
-                        </span>
-                        <span className="rounded-full bg-white px-2 py-0.5 border border-[#d2d2d7]/70">
-                          {effect ? (ROLE_TARGET_LABELS[effect.conceptId] ?? targetOptions.find((option) => option.id === effect.conceptId)?.label ?? effect.conceptId) : 'Sin target'}
-                        </span>
-                        <span className="rounded-full bg-white px-2 py-0.5 border border-[#d2d2d7]/70">
-                          {effect?.mode === 'percent' ? `${(effect.value * 100).toFixed(0)}%` : effect?.value}
-                        </span>
-                        <span className="rounded-full bg-white px-2 py-0.5 border border-[#d2d2d7]/70">
-                          {effect?.monthOffsets.length ?? 0} meses
-                        </span>
+                        <Badge>{SIMULATION_TYPES.find((item) => item.value === simulation.type)?.label ?? simulation.type}</Badge>
+                        <Badge>{simulation.operation === 'decrease' ? 'Reducir' : 'Incrementar'}</Badge>
+                        <Badge>{simulation.targetIds.slice(0, 2).map((id) => resolveConceptLabel(plan, id)).join(', ')}{simulation.targetIds.length > 2 ? ' +' : ''}</Badge>
+                        {simulation.percent !== undefined && <Badge>{Math.round(Math.abs(simulation.percent) * 100)}%</Badge>}
+                        {simulation.amount !== undefined && <Badge>{simulation.amount}</Badge>}
+                        {simulation.installments && <Badge>{simulation.installments} parcialidades</Badge>}
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -807,32 +1082,28 @@ export default function ProposalCreator({
   );
 }
 
-function SummaryCard({
+function StepCard({
+  index,
   title,
-  value,
-  subtitle,
-  icon,
+  description,
 }: {
+  index: string;
   title: string;
-  value: number;
-  subtitle: string;
-  icon: ReactNode;
+  description: string;
 }) {
   return (
-    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-[11px] uppercase tracking-wide text-[#86868b]">{title}</p>
-          <p className="mt-1 text-[26px] font-semibold text-[#1d1d1f]">{value}</p>
-          <p className="text-[12px] text-[#86868b]">{subtitle}</p>
-        </div>
-        <div className="rounded-xl bg-[#f5f5f7] p-2.5">{icon}</div>
+    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-[#0071e3]">{index}</span>
+        <ArrowRight className="w-4 h-4 text-[#c7c7cc]" />
       </div>
+      <p className="text-[13px] font-semibold text-[#1d1d1f]">{title}</p>
+      <p className="mt-1 text-[12px] text-[#6e6e73]">{description}</p>
     </div>
   );
 }
 
-function PanelHeader({
+function SectionHeader({
   title,
   subtitle,
   actionLabel,
@@ -847,7 +1118,7 @@ function PanelHeader({
     <div className="flex items-start justify-between gap-3">
       <div>
         <h2 className="text-[15px] font-semibold text-[#1d1d1f]">{title}</h2>
-        <p className="text-[12px] text-[#86868b] mt-1">{subtitle}</p>
+        <p className="mt-1 text-[12px] text-[#86868b]">{subtitle}</p>
       </div>
       {actionLabel && onAction && (
         <button
@@ -862,6 +1133,21 @@ function PanelHeader({
   );
 }
 
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block space-y-1">
+      <span className="text-[11px] font-medium uppercase tracking-wide text-[#86868b]">{label}</span>
+      {children}
+    </label>
+  );
+}
+
 function InlineActions({
   onCancel,
   onSave,
@@ -873,13 +1159,13 @@ function InlineActions({
     <div className="flex items-center justify-end gap-2">
       <button
         onClick={onCancel}
-        className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] text-[#6e6e73]"
+        className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#6e6e73]"
       >
         Cancelar
       </button>
       <button
         onClick={onSave}
-        className="rounded-lg bg-[#1d1d1f] px-3 py-1.5 text-[12px] font-medium text-white"
+        className="rounded-xl bg-[#1d1d1f] px-3 py-2 text-[12px] font-medium text-white"
       >
         Guardar
       </button>
@@ -887,7 +1173,7 @@ function InlineActions({
   );
 }
 
-function EmptyBlock({
+function EmptyState({
   title,
   description,
 }: {
@@ -895,12 +1181,20 @@ function EmptyBlock({
   description: string;
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-[#d2d2d7] bg-[#fbfbfd] px-4 py-8 text-center">
+    <div className="rounded-2xl border border-dashed border-[#d2d2d7] bg-[#fbfbfd] px-4 py-8 text-center">
       <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-white border border-[#d2d2d7]/60">
         <CopyPlus className="w-4 h-4 text-[#86868b]" />
       </div>
       <p className="text-[13px] font-medium text-[#1d1d1f]">{title}</p>
       <p className="mt-1 text-[12px] text-[#86868b]">{description}</p>
     </div>
+  );
+}
+
+function Badge({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-full border border-[#d2d2d7]/60 bg-white px-2 py-0.5">
+      {children}
+    </span>
   );
 }

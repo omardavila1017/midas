@@ -25,11 +25,34 @@ export type ProposalStatus =
   | 'Aprobada'
   | 'Descartada';
 
+export const BASE_SCENARIO_ID = 'scenario-base';
+export const BASE_SCENARIO_NAME = 'Escenario Base';
+
+export type ScenarioKind = 'base' | 'proposal';
+
 export type SimulationCategory =
   | 'Reducción de Costos'
   | 'Incremento de Ingresos'
   | 'Diferimiento'
   | 'Renegociación';
+
+export type SimulationType =
+  | 'percent_adjustment'
+  | 'amount_adjustment'
+  | 'recurring_series'
+  | 'installment_plan'
+  | 'timing_shift'
+  | 'pause_expense';
+
+export type SimulationFrequency =
+  | 'once'
+  | 'monthly'
+  | 'bimonthly'
+  | 'quarterly'
+  | 'semiannual'
+  | 'annual';
+
+export type SimulationOperation = 'increase' | 'decrease';
 
 export type SimulationEffectMode = 'absolute' | 'percent';
 
@@ -49,7 +72,8 @@ export interface ConceptDeltaEffect {
   id: string;
   type: 'concept_delta';
   conceptId: string;
-  monthOffsets: number[];
+  monthOffsets?: number[];
+  yearMonths?: string[];
   mode: SimulationEffectMode;
   value: number;
 }
@@ -61,6 +85,20 @@ export interface Simulation {
   name: string;
   description: string;
   category: SimulationCategory;
+  type: SimulationType;
+  targetIds: string[];
+  startYearMonth: string;
+  endYearMonth?: string;
+  frequency?: SimulationFrequency;
+  operation?: SimulationOperation;
+  amount?: number;
+  percent?: number;
+  installments?: number;
+  customAllocation?: number[];
+  shiftMonths?: number;
+  shiftRatio?: number;
+  paymentLabel?: string;
+  comments?: string;
   effects: SimulationEffect[];
   createdAt: string;
   updatedAt: string;
@@ -78,13 +116,15 @@ export interface Proposal {
 
 export interface Scenario {
   id: string;
-  proposalId: string;
+  proposalId: string | null;
+  kind: ScenarioKind;
   name: string;
   description: string;
   probability: number;
   startYearMonth: string;
   horizonMonths: number;
   simulationIds: string[];
+  locked?: boolean;
   createdAt: string;
   updatedAt: string;
 }

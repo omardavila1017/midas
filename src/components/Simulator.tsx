@@ -16,6 +16,8 @@ import {
   FlaskConical,
 } from 'lucide-react';
 import {
+  BASE_SCENARIO_ID,
+  BASE_SCENARIO_NAME,
   CATEGORY_COLORS,
   FlowPlan,
   Proposal,
@@ -28,6 +30,7 @@ import {
   evaluateScenario,
   resolveConceptLabel,
 } from '../domain/scenarioEngine';
+import { isBaseScenario } from '../domain/simulationCompiler';
 import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 
 interface SimulatorProps {
@@ -53,6 +56,15 @@ const KPI_CONFIG = [
   { key: 'pagosProveedores12m', label: 'Pagos Proveedores', color: 'text-[#ff9500]' },
 ] as const;
 
+const VIRTUAL_BASE_PROPOSAL: Proposal = {
+  id: 'proposal-base',
+  name: BASE_SCENARIO_NAME,
+  description: 'Pronóstico original',
+  status: 'Pendiente',
+  createdAt: '',
+  updatedAt: '',
+};
+
 export default function Simulator({
   plan,
   proposals,
@@ -68,21 +80,30 @@ export default function Simulator({
   const [simulationSearch, setSimulationSearch] = useState('');
   const [compareScenarioIds, setCompareScenarioIds] = useState<string[]>([]);
   const [treeOpen, setTreeOpen] = useState<Set<string>>(() => new Set(proposals.map((proposal) => proposal.id)));
+  const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
 
   const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
     ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? baseScenario
     ?? null;
+  const effectiveProposal = isBaseScenario(activeScenario) ? VIRTUAL_BASE_PROPOSAL : (activeProposal ?? VIRTUAL_BASE_PROPOSAL);
 
   const activeEvaluation = useMemo(() => {
-    if (!activeProposal || !activeScenario) return null;
-    return evaluateScenario(plan, activeProposal, activeScenario, simulations, overrides);
-  }, [activeProposal, activeScenario, overrides, plan, simulations]);
+    if (!activeScenario) return null;
+    return evaluateScenario(
+      plan,
+      effectiveProposal,
+      activeScenario,
+      isBaseScenario(activeScenario) ? [] : simulations,
+      isBaseScenario(activeScenario) ? [] : overrides,
+    );
+  }, [activeScenario, effectiveProposal, overrides, plan, simulations]);
 
   const baseEvaluation = useMemo(() => {
-    if (!activeProposal || !activeScenario) return null;
-    return evaluateScenario(plan, activeProposal, activeScenario, [], []);
-  }, [activeProposal, activeScenario, plan]);
+    if (!activeScenario) return null;
+    return evaluateScenario(plan, effectiveProposal, activeScenario, [], []);
+  }, [activeScenario, effectiveProposal, plan]);
 
   const filteredSimulations = useMemo(() => {
     const query = simulationSearch.trim().toLowerCase();
@@ -124,8 +145,8 @@ export default function Simulator({
       .map((scenarioId) => {
         const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
         if (!scenario) return null;
-        const proposal = proposals.find((candidate) => candidate.id === scenario.proposalId);
-        if (!proposal) return null;
+        const proposal = proposals.find((candidate) => candidate.id === scenario.proposalId)
+          ?? VIRTUAL_BASE_PROPOSAL;
         const evaluation = evaluateScenario(plan, proposal, scenario, simulations, overrides);
         const diff = compareScenarioEvaluations(evaluation, activeEvaluation);
         return { proposal, scenario, evaluation, diff };
@@ -139,7 +160,7 @@ export default function Simulator({
   }, [activeEvaluation, compareScenarioIds, overrides, plan, proposals, scenarios, simulations]);
 
   const toggleSimulationAssignment = (simulationId: string) => {
-    if (!activeScenario) return;
+    if (!activeScenario || isBaseScenario(activeScenario)) return;
     const exists = assignedSimulationIds.has(simulationId);
     onUpdateScenario({
       ...activeScenario,
@@ -169,7 +190,7 @@ export default function Simulator({
     });
   };
 
-  if (!activeProposal || !activeScenario || !activeEvaluation || !baseEvaluation) {
+  if (!activeScenario || !activeEvaluation || !baseEvaluation) {
     return (
       <div className="rounded-2xl border border-dashed border-[#d2d2d7] bg-white px-6 py-20 text-center">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#f5f5f7]">
@@ -191,6 +212,21 @@ export default function Simulator({
           <h2 className="mt-1 text-[16px] font-semibold text-[#1d1d1f]">Propuestas y escenarios</h2>
         </div>
         <div className="space-y-2">
+          {baseScenario && (
+            <button
+              onClick={() => onSelectScenario(baseScenario.id)}
+              className={`w-full rounded-xl border px-3 py-3 text-left transition ${
+                activeScenario.id === baseScenario.id
+                  ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+                  : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:bg-white'
+              }`}
+            >
+              <p className="text-[13px] font-semibold">{BASE_SCENARIO_NAME}</p>
+              <p className={`mt-1 text-[11px] ${activeScenario.id === baseScenario.id ? 'text-white/75' : 'text-[#86868b]'}`}>
+                Pronóstico original siempre visible y sin cambios.
+              </p>
+            </button>
+          )}
           {proposals.map((proposal) => {
             const isOpen = treeOpen.has(proposal.id);
             const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === proposal.id);
@@ -250,7 +286,9 @@ export default function Simulator({
               <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Workbench activo</p>
               <h1 className="mt-1 text-[24px] font-semibold text-[#1d1d1f]">{activeScenario.name}</h1>
               <p className="mt-1 text-[13px] text-[#86868b]">
-                {activeProposal.name} · {Math.round(activeScenario.probability * 100)}% probabilidad · {activeScenario.horizonMonths} meses
+                {isBaseScenario(activeScenario)
+                  ? 'Pronóstico original sin simulaciones.'
+                  : `${effectiveProposal.name} · ${Math.round(activeScenario.probability * 100)}% probabilidad · ${activeScenario.horizonMonths} meses`}
               </p>
             </div>
             <div className="rounded-xl bg-[#f5f5f7] px-3 py-2 text-right">
@@ -281,7 +319,7 @@ export default function Simulator({
               <p className="text-[12px] text-[#86868b]">Cada cambio en simulaciones y celdas recalcula el flujo completo.</p>
             </div>
             <div className="rounded-full bg-[#f5f5f7] px-3 py-1 text-[12px] text-[#6e6e73]">
-              {activeScenario.simulationIds.length} simulaciones activas
+              {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.simulationIds.length} simulaciones activas`}
             </div>
           </div>
           <ResponsiveContainer width="100%" height={300}>
@@ -367,7 +405,7 @@ export default function Simulator({
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-[13px] font-semibold text-[#1d1d1f]">{scenario.name}</p>
-                        <p className="text-[11px] text-[#86868b]">{proposal?.name ?? 'Sin propuesta'}</p>
+                        <p className="text-[11px] text-[#86868b]">{proposal?.name ?? BASE_SCENARIO_NAME}</p>
                       </div>
                       <span className={`flex h-5 w-5 items-center justify-center rounded-md border ${
                         selected ? 'border-[#0071e3] bg-[#0071e3] text-white' : 'border-[#d2d2d7]'
@@ -442,6 +480,7 @@ export default function Simulator({
                     ? 'border-[#0071e3] bg-[#e8f4fd]'
                     : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:bg-white'
                 }`}
+                disabled={isBaseScenario(activeScenario)}
               >
                 <div className="flex items-start gap-3">
                   <span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-md border ${
