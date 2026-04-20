@@ -1008,7 +1008,10 @@ const CXP = ({
     setLoading(true); setError(null);
     try {
       const data = await fetchAgedBalances({ cia });
-      onMergeCia(cia, data as CXPRecord[]);
+      // Stamp the requested cia so downstream filtering is consistent, even if
+      // JDE doesn't echo the field back (or returns it in a different format).
+      const stamped = (data as CXPRecord[]).map(r => ({ ...r, cia }));
+      onMergeCia(cia, stamped);
     } catch (e) {
       if (e instanceof JdeApiError) {
         const hint = e.status === 401 ? ' — revisa VITE_JDE_TOKEN en .env.local' : '';
@@ -1037,7 +1040,9 @@ const CXP = ({
       results.forEach((r, i) => {
         const cia = activeCias[i];
         if (r.status === 'fulfilled') {
-          merged.push(...(r.value as CXPRecord[]));
+          // Stamp the requested cia so filtering by company works downstream.
+          const stamped = (r.value as CXPRecord[]).map(rec => ({ ...rec, cia }));
+          merged.push(...stamped);
           succeededCias.push(cia);
         } else {
           const reason = r.reason instanceof JdeApiError
@@ -1058,6 +1063,12 @@ const CXP = ({
       setLoading(false);
     }
   }, [activeCias, onReplaceAll]);
+
+  // When the user switches company, allow auto-fetch to retry this cia
+  // (the attempt-guard is only to prevent infinite retries within one selection).
+  useEffect(() => {
+    autoFetchAttempted.current.delete(selectedCia);
+  }, [selectedCia]);
 
   // Auto-fetch on cia change when we have a token and the cia isn't cached yet.
   useEffect(() => {
