@@ -17,7 +17,9 @@ import {
   Receipt,
   Filter,
   RotateCcw,
+  Database,
 } from 'lucide-react';
+import { fetchAgedBalances, JdeApiError } from '../services/jde';
 import {
   BarChart,
   Bar,
@@ -209,17 +211,24 @@ function parseCXP(text: string): CXPRecord[] {
    Upload Component
    ═══════════════════════════════════════════════════════════════════════ */
 
-const CXPUpload = ({ onDataLoaded }: { onDataLoaded: (r: CXPRecord[]) => void }) => {
+const CXPUpload = ({
+  onDataLoaded,
+  selectedCia,
+}: {
+  onDataLoaded: (r: CXPRecord[]) => void;
+  selectedCia?: string;
+}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [count, setCount] = useState(0);
+  const [source, setSource] = useState<'csv' | 'jde' | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
 
   const handle = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.csv')) { setError('Solo archivos .csv'); return; }
-    setLoading(true); setError(null);
+    setSource('csv'); setLoading(true); setError(null);
     try {
       const text = await file.text();
       const recs = parseCXP(text);
@@ -232,6 +241,28 @@ const CXPUpload = ({ onDataLoaded }: { onDataLoaded: (r: CXPRecord[]) => void })
     }
   }, [onDataLoaded]);
 
+  const loadFromJde = useCallback(async () => {
+    if (!selectedCia || selectedCia === 'all') return;
+    setSource('jde'); setLoading(true); setError(null);
+    try {
+      const records = await fetchAgedBalances({ cia: selectedCia });
+      if (records.length === 0) throw new Error(`JDE devolvió 0 registros para la compañía ${selectedCia}`);
+      setCount(records.length);
+      setSuccess(true);
+      setTimeout(() => onDataLoaded(records as CXPRecord[]), 500);
+    } catch (e) {
+      if (e instanceof JdeApiError) {
+        const hint = e.status === 401 ? ' — revisa VITE_JDE_TOKEN en .env.local' : '';
+        setError(`JDE ${e.status}: ${e.message}${hint}`);
+      } else {
+        setError(e instanceof Error ? e.message : 'Error al consultar JDE');
+      }
+      setLoading(false);
+    }
+  }, [selectedCia, onDataLoaded]);
+
+  const jdeDisabled = !selectedCia || selectedCia === 'all';
+
   const onDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
     setDragActive(e.type === 'dragenter' || e.type === 'dragover');
@@ -242,8 +273,14 @@ const CXPUpload = ({ onDataLoaded }: { onDataLoaded: (r: CXPRecord[]) => void })
     if (e.dataTransfer.files?.length) handle(e.dataTransfer.files[0]);
   }, [handle]);
 
+  const retry = () => {
+    setError(null);
+    if (source === 'jde') loadFromJde();
+    else ref.current?.click();
+  };
+
   return (
-    <div className="w-full max-w-lg mx-auto">
+    <div className="w-full max-w-3xl mx-auto">
       <div className="text-center mb-8">
         <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200/50">
           <Clock className="text-white" size={26} />
@@ -254,24 +291,51 @@ const CXPUpload = ({ onDataLoaded }: { onDataLoaded: (r: CXPRecord[]) => void })
 
       <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/40 p-8">
         {!loading && !success && !error && (
-          <div
-            onDragEnter={onDrag} onDragLeave={onDrag} onDragOver={onDrag} onDrop={onDrop}
-            onClick={() => ref.current?.click()}
-            className={`border-2 border-dashed rounded-2xl p-16 text-center cursor-pointer transition-all ${
-              dragActive ? 'border-[#0071e3] bg-[#e8f4fd]' : 'border-[#d2d2d7] hover:border-[#0071e3] hover:bg-[#fbfbfd]'
-            }`}
-          >
-            <FileSpreadsheet className="w-10 h-10 text-[#86868b] mx-auto mb-3" />
-            <p className="text-[15px] font-semibold text-[#1d1d1f]">Arrastra tu CSV aquí</p>
-            <p className="text-[13px] text-[#86868b] mt-1">o haz click para seleccionar archivo</p>
-            <input ref={ref} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handle(e.target.files[0])} />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* ── JDE ── */}
+            <div className={`border-2 rounded-2xl p-10 text-center transition-all ${
+              jdeDisabled ? 'border-[#e8e8ed] bg-[#fbfbfd]' : 'border-[#0071e3]/30 bg-[#f5fbff] hover:border-[#0071e3] hover:bg-[#e8f4fd]'
+            }`}>
+              <Database className={`w-10 h-10 mx-auto mb-3 ${jdeDisabled ? 'text-[#c7c7cc]' : 'text-[#0071e3]'}`} />
+              <p className="text-[15px] font-semibold text-[#1d1d1f]">Consultar desde JDE</p>
+              <p className="text-[12px] text-[#86868b] mt-1">
+                Compañía: <span className="font-medium text-[#1d1d1f]">
+                  {jdeDisabled ? '— selecciona en el header —' : selectedCia}
+                </span>
+              </p>
+              <button
+                onClick={loadFromJde}
+                disabled={jdeDisabled}
+                title={jdeDisabled ? 'Selecciona una compañía en el header primero' : undefined}
+                className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[#0071e3] text-white text-[13.5px] font-medium hover:bg-[#0077ed] shadow-sm shadow-[#0071e3]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+              >
+                <Database className="w-4 h-4" />
+                Consultar Antigüedad
+              </button>
+            </div>
+
+            {/* ── CSV ── */}
+            <div
+              onDragEnter={onDrag} onDragLeave={onDrag} onDragOver={onDrag} onDrop={onDrop}
+              onClick={() => ref.current?.click()}
+              className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
+                dragActive ? 'border-[#0071e3] bg-[#e8f4fd]' : 'border-[#d2d2d7] hover:border-[#0071e3] hover:bg-[#fbfbfd]'
+              }`}
+            >
+              <FileSpreadsheet className="w-10 h-10 text-[#86868b] mx-auto mb-3" />
+              <p className="text-[15px] font-semibold text-[#1d1d1f]">Arrastra tu CSV aquí</p>
+              <p className="text-[13px] text-[#86868b] mt-1">o haz click para seleccionar archivo</p>
+              <input ref={ref} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handle(e.target.files[0])} />
+            </div>
           </div>
         )}
 
         {loading && !success && (
           <div className="text-center py-16">
             <Loader2 className="w-8 h-8 text-[#0071e3] animate-spin mx-auto mb-3" />
-            <p className="text-[15px] font-medium text-[#1d1d1f]">Procesando archivo...</p>
+            <p className="text-[15px] font-medium text-[#1d1d1f]">
+              {source === 'jde' ? `Consultando JDE (compañía ${selectedCia})...` : 'Procesando archivo...'}
+            </p>
           </div>
         )}
 
@@ -279,7 +343,9 @@ const CXPUpload = ({ onDataLoaded }: { onDataLoaded: (r: CXPRecord[]) => void })
           <div className="text-center py-14">
             <CheckCircle className="w-12 h-12 text-[#34c759] mx-auto mb-3" />
             <p className="text-[15px] font-semibold text-[#1d1d1f]">{count.toLocaleString()} registros cargados</p>
-            <p className="text-[13px] text-[#86868b] mt-1">Abriendo análisis...</p>
+            <p className="text-[13px] text-[#86868b] mt-1">
+              {source === 'jde' ? `Desde JDE · compañía ${selectedCia}` : 'Desde archivo CSV'} — abriendo análisis...
+            </p>
           </div>
         )}
 
@@ -287,10 +353,12 @@ const CXPUpload = ({ onDataLoaded }: { onDataLoaded: (r: CXPRecord[]) => void })
           <div className="bg-[#fff5f5] border border-red-100 rounded-xl p-5">
             <div className="flex items-start gap-3">
               <AlertCircle className="text-[#ff3b30] flex-shrink-0 mt-0.5" size={18} />
-              <div>
-                <p className="text-[14px] font-semibold text-[#1d1d1f]">Error al procesar</p>
+              <div className="flex-1">
+                <p className="text-[14px] font-semibold text-[#1d1d1f]">
+                  {source === 'jde' ? 'Error al consultar JDE' : 'Error al procesar'}
+                </p>
                 <p className="text-[13px] text-[#6e6e73] mt-1">{error}</p>
-                <button onClick={() => { setError(null); ref.current?.click(); }}
+                <button onClick={retry}
                   className="mt-3 text-[13px] font-medium text-[#0071e3] hover:text-[#0077ED]">
                   Intentar de nuevo
                 </button>
@@ -884,9 +952,10 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
 interface CXPProps {
   records?: CXPRecord[];
   onRecordsChange?: (records: CXPRecord[]) => void;
+  selectedCia?: string;
 }
 
-const CXP = ({ records: externalRecords, onRecordsChange }: CXPProps) => {
+const CXP = ({ records: externalRecords, onRecordsChange, selectedCia }: CXPProps) => {
   const [view, setView] = useState<CXPView>(externalRecords && externalRecords.length > 0 ? 'dashboard' : 'upload');
   const [records, setRecords] = useState<CXPRecord[]>(externalRecords || []);
 
@@ -905,7 +974,7 @@ const CXP = ({ records: externalRecords, onRecordsChange }: CXPProps) => {
   if (view === 'upload') {
     return (
       <div className="min-h-[60vh] flex items-center justify-center p-6">
-        <CXPUpload onDataLoaded={handleLoaded} />
+        <CXPUpload onDataLoaded={handleLoaded} selectedCia={selectedCia} />
       </div>
     );
   }

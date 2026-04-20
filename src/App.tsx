@@ -1,13 +1,15 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { FlowPlan, Proposal, Scenario, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { loadClientsCatalog } from './domain/loadClientsCatalog';
+import { fetchCompanies, type Company, JdeApiError, type BankAccountStatement, type BankStatementFormat } from './services/jde';
 import Upload from './components/Upload';
 import Dashboard from './components/Dashboard';
 import ProposalCreator from './components/ProposalCreator';
 import Simulator from './components/Simulator';
 import CXP from './components/CXP';
+import Bancos from './components/Bancos';
 import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
@@ -19,6 +21,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import {
   LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap,
   Users, UserSquare, FileSpreadsheet, Download, LineChart, DollarSign, Sliders,
+  Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
 } from 'lucide-react';
 
 type SectionId = 'cobros' | 'pagos' | 'plan' | 'forecast';
@@ -39,6 +42,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
   pagos: [
     { id: 'providers', label: 'Proveedores', icon: Users },
     { id: 'cxp',       label: 'CXP',         icon: Users },
+    { id: 'bancos',    label: 'Bancos',      icon: Landmark },
   ],
   plan: [
     { id: 'dashboard',  label: 'Dashboard',   icon: LayoutDashboard, needsPlan: true },
@@ -54,7 +58,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'cobros', collections: 'cobros', netflow: 'cobros',
-  providers: 'pagos', cxp: 'pagos',
+  providers: 'pagos', cxp: 'pagos', bancos: 'pagos',
   dashboard: 'plan', proposals: 'plan', simulator: 'plan',
   pnl: 'forecast', cashflow: 'forecast', drivers: 'forecast',
 };
@@ -82,6 +86,29 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
+
+  // ── JDE integration state ──
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [selectedCia, setSelectedCia] = useState<string>(
+    () => localStorage.getItem('flowsense.selectedCia') ?? 'all'
+  );
+  const [companiesLoading, setCompaniesLoading] = useState(false);
+  const [companiesError, setCompaniesError] = useState<string | null>(null);
+  const [bankStatements, setBankStatements] = useState<BankAccountStatement[]>(() => {
+    try {
+      const raw = localStorage.getItem('flowsense.bankStatements');
+      return raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
+    } catch { return []; }
+  });
+  const [bankLastQuery, setBankLastQuery] = useState<{
+    fechaEstadoCuenta: string;
+    formatoElectronico: BankStatementFormat;
+  } | null>(() => {
+    try {
+      const raw = localStorage.getItem('flowsense.bankLastQuery');
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
@@ -124,6 +151,47 @@ export default function App() {
     }, 500);
     return () => clearTimeout(timer);
   }, [plan, proposals, scenarios, providers, clients, assumptions, confirmedPayments, cxpRecords]);
+
+  // ── JDE: load companies on mount ──
+  const loadCompanies = useCallback(async () => {
+    setCompaniesLoading(true);
+    setCompaniesError(null);
+    try {
+      const list = await fetchCompanies();
+      setCompanies(list);
+    } catch (e) {
+      setCompaniesError(
+        e instanceof JdeApiError ? `${e.status}: ${e.message}` : (e as Error).message
+      );
+    } finally {
+      setCompaniesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadCompanies(); }, [loadCompanies]);
+
+  // Persist selected cia (clear to 'all' if it disappears from the catalog)
+  useEffect(() => {
+    localStorage.setItem('flowsense.selectedCia', selectedCia);
+  }, [selectedCia]);
+  useEffect(() => {
+    if (companies.length > 0 && selectedCia !== 'all'
+        && !companies.some(c => c.cia === selectedCia)) {
+      setSelectedCia('all');
+    }
+  }, [companies, selectedCia]);
+
+  // Persist bank statements + last query
+  useEffect(() => {
+    try { localStorage.setItem('flowsense.bankStatements', JSON.stringify(bankStatements)); }
+    catch { /* quota or serialization issue; ignore */ }
+  }, [bankStatements]);
+  useEffect(() => {
+    try {
+      if (bankLastQuery) localStorage.setItem('flowsense.bankLastQuery', JSON.stringify(bankLastQuery));
+      else localStorage.removeItem('flowsense.bankLastQuery');
+    } catch { /* ignore */ }
+  }, [bankLastQuery]);
 
   /* ── Animated page key for re-mount on tab change ── */
   const [pageKey, setPageKey] = useState(0);
@@ -201,6 +269,14 @@ export default function App() {
 
           {/* Actions */}
           <div className="flex items-center gap-2">
+            <CompanySelector
+              companies={companies}
+              selectedCia={selectedCia}
+              loading={companiesLoading}
+              error={companiesError}
+              onSelect={setSelectedCia}
+              onRetry={loadCompanies}
+            />
             <button
               onClick={() => {
                 const json = exportStore({
@@ -318,7 +394,20 @@ export default function App() {
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Simulador" />
             )}
             {activeTab === 'cxp' && (
-              <CXP records={cxpRecords} onRecordsChange={setCxpRecords} />
+              <CXP
+                records={cxpRecords}
+                onRecordsChange={setCxpRecords}
+                selectedCia={selectedCia}
+              />
+            )}
+            {activeTab === 'bancos' && (
+              <Bancos
+                selectedCia={selectedCia}
+                statements={bankStatements}
+                onStatementsChange={setBankStatements}
+                lastQuery={bankLastQuery}
+                onLastQueryChange={setBankLastQuery}
+              />
             )}
             {activeTab === 'netflow' && (
               <CashFlowDetail
@@ -336,6 +425,108 @@ export default function App() {
           </ErrorBoundary>
         </div>
       </main>
+    </div>
+  );
+}
+
+function CompanySelector({
+  companies,
+  selectedCia,
+  loading,
+  error,
+  onSelect,
+  onRetry,
+}: {
+  companies: Company[];
+  selectedCia: string;
+  loading: boolean;
+  error: string | null;
+  onSelect: (cia: string) => void;
+  onRetry: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const active = companies.find(c => c.cia === selectedCia);
+  const label = selectedCia === 'all'
+    ? 'Todas las compañías'
+    : active ? `${active.cia} — ${active.nombre}` : selectedCia;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 h-9 px-3 rounded-xl bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[13px] font-medium text-[#1d1d1f] transition-all duration-200 max-w-[260px]"
+        title="Compañía JDE activa"
+      >
+        <Building2 className="w-4 h-4 text-[#0071e3] flex-shrink-0" />
+        <span className="truncate">{loading ? 'Cargando…' : label}</span>
+        {loading
+          ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#86868b] flex-shrink-0" />
+          : <ChevronDown className={`w-3.5 h-3.5 text-[#86868b] flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        }
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-11 w-[320px] bg-white rounded-2xl border border-[#d2d2d7]/40 shadow-lg p-1.5 z-50 max-h-[420px] overflow-y-auto">
+          {error ? (
+            <div className="p-3">
+              <div className="flex items-start gap-2 mb-2">
+                <AlertCircle className="w-4 h-4 text-[#ff3b30] flex-shrink-0 mt-0.5" />
+                <p className="text-[12px] text-[#6e6e73] leading-snug">{error}</p>
+              </div>
+              <button
+                onClick={() => { onRetry(); }}
+                className="text-[12px] font-medium text-[#0071e3] hover:text-[#0077ed]"
+              >Reintentar</button>
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={() => { onSelect('all'); setOpen(false); }}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition ${
+                  selectedCia === 'all' ? 'bg-[#0071e3]/10 text-[#0071e3]' : 'text-[#1d1d1f] hover:bg-[#f5f5f7]'
+                }`}
+              >
+                <span className="font-medium">Todas las compañías</span>
+                {selectedCia === 'all' && <Check className="w-3.5 h-3.5" />}
+              </button>
+              {companies.length === 0 && !loading && (
+                <p className="text-[12px] text-[#86868b] px-3 py-2">Sin compañías disponibles.</p>
+              )}
+              {companies
+                .filter(c => c.activa !== false)
+                .map(c => {
+                  const isActive = selectedCia === c.cia;
+                  return (
+                    <button
+                      key={c.cia}
+                      onClick={() => { onSelect(c.cia); setOpen(false); }}
+                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition ${
+                        isActive ? 'bg-[#0071e3]/10 text-[#0071e3]' : 'text-[#1d1d1f] hover:bg-[#f5f5f7]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{c.cia} — {c.nombre}</p>
+                        {c.rfc && <p className="text-[11px] text-[#86868b] truncate">{c.rfc}</p>}
+                      </div>
+                      {isActive && <Check className="w-3.5 h-3.5 flex-shrink-0" />}
+                    </button>
+                  );
+                })}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
