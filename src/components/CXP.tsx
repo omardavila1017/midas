@@ -35,6 +35,8 @@ import {
   Legend,
   Treemap,
 } from 'recharts';
+import { hex, color } from '../theme';
+import { fmtCompact, fmtCurrency, fmtSmart } from '../formatters';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -88,10 +90,10 @@ type SortDir = 'asc' | 'desc';
    Constants
    ═══════════════════════════════════════════════════════════════════════ */
 
-const AGING_COLORS = ['#34c759','#0071e3','#5ac8fa','#ff9f0a','#ff6723','#ff3b30','#af52de','#8e2d5c'];
+const AGING_COLORS = [hex.success, hex.primary, hex.info, hex.warning, '#ff6723', hex.danger, '#af52de', '#8e2d5c'];
 const BUCKET_LABELS = ['Por Vencer','1-30','31-60','61-90','91-120','121-150','151-180','180+'];
 const BUCKET_KEYS: (keyof CXPRecord)[] = ['porVencer','v1_30','v31_60','v61_90','v91_120','v121_150','v151_180','mas180'];
-const PIE_COLORS = ['#0071e3','#34c759','#ff9f0a','#af52de','#ff3b30','#5ac8fa','#ff6723','#8e2d5c','#30b0c7','#a2845e'];
+const PIE_COLORS = [hex.primary, hex.success, hex.warning, '#af52de', hex.danger, hex.info, '#ff6723', '#8e2d5c', '#30b0c7', '#a2845e'];
 const PAGE_SIZE = 50;
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -105,15 +107,9 @@ const parseNum = (val: string): number => {
   return isNaN(n) ? 0 : n;
 };
 
-const fmt = (v: number): string => {
-  const abs = Math.abs(v);
-  if (abs >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1_000) return `$${(v / 1_000).toFixed(1)}K`;
-  return `$${v.toFixed(0)}`;
-};
-
-const fmtFull = (v: number): string =>
-  new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2 }).format(v);
+/* fmt & fmtFull → imported from ../formatters as fmtCompact & fmtCurrency */
+const fmt = fmtCompact;
+const fmtFull = fmtCurrency;
 
 const pct = (part: number, whole: number): string =>
   whole > 0 ? `${((part / whole) * 100).toFixed(1)}%` : '0%';
@@ -235,7 +231,7 @@ const CXPUpload = ({
       const recs = parseCXP(text);
       setCount(recs.length);
       setSuccess(true);
-      setTimeout(() => onDataLoaded(recs), 500);
+      onDataLoaded(recs);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al procesar');
       setLoading(false);
@@ -250,10 +246,10 @@ const CXPUpload = ({
       if (records.length === 0) throw new Error(`JDE devolvió 0 registros para la compañía ${selectedCia}`);
       setCount(records.length);
       setSuccess(true);
-      setTimeout(() => onDataLoaded(records as CXPRecord[]), 500);
+      onDataLoaded(records as CXPRecord[]);
     } catch (e) {
       if (e instanceof JdeApiError) {
-        const hint = e.status === 401 ? ' — revisa VITE_JDE_TOKEN en .env.local' : '';
+        const hint = e.status === 401 ? ' — error de autenticación con el servidor' : '';
         setError(`JDE ${e.status}: ${e.message}${hint}`);
       } else {
         setError(e instanceof Error ? e.message : 'Error al consultar JDE');
@@ -283,24 +279,24 @@ const CXPUpload = ({
   return (
     <div className="w-full max-w-3xl mx-auto">
       <div className="text-center mb-8">
-        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200/50">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--info)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
           <Clock className="text-white" size={26} />
         </div>
-        <h1 className="text-[28px] font-bold text-[#1d1d1f] tracking-tight">Cuentas por Pagar</h1>
-        <p className="text-[15px] text-[#86868b] mt-1">Análisis de antigüedad de saldos CXP</p>
+        <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Cuentas por Pagar</h1>
+        <p className="text-[15px] text-[var(--gray-400)] mt-1">Análisis de antigüedad de saldos CXP</p>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/40 p-8">
+      <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
         {!loading && !success && !error && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* ── JDE ── */}
             <div className={`border-2 rounded-2xl p-10 text-center transition-all ${
-              jdeDisabled ? 'border-[#e8e8ed] bg-[#fbfbfd]' : 'border-[#0071e3]/30 bg-[#f5fbff] hover:border-[#0071e3] hover:bg-[#e8f4fd]'
+              jdeDisabled ? 'border-[var(--gray-100)] bg-[var(--surface-alt)]' : 'border-[var(--primary)]/30 bg-[var(--primary-subtle)] hover:border-[var(--primary)] hover:bg-[var(--primary-muted)]'
             }`}>
-              <Database className={`w-10 h-10 mx-auto mb-3 ${jdeDisabled ? 'text-[#c7c7cc]' : 'text-[#0071e3]'}`} />
-              <p className="text-[15px] font-semibold text-[#1d1d1f]">Consultar desde JDE</p>
-              <p className="text-[12px] text-[#86868b] mt-1">
-                Compañía: <span className="font-medium text-[#1d1d1f]">
+              <Database className={`w-10 h-10 mx-auto mb-3 ${jdeDisabled ? 'text-[var(--gray-300)]' : 'text-[var(--primary)]'}`} />
+              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Consultar desde JDE</p>
+              <p className="text-[12px] text-[var(--gray-400)] mt-1">
+                Compañía: <span className="font-medium text-[var(--gray-950)]">
                   {jdeDisabled ? '— selecciona en el header —' : selectedCia}
                 </span>
               </p>
@@ -308,7 +304,7 @@ const CXPUpload = ({
                 onClick={loadFromJde}
                 disabled={jdeDisabled}
                 title={jdeDisabled ? 'Selecciona una compañía en el header primero' : undefined}
-                className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[#0071e3] text-white text-[13.5px] font-medium hover:bg-[#0077ed] shadow-sm shadow-[#0071e3]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
               >
                 <Database className="w-4 h-4" />
                 Consultar Antigüedad
@@ -320,12 +316,12 @@ const CXPUpload = ({
               onDragEnter={onDrag} onDragLeave={onDrag} onDragOver={onDrag} onDrop={onDrop}
               onClick={() => ref.current?.click()}
               className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
-                dragActive ? 'border-[#0071e3] bg-[#e8f4fd]' : 'border-[#d2d2d7] hover:border-[#0071e3] hover:bg-[#fbfbfd]'
+                dragActive ? 'border-[var(--primary)] bg-[var(--primary-muted)]' : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
               }`}
             >
-              <FileSpreadsheet className="w-10 h-10 text-[#86868b] mx-auto mb-3" />
-              <p className="text-[15px] font-semibold text-[#1d1d1f]">Arrastra tu CSV aquí</p>
-              <p className="text-[13px] text-[#86868b] mt-1">o haz click para seleccionar archivo</p>
+              <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
+              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Arrastra tu CSV aquí</p>
+              <p className="text-[13px] text-[var(--gray-400)] mt-1">o haz click para seleccionar archivo</p>
               <input ref={ref} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handle(e.target.files[0])} />
             </div>
           </div>
@@ -333,8 +329,8 @@ const CXPUpload = ({
 
         {loading && !success && (
           <div className="text-center py-16">
-            <Loader2 className="w-8 h-8 text-[#0071e3] animate-spin mx-auto mb-3" />
-            <p className="text-[15px] font-medium text-[#1d1d1f]">
+            <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-3" />
+            <p className="text-[15px] font-medium text-[var(--gray-950)]">
               {source === 'jde' ? `Consultando JDE (compañía ${selectedCia})...` : 'Procesando archivo...'}
             </p>
           </div>
@@ -342,25 +338,25 @@ const CXPUpload = ({
 
         {success && (
           <div className="text-center py-14">
-            <CheckCircle className="w-12 h-12 text-[#34c759] mx-auto mb-3" />
-            <p className="text-[15px] font-semibold text-[#1d1d1f]">{count.toLocaleString()} registros cargados</p>
-            <p className="text-[13px] text-[#86868b] mt-1">
+            <CheckCircle className="w-12 h-12 text-[var(--success)] mx-auto mb-3" />
+            <p className="text-[15px] font-semibold text-[var(--gray-950)]">{count.toLocaleString()} registros cargados</p>
+            <p className="text-[13px] text-[var(--gray-400)] mt-1">
               {source === 'jde' ? `Desde JDE · compañía ${selectedCia}` : 'Desde archivo CSV'} — abriendo análisis...
             </p>
           </div>
         )}
 
         {error && (
-          <div className="bg-[#fff5f5] border border-red-100 rounded-xl p-5">
+          <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl p-5">
             <div className="flex items-start gap-3">
-              <AlertCircle className="text-[#ff3b30] flex-shrink-0 mt-0.5" size={18} />
+              <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
               <div className="flex-1">
-                <p className="text-[14px] font-semibold text-[#1d1d1f]">
+                <p className="text-[14px] font-semibold text-[var(--gray-950)]">
                   {source === 'jde' ? 'Error al consultar JDE' : 'Error al procesar'}
                 </p>
-                <p className="text-[13px] text-[#6e6e73] mt-1">{error}</p>
+                <p className="text-[13px] text-[var(--gray-500)] mt-1">{error}</p>
                 <button onClick={retry}
-                  className="mt-3 text-[13px] font-medium text-[#0071e3] hover:text-[#0077ED]">
+                  className="mt-3 text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]">
                   Intentar de nuevo
                 </button>
               </div>
@@ -379,9 +375,9 @@ const CXPUpload = ({
 const ChartTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.[0]) return null;
   return (
-    <div className="bg-white/95 backdrop-blur-xl border border-[#d2d2d7]/60 rounded-xl px-3 py-2 shadow-lg">
-      <p className="text-[12px] font-semibold text-[#1d1d1f]">{payload[0].payload.name || payload[0].name}</p>
-      <p className="text-[12px] font-mono text-[#6e6e73]">{fmtFull(payload[0].value)}</p>
+    <div className="bg-white/95 backdrop-blur-xl border border-[var(--gray-200)]/60 rounded-xl px-3 py-2 shadow-lg">
+      <p className="text-[12px] font-semibold text-[var(--gray-950)]">{payload[0].payload.name || payload[0].name}</p>
+      <p className="text-[12px] font-mono text-[var(--gray-500)]">{fmtFull(payload[0].value)}</p>
     </div>
   );
 };
@@ -390,7 +386,17 @@ const ChartTooltip = ({ active, payload }: any) => {
    Dashboard
    ═══════════════════════════════════════════════════════════════════════ */
 
-const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () => void }) => {
+const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: CXPRecord[]; onReset: () => void; companies?: Company[] }) => {
+  /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
+  const ciaName = useCallback((code: string): string => {
+    if (!compCatalog) return code;
+    const found = compCatalog.find(c => c.cia === code);
+    if (!found) return code;
+    // Strip the code prefix if the nombre already starts with it (e.g. "00011 - Servicio Industrial...")
+    const nombre = found.nombre;
+    const prefix = `${code} - `;
+    return nombre.startsWith(prefix) ? nombre.slice(prefix.length).trim() : nombre;
+  }, [compCatalog]);
   const [tab, setTab] = useState<DashboardTab>('resumen');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCia, setSelectedCia] = useState('all');
@@ -493,12 +499,14 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
     return [...top, { name: `Otros (${all.length - 7})`, value: otrosVal }];
   }, [filtered]);
 
-  // Company breakdown
+  // Company breakdown — show names instead of codes
   const ciaData = useMemo(() => {
     const map = new Map<string, number>();
     filtered.forEach(r => map.set(r.cia, (map.get(r.cia) || 0) + r.importePendientePesos));
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [filtered]);
+    return Array.from(map.entries())
+      .map(([code, value]) => ({ name: ciaName(code), value }))
+      .sort((a, b) => b.value - a.value);
+  }, [filtered, ciaName]);
 
   // Pagination
   const totalPages = Math.ceil(supplierData.length / PAGE_SIZE);
@@ -521,59 +529,59 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
     <div className="space-y-4">
       {/* ── Header Bar ── */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center bg-white rounded-full border border-[#d2d2d7]/40 px-3 py-1.5 gap-2 shadow-sm">
-          <Search className="w-3.5 h-3.5 text-[#86868b]" />
+        <div className="flex items-center bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 gap-2 shadow-sm">
+          <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
           <input type="text" placeholder="Buscar proveedor, factura, # prov..."
             value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setProvPage(0); }}
-            className="text-[13px] bg-transparent border-none outline-none w-56 placeholder:text-[#c7c7cc]" />
-          {searchTerm && <button onClick={() => setSearchTerm('')}><X className="w-3.5 h-3.5 text-[#86868b]" /></button>}
+            className="text-[13px] bg-transparent border-none outline-none w-56 placeholder:text-[var(--gray-300)]" />
+          {searchTerm && <button onClick={() => setSearchTerm('')}><X className="w-3.5 h-3.5 text-[var(--gray-400)]" /></button>}
         </div>
 
         <select value={selectedCia} onChange={e => { setSelectedCia(e.target.value); setProvPage(0); }}
-          className="text-[13px] bg-white rounded-full border border-[#d2d2d7]/40 px-4 py-1.5 shadow-sm text-[#1d1d1f] cursor-pointer">
+          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
           <option value="all">Todas las compañías</option>
-          {companies.map(c => <option key={c} value={c}>{c}</option>)}
+          {companies.map(c => <option key={c} value={c}>{ciaName(c)}</option>)}
         </select>
 
-        <div className="flex items-center gap-1 text-[12px] text-[#86868b] bg-[#f5f5f7] rounded-full px-3 py-1.5">
+        <div className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] rounded-full px-3 py-1.5">
           <Receipt className="w-3.5 h-3.5" />
           {filtered.length.toLocaleString()} facturas
         </div>
 
         {/* Sub-tabs — right aligned */}
-        <div className="ml-auto flex items-center bg-[#f5f5f7]/80 rounded-full p-[3px] gap-[2px]">
+        <div className="ml-auto flex items-center bg-[var(--gray-50)]/80 rounded-full p-[3px] gap-[2px]">
           {tabs.map(t => {
             const isActive = tab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)}
                 className={`relative px-3.5 py-[6px] rounded-full text-[12.5px] font-medium transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] flex items-center gap-1.5 ${
-                  isActive ? 'text-[#1d1d1f]' : 'text-[#86868b] hover:text-[#515154]'
+                  isActive ? 'text-[var(--gray-950)]' : 'text-[var(--gray-400)] hover:text-[var(--gray-700)]'
                 }`}>
                 {isActive && (
                   <span className="absolute inset-0 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.04)] animate-scale-in" />
                 )}
                 <span className="relative flex items-center gap-1.5">
                   {t.label}
-                  {t.count !== undefined && <span className="text-[11px] text-[#86868b]">({t.count})</span>}
+                  {t.count !== undefined && <span className="text-[11px] text-[var(--gray-400)]">({t.count})</span>}
                 </span>
               </button>
             );
           })}
         </div>
 
-        <button onClick={onReset} className="text-[12px] text-[#86868b] hover:text-[#ff3b30] flex items-center gap-1 transition">
+        <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition">
           <RotateCcw className="w-3 h-3" /> Nuevo archivo
         </button>
       </div>
 
       {/* ── Drilldown Banner ── */}
       {hasDrill && (
-        <div className="bg-[#e8f4fd] border border-[#0071e3]/20 rounded-xl px-4 py-2.5 flex items-center justify-between animate-slide-down">
-          <div className="flex items-center gap-2 text-[13px] text-[#0071e3] font-medium">
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center justify-between animate-slide-down">
+          <div className="flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
             <Filter className="w-3.5 h-3.5" />
             Filtrando: {drillLabel} — {filtered.length.toLocaleString()} registros
           </div>
-          <button onClick={clearDrill} className="text-[13px] font-medium text-[#0071e3] hover:text-[#0077ED] flex items-center gap-1 hover-press">
+          <button onClick={clearDrill} className="text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] flex items-center gap-1 hover-press">
             <X className="w-3.5 h-3.5" /> Limpiar
           </button>
         </div>
@@ -582,10 +590,10 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
       {/* ── KPI Cards ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Saldo Total CXP', value: totalPendiente, sub: `${supplierData.length} proveedores · ${filtered.length.toLocaleString()} facturas`, icon: Building2, color: '#0071e3', kpi: null as string | null },
-          { label: 'Por Vencer', value: totalPorVencer, sub: pct(totalPorVencer, totalPendiente) + ' del total', icon: Clock, color: '#34c759', kpi: 'porVencer' },
-          { label: 'Total Vencido', value: totalVencido, sub: pct(totalVencido, totalPendiente) + ' del total', icon: AlertTriangle, color: '#ff9f0a', kpi: 'vencido' },
-          { label: 'Vencido > 90 días', value: totalMas90, sub: pct(totalMas90, totalPendiente) + ' del total', icon: TrendingUp, color: '#ff3b30', kpi: 'mas90' },
+          { label: 'Saldo Total CXP', value: totalPendiente, sub: `${supplierData.length} proveedores · ${filtered.length.toLocaleString()} facturas`, icon: Building2, color: hex.primary, kpi: null as string | null },
+          { label: 'Por Vencer', value: totalPorVencer, sub: pct(totalPorVencer, totalPendiente) + ' del total', icon: Clock, color: hex.success, kpi: 'porVencer' },
+          { label: 'Total Vencido', value: totalVencido, sub: pct(totalVencido, totalPendiente) + ' del total', icon: AlertTriangle, color: hex.warning, kpi: 'vencido' },
+          { label: 'Vencido > 90 días', value: totalMas90, sub: pct(totalMas90, totalPendiente) + ' del total', icon: TrendingUp, color: hex.danger, kpi: 'mas90' },
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           const active = activeKpi === kpi.kpi && kpi.kpi !== null;
@@ -598,18 +606,18 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                 setTab('proveedores');
               }}
               className={`animate-card-in stagger-${i + 1} bg-white rounded-2xl border p-4 shadow-sm hover-lift cursor-pointer ${
-                active ? 'border-[#0071e3] ring-2 ring-[#0071e3]/20' : 'border-[#d2d2d7]/40'
+                active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/20' : 'border-[var(--gray-200)]'
               }`}>
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[11px] font-medium text-[#86868b] uppercase tracking-wider">{kpi.label}</p>
+                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-wider">{kpi.label}</p>
                 <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
                   <Icon className="w-3.5 h-3.5" style={{ color: kpi.color }} />
                 </div>
               </div>
-              <p className="text-[22px] font-bold font-mono tracking-tight text-[#1d1d1f]">
+              <p className="text-[22px] font-bold font-mono tracking-tight text-[var(--gray-950)]">
                 {fmt(kpi.value as number)}
               </p>
-              <p className="text-[11px] text-[#86868b] mt-0.5">{kpi.sub}</p>
+              <p className="text-[11px] text-[var(--gray-400)] mt-0.5">{kpi.sub}</p>
             </div>
           );
         })}
@@ -621,16 +629,16 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
       {tab === 'resumen' && (
         <>
           {/* Aging Bar Chart */}
-          <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-5 shadow-sm animate-card-in stagger-5">
+          <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Distribución por Antigüedad</h2>
-              <p className="text-[12px] text-[#86868b]">Click en barra para filtrar</p>
+              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Distribución por Antigüedad</h2>
+              <p className="text-[12px] text-[var(--gray-400)]">Click en barra para filtrar</p>
             </div>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={agingBuckets} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                <CartesianGrid stroke="#f0f0f2" strokeDasharray="0" vertical={false} />
-                <XAxis dataKey="name" tick={{ fill: '#86868b', fontSize: 11 }} axisLine={{ stroke: '#e8e8ed' }} tickLine={false} />
-                <YAxis tick={{ fill: '#86868b', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} />
+                <CartesianGrid stroke="var(--gray-100)" strokeDasharray="0" vertical={false} />
+                <XAxis dataKey="name" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={{ stroke: 'var(--gray-100)' }} tickLine={false} />
+                <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} />
                 <Tooltip content={<ChartTooltip />} />
                 <Bar dataKey="total" radius={[6, 6, 0, 0]} cursor="pointer"
                   onClick={(data: any) => { clearDrill(); setActiveBucket(activeBucket === data.name ? null : data.name); setTab('proveedores'); }}>
@@ -645,11 +653,11 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
             {/* Bucket summary chips */}
             <div className="flex gap-2 mt-3 flex-wrap">
               {agingBuckets.filter(b => b.total > 0).map((b, i) => (
-                <div key={i} className="flex items-center gap-1.5 bg-[#f5f5f7] rounded-full px-2.5 py-1 text-[11px]">
+                <div key={i} className="flex items-center gap-1.5 bg-[var(--gray-50)] rounded-full px-2.5 py-1 text-[11px]">
                   <div className="w-2 h-2 rounded-full" style={{ backgroundColor: b.color }} />
-                  <span className="text-[#6e6e73]">{b.name}:</span>
-                  <span className="font-mono font-semibold text-[#1d1d1f]">{fmt(b.total)}</span>
-                  <span className="text-[#86868b]">({b.count})</span>
+                  <span className="text-[var(--gray-500)]">{b.name}:</span>
+                  <span className="font-mono font-semibold text-[var(--gray-950)]">{fmt(b.total)}</span>
+                  <span className="text-[var(--gray-400)]">({b.count})</span>
                 </div>
               ))}
             </div>
@@ -658,10 +666,10 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
           {/* Two columns: Clasificación + Top Proveedores */}
           <div className="grid grid-cols-2 gap-4 animate-card-in stagger-7">
             {/* Classification Donut */}
-            <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-5 shadow-sm overflow-hidden hover-lift">
+            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Por Clasificación</h2>
-                <p className="text-[12px] text-[#86868b]">Click para filtrar</p>
+                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Por Clasificación</h2>
+                <p className="text-[12px] text-[var(--gray-400)]">Click para filtrar</p>
               </div>
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
@@ -684,33 +692,33 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                   <button key={i} onClick={() => { clearDrill(); setActiveClassification(activeClassification === e.name ? null : e.name); setTab('proveedores'); }}
                     className="flex items-center gap-1 text-[10px] hover:opacity-70 transition">
                     <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                    <span className="text-[#6e6e73] truncate max-w-[100px]">{e.name}</span>
-                    <span className="font-mono text-[#1d1d1f] font-medium">{fmt(e.value)}</span>
+                    <span className="text-[var(--gray-500)] truncate max-w-[100px]">{e.name}</span>
+                    <span className="font-mono text-[var(--gray-950)] font-medium">{fmt(e.value)}</span>
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Top 10 Proveedores */}
-            <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-5 shadow-sm hover-lift">
-              <h2 className="text-[15px] font-semibold text-[#1d1d1f] mb-3">Top 10 Proveedores</h2>
+            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm hover-lift">
+              <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-3">Top 10 Proveedores</h2>
               <div className="space-y-1.5">
                 {supplierData.slice(0, 10).map((s, i) => {
                   const barPct = supplierData[0]?.total > 0 ? (s.total / supplierData[0].total) : 0;
                   return (
                     <div key={i}
-                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[#f5f5f7] rounded-lg transition-all duration-200"
+                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-lg transition-all duration-200"
                       onClick={() => { clearDrill(); setSearchTerm(s.nombre.slice(0, 20)); setTab('proveedores'); setExpandedSupplier(s.nombre); setProvPage(0); }}>
-                      <span className="text-[11px] font-mono text-[#86868b] w-4 text-right">{i + 1}</span>
+                      <span className="text-[11px] font-mono text-[var(--gray-400)] w-4 text-right">{i + 1}</span>
                       <div className="flex-1 min-w-0">
-                        <p className="text-[12px] font-medium text-[#0071e3] truncate">{s.nombre}</p>
-                        <div className="bg-[#f0f0f2] rounded-full h-1.5 mt-1 overflow-hidden">
-                          <div className="h-full rounded-full bg-[#0071e3]/60" style={{ width: `${barPct * 100}%` }} />
+                        <p className="text-[12px] font-medium text-[var(--primary)] truncate">{s.nombre}</p>
+                        <div className="bg-[var(--gray-100)] rounded-full h-1.5 mt-1 overflow-hidden">
+                          <div className="h-full rounded-full bg-[var(--primary)]/60" style={{ width: `${barPct * 100}%` }} />
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-[12px] font-mono font-semibold text-[#1d1d1f]">{fmt(s.total)}</p>
-                        <p className="text-[10px] text-[#86868b]">{s.count} fact.</p>
+                        <p className="text-[12px] font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</p>
+                        <p className="text-[10px] text-[var(--gray-400)]">{s.count} fact.</p>
                       </div>
                     </div>
                   );
@@ -721,17 +729,17 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
 
           {/* Company breakdown (if multiple) */}
           {ciaData.length > 1 && (
-            <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-5 shadow-sm animate-card-in stagger-9">
-              <h2 className="text-[15px] font-semibold text-[#1d1d1f] mb-4">Desglose por Compañía</h2>
+            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-9">
+              <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-4">Desglose por Compañía</h2>
               <div className="grid grid-cols-2 gap-3">
                 {ciaData.map((c, i) => (
-                  <div key={i} className="flex items-center gap-3 p-3 bg-[#fbfbfd] rounded-xl">
+                  <div key={i} className="flex items-center gap-3 p-3 bg-[var(--surface-alt)] rounded-xl">
                     <div className="w-2 h-8 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-[12px] font-medium text-[#1d1d1f] truncate">{c.name}</p>
-                      <p className="text-[11px] text-[#86868b]">{pct(c.value, totalPendiente)}</p>
+                      <p className="text-[12px] font-medium text-[var(--gray-950)] truncate">{c.name}</p>
+                      <p className="text-[11px] text-[var(--gray-400)]">{pct(c.value, totalPendiente)}</p>
                     </div>
-                    <p className="text-[13px] font-mono font-semibold text-[#1d1d1f]">{fmt(c.value)}</p>
+                    <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmt(c.value)}</p>
                   </div>
                 ))}
               </div>
@@ -744,12 +752,12 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
          PROVEEDORES TAB
          ════════════════════════════════════════════════════════════════ */}
       {tab === 'proveedores' && (
-        <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
           {/* Header with sort controls */}
-          <div className="p-4 border-b border-[#e8e8ed] flex items-center justify-between">
-            <h2 className="text-[15px] font-semibold text-[#1d1d1f]">
+          <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
+            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
               Proveedores
-              <span className="text-[#86868b] font-normal ml-1">({supplierData.length.toLocaleString()})</span>
+              <span className="text-[var(--gray-400)] font-normal ml-1">({supplierData.length.toLocaleString()})</span>
             </h2>
             <div className="flex items-center gap-1">
               {([
@@ -760,7 +768,7 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
               ] as [SortKey, string][]).map(([k, label]) => (
                 <button key={k} onClick={() => toggleSort(k)}
                   className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition flex items-center gap-1 ${
-                    sortKey === k ? 'bg-[#0071e3] text-white' : 'bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed]'
+                    sortKey === k ? 'bg-[var(--primary)] text-white' : 'bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)]'
                   }`}>
                   {label}
                   {sortKey === k && <ArrowUpDown className="w-2.5 h-2.5" />}
@@ -770,22 +778,22 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
           </div>
 
           {/* Supplier list */}
-          <div className="divide-y divide-[#f5f5f7]">
+          <div className="divide-y divide-[var(--gray-50)]">
             {pagedSuppliers.map(s => {
               const isExpanded = expandedSupplier === s.nombre;
               const vencido = s.records.reduce((sum, r) => sum + r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180, 0);
-              const severity = s.maxDias > 120 ? '#ff3b30' : s.maxDias > 60 ? '#ff9f0a' : s.maxDias > 0 ? '#0071e3' : '#34c759';
+              const severity = s.maxDias > 120 ? hex.danger : s.maxDias > 60 ? hex.warning : s.maxDias > 0 ? hex.primary : hex.success;
 
               return (
                 <div key={s.nombre}>
                   <button onClick={() => setExpandedSupplier(isExpanded ? null : s.nombre)}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#fbfbfd] transition text-left">
-                    {isExpanded ? <ChevronDown className="w-4 h-4 text-[#86868b]" /> : <ChevronRight className="w-4 h-4 text-[#86868b]" />}
+                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--gray-50)] transition text-left">
+                    {isExpanded ? <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" /> : <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />}
 
                     <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-medium text-[#1d1d1f] truncate">{s.nombre}</p>
+                      <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">{s.nombre}</p>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[11px] text-[#86868b]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
+                        <span className="text-[11px] text-[var(--gray-400)]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
                         {s.maxDias > 0 && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ backgroundColor: severity + '14', color: severity }}>
                             máx {s.maxDias}d
@@ -795,7 +803,7 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                     </div>
 
                     {/* Mini aging bar */}
-                    <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[#f0f0f2]">
+                    <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[var(--gray-100)]">
                       {BUCKET_KEYS.map((key, bi) => {
                         const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
                         const bpct = s.total > 0 ? (bval / s.total) * 100 : 0;
@@ -804,24 +812,24 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                     </div>
 
                     <div className="text-right w-28">
-                      <p className="text-[13px] font-mono font-semibold text-[#1d1d1f]">{fmt(s.total)}</p>
-                      {vencido > 0 && <p className="text-[10px] font-mono text-[#ff3b30]">{fmt(vencido)} vencido</p>}
+                      <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</p>
+                      {vencido > 0 && <p className="text-[10px] font-mono text-[var(--danger)]">{fmt(vencido)} vencido</p>}
                     </div>
                   </button>
 
                   {/* Expanded detail */}
                   {isExpanded && (
-                    <div className="bg-[#fbfbfd] px-4 pb-3">
+                    <div className="bg-[var(--surface-alt)] px-4 pb-3">
                       {/* Aging summary for this supplier */}
                       <div className="flex gap-1.5 mb-3 flex-wrap">
                         {BUCKET_KEYS.map((key, bi) => {
                           const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
                           if (bval === 0) return null;
                           return (
-                            <div key={bi} className="flex items-center gap-1 bg-white rounded-full px-2 py-0.5 text-[10px] border border-[#e8e8ed]">
+                            <div key={bi} className="flex items-center gap-1 bg-white rounded-full px-2 py-0.5 text-[10px] border border-[var(--gray-100)]">
                               <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: AGING_COLORS[bi] }} />
-                              <span className="text-[#6e6e73]">{BUCKET_LABELS[bi]}:</span>
-                              <span className="font-mono font-medium text-[#1d1d1f]">{fmt(bval)}</span>
+                              <span className="text-[var(--gray-500)]">{BUCKET_LABELS[bi]}:</span>
+                              <span className="font-mono font-medium text-[var(--gray-950)]">{fmt(bval)}</span>
                             </div>
                           );
                         })}
@@ -830,30 +838,30 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                       <div className="overflow-x-auto">
                         <table className="w-full text-[11px]">
                           <thead>
-                            <tr className="border-b border-[#e8e8ed]">
-                              <th className="text-left py-2 text-[#86868b] font-semibold">Factura</th>
-                              <th className="text-left py-2 text-[#86868b] font-semibold">F. Factura</th>
-                              <th className="text-left py-2 text-[#86868b] font-semibold">Vence</th>
-                              <th className="text-right py-2 text-[#86868b] font-semibold">Días</th>
-                              <th className="text-right py-2 text-[#86868b] font-semibold">Pendiente</th>
-                              <th className="text-left py-2 text-[#86868b] font-semibold pl-3">Mon.</th>
-                              <th className="text-left py-2 text-[#86868b] font-semibold">Cond. Pago</th>
+                            <tr className="border-b border-[var(--gray-100)]">
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Factura</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">F. Factura</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Vence</th>
+                              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Días</th>
+                              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Pendiente</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold pl-3">Mon.</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Cond. Pago</th>
                             </tr>
                           </thead>
                           <tbody>
                             {s.records.sort((a, b) => b.diasVencida - a.diasVencida).map((r, ri) => (
-                              <tr key={ri} className="border-b border-[#f5f5f7]">
-                                <td className="py-1.5 font-mono text-[#1d1d1f]">{r.noFactura}</td>
-                                <td className="py-1.5 text-[#6e6e73]">{r.fechaFactura}</td>
-                                <td className="py-1.5 text-[#6e6e73]">{r.fechaVence}</td>
+                              <tr key={ri} className="border-b border-[var(--gray-50)]">
+                                <td className="py-1.5 font-mono text-[var(--gray-950)]">{r.noFactura}</td>
+                                <td className="py-1.5 text-[var(--gray-500)]">{r.fechaFactura}</td>
+                                <td className="py-1.5 text-[var(--gray-500)]">{r.fechaVence}</td>
                                 <td className="py-1.5 text-right font-mono">
-                                  <span className={r.diasVencida > 90 ? 'text-[#ff3b30] font-semibold' : r.diasVencida > 30 ? 'text-[#ff9f0a]' : 'text-[#1d1d1f]'}>
+                                  <span className={r.diasVencida > 90 ? 'text-[var(--danger)] font-semibold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}>
                                     {r.diasVencida}
                                   </span>
                                 </td>
-                                <td className="py-1.5 text-right font-mono font-medium text-[#1d1d1f]">{fmtFull(r.importePendientePesos)}</td>
-                                <td className="py-1.5 pl-3 text-[#86868b]">{r.moneda}</td>
-                                <td className="py-1.5 text-[#86868b]">{r.condPago}</td>
+                                <td className="py-1.5 text-right font-mono font-medium text-[var(--gray-950)]">{fmtFull(r.importePendientePesos)}</td>
+                                <td className="py-1.5 pl-3 text-[var(--gray-400)]">{r.moneda}</td>
+                                <td className="py-1.5 text-[var(--gray-400)]">{r.condPago}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -868,18 +876,18 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="px-4 py-3 border-t border-[#e8e8ed] flex items-center justify-between">
-              <p className="text-[12px] text-[#86868b]">
+            <div className="px-4 py-3 border-t border-[var(--gray-100)] flex items-center justify-between">
+              <p className="text-[12px] text-[var(--gray-400)]">
                 Mostrando {provPage * PAGE_SIZE + 1}–{Math.min((provPage + 1) * PAGE_SIZE, supplierData.length)} de {supplierData.length.toLocaleString()}
               </p>
               <div className="flex gap-1">
                 <button onClick={() => setProvPage(p => Math.max(0, p - 1))} disabled={provPage === 0}
-                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed] disabled:opacity-30 transition">
+                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
                   Anterior
                 </button>
-                <span className="px-3 py-1 text-[12px] text-[#86868b]">{provPage + 1} / {totalPages}</span>
+                <span className="px-3 py-1 text-[12px] text-[var(--gray-400)]">{provPage + 1} / {totalPages}</span>
                 <button onClick={() => setProvPage(p => Math.min(totalPages - 1, p + 1))} disabled={provPage >= totalPages - 1}
-                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[#f5f5f7] text-[#6e6e73] hover:bg-[#e8e8ed] disabled:opacity-30 transition">
+                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
                   Siguiente
                 </button>
               </div>
@@ -892,18 +900,18 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
          ANTIGÜEDAD TAB
          ════════════════════════════════════════════════════════════════ */}
       {tab === 'antiguedad' && (
-        <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-[#e8e8ed] flex items-center justify-between">
-            <h2 className="text-[15px] font-semibold text-[#1d1d1f]">Matriz de Antigüedad por Proveedor</h2>
-            <p className="text-[12px] text-[#86868b]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
+        <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
+            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
+            <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-[11px]">
               <thead className="sticky top-0 bg-white z-10">
-                <tr className="border-b-2 border-[#d2d2d7]">
-                  <th className="text-left py-2.5 px-3 text-[#86868b] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
-                  <th className="text-right py-2.5 px-2 text-[#86868b] font-semibold w-[90px]">Total</th>
-                  <th className="text-center py-2.5 px-1 text-[#86868b] font-semibold w-[40px]">#</th>
+                <tr className="border-b-2 border-[var(--gray-200)]">
+                  <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
+                  <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-semibold w-[90px]">Total</th>
+                  <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-semibold w-[40px]">#</th>
                   {BUCKET_LABELS.map((label, i) => (
                     <th key={i} className="text-right py-2.5 px-2 font-semibold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
                   ))}
@@ -914,10 +922,10 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                   const bucketVals = BUCKET_KEYS.map(key => s.records.reduce((sum, r) => sum + (r[key] as number), 0));
                   const maxBucket = Math.max(...bucketVals);
                   return (
-                    <tr key={si} className="border-b border-[#f5f5f7] hover:bg-[#fbfbfd] transition">
-                      <td className="py-2 px-3 font-medium text-[#1d1d1f] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
-                      <td className="py-2 px-2 text-right font-mono font-semibold text-[#1d1d1f]">{fmt(s.total)}</td>
-                      <td className="py-2 px-1 text-center text-[#86868b]">{s.count}</td>
+                    <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
+                      <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
+                      <td className="py-2 px-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</td>
+                      <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
                       {bucketVals.map((val, bi) => {
                         const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
                         return (
@@ -932,7 +940,7 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                                 {fmt(val)}
                               </span>
                             ) : (
-                              <span className="text-[#e0e0e0]">—</span>
+                              <span className="text-[var(--gray-200)]">—</span>
                             )}
                           </td>
                         );
@@ -941,10 +949,10 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
                   );
                 })}
                 {/* Totals */}
-                <tr className="border-t-2 border-[#d2d2d7] bg-[#f5f5f7] font-semibold sticky bottom-0">
-                  <td className="py-2.5 px-3 text-[#1d1d1f]">TOTAL</td>
-                  <td className="py-2.5 px-2 text-right font-mono text-[#1d1d1f]">{fmt(totalPendiente)}</td>
-                  <td className="py-2.5 px-1 text-center text-[#86868b]">{filtered.length}</td>
+                <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold sticky bottom-0">
+                  <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
+                  <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
+                  <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{filtered.length}</td>
                   {agingBuckets.map((b, i) => (
                     <td key={i} className="py-2.5 px-2 text-right font-mono font-bold" style={{ color: b.color }}>{fmt(b.total)}</td>
                   ))}
@@ -1014,7 +1022,7 @@ const CXP = ({
       onMergeCia(cia, stamped);
     } catch (e) {
       if (e instanceof JdeApiError) {
-        const hint = e.status === 401 ? ' — revisa VITE_JDE_TOKEN en .env.local' : '';
+        const hint = e.status === 401 ? ' — error de autenticación con el servidor' : '';
         setError(`JDE ${e.status}: ${e.message}${hint}`);
       } else {
         setError(e instanceof Error ? e.message : 'Error al consultar JDE');
@@ -1138,18 +1146,18 @@ const CXP = ({
       <div className="min-h-[60vh] flex items-center justify-center p-6">
         <div className="w-full max-w-3xl mx-auto">
           <div className="text-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200/50">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--info)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
               <Clock className="text-white" size={26} />
             </div>
-            <h1 className="text-[28px] font-bold text-[#1d1d1f] tracking-tight">Cuentas por Pagar</h1>
-            <p className="text-[15px] text-[#86868b] mt-1">Antigüedad de saldos · {scopeLabel}</p>
+            <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Cuentas por Pagar</h1>
+            <p className="text-[15px] text-[var(--gray-400)] mt-1">Antigüedad de saldos · {scopeLabel}</p>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/40 p-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
             {loading ? (
               <div className="text-center py-14">
-                <Loader2 className="w-8 h-8 text-[#0071e3] animate-spin mx-auto mb-3" />
-                <p className="text-[15px] font-medium text-[#1d1d1f]">
+                <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-3" />
+                <p className="text-[15px] font-medium text-[var(--gray-950)]">
                   {selectedCia === 'all'
                     ? `Consultando JDE para ${activeCias.length} compañías…`
                     : `Consultando JDE (compañía ${selectedCia})…`}
@@ -1157,14 +1165,14 @@ const CXP = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="border-2 border-[#0071e3]/30 bg-[#f5fbff] rounded-2xl p-10 text-center hover:border-[#0071e3] hover:bg-[#e8f4fd] transition-all">
-                  <Database className="w-10 h-10 mx-auto mb-3 text-[#0071e3]" />
-                  <p className="text-[15px] font-semibold text-[#1d1d1f]">Consultar desde JDE</p>
-                  <p className="text-[12px] text-[#86868b] mt-1">{scopeLabel}</p>
+                <div className="border-2 border-[var(--primary)]/30 bg-[var(--primary-subtle)] rounded-2xl p-10 text-center hover:border-[var(--primary)] hover:bg-[var(--primary-muted)] transition-all">
+                  <Database className="w-10 h-10 mx-auto mb-3 text-[var(--primary)]" />
+                  <p className="text-[15px] font-semibold text-[var(--gray-950)]">Consultar desde JDE</p>
+                  <p className="text-[12px] text-[var(--gray-400)] mt-1">{scopeLabel}</p>
                   <button
                     onClick={() => selectedCia === 'all' ? loadAll() : loadSingle(selectedCia)}
                     disabled={loading || (selectedCia === 'all' && activeCias.length === 0)}
-                    className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[#0071e3] text-white text-[13.5px] font-medium hover:bg-[#0077ed] shadow-sm shadow-[#0071e3]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
                   >
                     <Database className="w-4 h-4" />
                     {selectedCia === 'all' ? 'Consultar todas' : 'Consultar antigüedad'}
@@ -1173,11 +1181,11 @@ const CXP = ({
 
                 <div
                   onClick={() => csvInput.current?.click()}
-                  className="border-2 border-dashed border-[#d2d2d7] rounded-2xl p-10 text-center cursor-pointer hover:border-[#0071e3] hover:bg-[#fbfbfd] transition-all"
+                  className="border-2 border-dashed border-[var(--gray-200)] rounded-2xl p-10 text-center cursor-pointer hover:border-[var(--primary)] hover:bg-[var(--gray-50)] transition-all"
                 >
-                  <FileSpreadsheet className="w-10 h-10 text-[#86868b] mx-auto mb-3" />
-                  <p className="text-[15px] font-semibold text-[#1d1d1f]">Subir CSV</p>
-                  <p className="text-[13px] text-[#86868b] mt-1">Opcional · si JDE no está disponible</p>
+                  <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
+                  <p className="text-[15px] font-semibold text-[var(--gray-950)]">Subir CSV</p>
+                  <p className="text-[13px] text-[var(--gray-400)] mt-1">Opcional · si JDE no está disponible</p>
                   <input
                     ref={csvInput} type="file" accept=".csv" className="hidden"
                     onChange={e => e.target.files?.[0] && handleCsvFile(e.target.files[0])}
@@ -1187,15 +1195,15 @@ const CXP = ({
             )}
 
             {error && !loading && (
-              <div className="mt-4 bg-[#fff5f5] border border-red-100 rounded-xl p-4">
+              <div className="mt-4 bg-[var(--danger-muted)] border border-red-100 rounded-xl p-4">
                 <div className="flex items-start gap-3">
-                  <AlertCircle className="text-[#ff3b30] flex-shrink-0 mt-0.5" size={18} />
+                  <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
                   <div className="flex-1">
-                    <p className="text-[13px] font-semibold text-[#1d1d1f]">Error al consultar JDE</p>
-                    <p className="text-[12px] text-[#6e6e73] mt-1">{error}</p>
+                    <p className="text-[13px] font-semibold text-[var(--gray-950)]">Error al consultar JDE</p>
+                    <p className="text-[12px] text-[var(--gray-500)] mt-1">{error}</p>
                     <button
                       onClick={refresh}
-                      className="mt-2 text-[12px] font-medium text-[#0071e3] hover:text-[#0077ed]"
+                      className="mt-2 text-[12px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]"
                     >
                       Intentar de nuevo
                     </button>
@@ -1215,17 +1223,17 @@ const CXP = ({
       {/* Scope + actions bar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#e8f4fd] border border-[#0071e3]/20 text-[12px] font-medium text-[#0071e3]">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--primary-muted)] border border-[var(--primary)]/20 text-[12px] font-medium text-[var(--primary)]">
             <Building2 className="w-3.5 h-3.5" />
             {scopeLabel}
           </div>
           {lastSyncLabel && (
-            <span className="text-[11px] text-[#86868b]">{lastSyncLabel}</span>
+            <span className="text-[11px] text-[var(--gray-400)]">{lastSyncLabel}</span>
           )}
           {missingActiveCias.length > 0 && !loading && (
             <button
               onClick={loadAll}
-              className="text-[11px] font-medium text-[#0071e3] hover:text-[#0077ed] underline underline-offset-2"
+              className="text-[11px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] underline underline-offset-2"
               title={`Faltan: ${missingActiveCias.join(', ')}`}
             >
               Completar {missingActiveCias.length} faltantes
@@ -1236,7 +1244,7 @@ const CXP = ({
           <button
             onClick={refresh}
             disabled={loading}
-            className="flex items-center gap-1.5 text-[12px] text-[#6e6e73] hover:text-[#0071e3] disabled:opacity-40 transition"
+            className="flex items-center gap-1.5 text-[12px] text-[var(--gray-500)] hover:text-[var(--primary)] disabled:opacity-40 transition"
           >
             {loading
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1245,14 +1253,14 @@ const CXP = ({
           </button>
           <button
             onClick={() => csvInput.current?.click()}
-            className="flex items-center gap-1.5 text-[12px] text-[#6e6e73] hover:text-[#0071e3] transition"
+            className="flex items-center gap-1.5 text-[12px] text-[var(--gray-500)] hover:text-[var(--primary)] transition"
           >
             <UploadIcon className="w-3.5 h-3.5" />
             Subir CSV
           </button>
           <button
             onClick={onReset}
-            className="flex items-center gap-1.5 text-[12px] text-[#86868b] hover:text-[#ff3b30] transition"
+            className="flex items-center gap-1.5 text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] transition"
           >
             <X className="w-3.5 h-3.5" />
             Limpiar
@@ -1265,20 +1273,20 @@ const CXP = ({
       </div>
 
       {error && (
-        <div className="bg-[#fff5f5] border border-red-100 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-[12.5px] text-[#ff3b30] font-medium">
+        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[12.5px] text-[var(--danger)] font-medium">
             <AlertCircle className="w-3.5 h-3.5" /> {error}
           </div>
           <button
             onClick={() => setError(null)}
-            className="text-[11px] text-[#6e6e73] hover:text-[#ff3b30]"
+            className="text-[11px] text-[var(--gray-500)] hover:text-[var(--danger)]"
           >
             Cerrar
           </button>
         </div>
       )}
 
-      <CXPDashboard records={visibleRecords} onReset={onReset} />
+      <CXPDashboard records={visibleRecords} onReset={onReset} companies={companies} />
     </div>
   );
 };

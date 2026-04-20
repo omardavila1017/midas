@@ -67,21 +67,21 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#f5f5f7] flex items-center justify-center p-6">
+    <div className="min-h-screen bg-[var(--gray-50)] flex items-center justify-center p-6">
       <div className="w-full max-w-lg animate-page-in">
         {/* Logo and Header */}
         <div className="text-center mb-10">
           <div className="flex items-center justify-center gap-3 mb-4 animate-scale-in">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center shadow-lg shadow-blue-200/40">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--info)] flex items-center justify-center shadow-lg shadow-blue-200/40">
               <Zap className="text-white" size={24} />
             </div>
           </div>
-          <h1 className="text-[28px] font-bold text-[#1d1d1f] tracking-[-0.02em] mb-1 animate-card-in stagger-1">FlowSense</h1>
-          <p className="text-[15px] text-[#86868b] animate-card-in stagger-2">Análisis de Flujo de Efectivo</p>
+          <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-[-0.02em] mb-1 animate-card-in stagger-1">FlowSense</h1>
+          <p className="text-[15px] text-[var(--gray-400)] animate-card-in stagger-2">Análisis de Flujo de Efectivo</p>
         </div>
 
         {/* Main Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-[#d2d2d7]/40 p-8 animate-card-in stagger-3 hover-lift">
+        <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)]/40 p-8 animate-card-in stagger-3 hover-lift">
           {!loading && !success && !error && (
             <>
               {/* Drag & Drop Zone */}
@@ -93,17 +93,17 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
                 onClick={triggerFileInput}
                 className={`border-2 border-dashed rounded-2xl p-14 text-center cursor-pointer transition-all ${
                   dragActive
-                    ? 'border-[#0071e3] bg-[#e8f4fd]'
-                    : 'border-[#d2d2d7] hover:border-[#0071e3] hover:bg-[#fbfbfd]'
+                    ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
+                    : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--surface-alt)]'
                 }`}
               >
-                <div className="w-14 h-14 rounded-2xl bg-[#f5f5f7] flex items-center justify-center mx-auto mb-4">
-                  <UploadIcon className="text-[#86868b]" size={28} />
+                <div className="w-14 h-14 rounded-2xl bg-[var(--gray-50)] flex items-center justify-center mx-auto mb-4">
+                  <UploadIcon className="text-[var(--gray-400)]" size={28} />
                 </div>
-                <p className="text-[15px] font-semibold text-[#1d1d1f] mb-1">
+                <p className="text-[15px] font-semibold text-[var(--gray-950)] mb-1">
                   Arrastra tu Excel aquí
                 </p>
-                <p className="text-[13px] text-[#86868b]">
+                <p className="text-[13px] text-[var(--gray-400)]">
                   o haz clic para seleccionar — .xlsx, .xls
                 </p>
               </div>
@@ -118,8 +118,8 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
 
               {/* Footer Note */}
               <div className="mt-6 flex items-center gap-3 px-1">
-                <FileSpreadsheet size={16} className="text-[#86868b] flex-shrink-0" />
-                <p className="text-[12px] text-[#86868b]">
+                <FileSpreadsheet size={16} className="text-[var(--gray-400)] flex-shrink-0" />
+                <p className="text-[12px] text-[var(--gray-400)]">
                   Formato esperado: Plan de Flujo Ajustado con datos semanales
                 </p>
               </div>
@@ -129,11 +129,11 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
           {/* Loading State */}
           {loading && !success && (
             <div className="text-center py-14">
-              <Loader2 className="text-[#0071e3] animate-spin mx-auto mb-4" size={40} />
-              <p className="text-[15px] font-semibold text-[#1d1d1f] mb-1">Procesando Excel...</p>
-              <p className="text-[13px] text-[#86868b]">Analizando estructura y datos</p>
-              <div className="mt-6 h-1 bg-[#f5f5f7] rounded-full overflow-hidden max-w-xs mx-auto">
-                <div className="h-full bg-[#0071e3] rounded-full animate-pulse" style={{ width: '60%' }} />
+              <Loader2 className="text-[var(--primary)] animate-spin mx-auto mb-4" size={40} />
+              <p className="text-[15px] font-semibold text-[var(--gray-950)] mb-1">Procesando Excel...</p>
+              <p className="text-[13px] text-[var(--gray-400)]">Analizando estructura y datos</p>
+              <div className="mt-6 h-1 bg-[var(--gray-50)] rounded-full overflow-hidden max-w-xs mx-auto">
+                <div className="h-full bg-[var(--primary)] rounded-full animate-pulse" style={{ width: '60%' }} />
               </div>
             </div>
           )}
@@ -141,27 +141,27 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
           {/* Success State */}
           {success && (
             <div className="text-center py-14 animate-scale-in">
-              <div className="w-14 h-14 rounded-full bg-[#e8faf0] flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="text-[#34c759]" size={28} />
+              <div className="w-14 h-14 rounded-full bg-[var(--success-muted)] flex items-center justify-center mx-auto mb-4">
+                <CheckCircle className="text-[var(--success)]" size={28} />
               </div>
-              <p className="text-[15px] font-semibold text-[#1d1d1f]">Archivo procesado</p>
-              <p className="text-[13px] text-[#86868b] mt-1">Cargando dashboard...</p>
+              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Archivo procesado</p>
+              <p className="text-[13px] text-[var(--gray-400)] mt-1">Cargando dashboard...</p>
             </div>
           )}
 
           {/* Error State */}
           {error && !loading && (
-            <div className="bg-[#fff5f5] border border-red-100 rounded-xl p-5 animate-slide-down">
+            <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl p-5 animate-slide-down">
               <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-[#ffe5e5] flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <AlertCircle className="text-[#ff3b30]" size={16} />
+                <div className="w-8 h-8 rounded-full bg-[var(--danger)/20] flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <AlertCircle className="text-[var(--danger)]" size={16} />
                 </div>
                 <div>
-                  <p className="text-[14px] font-semibold text-[#1d1d1f]">Error al procesar</p>
-                  <p className="text-[13px] text-[#6e6e73] mt-1">{error}</p>
+                  <p className="text-[14px] font-semibold text-[var(--gray-950)]">Error al procesar</p>
+                  <p className="text-[13px] text-[var(--gray-500)] mt-1">{error}</p>
                   <button
                     onClick={() => { setError(null); triggerFileInput(); }}
-                    className="mt-3 text-[13px] font-medium text-[#0071e3] hover:text-[#0077ED]"
+                    className="mt-3 text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]"
                   >
                     Intentar de nuevo
                   </button>

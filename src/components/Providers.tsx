@@ -22,9 +22,9 @@ const RISKS: ProviderRisk[] = ['Alto', 'Medio', 'Bajo'];
 const PERIODS: ProviderPaymentPeriod[] = ['Contado', '15 días', '30 días', '45 días', '60 días', '90 días'];
 
 const RISK_STYLES: Record<ProviderRisk, { bg: string; text: string; border: string }> = {
-  Alto: { bg: '#ff3b3010', text: '#ff3b30', border: '#ff3b3040' },
-  Medio: { bg: '#ff9f0a10', text: '#ff9f0a', border: '#ff9f0a40' },
-  Bajo: { bg: '#34c75910', text: '#34c759', border: '#34c75940' },
+  Alto: { bg: 'var(--danger)/10', text: 'var(--danger)', border: 'var(--danger)40' },
+  Medio: { bg: 'var(--warning)/10', text: 'var(--warning)', border: 'var(--warning)40' },
+  Bajo: { bg: 'var(--success)/10', text: 'var(--success)', border: 'var(--success)40' },
 };
 
 interface Props {
@@ -71,8 +71,8 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
     <div className="space-y-5">
       <header className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight">Proveedores</h1>
-          <p className="text-[13px] text-[#86868b] mt-1">
+          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Proveedores</h1>
+          <p className="text-[13px] text-[var(--gray-400)] mt-1">
             {providers.length === 0
               ? 'Importa el catálogo o agrega proveedores uno a uno.'
               : `${providers.length} proveedores`}
@@ -81,7 +81,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
         <div className="flex gap-2">
           <button
             onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed]"
+            className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
           >
             <UploadIcon className="w-3.5 h-3.5" /> Importar Excel
           </button>
@@ -96,8 +96,8 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
       </header>
 
       {/* Quick add row */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4">
-        <div className="text-[12px] text-[#86868b] mb-2">Agregar manualmente</div>
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4">
+        <div className="text-[12px] text-[var(--gray-400)] mb-2">Agregar manualmente</div>
         <div className="flex flex-wrap gap-2 items-end">
           <div className="flex-1 min-w-[220px]">
             <input
@@ -137,15 +137,15 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
             disabled={!canAdd}
             className={`flex items-center gap-1.5 px-4 h-9 rounded-lg text-[13px] font-medium hover-press ${
               canAdd
-                ? 'bg-[#0071e3] text-white hover:bg-[#0077ed]'
-                : 'bg-[#f5f5f7] text-[#86868b] cursor-not-allowed'
+                ? 'bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)]'
+                : 'bg-[var(--gray-50)] text-[var(--gray-400)] cursor-not-allowed'
             }`}
           >
             <Plus className="w-3.5 h-3.5" /> Agregar
           </button>
         </div>
         {!canAdd && draft.name.length === 0 && (
-          <div className="text-[11px] text-[#86868b] mt-2">
+          <div className="text-[11px] text-[var(--gray-400)] mt-2">
             Escribe un nombre para habilitar el botón.
           </div>
         )}
@@ -154,7 +154,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
       {/* Search */}
       {providers.length > 0 && (
         <div className="relative max-w-sm">
-          <Search className="w-4 h-4 text-[#86868b] absolute left-3 top-1/2 -translate-y-1/2" />
+          <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             value={query}
             onChange={e => setQuery(e.target.value)}
@@ -165,9 +165,9 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
       )}
 
       {/* Table */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden animate-card-in">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in">
         <table className="w-full text-[13px]">
-          <thead className="bg-[#fbfbfd] text-[#86868b] text-left text-[11px] uppercase tracking-wide">
+          <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide">
             <tr>
               <Th>Proveedor</Th>
               <Th>Tipo</Th>
@@ -178,14 +178,14 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={5} className="text-center text-[#86868b] py-10">
+              <tr><td colSpan={5} className="text-center text-[var(--gray-400)] py-10">
                 {providers.length === 0
                   ? 'Sin proveedores. Importa un Excel o agrega uno arriba.'
                   : 'Sin coincidencias con el filtro.'}
               </td></tr>
             )}
             {filtered.map(p => (
-              <tr key={p.id} className="border-t border-[#d2d2d7]/40 hover:bg-[#f5f5f7]/50 hover-row">
+              <tr key={p.id} className="border-t border-[var(--gray-200)]/40 hover:bg-[var(--gray-50)]/50 hover-row">
                 <Td>
                   <input
                     value={p.name}
@@ -222,7 +222,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                   </select>
                 </Td>
                 <Td>
-                  <button onClick={() => onDelete(p.id)} className="text-[#86868b] hover:text-red-600 hover-press">
+                  <button onClick={() => onDelete(p.id)} className="text-[var(--gray-400)] hover:text-red-600 hover-press">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </Td>
@@ -239,5 +239,5 @@ function Th({ children, className = '' }: { children?: React.ReactNode; classNam
   return <th className={`px-4 py-2.5 font-medium ${className}`}>{children}</th>;
 }
 function Td({ children }: { children?: React.ReactNode }) {
-  return <td className="px-4 py-2.5 text-[#1d1d1f]">{children}</td>;
+  return <td className="px-4 py-2.5 text-[var(--gray-950)]">{children}</td>;
 }

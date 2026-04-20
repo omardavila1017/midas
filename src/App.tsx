@@ -23,6 +23,7 @@ import {
   Users, UserSquare, FileSpreadsheet, Download, LineChart, DollarSign, Sliders,
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
 } from 'lucide-react';
+import { hex } from './theme';
 
 type SectionId = 'cobros' | 'pagos' | 'plan' | 'forecast';
 
@@ -382,37 +383,51 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f5f5f7]">
-      {/* ─── HEADER — glass nav bar ─── */}
-      <header className="glass border-b border-[#d2d2d7]/40 sticky top-0 z-50">
-        <div className="max-w-[1400px] mx-auto px-8 h-[56px] flex items-center justify-between">
+    <div className="min-h-screen" style={{ background: 'var(--surface-alt)' }}>
+      {/* ─── HEADER ─── */}
+      <header className="glass border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)' }}>
+        <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-2.5 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('clients')}>
-            <div className="w-8 h-8 rounded-[9px] bg-gradient-to-br from-[#0071e3] to-[#40a9ff] flex items-center justify-center shadow-sm shadow-[#0071e3]/20">
+            <div
+              className="w-8 h-8 rounded-[10px] flex items-center justify-center"
+              style={{
+                background: 'linear-gradient(135deg, var(--primary), var(--info))',
+                boxShadow: '0 2px 8px oklch(55% 0.22 255 / 0.2)',
+              }}
+            >
               <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
             </div>
-            <span className="text-[15px] font-semibold text-[#1d1d1f] tracking-[-0.01em]">FlowSense</span>
+            <span className="text-[15px] font-semibold tracking-[-0.02em]" style={{ color: 'var(--gray-950)' }}>
+              FlowSense
+            </span>
           </div>
 
           {/* 4-section nav */}
-          <nav className="flex items-center bg-[#f5f5f7]/80 rounded-full p-[3px] gap-[2px]">
+          <nav className="flex items-center rounded-full p-[3px] gap-[2px]" style={{ background: 'var(--gray-50)' }}>
             {SECTIONS.map(s => {
               const isActive = activeSection === s.id;
               return (
                 <button
                   key={s.id}
                   onClick={() => switchSection(s.id)}
-                  className={`relative flex items-center gap-1.5 px-4 py-[7px] rounded-full text-[14px] font-medium transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] whitespace-nowrap ${
-                    isActive
-                      ? 'text-[#1d1d1f]'
-                      : 'text-[#86868b] hover:text-[#515154]'
-                  }`}
+                  className={`relative flex items-center gap-1.5 px-4 py-[7px] rounded-full text-[13.5px] font-medium transition-all duration-300 whitespace-nowrap`}
+                  style={{
+                    color: isActive ? 'var(--gray-950)' : 'var(--gray-400)',
+                    transitionTimingFunction: 'var(--spring)',
+                  }}
                 >
                   {isActive && (
-                    <span className="absolute inset-0 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.04)] animate-scale-in" />
+                    <span
+                      className="absolute inset-0 bg-white rounded-full animate-scale-in"
+                      style={{ boxShadow: 'var(--shadow-sm)' }}
+                    />
                   )}
                   <span className="relative flex items-center gap-1.5">
-                    <s.icon className={`w-4 h-4 transition-colors duration-300 ${isActive ? 'text-[#0071e3]' : ''}`} />
+                    <s.icon
+                      className="w-4 h-4 transition-colors duration-300"
+                      style={{ color: isActive ? 'var(--primary)' : undefined }}
+                    />
                     {s.label}
                   </span>
                 </button>
@@ -448,14 +463,20 @@ export default function App() {
                 URL.revokeObjectURL(url);
               }}
               title="Descargar respaldo"
-              className="flex items-center justify-center w-9 h-9 text-[#86868b] hover:text-[#1d1d1f] rounded-xl hover:bg-[#e8e8ed] transition-all duration-200 hover-press flex-shrink-0"
+              className="flex items-center justify-center w-9 h-9 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
+              style={{ color: 'var(--gray-400)' }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
             >
               <Download className="w-[18px] h-[18px]" />
             </button>
             <button
               onClick={() => setShowUpload(true)}
               title={plan ? 'Nuevo Plan' : 'Cargar Plan'}
-              className="flex items-center justify-center w-9 h-9 text-[#86868b] hover:text-[#1d1d1f] rounded-xl hover:bg-[#e8e8ed] transition-all duration-200 hover-press flex-shrink-0"
+              className="flex items-center justify-center w-9 h-9 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
+              style={{ color: 'var(--gray-400)' }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
             >
               <ArrowUpFromLine className="w-[18px] h-[18px]" />
             </button>
@@ -463,9 +484,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* ─── SUB-TABS (only when section has multiple views) ─── */}
+      {/* ─── SUB-TABS ─── */}
       {subTabs.length > 0 && (
-        <div className="bg-white/60 border-b border-[#e8e8ed]">
+        <div className="border-b" style={{ background: 'oklch(100% 0 0 / 0.6)', borderColor: 'var(--gray-100)' }}>
           <div className="max-w-[1400px] mx-auto px-8">
             <div className="flex items-center gap-1 py-1.5">
               {subTabs.map(t => {
@@ -474,11 +495,11 @@ export default function App() {
                   <button
                     key={t.id}
                     onClick={() => setActiveTab(t.id)}
-                    className={`px-4 py-2 rounded-lg text-[13px] font-medium transition-all duration-200 ${
-                      isActive
-                        ? 'bg-[#0071e3]/10 text-[#0071e3]'
-                        : 'text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]'
-                    }`}
+                    className="px-4 py-2 rounded-lg text-[13px] font-medium transition-all duration-200"
+                    style={{
+                      background: isActive ? 'var(--primary-muted)' : undefined,
+                      color: isActive ? 'var(--primary)' : 'var(--gray-500)',
+                    }}
                   >
                     {t.label}
                   </button>
@@ -654,43 +675,50 @@ function CompanySelector({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 h-9 px-3 rounded-xl bg-[#f5f5f7] hover:bg-[#e8e8ed] text-[13px] font-medium text-[#1d1d1f] transition-all duration-200 max-w-[260px]"
+        className="flex items-center gap-1.5 h-9 px-3 rounded-xl text-[13px] font-medium transition-all duration-200 max-w-[260px]"
+        style={{ background: 'var(--gray-50)', color: 'var(--gray-950)' }}
         title="Compañía JDE activa"
       >
-        <Building2 className="w-4 h-4 text-[#0071e3] flex-shrink-0" />
+        <Building2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--primary)' }} />
         <span className="truncate">{loading ? 'Cargando…' : label}</span>
         {loading
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#86868b] flex-shrink-0" />
-          : <ChevronDown className={`w-3.5 h-3.5 text-[#86868b] flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+          ? <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" style={{ color: 'var(--gray-400)' }} />
+          : <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} style={{ color: 'var(--gray-400)' }} />
         }
       </button>
 
       {open && (
-        <div className="absolute right-0 top-11 w-[320px] bg-white rounded-2xl border border-[#d2d2d7]/40 shadow-lg p-1.5 z-50 max-h-[420px] overflow-y-auto">
+        <div
+          className="absolute right-0 top-11 w-[320px] rounded-2xl border p-1.5 z-50 max-h-[420px] overflow-y-auto animate-slide-down"
+          style={{ background: 'var(--surface)', borderColor: 'var(--gray-200)', boxShadow: 'var(--shadow-lg)' }}
+        >
           {error ? (
             <div className="p-3">
               <div className="flex items-start gap-2 mb-2">
-                <AlertCircle className="w-4 h-4 text-[#ff3b30] flex-shrink-0 mt-0.5" />
-                <p className="text-[12px] text-[#6e6e73] leading-snug">{error}</p>
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
+                <p className="text-[12px] leading-snug" style={{ color: 'var(--gray-500)' }}>{error}</p>
               </div>
               <button
                 onClick={() => { onRetry(); }}
-                className="text-[12px] font-medium text-[#0071e3] hover:text-[#0077ed]"
+                className="text-[12px] font-medium"
+                style={{ color: 'var(--primary)' }}
               >Reintentar</button>
             </div>
           ) : (
             <>
               <button
                 onClick={() => { onSelect('all'); setOpen(false); }}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition ${
-                  selectedCia === 'all' ? 'bg-[#0071e3]/10 text-[#0071e3]' : 'text-[#1d1d1f] hover:bg-[#f5f5f7]'
-                }`}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition"
+                style={{
+                  background: selectedCia === 'all' ? 'var(--primary-muted)' : undefined,
+                  color: selectedCia === 'all' ? 'var(--primary)' : 'var(--gray-950)',
+                }}
               >
                 <span className="font-medium">Todas las compañías</span>
                 {selectedCia === 'all' && <Check className="w-3.5 h-3.5" />}
               </button>
               {companies.length === 0 && !loading && (
-                <p className="text-[12px] text-[#86868b] px-3 py-2">Sin compañías disponibles.</p>
+                <p className="text-[12px] px-3 py-2" style={{ color: 'var(--gray-400)' }}>Sin compañías disponibles.</p>
               )}
               {companies
                 .filter(c => c.activa !== false)
@@ -700,13 +728,15 @@ function CompanySelector({
                     <button
                       key={c.cia}
                       onClick={() => { onSelect(c.cia); setOpen(false); }}
-                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition ${
-                        isActive ? 'bg-[#0071e3]/10 text-[#0071e3]' : 'text-[#1d1d1f] hover:bg-[#f5f5f7]'
-                      }`}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition"
+                      style={{
+                        background: isActive ? 'var(--primary-muted)' : undefined,
+                        color: isActive ? 'var(--primary)' : 'var(--gray-950)',
+                      }}
                     >
                       <div className="min-w-0">
                         <p className="font-medium truncate">{c.cia} — {c.nombre}</p>
-                        {c.rfc && <p className="text-[11px] text-[#86868b] truncate">{c.rfc}</p>}
+                        {c.rfc && <p className="text-[11px] truncate" style={{ color: 'var(--gray-400)' }}>{c.rfc}</p>}
                       </div>
                       {isActive && <Check className="w-3.5 h-3.5 flex-shrink-0" />}
                     </button>
@@ -723,19 +753,23 @@ function CompanySelector({
 function PlanRequired({ onUpload, feature }: { onUpload: () => void; feature: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-28 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-gradient-to-b from-[#f5f5f7] to-[#ebebed] flex items-center justify-center mb-5 animate-card-in shadow-sm">
-        <FileSpreadsheet className="w-7 h-7 text-[#86868b]" />
+      <div
+        className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5 animate-card-in"
+        style={{ background: 'linear-gradient(to bottom, var(--gray-50), var(--gray-100))', boxShadow: 'var(--shadow-xs)' }}
+      >
+        <FileSpreadsheet className="w-7 h-7" style={{ color: 'var(--gray-400)' }} />
       </div>
-      <h2 className="text-[22px] font-semibold text-[#1d1d1f] tracking-[-0.02em] animate-card-in stagger-1">
+      <h2 className="text-[22px] font-semibold tracking-[-0.02em] animate-card-in stagger-1" style={{ color: 'var(--gray-950)' }}>
         {feature} requiere un Plan de Flujo
       </h2>
-      <p className="text-[13.5px] text-[#86868b] mt-2 max-w-[380px] leading-relaxed animate-card-in stagger-2">
+      <p className="text-[13.5px] mt-2 max-w-[380px] leading-relaxed animate-card-in stagger-2" style={{ color: 'var(--gray-400)' }}>
         Carga tu Excel de necesidad de flujo para usar esta pestaña. Mientras tanto puedes trabajar
         en Clientes, Cobranza y Proveedores.
       </p>
       <button
         onClick={onUpload}
-        className="mt-6 flex items-center gap-2 px-5 h-10 rounded-xl bg-[#0071e3] text-white text-[13.5px] font-medium hover:bg-[#0077ed] hover-press shadow-sm shadow-[#0071e3]/20 animate-card-in stagger-3"
+        className="mt-6 flex items-center gap-2 px-5 h-10 rounded-xl text-white text-[13.5px] font-medium hover-press animate-card-in stagger-3"
+        style={{ background: 'var(--primary)', boxShadow: '0 2px 8px oklch(55% 0.22 255 / 0.2)' }}
       >
         <ArrowUpFromLine className="w-4 h-4" /> Cargar Plan
       </button>

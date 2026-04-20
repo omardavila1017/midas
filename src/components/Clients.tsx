@@ -107,8 +107,8 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
     <div className="space-y-6">
       <header className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight animate-fade-in">Clientes</h1>
-          <p className="text-[13px] text-[#86868b] mt-1">
+          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight animate-fade-in">Clientes</h1>
+          <p className="text-[13px] text-[var(--gray-400)] mt-1">
             {clients.length} clientes · facturación anual {fmt(totalAnnual)} · IVA {fmt(totalIva)}
             {issues.length > 0 && (
               <span className="ml-2 text-amber-600">· {issues.length} avisos de importación</span>
@@ -119,13 +119,13 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
           <button
             onClick={handleExport}
             title="Exportar catálogo"
-            className="p-2 h-9 rounded-lg hover:bg-[#f5f5f7] text-[#86868b] hover:text-[#1d1d1f] transition-colors"
+            className="p-2 h-9 rounded-lg hover:bg-[var(--gray-50)] text-[var(--gray-400)] hover:text-[var(--gray-950)] transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={addBlank}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[#0071e3] text-white text-[13px] font-medium hover:bg-[#0077ed] hover-press"
+            className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
           >
             <Plus className="w-3.5 h-3.5" /> Nuevo Cliente
           </button>
@@ -137,7 +137,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
 
       {/* Search */}
       <div className="relative">
-        <Search className="w-4 h-4 text-[#86868b] absolute left-3 top-1/2 -translate-y-1/2" />
+        <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
@@ -147,9 +147,9 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
       </div>
 
       {/* Table */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
         <table className="w-full text-[13px]">
-          <thead className="bg-[#f5f5f7] text-[#86868b] text-left text-[12px] uppercase tracking-wide">
+          <thead className="bg-[var(--gray-50)] text-[var(--gray-400)] text-left text-[12px] uppercase tracking-wide">
             <tr>
               <Th>Cliente</Th>
               <Th>Día de pago</Th>
@@ -165,7 +165,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={10} className="text-center text-[#86868b] py-10">
+              <tr><td colSpan={10} className="text-center text-[var(--gray-400)] py-10">
                 {clients.length === 0
                   ? 'Sin clientes. Importa tu Excel o agrega uno manual.'
                   : 'Sin coincidencias.'}
@@ -183,7 +183,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                 <>
                   <tr
                     key={c.id}
-                    className={`border-t border-[#d2d2d7]/40 hover:bg-[#f5f5f7]/40 cursor-pointer hover-row stagger-${Math.min(idx + 1, 10)}`}
+                    className={`border-t border-[var(--gray-200)]/40 hover:bg-[var(--gray-50)]/40 cursor-pointer hover-row stagger-${Math.min(idx + 1, 10)}`}
                     onClick={() => setExpandedId(isOpen ? null : c.id)}
                   >
                     <Td>
@@ -196,7 +196,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                       </div>
                     </Td>
                     <Td>
-                      <span className="text-[#86868b]">{c.paymentDayRaw ?? '—'}</span>
+                      <span className="text-[var(--gray-400)]">{c.paymentDayRaw ?? '—'}</span>
                     </Td>
                     <Td>
                       {parsed
@@ -209,27 +209,27 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
                     <Td className="text-right tabular-nums">{c.creditDays}d</Td>
                     <Td className="text-right tabular-nums">
                       {avgLag > 0
-                        ? <span className="text-[#ff3b30] text-[12px] font-medium">+{avgLag.toFixed(0)}d</span>
-                        : <span className="text-[#34c759] text-[12px]">0d</span>}
+                        ? <span className="text-[var(--danger)] text-[12px] font-medium">+{avgLag.toFixed(0)}d</span>
+                        : <span className="text-[var(--success)] text-[12px]">0d</span>}
                     </Td>
                     <Td className="text-right tabular-nums">
                       {realCredit > c.creditDays
-                        ? <span className="font-semibold text-[#ff3b30]">{realCredit}d</span>
-                        : <span className="text-[#34c759]">{realCredit}d</span>}
+                        ? <span className="font-semibold text-[var(--danger)]">{realCredit}d</span>
+                        : <span className="text-[var(--success)]">{realCredit}d</span>}
                     </Td>
                     <Td className="text-right tabular-nums font-medium">{fmt(annual)}</Td>
-                    <Td className="text-right tabular-nums text-[#86868b]">{fmt(ivaAmount)}</Td>
+                    <Td className="text-right tabular-nums text-[var(--gray-400)]">{fmt(ivaAmount)}</Td>
                     <Td>
                       <button
                         onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
-                        className="text-[#86868b] hover:text-red-600"
+                        className="text-[var(--gray-400)] hover:text-red-600"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </Td>
                   </tr>
                   {isOpen && (
-                    <tr className="border-t border-[#d2d2d7]/40 bg-[#fbfbfd]">
+                    <tr className="border-t border-[var(--gray-200)]/40 bg-[var(--surface-alt)]">
                       <td colSpan={9} className="px-4 py-4">
                         <ClientEditor client={c} onChange={onUpdate} />
                       </td>
@@ -304,11 +304,11 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
       {/* Right column — seasonality + IVA */}
       <div className="space-y-3">
         <div>
-          <div className="text-[12px] text-[#86868b] mb-1.5">Facturación mensual (sin IVA)</div>
+          <div className="text-[12px] text-[var(--gray-400)] mb-1.5">Facturación mensual (sin IVA)</div>
           <div className="grid grid-cols-6 gap-1.5">
             {MONTHS.map((m, i) => (
               <label key={m} className="flex flex-col">
-                <span className="text-[11px] text-[#86868b] text-center">{m}</span>
+                <span className="text-[11px] text-[var(--gray-400)] text-center">{m}</span>
                 <input
                   type="number"
                   value={client.monthlyBilling[i] ?? 0}
@@ -323,22 +323,22 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
             ))}
           </div>
         </div>
-        <div className="bg-[#f5f5f7] rounded-lg px-3 py-2 text-[12px] grid grid-cols-3 gap-x-4">
+        <div className="bg-[var(--gray-50)] rounded-lg px-3 py-2 text-[12px] grid grid-cols-3 gap-x-4">
           <div>
-            <div className="text-[#86868b]">Base gravable anual</div>
-            <div className="font-semibold tabular-nums text-[#1d1d1f]">
+            <div className="text-[var(--gray-400)]">Base gravable anual</div>
+            <div className="font-semibold tabular-nums text-[var(--gray-950)]">
               {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0))}
             </div>
           </div>
           <div>
-            <div className="text-[#86868b]">IVA ({(client.ivaRate ?? 16)}%)</div>
-            <div className="font-semibold tabular-nums text-[#0071e3]">
+            <div className="text-[var(--gray-400)]">IVA ({(client.ivaRate ?? 16)}%)</div>
+            <div className="font-semibold tabular-nums text-[var(--primary)]">
               {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * ivaRate)}
             </div>
           </div>
           <div>
-            <div className="text-[#86868b]">Total con IVA</div>
-            <div className="font-semibold tabular-nums text-[#1d1d1f]">
+            <div className="text-[var(--gray-400)]">Total con IVA</div>
+            <div className="font-semibold tabular-nums text-[var(--gray-950)]">
               {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * (1 + ivaRate))}
             </div>
           </div>
@@ -377,7 +377,7 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
         <option value="WOM">Semana(s) del mes</option>
       </select>
       {pattern.kind === 'ANY' && (
-        <div className="text-[12px] text-[#86868b]">Sin restricción de fecha exacta; el pago cae en la fecha teórica.</div>
+        <div className="text-[12px] text-[var(--gray-400)]">Sin restricción de fecha exacta; el pago cae en la fecha teórica.</div>
       )}
       {pattern.kind === 'DOW' && (
         <div className="flex gap-1">
@@ -391,8 +391,8 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
               }}
               className={`px-2 py-1 text-[12px] rounded border ${
                 pattern.days.includes(i as DayOfWeek)
-                  ? 'bg-[#0071e3] text-white border-[#0071e3]'
-                  : 'bg-white border-[#d2d2d7] text-[#86868b]'
+                  ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                  : 'bg-white border-[var(--gray-200)] text-[var(--gray-400)]'
               }`}
             >{lbl}</button>
           ))}
@@ -433,7 +433,7 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
           >
             {DOW_LABELS.map((l, i) => <option key={l} value={i}>{l}</option>)}
           </select>
-          <span className="self-center text-[12px] text-[#86868b]">del mes</span>
+          <span className="self-center text-[12px] text-[var(--gray-400)]">del mes</span>
         </div>
       )}
       {pattern.kind === 'NTH_DOW_SET' && (
@@ -450,8 +450,8 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
                 }
                 className={`px-2 py-1 text-[12px] rounded border ${
                   pattern.nths.includes(option.value)
-                    ? 'bg-[#0071e3] text-white border-[#0071e3]'
-                    : 'bg-white border-[#d2d2d7] text-[#86868b]'
+                    ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                    : 'bg-white border-[var(--gray-200)] text-[var(--gray-400)]'
                 }`}
               >
                 {option.label}
@@ -466,7 +466,7 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
             >
               {DOW_LABELS.map((l, i) => <option key={l} value={i}>{l}</option>)}
             </select>
-            <span className="text-[12px] text-[#86868b]">del mes</span>
+            <span className="text-[12px] text-[var(--gray-400)]">del mes</span>
           </div>
         </div>
       )}
@@ -483,8 +483,8 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
               }
               className={`px-2 py-1 text-[12px] rounded border ${
                 pattern.weeks.includes(option.value)
-                  ? 'bg-[#0071e3] text-white border-[#0071e3]'
-                  : 'bg-white border-[#d2d2d7] text-[#86868b]'
+                  ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                  : 'bg-white border-[var(--gray-200)] text-[var(--gray-400)]'
               }`}
             >
               {option.label}
@@ -578,7 +578,7 @@ function sortPatternNumber(value: number): number {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="flex flex-col gap-1 text-[12px] text-[#86868b]">
+    <label className="flex flex-col gap-1 text-[12px] text-[var(--gray-400)]">
       <span>{label}</span>
       {children}
     </label>
@@ -588,7 +588,7 @@ function Th({ children, className = '' }: { children?: React.ReactNode; classNam
   return <th className={`px-4 py-2.5 font-medium ${className}`}>{children}</th>;
 }
 function Td({ children, className = '' }: { children?: React.ReactNode; className?: string }) {
-  return <td className={`px-4 py-2.5 text-[#1d1d1f] ${className}`}>{children}</td>;
+  return <td className={`px-4 py-2.5 text-[var(--gray-950)] ${className}`}>{children}</td>;
 }
 function fmt(n: number): string {
   return n.toLocaleString('es-MX', { maximumFractionDigits: 0 });

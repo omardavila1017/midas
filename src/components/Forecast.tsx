@@ -6,6 +6,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
+import { hex } from '../theme';
 import {
   BASE_SCENARIO_ID,
   BASE_SCENARIO_NAME,
@@ -146,9 +147,9 @@ export default function Forecast({
 
   if (!activeScenario || !baseEvaluation || !simulatedEvaluation || !finalEvaluation) {
     return (
-      <div className="rounded-2xl border border-dashed border-[#d2d2d7] bg-white px-6 py-20 text-center">
-        <h2 className="text-[18px] font-semibold text-[#1d1d1f]">No hay escenario activo</h2>
-        <p className="mt-2 text-[13px] text-[#86868b]">
+      <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-white px-6 py-20 text-center">
+        <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">No hay escenario activo</h2>
+        <p className="mt-2 text-[13px] text-[var(--gray-400)]">
           Selecciona una propuesta y un escenario en el módulo de Propuestas para habilitar el pronóstico.
         </p>
       </div>
@@ -263,13 +264,13 @@ export default function Forecast({
 
   return (
     <div className="space-y-5" onClick={() => setPopover(null)}>
-      <header className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm">
+      <header className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-[24px] font-semibold text-[#1d1d1f]">
+            <h1 className="text-[24px] font-semibold text-[var(--gray-950)]">
               {view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers'}
             </h1>
-            <p className="mt-1 text-[13px] text-[#86868b]">
+            <p className="mt-1 text-[13px] text-[var(--gray-400)]">
               Pronóstico unificado por escenario. Doble clic en celdas hoja para editar manualmente.
             </p>
           </div>
@@ -290,7 +291,7 @@ export default function Forecast({
             className={`rounded-xl border px-3 py-2.5 text-left text-[13px] font-medium transition ${
               isBaseScenario(activeScenario)
                 ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
-                : 'border-[#d2d2d7] bg-[#fbfbfd] text-[#1d1d1f]'
+                : 'border-[var(--gray-200)] bg-[var(--surface-alt)] text-[var(--gray-950)]'
             }`}
           >
             {BASE_SCENARIO_NAME}
@@ -299,7 +300,7 @@ export default function Forecast({
             value={activeProposal?.id ?? ''}
             onChange={(event) => onSelectProposal(event.target.value)}
             disabled={proposals.length === 0}
-            className="rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
+            className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
           >
             {proposals.length === 0 && <option value="">Sin propuestas</option>}
             {proposals.map((proposal) => (
@@ -309,7 +310,7 @@ export default function Forecast({
           <select
             value={activeScenario.id}
             onChange={(event) => onSelectScenario(event.target.value)}
-            className="rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
+            className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
           >
             {baseScenario && (
               <option value={baseScenario.id}>{baseScenario.name}</option>
@@ -320,15 +321,15 @@ export default function Forecast({
                 <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
               ))}
           </select>
-          <div className="flex items-center justify-end rounded-xl bg-[#f5f5f7] p-1">
+          <div className="flex items-center justify-end rounded-xl bg-[var(--gray-50)] p-1">
             {(['base', 'simulated', 'manual', 'diff'] as ForecastLayerMode[]).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setLayerMode(mode)}
                 className={`rounded-lg px-3 py-1.5 text-[12px] font-medium transition ${
                   layerMode === mode
-                    ? 'bg-white text-[#1d1d1f] shadow-sm'
-                    : 'text-[#6e6e73]'
+                    ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                    : 'text-[var(--gray-500)]'
                 }`}
               >
                 {mode === 'base' ? 'Base' : mode === 'simulated' ? 'Simulado' : mode === 'manual' ? 'Manual' : 'Diff'}
@@ -337,16 +338,16 @@ export default function Forecast({
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-4 text-[12px] text-[#86868b]">
+        <div className="mt-5 flex flex-wrap items-center gap-4 text-[12px] text-[var(--gray-400)]">
           <LegendDot color="bg-[#d2d2d7]" label="Base" />
-          <LegendDot color="bg-[#0071e3]" label="Impactada por simulación" />
+          <LegendDot color="bg-[var(--primary)]" label="Impactada por simulación" />
           <LegendDot color="bg-[#ff9500]" label={`Ajuste manual${directOverrideCount > 0 ? ` (${directOverrideCount})` : ''}`} />
           <span className="inline-flex items-center gap-1.5">
-            <MessageSquare className="w-3.5 h-3.5 text-[#0071e3]" />
+            <MessageSquare className="w-3.5 h-3.5 text-[var(--primary)]" />
             Comentarios{commentCount > 0 ? ` (${commentCount})` : ''}
           </span>
           {isBaseScenario(activeScenario) && (
-            <span className="rounded-full bg-[#f5f5f7] px-2.5 py-1 text-[11px] text-[#6e6e73]">
+            <span className="rounded-full bg-[var(--gray-50)] px-2.5 py-1 text-[11px] text-[var(--gray-500)]">
               Solo lectura: el Base no admite edición manual
             </span>
           )}
@@ -362,16 +363,16 @@ export default function Forecast({
         <KpiCard label="Pagos Prov." value={metrics.pagosProveedores.reduce((sum, value) => sum + value, 0)} tone="neg" />
       </div>
 
-      <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white shadow-sm overflow-hidden">
+      <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[980px] text-[13px]">
-            <thead className="border-b border-[#e8e8ed] bg-[#fbfbfd]">
+            <thead className="border-b border-[#e8e8ed] bg-[var(--surface-alt)]">
               <tr>
-                <th className="sticky left-0 min-w-[240px] bg-[#fbfbfd] px-4 py-2.5 text-left font-medium text-[#86868b]">Concepto</th>
+                <th className="sticky left-0 min-w-[240px] bg-[var(--surface-alt)] px-4 py-2.5 text-left font-medium text-[var(--gray-400)]">Concepto</th>
                 {months.map((month) => (
-                  <th key={month.ym} className="px-3 py-2.5 text-right font-medium text-[#86868b]">{month.label}</th>
+                  <th key={month.ym} className="px-3 py-2.5 text-right font-medium text-[var(--gray-400)]">{month.label}</th>
                 ))}
-                <th className="bg-[#f5f5f7] px-4 py-2.5 text-right font-medium text-[#86868b]">Total</th>
+                <th className="bg-[var(--gray-50)] px-4 py-2.5 text-right font-medium text-[var(--gray-400)]">Total</th>
               </tr>
             </thead>
             <tbody>
@@ -490,28 +491,28 @@ export default function Forecast({
               )}
             </tbody>
             {view === 'cashflow' && (
-              <tfoot className="border-t-2 border-[#1d1d1f]/10 bg-[#fbfbfd]">
+              <tfoot className="border-t-2 border-[#1d1d1f]/10 bg-[var(--surface-alt)]">
                 <tr>
-                  <td className="sticky left-0 bg-[#fbfbfd] px-4 py-2.5 font-semibold text-[#1d1d1f]">Caja inicial</td>
+                  <td className="sticky left-0 bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--gray-950)]">Caja inicial</td>
                   {months.map((month, index) => (
-                    <td key={month.ym} className="px-3 py-2.5 text-right tabular-nums text-[#6e6e73]">
+                    <td key={month.ym} className="px-3 py-2.5 text-right tabular-nums text-[var(--gray-500)]">
                       {layerMode === 'diff'
                         ? formatCompactNumber(index === 0 ? 0 : metrics.cajaFinal[index - 1] ?? 0)
                         : formatCompactNumber(index === 0 ? plan.cajaInicial : metrics.cajaFinal[index - 1] ?? 0)}
                     </td>
                   ))}
-                  <td className="bg-[#f5f5f7] px-4 py-2.5 text-right tabular-nums text-[#6e6e73]">
+                  <td className="bg-[var(--gray-50)] px-4 py-2.5 text-right tabular-nums text-[var(--gray-500)]">
                     {layerMode === 'diff' ? '0' : formatCompactNumber(plan.cajaInicial)}
                   </td>
                 </tr>
                 <tr>
-                  <td className="sticky left-0 bg-[#fbfbfd] px-4 py-2.5 font-semibold text-[#1d1d1f]">Caja al cierre</td>
+                  <td className="sticky left-0 bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--gray-950)]">Caja al cierre</td>
                   {metrics.cajaFinal.map((value, index) => (
-                    <td key={`${months[index]?.ym ?? index}-cash`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${value < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>
+                    <td key={`${months[index]?.ym ?? index}-cash`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${value < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'}`}>
                       {layerMode === 'diff' && value > 0 ? '+' : ''}{formatCompactNumber(value)}
                     </td>
                   ))}
-                  <td className={`bg-[#f5f5f7] px-4 py-2.5 text-right tabular-nums font-semibold ${(metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0) < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>
+                  <td className={`bg-[var(--gray-50)] px-4 py-2.5 text-right tabular-nums font-semibold ${(metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0) < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'}`}>
                     {(layerMode === 'diff' && (metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0) > 0) ? '+' : ''}
                     {formatCompactNumber(metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0)}
                   </td>
@@ -539,8 +540,8 @@ function toggleExpanded(
 
 function CategoryHeader({ label, colSpan }: { label: string; colSpan: number }) {
   return (
-    <tr className="border-t border-[#d2d2d7]/40 bg-[#fbfbfd]/70">
-      <td className="sticky left-0 bg-[#fbfbfd]/70 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#86868b]">
+    <tr className="border-t border-[var(--gray-200)] bg-[var(--surface-alt)]/70">
+      <td className="sticky left-0 bg-[var(--surface-alt)]/70 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">
         {label}
       </td>
       <td colSpan={colSpan} />
@@ -569,18 +570,18 @@ function RoleRow({
   }, 0);
 
   return (
-    <tr className="border-t border-[#d2d2d7]/30 bg-[#f5f5f7]/50">
-      <td className="sticky left-0 bg-[#f5f5f7]/50 px-4 py-2 text-[#1d1d1f]">{label}</td>
+    <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--gray-50)]/50">
+      <td className="sticky left-0 bg-[var(--gray-50)]/50 px-4 py-2 text-[var(--gray-950)]">{label}</td>
       {months.map((month) => {
         const cell = evaluation.cells.get(scenarioCellKey(activeScenario.id, rowId, month.ym));
         const value = cell ? displayValue(cell, layerMode) : 0;
         return (
-          <td key={month.ym} className="px-3 py-2 text-right tabular-nums text-[#0071e3]">
+          <td key={month.ym} className="px-3 py-2 text-right tabular-nums text-[var(--primary)]">
             {value === 0 ? '—' : `${layerMode === 'diff' && value > 0 ? '+' : ''}${formatCompactNumber(value)}`}
           </td>
         );
       })}
-      <td className="bg-[#f5f5f7] px-4 py-2 text-right tabular-nums text-[#0071e3]">
+      <td className="bg-[var(--gray-50)] px-4 py-2 text-right tabular-nums text-[var(--primary)]">
         {total === 0 ? '—' : `${layerMode === 'diff' && total > 0 ? '+' : ''}${formatCompactNumber(total)}`}
       </td>
     </tr>
@@ -636,21 +637,21 @@ function ConceptRow({
 
   return (
     <>
-      <tr className="border-t border-[#d2d2d7]/30 hover:bg-[#f5f5f7]/60">
+      <tr className="border-t border-[var(--gray-200)]/30 hover:bg-[var(--gray-50)]/60">
         <td className="sticky left-0 bg-white px-4 py-2" style={{ paddingLeft: 16 + depth * 16 }}>
           <div className="flex items-center gap-1.5">
             {hasChildren ? (
-              <button onClick={() => onToggle(concept.id)} className="rounded p-0.5 hover:bg-[#e8e8ed]">
+              <button onClick={() => onToggle(concept.id)} className="rounded p-0.5 hover:bg-[var(--gray-100)]">
                 {isOpen ? (
-                  <ChevronDown className="w-3.5 h-3.5 text-[#86868b]" />
+                  <ChevronDown className="w-3.5 h-3.5 text-[var(--gray-400)]" />
                 ) : (
-                  <ChevronRight className="w-3.5 h-3.5 text-[#86868b]" />
+                  <ChevronRight className="w-3.5 h-3.5 text-[var(--gray-400)]" />
                 )}
               </button>
             ) : (
               <span className="w-4" />
             )}
-            <span className="text-[#1d1d1f]">{concept.name}</span>
+            <span className="text-[var(--gray-950)]">{concept.name}</span>
           </div>
         </td>
         {months.map((month) => {
@@ -673,7 +674,7 @@ function ConceptRow({
             />
           );
         })}
-        <td className="bg-[#f5f5f7] px-4 py-2 text-right tabular-nums font-medium">
+        <td className="bg-[var(--gray-50)] px-4 py-2 text-right tabular-nums font-medium">
           {total === 0 ? '—' : `${layerMode === 'diff' && total > 0 ? '+' : ''}${formatCompactNumber(total)}`}
         </td>
       </tr>
@@ -743,8 +744,8 @@ function EditableCell({
   const colorClass = cell.hasManualDelta
     ? 'bg-[#ff9500]/10 text-[#ff9500]'
     : cell.hasSimulationDelta
-      ? 'bg-[#0071e3]/8 text-[#0071e3]'
-      : 'text-[#1d1d1f]';
+      ? 'bg-[var(--primary)]/8 text-[var(--primary)]'
+      : 'text-[var(--gray-950)]';
 
   const commit = () => {
     const cleaned = draft.replace(/[^0-9.\-]/g, '');
@@ -784,9 +785,9 @@ function EditableCell({
         <>
           <span className="inline-flex items-center justify-end gap-1">
             {(cell.hasManualDelta || cell.hasSimulationDelta) && (
-              <span className={`h-1.5 w-1.5 rounded-full ${cell.hasManualDelta ? 'bg-[#ff9500]' : 'bg-[#0071e3]'}`} />
+              <span className={`h-1.5 w-1.5 rounded-full ${cell.hasManualDelta ? 'bg-[#ff9500]' : 'bg-[var(--primary)]'}`} />
             )}
-            {cell.comment && <MessageSquare className="w-3 h-3 text-[#0071e3]" />}
+            {cell.comment && <MessageSquare className="w-3 h-3 text-[var(--primary)]" />}
             <span>{value === 0 ? '—' : `${layerMode === 'diff' && value > 0 ? '+' : ''}${formatCompactNumber(value)}`}</span>
           </span>
           {isPopoverOpen && (
@@ -832,15 +833,15 @@ function CellPopover({
 
   return (
     <div
-      className="absolute right-0 top-full z-50 mt-1 w-80 rounded-xl border border-[#d2d2d7] bg-white p-3 text-left shadow-xl"
+      className="absolute right-0 top-full z-50 mt-1 w-80 rounded-xl border border-[var(--gray-200)] bg-white p-3 text-left shadow-xl"
       onClick={(event) => event.stopPropagation()}
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">{cell.yearMonth}</div>
-          <div className="text-[13px] font-medium text-[#1d1d1f]">{label}</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">{cell.yearMonth}</div>
+          <div className="text-[13px] font-medium text-[var(--gray-950)]">{label}</div>
         </div>
-        <button onClick={onClose} className="text-[#86868b] hover:text-[#1d1d1f]">
+        <button onClick={onClose} className="text-[var(--gray-400)] hover:text-[var(--gray-950)]">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -855,13 +856,13 @@ function CellPopover({
       </div>
 
       {cell.simulationContributions.length > 0 && (
-        <div className="mt-3 rounded-lg bg-[#f5f5f7] p-2">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-[#86868b]">Simulaciones</p>
+        <div className="mt-3 rounded-lg bg-[var(--gray-50)] p-2">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Simulaciones</p>
           <div className="mt-2 space-y-1 text-[11px]">
             {cell.simulationContributions.map((contribution) => (
               <div key={contribution.simulationId} className="flex items-center justify-between gap-3">
-                <span className="text-[#6e6e73]">{contribution.simulationName}</span>
-                <span className={contribution.delta >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}>
+                <span className="text-[var(--gray-500)]">{contribution.simulationName}</span>
+                <span className={contribution.delta >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}>
                   {contribution.delta > 0 ? '+' : ''}{formatCompactNumber(contribution.delta)}
                 </span>
               </div>
@@ -872,13 +873,13 @@ function CellPopover({
 
       {cell.isEditable && editingAllowed && (
         <div className="mt-3">
-          <label className="mb-1 block text-[11px] uppercase tracking-wide text-[#86868b]">Comentario</label>
+          <label className="mb-1 block text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Comentario</label>
           <textarea
             value={commentDraft}
             onChange={(event) => setCommentDraft(event.target.value)}
             onBlur={() => onSetComment(commentDraft)}
             rows={2}
-            className="w-full resize-none rounded-lg border border-[#d2d2d7] px-2 py-1.5 text-[12px] outline-none focus:border-[#0071e3]"
+            className="w-full resize-none rounded-lg border border-[var(--gray-200)] px-2 py-1.5 text-[12px] outline-none focus:border-[#0071e3]"
             placeholder="Nota o explicación..."
           />
         </div>
@@ -888,7 +889,7 @@ function CellPopover({
         {cell.isEditable && editingAllowed && (
           <button
             onClick={onEdit}
-            className="flex-1 rounded-lg bg-[#0071e3] px-3 py-2 text-[12px] font-medium text-white"
+            className="flex-1 rounded-lg bg-[var(--primary)] px-3 py-2 text-[12px] font-medium text-white"
           >
             Editar
           </button>
@@ -896,7 +897,7 @@ function CellPopover({
         {cell.isOverridden && (
           <button
             onClick={onRestore}
-            className="inline-flex items-center gap-1 rounded-lg border border-[#d2d2d7] px-3 py-2 text-[12px] text-[#6e6e73]"
+            className="inline-flex items-center gap-1 rounded-lg border border-[var(--gray-200)] px-3 py-2 text-[12px] text-[var(--gray-500)]"
           >
             <RotateCcw className="w-3 h-3" />
             Restaurar
@@ -917,15 +918,15 @@ function PopoverRow({
   accent?: 'sim' | 'manual' | 'final' | 'delta';
 }) {
   const colorClass =
-    accent === 'sim' ? 'text-[#0071e3]' :
+    accent === 'sim' ? 'text-[var(--primary)]' :
     accent === 'manual' ? 'text-[#ff9500]' :
-    accent === 'delta' ? (value >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]') :
-    accent === 'final' ? 'text-[#1d1d1f] font-semibold' :
-    'text-[#1d1d1f]';
+    accent === 'delta' ? (value >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]') :
+    accent === 'final' ? 'text-[var(--gray-950)] font-semibold' :
+    'text-[var(--gray-950)]';
 
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-[#86868b]">{label}</span>
+      <span className="text-[var(--gray-400)]">{label}</span>
       <span className={`font-mono ${colorClass}`}>{value > 0 && accent === 'delta' ? '+' : ''}{formatCompactNumber(value)}</span>
     </div>
   );
@@ -942,19 +943,19 @@ function MetricTotalRow({
 }) {
   const total = values.reduce((sum, value) => sum + value, 0);
   const colorClass =
-    tone === 'pos' ? 'text-[#34c759]' :
-    tone === 'neg' ? 'text-[#ff3b30]' :
-    'text-[#1d1d1f]';
+    tone === 'pos' ? 'text-[var(--success)]' :
+    tone === 'neg' ? 'text-[var(--danger)]' :
+    'text-[var(--gray-950)]';
 
   return (
-    <tr className="border-t border-[#d2d2d7]/40">
+    <tr className="border-t border-[var(--gray-200)]">
       <td className={`sticky left-0 bg-white px-4 py-2.5 font-semibold ${colorClass}`}>{label}</td>
       {values.map((value, index) => (
         <td key={`${label}-${index}`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${colorClass}`}>
           {value === 0 ? '—' : formatCompactNumber(value)}
         </td>
       ))}
-      <td className={`bg-[#f5f5f7] px-4 py-2.5 text-right tabular-nums font-semibold ${colorClass}`}>
+      <td className={`bg-[var(--gray-50)] px-4 py-2.5 text-right tabular-nums font-semibold ${colorClass}`}>
         {total === 0 ? '—' : formatCompactNumber(total)}
       </td>
     </tr>
@@ -980,14 +981,14 @@ function KpiCard({
   tone: 'pos' | 'neg' | 'neutral' | 'cash';
 }) {
   const colorClass =
-    tone === 'pos' ? 'text-[#34c759]' :
-    tone === 'neg' ? 'text-[#ff3b30]' :
-    tone === 'cash' ? 'text-[#0071e3]' :
-    'text-[#1d1d1f]';
+    tone === 'pos' ? 'text-[var(--success)]' :
+    tone === 'neg' ? 'text-[var(--danger)]' :
+    tone === 'cash' ? 'text-[var(--primary)]' :
+    'text-[var(--gray-950)]';
 
   return (
-    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm">
-      <p className="text-[11px] uppercase tracking-wide text-[#86868b]">{label}</p>
+    <div className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm">
+      <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
       <p className={`mt-2 text-[22px] font-semibold ${colorClass}`}>{formatCurrency(value)}</p>
     </div>
   );

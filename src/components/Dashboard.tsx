@@ -22,6 +22,8 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { FlowPlan, FlowConcept, Proposal, MONTHS } from '../types';
+import { hex } from '../theme';
+import { fmtCompact, fmtCurrency, fmtPct } from '../formatters';
 
 interface DashboardProps {
   plan: FlowPlan;
@@ -37,14 +39,6 @@ interface DrillPathItem {
 const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
   const [drillPath, setDrillPath] = useState<DrillPathItem[]>([]);
 
-  const formatCurrency = (value: number): string => {
-    const sign = value < 0 ? '-' : '';
-    return `${sign}$${Math.abs(value).toFixed(2)} M`;
-  };
-
-  const formatPercent = (value: number): string => {
-    return `${(value * 100).toFixed(1)}%`;
-  };
 
   const findConceptByName = (name: string): FlowConcept | undefined => {
     const search = (concepts: FlowConcept[]): FlowConcept | undefined => {
@@ -105,17 +99,17 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
   }));
 
   const monthlySummaryRows = [
-    { label: 'Ingresos', data: ingresoData, color: 'text-[#0071e3]' },
-    { label: 'Egresos', data: egresosData, color: 'text-[#6e6e73]' },
+    { label: 'Ingresos', data: ingresoData, color: 'text-[var(--primary)]' },
+    { label: 'Egresos', data: egresosData, color: 'text-[var(--gray-500)]' },
     {
       label: 'Variación',
       data: variacionValues,
-      getColor: (val: number) => (val >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'),
+      getColor: (val: number) => (val >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'),
     },
     {
       label: 'Caja Final',
       data: cajaFinalValues,
-      getColor: (val: number) => (val < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'),
+      getColor: (val: number) => (val < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'),
     },
   ];
 
@@ -134,11 +128,11 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3.5 shadow-lg shadow-black/5">
-          <p className="text-[13px] font-semibold text-[#1d1d1f] mb-1.5">{label}</p>
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-3.5 shadow-lg shadow-black/5">
+          <p className="text-[13px] font-semibold text-[var(--gray-950)] mb-1.5">{label}</p>
           {payload.map((entry: any, idx: number) => (
             <p key={idx} style={{ color: entry.color }} className="font-mono text-[12px] leading-5">
-              {entry.name}: {formatCurrency(entry.value)}
+              {entry.name}: {fmtCurrency(entry.value)}
             </p>
           ))}
         </div>
@@ -164,40 +158,40 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
   };
 
   const getDrillDownBarColor = (concept: FlowConcept, value: number) => {
-    if (concept.conceptType === 'ingreso') return '#0071e3';
-    if (Math.abs(value) > drillDownTotal / drillDownData.length) return '#ff3b30';
-    return '#86868b';
+    if (concept.conceptType === 'ingreso') return hex.primary;
+    if (Math.abs(value) > drillDownTotal / drillDownData.length) return hex.danger;
+    return hex.gray400;
   };
 
   // KPI card data
   const kpis = [
     {
       label: 'Caja Inicial',
-      value: formatCurrency(cajaInicial),
+      value: fmtCurrency(cajaInicial),
       icon: Wallet,
-      accentColor: '#0071e3',
-      textColor: 'text-[#1d1d1f]',
+      accentColor: hex.primary,
+      textColor: 'text-[var(--gray-950)]',
     },
     {
       label: 'Caja Mínima',
-      value: formatCurrency(cajaMinimaValue),
+      value: fmtCurrency(cajaMinimaValue),
       icon: TrendingDown,
-      accentColor: cajaMinimaValue < 0 ? '#ff3b30' : '#ff9f0a',
-      textColor: cajaMinimaValue < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]',
+      accentColor: cajaMinimaValue < 0 ? hex.danger : hex.warning,
+      textColor: cajaMinimaValue < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]',
     },
     {
       label: 'Flujo Neto Anual',
-      value: formatCurrency(flujoNetoAnual),
+      value: fmtCurrency(flujoNetoAnual),
       icon: flujoNetoAnual >= 0 ? TrendingUp : TrendingDown,
-      accentColor: flujoNetoAnual >= 0 ? '#34c759' : '#ff3b30',
-      textColor: flujoNetoAnual >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]',
+      accentColor: flujoNetoAnual >= 0 ? hex.success : hex.danger,
+      textColor: flujoNetoAnual >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]',
     },
     {
       label: 'Caja Final Año',
-      value: formatCurrency(cajaFinalAno),
+      value: fmtCurrency(cajaFinalAno),
       icon: DollarSign,
-      accentColor: '#0071e3',
-      textColor: 'text-[#1d1d1f]',
+      accentColor: hex.primary,
+      textColor: 'text-[var(--gray-950)]',
     },
   ];
 
@@ -205,13 +199,13 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
     <div className="space-y-5">
       {/* Liquidity Alert Banner */}
       {negativeCajaMonths.length > 0 && (
-        <div className="bg-[#fff5f5] border border-red-100 rounded-2xl px-5 py-4 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-[#ffe5e5] flex items-center justify-center flex-shrink-0">
-            <AlertTriangle className="w-4 h-4 text-[#ff3b30]" />
+        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-2xl px-5 py-4 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: hex.danger + '14' }}>
+            <AlertTriangle className="w-4 h-4 text-[var(--danger)]" />
           </div>
-          <p className="text-[13px] text-[#1d1d1f]">
+          <p className="text-[13px] text-[var(--gray-950)]">
             <span className="font-semibold">Alerta de Liquidez</span> — Caja negativa en{' '}
-            {negativeCajaMonths.map((m) => `${m.month} (${formatCurrency(m.value)})`).join(', ')}
+            {negativeCajaMonths.map((m) => `${m.month} (${fmtCurrency(m.value)})`).join(', ')}
           </p>
         </div>
       )}
@@ -223,10 +217,10 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
           return (
             <div
               key={idx}
-              className={`bg-white rounded-2xl border border-[#d2d2d7]/40 p-5 shadow-sm hover:shadow-md transition-shadow animate-card-in hover-lift ${['stagger-1', 'stagger-2', 'stagger-3', 'stagger-4'][idx]}`}
+              className={`bg-white rounded-2xl border border-[var(--gray-200)]/40 p-5 shadow-sm hover:shadow-md transition-shadow animate-card-in hover-lift ${['stagger-1', 'stagger-2', 'stagger-3', 'stagger-4'][idx]}`}
             >
               <div className="flex items-start justify-between mb-3">
-                <p className="text-[12px] font-medium text-[#86868b] uppercase tracking-wide">{kpi.label}</p>
+                <p className="text-[12px] font-medium text-[var(--gray-400)] uppercase tracking-wide">{kpi.label}</p>
                 <div
                   className="w-8 h-8 rounded-xl flex items-center justify-center"
                   style={{ backgroundColor: kpi.accentColor + '12' }}
@@ -243,8 +237,8 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
       </div>
 
       {/* Main Chart */}
-      <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm animate-card-in hover-lift stagger-5">
-        <h2 className="text-[16px] font-semibold text-[#1d1d1f] mb-5">
+      <div className="bg-white rounded-2xl border border-[var(--gray-200)]/40 p-6 shadow-sm animate-card-in hover-lift stagger-5">
+        <h2 className="text-[16px] font-semibold text-[var(--gray-950)] mb-5">
           Flujo de Efectivo Mensual — {plan.year}
         </h2>
         <ResponsiveContainer width="100%" height={380}>
@@ -252,15 +246,15 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
             data={mainChartData}
             margin={{ top: 10, right: 20, left: 10, bottom: 10 }}
           >
-            <CartesianGrid stroke="#e8e8ed" strokeDasharray="0" vertical={false} />
+            <CartesianGrid stroke={hex.gray100} strokeDasharray="0" vertical={false} />
             <XAxis
               dataKey="month"
-              tick={{ fill: '#86868b', fontSize: 12 }}
-              axisLine={{ stroke: '#e8e8ed' }}
+              tick={{ fill: hex.gray400, fontSize: 12 }}
+              axisLine={{ stroke: hex.gray100 }}
               tickLine={false}
             />
             <YAxis
-              tick={{ fill: '#86868b', fontSize: 12 }}
+              tick={{ fill: hex.gray400, fontSize: 12 }}
               axisLine={false}
               tickLine={false}
               tickFormatter={(value) => `$${value}M`}
@@ -271,13 +265,13 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
               iconType="circle"
               iconSize={8}
               formatter={(value: string) => (
-                <span style={{ color: '#6e6e73', fontSize: 12, fontWeight: 500 }}>{value}</span>
+                <span style={{ color: hex.gray500, fontSize: 12, fontWeight: 500 }}>{value}</span>
               )}
             />
-            <ReferenceLine y={0} stroke="#ff3b30" strokeDasharray="5 5" strokeWidth={1} strokeOpacity={0.5} />
+            <ReferenceLine y={0} stroke={hex.danger} strokeDasharray="5 5" strokeWidth={1} strokeOpacity={0.5} />
             <Bar
               dataKey="Ingresos"
-              fill="#0071e3"
+              fill={hex.primary}
               fillOpacity={0.85}
               radius={[4, 4, 0, 0]}
               cursor="pointer"
@@ -285,7 +279,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
             />
             <Bar
               dataKey="Egresos"
-              fill="#c7c7cc"
+              fill={hex.gray300}
               fillOpacity={0.7}
               radius={[4, 4, 0, 0]}
               cursor="pointer"
@@ -294,10 +288,10 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
             <Line
               type="monotone"
               dataKey="Caja Final"
-              stroke="#ff9f0a"
+              stroke={hex.warning}
               strokeWidth={2.5}
-              dot={{ fill: '#ff9f0a', r: 4, strokeWidth: 2, stroke: '#fff' }}
-              activeDot={{ r: 6, stroke: '#ff9f0a', strokeWidth: 2 }}
+              dot={{ fill: hex.warning, r: 4, strokeWidth: 2, stroke: '#fff' }}
+              activeDot={{ r: 6, stroke: hex.warning, strokeWidth: 2 }}
             />
           </ComposedChart>
         </ResponsiveContainer>
@@ -305,21 +299,21 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
 
       {/* Drill-Down Section */}
       {drillPath.length > 0 && currentMonth !== null && (
-        <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm animate-card-in hover-lift stagger-6">
+        <div className="bg-white rounded-2xl border border-[var(--gray-200)]/40 p-6 shadow-sm animate-card-in hover-lift stagger-6">
           {/* Breadcrumb */}
           <div className="flex items-center gap-1.5 mb-5 flex-wrap">
             <button
               onClick={() => handleBreadcrumbClick(-1)}
-              className="text-[13px] font-medium text-[#0071e3] hover:text-[#0077ED] transition"
+              className="text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] transition"
             >
               Año {plan.year}
             </button>
             {drillPath.map((item, idx) => (
               <React.Fragment key={idx}>
-                <ChevronRight className="w-3.5 h-3.5 text-[#c7c7cc]" />
+                <ChevronRight className="w-3.5 h-3.5 text-[var(--gray-300)]" />
                 <button
                   onClick={() => handleBreadcrumbClick(idx)}
-                  className="text-[13px] font-medium text-[#0071e3] hover:text-[#0077ED] transition"
+                  className="text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] transition"
                 >
                   {item.label}
                 </button>
@@ -327,7 +321,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
             ))}
           </div>
 
-          <h3 className="text-[12px] font-semibold text-[#86868b] mb-4 uppercase tracking-wider">
+          <h3 className="text-[12px] font-semibold text-[var(--gray-400)] mb-4 uppercase tracking-wider">
             Desglose por Concepto
           </h3>
 
@@ -342,17 +336,17 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
                   key={concept.id}
                   onClick={() => isClickable && handleConceptClick(concept, currentMonth!)}
                   className={`group flex items-center gap-4 py-2 px-3 rounded-xl transition hover-row ${
-                    isClickable ? 'cursor-pointer hover:bg-[#f5f5f7]' : ''
+                    isClickable ? 'cursor-pointer hover:bg-[var(--gray-50)]' : ''
                   }`}
                 >
                   <div className="w-36 flex-shrink-0">
-                    <p className="text-[13px] font-medium text-[#1d1d1f] truncate">{concept.name}</p>
+                    <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">{concept.name}</p>
                     {concept.responsible && (
-                      <p className="text-[11px] text-[#86868b]">{concept.responsible}</p>
+                      <p className="text-[11px] text-[var(--gray-400)]">{concept.responsible}</p>
                     )}
                   </div>
                   <div className="flex-1">
-                    <div className="bg-[#f5f5f7] rounded-full h-5 overflow-hidden">
+                    <div className="bg-[var(--gray-50)] rounded-full h-5 overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all"
                         style={{
@@ -364,10 +358,10 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
                     </div>
                   </div>
                   <div className="text-right w-36 flex-shrink-0">
-                    <p className="text-[13px] font-mono font-semibold text-[#1d1d1f]">
-                      {formatCurrency(concept.displayValue)}
+                    <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">
+                      {fmtCurrency(concept.displayValue)}
                     </p>
-                    <p className="text-[11px] text-[#86868b]">{formatPercent(percentage)}</p>
+                    <p className="text-[11px] text-[var(--gray-400)]">{fmtPct(percentage)}</p>
                   </div>
                 </div>
               );
@@ -375,38 +369,38 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
           </div>
 
           {drillDownData.length === 0 && (
-            <p className="text-[13px] text-[#86868b] py-8 text-center">No hay datos para este período</p>
+            <p className="text-[13px] text-[var(--gray-400)] py-8 text-center">No hay datos para este período</p>
           )}
         </div>
       )}
 
       {/* Monthly Summary Table */}
-      <div className="bg-white rounded-2xl border border-[#d2d2d7]/40 p-6 shadow-sm animate-card-in hover-lift stagger-7">
-        <h2 className="text-[16px] font-semibold text-[#1d1d1f] mb-5">Resumen Mensual</h2>
+      <div className="bg-white rounded-2xl border border-[var(--gray-200)]/40 p-6 shadow-sm animate-card-in hover-lift stagger-7">
+        <h2 className="text-[16px] font-semibold text-[var(--gray-950)] mb-5">Resumen Mensual</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]">
             <thead>
-              <tr className="border-b border-[#e8e8ed]">
-                <th className="text-left py-3 px-3 text-[#86868b] font-semibold">Concepto</th>
+              <tr className="border-b border-[var(--gray-100)]">
+                <th className="text-left py-3 px-3 text-[var(--gray-400)] font-semibold">Concepto</th>
                 {MONTHS.map((month, idx) => (
                   <th
                     key={month}
-                    className="text-right py-3 px-2 text-[#86868b] font-semibold cursor-pointer hover:text-[#0071e3] transition"
+                    className="text-right py-3 px-2 text-[var(--gray-400)] font-semibold cursor-pointer hover:text-[var(--primary)] transition"
                     onClick={() => handleMonthClick(idx)}
                   >
                     {month}
                   </th>
                 ))}
-                <th className="text-right py-3 px-3 text-[#86868b] font-semibold">Total</th>
+                <th className="text-right py-3 px-3 text-[var(--gray-400)] font-semibold">Total</th>
               </tr>
             </thead>
             <tbody>
               {monthlySummaryRows.map((row, rowIdx) => (
                 <tr
                   key={rowIdx}
-                  className="border-b border-[#f5f5f7] hover:bg-[#fbfbfd] transition hover-row"
+                  className="border-b border-[var(--gray-50)] hover:bg-[var(--surface-alt)] transition hover-row"
                 >
-                  <td className="py-3 px-3 font-medium text-[#1d1d1f]">{row.label}</td>
+                  <td className="py-3 px-3 font-medium text-[var(--gray-950)]">{row.label}</td>
                   {row.data.map((value, colIdx) => (
                     <td
                       key={colIdx}
@@ -414,7 +408,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
                         row.getColor ? row.getColor(value) : row.color
                       }`}
                     >
-                      {formatCurrency(value)}
+                      {fmtCurrency(value)}
                     </td>
                   ))}
                   <td
@@ -424,7 +418,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
                         : row.color
                     }`}
                   >
-                    {formatCurrency(row.data.reduce((a, b) => a + b, 0))}
+                    {fmtCurrency(row.data.reduce((a, b) => a + b, 0))}
                   </td>
                 </tr>
               ))}

@@ -11,6 +11,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import { hex } from '../theme';
 import {
   BASE_SCENARIO_ID,
   BASE_SCENARIO_NAME,
@@ -483,18 +484,18 @@ export default function ProposalCreator({
 
   return (
     <div className="space-y-5">
-      <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-6">
           <div>
-            <p className="text-[11px] uppercase tracking-wide text-[#86868b]">Cómo funciona</p>
-            <h1 className="mt-1 text-[24px] font-semibold text-[#1d1d1f]">Simular decisiones sin perder el pronóstico original</h1>
-            <p className="mt-2 max-w-[880px] text-[13px] text-[#6e6e73]">
+            <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cómo funciona</p>
+            <h1 className="mt-1 text-[24px] font-semibold text-[var(--gray-950)]">Simular decisiones sin perder el pronóstico original</h1>
+            <p className="mt-2 max-w-[880px] text-[13px] text-[var(--gray-500)]">
               Siempre existe un <strong>Escenario Base</strong>. Desde ahí creas una propuesta, dentro de la propuesta un escenario,
               y dentro del escenario activas simulaciones. Cada cambio recalcula el forecast y siempre se compara contra el Base.
             </p>
           </div>
-          <div className="rounded-2xl bg-[#f5f5f7] p-3">
-            <Sparkles className="w-5 h-5 text-[#0071e3]" />
+          <div className="rounded-2xl bg-[var(--gray-50)] p-3">
+            <Sparkles className="w-5 h-5 text-[var(--primary)]" />
           </div>
         </div>
 
@@ -507,7 +508,7 @@ export default function ProposalCreator({
       </div>
 
       <div className="grid grid-cols-[300px,minmax(0,1fr),420px] gap-5">
-        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+        <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
             title="Base y Propuestas"
             subtitle="El Escenario Base se mantiene fijo. Las propuestas cuelgan aparte."
@@ -520,20 +521,20 @@ export default function ProposalCreator({
             className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
               activeScenario?.id === BASE_SCENARIO_ID
                 ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
-                : 'border-[#d2d2d7]/60 bg-[#fbfbfd] hover:bg-white'
+                : 'border-[var(--gray-200)]/60 bg-[var(--surface-alt)] hover:bg-white'
             }`}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-[13px] font-semibold">{BASE_SCENARIO_NAME}</p>
-                <p className={`mt-1 text-[11px] ${activeScenario?.id === BASE_SCENARIO_ID ? 'text-white/75' : 'text-[#86868b]'}`}>
+                <p className={`mt-1 text-[11px] ${activeScenario?.id === BASE_SCENARIO_ID ? 'text-white/75' : 'text-[var(--gray-400)]'}`}>
                   Pronóstico original sin simulaciones ni overrides. Punto de comparación permanente.
                 </p>
               </div>
               <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                 activeScenario?.id === BASE_SCENARIO_ID
                   ? 'bg-white/15 text-white'
-                  : 'bg-[#f5f5f7] text-[#6e6e73]'
+                  : 'bg-[var(--gray-50)] text-[var(--gray-500)]'
               }`}>
                 Fijo
               </span>
@@ -541,24 +542,24 @@ export default function ProposalCreator({
           </button>
 
           {showProposalForm && (
-            <div className="rounded-2xl border border-[#d2d2d7]/60 bg-[#fbfbfd] p-3 space-y-3">
+            <div className="rounded-2xl border border-[var(--gray-200)]/60 bg-[var(--surface-alt)] p-3 space-y-3">
               <input
                 value={proposalForm.name}
                 onChange={(event) => setProposalForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Nombre de la propuesta"
-                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={proposalForm.description}
                 onChange={(event) => setProposalForm((current) => ({ ...current, description: event.target.value }))}
                 rows={3}
                 placeholder="Qué decisión se quiere analizar"
-                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
               <select
                 value={proposalForm.status}
                 onChange={(event) => setProposalForm((current) => ({ ...current, status: event.target.value as Proposal['status'] }))}
-                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
               >
                 {PROPOSAL_STATUSES.map((status) => (
                   <option key={status} value={status}>{status}</option>
@@ -591,15 +592,15 @@ export default function ProposalCreator({
                   onClick={() => onSelectProposal(proposal.id)}
                   className={`w-full rounded-xl border px-3 py-3 text-left transition ${
                     selected
-                      ? 'border-[#0071e3] bg-[#e8f4fd]'
-                      : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:bg-white'
+                      ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
+                      : 'border-[var(--gray-200)]/50 bg-[var(--surface-alt)] hover:bg-white'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate text-[13px] font-semibold text-[#1d1d1f]">{proposal.name}</p>
-                      <p className="mt-1 line-clamp-2 text-[11px] text-[#86868b]">{proposal.description || 'Sin descripción'}</p>
-                      <div className="mt-2 flex items-center gap-2 text-[11px] text-[#6e6e73]">
+                      <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{proposal.name}</p>
+                      <p className="mt-1 line-clamp-2 text-[11px] text-[var(--gray-400)]">{proposal.description || 'Sin descripción'}</p>
+                      <div className="mt-2 flex items-center gap-2 text-[11px] text-[var(--gray-500)]">
                         <span>{proposalScenarioCount} escenarios</span>
                         <span>•</span>
                         <span>{proposal.status}</span>
@@ -611,7 +612,7 @@ export default function ProposalCreator({
                           event.stopPropagation();
                           openEditProposal(proposal);
                         }}
-                        className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#1d1d1f]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]"
                         title="Editar propuesta"
                       >
                         <Pencil className="w-3.5 h-3.5" />
@@ -621,7 +622,7 @@ export default function ProposalCreator({
                           event.stopPropagation();
                           onDelete(proposal.id);
                         }}
-                        className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#ff3b30]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
                         title="Eliminar propuesta"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -634,7 +635,7 @@ export default function ProposalCreator({
           </div>
         </section>
 
-        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+        <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
             title="Escenarios"
             subtitle={activeProposal ? `Propuesta activa: ${activeProposal.name}` : 'Selecciona una propuesta para trabajar escenarios.'}
@@ -648,7 +649,7 @@ export default function ProposalCreator({
                 <button
                   key={preset}
                   onClick={() => openNewScenario(preset)}
-                  className="rounded-xl border border-[#d2d2d7]/60 bg-[#fbfbfd] px-3 py-2 text-[12px] font-medium text-[#6e6e73] hover:bg-white hover:text-[#1d1d1f]"
+                  className="rounded-xl border border-[var(--gray-200)]/60 bg-[var(--surface-alt)] px-3 py-2 text-[12px] font-medium text-[var(--gray-500)] hover:bg-white hover:text-[var(--gray-950)]"
                 >
                   {preset}
                 </button>
@@ -657,19 +658,19 @@ export default function ProposalCreator({
           )}
 
           {showScenarioForm && activeProposal && (
-            <div className="rounded-2xl border border-[#d2d2d7]/60 bg-[#fbfbfd] p-3 space-y-3">
+            <div className="rounded-2xl border border-[var(--gray-200)]/60 bg-[var(--surface-alt)] p-3 space-y-3">
               <input
                 value={scenarioForm.name}
                 onChange={(event) => setScenarioForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Nombre del escenario"
-                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={scenarioForm.description}
                 onChange={(event) => setScenarioForm((current) => ({ ...current, description: event.target.value }))}
                 rows={3}
                 placeholder="Hipótesis del escenario"
-                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
               <div className="grid grid-cols-3 gap-3">
                 <Field label="Probabilidad">
@@ -679,7 +680,7 @@ export default function ProposalCreator({
                     max={100}
                     value={scenarioForm.probability}
                     onChange={(event) => setScenarioForm((current) => ({ ...current, probability: Number(event.target.value) || 0 }))}
-                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                   />
                 </Field>
                 <Field label="Inicio">
@@ -687,7 +688,7 @@ export default function ProposalCreator({
                     type="month"
                     value={scenarioForm.startYearMonth}
                     onChange={(event) => setScenarioForm((current) => ({ ...current, startYearMonth: event.target.value }))}
-                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                   />
                 </Field>
                 <Field label="Horizonte">
@@ -697,7 +698,7 @@ export default function ProposalCreator({
                     max={24}
                     value={scenarioForm.horizonMonths}
                     onChange={(event) => setScenarioForm((current) => ({ ...current, horizonMonths: Number(event.target.value) || 12 }))}
-                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                   />
                 </Field>
               </div>
@@ -735,20 +736,20 @@ export default function ProposalCreator({
                   onClick={() => onSelectScenario(scenario.id)}
                   className={`w-full rounded-xl border px-3 py-3 text-left transition ${
                     selected
-                      ? 'border-[#34c759] bg-[#e8faf0]'
-                      : 'border-[#d2d2d7]/50 bg-[#fbfbfd] hover:bg-white'
+                      ? 'border-[var(--success)] bg-[var(--success)]/10'
+                      : 'border-[var(--gray-200)]/50 bg-[var(--surface-alt)] hover:bg-white'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="truncate text-[13px] font-semibold text-[#1d1d1f]">{scenario.name}</p>
+                        <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{scenario.name}</p>
                         {selected && (
-                          <span className="rounded-full bg-[#34c759]/15 px-2 py-0.5 text-[10px] font-medium text-[#248a3d]">Activo</span>
+                          <span className="rounded-full bg-[var(--success)]/15 px-2 py-0.5 text-[10px] font-medium text-[#248a3d]">Activo</span>
                         )}
                       </div>
-                      <p className="mt-1 line-clamp-2 text-[11px] text-[#86868b]">{scenario.description || 'Sin descripción'}</p>
-                      <div className="mt-2 flex items-center gap-2 text-[11px] text-[#6e6e73]">
+                      <p className="mt-1 line-clamp-2 text-[11px] text-[var(--gray-400)]">{scenario.description || 'Sin descripción'}</p>
+                      <div className="mt-2 flex items-center gap-2 text-[11px] text-[var(--gray-500)]">
                         <span>{Math.round(scenario.probability * 100)}%</span>
                         <span>•</span>
                         <span>{scenario.simulationIds.length} simulaciones activas</span>
@@ -762,7 +763,7 @@ export default function ProposalCreator({
                           event.stopPropagation();
                           openEditScenario(scenario);
                         }}
-                        className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#1d1d1f]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]"
                         title="Editar escenario"
                       >
                         <Pencil className="w-3.5 h-3.5" />
@@ -772,7 +773,7 @@ export default function ProposalCreator({
                           event.stopPropagation();
                           onDeleteScenario(scenario.id);
                         }}
-                        className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#ff3b30]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
                         title="Eliminar escenario"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -785,7 +786,7 @@ export default function ProposalCreator({
           </div>
         </section>
 
-        <section className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm space-y-3">
+        <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm space-y-3">
           <SectionHeader
             title="Biblioteca de Simulaciones"
             subtitle={isBaseScenario(activeScenario)
@@ -799,23 +800,23 @@ export default function ProposalCreator({
             value={simulationSearch}
             onChange={(event) => setSimulationSearch(event.target.value)}
             placeholder="Buscar simulación..."
-            className="w-full rounded-xl border border-[#d2d2d7] bg-[#fbfbfd] px-3 py-2.5 text-[13px]"
+            className="w-full rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
           />
 
           {showSimulationForm && (
-            <div className="rounded-2xl border border-[#d2d2d7]/60 bg-[#fbfbfd] p-3 space-y-3">
+            <div className="rounded-2xl border border-[var(--gray-200)]/60 bg-[var(--surface-alt)] p-3 space-y-3">
               <input
                 value={simulationForm.name}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, name: event.target.value }))}
                 placeholder="Nombre de la simulación"
-                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
               />
               <textarea
                 value={simulationForm.description}
                 onChange={(event) => setSimulationForm((current) => ({ ...current, description: event.target.value }))}
                 rows={3}
                 placeholder="Describe la decisión financiera"
-                className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
               />
 
               <div className="grid grid-cols-2 gap-3">
@@ -823,7 +824,7 @@ export default function ProposalCreator({
                   <select
                     value={simulationForm.type}
                     onChange={(event) => setSimulationForm((current) => ({ ...current, type: event.target.value as SimulationType }))}
-                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                   >
                     {SIMULATION_TYPES.map((item) => (
                       <option key={item.value} value={item.value}>{item.label}</option>
@@ -834,7 +835,7 @@ export default function ProposalCreator({
                   <select
                     value={simulationForm.category}
                     onChange={(event) => setSimulationForm((current) => ({ ...current, category: event.target.value as SimulationCategory }))}
-                    className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                   >
                     {SIMULATION_CATEGORIES.map((category) => (
                       <option key={category} value={category}>{category}</option>
@@ -844,8 +845,8 @@ export default function ProposalCreator({
               </div>
 
               {simulationTypeMeta && (
-                <div className="rounded-xl bg-white p-3 text-[12px] text-[#6e6e73]">
-                  <p className="font-medium text-[#1d1d1f]">{simulationTypeMeta.label}</p>
+                <div className="rounded-xl bg-white p-3 text-[12px] text-[var(--gray-500)]">
+                  <p className="font-medium text-[var(--gray-950)]">{simulationTypeMeta.label}</p>
                   <p className="mt-1">{simulationTypeMeta.description}</p>
                 </div>
               )}
@@ -856,7 +857,7 @@ export default function ProposalCreator({
                     <select
                       value={simulationForm.operation}
                       onChange={(event) => setSimulationForm((current) => ({ ...current, operation: event.target.value as SimulationOperation }))}
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     >
                       <option value="increase">Incrementar / Agregar</option>
                       <option value="decrease">Reducir / Quitar</option>
@@ -872,7 +873,7 @@ export default function ProposalCreator({
                           ? { ...current, percent: Number(event.target.value) || 0 }
                           : { ...current, amount: Number(event.target.value) || 0 }
                       ))}
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     />
                   </Field>
                 </div>
@@ -887,7 +888,7 @@ export default function ProposalCreator({
                       max={12}
                       value={simulationForm.shiftMonths}
                       onChange={(event) => setSimulationForm((current) => ({ ...current, shiftMonths: Number(event.target.value) || 0 }))}
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     />
                   </Field>
                   <Field label="% del flujo a mover">
@@ -897,7 +898,7 @@ export default function ProposalCreator({
                       max={100}
                       value={simulationForm.shiftRatio}
                       onChange={(event) => setSimulationForm((current) => ({ ...current, shiftRatio: Number(event.target.value) || 0 }))}
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     />
                   </Field>
                 </div>
@@ -912,7 +913,7 @@ export default function ProposalCreator({
                         step={0.01}
                         value={simulationForm.amount}
                         onChange={(event) => setSimulationForm((current) => ({ ...current, amount: Number(event.target.value) || 0 }))}
-                        className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                       />
                     </Field>
                     <Field label="Parcialidades">
@@ -922,7 +923,7 @@ export default function ProposalCreator({
                         max={24}
                         value={simulationForm.installments}
                         onChange={(event) => setSimulationForm((current) => ({ ...current, installments: Number(event.target.value) || 2 }))}
-                        className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                       />
                     </Field>
                   </div>
@@ -931,7 +932,7 @@ export default function ProposalCreator({
                       value={simulationForm.customAllocationText}
                       onChange={(event) => setSimulationForm((current) => ({ ...current, customAllocationText: event.target.value }))}
                       placeholder="Ej. 25, 25, 25, 25"
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     />
                   </Field>
                 </div>
@@ -944,7 +945,7 @@ export default function ProposalCreator({
                       type="month"
                       value={simulationForm.startYearMonth}
                       onChange={(event) => setSimulationForm((current) => ({ ...current, startYearMonth: event.target.value }))}
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     />
                   </Field>
                   <Field label="Fin">
@@ -952,14 +953,14 @@ export default function ProposalCreator({
                       type="month"
                       value={simulationForm.endYearMonth}
                       onChange={(event) => setSimulationForm((current) => ({ ...current, endYearMonth: event.target.value }))}
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     />
                   </Field>
                   <Field label="Frecuencia">
                     <select
                       value={simulationForm.frequency}
                       onChange={(event) => setSimulationForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
-                      className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     >
                       {FREQUENCIES.map((frequency) => (
                         <option key={frequency.value} value={frequency.value}>{frequency.label}</option>
@@ -974,12 +975,12 @@ export default function ProposalCreator({
                   value={simulationForm.paymentLabel}
                   onChange={(event) => setSimulationForm((current) => ({ ...current, paymentLabel: event.target.value }))}
                   placeholder="Ej. 4 pagos mensuales, anticipo 30%, contraentrega..."
-                  className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px]"
+                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                 />
               </Field>
 
               <Field label="Categorías o conceptos afectados">
-                <div className="flex flex-wrap gap-2 rounded-xl border border-[#d2d2d7] bg-white p-2">
+                <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--gray-200)] bg-white p-2">
                   {targetOptions.map((target) => {
                     const selected = simulationForm.targetIds.includes(target.id);
                     return (
@@ -988,8 +989,8 @@ export default function ProposalCreator({
                         onClick={() => toggleTarget(target.id)}
                         className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
                           selected
-                            ? 'bg-[#0071e3] text-white'
-                            : 'bg-[#f5f5f7] text-[#6e6e73]'
+                            ? 'bg-[var(--primary)] text-white'
+                            : 'bg-[var(--gray-50)] text-[var(--gray-500)]'
                         }`}
                       >
                         {target.label}
@@ -1005,7 +1006,7 @@ export default function ProposalCreator({
                   onChange={(event) => setSimulationForm((current) => ({ ...current, comments: event.target.value }))}
                   rows={3}
                   placeholder="Contexto, riesgos, supuestos..."
-                  className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2.5 text-[13px] resize-none"
+                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
                 />
               </Field>
 
@@ -1040,8 +1041,8 @@ export default function ProposalCreator({
                   key={simulation.id}
                   className={`rounded-xl border px-3 py-3 transition ${
                     selected
-                      ? 'border-[#0071e3]/30 bg-[#e8f4fd]/70'
-                      : 'border-[#d2d2d7]/50 bg-[#fbfbfd]'
+                      ? 'border-[var(--primary)]/30 bg-[var(--primary-muted)]/70'
+                      : 'border-[var(--gray-200)]/50 bg-[var(--surface-alt)]'
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -1050,8 +1051,8 @@ export default function ProposalCreator({
                       disabled={isBaseScenario(activeScenario)}
                       className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-md border transition ${
                         selected
-                          ? 'border-[#0071e3] bg-[#0071e3] text-white'
-                          : 'border-[#d2d2d7] bg-white text-transparent'
+                          ? 'border-[var(--primary)] bg-[var(--primary)] text-white'
+                          : 'border-[var(--gray-200)] bg-white text-transparent'
                       } ${isBaseScenario(activeScenario) ? 'cursor-not-allowed opacity-50' : ''}`}
                       title={isBaseScenario(activeScenario) ? 'Selecciona un escenario de propuesta' : 'Activar / desactivar simulación'}
                     >
@@ -1060,10 +1061,10 @@ export default function ProposalCreator({
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }} />
-                        <p className="truncate text-[13px] font-semibold text-[#1d1d1f]">{simulation.name}</p>
+                        <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{simulation.name}</p>
                       </div>
-                      <p className="mt-1 line-clamp-2 text-[11px] text-[#86868b]">{simulation.description || 'Sin descripción'}</p>
-                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[#6e6e73]">
+                      <p className="mt-1 line-clamp-2 text-[11px] text-[var(--gray-400)]">{simulation.description || 'Sin descripción'}</p>
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[var(--gray-500)]">
                         <Badge>{SIMULATION_TYPES.find((item) => item.value === simulation.type)?.label ?? 'Simulación'}</Badge>
                         <Badge>{simulation.operation === 'decrease' ? 'Reducir' : 'Incrementar'}</Badge>
                         <Badge>{targetLabel}{targetIds.length > 2 ? ' +' : ''}</Badge>
@@ -1075,14 +1076,14 @@ export default function ProposalCreator({
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => openEditSimulation(simulation)}
-                        className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#1d1d1f]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]"
                         title="Editar simulación"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => onDeleteSimulation(simulation.id)}
-                        className="rounded-lg p-1.5 text-[#86868b] hover:bg-white hover:text-[#ff3b30]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
                         title="Eliminar simulación"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1109,13 +1110,13 @@ function StepCard({
   description: string;
 }) {
   return (
-    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-4">
+    <div className="rounded-2xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)] p-4">
       <div className="mb-3 flex items-center justify-between">
-        <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-[#0071e3]">{index}</span>
+        <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-[var(--primary)]">{index}</span>
         <ArrowRight className="w-4 h-4 text-[#c7c7cc]" />
       </div>
-      <p className="text-[13px] font-semibold text-[#1d1d1f]">{title}</p>
-      <p className="mt-1 text-[12px] text-[#6e6e73]">{description}</p>
+      <p className="text-[13px] font-semibold text-[var(--gray-950)]">{title}</p>
+      <p className="mt-1 text-[12px] text-[var(--gray-500)]">{description}</p>
     </div>
   );
 }
@@ -1134,13 +1135,13 @@ function SectionHeader({
   return (
     <div className="flex items-start justify-between gap-3">
       <div>
-        <h2 className="text-[15px] font-semibold text-[#1d1d1f]">{title}</h2>
-        <p className="mt-1 text-[12px] text-[#86868b]">{subtitle}</p>
+        <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">{title}</h2>
+        <p className="mt-1 text-[12px] text-[var(--gray-400)]">{subtitle}</p>
       </div>
       {actionLabel && onAction && (
         <button
           onClick={onAction}
-          className="inline-flex items-center gap-1 rounded-full bg-[#0071e3] px-3 py-1.5 text-[12px] font-medium text-white hover:bg-[#0077ed]"
+          className="inline-flex items-center gap-1 rounded-full bg-[var(--primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
         >
           <Plus className="w-3.5 h-3.5" />
           {actionLabel}
@@ -1159,7 +1160,7 @@ function Field({
 }) {
   return (
     <label className="block space-y-1">
-      <span className="text-[11px] font-medium uppercase tracking-wide text-[#86868b]">{label}</span>
+      <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</span>
       {children}
     </label>
   );
@@ -1176,7 +1177,7 @@ function InlineActions({
     <div className="flex items-center justify-end gap-2">
       <button
         onClick={onCancel}
-        className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#6e6e73]"
+        className="rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2 text-[12px] text-[var(--gray-500)]"
       >
         Cancelar
       </button>
@@ -1198,19 +1199,19 @@ function EmptyState({
   description: string;
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-[#d2d2d7] bg-[#fbfbfd] px-4 py-8 text-center">
-      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-white border border-[#d2d2d7]/60">
-        <CopyPlus className="w-4 h-4 text-[#86868b]" />
+    <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-4 py-8 text-center">
+      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-white border border-[var(--gray-200)]/60">
+        <CopyPlus className="w-4 h-4 text-[var(--gray-400)]" />
       </div>
-      <p className="text-[13px] font-medium text-[#1d1d1f]">{title}</p>
-      <p className="mt-1 text-[12px] text-[#86868b]">{description}</p>
+      <p className="text-[13px] font-medium text-[var(--gray-950)]">{title}</p>
+      <p className="mt-1 text-[12px] text-[var(--gray-400)]">{description}</p>
     </div>
   );
 }
 
 function Badge({ children }: { children: ReactNode }) {
   return (
-    <span className="rounded-full border border-[#d2d2d7]/60 bg-white px-2 py-0.5">
+    <span className="rounded-full border border-[var(--gray-200)]/60 bg-white px-2 py-0.5">
       {children}
     </span>
   );

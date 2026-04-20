@@ -1,122 +1,148 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300..800&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ═══════════════════════════════════════════════
-   FlowSense — Apple HIG Design System
+   FlowSense — Impeccable Design System
+   OKLCH color space · 4pt grid · 1.25 type scale
    ═══════════════════════════════════════════════ */
 
 :root {
-  --accent: #0071e3;
-  --accent-hover: #0077ED;
-  --accent-light: #e8f4fd;
-  --surface: #ffffff;
-  --surface-secondary: #f5f5f7;
-  --surface-tertiary: #fbfbfd;
-  --border: #d2d2d7;
-  --border-light: #e8e8ed;
-  --text-primary: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --text-tertiary: #86868b;
-  --success: #34c759;
-  --warning: #ff9f0a;
-  --danger: #ff3b30;
-  /* Apple spring curve */
-  --spring: cubic-bezier(0.22, 1, 0.36, 1);
+  /* ── Primary ── */
+  --primary:       oklch(55% 0.22 255);
+  --primary-hover: oklch(58% 0.22 255);
+  --primary-muted: oklch(95% 0.04 255);
+  --primary-subtle: oklch(97% 0.02 255);
+
+  /* ── Neutrals (blue-tinted, chroma 0.008) ── */
+  --gray-950: oklch(18% 0.008 255);
+  --gray-900: oklch(22% 0.008 255);
+  --gray-700: oklch(40% 0.008 255);
+  --gray-500: oklch(56% 0.008 255);
+  --gray-400: oklch(64% 0.008 255);
+  --gray-300: oklch(78% 0.006 255);
+  --gray-200: oklch(88% 0.004 255);
+  --gray-100: oklch(94% 0.003 255);
+  --gray-50:  oklch(97% 0.002 255);
+
+  /* ── Semantic ── */
+  --success:       oklch(62% 0.19 145);
+  --success-muted: oklch(95% 0.04 145);
+  --warning:       oklch(72% 0.18 70);
+  --warning-muted: oklch(95% 0.04 70);
+  --danger:        oklch(58% 0.22 25);
+  --danger-muted:  oklch(95% 0.04 25);
+  --info:          oklch(68% 0.15 230);
+  --info-muted:    oklch(95% 0.03 230);
+
+  /* ── Surfaces ── */
+  --surface:          #ffffff;
+  --surface-alt:      oklch(97.5% 0.002 255);
+  --surface-raised:   #ffffff;
+
+  /* ── Motion curves ── */
+  --spring:       cubic-bezier(0.22, 1, 0.36, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-smooth: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-smooth:  cubic-bezier(0.25, 0.1, 0.25, 1);
+
+  /* ── Shadows ── */
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04);
+  --shadow-lg: 0 8px 25px -5px rgba(0,0,0,0.08), 0 4px 10px -6px rgba(0,0,0,0.04);
+
+  /* ── Radii ── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* ── Layout ── */
+  --max-width: 1400px;
+  --header-h: 56px;
+  --page-gutter: 32px;
 }
 
+/* ─── Base ─── */
 * {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
 body {
-  background-color: var(--surface-secondary);
-  color: var(--text-primary);
+  background-color: var(--surface-alt);
+  color: var(--gray-950);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+/* ── Tabular numbers for all data ── */
+.tabular-nums,
+table, [data-numeric] {
+  font-variant-numeric: tabular-nums;
 }
 
 /* ═══════════════════════════════════════════════
-   KEYFRAME ANIMATIONS — Apple-grade motion
+   KEYFRAME ANIMATIONS
+   Duration rules: 100-150ms instant, 200-300ms state,
+   300-500ms layout, 500-800ms entrance
    ═══════════════════════════════════════════════ */
 
-/* Page mount — content fades up into view */
 @keyframes pageIn {
-  from { opacity: 0; transform: translateY(12px) scale(0.99); }
+  from { opacity: 0; transform: translateY(12px) scale(0.995); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* Fade in only (no movement) */
 @keyframes fadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 
-/* Card stagger — each card slides up */
 @keyframes cardIn {
   from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Slide down — for banners, alerts */
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Slide up — for tooltips, modals */
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Scale in — for badges, pills, icons */
 @keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.85); }
+  from { opacity: 0; transform: scale(0.92); }
   to   { opacity: 1; transform: scale(1); }
 }
 
-/* Pulse glow — subtle attention */
-@keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 113, 227, 0); }
-  50%      { box-shadow: 0 0 0 6px rgba(0, 113, 227, 0.08); }
-}
-
-/* Number count up shimmer */
 @keyframes shimmer {
   from { background-position: -200% 0; }
   to   { background-position: 200% 0; }
 }
 
-/* Skeleton loading */
 @keyframes skeletonPulse {
-  0%, 100% { opacity: 0.6; }
-  50%      { opacity: 1; }
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.8; }
 }
 
-/* Spinner */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-/* Tab indicator slide */
-@keyframes tabSlide {
-  from { opacity: 0; transform: scaleX(0.8); }
-  to   { opacity: 1; transform: scaleX(1); }
-}
-
-/* Row highlight */
 @keyframes rowHighlight {
-  from { background-color: rgba(0, 113, 227, 0.06); }
+  from { background-color: var(--primary-subtle); }
   to   { background-color: transparent; }
 }
 
 /* ═══════════════════════════════════════════════
-   UTILITY ANIMATION CLASSES
+   ANIMATION UTILITY CLASSES
    ═══════════════════════════════════════════════ */
 
 .animate-page-in {
@@ -124,7 +150,7 @@ body {
 }
 
 .animate-fade-in {
-  animation: fadeIn 0.35s var(--ease-smooth) both;
+  animation: fadeIn 0.3s var(--ease-smooth) both;
 }
 
 .animate-card-in {
@@ -132,26 +158,15 @@ body {
 }
 
 .animate-slide-down {
-  animation: slideDown 0.35s var(--spring) both;
+  animation: slideDown 0.3s var(--spring) both;
 }
 
 .animate-slide-up {
-  animation: slideUp 0.35s var(--spring) both;
+  animation: slideUp 0.3s var(--spring) both;
 }
 
 .animate-scale-in {
-  animation: scaleIn 0.3s var(--spring) both;
-}
-
-.animate-pulse-glow {
-  animation: pulseGlow 2s ease-in-out infinite;
-}
-
-.animate-skeleton {
-  animation: skeletonPulse 1.5s ease-in-out infinite;
-  background: linear-gradient(90deg, #f0f0f2 25%, #e8e8ed 50%, #f0f0f2 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.8s ease-in-out infinite;
+  animation: scaleIn 0.25s var(--spring) both;
 }
 
 .animate-spin {
@@ -159,194 +174,200 @@ body {
 }
 
 .animate-row-highlight {
-  animation: rowHighlight 1.2s ease-out both;
+  animation: rowHighlight 1s ease-out both;
 }
 
-/* Stagger delays for card grids (use with animate-card-in) */
-.stagger-1 { animation-delay: 0.04s; }
-.stagger-2 { animation-delay: 0.08s; }
-.stagger-3 { animation-delay: 0.12s; }
-.stagger-4 { animation-delay: 0.16s; }
-.stagger-5 { animation-delay: 0.20s; }
-.stagger-6 { animation-delay: 0.24s; }
-.stagger-7 { animation-delay: 0.28s; }
-.stagger-8 { animation-delay: 0.32s; }
-.stagger-9 { animation-delay: 0.36s; }
-.stagger-10 { animation-delay: 0.40s; }
+/* Skeleton loader — shimmer effect */
+.skeleton {
+  background: linear-gradient(90deg,
+    var(--gray-100) 25%,
+    var(--gray-200) 50%,
+    var(--gray-100) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* Stagger delays (50ms increments, capped at 500ms) */
+.stagger-1  { animation-delay: 50ms; }
+.stagger-2  { animation-delay: 100ms; }
+.stagger-3  { animation-delay: 150ms; }
+.stagger-4  { animation-delay: 200ms; }
+.stagger-5  { animation-delay: 250ms; }
+.stagger-6  { animation-delay: 300ms; }
+.stagger-7  { animation-delay: 350ms; }
+.stagger-8  { animation-delay: 400ms; }
+.stagger-9  { animation-delay: 450ms; }
+.stagger-10 { animation-delay: 500ms; }
 
 /* ═══════════════════════════════════════════════
-   HOVER MICRO-INTERACTIONS
+   MICRO-INTERACTIONS
    ═══════════════════════════════════════════════ */
 
-/* Card hover lift — Apple-style elevation change */
+/* Card hover — subtle lift + shadow */
 .hover-lift {
   transition: transform 0.3s var(--spring), box-shadow 0.3s var(--spring);
 }
 .hover-lift:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.08), 0 4px 10px -6px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-lg);
 }
 .hover-lift:active {
-  transform: translateY(0px) scale(0.98);
+  transform: translateY(0) scale(0.98);
   transition-duration: 0.1s;
 }
 
-/* Button press — tactile feel */
+/* Button press — tactile */
 .hover-press {
   transition: transform 0.15s var(--ease-smooth), opacity 0.15s var(--ease-smooth);
 }
 .hover-press:hover {
-  opacity: 0.85;
+  opacity: 0.88;
 }
 .hover-press:active {
-  transform: scale(0.96);
-  opacity: 0.7;
+  transform: scale(0.97);
+  opacity: 0.75;
 }
 
-/* Row hover — subtle background shift */
+/* Row hover */
 .hover-row {
   transition: background-color 0.2s var(--ease-smooth);
 }
 .hover-row:hover {
-  background-color: rgba(0, 0, 0, 0.02);
+  background-color: var(--primary-subtle);
 }
 
 /* ═══════════════════════════════════════════════
-   SCROLLBAR — minimal, refined
+   SCROLLBAR
    ═══════════════════════════════════════════════ */
 
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  background: oklch(70% 0 0 / 0.2);
   border-radius: 3px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background: oklch(60% 0 0 / 0.3);
 }
 
 /* ═══════════════════════════════════════════════
-   FORM ELEMENTS — premium inputs
+   FORM ELEMENTS
    ═══════════════════════════════════════════════ */
 
 input:focus, select:focus, textarea:focus {
   outline: none;
-  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.12);
-  border-color: var(--accent) !important;
-  transition: box-shadow 0.25s var(--spring), border-color 0.25s var(--spring);
+  box-shadow: 0 0 0 3px oklch(55% 0.22 255 / 0.12);
+  border-color: var(--primary) !important;
+  transition: box-shadow 0.2s var(--spring), border-color 0.2s var(--spring);
 }
 
 .input {
   height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
   background: white;
-  font-size: 13px;
-  color: var(--text-primary);
-  transition: all 0.25s var(--spring);
+  font-size: 0.8125rem;
+  color: var(--gray-950);
+  transition: all 0.2s var(--spring);
 }
-
 .input:hover {
-  border-color: #b0b0b5;
+  border-color: var(--gray-400);
+}
+.input::placeholder {
+  color: var(--gray-400);
 }
 
-/* Smooth transitions globally */
 button, a {
   transition: all 0.2s var(--ease-smooth);
 }
 
 input, select, textarea {
-  transition: border-color 0.25s var(--spring), box-shadow 0.25s var(--spring);
+  transition: border-color 0.2s var(--spring), box-shadow 0.2s var(--spring);
 }
 
 /* ═══════════════════════════════════════════════
-   RANGE SLIDER — polished
+   RANGE SLIDER
    ═══════════════════════════════════════════════ */
 
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
-  background: var(--border);
+  background: var(--gray-200);
   border-radius: 2px;
   outline: none;
 }
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  appearance: none;
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--primary);
   cursor: pointer;
   border: 2.5px solid white;
   box-shadow: 0 1px 4px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.04);
   transition: transform 0.2s var(--spring), box-shadow 0.2s var(--spring);
 }
-
 input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.15);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.04);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
-
 input[type="range"]::-moz-range-thumb {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--primary);
   cursor: pointer;
   border: 2.5px solid white;
   box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 }
 
 /* ═══════════════════════════════════════════════
-   GLASSMORPHISM HELPERS
+   GLASS
    ═══════════════════════════════════════════════ */
 
 .glass {
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-}
-
-.glass-dark {
-  background: rgba(29, 29, 31, 0.72);
+  background: oklch(100% 0 0 / 0.72);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 
 /* ═══════════════════════════════════════════════
-   RECHARTS OVERRIDES — smoother chart animations
+   RECHARTS OVERRIDES
    ═══════════════════════════════════════════════ */
 
 .recharts-wrapper {
-  animation: fadeIn 0.6s var(--ease-smooth) both;
+  animation: fadeIn 0.5s var(--ease-smooth) both;
 }
-
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
-  stroke: #f0f0f2;
+  stroke: var(--gray-100);
 }
-
 .recharts-tooltip-wrapper {
   filter: drop-shadow(0 4px 12px rgba(0,0,0,0.08));
 }
 
 /* ═══════════════════════════════════════════════
-   SELECTION STYLE
+   SELECTION
    ═══════════════════════════════════════════════ */
 
 ::selection {
-  background: rgba(0, 113, 227, 0.15);
-  color: var(--text-primary);
+  background: oklch(55% 0.22 255 / 0.15);
+  color: var(--gray-950);
+}
+
+/* ═══════════════════════════════════════════════
+   REDUCED MOTION
+   ═══════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

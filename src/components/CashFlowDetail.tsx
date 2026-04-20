@@ -11,6 +11,8 @@ import {
 } from '../domain/netCashFlowEngine';
 import { ChevronDown, Download, TrendingUp, TrendingDown, Wallet, Calendar as CalendarIcon } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
+import { hex } from '../theme';
+import { fmtCompact, fmtCurrency } from '../formatters';
 
 /**
  * Flujo de efectivo detallado — vista unificada CXC + CXP.
@@ -86,9 +88,9 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
   if (clients.length === 0 && cxpRecords.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
-        <CalendarIcon className="w-12 h-12 text-[#d2d2d7] mb-3" />
-        <h2 className="text-xl font-semibold text-[#1d1d1f]">Sin datos para proyectar</h2>
-        <p className="text-[13px] text-[#86868b] mt-1 max-w-sm">
+        <CalendarIcon className="w-12 h-12 text-[var(--gray-200)] mb-3" />
+        <h2 className="text-xl font-semibold text-[var(--gray-950)]">Sin datos para proyectar</h2>
+        <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-sm">
           Carga clientes y/o un archivo CXP para ver el flujo detallado.
         </p>
       </div>
@@ -134,15 +136,15 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
       {/* Header */}
       <header className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight">Flujo de efectivo</h1>
-          <p className="text-[13px] text-[#86868b] mt-1">
+          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Flujo de efectivo</h1>
+          <p className="text-[13px] text-[var(--gray-400)] mt-1">
             Cobros y pagos combinados · saldo acumulado · expande cualquier fila para ver el detalle.
           </p>
         </div>
         <button
           onClick={handleExport}
           title="Exportar flujo diario"
-          className="flex items-center gap-1.5 px-3 h-9 rounded-lg border border-[#d2d2d7] text-[13px] text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+          className="flex items-center gap-1.5 px-3 h-9 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-400)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
         >
           <Download className="w-3.5 h-3.5" /> Exportar
         </button>
@@ -154,31 +156,31 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
           label="Cobros"
           value={totalInflows}
           icon={<TrendingUp className="w-4 h-4" />}
-          color="#34c759"
+          color="var(--success)"
         />
         <KPI
           label="Pagos"
           value={totalOutflows}
           icon={<TrendingDown className="w-4 h-4" />}
-          color="#ff3b30"
+          color="var(--danger)"
         />
         <KPI
           label="Neto"
           value={netFlow}
           icon={<Wallet className="w-4 h-4" />}
-          color={netFlow >= 0 ? '#0071e3' : '#ff3b30'}
+          color={netFlow >= 0 ? hex.primary : hex.danger}
         />
         <KPI
           label="Saldo final"
           value={finalBalance}
           icon={<Wallet className="w-4 h-4" />}
-          color={finalBalance >= 0 ? '#0071e3' : '#ff3b30'}
+          color={finalBalance >= 0 ? hex.primary : hex.danger}
         />
         <KPI
           label="IVA cobrado"
           value={totalIvaInflows}
           icon={<TrendingUp className="w-4 h-4" />}
-          color="#86868b"
+          color="var(--gray-400)"
         />
       </div>
 
@@ -187,7 +189,7 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[13px] text-amber-900 flex items-center gap-2">
           <TrendingDown className="w-4 h-4 text-amber-700" />
           <span>
-            Saldo mínimo proyectado: <strong className="tabular-nums">{fmt(minBalance)}</strong> el {formatDate(minBalanceDate)}.
+            Saldo mínimo proyectado: <strong className="tabular-nums">{fmtCurrency(minBalance)}</strong> el {formatDate(minBalanceDate)}.
             Considera ajustar el saldo inicial o reprogramar pagos.
           </span>
         </div>
@@ -195,23 +197,23 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
 
       {/* Controls */}
       <div className="flex items-center justify-between gap-4 animate-card-in stagger-2">
-        <nav className="flex bg-[#f5f5f7] rounded-full p-0.5 text-[13px]">
+        <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[13px]">
           <button
             onClick={() => { setGranularity('daily'); setExpandedKey(null); }}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'daily' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
+            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'daily' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
           >Diario</button>
           <button
             onClick={() => { setGranularity('weekly'); setExpandedKey(null); }}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'weekly' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
+            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'weekly' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
           >Semanal</button>
           <button
             onClick={() => { setGranularity('monthly'); setExpandedKey(null); }}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'monthly' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
+            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'monthly' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
           >Mensual</button>
         </nav>
 
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-[12px] text-[#86868b]">
+          <label className="flex items-center gap-2 text-[12px] text-[var(--gray-400)]">
             <span>Saldo inicial</span>
             <input
               type="number"
@@ -282,9 +284,9 @@ function DailyTable({
     return <EmptyTable msg="Sin actividad en el periodo." />;
   }
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
       <table className="w-full text-[13px]">
-        <thead className="bg-[#fbfbfd] text-[#86868b] text-left text-[11px] uppercase tracking-wide sticky top-0">
+        <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0">
           <tr>
             <th className="px-4 py-2.5 font-medium w-10"></th>
             <th className="px-4 py-2.5 font-medium">Fecha</th>
@@ -306,35 +308,35 @@ function DailyTable({
             return (
               <Fragment key={key}>
                 <tr
-                  className={`border-t border-[#d2d2d7]/40 cursor-pointer hover-row ${isOpen ? 'bg-[#f5f5f7]/60' : ''}`}
+                  className={`border-t border-[var(--gray-200)]/40 cursor-pointer hover-row ${isOpen ? 'bg-[var(--gray-50)]/60' : ''}`}
                   onClick={() => onToggle(isOpen ? null : key)}
                 >
                   <td className="px-4 py-2.5">
-                    <ChevronDown className={`w-3.5 h-3.5 text-[#86868b] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
+                    <ChevronDown className={`w-3.5 h-3.5 text-[var(--gray-400)] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
                   </td>
                   <td className="px-4 py-2.5">
-                    <div className="font-medium text-[#1d1d1f]">{formatDate(d.date)}</div>
-                    <div className="text-[11px] text-[#86868b]">{weekday}</div>
+                    <div className="font-medium text-[var(--gray-950)]">{formatDate(d.date)}</div>
+                    <div className="text-[11px] text-[var(--gray-400)]">{weekday}</div>
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[#34c759] font-medium">
-                    {d.inflows > 0 ? fmt(d.inflows) : '—'}
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--success)] font-medium">
+                    {d.inflows > 0 ? fmtCurrency(d.inflows) : '—'}
                     {d.confirmedIn > 0 && (
-                      <div className="text-[10px] text-[#86868b]">{fmt(d.confirmedIn)} confirmado</div>
+                      <div className="text-[10px] text-[var(--gray-400)]">{fmtCurrency(d.confirmedIn)} confirmado</div>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[#ff3b30]">
-                    {d.outflows > 0 ? fmt(d.outflows) : '—'}
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--danger)]">
+                    {d.outflows > 0 ? fmtCurrency(d.outflows) : '—'}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${d.net >= 0 ? 'text-[#1d1d1f]' : 'text-[#ff3b30]'}`}>
-                    {fmt(d.net)}
+                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${d.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>
+                    {fmtCurrency(d.net)}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums ${d.cumulative < 0 ? 'text-[#ff3b30] font-semibold' : 'text-[#1d1d1f]'}`}>
-                    {fmt(d.cumulative)}
+                  <td className={`px-3 py-2.5 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : 'text-[var(--gray-950)]'}`}>
+                    {fmtCurrency(d.cumulative)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[#86868b]">{eventCount}</td>
+                  <td className="px-3 py-2.5 text-right text-[var(--gray-400)]">{eventCount}</td>
                 </tr>
                 {isOpen && (
-                  <tr className="border-t border-[#d2d2d7]/20 bg-[#fbfbfd]">
+                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
                     <td colSpan={7} className="px-4 py-3">
                       <DayDetail
                         cobroEvents={cobroEvents}
@@ -387,9 +389,9 @@ function WeeklyTable({
   }, [daily]);
 
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
       <table className="w-full text-[13px]">
-        <thead className="bg-[#fbfbfd] text-[#86868b] text-left text-[11px] uppercase tracking-wide sticky top-0">
+        <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0">
           <tr>
             <th className="px-4 py-2.5 font-medium w-10"></th>
             <th className="px-4 py-2.5 font-medium">Semana</th>
@@ -408,34 +410,34 @@ function WeeklyTable({
             return (
               <Fragment key={key}>
                 <tr
-                  className={`border-t border-[#d2d2d7]/40 cursor-pointer hover-row ${isOpen ? 'bg-[#f5f5f7]/60' : ''}`}
+                  className={`border-t border-[var(--gray-200)]/40 cursor-pointer hover-row ${isOpen ? 'bg-[var(--gray-50)]/60' : ''}`}
                   onClick={() => onToggle(isOpen ? null : key)}
                 >
                   <td className="px-4 py-2.5">
-                    <ChevronDown className={`w-3.5 h-3.5 text-[#86868b] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
+                    <ChevronDown className={`w-3.5 h-3.5 text-[var(--gray-400)] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
                   </td>
                   <td className="px-4 py-2.5">
-                    <div className="font-medium text-[#1d1d1f]">Semana {w.weekNumber}</div>
-                    <div className="text-[11px] text-[#86868b]">
+                    <div className="font-medium text-[var(--gray-950)]">Semana {w.weekNumber}</div>
+                    <div className="text-[11px] text-[var(--gray-400)]">
                       Desde {formatDate(w.weekStart)}
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[#34c759] font-medium">
-                    {w.inflows > 0 ? fmt(w.inflows) : '—'}
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--success)] font-medium">
+                    {w.inflows > 0 ? fmtCurrency(w.inflows) : '—'}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[#ff3b30]">
-                    {w.outflows > 0 ? fmt(w.outflows) : '—'}
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--danger)]">
+                    {w.outflows > 0 ? fmtCurrency(w.outflows) : '—'}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${w.net >= 0 ? 'text-[#1d1d1f]' : 'text-[#ff3b30]'}`}>
-                    {fmt(w.net)}
+                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${w.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>
+                    {fmtCurrency(w.net)}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums ${w.cumulative < 0 ? 'text-[#ff3b30] font-semibold' : 'text-[#1d1d1f]'}`}>
-                    {fmt(w.cumulative)}
+                  <td className={`px-3 py-2.5 text-right tabular-nums ${w.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : 'text-[var(--gray-950)]'}`}>
+                    {fmtCurrency(w.cumulative)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[#86868b]">{weekDays.length}</td>
+                  <td className="px-3 py-2.5 text-right text-[var(--gray-400)]">{weekDays.length}</td>
                 </tr>
                 {isOpen && weekDays.length > 0 && (
-                  <tr className="border-t border-[#d2d2d7]/20 bg-[#fbfbfd]">
+                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
                     <td colSpan={7} className="px-4 py-3">
                       <WeekDetail
                         weekDays={weekDays}
@@ -472,9 +474,9 @@ function MonthlyTable({
   const maxInflow = Math.max(...monthly.map(m => m.inflows), 1);
 
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
       <table className="w-full text-[13px]">
-        <thead className="bg-[#fbfbfd] text-[#86868b] text-left text-[11px] uppercase tracking-wide sticky top-0">
+        <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0">
           <tr>
             <th className="px-4 py-2.5 font-medium w-10"></th>
             <th className="px-4 py-2.5 font-medium">Mes</th>
@@ -495,40 +497,40 @@ function MonthlyTable({
             return (
               <Fragment key={key}>
                 <tr
-                  className={`border-t border-[#d2d2d7]/40 cursor-pointer hover-row ${isOpen ? 'bg-[#f5f5f7]/60' : ''}`}
+                  className={`border-t border-[var(--gray-200)]/40 cursor-pointer hover-row ${isOpen ? 'bg-[var(--gray-50)]/60' : ''}`}
                   onClick={() => onToggle(isOpen ? null : key)}
                 >
                   <td className="px-4 py-2.5">
-                    <ChevronDown className={`w-3.5 h-3.5 text-[#86868b] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
+                    <ChevronDown className={`w-3.5 h-3.5 text-[var(--gray-400)] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
                   </td>
-                  <td className="px-4 py-2.5 font-medium text-[#1d1d1f]">{m.monthName}</td>
+                  <td className="px-4 py-2.5 font-medium text-[var(--gray-950)]">{m.monthName}</td>
                   <td className="px-3 py-2.5 min-w-[200px]">
                     <div className="flex items-center gap-1 h-4">
-                      <div className="h-2.5 bg-[#34c759] rounded-l" style={{ width: `${inflowPct}%` }} />
-                      <div className="h-2.5 bg-[#ff3b30] rounded-r" style={{ width: `${outflowPct}%` }} />
+                      <div className="h-2.5 rounded-l" style={{ width: `${inflowPct}%`, backgroundColor: hex.success }} />
+                      <div className="h-2.5 rounded-r" style={{ width: `${outflowPct}%`, backgroundColor: hex.danger }} />
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[#34c759] font-medium">{fmt(m.inflows)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[#ff3b30]">{fmt(m.outflows)}</td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${m.net >= 0 ? 'text-[#1d1d1f]' : 'text-[#ff3b30]'}`}>
-                    {fmt(m.net)}
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--success)] font-medium">{fmtCurrency(m.inflows)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--danger)]">{fmtCurrency(m.outflows)}</td>
+                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${m.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>
+                    {fmtCurrency(m.net)}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums ${m.cumulative < 0 ? 'text-[#ff3b30] font-semibold' : 'text-[#1d1d1f]'}`}>
-                    {fmt(m.cumulative)}
+                  <td className={`px-3 py-2.5 text-right tabular-nums ${m.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : 'text-[var(--gray-950)]'}`}>
+                    {fmtCurrency(m.cumulative)}
                   </td>
                 </tr>
                 {isOpen && (
-                  <tr className="border-t border-[#d2d2d7]/20 bg-[#fbfbfd]">
+                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
                     <td colSpan={7} className="px-4 py-3">
-                      <div className="text-[12px] text-[#86868b] mb-2">
-                        {monthDays.length} días con actividad · {fmt(m.confirmedIn)} cobrado (real), {fmt(m.projectedIn)} proyectado
+                      <div className="text-[12px] text-[var(--gray-400)] mb-2">
+                        {monthDays.length} días con actividad · {fmtCurrency(m.confirmedIn)} cobrado (real), {fmtCurrency(m.projectedIn)} proyectado
                       </div>
                       <div className="grid grid-cols-7 gap-1 text-[11px]">
                         {monthDays.map(d => (
-                          <div key={d.date} className="border border-[#d2d2d7]/40 rounded p-1.5">
-                            <div className="text-[#86868b]">{d.date.slice(8)}</div>
-                            <div className="text-[#34c759] tabular-nums">{d.inflows > 0 ? compact(d.inflows) : ''}</div>
-                            <div className="text-[#ff3b30] tabular-nums">{d.outflows > 0 ? `-${compact(d.outflows)}` : ''}</div>
+                          <div key={d.date} className="border border-[var(--gray-200)]/40 rounded p-1.5">
+                            <div className="text-[var(--gray-400)]">{d.date.slice(8)}</div>
+                            <div className="text-[var(--success)] tabular-nums">{d.inflows > 0 ? fmtCompact(d.inflows) : ''}</div>
+                            <div className="text-[var(--danger)] tabular-nums">{d.outflows > 0 ? `-${fmtCompact(d.outflows)}` : ''}</div>
                           </div>
                         ))}
                       </div>
@@ -557,11 +559,11 @@ function DayDetail({
   return (
     <div className="grid grid-cols-2 gap-4">
       <div>
-        <h4 className="text-[12px] font-semibold text-[#34c759] uppercase tracking-wide mb-2">
+        <h4 className="text-[12px] font-semibold text-[var(--success)] uppercase tracking-wide mb-2">
           Cobros ({cobroEvents.length})
         </h4>
         {cobroEvents.length === 0 ? (
-          <div className="text-[12px] text-[#86868b]">Sin cobros</div>
+          <div className="text-[12px] text-[var(--gray-400)]">Sin cobros</div>
         ) : (
           <div className="space-y-1">
             {cobroEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
@@ -569,16 +571,16 @@ function DayDetail({
               const ivaRate = (c?.ivaRate ?? 16) / 100;
               const iva = e.amount * ivaRate;
               return (
-                <div key={i} className="flex items-center justify-between text-[12px] bg-white px-2.5 py-1.5 rounded border border-[#d2d2d7]/40">
+                <div key={i} className="flex items-center justify-between text-[12px] bg-white px-2.5 py-1.5 rounded border border-[var(--gray-200)]/40">
                   <div className="min-w-0 flex-1">
-                    <div className="font-medium text-[#1d1d1f] truncate">{c?.name ?? e.clientId}</div>
-                    <div className="text-[10px] text-[#86868b]">
+                    <div className="font-medium text-[var(--gray-950)] truncate">{c?.name ?? e.clientId}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">
                       Fact {e.invoiceDate.slice(5)} · {c?.frequency} · IVA {c?.ivaRate ?? 16}%
                     </div>
                   </div>
                   <div className="text-right ml-2">
-                    <div className="tabular-nums font-medium text-[#34c759]">{fmt(e.amount)}</div>
-                    <div className="text-[10px] text-[#86868b]">+IVA {fmt(iva)}</div>
+                    <div className="tabular-nums font-medium text-[var(--success)]">{fmtCurrency(e.amount)}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">+IVA {fmtCurrency(iva)}</div>
                   </div>
                 </div>
               );
@@ -587,20 +589,20 @@ function DayDetail({
         )}
       </div>
       <div>
-        <h4 className="text-[12px] font-semibold text-[#ff3b30] uppercase tracking-wide mb-2">
+        <h4 className="text-[12px] font-semibold text-[var(--danger)] uppercase tracking-wide mb-2">
           Pagos ({pagoEvents.length})
         </h4>
         {pagoEvents.length === 0 ? (
-          <div className="text-[12px] text-[#86868b]">Sin pagos</div>
+          <div className="text-[12px] text-[var(--gray-400)]">Sin pagos</div>
         ) : (
           <div className="space-y-1">
             {pagoEvents.sort((a, b) => b.amount - a.amount).map((p, i) => (
-              <div key={i} className="flex items-center justify-between text-[12px] bg-white px-2.5 py-1.5 rounded border border-[#d2d2d7]/40">
+              <div key={i} className="flex items-center justify-between text-[12px] bg-white px-2.5 py-1.5 rounded border border-[var(--gray-200)]/40">
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium text-[#1d1d1f] truncate">{p.supplier}</div>
-                  <div className="text-[10px] text-[#86868b]">{p.classification}</div>
+                  <div className="font-medium text-[var(--gray-950)] truncate">{p.supplier}</div>
+                  <div className="text-[10px] text-[var(--gray-400)]">{p.classification}</div>
                 </div>
-                <div className="tabular-nums font-medium text-[#ff3b30] ml-2">{fmt(p.amount)}</div>
+                <div className="tabular-nums font-medium text-[var(--danger)] ml-2">{fmtCurrency(p.amount)}</div>
               </div>
             ))}
           </div>
@@ -623,9 +625,9 @@ function WeekDetail({
 }) {
   const [dayOpen, setDayOpen] = useState<string | null>(null);
   return (
-    <div className="bg-white border border-[#d2d2d7]/40 rounded-lg overflow-hidden">
+    <div className="bg-white border border-[var(--gray-200)]/40 rounded-lg overflow-hidden">
       <table className="w-full text-[12px]">
-        <thead className="bg-[#f5f5f7] text-[#86868b] text-left text-[10px] uppercase tracking-wide">
+        <thead className="bg-[var(--gray-50)] text-[var(--gray-400)] text-left text-[10px] uppercase tracking-wide">
           <tr>
             <th className="px-3 py-2 font-medium">Día</th>
             <th className="px-3 py-2 font-medium text-right">Cobros</th>
@@ -644,21 +646,21 @@ function WeekDetail({
             return (
               <Fragment key={d.date}>
                 <tr
-                  className="border-t border-[#d2d2d7]/30 cursor-pointer hover:bg-[#f5f5f7]/60"
+                  className="border-t border-[var(--gray-200)]/30 cursor-pointer hover:bg-[var(--gray-50)]/60"
                   onClick={() => setDayOpen(isOpen ? null : d.date)}
                 >
                   <td className="px-3 py-1.5">
-                    <span className="font-medium text-[#1d1d1f]">{formatDate(d.date)}</span>
-                    <span className="text-[10px] text-[#86868b] ml-2">{weekday}</span>
+                    <span className="font-medium text-[var(--gray-950)]">{formatDate(d.date)}</span>
+                    <span className="text-[10px] text-[var(--gray-400)] ml-2">{weekday}</span>
                   </td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-[#34c759]">{d.inflows > 0 ? fmt(d.inflows) : '—'}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-[#ff3b30]">{d.outflows > 0 ? fmt(d.outflows) : '—'}</td>
-                  <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${d.net >= 0 ? 'text-[#1d1d1f]' : 'text-[#ff3b30]'}`}>{fmt(d.net)}</td>
-                  <td className={`px-3 py-1.5 text-right tabular-nums ${d.cumulative < 0 ? 'text-[#ff3b30]' : 'text-[#1d1d1f]'}`}>{fmt(d.cumulative)}</td>
-                  <td className="px-3 py-1.5 text-right text-[#86868b]">{cobroEvents.length + pagoEvents.length}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-[var(--success)]">{d.inflows > 0 ? fmtCurrency(d.inflows) : '—'}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-[var(--danger)]">{d.outflows > 0 ? fmtCurrency(d.outflows) : '—'}</td>
+                  <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${d.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>{fmtCurrency(d.net)}</td>
+                  <td className={`px-3 py-1.5 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(d.cumulative)}</td>
+                  <td className="px-3 py-1.5 text-right text-[var(--gray-400)]">{cobroEvents.length + pagoEvents.length}</td>
                 </tr>
                 {isOpen && (
-                  <tr className="border-t border-[#d2d2d7]/20 bg-[#fbfbfd]">
+                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
                     <td colSpan={6} className="px-3 py-2">
                       <DayDetail cobroEvents={cobroEvents} pagoEvents={pagoEvents} clientById={clientById} />
                     </td>
@@ -678,13 +680,13 @@ function WeekDetail({
 // ---------------------------------------------------------------------------
 function KPI({ label, value, icon, color }: { label: string; value: number; icon: React.ReactNode; color: string }) {
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
       <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide" style={{ color }}>
         {icon}
         {label}
       </div>
       <div className="text-2xl font-semibold tabular-nums mt-1" style={{ color }}>
-        {fmt(value)}
+        {fmtCurrency(value)}
       </div>
     </div>
   );
@@ -692,21 +694,12 @@ function KPI({ label, value, icon, color }: { label: string; value: number; icon
 
 function EmptyTable({ msg }: { msg: string }) {
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl py-12 text-center text-[13px] text-[#86868b]">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl py-12 text-center text-[13px] text-[var(--gray-400)]">
       {msg}
     </div>
   );
 }
 
-function fmt(n: number): string {
-  return n.toLocaleString('es-MX', { maximumFractionDigits: 0 });
-}
-
-function compact(n: number): string {
-  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1000) return `${Math.round(n / 1000)}K`;
-  return String(Math.round(n));
-}
 
 function formatDate(iso: string): string {
   const d = new Date(iso + 'T12:00:00');

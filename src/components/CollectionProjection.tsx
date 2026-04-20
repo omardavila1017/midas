@@ -6,6 +6,8 @@ import { CXPRecord } from '../domain/persistence';
 import { MONTHS } from '../types';
 import { Search, Settings2, ChevronDown, Check, X, Download } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
+import { hex } from '../theme';
+import { fmtCompact, fmtCurrency } from '../formatters';
 
 /**
  * Proyección de Cobranza — simplified layout.
@@ -68,8 +70,8 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   if (clients.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
-        <h2 className="text-xl font-semibold text-[#1d1d1f]">Sin clientes cargados</h2>
-        <p className="text-[13px] text-[#86868b] mt-1 max-w-sm">
+        <h2 className="text-xl font-semibold text-[var(--gray-950)]">Sin clientes cargados</h2>
+        <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-sm">
           Importa el catálogo en la pestaña Clientes para ver la proyección.
         </p>
       </div>
@@ -81,36 +83,36 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       {/* ── Header ─────────────────────────────────────────── */}
       <header className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-[#1d1d1f] tracking-tight">Proyección de cobranza</h1>
-          <p className="text-[13px] text-[#86868b] mt-1">
+          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Proyección de cobranza</h1>
+          <p className="text-[13px] text-[var(--gray-400)] mt-1">
             La factura nace por ciclo de facturación; luego corre el crédito y el cobro cae en el siguiente día válido del patrón.
           </p>
         </div>
       </header>
 
       {/* ── Summary strip ─────────────────────────────────── */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-5 flex items-end gap-8 animate-card-in stagger-1">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 animate-card-in stagger-1">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Total proyectado {assumptions.year}</div>
-          <div className="text-3xl font-semibold tabular-nums text-[#1d1d1f] mt-0.5">{fmt(total)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Total proyectado {assumptions.year}</div>
+          <div className="text-3xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5">{fmtCurrency(total)}</div>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Días promedio de lag</div>
-          <div className="text-xl font-medium tabular-nums text-[#1d1d1f] mt-0.5">{avgLag.toFixed(1)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Días promedio de lag</div>
+          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">{avgLag.toFixed(1)}</div>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Clientes</div>
-          <div className="text-xl font-medium tabular-nums text-[#1d1d1f] mt-0.5">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Clientes</div>
+          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
             {filteredClients.length}
             {filteredClients.length !== clients.length && (
-              <span className="text-[#86868b] text-[13px]"> / {clients.length}</span>
+              <span className="text-[var(--gray-400)] text-[13px]"> / {clients.length}</span>
             )}
           </div>
         </div>
         <div className="ml-auto">
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[#d2d2d7] text-[13px] text-[#86868b] hover:text-[#1d1d1f] hover:bg-[#f5f5f7]"
+            className="flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-400)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
           >
             <Settings2 className="w-3.5 h-3.5" />
             Supuestos
@@ -120,7 +122,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       </div>
 
       {showSettings && (
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 flex gap-6 items-end">
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex gap-6 items-end">
           <Field label="Año">
             <input
               type="number"
@@ -151,7 +153,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       {/* ── Filters ───────────────────────────────────────── */}
       <div className="flex flex-wrap gap-2 items-center animate-card-in stagger-2">
         <div className="relative flex-1 min-w-[240px] max-w-md">
-          <Search className="w-4 h-4 text-[#86868b] absolute left-3 top-1/2 -translate-y-1/2" />
+          <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             value={query}
             onChange={e => setQuery(e.target.value)}
@@ -187,7 +189,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
         {(query || freqFilter.size > 0 || factorajeFilter !== 'all') && (
           <button
             onClick={() => { setQuery(''); setFreqFilter(new Set()); setFactorajeFilter('all'); }}
-            className="text-[12px] text-[#0071e3] hover:underline px-2"
+            className="text-[12px] text-[var(--primary)] hover:underline px-2"
           >
             Limpiar filtros
           </button>
@@ -196,18 +198,18 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 
       {/* ── View toggle ───────────────────────────────────── */}
       <div className="flex items-center justify-between animate-card-in stagger-3">
-        <nav className="flex bg-[#f5f5f7] rounded-full p-0.5 text-[13px]">
+        <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[13px]">
           <button
             onClick={() => setView('calendar')}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'calendar' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
+            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'calendar' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
           >Calendario</button>
           <button
             onClick={() => setView('month')}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'month' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
+            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'month' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
           >Por mes</button>
           <button
             onClick={() => setView('client')}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'client' ? 'bg-white text-[#1d1d1f] shadow-sm' : 'text-[#86868b]'}`}
+            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'client' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
           >Por cliente</button>
         </nav>
       </div>
@@ -372,71 +374,71 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
       <div className="grid grid-cols-4 gap-4 animate-card-in stagger-4" style={{ display: 'grid' }}>
         {monthPagos > 0 && (
           <div className="col-span-4 grid grid-cols-3 gap-4 mb-1">
-            <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3">
-              <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Pagos CXP del mes</div>
-              <div className="text-lg font-semibold tabular-nums text-[#ff3b30] mt-0.5">{fmt(monthPagos)}</div>
+            <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-3">
+              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Pagos CXP del mes</div>
+              <div className="text-lg font-semibold tabular-nums text-[var(--danger)] mt-0.5">{fmtCurrency(monthPagos)}</div>
             </div>
-            <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3">
-              <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Flujo neto</div>
-              <div className={`text-lg font-semibold tabular-nums mt-0.5 ${monthNeto >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}`}>{fmt(monthNeto)}</div>
+            <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-3">
+              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Flujo neto</div>
+              <div className={`text-lg font-semibold tabular-nums mt-0.5 ${monthNeto >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>{fmtCurrency(monthNeto)}</div>
             </div>
-            <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3">
-              <div className="text-[11px] uppercase tracking-wide text-[#86868b]">IVA cobrado (estimado)</div>
-              <div className="text-lg font-semibold tabular-nums text-[#0071e3] mt-0.5">{fmt(monthIva)}</div>
+            <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-3">
+              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">IVA cobrado (estimado)</div>
+              <div className="text-lg font-semibold tabular-nums text-[var(--primary)] mt-0.5">{fmtCurrency(monthIva)}</div>
             </div>
           </div>
         )}
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Cobranza total</div>
-          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{fmt(monthTotal)}</div>
-          <div className="text-[12px] text-[#86868b] mt-0.5">{monthEvents} pagos · {uniqueClients} clientes</div>
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobranza total</div>
+          <div className="text-2xl font-semibold tabular-nums text-[var(--gray-950)] mt-1">{fmtCurrency(monthTotal)}</div>
+          <div className="text-[12px] text-[var(--gray-400)] mt-0.5">{monthEvents} pagos · {uniqueClients} clientes</div>
         </div>
-        <div className="bg-white border border-[#34c759]/40 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[#34c759]">Cobrado (real)</div>
-          <div className="text-2xl font-semibold tabular-nums text-[#34c759] mt-1">{fmt(confirmedTotal)}</div>
-          <div className="text-[12px] text-[#86868b] mt-0.5">{confirmedCount} pagos confirmados</div>
+        <div className="bg-white border border-[var(--success)]/40 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cobrado (real)</div>
+          <div className="text-2xl font-semibold tabular-nums text-[var(--success)] mt-1">{fmtCurrency(confirmedTotal)}</div>
+          <div className="text-[12px] text-[var(--gray-400)] mt-0.5">{confirmedCount} pagos confirmados</div>
         </div>
-        <div className="bg-white border border-[#0071e3]/30 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[#0071e3]">Proyectado</div>
-          <div className="text-2xl font-semibold tabular-nums text-[#0071e3] mt-1">{fmt(projectedTotal)}</div>
-          <div className="text-[12px] text-[#86868b] mt-0.5">{monthEvents - confirmedCount} pendientes</div>
+        <div className="bg-white border border-[var(--primary)]/30 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--primary)]">Proyectado</div>
+          <div className="text-2xl font-semibold tabular-nums text-[var(--primary)] mt-1">{fmtCurrency(projectedTotal)}</div>
+          <div className="text-[12px] text-[var(--gray-400)] mt-0.5">{monthEvents - confirmedCount} pendientes</div>
         </div>
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[#86868b]">% Avance</div>
-          <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Avance</div>
+          <div className="text-2xl font-semibold tabular-nums text-[var(--gray-950)] mt-1">
             {monthTotal > 0 ? `${((confirmedTotal / monthTotal) * 100).toFixed(0)}%` : '—'}
           </div>
-          <div className="mt-1.5 h-2 bg-[#f5f5f7] rounded-full overflow-hidden">
-            <div className="h-full bg-[#34c759] rounded-full transition-all" style={{ width: `${monthTotal > 0 ? (confirmedTotal / monthTotal) * 100 : 0}%` }} />
+          <div className="mt-1.5 h-2 bg-[var(--gray-50)] rounded-full overflow-hidden">
+            <div className="h-full bg-[var(--success)] rounded-full transition-all" style={{ width: `${monthTotal > 0 ? (confirmedTotal / monthTotal) * 100 : 0}%` }} />
           </div>
         </div>
       </div>
 
       {/* Calendar header */}
       <div className="flex items-center justify-between">
-        <button onClick={prevMonth} className="p-2 rounded-lg hover:bg-[#f5f5f7] transition-colors hover-press">
-          <svg className="w-5 h-5 text-[#86868b]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+        <button onClick={prevMonth} className="p-2 rounded-lg hover:bg-[var(--gray-50)] transition-colors hover-press">
+          <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
         </button>
-        <h2 className="text-lg font-semibold text-[#1d1d1f]">{MONTH_NAMES[month]} {year}</h2>
+        <h2 className="text-lg font-semibold text-[var(--gray-950)]">{MONTH_NAMES[month]} {year}</h2>
         <div className="flex items-center gap-1.5">
           <button
             onClick={handleExport}
             title="Exportar mes"
-            className="p-1.5 rounded-lg hover:bg-[#f5f5f7] text-[#86868b] hover:text-[#1d1d1f] transition-colors"
+            className="p-1.5 rounded-lg hover:bg-[var(--gray-50)] text-[var(--gray-400)] hover:text-[var(--gray-950)] transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
           </button>
-          <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-[#f5f5f7] transition-colors hover-press">
-            <svg className="w-5 h-5 text-[#86868b]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+          <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-[var(--gray-50)] transition-colors hover-press">
+            <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
           </button>
         </div>
       </div>
 
       {/* Calendar grid */}
-      <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
-        <div className="grid grid-cols-7 border-b border-[#d2d2d7]/40">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
+        <div className="grid grid-cols-7 border-b border-[var(--gray-200)]/40">
           {DOW_HEADERS.map(d => (
-            <div key={d} className="px-2 py-2 text-center text-[11px] font-medium text-[#86868b] bg-[#fbfbfd] uppercase tracking-wide">{d}</div>
+            <div key={d} className="px-2 py-2 text-center text-[11px] font-medium text-[var(--gray-400)] bg-[var(--surface-alt)] uppercase tracking-wide">{d}</div>
           ))}
         </div>
         <div className="grid grid-cols-7">
@@ -465,76 +467,76 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
             if (allConfirmed) {
               // All paid → green
               pillBg = `rgba(52, 199, 89, ${intensity + 0.15})`;
-              pillFg = intensity > 0.35 ? 'white' : '#15803d';
+              pillFg = intensity > 0.35 ? 'white' : hex.success;
             } else if (hasPastDue && dayConfirmed.length === 0) {
               // All past-due → amber
               pillBg = `rgba(255, 159, 10, ${intensity + 0.1})`;
-              pillFg = intensity > 0.35 ? 'white' : '#92400e';
+              pillFg = intensity > 0.35 ? 'white' : hex.warning;
             } else if (someConfirmed) {
               // Mix → split indicator
               pillBg = `rgba(0, 113, 227, ${intensity})`;
-              pillFg = intensity > 0.45 ? 'white' : '#0071e3';
+              pillFg = intensity > 0.45 ? 'white' : hex.primary;
             } else {
               // Future projected → blue
               pillBg = `rgba(0, 113, 227, ${intensity})`;
-              pillFg = intensity > 0.45 ? 'white' : '#0071e3';
+              pillFg = intensity > 0.45 ? 'white' : hex.primary;
             }
 
             return (
               <div
                 key={i}
-                className={`min-h-[84px] border-b border-r border-[#d2d2d7]/30 p-1.5 cursor-pointer transition-all duration-150
-                  ${!isCurrentMonth ? 'bg-[#fbfbfd] opacity-30' : ''}
-                  ${isWeekend && isCurrentMonth ? 'bg-[#fbfbfd]' : ''}
-                  ${isSelected ? 'ring-2 ring-[#0071e3] ring-inset' : ''}
-                  ${isToday && !isSelected ? 'ring-2 ring-[#34c759] ring-inset' : ''}
-                  ${isCurrentMonth ? 'hover:bg-[#f5f5f7]/60' : ''}
+                className={`min-h-[84px] border-b border-r border-[var(--gray-200)]/30 p-1.5 cursor-pointer transition-all duration-150
+                  ${!isCurrentMonth ? 'bg-[var(--surface-alt)] opacity-30' : ''}
+                  ${isWeekend && isCurrentMonth ? 'bg-[var(--surface-alt)]' : ''}
+                  ${isSelected ? 'ring-2 ring-[var(--primary)] ring-inset' : ''}
+                  ${isToday && !isSelected ? 'ring-2 ring-[var(--success)] ring-inset' : ''}
+                  ${isCurrentMonth ? 'hover:bg-[var(--gray-50)]/60' : ''}
                 `}
                 onClick={() => isCurrentMonth && setSelectedDay(isSelected ? null : iso)}
               >
                 <div className="flex justify-between items-start">
                   <span className={`text-[12px] font-medium ${
                     isToday
-                      ? 'bg-[#34c759] text-white w-5 h-5 rounded-full flex items-center justify-center text-[11px]'
-                      : isCurrentMonth ? 'text-[#1d1d1f]' : 'text-[#d2d2d7]'
+                      ? 'bg-[var(--success)] text-white w-5 h-5 rounded-full flex items-center justify-center text-[11px]'
+                      : isCurrentMonth ? 'text-[var(--gray-950)]' : 'text-[var(--gray-200)]'
                   }`}>
                     {d.getUTCDate()}
                   </span>
                   {dayEvents.length > 0 && (
                     <div className="flex items-center gap-0.5">
-                      {allConfirmed && <Check className="w-3 h-3 text-[#34c759]" />}
-                      {hasPastDue && !allConfirmed && <span className="w-1.5 h-1.5 rounded-full bg-[#ff9f0a]" />}
-                      <span className="text-[10px] text-[#86868b]">{dayEvents.length}</span>
+                      {allConfirmed && <Check className="w-3 h-3 text-[var(--success)]" />}
+                      {hasPastDue && !allConfirmed && <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)]" />}
+                      <span className="text-[10px] text-[var(--gray-400)]">{dayEvents.length}</span>
                     </div>
                   )}
                 </div>
                 {dayTotal === 0 && dayPagosTotal > 0 && isCurrentMonth && (
                   <div className="mt-1">
-                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums bg-[#ff3b30]/10 text-[#ff3b30]">
-                      −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmt(dayPagosTotal)}
+                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums bg-[var(--danger)]/10 text-[var(--danger)]">
+                      −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmtCurrency(dayPagosTotal)}
                     </div>
                   </div>
                 )}
                 {dayTotal > 0 && isCurrentMonth && (
                   <div className="mt-1">
                     <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
-                      {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmt(dayTotal)}
+                      {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmtCurrency(dayTotal)}
                     </div>
                     {dayPagosTotal > 0 && (
-                      <div className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums mt-0.5 bg-[#ff3b30]/10 text-[#ff3b30]">
-                        −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmt(dayPagosTotal)}
+                      <div className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums mt-0.5 bg-[var(--danger)]/10 text-[var(--danger)]">
+                        −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmtCurrency(dayPagosTotal)}
                       </div>
                     )}
                     {someConfirmed && (
                       <div className="flex gap-0.5 mt-0.5">
-                        <div className="h-1 rounded-full bg-[#34c759] flex-1" style={{ flex: dayConfirmed.length }} />
-                        <div className={`h-1 rounded-full ${hasPastDue ? 'bg-[#ff9f0a]' : 'bg-[#0071e3]'} flex-1`} style={{ flex: dayPending.length }} />
+                        <div className="h-1 rounded-full bg-[var(--success)] flex-1" style={{ flex: dayConfirmed.length }} />
+                        <div className={`h-1 rounded-full ${hasPastDue ? 'bg-[var(--warning)]' : 'bg-[var(--primary)]'} flex-1`} style={{ flex: dayPending.length }} />
                       </div>
                     )}
                     {!someConfirmed && dayEvents.length <= 3 && (
                       <div className="mt-0.5">
                         {dayEvents.slice(0, 2).map((e, j) => (
-                          <div key={j} className="text-[10px] text-[#86868b] truncate leading-tight">
+                          <div key={j} className="text-[10px] text-[var(--gray-400)] truncate leading-tight">
                             {byId.get(e.clientId)?.name.split(' ')[0] ?? '?'}
                           </div>
                         ))}
@@ -550,37 +552,37 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
 
       {/* Day detail panel */}
       {selectedDay && (selectedEvents.length > 0 || selectedPayments.length > 0) && (
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 animate-slide-down">
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 animate-slide-down">
           <div className="flex justify-between items-center mb-3">
-            <h3 className="font-semibold text-[14px] text-[#1d1d1f]">
+            <h3 className="font-semibold text-[14px] text-[var(--gray-950)]">
               {new Date(selectedDay + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
             </h3>
             <div className="flex gap-4 items-baseline">
-              {selectedTotal > 0 && <span className="text-[13px] tabular-nums text-[#34c759]">+{fmt(selectedTotal)}</span>}
-              {selectedPagosTotal > 0 && <span className="text-[13px] tabular-nums text-[#ff3b30]">−{fmt(selectedPagosTotal)}</span>}
-              <span className={`text-lg font-semibold tabular-nums ${selectedTotal - selectedPagosTotal >= 0 ? 'text-[#0071e3]' : 'text-[#ff3b30]'}`}>
-                {fmt(selectedTotal - selectedPagosTotal)}
+              {selectedTotal > 0 && <span className="text-[13px] tabular-nums text-[var(--success)]">+{fmtCurrency(selectedTotal)}</span>}
+              {selectedPagosTotal > 0 && <span className="text-[13px] tabular-nums text-[var(--danger)]">−{fmtCurrency(selectedPagosTotal)}</span>}
+              <span className={`text-lg font-semibold tabular-nums ${selectedTotal - selectedPagosTotal >= 0 ? 'text-[var(--primary)]' : 'text-[var(--danger)]'}`}>
+                {fmtCurrency(selectedTotal - selectedPagosTotal)}
               </span>
             </div>
           </div>
           {selectedPayments.length > 0 && (
             <div className="mb-3">
-              <div className="text-[11px] uppercase tracking-wide text-[#ff3b30] mb-1.5">Pagos ({selectedPayments.length})</div>
+              <div className="text-[11px] uppercase tracking-wide text-[var(--danger)] mb-1.5">Pagos ({selectedPayments.length})</div>
               <div className="space-y-1 max-h-48 overflow-y-auto">
                 {selectedPayments.sort((a, b) => b.amount - a.amount).map((p, i) => (
-                  <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-[#ff3b30]/5 border border-[#ff3b30]/20">
+                  <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-[var(--danger)]/5 border border-[var(--danger)]/20">
                     <div className="flex-1 min-w-0">
-                      <div className="text-[13px] font-medium text-[#1d1d1f] truncate">{p.supplier}</div>
-                      <div className="text-[11px] text-[#86868b]">{p.classification}</div>
+                      <div className="text-[13px] font-medium text-[var(--gray-950)] truncate">{p.supplier}</div>
+                      <div className="text-[11px] text-[var(--gray-400)]">{p.classification}</div>
                     </div>
-                    <div className="text-[13px] font-semibold tabular-nums text-[#ff3b30]">−{fmt(p.amount)}</div>
+                    <div className="text-[13px] font-semibold tabular-nums text-[var(--danger)]">−{fmtCurrency(p.amount)}</div>
                   </div>
                 ))}
               </div>
             </div>
           )}
           {selectedEvents.length > 0 && selectedPayments.length > 0 && (
-            <div className="text-[11px] uppercase tracking-wide text-[#34c759] mb-1.5">Cobros ({selectedEvents.length})</div>
+            <div className="text-[11px] uppercase tracking-wide text-[var(--success)] mb-1.5">Cobros ({selectedEvents.length})</div>
           )}
           <div className="space-y-1.5 max-h-72 overflow-y-auto">
             {selectedEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
@@ -589,10 +591,10 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
               const isConfirmed = confirmedSet.has(key);
               const isPastDue = !isConfirmed && e.realDate < todayISO;
               const rowBg = isConfirmed
-                ? 'bg-[#34c759]/10 border border-[#34c759]/30'
+                ? 'bg-[var(--success)]/10 border border-[var(--success)]/30'
                 : isPastDue
-                  ? 'bg-[#ff9500]/10 border border-[#ff9500]/30'
-                  : 'bg-[#f5f5f7] border border-transparent';
+                  ? 'bg-[var(--warning)]/10 border border-[var(--warning)]/30'
+                  : 'bg-[var(--gray-50)] border border-transparent';
               return (
                 <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-lg ${rowBg} hover:brightness-95 transition-all`}>
                   {/* Confirm / Unconfirm toggle */}
@@ -614,26 +616,26 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
                     title={isConfirmed ? 'Desmarcar cobro' : 'Marcar como cobrado'}
                     className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-all ${
                       isConfirmed
-                        ? 'bg-[#34c759] text-white shadow-sm shadow-[#34c759]/30'
+                        ? 'bg-[var(--success)] text-white shadow-sm shadow-[var(--success)]/30'
                         : isPastDue
-                          ? 'border-2 border-[#ff9500] text-[#ff9500] hover:bg-[#ff9500] hover:text-white'
-                          : 'border-2 border-[#d2d2d7] text-[#d2d2d7] hover:border-[#0071e3] hover:text-[#0071e3]'
+                          ? 'border-2 border-[var(--warning)] text-[var(--warning)] hover:bg-[var(--warning)] hover:text-white'
+                          : 'border-2 border-[var(--gray-200)] text-[var(--gray-200)] hover:border-[var(--primary)] hover:text-[var(--primary)]'
                     }`}
                   >
                     {isConfirmed ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> : <span className="w-2 h-2" />}
                   </button>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium text-[#1d1d1f] truncate">{c?.name ?? e.clientId}</div>
-                    <div className="text-[11px] text-[#86868b]">
+                    <div className="text-[13px] font-medium text-[var(--gray-950)] truncate">{c?.name ?? e.clientId}</div>
+                    <div className="text-[11px] text-[var(--gray-400)]">
                       {c?.paymentDayRaw ?? '—'} · {c?.creditDays}d crédito
-                      {e.lagDays > 0 && <span className="text-[#ff3b30] font-medium"> (+{e.lagDays}d lag)</span>}
-                      {isConfirmed && <span className="text-[#34c759] font-medium"> · Cobrado ✓</span>}
-                      {isPastDue && <span className="text-[#ff9500] font-medium"> · Vencido</span>}
+                      {e.lagDays > 0 && <span className="text-[var(--danger)] font-medium"> (+{e.lagDays}d lag)</span>}
+                      {isConfirmed && <span className="text-[var(--success)] font-medium"> · Cobrado ✓</span>}
+                      {isPastDue && <span className="text-[var(--warning)] font-medium"> · Vencido</span>}
                     </div>
                   </div>
                   <div className="text-right ml-3">
-                    <div className={`text-[13px] font-semibold tabular-nums ${isConfirmed ? 'text-[#34c759]' : 'text-[#1d1d1f]'}`}>{fmt(e.amount)}</div>
-                    <div className="text-[10px] text-[#86868b]">Fact: {e.invoiceDate.slice(5)}</div>
+                    <div className={`text-[13px] font-semibold tabular-nums ${isConfirmed ? 'text-[var(--success)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(e.amount)}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">Fact: {e.invoiceDate.slice(5)}</div>
                   </div>
                 </div>
               );
@@ -644,24 +646,24 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
 
       {/* Weekly breakdown */}
       {Object.keys(weeklyTotals).length > 0 && (
-        <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
-          <h3 className="text-[13px] font-semibold text-[#1d1d1f] mb-3">Cobranza semanal</h3>
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
+          <h3 className="text-[13px] font-semibold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
           <div className="space-y-2">
             {Object.entries(weeklyTotals).sort(([a], [b]) => a.localeCompare(b)).map(([week, total]) => {
               const pct = monthTotal ? (total / monthTotal) * 100 : 0;
               return (
                 <div key={week} className="grid grid-cols-[90px_1fr_100px_50px] items-center gap-3">
-                  <span className="text-[12px] text-[#86868b]">
+                  <span className="text-[12px] text-[var(--gray-400)]">
                     Sem. {new Date(week + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
                   </span>
-                  <div className="h-5 bg-[#f5f5f7] rounded-full overflow-hidden">
+                  <div className="h-5 bg-[var(--gray-50)] rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-[#0071e3] to-[#40a9ff] rounded-full transition-all"
+                      className="h-full bg-gradient-to-r from-[var(--primary)] to-[var(--info)] rounded-full transition-all"
                       style={{ width: `${Math.min(100, pct)}%` }}
                     />
                   </div>
-                  <span className="text-[13px] font-medium tabular-nums text-right">{fmt(total)}</span>
-                  <span className="text-[11px] text-[#86868b] text-right">{pct.toFixed(0)}%</span>
+                  <span className="text-[13px] font-medium tabular-nums text-right">{fmtCurrency(total)}</span>
+                  <span className="text-[11px] text-[var(--gray-400)] text-right">{pct.toFixed(0)}%</span>
                 </div>
               );
             })}
@@ -678,10 +680,10 @@ function MonthView({ events, total }: { events: CollectionEvent[]; total: number
   const max = Math.max(...monthly, 1);
 
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-5 hover-lift animate-card-in stagger-4">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 hover-lift animate-card-in stagger-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Entrada de efectivo por mes</h3>
-        <span className="text-[12px] text-[#86868b]">
+        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Entrada de efectivo por mes</h3>
+        <span className="text-[12px] text-[var(--gray-400)]">
           Barra = monto del mes · % = participación sobre el total anual
         </span>
       </div>
@@ -692,24 +694,24 @@ function MonthView({ events, total }: { events: CollectionEvent[]; total: number
           const share = total ? (v / total) * 100 : 0;
           return (
             <div key={m} className="grid grid-cols-[44px_1fr_140px_90px] items-center gap-3 text-[13px]">
-              <span className="text-[#86868b] font-medium">{m}</span>
-              <div className="h-7 bg-[#f5f5f7] rounded-md relative overflow-hidden">
+              <span className="text-[var(--gray-400)] font-medium">{m}</span>
+              <div className="h-7 bg-[var(--gray-50)] rounded-md relative overflow-hidden">
                 <div
-                  className="absolute inset-y-0 left-0 bg-gradient-to-r from-[#0071e3] to-[#40a9ff] rounded-md"
+                  className="absolute inset-y-0 left-0 bg-gradient-to-r from-[var(--primary)] to-[var(--info)] rounded-md"
                   style={{ width: `${pct}%` }}
                 />
               </div>
-              <span className="text-right tabular-nums font-medium text-[#1d1d1f]">{fmt(v)}</span>
-              <span className="text-right text-[#86868b] tabular-nums text-[12px]">
+              <span className="text-right tabular-nums font-medium text-[var(--gray-950)]">{fmtCurrency(v)}</span>
+              <span className="text-right text-[var(--gray-400)] tabular-nums text-[12px]">
                 {share.toFixed(1)}% del total
               </span>
             </div>
           );
         })}
       </div>
-      <div className="mt-4 pt-3 border-t border-[#d2d2d7]/40 flex justify-between text-[13px]">
-        <span className="text-[#86868b]">Total anual</span>
-        <span className="font-semibold tabular-nums">{fmt(total)}</span>
+      <div className="mt-4 pt-3 border-t border-[var(--gray-200)]/40 flex justify-between text-[13px]">
+        <span className="text-[var(--gray-400)]">Total anual</span>
+        <span className="font-semibold tabular-nums">{fmtCurrency(total)}</span>
       </div>
     </div>
   );
@@ -741,13 +743,13 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
   const maxTotal = rows[0]?.total ?? 1;
 
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden hover-lift animate-card-in stagger-5">
-      <div className="px-5 py-3 border-b border-[#d2d2d7]/40 flex items-center justify-between">
-        <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Ranking por cliente</h3>
-        <span className="text-[12px] text-[#86868b]">Ordenado por monto proyectado</span>
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden hover-lift animate-card-in stagger-5">
+      <div className="px-5 py-3 border-b border-[var(--gray-200)]/40 flex items-center justify-between">
+        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Ranking por cliente</h3>
+        <span className="text-[12px] text-[var(--gray-400)]">Ordenado por monto proyectado</span>
       </div>
       <table className="w-full text-[13px]">
-        <thead className="bg-[#fbfbfd] text-[#86868b] text-left text-[11px] uppercase tracking-wide">
+        <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide">
           <tr>
             <th className="px-5 py-2.5 font-medium">Cliente</th>
             <th className="px-3 py-2.5 font-medium text-right">Eventos</th>
@@ -761,37 +763,37 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
             const pct = (rowTotal / maxTotal) * 100;
             const share = total ? (rowTotal / total) * 100 : 0;
             return (
-              <tr key={c.id} className="border-t border-[#d2d2d7]/40 hover-row">
+              <tr key={c.id} className="border-t border-[var(--gray-200)]/40 hover-row">
                 <td className="px-5 py-2.5">
                   <div className="flex items-center gap-2">
                     {c.factoraje && (
                       <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">F</span>
                     )}
-                    <span className="text-[#1d1d1f]">{c.name}</span>
-                    <span className="text-[11px] text-[#86868b]">· {c.frequency}</span>
+                    <span className="text-[var(--gray-950)]">{c.name}</span>
+                    <span className="text-[11px] text-[var(--gray-400)]">· {c.frequency}</span>
                   </div>
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-[#86868b]">{count}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-[#86868b]">{avgLag.toFixed(0)}d</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--gray-400)]">{count}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--gray-400)]">{avgLag.toFixed(0)}d</td>
                 <td className="px-3 py-2.5">
                   <div className="flex items-center gap-2">
-                    <div className="h-2 bg-[#f5f5f7] rounded-full flex-1 min-w-[80px] overflow-hidden">
+                    <div className="h-2 bg-[var(--gray-50)] rounded-full flex-1 min-w-[80px] overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-[#0071e3] to-[#40a9ff] rounded-full"
+                        className="h-full bg-gradient-to-r from-[var(--primary)] to-[var(--info)] rounded-full"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
-                    <span className="tabular-nums font-medium w-20 text-right">{fmt(rowTotal)}</span>
+                    <span className="tabular-nums font-medium w-20 text-right">{fmtCurrency(rowTotal)}</span>
                   </div>
                 </td>
-                <td className="px-5 py-2.5 text-right tabular-nums text-[#86868b] text-[12px]">
+                <td className="px-5 py-2.5 text-right tabular-nums text-[var(--gray-400)] text-[12px]">
                   {share.toFixed(1)}%
                 </td>
               </tr>
             );
           })}
           {rows.length === 0 && (
-            <tr><td colSpan={5} className="text-center text-[#86868b] py-10">Sin datos con los filtros actuales.</td></tr>
+            <tr><td colSpan={5} className="text-center text-[var(--gray-400)] py-10">Sin datos con los filtros actuales.</td></tr>
           )}
         </tbody>
       </table>
@@ -807,19 +809,19 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
     a.clientId.localeCompare(b.clientId),
   );
   return (
-    <div className="bg-white border border-[#d2d2d7]/60 rounded-xl overflow-hidden hover-lift">
-      <div className="px-4 py-3 border-b border-[#d2d2d7]/40 flex items-center justify-between">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden hover-lift">
+      <div className="px-4 py-3 border-b border-[var(--gray-200)]/40 flex items-center justify-between">
         <div>
-          <h3 className="text-[13px] font-semibold text-[#1d1d1f]">Detalle de eventos</h3>
-          <p className="text-[12px] text-[#86868b] mt-0.5">
+          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Detalle de eventos</h3>
+          <p className="text-[12px] text-[var(--gray-400)] mt-0.5">
             Secuencia auditada: fecha de factura, fecha teórica por crédito y fecha real de cobro.
           </p>
         </div>
-        <span className="text-[12px] text-[#86868b]">{Math.min(sorted.length, 1000).toLocaleString('es-MX')} eventos</span>
+        <span className="text-[12px] text-[var(--gray-400)]">{Math.min(sorted.length, 1000).toLocaleString('es-MX')} eventos</span>
       </div>
       <div className="max-h-[560px] overflow-y-auto">
         <table className="w-full text-[13px]">
-          <thead className="bg-[#f5f5f7] text-[#86868b] text-left sticky top-0">
+          <thead className="bg-[var(--gray-50)] text-[var(--gray-400)] text-left sticky top-0">
             <tr>
               <th className="px-4 py-2">Cliente</th>
               <th className="px-4 py-2">Factura</th>
@@ -835,17 +837,17 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
             {sorted.slice(0, 1000).map((e, i) => {
               const c = byId.get(e.clientId);
               return (
-                <tr key={i} className="border-t border-[#d2d2d7]/40 hover-row">
+                <tr key={i} className="border-t border-[var(--gray-200)]/40 hover-row">
                   <td className="px-4 py-2">{c?.name ?? e.clientId}</td>
-                  <td className="px-4 py-2 text-[#86868b]">{e.invoiceDate}</td>
-                  <td className="px-4 py-2 text-[#86868b]">{e.theoreticalDate}</td>
+                  <td className="px-4 py-2 text-[var(--gray-400)]">{e.invoiceDate}</td>
+                  <td className="px-4 py-2 text-[var(--gray-400)]">{e.theoreticalDate}</td>
                   <td className="px-4 py-2 font-medium">{e.realDate}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{e.lagDays}d</td>
                   <td className="px-4 py-2">S{e.isoWeek}</td>
                   <td className="px-4 py-2 text-center">
                     {c?.factoraje && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">F</span>}
                   </td>
-                  <td className="px-4 py-2 text-right tabular-nums">{fmt(e.amount)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{fmtCurrency(e.amount)}</td>
                 </tr>
               );
             })}
@@ -853,7 +855,7 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
         </table>
       </div>
       {sorted.length > 1000 && (
-        <div className="px-4 py-2 text-[12px] text-[#86868b] bg-[#f5f5f7] border-t border-[#d2d2d7]/40">
+        <div className="px-4 py-2 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] border-t border-[var(--gray-200)]/40">
           Mostrando 1,000 de {sorted.length} eventos. Filtra para reducir.
         </div>
       )}
@@ -873,9 +875,9 @@ function Chip({
       onClick={onClick}
       disabled={disabled}
       className={`px-3 h-8 rounded-full text-[12px] font-medium border transition-colors hover-press ${
-        disabled ? 'opacity-40 cursor-not-allowed border-[#d2d2d7]' :
-        active ? 'bg-[#0071e3] text-white border-[#0071e3]' :
-        'bg-white text-[#86868b] border-[#d2d2d7] hover:text-[#1d1d1f]'
+        disabled ? 'opacity-40 cursor-not-allowed border-[var(--gray-200)]' :
+        active ? 'bg-[var(--primary)] text-white border-[var(--primary)]' :
+        'bg-white text-[var(--gray-400)] border-[var(--gray-200)] hover:text-[var(--gray-950)]'
       }`}
     >{children}</button>
   );
@@ -883,13 +885,10 @@ function Chip({
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="flex flex-col gap-1 text-[12px] text-[#86868b]">
+    <label className="flex flex-col gap-1 text-[12px] text-[var(--gray-400)]">
       <span>{label}</span>
       {children}
     </label>
   );
 }
 
-function fmt(n: number): string {
-  return n.toLocaleString('es-MX', { maximumFractionDigits: 0 });
-}
