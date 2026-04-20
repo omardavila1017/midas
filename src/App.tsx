@@ -86,6 +86,7 @@ export default function App() {
   });
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
+  const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
@@ -131,6 +132,7 @@ export default function App() {
       if (stored.clients.length) setClients(stored.clients);
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
+      if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
       if (stored.scenarioCellOverrides?.length) setScenarioCellOverrides(stored.scenarioCellOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
@@ -192,7 +194,8 @@ export default function App() {
       const store: FlowSenseStore = {
         plan, proposals, scenarios, providers, clients,
         simulations, activeProposalId, activeScenarioId,
-        assumptions, confirmedPayments, cxpRecords, scenarioCellOverrides,
+        assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+        scenarioCellOverrides,
         lastSaved: new Date().toISOString(),
       };
       saveStore(store);
@@ -210,6 +213,7 @@ export default function App() {
     assumptions,
     confirmedPayments,
     cxpRecords,
+    cxpLoadedCias,
     scenarioCellOverrides,
   ]);
 
@@ -339,6 +343,21 @@ export default function App() {
     )));
   };
 
+  // ── CXP per-cia cache management ──
+  const mergeCxpForCia = useCallback((cia: string, records: CXPRecord[]) => {
+    setCxpRecords(prev => [...prev.filter(r => r.cia !== cia), ...records]);
+    setCxpLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+  }, []);
+  const replaceAllCxp = useCallback((records: CXPRecord[], cias: string[]) => {
+    setCxpRecords(records);
+    const now = new Date().toISOString();
+    setCxpLoadedCias(cias.reduce<Record<string, string>>((acc, c) => { acc[c] = now; return acc; }, {}));
+  }, []);
+  const resetCxp = useCallback(() => {
+    setCxpRecords([]);
+    setCxpLoadedCias({});
+  }, []);
+
   const addProvider = (p: Provider) => setProviders(prev => [...prev, p]);
   const updateProvider = (p: Provider) => setProviders(prev => prev.map(x => x.id === p.id ? p : x));
   const deleteProvider = (id: string) => setProviders(prev => prev.filter(x => x.id !== id));
@@ -416,7 +435,8 @@ export default function App() {
                 const json = exportStore({
                   plan, proposals, scenarios, providers, clients,
                   simulations, activeProposalId, activeScenarioId,
-                  assumptions, confirmedPayments, cxpRecords, scenarioCellOverrides,
+                  assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+                  scenarioCellOverrides,
                   lastSaved: new Date().toISOString(),
                 });
                 const blob = new Blob([json], { type: 'application/json' });
@@ -549,8 +569,12 @@ export default function App() {
             {activeTab === 'cxp' && (
               <CXP
                 records={cxpRecords}
-                onRecordsChange={setCxpRecords}
+                loadedCias={cxpLoadedCias}
+                companies={companies}
                 selectedCia={selectedCia}
+                onMergeCia={mergeCxpForCia}
+                onReplaceAll={replaceAllCxp}
+                onReset={resetCxp}
               />
             )}
             {activeTab === 'bancos' && (
