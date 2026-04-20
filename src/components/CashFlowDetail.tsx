@@ -9,7 +9,8 @@ import {
   aggregateMonthly,
   PaymentEvent,
 } from '../domain/netCashFlowEngine';
-import { ChevronDown, Download, TrendingUp, TrendingDown, Wallet, Calendar as CalendarIcon } from 'lucide-react';
+import type { BankAccountStatement } from '../services/jde';
+import { ChevronDown, Download, TrendingUp, TrendingDown, Wallet, Calendar as CalendarIcon, Landmark } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCompact, fmtCurrency } from '../formatters';
@@ -27,6 +28,17 @@ interface Props {
   cxpRecords: CXPRecord[];
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
+  bankStatements?: BankAccountStatement[];
+  companies?: { cia: string; nombre: string }[];
+}
+
+/** Flatten bank statements into daily inflow/outflow totals + saldo snapshot */
+interface BankDaySummary {
+  date: string;
+  abonos: number;      // total inflows from bank
+  cargos: number;      // total outflows from bank
+  saldoFinal: number;  // last known saldo final across accounts
+  cuentas: number;     // how many accounts had movements
 }
 
 type Granularity = 'daily' | 'weekly' | 'monthly';
@@ -34,11 +46,65 @@ type Granularity = 'daily' | 'weekly' | 'monthly';
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const DOW_SHORT = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
-export default function CashFlowDetail({ clients, cxpRecords, assumptions, confirmedPayments }: Props) {
+export default function CashFlowDetail({ clients, cxpRecords, assumptions, confirmedPayments, bankStatements = [], companies = [] }: Props) {
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [startingBalance, setStartingBalance] = useState(0);
   const [monthFilter, setMonthFilter] = useState<number | 'all'>('all');
+
+  // Build company name lookup
+  const ciaNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of companies) map.set(c.cia, c.nombre);
+    return map;
+  }, [companies]);
+
+  // ── Flatten bank statements into day summaries ──
+  const bankByDate = useMemo(() => {
+    const map = new Map<string, BankDaySummary>();
+    for (const acc of bankStatements) {
+      for (const mov of acc.movimientos) {
+        const date = mov.fechaOperacion;
+        if (!date) continue;
+        let entry = map.get(date);
+        if (!entry) {
+          entry = { date, abonos: 0, cargos: 0, saldoFinal: 0, cuentas: 0 };
+          map.set(date, entry);
+        }
+        if (mov.tipoMovimiento === 'ABONO') entry.abonos += mov.importe;
+        else entry.cargos += mov.importe;
+      }
+      // Track saldo final per account
+      if (acc.saldoFinal !== undefined) {
+        const date = acc.fechaEstadoCuenta;
+        let entry = map.get(date);
+        if (!entry) {
+          entry = { date, abonos: 0, cargos: 0, saldoFinal: 0, cuentas: 0 };
+          map.set(date, entry);
+        }
+        entry.saldoFinal += acc.saldoFinal;
+        entry.cuentas += 1;
+      }
+    }
+    return map;
+  }, [bankStatements]);
+
+  // Total bank saldo (latest)
+  const totalBankSaldo = useMemo(() => {
+    return bankStatements.reduce((sum, acc) => sum + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0);
+  }, [bankStatements]);
+
+  const totalBankAbonos = useMemo(() => {
+    let total = 0;
+    for (const entry of bankByDate.values()) total += entry.abonos;
+    return total;
+  }, [bankByDate]);
+
+  const totalBankCargos = useMemo(() => {
+    let total = 0;
+    for (const entry of bankByDate.values()) total += entry.cargos;
+    return total;
+  }, [bankByDate]);
 
   // Project cash flow events
   const collections = useMemo(() => projectYear(clients, assumptions), [clients, assumptions]);
@@ -183,6 +249,45 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
           color="var(--gray-400)"
         />
       </div>
+
+      {/* Bank real data summary */}
+      {bankStatements.length > 0 && (
+        <div className="bg-white border border-[var(--primary)]/20 rounded-xl p-4 animate-card-in stagger-2">
+          <div className="flex items-center gap-2 mb-3">
+            <Landmark className="w-4 h-4 text-[var(--primary)]" />
+            <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">
+              Saldo Real Bancos
+            </h3>
+            <span className="text-[11px] text-[var(--gray-400)] ml-auto">
+              {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''} · Al {bankStatements[0]?.fechaEstadoCuenta}
+            </span>
+          </div>
+          <div className="grid grid-cols-4 gap-4">
+            <div>
+              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Saldo Total</div>
+              <div className="text-[18px] font-semibold tabular-nums text-[var(--primary)]">{fmtCurrency(totalBankSaldo)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Abonos (real)</div>
+              <div className="text-[18px] font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(totalBankAbonos)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Cargos (real)</div>
+              <div className="text-[18px] font-semibold tabular-nums text-[var(--danger)]">{fmtCurrency(totalBankCargos)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Empresas</div>
+              <div className="text-[13px] text-[var(--gray-950)] mt-1">
+                {Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean))).map(cia => (
+                  <span key={cia} className="inline-block mr-2 px-2 py-0.5 rounded-full bg-[var(--gray-50)] text-[11px] font-medium text-[var(--gray-500)]">
+                    {ciaNameMap.get(cia) ?? `Cia ${cia}`}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Min balance alert */}
       {minBalance < 0 && minBalanceDate && (

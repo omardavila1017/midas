@@ -3,8 +3,9 @@ import { Client, CashFlowAssumptions, Frequency, CollectionEvent, ConfirmedPayme
 import { projectYear } from '../domain/collectionEngine';
 import { extractPaymentEvents, PaymentEvent } from '../domain/netCashFlowEngine';
 import { CXPRecord } from '../domain/persistence';
+import type { BankAccountStatement } from '../services/jde';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, Check, X, Download } from 'lucide-react';
+import { Search, Settings2, ChevronDown, Check, X, Download, Landmark } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCompact, fmtCurrency } from '../formatters';
@@ -27,6 +28,8 @@ interface Props {
   onConfirm: (p: ConfirmedPayment) => void;
   onUnconfirm: (key: string) => void;
   cxpRecords?: CXPRecord[];
+  bankStatements?: BankAccountStatement[];
+  companies?: { cia: string; nombre: string }[];
 }
 
 type ViewMode = 'month' | 'client' | 'calendar';
@@ -35,7 +38,7 @@ const FREQUENCIES: Frequency[] = ['Semanal', 'Quincenal', 'Mensual', 'Contado'];
 const DOW_HEADERS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [] }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [] }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -65,6 +68,24 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 
   const total = events.reduce((a, e) => a + e.amount, 0);
   const avgLag = events.length ? events.reduce((a, e) => a + e.lagDays, 0) / events.length : 0;
+
+  // ── Bank real data ──
+  const ciaNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of companies) map.set(c.cia, c.nombre);
+    return map;
+  }, [companies]);
+
+  const bankRealAbonos = useMemo(() => {
+    return bankStatements.reduce((sum, acc) =>
+      sum + acc.movimientos
+        .filter(m => m.tipoMovimiento === 'ABONO')
+        .reduce((s, m) => s + m.importe, 0), 0);
+  }, [bankStatements]);
+
+  const totalBankSaldo = useMemo(() => {
+    return bankStatements.reduce((sum, acc) => sum + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0);
+  }, [bankStatements]);
 
   // Empty state
   if (clients.length === 0) {
@@ -120,6 +141,36 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           </button>
         </div>
       </div>
+
+      {/* ── Bank real data strip ─────────────────────────── */}
+      {bankStatements.length > 0 && (
+        <div className="bg-white border border-[var(--primary)]/20 rounded-xl p-4 flex items-end gap-8 animate-card-in stagger-1">
+          <div className="flex items-center gap-2">
+            <Landmark className="w-4 h-4 text-[var(--primary)]" />
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo real bancos</div>
+              <div className="text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5">{fmtCurrency(totalBankSaldo)}</div>
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobros reales (abonos)</div>
+            <div className="text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5">{fmtCurrency(bankRealAbonos)}</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Empresas</div>
+            <div className="flex items-center gap-1 mt-1">
+              {Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean))).map(cia => (
+                <span key={cia} className="px-2 py-0.5 rounded-full bg-[var(--gray-50)] text-[10px] font-medium text-[var(--gray-500)]">
+                  {ciaNameMap.get(cia) ?? `Cia ${cia}`}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="ml-auto text-[11px] text-[var(--gray-400)]">
+            Al {bankStatements[0]?.fechaEstadoCuenta} · {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''} · SWIFT
+          </div>
+        </div>
+      )}
 
       {showSettings && (
         <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex gap-6 items-end">

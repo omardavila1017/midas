@@ -529,6 +529,8 @@ export default function App() {
                 onConfirm={confirmPayment}
                 onUnconfirm={unconfirmPayment}
                 cxpRecords={cxpRecords}
+                bankStatements={bankStatements}
+                companies={companies}
               />
             )}
             {activeTab === 'providers' && (
@@ -598,6 +600,7 @@ export default function App() {
                 onStatementsChange={setBankStatements}
                 lastQuery={bankLastQuery}
                 onLastQueryChange={setBankLastQuery}
+                companies={companies}
               />
             )}
             {activeTab === 'netflow' && (
@@ -606,6 +609,8 @@ export default function App() {
                 cxpRecords={cxpRecords}
                 assumptions={assumptions}
                 confirmedPayments={confirmedPayments}
+                bankStatements={bankStatements}
+                companies={companies}
               />
             )}
             {activeTab === 'forecast' && (

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   Landmark,
   Loader2,
@@ -38,6 +38,7 @@ interface BancosProps {
   onStatementsChange: (list: BankAccountStatement[]) => void;
   lastQuery: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat } | null;
   onLastQueryChange: (q: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat } | null) => void;
+  companies?: { cia: string; nombre: string }[];
 }
 
 type BancosView = 'form' | 'dashboard';
@@ -187,6 +188,7 @@ const BancosDashboard = ({
   onRefresh,
   refreshing,
   refreshError,
+  companies = [],
 }: {
   statements: BankAccountStatement[];
   query: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat };
@@ -195,7 +197,14 @@ const BancosDashboard = ({
   onRefresh: () => void;
   refreshing: boolean;
   refreshError: string | null;
+  companies?: { cia: string; nombre: string }[];
 }) => {
+  // Build a cia→nombre lookup map
+  const ciaNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of companies) map.set(c.cia, c.nombre);
+    return map;
+  }, [companies]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [bancoFilter, setBancoFilter] = useState<string>('all');
@@ -252,12 +261,13 @@ const BancosDashboard = ({
   const clearFilters = () => { setBancoFilter('all'); setMonedaFilter('all'); setTipoFilter('all'); setSearchTerm(''); };
 
   const exportCsv = () => {
-    const header = ['cia','banco','cuenta','moneda','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo'];
+    const header = ['cia','empresa','banco','cuenta','moneda','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo'];
     const rows: string[] = [header.join(',')];
     accountsView.forEach(acc => {
+      const empresaNombre = ciaNameMap.get(acc.cia) ?? '';
       acc.movimientos.forEach(m => {
         rows.push([
-          acc.cia, acc.banco, acc.cuenta, acc.moneda,
+          acc.cia, empresaNombre, acc.banco, acc.cuenta, acc.moneda,
           m.fechaOperacion, m.fechaValor ?? '',
           m.referencia, m.concepto, m.tipoMovimiento,
           m.importe, m.saldo ?? '',
@@ -341,7 +351,7 @@ const BancosDashboard = ({
       {selectedCia !== 'all' && (
         <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
           <Filter className="w-3.5 h-3.5" />
-          Filtrando por compañía {selectedCia} — {totalCuentas} cuenta{totalCuentas !== 1 ? 's' : ''}
+          Filtrando por {ciaNameMap.get(selectedCia) ?? `compañía ${selectedCia}`} — {totalCuentas} cuenta{totalCuentas !== 1 ? 's' : ''}
           {statements.some(s => !s.cia) && (
             <span className="text-[11px] text-[var(--gray-400)] font-normal ml-2">
               (cuentas sin empresa asignada se muestran siempre)
@@ -428,7 +438,11 @@ const BancosDashboard = ({
                       </p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
-                        {acc.cia && <span className="text-[11px] text-[var(--gray-400)]">Cia {acc.cia}</span>}
+                        {acc.cia && (
+                          <span className="text-[11px] text-[var(--gray-400)]">
+                            {ciaNameMap.get(acc.cia) ?? `Cia ${acc.cia}`}
+                          </span>
+                        )}
                         <span className="text-[11px] text-[var(--gray-400)]">{acc.cia ? '· ' : ''}{acc.movimientos.length} mov.</span>
                       </div>
                     </div>
@@ -535,12 +549,14 @@ const Bancos = ({
   onStatementsChange,
   lastQuery,
   onLastQueryChange,
+  companies = [],
 }: BancosProps) => {
   const [view, setView] = useState<BancosView>(
     statements.length > 0 && lastQuery ? 'dashboard' : 'form'
   );
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const autoFetched = useRef(false);
 
   const handleLoaded = useCallback(
     (result: BankAccountStatement[], q: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat }) => {
@@ -551,6 +567,31 @@ const Bancos = ({
     [onStatementsChange, onLastQueryChange],
   );
 
+  // ── Auto-fetch latest data on mount (today + SWIFT) ──
+  // Only fires once if there's no existing data loaded.
+  useEffect(() => {
+    if (autoFetched.current) return;
+    if (statements.length > 0 && lastQuery) return; // already have data
+    autoFetched.current = true;
+
+    const today = todayISO();
+    const defaultFormat: BankStatementFormat = 'SWIFT';
+
+    (async () => {
+      try {
+        const res = await fetchBankStatements({
+          fechaEstadoCuenta: today,
+          formatoElectronico: defaultFormat,
+        });
+        if (res.length > 0) {
+          handleLoaded(res, { fechaEstadoCuenta: today, formatoElectronico: defaultFormat });
+        }
+      } catch {
+        // Silently fail — user can still use the form to query manually
+      }
+    })();
+  }, [statements.length, lastQuery, handleLoaded]);
+
   const handleReset = useCallback(() => {
     onStatementsChange([]);
     onLastQueryChange(null);
@@ -559,11 +600,16 @@ const Bancos = ({
   }, [onStatementsChange, onLastQueryChange]);
 
   const handleRefresh = useCallback(async () => {
-    if (!lastQuery) return;
+    // Always refresh with today's date to get the latest data
+    const queryToUse = {
+      fechaEstadoCuenta: todayISO(),
+      formatoElectronico: lastQuery?.formatoElectronico ?? 'SWIFT' as BankStatementFormat,
+    };
     setRefreshing(true); setRefreshError(null);
     try {
-      const res = await fetchBankStatements(lastQuery);
+      const res = await fetchBankStatements(queryToUse);
       onStatementsChange(res);
+      onLastQueryChange(queryToUse);
     } catch (e) {
       if (e instanceof JdeApiError) {
         setRefreshError(`JDE ${e.status}: ${e.message}`);
@@ -573,7 +619,7 @@ const Bancos = ({
     } finally {
       setRefreshing(false);
     }
-  }, [lastQuery, onStatementsChange]);
+  }, [lastQuery, onStatementsChange, onLastQueryChange]);
 
   if (view === 'form' || !lastQuery) {
     return (
@@ -592,6 +638,7 @@ const Bancos = ({
       onRefresh={handleRefresh}
       refreshing={refreshing}
       refreshError={refreshError}
+      companies={companies}
     />
   );
 };
