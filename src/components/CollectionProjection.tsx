@@ -296,10 +296,6 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
     return map;
   }, [payments, month]);
 
-  const monthPagos = Object.values(paymentsByDay).flat().reduce((s, p) => s + p.amount, 0);
-  const monthIva = allMonthEventsIvaSum(byDay, byId);
-  const monthNeto = (allMonthEventsTotal(byDay)) - monthPagos;
-
   // Weekly totals for this month
   const weeklyTotals = useMemo(() => {
     const weeks: Record<string, number> = {};
@@ -317,6 +313,12 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
   const monthTotal = allMonthEvents.reduce((s, e) => s + e.amount, 0);
   const monthEvents = allMonthEvents.length;
   const uniqueClients = new Set(allMonthEvents.map(e => e.clientId)).size;
+  const monthPagos = Object.values(paymentsByDay).flat().reduce((s, p) => s + p.amount, 0);
+  const monthIva = allMonthEvents.reduce((s, e) => {
+    const rate = (byId.get(e.clientId)?.ivaRate ?? 16) / 100;
+    return s + (e.amount * rate) / (1 + rate);
+  }, 0);
+  const monthNeto = monthTotal - monthPagos;
 
   // Split: confirmed (real) vs projected
   const confirmedTotal = allMonthEvents
@@ -341,7 +343,9 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
   );
 
   const selectedEvents = selectedDay ? (byDay[selectedDay] || []) : [];
+  const selectedPayments = selectedDay ? (paymentsByDay[selectedDay] || []) : [];
   const selectedTotal = selectedEvents.reduce((s, e) => s + e.amount, 0);
+  const selectedPagosTotal = selectedPayments.reduce((s, p) => s + p.amount, 0);
 
   const prevMonth = () => { setMonth(m => m <= 0 ? 11 : m - 1); setSelectedDay(null); };
   const nextMonth = () => { setMonth(m => m >= 11 ? 0 : m + 1); setSelectedDay(null); };
@@ -365,7 +369,23 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
   return (
     <div className="space-y-4">
       {/* Month summary cards */}
-      <div className="grid grid-cols-4 gap-4 animate-card-in stagger-4">
+      <div className="grid grid-cols-4 gap-4 animate-card-in stagger-4" style={{ display: 'grid' }}>
+        {monthPagos > 0 && (
+          <div className="col-span-4 grid grid-cols-3 gap-4 mb-1">
+            <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3">
+              <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Pagos CXP del mes</div>
+              <div className="text-lg font-semibold tabular-nums text-[#ff3b30] mt-0.5">{fmt(monthPagos)}</div>
+            </div>
+            <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3">
+              <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Flujo neto</div>
+              <div className={`text-lg font-semibold tabular-nums mt-0.5 ${monthNeto >= 0 ? 'text-[#34c759]' : 'text-[#ff3b30]'}`}>{fmt(monthNeto)}</div>
+            </div>
+            <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-3">
+              <div className="text-[11px] uppercase tracking-wide text-[#86868b]">IVA cobrado (estimado)</div>
+              <div className="text-lg font-semibold tabular-nums text-[#0071e3] mt-0.5">{fmt(monthIva)}</div>
+            </div>
+          </div>
+        )}
         <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 hover-lift">
           <div className="text-[11px] uppercase tracking-wide text-[#86868b]">Cobranza total</div>
           <div className="text-2xl font-semibold tabular-nums text-[#1d1d1f] mt-1">{fmt(monthTotal)}</div>
@@ -424,6 +444,8 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
             const iso = d.toISOString().slice(0, 10);
             const isCurrentMonth = d.getUTCMonth() === month;
             const dayEvents = byDay[iso] || [];
+            const dayPayments = paymentsByDay[iso] || [];
+            const dayPagosTotal = dayPayments.reduce((s, p) => s + p.amount, 0);
             const dayTotal = dayEvents.reduce((s, e) => s + e.amount, 0);
             const intensity = dayTotal > 0 ? Math.max(0.08, Math.min(0.85, dayTotal / maxDayAmount)) : 0;
             const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
@@ -486,11 +508,23 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
                     </div>
                   )}
                 </div>
+                {dayTotal === 0 && dayPagosTotal > 0 && isCurrentMonth && (
+                  <div className="mt-1">
+                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums bg-[#ff3b30]/10 text-[#ff3b30]">
+                      −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmt(dayPagosTotal)}
+                    </div>
+                  </div>
+                )}
                 {dayTotal > 0 && isCurrentMonth && (
                   <div className="mt-1">
                     <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
                       {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmt(dayTotal)}
                     </div>
+                    {dayPagosTotal > 0 && (
+                      <div className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums mt-0.5 bg-[#ff3b30]/10 text-[#ff3b30]">
+                        −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmt(dayPagosTotal)}
+                      </div>
+                    )}
                     {someConfirmed && (
                       <div className="flex gap-0.5 mt-0.5">
                         <div className="h-1 rounded-full bg-[#34c759] flex-1" style={{ flex: dayConfirmed.length }} />
@@ -515,14 +549,39 @@ function CalendarView({ events, clients, year, confirmedPayments, onConfirm, onU
       </div>
 
       {/* Day detail panel */}
-      {selectedDay && selectedEvents.length > 0 && (
+      {selectedDay && (selectedEvents.length > 0 || selectedPayments.length > 0) && (
         <div className="bg-white border border-[#d2d2d7]/60 rounded-xl p-4 animate-slide-down">
           <div className="flex justify-between items-center mb-3">
             <h3 className="font-semibold text-[14px] text-[#1d1d1f]">
               {new Date(selectedDay + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
             </h3>
-            <span className="text-lg font-semibold tabular-nums text-[#0071e3]">{fmt(selectedTotal)}</span>
+            <div className="flex gap-4 items-baseline">
+              {selectedTotal > 0 && <span className="text-[13px] tabular-nums text-[#34c759]">+{fmt(selectedTotal)}</span>}
+              {selectedPagosTotal > 0 && <span className="text-[13px] tabular-nums text-[#ff3b30]">−{fmt(selectedPagosTotal)}</span>}
+              <span className={`text-lg font-semibold tabular-nums ${selectedTotal - selectedPagosTotal >= 0 ? 'text-[#0071e3]' : 'text-[#ff3b30]'}`}>
+                {fmt(selectedTotal - selectedPagosTotal)}
+              </span>
+            </div>
           </div>
+          {selectedPayments.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[11px] uppercase tracking-wide text-[#ff3b30] mb-1.5">Pagos ({selectedPayments.length})</div>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {selectedPayments.sort((a, b) => b.amount - a.amount).map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-[#ff3b30]/5 border border-[#ff3b30]/20">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] font-medium text-[#1d1d1f] truncate">{p.supplier}</div>
+                      <div className="text-[11px] text-[#86868b]">{p.classification}</div>
+                    </div>
+                    <div className="text-[13px] font-semibold tabular-nums text-[#ff3b30]">−{fmt(p.amount)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {selectedEvents.length > 0 && selectedPayments.length > 0 && (
+            <div className="text-[11px] uppercase tracking-wide text-[#34c759] mb-1.5">Cobros ({selectedEvents.length})</div>
+          )}
           <div className="space-y-1.5 max-h-72 overflow-y-auto">
             {selectedEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
               const c = byId.get(e.clientId);
