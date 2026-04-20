@@ -63,6 +63,8 @@ export interface FlowSenseStore {
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
   cxpRecords: CXPRecord[];
+  /** ISO timestamp of last JDE sync per cia. Empty when only CSV upload was used. */
+  cxpLoadedCias: Record<string, string>;
   lastSaved: string;
 }
 
@@ -244,6 +246,7 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
     assumptions: validateAssumptions(legacy.assumptions),
     confirmedPayments: Array.isArray(legacy.confirmedPayments) ? legacy.confirmedPayments : [],
     cxpRecords: Array.isArray(legacy.cxpRecords) ? legacy.cxpRecords : [],
+    cxpLoadedCias: {},
     lastSaved: legacy.lastSaved ?? now,
   };
 }
@@ -267,6 +270,7 @@ export function getDefaultStore(): FlowSenseStore {
     },
     confirmedPayments: [],
     cxpRecords: [],
+    cxpLoadedCias: {},
     lastSaved: isoNow(),
   };
 }
@@ -322,6 +326,7 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
       'confirmedPayments',
     ),
     cxpRecords: validateArray<CXPRecord>(data.cxpRecords, 'cxpRecords'),
+    cxpLoadedCias: validateStringMap(data.cxpLoadedCias),
     lastSaved: validateISODate(data.lastSaved, 'lastSaved'),
   };
 }
@@ -432,6 +437,15 @@ function validateAssumptions(value: unknown): CashFlowAssumptions {
         ? obj.factorajeDays
         : 30,
   };
+}
+
+function validateStringMap(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
 }
 
 function validateISODate(value: unknown, fieldName: string): string {
