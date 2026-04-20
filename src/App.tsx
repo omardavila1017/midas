@@ -21,46 +21,46 @@ import {
   LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap,
   Users, UserSquare, FileSpreadsheet, Download, LineChart, DollarSign, Sliders,
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
-  HandCoins, CreditCard, ChevronRight,
+  HandCoins, CreditCard, ChevronRight, BookUser, Activity, TrendingUp,
+  Receipt, Wallet,
 } from 'lucide-react';
 import { hex } from './theme';
 
-type SectionId = 'cobros' | 'pagos' | 'plan';
+type SectionId = 'catalogos' | 'operacion' | 'planeacion';
 
 const SECTIONS: { id: SectionId; label: string; icon: any; description: string }[] = [
-  { id: 'cobros',   label: 'Cobros',     icon: HandCoins,       description: 'Clientes y cobranza' },
-  { id: 'pagos',    label: 'Pagos',      icon: CreditCard,      description: 'Proveedores y CXP' },
-  { id: 'plan',     label: 'Plan',       icon: LayoutDashboard, description: 'Dashboard y escenarios' },
+  { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes y proveedores' },
+  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo diario, cobranza, CXP y bancos' },
+  { id: 'planeacion', label: 'Planeación',  icon: TrendingUp,      description: 'Dashboard, pronóstico y escenarios' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPlan?: boolean }[]> = {
-  cobros: [
-    { id: 'clients',     label: 'Clientes', icon: UserSquare },
-    { id: 'collections', label: 'Cobranza', icon: UserSquare },
-    { id: 'netflow',     label: 'Flujo',    icon: LayoutDashboard },
+  catalogos: [
+    { id: 'clients',   label: 'Clientes',     icon: UserSquare },
+    { id: 'providers', label: 'Proveedores',  icon: Users },
   ],
-  pagos: [
-    { id: 'providers', label: 'Proveedores', icon: Users },
-    { id: 'cxp',       label: 'CXP',         icon: Users },
-    { id: 'bancos',    label: 'Bancos',      icon: Landmark },
+  operacion: [
+    { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
+    { id: 'collections', label: 'Cobranza',    icon: HandCoins },
+    { id: 'cxp',         label: 'CXP',         icon: Receipt },
+    { id: 'bancos',      label: 'Bancos',      icon: Landmark },
   ],
-  plan: [
+  planeacion: [
     { id: 'dashboard',  label: 'Dashboard',   icon: LayoutDashboard, needsPlan: true },
-    { id: 'forecast',   label: 'Pronóstico',  icon: LineChart, needsPlan: true },
     { id: 'scenarios',  label: 'Escenarios',  icon: FlaskConical, needsPlan: true },
   ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
-  clients: 'cobros', collections: 'cobros', netflow: 'cobros',
-  providers: 'pagos', cxp: 'pagos', bancos: 'pagos',
-  dashboard: 'plan', forecast: 'plan', scenarios: 'plan',
+  clients: 'catalogos', providers: 'catalogos',
+  netflow: 'operacion', collections: 'operacion', cxp: 'operacion', bancos: 'operacion',
+  dashboard: 'planeacion', scenarios: 'planeacion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
-  cobros: 'clients',
-  pagos: 'providers',
-  plan: 'dashboard',
+  catalogos: 'clients',
+  operacion: 'netflow',
+  planeacion: 'dashboard',
 };
 
 export default function App() {
@@ -82,7 +82,7 @@ export default function App() {
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
   const [forecastGranularity, setForecastGranularity] = useState<ForecastGranularity>('monthly');
-  const [activeTab, setActiveTab] = useState<TabId>('clients');
+  const [activeTab, setActiveTab] = useState<TabId>('netflow');
   const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
@@ -458,7 +458,7 @@ export default function App() {
     return <Upload onPlanLoaded={p => { setPlan(p); setShowUpload(false); setActiveTab('dashboard'); }} />;
   }
 
-  const activeSection = SECTION_FOR_TAB[activeTab] ?? 'cobros';
+  const activeSection = SECTION_FOR_TAB[activeTab] ?? 'operacion';
   const subTabs = SUB_TABS[activeSection];
 
   const switchSection = (s: SectionId) => {
@@ -472,7 +472,7 @@ export default function App() {
       <header className="glass border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)' }}>
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
           {/* Logo */}
-          <div className="flex items-center gap-2.5 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('clients')}>
+          <div className="flex items-center gap-2.5 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
             <div
               className="w-8 h-8 rounded-[10px] flex items-center justify-center"
               style={{
@@ -492,14 +492,15 @@ export default function App() {
             {SECTIONS.map(s => {
               const isActive = activeSection === s.id;
               // Status badge logic
-              const badge = s.id === 'plan' && !plan
+              const catalogCount = clients.length + providers.length;
+              const badge = s.id === 'planeacion' && !plan
                 ? 'Sin plan'
-                : s.id === 'cobros' && clients.length > 0
-                  ? `${clients.length}`
-                  : s.id === 'pagos' && providers.length > 0
-                    ? `${providers.length}`
+                : s.id === 'catalogos' && catalogCount > 0
+                  ? `${catalogCount}`
+                  : s.id === 'operacion' && (cxpRecords.length > 0 || bankStatements.length > 0)
+                    ? 'Activo'
                     : null;
-              const badgeColor = s.id === 'plan' && !plan ? 'var(--warning)' : 'var(--gray-400)';
+              const badgeColor = s.id === 'planeacion' && !plan ? 'var(--warning)' : 'var(--gray-400)';
               return (
                 <button
                   key={s.id}
@@ -527,7 +528,7 @@ export default function App() {
                       <span
                         className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
                         style={{
-                          background: s.id === 'plan' && !plan ? 'var(--warning-muted)' : 'var(--gray-100)',
+                          background: s.id === 'planeacion' && !plan ? 'var(--warning-muted)' : 'var(--gray-100)',
                           color: badgeColor,
                         }}
                       >
@@ -632,7 +633,36 @@ export default function App() {
           <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
             {activeTab === 'dashboard' && (
               plan
-                ? <Dashboard plan={plan} proposals={proposals} />
+                ? <>
+                    <Dashboard plan={plan} proposals={proposals} />
+                    {/* Forecast fused below Dashboard */}
+                    <div className="mt-8 pt-8 border-t" style={{ borderColor: 'var(--gray-200)' }}>
+                      <div className="flex items-center justify-between mb-5">
+                        <div>
+                          <h2 className="text-[18px] font-semibold text-[var(--gray-950)] tracking-tight">
+                            Pronóstico con Escenarios
+                          </h2>
+                          <p className="text-[13px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
+                            Vista detallada con capas de simulación sobre el plan base
+                          </p>
+                        </div>
+                      </div>
+                      <Forecast
+                        plan={plan}
+                        proposals={proposals}
+                        scenarios={scenarios}
+                        simulations={simulations}
+                        activeProposalId={activeProposalId}
+                        activeScenarioId={activeScenarioId}
+                        overrides={scenarioCellOverrides}
+                        granularity={forecastGranularity}
+                        onGranularityChange={setForecastGranularity}
+                        onSelectProposal={selectProposal}
+                        onSelectScenario={selectScenario}
+                        onOverridesChange={setScenarioCellOverrides}
+                      />
+                    </div>
+                  </>
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Dashboard" />
             )}
             {activeTab === 'clients' && (
@@ -690,22 +720,7 @@ export default function App() {
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Propuestas" />
             )}
-            {activeTab === 'simulator' && (
-              plan
-                ? <Simulator
-                    plan={plan}
-                    proposals={proposals}
-                    scenarios={scenarios}
-                    simulations={simulations}
-                    overrides={scenarioCellOverrides}
-                    activeProposalId={activeProposalId}
-                    activeScenarioId={activeScenarioId}
-                    onSelectProposal={selectProposal}
-                    onSelectScenario={selectScenario}
-                    onUpdateScenario={updateScenario}
-                  />
-                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Simulador" />
-            )}
+            {/* Simulator tab removed — functionality lives in ScenarioWorkbench */}
             {activeTab === 'cxp' && (
               <CXP
                 records={cxpRecords}
@@ -737,24 +752,7 @@ export default function App() {
                 companies={companies}
               />
             )}
-            {activeTab === 'forecast' && (
-              plan
-                ? <Forecast
-                    plan={plan}
-                    proposals={proposals}
-                    scenarios={scenarios}
-                    simulations={simulations}
-                    activeProposalId={activeProposalId}
-                    activeScenarioId={activeScenarioId}
-                    overrides={scenarioCellOverrides}
-                    granularity={forecastGranularity}
-                    onGranularityChange={setForecastGranularity}
-                    onSelectProposal={selectProposal}
-                    onSelectScenario={selectScenario}
-                    onOverridesChange={setScenarioCellOverrides}
-                  />
-                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Pronóstico" />
-            )}
+            {/* Forecast tab fused into Dashboard — no longer standalone */}
           </ErrorBoundary>
         </div>
       </main>

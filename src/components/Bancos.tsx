@@ -370,8 +370,8 @@ const BancosDashboard = ({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: 'Saldo Total', value: fmtCurrency(saldoTotal), sub: `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`, icon: Wallet, color: hex.primary },
-          { label: 'Abonos', value: fmtCompact(totalAbonos), sub: 'Entradas', icon: ArrowDownCircle, color: hex.success },
-          { label: 'Cargos', value: fmtCompact(totalCargos), sub: 'Salidas', icon: ArrowUpCircle, color: hex.danger },
+          { label: 'Abonos', value: fmtCurrency(totalAbonos), sub: 'Entradas', icon: ArrowDownCircle, color: hex.success },
+          { label: 'Cargos', value: fmtCurrency(totalCargos), sub: 'Salidas', icon: ArrowUpCircle, color: hex.danger },
           { label: 'Movimientos', value: totalMovs.toLocaleString(), sub: `Al ${query.fechaEstadoCuenta}`, icon: Receipt, color: '#af52de' },
         ].map((kpi, i) => {
           const Icon = kpi.icon;

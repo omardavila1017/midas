@@ -150,15 +150,72 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
       }, 0);
   }, [collections, clientById, assumptions.year]);
 
-  // Empty state
+  // Empty state — show bank data if available, guide user to load the rest
   if (clients.length === 0 && cxpRecords.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-center">
-        <CalendarIcon className="w-12 h-12 text-[var(--gray-200)] mb-3" />
-        <h2 className="text-xl font-semibold text-[var(--gray-950)]">Sin datos para proyectar</h2>
-        <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-sm">
-          Carga clientes y/o un archivo CXP para ver el flujo detallado.
-        </p>
+      <div className="space-y-6">
+        <header>
+          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Flujo de efectivo</h1>
+          <p className="text-[13px] text-[var(--gray-400)] mt-1">
+            Vista integrada de cobros, pagos y saldo acumulado.
+          </p>
+        </header>
+
+        {/* If bank data exists, show it even without clients/CXP */}
+        {bankStatements.length > 0 && (
+          <div className="bg-white border border-[var(--primary)]/20 rounded-xl p-5 animate-card-in">
+            <div className="flex items-center gap-2 mb-3">
+              <Landmark className="w-4 h-4 text-[var(--primary)]" />
+              <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">Saldo Real Bancos</h3>
+              <span className="text-[11px] text-[var(--gray-400)] ml-auto">
+                {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''} · Al {bankStatements[0]?.fechaEstadoCuenta}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-6">
+              <div>
+                <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Saldo Total</div>
+                <div className="text-2xl font-semibold tabular-nums text-[var(--primary)]">{fmtCurrency(totalBankSaldo)}</div>
+              </div>
+              <div>
+                <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Abonos</div>
+                <div className="text-2xl font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(totalBankAbonos)}</div>
+              </div>
+              <div>
+                <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Cargos</div>
+                <div className="text-2xl font-semibold tabular-nums text-[var(--danger)]">{fmtCurrency(totalBankCargos)}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Guide card */}
+        <div className="bg-white border border-[var(--gray-200)] rounded-2xl p-8 text-center max-w-lg mx-auto animate-card-in stagger-1">
+          <div
+            className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
+            style={{ background: 'linear-gradient(to bottom, var(--gray-50), var(--gray-100))' }}
+          >
+            <CalendarIcon className="w-6 h-6" style={{ color: 'var(--gray-400)' }} />
+          </div>
+          <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">Completa los datos para proyectar flujo</h2>
+          <p className="text-[13px] text-[var(--gray-400)] mt-2 leading-relaxed max-w-sm mx-auto">
+            Esta vista combina cobros (de Clientes) y pagos (de CXP) para generar
+            la proyección diaria de flujo de efectivo. Necesitas al menos uno:
+          </p>
+          <div className="flex justify-center gap-4 mt-5">
+            <div className="flex flex-col items-center gap-1.5 px-4 py-3 rounded-xl" style={{ background: 'var(--gray-50)' }}>
+              <span className="text-[12px] font-medium" style={{ color: clients.length > 0 ? 'var(--success)' : 'var(--gray-400)' }}>
+                {clients.length > 0 ? '✓' : '○'} Clientes
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Catálogos → Clientes</span>
+            </div>
+            <div className="flex flex-col items-center gap-1.5 px-4 py-3 rounded-xl" style={{ background: 'var(--gray-50)' }}>
+              <span className="text-[12px] font-medium" style={{ color: cxpRecords.length > 0 ? 'var(--success)' : 'var(--gray-400)' }}>
+                {cxpRecords.length > 0 ? '✓' : '○'} CXP
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Operación → CXP</span>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
