@@ -15,7 +15,7 @@ import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
 import Forecast from './components/Forecast';
 import KpiCenter from './components/KpiCenter';
-import { DEFAULT_ACTIVE_KPI_IDS } from './domain/kpiCatalog';
+import { DEFAULT_ACTIVE_KPI_IDS, type CustomKpiDefinition } from './domain/kpiCatalog';
 // NetCashFlowDashboard disabled — needs real JDE data to be useful
 // import NetCashFlowDashboard from './components/NetCashFlowDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -86,6 +86,7 @@ export default function App() {
   const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
   const [forecastGranularity, setForecastGranularity] = useState<ForecastGranularity>('monthly');
   const [activeKpiIds, setActiveKpiIds] = useState<string[]>([...DEFAULT_ACTIVE_KPI_IDS]);
+  const [customKpis, setCustomKpis] = useState<CustomKpiDefinition[]>([]);
   const [activeTab, setActiveTab] = useState<TabId>('clients');
   const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -133,6 +134,7 @@ export default function App() {
       if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
       if (stored.scenarioCellOverrides?.length) setScenarioCellOverrides(stored.scenarioCellOverrides);
       if (stored.activeKpiIds) setActiveKpiIds(stored.activeKpiIds);
+      if (stored.customKpis) setCustomKpis(stored.customKpis);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
     }
@@ -194,6 +196,7 @@ export default function App() {
         plan, proposals, scenarios, providers, clients,
         simulations, activeProposalId, activeScenarioId,
         activeKpiIds,
+        customKpis,
         assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
         scenarioCellOverrides,
         lastSaved: new Date().toISOString(),
@@ -209,6 +212,7 @@ export default function App() {
     activeProposalId,
     activeScenarioId,
     activeKpiIds,
+    customKpis,
     providers,
     clients,
     assumptions,
@@ -563,6 +567,7 @@ export default function App() {
                   plan, proposals, scenarios, providers, clients,
                   simulations, activeProposalId, activeScenarioId,
                   activeKpiIds,
+                  customKpis,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
                   scenarioCellOverrides,
                   lastSaved: new Date().toISOString(),
@@ -658,6 +663,8 @@ export default function App() {
                 activeKpiIds={activeKpiIds}
                 onActiveKpiIdsChange={setActiveKpiIds}
                 defaultKpiIds={DEFAULT_ACTIVE_KPI_IDS}
+                customKpis={customKpis}
+                onCustomKpisChange={setCustomKpis}
               />
             )}
             {activeTab === 'clients' && (

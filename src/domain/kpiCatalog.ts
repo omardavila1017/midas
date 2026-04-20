@@ -14,10 +14,39 @@ import {
 } from '../types';
 import { hex } from '../theme';
 
-export type KpiUnit = 'currency' | 'percent' | 'count';
+export type KpiUnit = 'currency' | 'percent' | 'count' | 'days' | 'times' | 'custom';
 export type KpiGoal = 'higher' | 'lower';
 export type KpiComparisonKind = 'target' | 'base';
-export type KpiStatus = 'met' | 'missed' | 'na';
+export type KpiStatus = 'met' | 'warning' | 'missed' | 'na';
+export type KpiPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annual';
+
+export interface CustomKpiDefinition {
+  id: string;
+  name: string;
+  category: string;
+  formula: string;
+  targetValue: number;
+  period: KpiPeriod;
+  unit: KpiUnit;
+  customUnitLabel?: string;
+  goal: KpiGoal;
+  warningThreshold: number;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KpiVariableDoc {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+}
+
+export interface KpiFormulaHelperDoc {
+  signature: string;
+  description: string;
+}
 
 export interface KpiPoint {
   label: string;
@@ -35,9 +64,12 @@ export interface KpiCatalogEntry {
   accentColor: string;
   comparisonKind: KpiComparisonKind;
   goal: KpiGoal;
+  source: 'template' | 'custom';
+  isCustom: boolean;
   available: boolean;
   availabilityReason: string | null;
   periodLabel: string | null;
+  periodKey: KpiPeriod | null;
   value: number | null;
   comparisonValue: number | null;
   comparisonLabel: string | null;
@@ -47,6 +79,10 @@ export interface KpiCatalogEntry {
   chartValueLabel: string | null;
   chartComparisonLabel: string | null;
   note: string | null;
+  formula: string | null;
+  targetValue: number | null;
+  warningThreshold: number | null;
+  customUnitLabel: string | null;
 }
 
 export interface KpiCatalogInput {
@@ -61,6 +97,7 @@ export interface KpiCatalogInput {
   activeProposalId: string | null;
   activeScenarioId: string | null;
   activeMonth: number;
+  customKpis?: CustomKpiDefinition[];
 }
 
 interface KpiDefinition {
@@ -72,7 +109,21 @@ interface KpiDefinition {
   accentColor: string;
   comparisonKind: KpiComparisonKind;
   goal: KpiGoal;
-  build: (context: BuildContext) => Omit<KpiCatalogEntry, 'id' | 'label' | 'description' | 'category' | 'unit' | 'accentColor' | 'comparisonKind' | 'goal'>;
+  build: (
+    context: BuildContext,
+  ) => Omit<
+    KpiCatalogEntry,
+    'id'
+    | 'label'
+    | 'description'
+    | 'category'
+    | 'unit'
+    | 'accentColor'
+    | 'comparisonKind'
+    | 'goal'
+    | 'source'
+    | 'isCustom'
+  >;
 }
 
 interface CollectionSnapshot {
@@ -143,6 +194,38 @@ export const DEFAULT_ACTIVE_KPI_IDS = [
   'forecast_cobranza_month',
 ] as const;
 
+export const KPI_PERIOD_OPTIONS: Array<{ value: KpiPeriod; label: string }> = [
+  { value: 'daily', label: 'Diario' },
+  { value: 'weekly', label: 'Semanal' },
+  { value: 'monthly', label: 'Mensual' },
+  { value: 'quarterly', label: 'Trimestral' },
+  { value: 'annual', label: 'Anual' },
+];
+
+export const KPI_UNIT_OPTIONS: Array<{ value: KpiUnit; label: string }> = [
+  { value: 'currency', label: 'Pesos' },
+  { value: 'percent', label: 'Porcentaje' },
+  { value: 'days', label: 'Días' },
+  { value: 'times', label: 'Veces' },
+  { value: 'count', label: 'Conteo' },
+  { value: 'custom', label: 'Personalizada' },
+];
+
+export const KPI_GOAL_OPTIONS: Array<{ value: KpiGoal; label: string }> = [
+  { value: 'higher', label: 'Más alto es mejor' },
+  { value: 'lower', label: 'Más bajo es mejor' },
+];
+
+export const KPI_FORMULA_HELPERS: KpiFormulaHelperDoc[] = [
+  { signature: 'safe_div(a, b)', description: 'Divide y regresa 0 si el denominador es 0.' },
+  { signature: 'pct(a, b)', description: 'Atajo de porcentaje: a / b.' },
+  { signature: 'ifelse(cond, a, b)', description: 'Evalúa una condición y devuelve un valor u otro.' },
+  { signature: 'abs(x)', description: 'Valor absoluto.' },
+  { signature: 'min(a, b)', description: 'Menor entre dos valores.' },
+  { signature: 'max(a, b)', description: 'Mayor entre dos valores.' },
+  { signature: 'round(x)', description: 'Redondea al entero más cercano.' },
+];
+
 function monthIndexFromIso(isoDate: string): number {
   return Number(isoDate.slice(5, 7)) - 1;
 }
@@ -189,9 +272,12 @@ function unavailable(definition: KpiDefinition, reason: string): KpiCatalogEntry
     accentColor: definition.accentColor,
     comparisonKind: definition.comparisonKind,
     goal: definition.goal,
+    source: 'template',
+    isCustom: false,
     available: false,
     availabilityReason: reason,
     periodLabel: null,
+    periodKey: null,
     value: null,
     comparisonValue: null,
     comparisonLabel: null,
@@ -201,6 +287,10 @@ function unavailable(definition: KpiDefinition, reason: string): KpiCatalogEntry
     chartValueLabel: null,
     chartComparisonLabel: null,
     note: null,
+    formula: null,
+    targetValue: null,
+    warningThreshold: null,
+    customUnitLabel: null,
   };
 }
 
@@ -311,7 +401,19 @@ function buildCollectionMonthlyEntry(
     goal: KpiGoal;
     note: string;
   },
-): Omit<KpiCatalogEntry, 'id' | 'label' | 'description' | 'category' | 'unit' | 'accentColor' | 'comparisonKind' | 'goal'> {
+): Omit<
+  KpiCatalogEntry,
+  'id'
+  | 'label'
+  | 'description'
+  | 'category'
+  | 'unit'
+  | 'accentColor'
+  | 'comparisonKind'
+  | 'goal'
+  | 'source'
+  | 'isCustom'
+> {
   const collection = context.collection!;
   const value = config.valueSeries[context.activeMonth] ?? 0;
   const comparisonValue = config.comparisonSeries[context.activeMonth] ?? 0;
@@ -319,6 +421,7 @@ function buildCollectionMonthlyEntry(
     available: true,
     availabilityReason: null,
     periodLabel: `${MONTHS_FULL[context.activeMonth]} ${collection.year}`,
+    periodKey: 'monthly',
     value,
     comparisonValue,
     comparisonLabel: config.comparisonLabel,
@@ -328,6 +431,10 @@ function buildCollectionMonthlyEntry(
     chartValueLabel: 'Resultado',
     chartComparisonLabel: config.comparisonLabel,
     note: config.note,
+    formula: null,
+    targetValue: comparisonValue,
+    warningThreshold: null,
+    customUnitLabel: null,
   };
 }
 
@@ -339,7 +446,19 @@ function buildForecastMonthlyEntry(
     goal: KpiGoal;
     note: string;
   },
-): Omit<KpiCatalogEntry, 'id' | 'label' | 'description' | 'category' | 'unit' | 'accentColor' | 'comparisonKind' | 'goal'> {
+): Omit<
+  KpiCatalogEntry,
+  'id'
+  | 'label'
+  | 'description'
+  | 'category'
+  | 'unit'
+  | 'accentColor'
+  | 'comparisonKind'
+  | 'goal'
+  | 'source'
+  | 'isCustom'
+> {
   const forecast = context.forecast!;
   const value = config.valueSeries[context.activeMonth] ?? 0;
   const comparisonValue = config.comparisonSeries[context.activeMonth] ?? 0;
@@ -347,6 +466,7 @@ function buildForecastMonthlyEntry(
     available: true,
     availabilityReason: null,
     periodLabel: `${MONTHS_FULL[context.activeMonth]} ${forecast.year}`,
+    periodKey: 'monthly',
     value,
     comparisonValue,
     comparisonLabel: 'Base',
@@ -356,6 +476,10 @@ function buildForecastMonthlyEntry(
     chartValueLabel: forecast.activeScenarioName,
     chartComparisonLabel: 'Base',
     note: config.note,
+    formula: null,
+    targetValue: comparisonValue,
+    warningThreshold: null,
+    customUnitLabel: null,
   };
 }
 
@@ -369,12 +493,25 @@ function buildForecastSummaryEntry(
     goal: KpiGoal;
     note: string;
   },
-): Omit<KpiCatalogEntry, 'id' | 'label' | 'description' | 'category' | 'unit' | 'accentColor' | 'comparisonKind' | 'goal'> {
+): Omit<
+  KpiCatalogEntry,
+  'id'
+  | 'label'
+  | 'description'
+  | 'category'
+  | 'unit'
+  | 'accentColor'
+  | 'comparisonKind'
+  | 'goal'
+  | 'source'
+  | 'isCustom'
+> {
   const forecast = context.forecast!;
   return {
     available: true,
     availabilityReason: null,
     periodLabel: `Año ${forecast.year}`,
+    periodKey: 'annual',
     value: config.value,
     comparisonValue: config.comparisonValue,
     comparisonLabel: 'Base',
@@ -384,6 +521,10 @@ function buildForecastSummaryEntry(
     chartValueLabel: forecast.activeScenarioName,
     chartComparisonLabel: 'Base',
     note: config.note,
+    formula: null,
+    targetValue: config.comparisonValue,
+    warningThreshold: null,
+    customUnitLabel: null,
   };
 }
 
@@ -684,14 +825,588 @@ const KPI_DEFINITIONS: KpiDefinition[] = [
   },
 ];
 
+type FormulaVariableMap = Record<string, number[]>;
+interface FormulaPeriodData {
+  labels: string[];
+  variables: FormulaVariableMap;
+}
+
+interface ConceptVariableDef {
+  conceptId: string;
+  slug: string;
+  label: string;
+}
+
+const FORMULA_HELPER_IMPL = {
+  safe_div: (a: number, b: number) => (Math.abs(b) > 0.000001 ? a / b : 0),
+  pct: (a: number, b: number) => (Math.abs(b) > 0.000001 ? a / b : 0),
+  ifelse: (condition: number | boolean, whenTrue: number, whenFalse: number) => (condition ? whenTrue : whenFalse),
+  abs: (value: number) => Math.abs(value),
+  min: (left: number, right: number) => Math.min(left, right),
+  max: (left: number, right: number) => Math.max(left, right),
+  round: (value: number) => Math.round(value),
+  floor: (value: number) => Math.floor(value),
+  ceil: (value: number) => Math.ceil(value),
+} as const;
+
+function slugify(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_{2,}/g, '_');
+}
+
+function clampMonthIndex(monthIndex: number): number {
+  return Math.max(0, Math.min(11, monthIndex));
+}
+
+function isoDateRange(year: number): string[] {
+  const dates: string[] = [];
+  const cursor = new Date(Date.UTC(year, 0, 1));
+  while (cursor.getUTCFullYear() === year) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function formatShortDateLabel(isoDate: string): string {
+  const date = new Date(`${isoDate}T12:00:00Z`);
+  return `${String(date.getUTCDate()).padStart(2, '0')} ${MONTHS[date.getUTCMonth()]}`;
+}
+
+function weekStartIso(isoDate: string): string {
+  const date = new Date(`${isoDate}T12:00:00Z`);
+  const weekday = date.getUTCDay();
+  const offset = weekday === 0 ? -6 : 1 - weekday;
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
+function weekLabelFromIso(isoDate: string, index: number): string {
+  const date = new Date(`${isoDate}T12:00:00Z`);
+  return `Sem ${String(index + 1).padStart(2, '0')} · ${String(date.getUTCDate()).padStart(2, '0')} ${MONTHS[date.getUTCMonth()]}`;
+}
+
+function quarterIndexFromMonth(monthIndex: number): number {
+  return Math.floor(monthIndex / 3);
+}
+
+function buildConceptVariableDefs(plan: FlowPlan | null): ConceptVariableDef[] {
+  if (!plan) return [];
+  const used = new Map<string, number>();
+  return [...plan.concepts]
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map((concept) => {
+      const baseSlug = slugify(concept.name || concept.id) || `concepto_${concept.excelRow}`;
+      const seen = used.get(baseSlug) ?? 0;
+      used.set(baseSlug, seen + 1);
+      return {
+        conceptId: concept.id,
+        slug: seen === 0 ? baseSlug : `${baseSlug}_${seen + 1}`,
+        label: concept.name,
+      };
+    });
+}
+
+export function getKpiVariableDocs(plan: FlowPlan | null): KpiVariableDoc[] {
+  const baseDocs: KpiVariableDoc[] = [
+    { key: 'ingresos', label: 'Ingresos', description: 'Ingresos del periodo en el escenario activo.', group: 'Pronóstico' },
+    { key: 'egresos', label: 'Egresos', description: 'Egresos del periodo en el escenario activo.', group: 'Pronóstico' },
+    { key: 'flujo_neto', label: 'Flujo neto', description: 'Ingresos menos egresos del periodo.', group: 'Pronóstico' },
+    { key: 'caja_final', label: 'Caja final', description: 'Saldo de caja al cierre del periodo.', group: 'Pronóstico' },
+    { key: 'cobranza', label: 'Cobranza', description: 'Cobranza del periodo en el escenario activo.', group: 'Pronóstico' },
+    { key: 'pagos_proveedores', label: 'Pagos proveedores', description: 'Pagos a proveedores del periodo.', group: 'Pronóstico' },
+    { key: 'presupuesto_ingresos', label: 'Presupuesto ingresos', description: 'Serie base para comparar ingresos.', group: 'Base / presupuesto' },
+    { key: 'presupuesto_egresos', label: 'Presupuesto egresos', description: 'Serie base para comparar egresos.', group: 'Base / presupuesto' },
+    { key: 'desviacion_ingresos', label: 'Desviación ingresos', description: 'Ingresos activos menos ingresos base.', group: 'Desviaciones' },
+    { key: 'desviacion_egresos', label: 'Desviación egresos', description: 'Egresos activos menos egresos base.', group: 'Desviaciones' },
+    { key: 'desviacion_flujo_neto', label: 'Desviación flujo neto', description: 'Flujo neto activo menos base.', group: 'Desviaciones' },
+    { key: 'cobranza_proyectada', label: 'Cobranza proyectada', description: 'Cobranza esperada por proyección de clientes.', group: 'Cobranza' },
+    { key: 'cobranza_confirmada', label: 'Cobranza confirmada', description: 'Cobros marcados como realizados.', group: 'Cobranza' },
+    { key: 'meta_cobranza', label: 'Meta cobranza', description: 'Meta teórica con 100% de cumplimiento.', group: 'Cobranza' },
+    { key: 'porcentaje_cobranza', label: 'Porcentaje de cobranza', description: 'Cobranza confirmada dividida entre meta de cobranza.', group: 'Cobranza' },
+    { key: 'clientes_esperados_cobro', label: 'Clientes esperados', description: 'Clientes que debían cobrar en el periodo.', group: 'Cobranza' },
+    { key: 'clientes_cobrados', label: 'Clientes cobrados', description: 'Clientes con cobros confirmados en el periodo.', group: 'Cobranza' },
+    { key: 'lag_promedio_dias', label: 'Lag promedio', description: 'Días promedio entre fecha teórica y fecha real de cobro.', group: 'Cobranza' },
+    { key: 'dias_cobro', label: 'Días de cobro', description: 'Alias de lag_promedio_dias.', group: 'Cobranza' },
+  ];
+
+  const conceptDocs = buildConceptVariableDefs(plan).map((concept) => ({
+    key: `concepto_${concept.slug}`,
+    label: concept.label,
+    description: `Valor del concepto "${concept.label}" en el escenario activo. También puedes usar presupuesto_concepto_${concept.slug} y desviacion_concepto_${concept.slug}.`,
+    group: 'Conceptos del plan',
+  }));
+
+  return [...baseDocs, ...conceptDocs];
+}
+
+function collectionBucketKeys(period: KpiPeriod, year: number): string[] {
+  if (period === 'daily') return isoDateRange(year);
+  if (period === 'weekly') {
+    const keys: string[] = [];
+    let lastKey = '';
+    for (const isoDate of isoDateRange(year)) {
+      const key = weekStartIso(isoDate);
+      if (key !== lastKey) {
+        keys.push(key);
+        lastKey = key;
+      }
+    }
+    return keys;
+  }
+  if (period === 'monthly') return Array.from({ length: 12 }, (_, index) => String(index + 1));
+  if (period === 'quarterly') return ['1', '2', '3', '4'];
+  return [String(year)];
+}
+
+function collectionBucketKey(isoDate: string, year: number, period: KpiPeriod): string {
+  if (period === 'daily') return isoDate;
+  if (period === 'weekly') return weekStartIso(isoDate);
+  if (period === 'monthly') return String(monthIndexFromIso(isoDate) + 1);
+  if (period === 'quarterly') return String(quarterIndexFromMonth(monthIndexFromIso(isoDate)) + 1);
+  return String(year);
+}
+
+function collectionBucketLabel(period: KpiPeriod, key: string, index: number, year: number): string {
+  if (period === 'daily') return formatShortDateLabel(key);
+  if (period === 'weekly') return weekLabelFromIso(key, index);
+  if (period === 'monthly') return MONTHS[Number(key) - 1] ?? key;
+  if (period === 'quarterly') return `T${key} ${year}`;
+  return `Año ${year}`;
+}
+
+function buildCollectionFormulaData(
+  clients: Client[],
+  assumptions: CashFlowAssumptions,
+  confirmedPayments: ConfirmedPayment[],
+): Record<KpiPeriod, FormulaPeriodData> | null {
+  if (clients.length === 0) return null;
+
+  const projectedEvents = projectYear(clients, assumptions);
+  const targetEvents = projectYear(
+    clients.map((client) => ({ ...client, complianceRate: 1 })),
+    { ...assumptions, globalCompliance: 1 },
+  );
+  const filteredConfirmed = confirmedPayments.filter((payment) => payment.realDate.startsWith(String(assumptions.year)));
+  const periods: KpiPeriod[] = ['daily', 'weekly', 'monthly', 'quarterly', 'annual'];
+  const result = {} as Record<KpiPeriod, FormulaPeriodData>;
+
+  for (const period of periods) {
+    const keys = collectionBucketKeys(period, assumptions.year);
+    const labels = keys.map((key, index) => collectionBucketLabel(period, key, index, assumptions.year));
+    const projectedByKey = new Map<string, number>();
+    const targetByKey = new Map<string, number>();
+    const confirmedByKey = new Map<string, number>();
+    const expectedClientsByKey = new Map<string, Set<string>>();
+    const confirmedClientsByKey = new Map<string, Set<string>>();
+    const lagSumsByKey = new Map<string, number>();
+    const lagCountsByKey = new Map<string, number>();
+
+    for (const event of projectedEvents) {
+      const key = collectionBucketKey(event.realDate, assumptions.year, period);
+      projectedByKey.set(key, (projectedByKey.get(key) ?? 0) + event.amount);
+      lagSumsByKey.set(key, (lagSumsByKey.get(key) ?? 0) + event.lagDays);
+      lagCountsByKey.set(key, (lagCountsByKey.get(key) ?? 0) + 1);
+    }
+
+    for (const event of targetEvents) {
+      const key = collectionBucketKey(event.realDate, assumptions.year, period);
+      targetByKey.set(key, (targetByKey.get(key) ?? 0) + event.amount);
+      const clientBucket = expectedClientsByKey.get(key) ?? new Set<string>();
+      clientBucket.add(event.clientId);
+      expectedClientsByKey.set(key, clientBucket);
+    }
+
+    for (const payment of filteredConfirmed) {
+      const key = collectionBucketKey(payment.realDate, assumptions.year, period);
+      confirmedByKey.set(key, (confirmedByKey.get(key) ?? 0) + payment.amount);
+      const clientBucket = confirmedClientsByKey.get(key) ?? new Set<string>();
+      clientBucket.add(payment.clientId);
+      confirmedClientsByKey.set(key, clientBucket);
+    }
+
+    const cobranzaProyectada = keys.map((key) => projectedByKey.get(key) ?? 0);
+    const metaCobranza = keys.map((key) => targetByKey.get(key) ?? 0);
+    const cobranzaConfirmada = keys.map((key) => confirmedByKey.get(key) ?? 0);
+    const clientesEsperados = keys.map((key) => (expectedClientsByKey.get(key)?.size ?? 0));
+    const clientesCobrados = keys.map((key) => (confirmedClientsByKey.get(key)?.size ?? 0));
+    const lagPromedioDias = keys.map((key) => {
+      const count = lagCountsByKey.get(key) ?? 0;
+      return count > 0 ? (lagSumsByKey.get(key) ?? 0) / count : 0;
+    });
+    const porcentajeCobranza = keys.map((key, index) => {
+      const meta = metaCobranza[index] ?? 0;
+      return meta > 0 ? (cobranzaConfirmada[index] ?? 0) / meta : 0;
+    });
+
+    result[period] = {
+      labels,
+      variables: {
+        cobranza_proyectada: cobranzaProyectada,
+        cobranza_confirmada: cobranzaConfirmada,
+        meta_cobranza: metaCobranza,
+        porcentaje_cobranza: porcentajeCobranza,
+        clientes_esperados_cobro: clientesEsperados,
+        clientes_cobrados: clientesCobrados,
+        lag_promedio_dias: lagPromedioDias,
+        dias_cobro: lagPromedioDias,
+      },
+    };
+  }
+
+  return result;
+}
+
+function aggregateSeries(values: number[], period: 'quarterly' | 'annual', mode: 'sum' | 'last'): number[] {
+  if (period === 'annual') {
+    if (mode === 'last') return [values[values.length - 1] ?? 0];
+    return [sum(values)];
+  }
+
+  const result: number[] = [];
+  for (let quarter = 0; quarter < 4; quarter++) {
+    const start = quarter * 3;
+    const slice = values.slice(start, start + 3);
+    result.push(mode === 'last' ? (slice[slice.length - 1] ?? 0) : sum(slice));
+  }
+  return result;
+}
+
+function labelFromPeriodMonthSlice(period: 'quarterly' | 'annual', year: number): string[] {
+  if (period === 'annual') return [`Año ${year}`];
+  return ['T1', 'T2', 'T3', 'T4'].map((quarter) => `${quarter} ${year}`);
+}
+
+function buildForecastFormulaData(input: KpiCatalogInput): Record<KpiPeriod, FormulaPeriodData> | null {
+  const { plan, proposals, scenarios, simulations, overrides, activeProposalId, activeScenarioId } = input;
+  if (!plan || scenarios.length === 0) return null;
+
+  const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
+  const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
+  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
+    ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? baseScenario
+    ?? null;
+
+  if (!activeScenario) return null;
+
+  const effectiveProposal = activeProposal ?? {
+    id: 'proposal-base',
+    name: BASE_SCENARIO_NAME,
+    description: 'Pronóstico original',
+    status: 'Pendiente' as const,
+    createdAt: '',
+    updatedAt: '',
+  };
+
+  const conceptDefs = buildConceptVariableDefs(plan);
+  const periodData = {} as Record<KpiPeriod, FormulaPeriodData>;
+
+  const populateFromEvaluation = (period: Extract<KpiPeriod, 'daily' | 'weekly' | 'monthly'>, granularity: 'daily' | 'weekly' | 'monthly') => {
+    const activeEvaluation = evaluateScenario(
+      plan,
+      effectiveProposal,
+      activeScenario,
+      isBaseScenario(activeScenario) ? [] : simulations,
+      isBaseScenario(activeScenario) ? [] : overrides,
+      { granularity },
+    );
+    const baseEvaluation = evaluateScenario(
+      plan,
+      effectiveProposal,
+      activeScenario,
+      [],
+      [],
+      { granularity },
+    );
+
+    const variables: FormulaVariableMap = {
+      ingresos: activeEvaluation.metrics.ingresos,
+      egresos: activeEvaluation.metrics.egresos,
+      flujo_neto: activeEvaluation.metrics.flujoNeto,
+      caja_final: activeEvaluation.metrics.cajaFinal,
+      cobranza: activeEvaluation.metrics.cobranza,
+      pagos_proveedores: activeEvaluation.metrics.pagosProveedores,
+      base_ingresos: baseEvaluation.metrics.ingresos,
+      presupuesto_ingresos: baseEvaluation.metrics.ingresos,
+      base_egresos: baseEvaluation.metrics.egresos,
+      presupuesto_egresos: baseEvaluation.metrics.egresos,
+      base_flujo_neto: baseEvaluation.metrics.flujoNeto,
+      presupuesto_flujo_neto: baseEvaluation.metrics.flujoNeto,
+      base_caja_final: baseEvaluation.metrics.cajaFinal,
+      presupuesto_caja_final: baseEvaluation.metrics.cajaFinal,
+      base_cobranza: baseEvaluation.metrics.cobranza,
+      presupuesto_cobranza: baseEvaluation.metrics.cobranza,
+      base_pagos_proveedores: baseEvaluation.metrics.pagosProveedores,
+      presupuesto_pagos_proveedores: baseEvaluation.metrics.pagosProveedores,
+      desviacion_ingresos: activeEvaluation.metrics.ingresos.map((value, index) => value - (baseEvaluation.metrics.ingresos[index] ?? 0)),
+      desviacion_egresos: activeEvaluation.metrics.egresos.map((value, index) => value - (baseEvaluation.metrics.egresos[index] ?? 0)),
+      desviacion_flujo_neto: activeEvaluation.metrics.flujoNeto.map((value, index) => value - (baseEvaluation.metrics.flujoNeto[index] ?? 0)),
+      desviacion_caja_final: activeEvaluation.metrics.cajaFinal.map((value, index) => value - (baseEvaluation.metrics.cajaFinal[index] ?? 0)),
+      desviacion_cobranza: activeEvaluation.metrics.cobranza.map((value, index) => value - (baseEvaluation.metrics.cobranza[index] ?? 0)),
+      desviacion_pagos_proveedores: activeEvaluation.metrics.pagosProveedores.map((value, index) => value - (baseEvaluation.metrics.pagosProveedores[index] ?? 0)),
+    };
+
+    for (const concept of conceptDefs) {
+      const activeValues = activeEvaluation.valuesByConceptId.get(concept.conceptId) ?? Array(activeEvaluation.months.length).fill(0);
+      const baseValues = baseEvaluation.baseValuesByConceptId.get(concept.conceptId) ?? Array(baseEvaluation.months.length).fill(0);
+      variables[`concepto_${concept.slug}`] = activeValues;
+      variables[`base_concepto_${concept.slug}`] = baseValues;
+      variables[`presupuesto_concepto_${concept.slug}`] = baseValues;
+      variables[`desviacion_concepto_${concept.slug}`] = activeValues.map((value, index) => value - (baseValues[index] ?? 0));
+    }
+
+    periodData[period] = {
+      labels: activeEvaluation.months.map((month) => month.label),
+      variables,
+    };
+  };
+
+  populateFromEvaluation('daily', 'daily');
+  populateFromEvaluation('weekly', 'weekly');
+  populateFromEvaluation('monthly', 'monthly');
+
+  const monthly = periodData.monthly;
+  const buildAggregateVariables = (period: 'quarterly' | 'annual') => {
+    const variables: FormulaVariableMap = {};
+    for (const [key, values] of Object.entries(monthly.variables)) {
+      const mode = key.includes('caja_final') ? 'last' : 'sum';
+      variables[key] = aggregateSeries(values, period, mode);
+    }
+    return variables;
+  };
+
+  periodData.quarterly = {
+    labels: labelFromPeriodMonthSlice('quarterly', plan.year),
+    variables: buildAggregateVariables('quarterly'),
+  };
+  periodData.annual = {
+    labels: labelFromPeriodMonthSlice('annual', plan.year),
+    variables: buildAggregateVariables('annual'),
+  };
+
+  return periodData;
+}
+
+function validateFormula(expression: string, allowedVariables: string[]): string | null {
+  const trimmed = expression.trim();
+  if (!trimmed) return 'Escribe una fórmula para el KPI.';
+  if (/[^A-Za-z0-9_+\-*/%().,<>=!&|?:\s]/.test(trimmed)) {
+    return 'La fórmula contiene caracteres no permitidos.';
+  }
+
+  const identifiers = trimmed.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+  const allowed = new Set<string>([
+    ...allowedVariables,
+    ...Object.keys(FORMULA_HELPER_IMPL),
+    'true',
+    'false',
+    'null',
+  ]);
+
+  for (const identifier of identifiers) {
+    if (!allowed.has(identifier)) {
+      return `Variable o función desconocida: ${identifier}`;
+    }
+  }
+
+  return null;
+}
+
+function evaluateFormula(expression: string, scope: Record<string, number>): number {
+  const helperKeys = Object.keys(FORMULA_HELPER_IMPL);
+  const variableKeys = Object.keys(scope);
+  const fn = new Function(
+    ...helperKeys,
+    ...variableKeys,
+    `"use strict"; return (${expression});`,
+  );
+  const result = fn(
+    ...helperKeys.map((key) => FORMULA_HELPER_IMPL[key as keyof typeof FORMULA_HELPER_IMPL]),
+    ...variableKeys.map((key) => scope[key]),
+  );
+
+  return typeof result === 'number' && Number.isFinite(result) ? result : 0;
+}
+
+function latestMeaningfulIndex(values: number[], comparisonValue?: number | null): number {
+  for (let index = values.length - 1; index >= 0; index--) {
+    const value = values[index] ?? 0;
+    if (Math.abs(value) > 0.0001) return index;
+    if (comparisonValue !== null && comparisonValue !== undefined && Math.abs(comparisonValue) > 0.0001) return index;
+  }
+  return Math.max(0, values.length - 1);
+}
+
+function currentIndexForPeriod(period: KpiPeriod, activeMonth: number, values: number[], comparisonValue: number | null): number {
+  if (period === 'annual') return 0;
+  if (period === 'quarterly') return Math.min(3, quarterIndexFromMonth(clampMonthIndex(activeMonth)));
+  if (period === 'monthly') return Math.min(values.length - 1, clampMonthIndex(activeMonth));
+  return latestMeaningfulIndex(values, comparisonValue);
+}
+
+function customStatusForValue(value: number, definition: CustomKpiDefinition): KpiStatus {
+  if (definition.goal === 'higher') {
+    if (value >= definition.targetValue) return 'met';
+    if (value >= definition.warningThreshold) return 'warning';
+    return 'missed';
+  }
+
+  if (value <= definition.targetValue) return 'met';
+  if (value <= definition.warningThreshold) return 'warning';
+  return 'missed';
+}
+
+function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
+  const customKpis = input.customKpis ?? [];
+  if (customKpis.length === 0) return [];
+
+  const collectionData = buildCollectionFormulaData(input.clients, input.assumptions, input.confirmedPayments);
+  const forecastData = buildForecastFormulaData(input);
+  const allowedVariables = Array.from(new Set([
+    ...Object.values(collectionData ?? {}).flatMap((period) => Object.keys(period.variables)),
+    ...Object.values(forecastData ?? {}).flatMap((period) => Object.keys(period.variables)),
+  ]));
+
+  return customKpis.map((definition) => {
+    const forecastPeriod = forecastData?.[definition.period];
+    const collectionPeriod = collectionData?.[definition.period];
+    const periodData = forecastPeriod || collectionPeriod
+      ? {
+          labels: forecastPeriod?.labels ?? collectionPeriod?.labels ?? [],
+          variables: {
+            ...(forecastPeriod?.variables ?? {}),
+            ...(collectionPeriod?.variables ?? {}),
+          },
+        }
+      : null;
+
+    const formulaError = validateFormula(definition.formula, allowedVariables);
+
+    if (!periodData || periodData.labels.length === 0) {
+      return {
+        id: definition.id,
+        label: definition.name,
+        description: definition.notes || `Fórmula: ${definition.formula}`,
+        category: definition.category || 'KPIs personalizados',
+        unit: definition.unit,
+        accentColor: hex.primary,
+        comparisonKind: 'target',
+        goal: definition.goal,
+        source: 'custom',
+        isCustom: true,
+        available: false,
+        availabilityReason: 'No hay datos suficientes para este periodo con el contexto actual.',
+        periodLabel: null,
+        periodKey: definition.period,
+        value: null,
+        comparisonValue: definition.targetValue,
+        comparisonLabel: 'Meta',
+        diffValue: null,
+        status: 'na',
+        points: [],
+        chartValueLabel: 'Resultado',
+        chartComparisonLabel: 'Meta',
+        note: definition.notes,
+        formula: definition.formula,
+        targetValue: definition.targetValue,
+        warningThreshold: definition.warningThreshold,
+        customUnitLabel: definition.customUnitLabel ?? null,
+      };
+    }
+
+    if (formulaError) {
+      return {
+        id: definition.id,
+        label: definition.name,
+        description: definition.notes || `Fórmula: ${definition.formula}`,
+        category: definition.category || 'KPIs personalizados',
+        unit: definition.unit,
+        accentColor: hex.primary,
+        comparisonKind: 'target',
+        goal: definition.goal,
+        source: 'custom',
+        isCustom: true,
+        available: false,
+        availabilityReason: formulaError,
+        periodLabel: null,
+        periodKey: definition.period,
+        value: null,
+        comparisonValue: definition.targetValue,
+        comparisonLabel: 'Meta',
+        diffValue: null,
+        status: 'na',
+        points: [],
+        chartValueLabel: 'Resultado',
+        chartComparisonLabel: 'Meta',
+        note: definition.notes,
+        formula: definition.formula,
+        targetValue: definition.targetValue,
+        warningThreshold: definition.warningThreshold,
+        customUnitLabel: definition.customUnitLabel ?? null,
+      };
+    }
+
+    const values = periodData.labels.map((_, index) => {
+      const scope = Object.fromEntries(
+        Object.entries(periodData.variables).map(([key, series]) => [key, series[index] ?? 0]),
+      );
+      return evaluateFormula(definition.formula, scope);
+    });
+
+    const currentIndex = currentIndexForPeriod(definition.period, input.activeMonth, values, definition.targetValue);
+    const points = periodData.labels.map((label, index) => ({
+      label,
+      value: values[index] ?? 0,
+      comparison: definition.targetValue,
+      status: customStatusForValue(values[index] ?? 0, definition),
+    }));
+    const currentValue = values[currentIndex] ?? 0;
+
+    return {
+      id: definition.id,
+      label: definition.name,
+      description: definition.notes || `Fórmula: ${definition.formula}`,
+      category: definition.category || 'KPIs personalizados',
+      unit: definition.unit,
+      accentColor: hex.primary,
+      comparisonKind: 'target',
+      goal: definition.goal,
+      source: 'custom',
+      isCustom: true,
+      available: true,
+      availabilityReason: null,
+      periodLabel: periodData.labels[currentIndex] ?? null,
+      periodKey: definition.period,
+      value: currentValue,
+      comparisonValue: definition.targetValue,
+      comparisonLabel: 'Meta',
+      diffValue: currentValue - definition.targetValue,
+      status: customStatusForValue(currentValue, definition),
+      points,
+      chartValueLabel: 'Resultado',
+      chartComparisonLabel: 'Meta',
+      note: definition.notes,
+      formula: definition.formula,
+      targetValue: definition.targetValue,
+      warningThreshold: definition.warningThreshold,
+      customUnitLabel: definition.customUnitLabel ?? null,
+    };
+  });
+}
+
 export function buildKpiCatalog(input: KpiCatalogInput): KpiCatalogEntry[] {
   const context: BuildContext = {
     activeMonth: input.activeMonth,
     collection: buildCollectionSnapshot(input.clients, input.assumptions, input.confirmedPayments),
     forecast: buildForecastSnapshot(input),
   };
-
-  return KPI_DEFINITIONS.map((definition) => {
+  const builtIns: KpiCatalogEntry[] = KPI_DEFINITIONS.map((definition): KpiCatalogEntry => {
     const needsCollection = definition.category === 'Cobranza';
     if (needsCollection && !context.collection) {
       return unavailable(definition, 'Carga clientes para habilitar KPIs de cobranza.');
@@ -710,7 +1425,11 @@ export function buildKpiCatalog(input: KpiCatalogInput): KpiCatalogEntry[] {
       accentColor: definition.accentColor,
       comparisonKind: definition.comparisonKind,
       goal: definition.goal,
+      source: 'template',
+      isCustom: false,
       ...definition.build(context),
     };
   });
+
+  return [...builtIns, ...buildCustomKpiEntries(input)];
 }
