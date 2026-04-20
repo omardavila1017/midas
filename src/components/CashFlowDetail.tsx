@@ -150,6 +150,27 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
       }, 0);
   }, [collections, clientById, assumptions.year]);
 
+  // Collections by date for row expansion
+  const collectionsByDate = useMemo(() => {
+    const map = new Map<string, CollectionEvent[]>();
+    for (const e of collections) {
+      if (!e.realDate.startsWith(assumptions.year.toString())) continue;
+      if (!map.has(e.realDate)) map.set(e.realDate, []);
+      map.get(e.realDate)!.push(e);
+    }
+    return map;
+  }, [collections, assumptions.year]);
+
+  const paymentsByDate = useMemo(() => {
+    const map = new Map<string, PaymentEvent[]>();
+    for (const p of payments) {
+      if (!p.date.startsWith(assumptions.year.toString())) continue;
+      if (!map.has(p.date)) map.set(p.date, []);
+      map.get(p.date)!.push(p);
+    }
+    return map;
+  }, [payments, assumptions.year]);
+
   // Empty state — show bank data if available, guide user to load the rest
   if (clients.length === 0 && cxpRecords.length === 0) {
     return (
@@ -219,27 +240,6 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
       </div>
     );
   }
-
-  // Collections by date for row expansion
-  const collectionsByDate = useMemo(() => {
-    const map = new Map<string, CollectionEvent[]>();
-    for (const e of collections) {
-      if (!e.realDate.startsWith(assumptions.year.toString())) continue;
-      if (!map.has(e.realDate)) map.set(e.realDate, []);
-      map.get(e.realDate)!.push(e);
-    }
-    return map;
-  }, [collections, assumptions.year]);
-
-  const paymentsByDate = useMemo(() => {
-    const map = new Map<string, PaymentEvent[]>();
-    for (const p of payments) {
-      if (!p.date.startsWith(assumptions.year.toString())) continue;
-      if (!map.has(p.date)) map.set(p.date, []);
-      map.get(p.date)!.push(p);
-    }
-    return map;
-  }, [payments, assumptions.year]);
 
   const handleExport = () => {
     const rows = daily.map(d => ({
@@ -531,10 +531,6 @@ function WeeklyTable({
   paymentsByDate: Map<string, PaymentEvent[]>;
   clientById: Map<string, Client>;
 }) {
-  if (weekly.length === 0) {
-    return <EmptyTable msg="Sin actividad en el periodo." />;
-  }
-
   // Group daily rows by week start for expansion
   const dailyByWeek = useMemo(() => {
     const map = new Map<string, typeof daily>();
@@ -549,6 +545,10 @@ function WeeklyTable({
     }
     return map;
   }, [daily]);
+
+  if (weekly.length === 0) {
+    return <EmptyTable msg="Sin actividad en el periodo." />;
+  }
 
   return (
     <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
