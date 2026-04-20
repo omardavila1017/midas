@@ -412,6 +412,18 @@ const CXPDashboard = ({ records, onReset }: { records: CXPRecord[]; onReset: () 
     activeKpi === 'vencido' ? 'Total Vencido' :
     activeKpi === 'mas90' ? 'Vencido > 90 días' : '';
 
+  // Reset local filters when parent switches company (records no longer include the selected cia)
+  useEffect(() => {
+    if (selectedCia !== 'all' && !records.some(r => r.cia === selectedCia)) {
+      setSelectedCia('all');
+      setActiveBucket(null);
+      setActiveClassification(null);
+      setActiveKpi(null);
+      setExpandedSupplier(null);
+      setProvPage(0);
+    }
+  }, [records, selectedCia]);
+
   // ── Filtered Records ──
   const filtered = useMemo(() => {
     let f = records;
