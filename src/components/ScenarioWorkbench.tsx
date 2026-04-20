@@ -1,14 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import {
   Check,
   FlaskConical,
   Pencil,
@@ -37,14 +28,11 @@ import {
 } from '../types';
 import {
   buildSimulationEffects,
-  cloneProposalWithActiveScenario,
   isBaseScenario,
 } from '../domain/simulationCompiler';
 import {
-  evaluateScenario,
   resolveConceptLabel,
 } from '../domain/scenarioEngine';
-import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 
 /* ─── Props ─── */
 
@@ -95,13 +83,6 @@ const SIMULATION_TYPES: { value: SimulationType; label: string; description: str
   { value: 'timing_shift', label: 'Atrasar / adelantar', description: 'Mueve cobros o pagos en el calendario.' },
   { value: 'pause_expense', label: 'Pausar gasto', description: 'Reduce al 100% un gasto durante el periodo.' },
 ];
-
-const KPI_CONFIG = [
-  { key: 'ingresos12m', label: 'Ingresos 12m', color: 'text-[var(--primary)]' },
-  { key: 'egresos12m', label: 'Egresos 12m', color: 'text-[var(--danger)]' },
-  { key: 'flujoNeto12m', label: 'Flujo Neto', color: 'text-[var(--success)]' },
-  { key: 'cajaFinal', label: 'Caja Final', color: 'text-[var(--gray-950)]' },
-] as const;
 
 /* ─── Helpers ─── */
 
@@ -228,6 +209,22 @@ interface AdjustmentForm {
   comments: string;
 }
 
+interface ScenarioDraft {
+  proposalId: string | null;
+  scenarioId: string | null;
+  name: string;
+  description: string;
+}
+
+function makeScenarioDraft(proposal?: Proposal | null, scenario?: Scenario | null): ScenarioDraft {
+  return {
+    proposalId: proposal?.id ?? scenario?.proposalId ?? null,
+    scenarioId: scenario?.id ?? null,
+    name: scenario?.name ?? proposal?.name ?? '',
+    description: scenario?.description ?? proposal?.description ?? '',
+  };
+}
+
 function defaultAdjustmentForm(plan: FlowPlan, assignedScenarioIds: string[] = []): AdjustmentForm {
   return {
     name: '', description: '',
@@ -279,13 +276,6 @@ function buildSimulationFromForm(plan: FlowPlan, form: AdjustmentForm, existing?
   return sim;
 }
 
-/* ─── Virtual base proposal ─── */
-
-const VIRTUAL_BASE: Proposal = {
-  id: 'proposal-base', name: BASE_SCENARIO_NAME, description: 'Pronóstico original',
-  status: 'Pendiente', createdAt: '', updatedAt: '',
-};
-
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════ */
@@ -302,11 +292,28 @@ export default function ScenarioWorkbench({
   const baseScenario = scenarios.find(s => isBaseScenario(s)) ?? null;
   const activeProposal = proposals.find(p => p.id === activeProposalId) ?? null;
   const activeScenario = scenarios.find(s => s.id === activeScenarioId) ?? baseScenario ?? null;
-  const effectiveProposal = isBaseScenario(activeScenario) ? VIRTUAL_BASE : (activeProposal ?? VIRTUAL_BASE);
   const editableScenarios = useMemo(
     () => scenarios.filter((scenario) => !isBaseScenario(scenario)),
     [scenarios],
   );
+  const scenarioCards = useMemo(() => (
+    editableScenarios.map((scenario) => {
+      const proposal = proposals.find((item) => item.id === scenario.proposalId) ?? null;
+      const name = scenario.name.trim() || proposal?.name?.trim() || 'Escenario sin nombre';
+      const description = scenario.description.trim()
+        || proposal?.description?.trim()
+        || 'Sin descripción todavía. Agrega un contexto breve para que el equipo entienda este escenario.';
+
+      return {
+        scenario,
+        proposal,
+        name,
+        description,
+        adjustmentCount: scenario.simulationIds.length,
+        isSelected: activeScenario?.id === scenario.id,
+      };
+    })
+  ), [activeScenario?.id, editableScenarios, proposals]);
   const scenarioLabelsById = useMemo(() => new Map(
     editableScenarios.map((scenario) => {
       const proposalName = proposals.find((proposal) => proposal.id === scenario.proposalId)?.name?.trim() ?? '';
@@ -321,36 +328,12 @@ export default function ScenarioWorkbench({
   const scenarioForProposal = (proposalId: string) =>
     scenarios.find(s => s.proposalId === proposalId && !isBaseScenario(s));
 
-  /* ── Evaluations ── */
-  const baseEvaluation = useMemo(() => {
-    if (!activeScenario) return null;
-    return evaluateScenario(plan, effectiveProposal, activeScenario, [], []);
-  }, [activeScenario, effectiveProposal, plan]);
-
-  const activeEvaluation = useMemo(() => {
-    if (!activeScenario) return null;
-    return evaluateScenario(
-      plan, effectiveProposal, activeScenario,
-      isBaseScenario(activeScenario) ? [] : simulations,
-      isBaseScenario(activeScenario) ? [] : overrides,
-    );
-  }, [activeScenario, effectiveProposal, overrides, plan, simulations]);
-
-  const chartData = useMemo(() => {
-    if (!activeEvaluation || !baseEvaluation) return [];
-    return activeEvaluation.months.map((m, i) => ({
-      month: m.label,
-      base: baseEvaluation.metrics.cajaFinal[i] ?? 0,
-      escenario: activeEvaluation.metrics.cajaFinal[i] ?? 0,
-    }));
-  }, [activeEvaluation, baseEvaluation]);
-
   /* ── Adjustment panel state ── */
   const [panelOpen, setPanelOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<AdjustmentForm>(() => defaultAdjustmentForm(plan));
-  const [newScenarioName, setNewScenarioName] = useState('');
-  const [showNewScenario, setShowNewScenario] = useState(false);
+  const [scenarioEditorOpen, setScenarioEditorOpen] = useState(false);
+  const [scenarioDraft, setScenarioDraft] = useState<ScenarioDraft>(() => makeScenarioDraft());
 
   const assignedIds = new Set(activeScenario?.simulationIds ?? []);
   const assignedSimulations = simulations.filter(s => assignedIds.has(s.id));
@@ -397,27 +380,67 @@ export default function ScenarioWorkbench({
 
   /* ── Handlers ── */
 
-  const createScenario = () => {
-    const name = newScenarioName.trim();
+  const openNewScenarioEditor = () => {
+    setScenarioDraft(makeScenarioDraft());
+    setScenarioEditorOpen(true);
+  };
+
+  const openEditScenario = (scenario: Scenario) => {
+    const proposal = proposals.find((item) => item.id === scenario.proposalId) ?? null;
+    setScenarioDraft(makeScenarioDraft(proposal, scenario));
+    setScenarioEditorOpen(true);
+  };
+
+  const closeScenarioEditor = () => {
+    setScenarioEditorOpen(false);
+    setScenarioDraft(makeScenarioDraft());
+  };
+
+  const saveScenarioDraft = () => {
+    const name = scenarioDraft.name.trim();
+    const description = scenarioDraft.description.trim();
     if (!name) return;
     const ts = now();
+
+    if (scenarioDraft.proposalId && scenarioDraft.scenarioId) {
+      const proposal = proposals.find((item) => item.id === scenarioDraft.proposalId) ?? null;
+      const scenario = scenarios.find((item) => item.id === scenarioDraft.scenarioId) ?? null;
+      if (!proposal || !scenario) return;
+
+      onUpdate({
+        ...proposal,
+        name,
+        description,
+        updatedAt: ts,
+      });
+      onUpdateScenario({
+        ...scenario,
+        name,
+        description,
+        updatedAt: ts,
+      });
+      onSelectProposal(proposal.id);
+      onSelectScenario(scenario.id);
+      closeScenarioEditor();
+      return;
+    }
+
     const proposalId = `proposal-${Date.now()}`;
     const scenarioId = `scenario-${Date.now()}`;
 
     onAdd({
-      id: proposalId, name, description: '',
+      id: proposalId, name, description,
       status: 'Pendiente', createdAt: ts, updatedAt: ts,
     });
     onAddScenario({
       id: scenarioId, proposalId, kind: 'proposal',
-      name, description: '', probability: 1,
+      name, description, probability: 1,
       startYearMonth: `${plan.year}-01`, horizonMonths: 12,
       simulationIds: [], createdAt: ts, updatedAt: ts,
     });
     onSelectProposal(proposalId);
     onSelectScenario(scenarioId);
-    setNewScenarioName('');
-    setShowNewScenario(false);
+    closeScenarioEditor();
   };
 
   const deleteScenarioFull = (proposalId: string) => {
@@ -516,255 +539,298 @@ export default function ScenarioWorkbench({
 
   return (
     <div className="space-y-5 relative">
-
-      {/* ─── Scenario selector strip ─── */}
-      <div className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-4 mb-3">
+      <section className="rounded-[28px] border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 className="text-[20px] font-semibold text-[var(--gray-950)]">Escenarios</h1>
-            <p className="text-[13px] text-[var(--gray-400)]">
-              Crea escenarios financieros con ajustes y compáralos contra el Base.
+            <h1 className="text-[24px] font-semibold tracking-tight text-[var(--gray-950)]">Escenarios</h1>
+            <p className="mt-1 text-[13px] text-[var(--gray-400)]">
+              Selecciona un escenario para trabajar sus ajustes. El escenario base siempre queda disponible como referencia rápida.
             </p>
           </div>
           <button
-            onClick={() => setShowNewScenario(true)}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--primary)] px-4 py-2 text-[13px] font-medium text-white hover:bg-[var(--primary-hover)] transition"
+            onClick={openNewScenarioEditor}
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
           >
-            <Plus className="w-4 h-4" /> Nuevo escenario
+            <Plus className="w-4 h-4" />
+            Nuevo escenario
           </button>
         </div>
 
-        {showNewScenario && (
-          <div className="flex items-center gap-3 mb-3 rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-3">
-            <input
-              value={newScenarioName}
-              onChange={e => setNewScenarioName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') createScenario(); if (e.key === 'Escape') setShowNewScenario(false); }}
-              placeholder="Nombre del escenario"
-              className="flex-1 rounded-lg border border-[var(--gray-200)] bg-white px-3 py-2 text-[13px] outline-none focus:border-[var(--primary)]"
-              autoFocus
-            />
-            <button onClick={createScenario} className="rounded-lg bg-[#1d1d1f] px-4 py-2 text-[12px] font-medium text-white">Crear</button>
-            <button onClick={() => setShowNewScenario(false)} className="rounded-lg border border-[var(--gray-200)] px-3 py-2 text-[12px] text-[var(--gray-500)]">Cancelar</button>
+        {scenarioEditorOpen && (
+          <div className="mt-5 rounded-2xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-4">
+            <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)_auto]">
+              <Field label="Nombre del escenario">
+                <input
+                  value={scenarioDraft.name}
+                  onChange={(event) => setScenarioDraft((current) => ({ ...current, name: event.target.value }))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') saveScenarioDraft();
+                    if (event.key === 'Escape') closeScenarioEditor();
+                  }}
+                  placeholder="Ej. Conservador Q3"
+                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] outline-none focus:border-[var(--primary)]"
+                  autoFocus
+                />
+              </Field>
+              <Field label="Descripción breve">
+                <textarea
+                  value={scenarioDraft.description}
+                  onChange={(event) => setScenarioDraft((current) => ({ ...current, description: event.target.value }))}
+                  rows={2}
+                  placeholder="Ej. Menor cobranza y control de gastos operativos."
+                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none outline-none focus:border-[var(--primary)]"
+                />
+              </Field>
+              <div className="flex items-end gap-2 xl:justify-end">
+                <button
+                  onClick={saveScenarioDraft}
+                  disabled={!scenarioDraft.name.trim()}
+                  className="rounded-xl bg-[#1d1d1f] px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40"
+                >
+                  {scenarioDraft.scenarioId ? 'Guardar' : 'Crear'}
+                </button>
+                <button
+                  onClick={closeScenarioEditor}
+                  className="rounded-xl border border-[var(--gray-200)] px-4 py-2.5 text-[12px] text-[var(--gray-500)]"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {/* Base pill */}
-          <button
-            onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
-            className={`flex-shrink-0 rounded-xl border px-4 py-3 text-left transition min-w-[180px] ${
-              isBase
-                ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
-                : 'border-[var(--gray-200)]/60 bg-[var(--surface-alt)] hover:bg-white'
-            }`}
-          >
-            <p className="text-[13px] font-semibold">{BASE_SCENARIO_NAME}</p>
-            <p className={`text-[11px] mt-0.5 ${isBase ? 'text-white/70' : 'text-[var(--gray-400)]'}`}>Pronóstico original</p>
-          </button>
+        <div className="mt-6 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
+          <aside className={`rounded-2xl border p-4 ${
+            isBase
+              ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+              : 'border-[var(--gray-200)]/60 bg-[var(--surface-alt)]'
+          }`}>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">
+              Base
+            </div>
+            <h2 className="mt-3 text-[20px] font-semibold tracking-tight">{BASE_SCENARIO_NAME}</h2>
+            <p className={`mt-2 text-[13px] leading-6 ${isBase ? 'text-white/72' : 'text-[var(--gray-500)]'}`}>
+              Pronóstico original sin ajustes. Úsalo como referencia rápida para comparar cualquier escenario creado.
+            </p>
+            <button
+              onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
+              className={`mt-5 inline-flex h-10 items-center rounded-xl px-4 text-[13px] font-medium transition ${
+                isBase
+                  ? 'bg-white text-[#1d1d1f]'
+                  : 'bg-[#1d1d1f] text-white hover:bg-black'
+              }`}
+            >
+              {isBase ? 'Base seleccionado' : 'Ver escenario base'}
+            </button>
+          </aside>
 
-          {/* Scenario pills */}
-          {proposals.map(proposal => {
-            const sc = scenarioForProposal(proposal.id);
-            const adjustCount = sc?.simulationIds.length ?? 0;
-            const selected = activeProposal?.id === proposal.id && !isBase;
-            return (
-              <button
-                key={proposal.id}
-                onClick={() => selectScenarioByProposal(proposal.id)}
-                className={`flex-shrink-0 rounded-xl border px-4 py-3 text-left transition min-w-[180px] group ${
-                  selected
-                    ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
-                    : 'border-[var(--gray-200)]/60 bg-[var(--surface-alt)] hover:bg-white'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)] truncate">{proposal.name}</p>
-                    <p className="text-[11px] text-[var(--gray-400)] mt-0.5">{adjustCount} ajustes</p>
-                  </div>
-                  <button
-                    onClick={e => { e.stopPropagation(); deleteScenarioFull(proposal.id); }}
-                    className="opacity-0 group-hover:opacity-100 rounded-lg p-1 text-[var(--gray-400)] hover:text-[#ff3b30] hover:bg-white transition"
-                    title="Eliminar escenario"
+          <div>
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Escenarios creados</h2>
+                <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+                  Cada tarjeta muestra el escenario, su contexto breve y las acciones principales.
+                </p>
+              </div>
+              <span className="rounded-full bg-[var(--surface-alt)] px-3 py-1 text-[11px] font-medium text-[var(--gray-500)]">
+                {scenarioCards.length} {scenarioCards.length === 1 ? 'escenario' : 'escenarios'}
+              </span>
+            </div>
+
+            {scenarioCards.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
+                <FlaskConical className="mx-auto mb-3 h-6 w-6 text-[var(--gray-400)]" />
+                <p className="text-[13px] font-medium text-[var(--gray-950)]">Todavía no hay escenarios creados</p>
+                <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+                  Crea tu primer escenario para empezar a probar ajustes sin tocar el Base.
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+                {scenarioCards.map(({ scenario, proposal, name, description, adjustmentCount, isSelected }) => (
+                  <article
+                    key={scenario.id}
+                    className={`rounded-2xl border p-4 transition ${
+                      isSelected
+                        ? 'border-[var(--primary)] bg-[var(--primary-muted)]/60 shadow-[0_10px_24px_rgba(10,132,255,0.08)]'
+                        : 'border-[var(--gray-200)]/60 bg-white hover:border-[var(--gray-300)] hover:bg-[var(--surface-alt)]'
+                    }`}
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="truncate text-[15px] font-semibold text-[var(--gray-950)]">{name}</h3>
+                          {isSelected && (
+                            <span className="rounded-full bg-[var(--primary)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                              Activo
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-2 line-clamp-3 text-[12px] leading-6 text-[var(--gray-500)]">
+                          {description}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openEditScenario(scenario)}
+                          className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[var(--gray-950)]"
+                          title="Editar escenario"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        {proposal && (
+                          <button
+                            onClick={() => deleteScenarioFull(proposal.id)}
+                            className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[#ff3b30]"
+                            title="Eliminar escenario"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-      {/* ─── KPI cards ─── */}
-      {activeEvaluation && baseEvaluation && (
-        <div className="grid grid-cols-4 gap-4">
-          {KPI_CONFIG.map(kpi => {
-            const val = activeEvaluation.kpis[kpi.key];
-            const baseVal = baseEvaluation.kpis[kpi.key];
-            const diff = val - baseVal;
-            return (
-              <div key={kpi.key} className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm">
-                <p className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">{kpi.label}</p>
-                <p className={`mt-2 text-[22px] font-semibold ${kpi.color}`}>{formatCurrency(val)}</p>
-                <div className="mt-1 flex items-center gap-2 text-[11px]">
-                  <span className="text-[var(--gray-400)]">Base: {formatCurrency(baseVal)}</span>
-                  {diff !== 0 && (
-                    <span className={diff > 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}>
-                      {diff > 0 ? '+' : ''}{formatCurrency(diff)}
-                    </span>
-                  )}
+                    <div className="mt-4 flex items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge>{adjustmentCount} {adjustmentCount === 1 ? 'ajuste' : 'ajustes'}</Badge>
+                        {proposal?.status && <Badge>{proposal.status}</Badge>}
+                      </div>
+                      <button
+                        onClick={() => proposal && selectScenarioByProposal(proposal.id)}
+                        disabled={!proposal}
+                        className={`inline-flex h-9 items-center rounded-xl px-3 text-[12px] font-medium transition ${
+                          isSelected
+                            ? 'bg-white text-[var(--primary)] border border-[var(--primary)]/20'
+                            : 'bg-[#1d1d1f] text-white hover:bg-black'
+                        } disabled:opacity-40`}
+                      >
+                        {isSelected ? 'Seleccionado' : 'Abrir'}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
+        {isBase ? (
+          <div className="flex flex-col gap-4 rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-8 text-center lg:flex-row lg:items-center lg:justify-between lg:text-left">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--gray-400)]">Escenario seleccionado</div>
+              <p className="mt-2 text-[18px] font-semibold text-[var(--gray-950)]">Estás viendo el Escenario Base</p>
+              <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">
+                El Base es solo referencia. Para trabajar ajustes, abre uno de los escenarios creados o crea uno nuevo.
+              </p>
+            </div>
+            <button
+              onClick={openNewScenarioEditor}
+              className="inline-flex h-10 items-center justify-center rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
+            >
+              Crear escenario
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--gray-400)]">Escenario seleccionado</div>
+                <h2 className="mt-2 text-[22px] font-semibold tracking-tight text-[var(--gray-950)]">
+                  {activeScenario?.name ?? activeProposal?.name ?? 'Escenario'}
+                </h2>
+                <p className="mt-2 max-w-3xl text-[13px] leading-6 text-[var(--gray-500)]">
+                  {activeScenario?.description?.trim()
+                    || activeProposal?.description?.trim()
+                    || 'Sin descripción todavía. Agrega un resumen corto para que el equipo entienda cuándo usar este escenario.'}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Badge>{assignedSimulations.length} {assignedSimulations.length === 1 ? 'ajuste' : 'ajustes'}</Badge>
+                  {activeProposal?.status && <Badge>{activeProposal.status}</Badge>}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
 
-      {/* ─── Chart: Base vs Escenario ─── */}
-      {chartData.length > 0 && !isBase && (
-        <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
-          <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-1">Caja: Base vs {activeProposal?.name ?? 'Escenario'}</h2>
-          <p className="text-[12px] text-[var(--gray-400)] mb-4">Impacto acumulado de los ajustes en la caja mensual.</p>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={chartData}>
-              <defs>
-                <linearGradient id="wb-base" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--gray-300)" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="var(--gray-300)" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="wb-scenario" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.18} />
-                  <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#e8e8ed" vertical={false} />
-              <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} />
-              <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={v => formatCompactNumber(v)} />
-              <Tooltip formatter={(v: number) => formatCurrency(v)} contentStyle={{ borderRadius: 16, borderColor: 'var(--gray-200)' }} />
-              <Area type="monotone" dataKey="base" stroke="var(--gray-300)" strokeWidth={2} fill="url(#wb-base)" name="Base" />
-              <Area type="monotone" dataKey="escenario" stroke="var(--primary)" strokeWidth={2.5} fill="url(#wb-scenario)" name="Escenario" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </section>
-      )}
+              <div className="flex flex-wrap items-center gap-2">
+                {activeScenario && (
+                  <button
+                    onClick={() => openEditScenario(activeScenario)}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] px-4 text-[13px] font-medium text-[var(--gray-500)] transition hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]"
+                  >
+                    <Pencil className="w-4 h-4" />
+                    Editar escenario
+                  </button>
+                )}
+                <button
+                  onClick={openNewAdjustment}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
+                >
+                  <Plus className="w-4 h-4" />
+                  Agregar ajuste
+                </button>
+              </div>
+            </div>
 
-      {/* ─── Adjustments section ─── */}
-      <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
-              {isBase ? 'Ajustes' : `Ajustes de "${activeProposal?.name ?? 'Escenario'}"`}
-            </h2>
-            <p className="text-[12px] text-[var(--gray-400)]">
-              {isBase
-                ? 'Selecciona un escenario para ver y editar sus ajustes financieros.'
-                : 'Cada ajuste modifica el pronóstico. Puedes reutilizarlo en varios escenarios y definir si arranca por mes, semana o día.'}
-            </p>
-          </div>
-          {!isBase && (
-            <button
-              onClick={openNewAdjustment}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--primary)] px-4 py-2 text-[13px] font-medium text-white hover:bg-[var(--primary-hover)] transition"
-            >
-              <Plus className="w-4 h-4" /> Agregar ajuste
-            </button>
-          )}
-        </div>
+            <div>
+              <h3 className="text-[15px] font-semibold text-[var(--gray-950)]">Ajustes del escenario</h3>
+              <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+                Aquí se concentran únicamente los ajustes asignados a este escenario.
+              </p>
+            </div>
 
-        {isBase && (
-          <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
-            <FlaskConical className="w-6 h-6 mx-auto mb-3 text-[var(--gray-400)]" />
-            <p className="text-[13px] font-medium text-[var(--gray-950)]">Escenario Base seleccionado</p>
-            <p className="text-[12px] text-[var(--gray-400)] mt-1">
-              El Base es el pronóstico original sin cambios. Crea o selecciona un escenario para agregar ajustes.
-            </p>
-          </div>
-        )}
+            {assignedSimulations.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
+                <FlaskConical className="w-6 h-6 mx-auto mb-3 text-[var(--gray-400)]" />
+                <p className="text-[13px] font-medium text-[var(--gray-950)]">Sin ajustes todavía</p>
+                <p className="text-[12px] text-[var(--gray-400)] mt-1">
+                  Agrega tu primer ajuste para empezar a modelar este escenario.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {assignedSimulations.map((sim) => {
+                  const targetLabel = sim.targetIds?.slice(0, 2).map((id) => resolveConceptLabel(plan, id)).join(', ') ?? '';
+                  const typeMeta = SIMULATION_TYPES.find((type) => type.value === sim.type);
+                  const assignedScenarioLabels = resolveAssignedScenarioIds(sim.id)
+                    .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
 
-        {!isBase && assignedSimulations.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
-            <FlaskConical className="w-6 h-6 mx-auto mb-3 text-[var(--gray-400)]" />
-            <p className="text-[13px] font-medium text-[var(--gray-950)]">Sin ajustes todavía</p>
-            <p className="text-[12px] text-[var(--gray-400)] mt-1">
-              Agrega tu primer ajuste: incremento de ventas, reducción de costos, diferimiento, etc.
-            </p>
-          </div>
-        )}
-
-        {!isBase && assignedSimulations.length > 0 && (
-          <div className="space-y-2">
-            {assignedSimulations.map(sim => {
-              const targetLabel = sim.targetIds?.slice(0, 2).map(id => resolveConceptLabel(plan, id)).join(', ') ?? '';
-              const typeMeta = SIMULATION_TYPES.find(t => t.value === sim.type);
-              const assignedScenarioLabels = resolveAssignedScenarioIds(sim.id)
-                .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
-              return (
-                <div key={sim.id} className="flex items-center gap-4 rounded-xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)] px-4 py-3 group">
-                  <div className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[sim.category] }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)] truncate">{sim.name}</p>
-                    <div className="flex flex-wrap items-center gap-2 mt-1">
-                      <Badge>{typeMeta?.label ?? sim.type}</Badge>
-                      <Badge>{sim.operation === 'decrease' ? 'Reducir' : 'Incrementar'}</Badge>
-                      <Badge>{targetLabel}{(sim.targetIds?.length ?? 0) > 2 ? ' +' : ''}</Badge>
-                      {sim.percent != null && <Badge>{Math.round(Math.abs(sim.percent) * 100)}%</Badge>}
-                      {sim.amount != null && <Badge>${sim.amount.toLocaleString()}</Badge>}
-                      <Badge>{formatSimulationWindow(sim)}</Badge>
-                      {assignedScenarioLabels.length > 1 && (
-                        <Badge>{`Compartido en ${assignedScenarioLabels.length} escenarios`}</Badge>
-                      )}
+                  return (
+                    <div key={sim.id} className="group flex items-center gap-4 rounded-xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)] px-4 py-3">
+                      <div className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[sim.category] }} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{sim.name}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <Badge>{typeMeta?.label ?? sim.type}</Badge>
+                          <Badge>{sim.operation === 'decrease' ? 'Reducir' : 'Incrementar'}</Badge>
+                          <Badge>{targetLabel}{(sim.targetIds?.length ?? 0) > 2 ? ' +' : ''}</Badge>
+                          {sim.percent != null && <Badge>{Math.round(Math.abs(sim.percent) * 100)}%</Badge>}
+                          {sim.amount != null && <Badge>${sim.amount.toLocaleString()}</Badge>}
+                          <Badge>{formatSimulationWindow(sim)}</Badge>
+                          {assignedScenarioLabels.length > 1 && (
+                            <Badge>{`Compartido en ${assignedScenarioLabels.length} escenarios`}</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                        <button onClick={() => openEditAdjustment(sim)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]" title="Editar">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => removeAdjustmentFromScenario(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Quitar del escenario">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => deleteAdjustment(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Eliminar permanentemente de todos los escenarios">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                    <button onClick={() => openEditAdjustment(sim)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]" title="Editar">
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => removeAdjustmentFromScenario(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Quitar del escenario">
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => deleteAdjustment(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Eliminar permanentemente de todos los escenarios">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </section>
-
-      {/* ─── Monthly detail table ─── */}
-      {activeEvaluation && baseEvaluation && !isBase && (
-        <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
-          <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-1">Detalle mensual</h2>
-          <p className="text-[12px] text-[var(--gray-400)] mb-4">Impacto de los ajustes en métricas clave por mes.</p>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-[12px]">
-              <thead>
-                <tr className="border-b border-[var(--gray-100)] bg-[var(--surface-alt)]">
-                  <th className="sticky left-0 min-w-[150px] bg-[var(--surface-alt)] px-4 py-2.5 text-left font-medium text-[var(--gray-400)]">Métrica</th>
-                  {activeEvaluation.months.map(m => (
-                    <th key={m.ym} className="px-2 py-2.5 text-right font-medium text-[var(--gray-400)]">{m.label}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                <MetricRow label="Ingresos" values={activeEvaluation.metrics.ingresos} tone="pos" />
-                <MetricRow label="Egresos" values={activeEvaluation.metrics.egresos} tone="neg" />
-                <MetricRow label="Flujo Neto" values={activeEvaluation.metrics.flujoNeto} tone="neutral" />
-                <MetricRow label="Caja Final" values={activeEvaluation.metrics.cajaFinal} tone="emphasis" />
-                <MetricRow
-                  label="Δ vs Base"
-                  values={activeEvaluation.metrics.cajaFinal.map((v, i) => v - (baseEvaluation.metrics.cajaFinal[i] ?? 0))}
-                  tone="diff"
-                />
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
 
       {/* ═══ SLIDE-OVER PANEL: Create / Edit Adjustment ═══ */}
       {panelOpen && (
@@ -1113,25 +1179,5 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</span>
       {children}
     </label>
-  );
-}
-
-function MetricRow({ label, values, tone }: { label: string; values: number[]; tone: 'pos' | 'neg' | 'neutral' | 'emphasis' | 'diff' }) {
-  const color =
-    tone === 'pos' ? 'text-[var(--success)]' :
-    tone === 'neg' ? 'text-[var(--danger)]' :
-    tone === 'emphasis' ? 'text-[var(--gray-950)] font-semibold' :
-    tone === 'diff' ? 'text-[var(--primary)]' :
-    'text-[var(--gray-500)]';
-
-  return (
-    <tr className="border-b border-[#f5f5f7]">
-      <td className="sticky left-0 bg-white px-4 py-3 font-medium text-[var(--gray-950)]">{label}</td>
-      {values.map((v, i) => (
-        <td key={`${label}-${i}`} className={`px-2 py-3 text-right font-mono ${color}`}>
-          {tone === 'diff' && v > 0 ? '+' : ''}{formatCurrency(v)}
-        </td>
-      ))}
-    </tr>
   );
 }
