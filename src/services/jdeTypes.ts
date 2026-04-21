@@ -1,10 +1,10 @@
 /**
  * Tipos de datos para los APIs de JD Edwards.
  *
- * Endpoints consumidos:
- *   1. POST /JDEdwards/AntiguedadSaldos  → CXP / aging buckets
- *   2. POST /JDEdwards/Bancos            → Estados de cuenta bancarios
- *   3. GET  /JDEdwards/Empresas          → Catálogo de compañías
+ * Endpoints consumidos (api.gruposenda.com/v1/erp/tesoreria):
+ *   1. POST /antiguedadsaldos  → CXP / aging buckets
+ *   2. POST /bancos            → Estados de cuenta bancarios
+ *   3. GET  /empresas          → Catálogo de compañías
  *
  * Los shapes normalizados están alineados con los tipos ya usados en la
  * aplicación (p.ej. CXPRecord en components/CXP.tsx) para que los datos
@@ -15,7 +15,7 @@
 // 1. Antigüedad de Saldos (CXP)
 // ───────────────────────────────────────────────────────────────
 
-/** Request body para POST /JDEdwards/AntiguedadSaldos. */
+/** Request body para POST /antiguedadsaldos. */
 export interface AgedBalanceRequest {
   /**
    * Código de compañía JDE (p.ej. "00011"). UNA sola compañía por request.
@@ -74,7 +74,7 @@ export interface AgedBalanceRecord {
 
 export type BankStatementFormat = 'SWIFT' | 'BAI2' | 'MT940' | string;
 
-/** Request body para POST /JDEdwards/Bancos. */
+/** Request body para POST /bancos. */
 export interface BankStatementRequest {
   /** Fecha del estado de cuenta en formato ISO (YYYY-MM-DD). */
   fechaEstadoCuenta: string;

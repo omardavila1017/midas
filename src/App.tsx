@@ -114,7 +114,7 @@ export default function App() {
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [bankStatements, setBankStatements] = useState<BankAccountStatement[]>(() => {
     try {
-      const raw = localStorage.getItem('flowsense.bankStatements');
+      const raw = localStorage.getItem('flowsense.bankStatements.v2');
       return raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
     } catch { return []; }
   });
@@ -123,10 +123,17 @@ export default function App() {
     formatoElectronico: BankStatementFormat;
   } | null>(() => {
     try {
-      const raw = localStorage.getItem('flowsense.bankLastQuery');
+      const raw = localStorage.getItem('flowsense.bankLastQuery.v2');
       return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   });
+  // UI status for the auto/manual bank refresh — shown as a pill in Flujo Neto.
+  const [bankFetchStatus, setBankFetchStatus] = useState<
+    'idle' | 'priming' | 'ranging'
+  >('idle');
+  const [bankFetchProgress, setBankFetchProgress] = useState<
+    { done: number; total: number } | null
+  >(null);
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
@@ -288,27 +295,51 @@ export default function App() {
 
   // Persist bank statements + last query
   useEffect(() => {
-    try { localStorage.setItem('flowsense.bankStatements', JSON.stringify(bankStatements)); }
+    try { localStorage.setItem('flowsense.bankStatements.v2', JSON.stringify(bankStatements)); }
     catch { /* quota or serialization issue; ignore */ }
   }, [bankStatements]);
   useEffect(() => {
     try {
-      if (bankLastQuery) localStorage.setItem('flowsense.bankLastQuery', JSON.stringify(bankLastQuery));
-      else localStorage.removeItem('flowsense.bankLastQuery');
+      if (bankLastQuery) localStorage.setItem('flowsense.bankLastQuery.v2', JSON.stringify(bankLastQuery));
+      else localStorage.removeItem('flowsense.bankLastQuery.v2');
     } catch { /* ignore */ }
   }, [bankLastQuery]);
 
-  // ── JDE: auto-fetch bank statements on mount (today + SWIFT) ──
-  // Falls back to last available business day; if JDE is unreachable,
-  // loads demo data so the UI is always populated.
-  useEffect(() => {
-    // Skip if we already have data from localStorage or a previous fetch
-    if (bankStatements.length > 0) return;
-
+  // ── JDE: auto-fetch bank statements on mount ──
+  // Estrategia:
+  //   1. Si NO hay nada cacheado, hacer un "prime" rápido de 1 día para
+  //      poblar la UI al instante (hoy o últimos 5 días hábiles).
+  //   2. SIEMPRE hacer backfill año-a-la-fecha (Ene 1 → hoy) en background,
+  //      incluso si ya hay data cacheada — el cache típicamente es una foto
+  //      de 1 día de sesiones pasadas y eso es precisamente lo que el usuario
+  //      NO quiere para Flujo Neto. El range fetch mergea por (cia, cuenta,
+  //      moneda) y reemplaza el state completo al terminar.
+  //   3. Único escape: si el cache YA cubre >= 30 días distintos y la última
+  //      query fue de hoy, consideramos que ya está fresco y nos saltamos.
+  //   4. Si JDE está inalcanzable y no hay cache, cargamos demo data.
+  // Refresh helper — extracted so the auto-fetch effect and any manual
+  // refresh button can share the same code path.
+  const refreshBankStatementsRange = useCallback(async (force: boolean = false) => {
     const today = new Date().toISOString().slice(0, 10);
+    const yearStart = `${new Date().getUTCFullYear()}-01-01`;
     const defaultFormat: BankStatementFormat = 'SWIFT';
 
-    // Try today, then last 5 business days
+    // Cache hit: skip unless forced.
+    if (!force) {
+      const distinctDates = new Set<string>();
+      for (const acc of bankStatements) {
+        for (const mov of acc.movimientos) distinctDates.add(mov.fechaOperacion);
+      }
+      const cacheIsFresh =
+        bankLastQuery?.fechaEstadoCuenta === today &&
+        distinctDates.size >= 30;
+      if (cacheIsFresh) {
+        console.info('[FlowSense] Bancos: cache fresco, skip refetch.');
+        return { primed: true, ranged: true };
+      }
+    }
+
+    // Prime: hoy + últimos 5 días hábiles
     const tryDates = [today];
     const d = new Date();
     for (let i = 0; i < 5; i++) {
@@ -316,8 +347,13 @@ export default function App() {
       tryDates.push(d.toISOString().slice(0, 10));
     }
 
-    (async () => {
-      const { fetchBankStatements } = await import('./services/jde');
+    const { fetchBankStatements, fetchBankStatementsRange } = await import('./services/jde');
+
+    setBankFetchStatus('priming');
+
+    // ── Step 1: Prime con 1 día (solo si no hay cache o force) ──
+    let primed = !force && bankStatements.length > 0;
+    if (!primed) {
       for (const fecha of tryDates) {
         try {
           const res = await fetchBankStatements({
@@ -327,12 +363,66 @@ export default function App() {
           if (res.length > 0) {
             setBankStatements(res);
             setBankLastQuery({ fechaEstadoCuenta: fecha, formatoElectronico: defaultFormat });
-            return;
+            primed = true;
+            console.info('[FlowSense] Bancos: prime OK para', fecha, '—', res.length, 'cuentas');
+            break;
           }
-        } catch {
-          // try next date
+        } catch (e) {
+          console.warn('[FlowSense] Bancos: prime falló para', fecha, e);
         }
       }
+    }
+
+    // ── Step 2: Backfill año-a-la-fecha ──
+    setBankFetchStatus('ranging');
+    setBankFetchProgress({ done: 0, total: 0 });
+    let ranged = false;
+    try {
+      const full = await fetchBankStatementsRange(
+        yearStart,
+        today,
+        defaultFormat,
+        {
+          concurrency: 6,
+          onProgress: (done, total) => {
+            setBankFetchProgress({ done, total });
+            if (done === total || done % 20 === 0) {
+              console.info(`[FlowSense] Bancos range fetch: ${done}/${total}`);
+            }
+          },
+        },
+      );
+      if (full.length > 0) {
+        const totalMovs = full.reduce((n, a) => n + a.movimientos.length, 0);
+        console.info(`[FlowSense] Bancos: range OK — ${full.length} cuentas, ${totalMovs} movimientos (${yearStart} → ${today})`);
+        setBankStatements(full);
+        setBankLastQuery({
+          fechaEstadoCuenta: today,
+          formatoElectronico: defaultFormat,
+        });
+        ranged = true;
+      } else {
+        console.warn('[FlowSense] Bancos: range fetch regresó 0 cuentas');
+      }
+    } catch (e) {
+      console.error('[FlowSense] Bancos: range fetch error', e);
+    }
+
+    setBankFetchStatus('idle');
+    setBankFetchProgress(null);
+    return { primed, ranged };
+  // bankStatements & bankLastQuery are intentionally read inside; stable callback
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+
+    (async () => {
+      const { primed, ranged } = await refreshBankStatementsRange(false);
+
+      // Si algo funcionó (cache, prime o rango), listo.
+      if (primed || ranged) return;
       // JDE unreachable — load demo data for development
       const demoStatements: BankAccountStatement[] = [
         {
@@ -374,7 +464,7 @@ export default function App() {
         },
       ];
       setBankStatements(demoStatements);
-      setBankLastQuery({ fechaEstadoCuenta: today, formatoElectronico: defaultFormat });
+      setBankLastQuery({ fechaEstadoCuenta: today, formatoElectronico: 'SWIFT' });
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -851,6 +941,9 @@ export default function App() {
                 confirmedPayments={confirmedPayments}
                 bankStatements={bankStatements}
                 companies={companies}
+                bankFetchStatus={bankFetchStatus}
+                bankFetchProgress={bankFetchProgress}
+                onRefreshBanks={() => refreshBankStatementsRange(true)}
               />
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}

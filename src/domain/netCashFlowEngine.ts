@@ -13,6 +13,7 @@
 import { CollectionEvent, ConfirmedPayment, CashFlowAssumptions, eventKey } from './types';
 import { CXPRecord } from './persistence';
 import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
+import type { BankAccountStatement } from '../services/jdeTypes';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Domain Types
@@ -283,10 +284,10 @@ function isDateInPastOrToday(dateStr: string): boolean {
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Extract payment events from CXP records.
+ * Extract payment events from CXP records and (optionally) real bank movements.
  *
- * Converts CXPRecord array to PaymentEvent array for unified cash flow engine.
- * Emits up to TWO events per record so that both historical and projected
+ * Converts CXPRecord array to PaymentEvent array for the unified cash flow engine.
+ * Emits up to TWO events per CXP record so that both historical and projected
  * expenses show up in the cash flow:
  *
  *   1. "paid" event   → (importeBrutoPesos − importePendientePesos) on fechaProgramacionPago
@@ -300,11 +301,32 @@ function isDateInPastOrToday(dateStr: string): boolean {
  * Fully paid invoices emit only the "paid" event. Fully open invoices emit only the
  * "pending" event. Partially paid invoices emit both.
  *
+ * ─────────────────────────────────────────────────────────────
+ * Bank statements (optional)
+ * ─────────────────────────────────────────────────────────────
+ * When `bankStatements` is supplied, the bank is treated as the source of truth
+ * for *actual* outflows that already hit the account:
+ *
+ *   - Every CARGO movement is emitted as a "paid" PaymentEvent on its
+ *     `fechaOperacion`, so weekly/daily PAGOS totals reflect real egresos.
+ *   - To avoid double-counting against the CXP "paid" portion (which represents
+ *     the same real-world payment from the AP side), CXP "paid" events are
+ *     SKIPPED when bank data is provided. CXP "pending" events are kept —
+ *     those are future projections that have not yet hit the bank.
+ *
+ * If no bank data is provided, the legacy behaviour (CXP paid + pending) is used.
+ *
  * @param cxpRecords Array of CXP records from CSV upload
+ * @param bankStatements Optional real bank statements (JDE). When provided,
+ *                       CARGOs become the authoritative source for "paid" events.
  * @returns Array of payment events, sorted by date
  */
-export function extractPaymentEvents(cxpRecords: CXPRecord[]): PaymentEvent[] {
+export function extractPaymentEvents(
+  cxpRecords: CXPRecord[],
+  bankStatements?: BankAccountStatement[],
+): PaymentEvent[] {
   const events: PaymentEvent[] = [];
+  const hasBankData = !!bankStatements && bankStatements.length > 0;
 
   for (const record of cxpRecords) {
     const pending = record.importePendientePesos || 0;
@@ -316,8 +338,9 @@ export function extractPaymentEvents(cxpRecords: CXPRecord[]): PaymentEvent[] {
     const enrich = enrichFromCatalog({ supplier, classification });
 
     // Already-paid portion → use the actual payment date so the expense shows up
-    // in cash flow on the day it really happened.
-    if (paid > 0) {
+    // in cash flow on the day it really happened. When real bank data exists we
+    // defer to the bank (below) and skip this to avoid double-counting.
+    if (paid > 0 && !hasBankData) {
       const paidDate =
         parseDate(record.fechaProgramacionPago) ||
         parseDate(record.fechaFactura) ||
@@ -350,6 +373,37 @@ export function extractPaymentEvents(cxpRecords: CXPRecord[]): PaymentEvent[] {
           kind: 'pending',
           flexibility: enrich.flexibility,
           criticidad: enrich.criticidad,
+        });
+      }
+    }
+  }
+
+  // Fold real bank CARGOs (actual egresos) as "paid" events on fechaOperacion.
+  if (hasBankData) {
+    for (const acc of bankStatements!) {
+      const bankLabel =
+        acc.nombreBanco?.trim() ||
+        (acc.banco ? `Banco ${acc.banco}` : 'Banco');
+
+      for (const mov of acc.movimientos) {
+        if (mov.tipoMovimiento !== 'CARGO') continue;
+        const date = parseDate(mov.fechaOperacion);
+        if (!date) continue;
+        const amount = Math.abs(mov.importe || 0);
+        if (amount <= 0) continue;
+
+        const concepto = (mov.concepto || '').trim();
+        // Prefer concepto for traceability; fall back to bank+cuenta.
+        const supplier = concepto || `${bankLabel} · ${acc.cuenta}`;
+
+        events.push({
+          date,
+          amount,
+          supplier,
+          classification: 'Banco (real)',
+          kind: 'paid',
+          flexibility: 'unknown',
+          criticidad: null,
         });
       }
     }

@@ -10,9 +10,23 @@ import {
   PaymentEvent,
 } from '../domain/netCashFlowEngine';
 import type { BankAccountStatement } from '../services/jde';
-import { ChevronDown, Download, TrendingUp, TrendingDown, Wallet, Calendar as CalendarIcon, Landmark } from 'lucide-react';
+import {
+  ChevronDown,
+  Download,
+  TrendingUp,
+  TrendingDown,
+  Wallet,
+  Calendar as CalendarIcon,
+  Landmark,
+  RefreshCw,
+  AlertTriangle,
+  Check,
+  Circle,
+  Users,
+  FileText,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
-import { hex } from '../theme';
 import { fmtCompact, fmtCurrency } from '../formatters';
 
 /**
@@ -30,6 +44,12 @@ interface Props {
   confirmedPayments: ConfirmedPayment[];
   bankStatements?: BankAccountStatement[];
   companies?: { cia: string; nombre: string }[];
+  /** Current status of the JDE bank range fetch (driven from App). */
+  bankFetchStatus?: 'idle' | 'priming' | 'ranging';
+  /** Progress counter while ranging (done/total days queried). */
+  bankFetchProgress?: { done: number; total: number } | null;
+  /** Manual refresh trigger — re-runs the year-to-date range fetch. */
+  onRefreshBanks?: () => void;
 }
 
 /** Flatten bank statements into daily inflow/outflow totals + saldo snapshot */
@@ -46,7 +66,29 @@ type Granularity = 'daily' | 'weekly' | 'monthly';
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const DOW_SHORT = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
-export default function CashFlowDetail({ clients, cxpRecords, assumptions, confirmedPayments, bankStatements = [], companies = [] }: Props) {
+// Design tokens — Grupo Senda
+const T = {
+  text:        'text-[#1A1A1A]',
+  textMuted:   'text-[#6B7280]',
+  textSubtle:  'text-[#9CA3AF]',
+  border:      'border-[#E5E7EB]',
+  rowHover:    'hover:bg-[#F9FAFB]',
+  surface:     'bg-white',
+  surfaceAlt:  'bg-[#F9FAFB]',
+  divider:     'divide-[#F0F0F0]',
+} as const;
+
+export default function CashFlowDetail({
+  clients,
+  cxpRecords,
+  assumptions,
+  confirmedPayments,
+  bankStatements = [],
+  companies = [],
+  bankFetchStatus = 'idle',
+  bankFetchProgress = null,
+  onRefreshBanks,
+}: Props) {
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [startingBalance, setStartingBalance] = useState(0);
@@ -74,7 +116,6 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
         if (mov.tipoMovimiento === 'ABONO') entry.abonos += mov.importe;
         else entry.cargos += mov.importe;
       }
-      // Track saldo final per account
       if (acc.saldoFinal !== undefined) {
         const date = acc.fechaEstadoCuenta;
         let entry = map.get(date);
@@ -89,17 +130,16 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
     return map;
   }, [bankStatements]);
 
-  // Total bank saldo (latest)
-  const totalBankSaldo = useMemo(() => {
-    return bankStatements.reduce((sum, acc) => sum + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0);
-  }, [bankStatements]);
-
+  // Totales de bancos
+  const totalBankSaldo = useMemo(
+    () => bankStatements.reduce((s, acc) => s + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0),
+    [bankStatements],
+  );
   const totalBankAbonos = useMemo(() => {
     let total = 0;
     for (const entry of bankByDate.values()) total += entry.abonos;
     return total;
   }, [bankByDate]);
-
   const totalBankCargos = useMemo(() => {
     let total = 0;
     for (const entry of bankByDate.values()) total += entry.cargos;
@@ -108,7 +148,10 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
 
   // Project cash flow events
   const collections = useMemo(() => projectYear(clients, assumptions), [clients, assumptions]);
-  const payments = useMemo(() => extractPaymentEvents(cxpRecords), [cxpRecords]);
+  const payments = useMemo(
+    () => extractPaymentEvents(cxpRecords, bankStatements),
+    [cxpRecords, bankStatements],
+  );
 
   const daily = useMemo(
     () => computeDailyFlow(collections, payments, confirmedPayments, assumptions.year, startingBalance),
@@ -128,7 +171,6 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
     return weekly.filter(w => Number(w.weekStart.slice(5, 7)) - 1 === monthFilter);
   }, [weekly, monthFilter]);
 
-  // Clients by id for lookup
   const clientById = useMemo(() => new Map(clients.map(c => [c.id, c])), [clients]);
 
   // KPIs
@@ -139,7 +181,6 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
   const minBalance = daily.reduce((m, d) => Math.min(m, d.cumulative), startingBalance);
   const minBalanceDate = daily.find(d => d.cumulative === minBalance)?.date;
 
-  // IVA estimate on inflows (using per-client ivaRate applied to amounts)
   const totalIvaInflows = useMemo(() => {
     return collections
       .filter(e => e.realDate.startsWith(assumptions.year.toString()))
@@ -150,7 +191,6 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
       }, 0);
   }, [collections, clientById, assumptions.year]);
 
-  // Collections by date for row expansion
   const collectionsByDate = useMemo(() => {
     const map = new Map<string, CollectionEvent[]>();
     for (const e of collections) {
@@ -171,72 +211,26 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
     return map;
   }, [payments, assumptions.year]);
 
-  // Empty state — show bank data if available, guide user to load the rest
+  // ── Empty state — no clients, no CXP ──
   if (clients.length === 0 && cxpRecords.length === 0) {
     return (
-      <div className="space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Flujo de efectivo</h1>
-          <p className="text-[13px] text-[var(--gray-400)] mt-1">
-            Vista integrada de cobros, pagos y saldo acumulado.
-          </p>
-        </header>
+      <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-6">
+        <PageHeader />
 
-        {/* If bank data exists, show it even without clients/CXP */}
         {bankStatements.length > 0 && (
-          <div className="bg-white border border-[var(--primary)]/20 rounded-xl p-5 animate-card-in">
-            <div className="flex items-center gap-2 mb-3">
-              <Landmark className="w-4 h-4 text-[var(--primary)]" />
-              <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">Saldo Real Bancos</h3>
-              <span className="text-[11px] text-[var(--gray-400)] ml-auto">
-                {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''} · Al {bankStatements[0]?.fechaEstadoCuenta}
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-6">
-              <div>
-                <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Saldo Total</div>
-                <div className="text-2xl font-semibold tabular-nums text-[var(--primary)]">{fmtCurrency(totalBankSaldo)}</div>
-              </div>
-              <div>
-                <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Abonos</div>
-                <div className="text-2xl font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(totalBankAbonos)}</div>
-              </div>
-              <div>
-                <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Cargos</div>
-                <div className="text-2xl font-semibold tabular-nums text-[var(--danger)]">{fmtCurrency(totalBankCargos)}</div>
-              </div>
-            </div>
-          </div>
+          <BankSummaryCard
+            bankStatements={bankStatements}
+            totalBankSaldo={totalBankSaldo}
+            totalBankAbonos={totalBankAbonos}
+            totalBankCargos={totalBankCargos}
+            ciaNameMap={ciaNameMap}
+            bankFetchStatus={bankFetchStatus}
+            bankFetchProgress={bankFetchProgress}
+            onRefreshBanks={onRefreshBanks}
+          />
         )}
 
-        {/* Guide card */}
-        <div className="bg-white border border-[var(--gray-200)] rounded-2xl p-8 text-center max-w-lg mx-auto animate-card-in stagger-1">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
-            style={{ background: 'linear-gradient(to bottom, var(--gray-50), var(--gray-100))' }}
-          >
-            <CalendarIcon className="w-6 h-6" style={{ color: 'var(--gray-400)' }} />
-          </div>
-          <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">Completa los datos para proyectar flujo</h2>
-          <p className="text-[13px] text-[var(--gray-400)] mt-2 leading-relaxed max-w-sm mx-auto">
-            Esta vista combina cobros (de Clientes) y pagos (de CXP) para generar
-            la proyección diaria de flujo de efectivo. Necesitas al menos uno:
-          </p>
-          <div className="flex justify-center gap-4 mt-5">
-            <div className="flex flex-col items-center gap-1.5 px-4 py-3 rounded-xl" style={{ background: 'var(--gray-50)' }}>
-              <span className="text-[12px] font-medium" style={{ color: clients.length > 0 ? 'var(--success)' : 'var(--gray-400)' }}>
-                {clients.length > 0 ? '✓' : '○'} Clientes
-              </span>
-              <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Catálogos → Clientes</span>
-            </div>
-            <div className="flex flex-col items-center gap-1.5 px-4 py-3 rounded-xl" style={{ background: 'var(--gray-50)' }}>
-              <span className="text-[12px] font-medium" style={{ color: cxpRecords.length > 0 ? 'var(--success)' : 'var(--gray-400)' }}>
-                {cxpRecords.length > 0 ? '✓' : '○'} CXP
-              </span>
-              <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Operación → CXP</span>
-            </div>
-          </div>
-        </div>
+        <EmptyDataCard clientsOk={clients.length > 0} cxpOk={cxpRecords.length > 0} />
       </div>
     );
   }
@@ -255,139 +249,98 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
   };
 
   return (
-    <div className="space-y-5">
+    <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-6">
       {/* Header */}
-      <header className="flex items-end justify-between">
+      <header className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Flujo de efectivo</h1>
-          <p className="text-[13px] text-[var(--gray-400)] mt-1">
-            Cobros y pagos combinados · saldo acumulado · expande cualquier fila para ver el detalle.
-          </p>
+          <h1 className={`text-2xl font-bold tracking-tight ${T.text}`}>Flujo de efectivo</h1>
+          <p className={`text-sm mt-1 ${T.textMuted}`}>Cobros y pagos proyectados por día, semana y mes.</p>
         </div>
         <button
           onClick={handleExport}
-          title="Exportar flujo diario"
-          className="flex items-center gap-1.5 px-3 h-9 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-400)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+          className={`inline-flex items-center gap-2 h-9 px-3 rounded-lg border ${T.border} text-sm font-medium ${T.textMuted} ${T.rowHover} hover:text-[#111827] transition-colors duration-150`}
         >
-          <Download className="w-3.5 h-3.5" /> Exportar
+          <Download size={16} strokeWidth={1.5} />
+          Exportar
         </button>
       </header>
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-5 gap-4 animate-card-in stagger-1">
-        <KPI
+      {/* KPI grid */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <KpiCard
           label="Cobros"
           value={totalInflows}
-          icon={<TrendingUp className="w-4 h-4" />}
-          color="var(--success)"
+          icon={TrendingUp}
+          tone="success"
         />
-        <KPI
+        <KpiCard
           label="Pagos"
           value={totalOutflows}
-          icon={<TrendingDown className="w-4 h-4" />}
-          color="var(--danger)"
+          icon={TrendingDown}
+          tone="danger"
         />
-        <KPI
+        <KpiCard
           label="Neto"
           value={netFlow}
-          icon={<Wallet className="w-4 h-4" />}
-          color={netFlow >= 0 ? hex.primary : hex.danger}
+          icon={Wallet}
+          tone={netFlow >= 0 ? 'primary' : 'danger'}
         />
-        <KPI
+        <KpiCard
           label="Saldo final"
           value={finalBalance}
-          icon={<Wallet className="w-4 h-4" />}
-          color={finalBalance >= 0 ? hex.primary : hex.danger}
+          icon={Wallet}
+          tone={finalBalance >= 0 ? 'primary' : 'danger'}
         />
-        <KPI
+        <KpiCard
           label="IVA cobrado"
           value={totalIvaInflows}
-          icon={<TrendingUp className="w-4 h-4" />}
-          color="var(--gray-400)"
+          icon={TrendingUp}
+          tone="neutral"
         />
       </div>
 
-      {/* Bank real data summary */}
+      {/* Saldo real bancos */}
       {bankStatements.length > 0 && (
-        <div className="bg-white border border-[var(--primary)]/20 rounded-xl p-4 animate-card-in stagger-2">
-          <div className="flex items-center gap-2 mb-3">
-            <Landmark className="w-4 h-4 text-[var(--primary)]" />
-            <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">
-              Saldo Real Bancos
-            </h3>
-            <span className="text-[11px] text-[var(--gray-400)] ml-auto">
-              {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''} · Al {bankStatements[0]?.fechaEstadoCuenta}
-            </span>
-          </div>
-          <div className="grid grid-cols-4 gap-4">
-            <div>
-              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Saldo Total</div>
-              <div className="text-[18px] font-semibold tabular-nums text-[var(--primary)]">{fmtCurrency(totalBankSaldo)}</div>
-            </div>
-            <div>
-              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Abonos (real)</div>
-              <div className="text-[18px] font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(totalBankAbonos)}</div>
-            </div>
-            <div>
-              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Cargos (real)</div>
-              <div className="text-[18px] font-semibold tabular-nums text-[var(--danger)]">{fmtCurrency(totalBankCargos)}</div>
-            </div>
-            <div>
-              <div className="text-[11px] text-[var(--gray-400)] uppercase tracking-wide">Empresas</div>
-              <div className="text-[13px] text-[var(--gray-950)] mt-1">
-                {Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean))).map(cia => (
-                  <span key={cia} className="inline-block mr-2 px-2 py-0.5 rounded-full bg-[var(--gray-50)] text-[11px] font-medium text-[var(--gray-500)]">
-                    {ciaNameMap.get(cia) ?? `Cia ${cia}`}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <BankSummaryCard
+          bankStatements={bankStatements}
+          totalBankSaldo={totalBankSaldo}
+          totalBankAbonos={totalBankAbonos}
+          totalBankCargos={totalBankCargos}
+          ciaNameMap={ciaNameMap}
+          bankFetchStatus={bankFetchStatus}
+          bankFetchProgress={bankFetchProgress}
+          onRefreshBanks={onRefreshBanks}
+        />
       )}
 
-      {/* Min balance alert */}
+      {/* Skeleton while first-time loading bank data */}
+      {bankStatements.length === 0 && bankFetchStatus !== 'idle' && (
+        <BankSkeleton />
+      )}
+
+      {/* Alerta de saldo mínimo negativo */}
       {minBalance < 0 && minBalanceDate && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[13px] text-amber-900 flex items-center gap-2">
-          <TrendingDown className="w-4 h-4 text-amber-700" />
-          <span>
-            Saldo mínimo proyectado: <strong className="tabular-nums">{fmtCurrency(minBalance)}</strong> el {formatDate(minBalanceDate)}.
-            Considera ajustar el saldo inicial o reprogramar pagos.
-          </span>
-        </div>
+        <MinBalanceAlert minBalance={minBalance} minBalanceDate={minBalanceDate} />
       )}
 
       {/* Controls */}
-      <div className="flex items-center justify-between gap-4 animate-card-in stagger-2">
-        <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[13px]">
-          <button
-            onClick={() => { setGranularity('daily'); setExpandedKey(null); }}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'daily' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-          >Diario</button>
-          <button
-            onClick={() => { setGranularity('weekly'); setExpandedKey(null); }}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'weekly' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-          >Semanal</button>
-          <button
-            onClick={() => { setGranularity('monthly'); setExpandedKey(null); }}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${granularity === 'monthly' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-          >Mensual</button>
-        </nav>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <GranularityTabs value={granularity} onChange={(v) => { setGranularity(v); setExpandedKey(null); }} />
 
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-[12px] text-[var(--gray-400)]">
+          <label className={`flex items-center gap-2 text-sm ${T.textMuted}`}>
             <span>Saldo inicial</span>
             <input
               type="number"
               value={startingBalance}
               onChange={e => setStartingBalance(Number(e.target.value))}
-              className="input w-32 h-8 text-right tabular-nums"
+              className={`h-9 w-36 px-3 rounded-lg border ${T.border} bg-white text-sm text-right tabular-nums ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
             />
           </label>
           <select
             value={monthFilter}
             onChange={e => setMonthFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-            className="input text-[12px] h-8"
+            className={`h-9 px-3 rounded-lg border ${T.border} bg-white text-sm ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
           >
             <option value="all">Todo el año</option>
             {MONTH_NAMES.map((m, i) => <option key={m} value={i}>{m}</option>)}
@@ -395,7 +348,7 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
         </div>
       </div>
 
-      {/* Main table */}
+      {/* Tablas */}
       {granularity === 'daily' && (
         <DailyTable
           daily={filteredDaily}
@@ -430,6 +383,284 @@ export default function CashFlowDetail({ clients, cxpRecords, assumptions, confi
 }
 
 // ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function PageHeader() {
+  return (
+    <header>
+      <h1 className={`text-2xl font-bold tracking-tight ${T.text}`}>Flujo de efectivo</h1>
+      <p className={`text-sm mt-1 ${T.textMuted}`}>Cobros y pagos proyectados por día, semana y mes.</p>
+    </header>
+  );
+}
+
+function EmptyDataCard({ clientsOk, cxpOk }: { clientsOk: boolean; cxpOk: boolean }) {
+  return (
+    <div className={`${T.surface} border ${T.border} rounded-xl p-8 max-w-lg mx-auto`}>
+      <div className="flex flex-col items-center text-center">
+        <div className="w-12 h-12 rounded-xl bg-[#F9FAFB] flex items-center justify-center mb-4">
+          <CalendarIcon size={22} strokeWidth={1.5} className={T.textSubtle} />
+        </div>
+        <h2 className={`text-base font-semibold ${T.text}`}>Sin datos para proyectar</h2>
+        <p className={`text-sm mt-2 max-w-sm ${T.textMuted}`}>
+          Esta vista combina cobros de clientes y pagos de CXP. Carga al menos uno para generar la proyección.
+        </p>
+        <div className="flex gap-3 mt-6">
+          <RequirementPill ok={clientsOk} icon={Users} label="Clientes" hint="Catálogos → Clientes" />
+          <RequirementPill ok={cxpOk} icon={FileText} label="CXP" hint="Operación → CXP" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RequirementPill({
+  ok, icon: Icon, label, hint,
+}: {
+  ok: boolean;
+  icon: LucideIcon;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${
+        ok ? 'border-[var(--success)]/30 bg-[var(--success)]/5' : 'border-[#E5E7EB] bg-[#F9FAFB]'
+      }`}
+    >
+      <div
+        className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+          ok ? 'bg-[var(--success)]/10' : 'bg-white border border-[#E5E7EB]'
+        }`}
+      >
+        {ok ? (
+          <Check size={16} strokeWidth={2} className="text-[var(--success)]" />
+        ) : (
+          <Circle size={16} strokeWidth={1.5} className="text-[#9CA3AF]" />
+        )}
+      </div>
+      <div className="text-left">
+        <div className={`flex items-center gap-2 text-sm font-medium ${ok ? 'text-[var(--success)]' : T.text}`}>
+          <Icon size={14} strokeWidth={1.5} className={ok ? 'text-[var(--success)]' : T.textSubtle} />
+          {label}
+        </div>
+        <div className={`text-xs ${T.textMuted}`}>{hint}</div>
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({
+  label, value, icon: Icon, tone,
+}: {
+  label: string;
+  value: number;
+  icon: LucideIcon;
+  tone: 'success' | 'danger' | 'primary' | 'neutral';
+}) {
+  const toneClasses = {
+    success: { chip: 'bg-[var(--success)]/10',  icon: 'text-[var(--success)]', value: 'text-[var(--success)]' },
+    danger:  { chip: 'bg-[var(--danger)]/10',   icon: 'text-[var(--danger)]',  value: 'text-[var(--danger)]' },
+    primary: { chip: 'bg-[var(--primary)]/10',  icon: 'text-[var(--primary)]', value: 'text-[var(--primary)]' },
+    neutral: { chip: 'bg-[#F3F4F6]',            icon: 'text-[#6B7280]',        value: T.text },
+  }[tone];
+
+  return (
+    <div className={`${T.surface} border ${T.border} rounded-xl p-5 hover:shadow-sm transition-shadow duration-150`}>
+      <div className="flex items-center justify-between mb-3">
+        <span className={`text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>{label}</span>
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${toneClasses.chip}`}>
+          <Icon size={16} strokeWidth={1.5} className={toneClasses.icon} />
+        </div>
+      </div>
+      <div className={`text-2xl font-bold tabular-nums leading-tight ${toneClasses.value}`}>
+        {fmtCurrency(value)}
+      </div>
+    </div>
+  );
+}
+
+function BankSummaryCard({
+  bankStatements, totalBankSaldo, totalBankAbonos, totalBankCargos,
+  ciaNameMap, bankFetchStatus, bankFetchProgress, onRefreshBanks,
+}: {
+  bankStatements: BankAccountStatement[];
+  totalBankSaldo: number;
+  totalBankAbonos: number;
+  totalBankCargos: number;
+  ciaNameMap: Map<string, string>;
+  bankFetchStatus: 'idle' | 'priming' | 'ranging';
+  bankFetchProgress: { done: number; total: number } | null;
+  onRefreshBanks?: () => void;
+}) {
+  // Días únicos cubiertos por movimientos
+  const diasCubiertos = useMemo(() => {
+    const s = new Set<string>();
+    for (const acc of bankStatements) for (const mov of acc.movimientos) s.add(mov.fechaOperacion);
+    return s.size;
+  }, [bankStatements]);
+
+  const empresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
+  const fechaCorte = bankStatements[0]?.fechaEstadoCuenta;
+  const isLoading = bankFetchStatus !== 'idle';
+
+  return (
+    <section className={`${T.surface} border ${T.border} rounded-xl`}>
+      {/* Header */}
+      <div className={`flex flex-wrap items-center gap-3 px-5 py-4 border-b ${T.border}`}>
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-[var(--primary)]/10 flex items-center justify-center">
+            <Landmark size={16} strokeWidth={1.5} className="text-[var(--primary)]" />
+          </div>
+          <h3 className={`text-base font-semibold ${T.text}`}>Saldo real bancos</h3>
+        </div>
+
+        <div className="flex items-center gap-2 ml-auto">
+          {isLoading && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-[var(--primary)] bg-[var(--primary)]/10 px-2.5 py-1 rounded-full">
+              <RefreshCw size={12} strokeWidth={1.5} className="animate-spin" />
+              {bankFetchStatus === 'priming'
+                ? 'Cargando hoy'
+                : bankFetchProgress
+                  ? `Cargando año ${bankFetchProgress.done}/${bankFetchProgress.total}`
+                  : 'Cargando histórico'}
+            </span>
+          )}
+          <span className={`text-xs ${T.textMuted}`}>
+            {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''}
+            {' · '}
+            {diasCubiertos} día{diasCubiertos !== 1 ? 's' : ''} con actividad
+            {fechaCorte ? ` · Al ${formatDate(fechaCorte)}` : ''}
+          </span>
+          {onRefreshBanks && (
+            <button
+              type="button"
+              onClick={onRefreshBanks}
+              disabled={isLoading}
+              className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md border ${T.border} text-xs font-medium ${T.textMuted} ${T.rowHover} hover:text-[#111827] transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              <RefreshCw size={12} strokeWidth={1.5} className={isLoading ? 'animate-spin' : ''} />
+              Actualizar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Métricas */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[#F0F0F0]">
+        <BankMetric label="Saldo total"    value={totalBankSaldo}  tone="primary" />
+        <BankMetric label="Abonos (real)"  value={totalBankAbonos} tone="success" />
+        <BankMetric label="Cargos (real)"  value={totalBankCargos} tone="danger" />
+        <div className="bg-white p-4">
+          <div className={`text-xs font-medium uppercase tracking-wide ${T.textMuted} mb-2`}>Empresas</div>
+          <div className="flex flex-wrap gap-1.5">
+            {empresas.length === 0 ? (
+              <span className={`text-xs ${T.textSubtle}`}>—</span>
+            ) : (
+              empresas.map(cia => (
+                <span key={cia} className={`inline-block px-2 py-0.5 rounded-full bg-[#F3F4F6] text-xs font-medium ${T.textMuted}`}>
+                  {ciaNameMap.get(cia) ?? `Cia ${cia}`}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BankMetric({
+  label, value, tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'primary' | 'success' | 'danger';
+}) {
+  const color = {
+    primary: 'text-[var(--primary)]',
+    success: 'text-[var(--success)]',
+    danger:  'text-[var(--danger)]',
+  }[tone];
+  return (
+    <div className="bg-white p-4">
+      <div className={`text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>{label}</div>
+      <div className={`text-xl font-bold tabular-nums mt-1 ${color}`}>{fmtCurrency(value)}</div>
+    </div>
+  );
+}
+
+function BankSkeleton() {
+  return (
+    <div className={`${T.surface} border ${T.border} rounded-xl animate-pulse`}>
+      <div className={`px-5 py-4 border-b ${T.border} flex items-center gap-3`}>
+        <div className="w-8 h-8 rounded-lg bg-[#F3F4F6]" />
+        <div className="h-4 bg-[#F3F4F6] rounded w-48" />
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[#F0F0F0]">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="bg-white p-4">
+            <div className="h-3 bg-[#F3F4F6] rounded w-20 mb-3" />
+            <div className="h-6 bg-[#F3F4F6] rounded w-32" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MinBalanceAlert({ minBalance, minBalanceDate }: { minBalance: number; minBalanceDate: string }) {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning)]/5 px-4 py-3">
+      <AlertTriangle size={18} strokeWidth={1.5} className="text-[var(--warning)] mt-0.5 flex-shrink-0" />
+      <div className="flex-1">
+        <p className={`text-sm font-medium ${T.text}`}>Saldo mínimo negativo</p>
+        <p className={`text-sm ${T.textMuted} mt-0.5`}>
+          Tu saldo llegará a <span className={`font-semibold tabular-nums ${T.text}`}>{fmtCurrency(minBalance)}</span> el {formatDate(minBalanceDate)}.
+          Ajusta el saldo inicial o reprograma pagos.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function GranularityTabs({
+  value, onChange,
+}: {
+  value: Granularity;
+  onChange: (v: Granularity) => void;
+}) {
+  const items: { id: Granularity; label: string }[] = [
+    { id: 'daily', label: 'Diario' },
+    { id: 'weekly', label: 'Semanal' },
+    { id: 'monthly', label: 'Mensual' },
+  ];
+  return (
+    <div className="inline-flex p-0.5 rounded-lg bg-[#F3F4F6]" role="tablist">
+      {items.map(it => {
+        const active = value === it.id;
+        return (
+          <button
+            key={it.id}
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(it.id)}
+            className={`px-4 h-8 rounded-md text-sm font-medium transition-colors duration-150 ${
+              active
+                ? 'bg-white text-[#1A1A1A] shadow-sm'
+                : 'text-[#6B7280] hover:text-[#1A1A1A]'
+            }`}
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Daily table — one row per day with activity
 // ---------------------------------------------------------------------------
 function DailyTable({
@@ -442,24 +673,23 @@ function DailyTable({
   paymentsByDate: Map<string, PaymentEvent[]>;
   clientById: Map<string, Client>;
 }) {
-  if (daily.length === 0) {
-    return <EmptyTable msg="Sin actividad en el periodo." />;
-  }
+  if (daily.length === 0) return <EmptyTable msg="Sin actividad en el periodo" />;
+
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
-      <table className="w-full text-[13px]">
-        <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0">
+    <div className={`${T.surface} border ${T.border} rounded-xl overflow-hidden`}>
+      <table className="w-full text-sm">
+        <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
-            <th className="px-4 py-2.5 font-medium w-10"></th>
-            <th className="px-4 py-2.5 font-medium">Fecha</th>
-            <th className="px-3 py-2.5 font-medium text-right">Cobros</th>
-            <th className="px-3 py-2.5 font-medium text-right">Pagos</th>
-            <th className="px-3 py-2.5 font-medium text-right">Neto</th>
-            <th className="px-3 py-2.5 font-medium text-right">Saldo</th>
-            <th className="px-3 py-2.5 font-medium text-right"># Eventos</th>
+            <th className="px-4 py-3 w-10"></th>
+            <th className="px-4 py-3 text-left">Fecha</th>
+            <th className="px-4 py-3 text-right">Cobros</th>
+            <th className="px-4 py-3 text-right">Pagos</th>
+            <th className="px-4 py-3 text-right">Neto</th>
+            <th className="px-4 py-3 text-right">Saldo</th>
+            <th className="px-4 py-3 text-right w-24">Eventos</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className={`divide-y ${T.divider}`}>
           {daily.map(d => {
             const key = `d-${d.date}`;
             const isOpen = expandedKey === key;
@@ -470,41 +700,45 @@ function DailyTable({
             return (
               <Fragment key={key}>
                 <tr
-                  className={`border-t border-[var(--gray-200)]/40 cursor-pointer hover-row ${isOpen ? 'bg-[var(--gray-50)]/60' : ''}`}
+                  className={`cursor-pointer transition-colors duration-150 ${isOpen ? T.surfaceAlt : T.rowHover}`}
                   onClick={() => onToggle(isOpen ? null : key)}
                 >
-                  <td className="px-4 py-2.5">
-                    <ChevronDown className={`w-3.5 h-3.5 text-[var(--gray-400)] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
+                  <td className="px-4 py-3">
+                    <ChevronDown
+                      size={14}
+                      strokeWidth={1.5}
+                      className={`${T.textSubtle} transition-transform duration-150 ${isOpen ? 'rotate-0' : '-rotate-90'}`}
+                    />
                   </td>
-                  <td className="px-4 py-2.5">
-                    <div className="font-medium text-[var(--gray-950)]">{formatDate(d.date)}</div>
-                    <div className="text-[11px] text-[var(--gray-400)]">{weekday}</div>
+                  <td className="px-4 py-3">
+                    <div className={`text-sm font-medium ${T.text}`}>{formatDate(d.date)}</div>
+                    <div className={`text-xs ${T.textMuted}`}>{weekday}</div>
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--success)] font-medium">
-                    {d.inflows > 0 ? fmtCurrency(d.inflows) : '—'}
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    <div className="font-medium text-[var(--success)]">
+                      {d.inflows > 0 ? fmtCurrency(d.inflows) : <span className={T.textSubtle}>—</span>}
+                    </div>
                     {d.confirmedIn > 0 && (
-                      <div className="text-[10px] text-[var(--gray-400)]">{fmtCurrency(d.confirmedIn)} confirmado</div>
+                      <div className={`text-xs ${T.textMuted}`}>{fmtCurrency(d.confirmedIn)} confirmado</div>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--danger)]">
-                    {d.outflows > 0 ? fmtCurrency(d.outflows) : '—'}
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    <span className="text-[var(--danger)]">
+                      {d.outflows > 0 ? fmtCurrency(d.outflows) : <span className={T.textSubtle}>—</span>}
+                    </span>
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${d.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${d.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
                     {fmtCurrency(d.net)}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : 'text-[var(--gray-950)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : T.text}`}>
                     {fmtCurrency(d.cumulative)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[var(--gray-400)]">{eventCount}</td>
+                  <td className={`px-4 py-3 text-right tabular-nums text-xs ${T.textMuted}`}>{eventCount}</td>
                 </tr>
                 {isOpen && (
-                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
-                    <td colSpan={7} className="px-4 py-3">
-                      <DayDetail
-                        cobroEvents={cobroEvents}
-                        pagoEvents={pagoEvents}
-                        clientById={clientById}
-                      />
+                  <tr>
+                    <td colSpan={7} className={`${T.surfaceAlt} px-4 py-4`}>
+                      <DayDetail cobroEvents={cobroEvents} pagoEvents={pagoEvents} clientById={clientById} />
                     </td>
                   </tr>
                 )}
@@ -531,7 +765,6 @@ function WeeklyTable({
   paymentsByDate: Map<string, PaymentEvent[]>;
   clientById: Map<string, Client>;
 }) {
-  // Group daily rows by week start for expansion
   const dailyByWeek = useMemo(() => {
     const map = new Map<string, typeof daily>();
     for (const d of daily) {
@@ -546,25 +779,23 @@ function WeeklyTable({
     return map;
   }, [daily]);
 
-  if (weekly.length === 0) {
-    return <EmptyTable msg="Sin actividad en el periodo." />;
-  }
+  if (weekly.length === 0) return <EmptyTable msg="Sin actividad en el periodo" />;
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
-      <table className="w-full text-[13px]">
-        <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0">
+    <div className={`${T.surface} border ${T.border} rounded-xl overflow-hidden`}>
+      <table className="w-full text-sm">
+        <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
-            <th className="px-4 py-2.5 font-medium w-10"></th>
-            <th className="px-4 py-2.5 font-medium">Semana</th>
-            <th className="px-3 py-2.5 font-medium text-right">Cobros</th>
-            <th className="px-3 py-2.5 font-medium text-right">Pagos</th>
-            <th className="px-3 py-2.5 font-medium text-right">Neto</th>
-            <th className="px-3 py-2.5 font-medium text-right">Saldo al cierre</th>
-            <th className="px-3 py-2.5 font-medium text-right">Días activos</th>
+            <th className="px-4 py-3 w-10"></th>
+            <th className="px-4 py-3 text-left">Semana</th>
+            <th className="px-4 py-3 text-right">Cobros</th>
+            <th className="px-4 py-3 text-right">Pagos</th>
+            <th className="px-4 py-3 text-right">Neto</th>
+            <th className="px-4 py-3 text-right">Saldo al cierre</th>
+            <th className="px-4 py-3 text-right w-24">Días activos</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className={`divide-y ${T.divider}`}>
           {weekly.map(w => {
             const key = `w-${w.weekStart}`;
             const isOpen = expandedKey === key;
@@ -572,35 +803,37 @@ function WeeklyTable({
             return (
               <Fragment key={key}>
                 <tr
-                  className={`border-t border-[var(--gray-200)]/40 cursor-pointer hover-row ${isOpen ? 'bg-[var(--gray-50)]/60' : ''}`}
+                  className={`cursor-pointer transition-colors duration-150 ${isOpen ? T.surfaceAlt : T.rowHover}`}
                   onClick={() => onToggle(isOpen ? null : key)}
                 >
-                  <td className="px-4 py-2.5">
-                    <ChevronDown className={`w-3.5 h-3.5 text-[var(--gray-400)] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
+                  <td className="px-4 py-3">
+                    <ChevronDown
+                      size={14}
+                      strokeWidth={1.5}
+                      className={`${T.textSubtle} transition-transform duration-150 ${isOpen ? 'rotate-0' : '-rotate-90'}`}
+                    />
                   </td>
-                  <td className="px-4 py-2.5">
-                    <div className="font-medium text-[var(--gray-950)]">Semana {w.weekNumber}</div>
-                    <div className="text-[11px] text-[var(--gray-400)]">
-                      Desde {formatDate(w.weekStart)}
-                    </div>
+                  <td className="px-4 py-3">
+                    <div className={`text-sm font-medium ${T.text}`}>Semana {w.weekNumber}</div>
+                    <div className={`text-xs ${T.textMuted}`}>Desde {formatDate(w.weekStart)}</div>
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--success)] font-medium">
-                    {w.inflows > 0 ? fmtCurrency(w.inflows) : '—'}
+                  <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--success)]">
+                    {w.inflows > 0 ? fmtCurrency(w.inflows) : <span className={T.textSubtle}>—</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--danger)]">
-                    {w.outflows > 0 ? fmtCurrency(w.outflows) : '—'}
+                  <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">
+                    {w.outflows > 0 ? fmtCurrency(w.outflows) : <span className={T.textSubtle}>—</span>}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${w.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${w.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
                     {fmtCurrency(w.net)}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums ${w.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : 'text-[var(--gray-950)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums ${w.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : T.text}`}>
                     {fmtCurrency(w.cumulative)}
                   </td>
-                  <td className="px-3 py-2.5 text-right text-[var(--gray-400)]">{weekDays.length}</td>
+                  <td className={`px-4 py-3 text-right tabular-nums text-xs ${T.textMuted}`}>{weekDays.length}</td>
                 </tr>
                 {isOpen && weekDays.length > 0 && (
-                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
-                    <td colSpan={7} className="px-4 py-3">
+                  <tr>
+                    <td colSpan={7} className={`${T.surfaceAlt} px-4 py-4`}>
                       <WeekDetail
                         weekDays={weekDays}
                         collectionsByDate={collectionsByDate}
@@ -630,69 +863,76 @@ function MonthlyTable({
   expandedKey: string | null;
   onToggle: (k: string | null) => void;
 }) {
-  if (monthly.length === 0) {
-    return <EmptyTable msg="Sin actividad en el periodo." />;
-  }
+  if (monthly.length === 0) return <EmptyTable msg="Sin actividad en el periodo" />;
   const maxInflow = Math.max(...monthly.map(m => m.inflows), 1);
+  const maxOutflow = Math.max(...monthly.map(m => m.outflows), 1);
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-3">
-      <table className="w-full text-[13px]">
-        <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0">
+    <div className={`${T.surface} border ${T.border} rounded-xl overflow-hidden`}>
+      <table className="w-full text-sm">
+        <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
-            <th className="px-4 py-2.5 font-medium w-10"></th>
-            <th className="px-4 py-2.5 font-medium">Mes</th>
-            <th className="px-3 py-2.5 font-medium">Flujo</th>
-            <th className="px-3 py-2.5 font-medium text-right">Cobros</th>
-            <th className="px-3 py-2.5 font-medium text-right">Pagos</th>
-            <th className="px-3 py-2.5 font-medium text-right">Neto</th>
-            <th className="px-3 py-2.5 font-medium text-right">Saldo</th>
+            <th className="px-4 py-3 w-10"></th>
+            <th className="px-4 py-3 text-left">Mes</th>
+            <th className="px-4 py-3 text-left">Flujo</th>
+            <th className="px-4 py-3 text-right">Cobros</th>
+            <th className="px-4 py-3 text-right">Pagos</th>
+            <th className="px-4 py-3 text-right">Neto</th>
+            <th className="px-4 py-3 text-right">Saldo</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className={`divide-y ${T.divider}`}>
           {monthly.map(m => {
             const key = `m-${m.month}`;
             const isOpen = expandedKey === key;
             const inflowPct = (m.inflows / maxInflow) * 100;
-            const outflowPct = (m.outflows / maxInflow) * 100;
+            const outflowPct = (m.outflows / maxOutflow) * 100;
             const monthDays = daily.filter(d => Number(d.date.slice(5, 7)) - 1 === m.month);
             return (
               <Fragment key={key}>
                 <tr
-                  className={`border-t border-[var(--gray-200)]/40 cursor-pointer hover-row ${isOpen ? 'bg-[var(--gray-50)]/60' : ''}`}
+                  className={`cursor-pointer transition-colors duration-150 ${isOpen ? T.surfaceAlt : T.rowHover}`}
                   onClick={() => onToggle(isOpen ? null : key)}
                 >
-                  <td className="px-4 py-2.5">
-                    <ChevronDown className={`w-3.5 h-3.5 text-[var(--gray-400)] transition-transform ${isOpen ? 'rotate-180' : '-rotate-90'}`} />
+                  <td className="px-4 py-3">
+                    <ChevronDown
+                      size={14}
+                      strokeWidth={1.5}
+                      className={`${T.textSubtle} transition-transform duration-150 ${isOpen ? 'rotate-0' : '-rotate-90'}`}
+                    />
                   </td>
-                  <td className="px-4 py-2.5 font-medium text-[var(--gray-950)]">{m.monthName}</td>
-                  <td className="px-3 py-2.5 min-w-[200px]">
-                    <div className="flex items-center gap-1 h-4">
-                      <div className="h-2.5 rounded-l" style={{ width: `${inflowPct}%`, backgroundColor: hex.success }} />
-                      <div className="h-2.5 rounded-r" style={{ width: `${outflowPct}%`, backgroundColor: hex.danger }} />
+                  <td className={`px-4 py-3 text-sm font-medium ${T.text}`}>{m.monthName}</td>
+                  <td className="px-4 py-3 min-w-[180px]">
+                    <div className="flex flex-col gap-1">
+                      <div className="h-1.5 rounded-full bg-[#F3F4F6] overflow-hidden">
+                        <div className="h-full bg-[var(--success)] rounded-full transition-all duration-150" style={{ width: `${inflowPct}%` }} />
+                      </div>
+                      <div className="h-1.5 rounded-full bg-[#F3F4F6] overflow-hidden">
+                        <div className="h-full bg-[var(--danger)] rounded-full transition-all duration-150" style={{ width: `${outflowPct}%` }} />
+                      </div>
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--success)] font-medium">{fmtCurrency(m.inflows)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--danger)]">{fmtCurrency(m.outflows)}</td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${m.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>
+                  <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--success)]">{fmtCurrency(m.inflows)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">{fmtCurrency(m.outflows)}</td>
+                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${m.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
                     {fmtCurrency(m.net)}
                   </td>
-                  <td className={`px-3 py-2.5 text-right tabular-nums ${m.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : 'text-[var(--gray-950)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums ${m.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : T.text}`}>
                     {fmtCurrency(m.cumulative)}
                   </td>
                 </tr>
                 {isOpen && (
-                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
-                    <td colSpan={7} className="px-4 py-3">
-                      <div className="text-[12px] text-[var(--gray-400)] mb-2">
-                        {monthDays.length} días con actividad · {fmtCurrency(m.confirmedIn)} cobrado (real), {fmtCurrency(m.projectedIn)} proyectado
+                  <tr>
+                    <td colSpan={7} className={`${T.surfaceAlt} px-4 py-4`}>
+                      <div className={`text-xs ${T.textMuted} mb-3`}>
+                        {monthDays.length} días con actividad · {fmtCurrency(m.confirmedIn)} cobrado real · {fmtCurrency(m.projectedIn)} proyectado
                       </div>
-                      <div className="grid grid-cols-7 gap-1 text-[11px]">
+                      <div className="grid grid-cols-7 gap-1.5">
                         {monthDays.map(d => (
-                          <div key={d.date} className="border border-[var(--gray-200)]/40 rounded p-1.5">
-                            <div className="text-[var(--gray-400)]">{d.date.slice(8)}</div>
-                            <div className="text-[var(--success)] tabular-nums">{d.inflows > 0 ? fmtCompact(d.inflows) : ''}</div>
-                            <div className="text-[var(--danger)] tabular-nums">{d.outflows > 0 ? `-${fmtCompact(d.outflows)}` : ''}</div>
+                          <div key={d.date} className={`${T.surface} border ${T.border} rounded-lg p-2`}>
+                            <div className={`text-xs font-medium ${T.textMuted}`}>{d.date.slice(8)}</div>
+                            <div className="text-xs tabular-nums text-[var(--success)] mt-0.5">{d.inflows > 0 ? fmtCompact(d.inflows) : ''}</div>
+                            <div className="text-xs tabular-nums text-[var(--danger)]">{d.outflows > 0 ? `-${fmtCompact(d.outflows)}` : ''}</div>
                           </div>
                         ))}
                       </div>
@@ -709,7 +949,7 @@ function MonthlyTable({
 }
 
 // ---------------------------------------------------------------------------
-// Day detail — shows cobros + pagos for a single day
+// Day detail — cobros + pagos para un día
 // ---------------------------------------------------------------------------
 function DayDetail({
   cobroEvents, pagoEvents, clientById,
@@ -719,30 +959,32 @@ function DayDetail({
   clientById: Map<string, Client>;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Cobros */}
       <div>
-        <h4 className="text-[12px] font-semibold text-[var(--success)] uppercase tracking-wide mb-2">
-          Cobros ({cobroEvents.length})
-        </h4>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className={`text-xs font-medium uppercase tracking-wide text-[var(--success)]`}>Cobros</h4>
+          <span className={`text-xs ${T.textMuted}`}>{cobroEvents.length}</span>
+        </div>
         {cobroEvents.length === 0 ? (
-          <div className="text-[12px] text-[var(--gray-400)]">Sin cobros</div>
+          <div className={`text-sm ${T.textSubtle} py-4 text-center border border-dashed ${T.border} rounded-lg`}>Sin cobros</div>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {cobroEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
               const c = clientById.get(e.clientId);
               const ivaRate = (c?.ivaRate ?? 16) / 100;
               const iva = e.amount * ivaRate;
               return (
-                <div key={i} className="flex items-center justify-between text-[12px] bg-white px-2.5 py-1.5 rounded border border-[var(--gray-200)]/40">
+                <div key={i} className={`flex items-center justify-between gap-3 ${T.surface} px-3 py-2.5 rounded-lg border ${T.border}`}>
                   <div className="min-w-0 flex-1">
-                    <div className="font-medium text-[var(--gray-950)] truncate">{c?.name ?? e.clientId}</div>
-                    <div className="text-[10px] text-[var(--gray-400)]">
+                    <div className={`text-sm font-medium ${T.text} truncate`}>{c?.name ?? e.clientId}</div>
+                    <div className={`text-xs ${T.textMuted}`}>
                       Fact {e.invoiceDate.slice(5)} · {c?.frequency} · IVA {c?.ivaRate ?? 16}%
                     </div>
                   </div>
-                  <div className="text-right ml-2">
-                    <div className="tabular-nums font-medium text-[var(--success)]">{fmtCurrency(e.amount)}</div>
-                    <div className="text-[10px] text-[var(--gray-400)]">+IVA {fmtCurrency(iva)}</div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(e.amount)}</div>
+                    <div className={`text-xs ${T.textMuted}`}>+IVA {fmtCurrency(iva)}</div>
                   </div>
                 </div>
               );
@@ -750,60 +992,37 @@ function DayDetail({
           </div>
         )}
       </div>
+
+      {/* Pagos */}
       <div>
-        <h4 className="text-[12px] font-semibold text-[var(--danger)] uppercase tracking-wide mb-2">
-          Pagos ({pagoEvents.length})
-        </h4>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className={`text-xs font-medium uppercase tracking-wide text-[var(--danger)]`}>Pagos</h4>
+          <span className={`text-xs ${T.textMuted}`}>{pagoEvents.length}</span>
+        </div>
         {pagoEvents.length === 0 ? (
-          <div className="text-[12px] text-[var(--gray-400)]">Sin pagos</div>
+          <div className={`text-sm ${T.textSubtle} py-4 text-center border border-dashed ${T.border} rounded-lg`}>Sin pagos</div>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {pagoEvents.sort((a, b) => b.amount - a.amount).map((p, i) => (
-              <div key={i} className="flex items-center justify-between text-[12px] bg-white px-2.5 py-1.5 rounded border border-[var(--gray-200)]/40">
+              <div key={i} className={`flex items-center justify-between gap-3 ${T.surface} px-3 py-2.5 rounded-lg border ${T.border}`}>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-medium text-[var(--gray-950)] truncate">{p.supplier}</span>
-                    <span
-                      className={`text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                        p.kind === 'paid'
-                          ? 'bg-[var(--gray-200)]/60 text-[var(--gray-500)]'
-                          : 'bg-[var(--warning)]/10 text-[var(--warning)]'
-                      }`}
-                    >
+                    <span className={`text-sm font-medium ${T.text} truncate`}>{p.supplier}</span>
+                    <Badge tone={p.kind === 'paid' ? 'neutral' : 'warning'}>
                       {p.kind === 'paid' ? 'Pagado' : 'Pendiente'}
-                    </span>
-                    {p.flexibility === 'inamovible' && (
-                      <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--danger)]/10 text-[var(--danger)]">
-                        Inamovible
-                      </span>
-                    )}
-                    {p.flexibility === 'flexible' && (
-                      <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--success)]/10 text-[var(--success)]">
-                        Flexible
-                      </span>
-                    )}
-                    {p.flexibility === 'revisar' && (
-                      <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--info)]/10 text-[var(--info)]">
-                        Revisar
-                      </span>
-                    )}
+                    </Badge>
+                    {p.flexibility === 'inamovible' && <Badge tone="danger">Inamovible</Badge>}
+                    {p.flexibility === 'flexible'   && <Badge tone="success">Flexible</Badge>}
+                    {p.flexibility === 'revisar'    && <Badge tone="info">Revisar</Badge>}
                     {p.criticidad && (
-                      <span
-                        className={`text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                          p.criticidad === 'Alta'
-                            ? 'bg-[var(--danger)]/10 text-[var(--danger)]'
-                            : p.criticidad === 'Media'
-                            ? 'bg-[var(--warning)]/10 text-[var(--warning)]'
-                            : 'bg-[var(--gray-200)]/60 text-[var(--gray-500)]'
-                        }`}
-                      >
+                      <Badge tone={p.criticidad === 'Alta' ? 'danger' : p.criticidad === 'Media' ? 'warning' : 'neutral'}>
                         DTI {p.criticidad}
-                      </span>
+                      </Badge>
                     )}
                   </div>
-                  <div className="text-[10px] text-[var(--gray-400)]">{p.classification}</div>
+                  <div className={`text-xs ${T.textMuted} mt-0.5`}>{p.classification}</div>
                 </div>
-                <div className="tabular-nums font-medium text-[var(--danger)] ml-2">{fmtCurrency(p.amount)}</div>
+                <div className="text-sm font-semibold tabular-nums text-[var(--danger)]">{fmtCurrency(p.amount)}</div>
               </div>
             ))}
           </div>
@@ -814,7 +1033,7 @@ function DayDetail({
 }
 
 // ---------------------------------------------------------------------------
-// Week detail — shows day-by-day table inside a week row
+// Week detail — tabla día-por-día dentro de una semana
 // ---------------------------------------------------------------------------
 function WeekDetail({
   weekDays, collectionsByDate, paymentsByDate, clientById,
@@ -826,19 +1045,19 @@ function WeekDetail({
 }) {
   const [dayOpen, setDayOpen] = useState<string | null>(null);
   return (
-    <div className="bg-white border border-[var(--gray-200)]/40 rounded-lg overflow-hidden">
-      <table className="w-full text-[12px]">
-        <thead className="bg-[var(--gray-50)] text-[var(--gray-400)] text-left text-[10px] uppercase tracking-wide">
+    <div className={`${T.surface} border ${T.border} rounded-lg overflow-hidden`}>
+      <table className="w-full text-sm">
+        <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
-            <th className="px-3 py-2 font-medium">Día</th>
-            <th className="px-3 py-2 font-medium text-right">Cobros</th>
-            <th className="px-3 py-2 font-medium text-right">Pagos</th>
-            <th className="px-3 py-2 font-medium text-right">Neto</th>
-            <th className="px-3 py-2 font-medium text-right">Saldo</th>
-            <th className="px-3 py-2 font-medium text-right">#</th>
+            <th className="px-3 py-2.5 text-left">Día</th>
+            <th className="px-3 py-2.5 text-right">Cobros</th>
+            <th className="px-3 py-2.5 text-right">Pagos</th>
+            <th className="px-3 py-2.5 text-right">Neto</th>
+            <th className="px-3 py-2.5 text-right">Saldo</th>
+            <th className="px-3 py-2.5 text-right w-16">Eventos</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className={`divide-y ${T.divider}`}>
           {weekDays.map(d => {
             const isOpen = dayOpen === d.date;
             const cobroEvents = collectionsByDate.get(d.date) ?? [];
@@ -847,22 +1066,30 @@ function WeekDetail({
             return (
               <Fragment key={d.date}>
                 <tr
-                  className="border-t border-[var(--gray-200)]/30 cursor-pointer hover:bg-[var(--gray-50)]/60"
+                  className={`cursor-pointer transition-colors duration-150 ${isOpen ? T.surfaceAlt : T.rowHover}`}
                   onClick={() => setDayOpen(isOpen ? null : d.date)}
                 >
-                  <td className="px-3 py-1.5">
-                    <span className="font-medium text-[var(--gray-950)]">{formatDate(d.date)}</span>
-                    <span className="text-[10px] text-[var(--gray-400)] ml-2">{weekday}</span>
+                  <td className="px-3 py-2">
+                    <span className={`text-sm font-medium ${T.text}`}>{formatDate(d.date)}</span>
+                    <span className={`text-xs ${T.textMuted} ml-2`}>{weekday}</span>
                   </td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-[var(--success)]">{d.inflows > 0 ? fmtCurrency(d.inflows) : '—'}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums text-[var(--danger)]">{d.outflows > 0 ? fmtCurrency(d.outflows) : '—'}</td>
-                  <td className={`px-3 py-1.5 text-right tabular-nums font-medium ${d.net >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>{fmtCurrency(d.net)}</td>
-                  <td className={`px-3 py-1.5 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(d.cumulative)}</td>
-                  <td className="px-3 py-1.5 text-right text-[var(--gray-400)]">{cobroEvents.length + pagoEvents.length}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--success)]">
+                    {d.inflows > 0 ? fmtCurrency(d.inflows) : <span className={T.textSubtle}>—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)]">
+                    {d.outflows > 0 ? fmtCurrency(d.outflows) : <span className={T.textSubtle}>—</span>}
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums font-medium ${d.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
+                    {fmtCurrency(d.net)}
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)]' : T.text}`}>
+                    {fmtCurrency(d.cumulative)}
+                  </td>
+                  <td className={`px-3 py-2 text-right text-xs tabular-nums ${T.textMuted}`}>{cobroEvents.length + pagoEvents.length}</td>
                 </tr>
                 {isOpen && (
-                  <tr className="border-t border-[var(--gray-200)]/20 bg-[var(--surface-alt)]">
-                    <td colSpan={6} className="px-3 py-2">
+                  <tr>
+                    <td colSpan={6} className={`${T.surfaceAlt} px-3 py-3`}>
                       <DayDetail cobroEvents={cobroEvents} pagoEvents={pagoEvents} clientById={clientById} />
                     </td>
                   </tr>
@@ -879,28 +1106,33 @@ function WeekDetail({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function KPI({ label, value, icon, color }: { label: string; value: number; icon: React.ReactNode; color: string }) {
+function Badge({ tone, children }: {
+  tone: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+  children: React.ReactNode;
+}) {
+  const map = {
+    success: 'bg-[var(--success)]/10 text-[var(--success)]',
+    warning: 'bg-[var(--warning)]/10 text-[var(--warning)]',
+    danger:  'bg-[var(--danger)]/10 text-[var(--danger)]',
+    info:    'bg-[var(--info)]/10 text-[var(--info)]',
+    neutral: 'bg-[#F3F4F6] text-[#6B7280]',
+  }[tone];
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide" style={{ color }}>
-        {icon}
-        {label}
-      </div>
-      <div className="text-2xl font-semibold tabular-nums mt-1" style={{ color }}>
-        {fmtCurrency(value)}
-      </div>
-    </div>
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${map}`}>
+      {children}
+    </span>
   );
 }
 
 function EmptyTable({ msg }: { msg: string }) {
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl py-12 text-center text-[13px] text-[var(--gray-400)]">
-      {msg}
+    <div className={`${T.surface} border ${T.border} rounded-xl py-16 text-center`}>
+      <CalendarIcon size={28} strokeWidth={1.5} className={`${T.textSubtle} mx-auto mb-3`} />
+      <p className={`text-sm font-medium ${T.text}`}>{msg}</p>
+      <p className={`text-xs ${T.textMuted} mt-1`}>Prueba con otro mes o carga más datos</p>
     </div>
   );
 }
-
 
 function formatDate(iso: string): string {
   const d = new Date(iso + 'T12:00:00');

@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/jde/:path*",
-      "destination": "https://JDE_PUBLIC_URL_HERE/JDEdwards/:path*"
+      "destination": "https://api.gruposenda.com/v1/erp/tesoreria/:path*"
     },
     {
       "source": "/((?!assets/).*)",

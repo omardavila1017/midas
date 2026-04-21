@@ -21,6 +21,7 @@ import {
   BankAccountStatement,
   BankStatementLine,
   BankStatementRequest,
+  BankStatementFormat,
   Company,
 } from './jdeTypes';
 
@@ -123,14 +124,14 @@ function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
 }
 
 /**
- * POST /JDEdwards/AntiguedadSaldos
+ * POST /v1/erp/tesoreria/antiguedadsaldos
  * Retorna todos los saldos abiertos por proveedor para la compañía indicada.
  */
 export async function fetchAgedBalances(
   req: AgedBalanceRequest,
   config: JdeClientConfig = {},
 ): Promise<AgedBalanceRecord[]> {
-  const raw = await jdeClient.post<unknown>('/AntiguedadSaldos', req, config);
+  const raw = await jdeClient.post<unknown>('/antiguedadsaldos', req, config);
   return unwrapList(raw).map(mapAgedBalance);
 }
 
@@ -227,9 +228,17 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
       ? 'ABONO' :
     tipo || 'ABONO';
 
-  // ── Fecha ── (JDE devuelve "2026-04-17T00:00:00" → normalizamos a "2026-04-17")
+  // ── Fecha ── prioridad: fechaOperacion real > Fecha_Estado_Cuenta (la de la request)
+  // La API de producción (api.gruposenda.com) regresa fechaOperacion por línea
+  // cuando existe. Solo cuando no hay campo dedicado caemos al statement date.
+  // Normalizamos ISO "2026-04-17T00:00:00" → "2026-04-17".
   const rawFecha = toStr(
-    pick(raw, ['Fecha_Estado_Cuenta', 'fechaOperacion', 'fecha_operacion', 'fecha', 'date']),
+    pick(raw, [
+      'fechaOperacion', 'fecha_operacion', 'FechaOperacion', 'Fecha_Operacion',
+      'fechaMovimiento', 'Fecha_Movimiento', 'fecha_movimiento',
+      'fecha', 'date',
+      'Fecha_Estado_Cuenta',
+    ]),
   );
   const fechaOperacion = rawFecha.includes('T') ? rawFecha.split('T')[0] : rawFecha;
 
@@ -347,14 +356,14 @@ function groupByAccount(
 }
 
 /**
- * POST /JDEdwards/Bancos
+ * POST /v1/erp/tesoreria/bancos
  * Retorna el estado de cuenta agrupado por cuenta bancaria.
  */
 export async function fetchBankStatements(
   req: BankStatementRequest,
   config: JdeClientConfig = {},
 ): Promise<BankAccountStatement[]> {
-  const raw = await jdeClient.post<unknown>('/Bancos', req, config);
+  const raw = await jdeClient.post<unknown>('/bancos', req, config);
   const list = unwrapList(raw);
   if (list.length === 0) return [];
 
@@ -362,6 +371,182 @@ export async function fetchBankStatements(
   // Saldo_Inicial/Saldo_Final repetidos por cuenta → agrupar.
   const lines = list.map(mapBankLine);
   return groupByAccount(list, lines, req.fechaEstadoCuenta);
+}
+
+/**
+ * Fetch bank statements for a date range and merge by account.
+ *
+ * Context: /bancos solo acepta una `fechaEstadoCuenta` por request —
+ * es una "foto" diaria. Para reconstruir el histórico (flujo de efectivo año
+ * a la fecha, conciliación por semana, etc.) hay que llamar el endpoint día
+ * por día y concatenar. Esta función lo hace con concurrencia controlada y
+ * deduplica movimientos por (fechaOperacion, referencia, importe, tipo,
+ * concepto) para tolerar solapes entre fechas contiguas.
+ *
+ * Comportamiento de saldos al mergear:
+ *   - `saldoInicial` = saldo inicial del día más antiguo que respondió.
+ *   - `saldoFinal`   = saldo final del día más reciente que respondió.
+ *   - `fechaEstadoCuenta` = el día más reciente del rango con datos.
+ *
+ * Errores por día son silenciados (cada día se trata como 0 movimientos)
+ * para no abortar el rango entero si un solo día falla — el caller puede
+ * detectar fallos totales viendo si el array devuelto está vacío.
+ *
+ * @param from   Fecha inicial inclusive (YYYY-MM-DD).
+ * @param to     Fecha final inclusive (YYYY-MM-DD).
+ * @param formato Formato electrónico (default SWIFT).
+ * @param options Concurrencia, callback de progreso, config JDE.
+ * @returns Un BankAccountStatement[] — un elemento por (cia, cuenta, moneda)
+ *          — con `movimientos` cubriendo todo el rango.
+ */
+export async function fetchBankStatementsRange(
+  from: string,
+  to: string,
+  formato: BankStatementFormat = 'SWIFT',
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<BankAccountStatement[]> {
+  const concurrency = Math.max(1, options.concurrency ?? 6);
+  const config = options.config ?? {};
+
+  // Build the list of dates [from..to] inclusive.
+  const dates: string[] = [];
+  const start = new Date(from + 'T00:00:00Z');
+  const end = new Date(to + 'T00:00:00Z');
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+    return [];
+  }
+  for (
+    const d = new Date(start);
+    d <= end;
+    d.setUTCDate(d.getUTCDate() + 1)
+  ) {
+    dates.push(d.toISOString().slice(0, 10));
+  }
+
+  // Parallel fetch with a simple worker pool.
+  const results: BankAccountStatement[][] = new Array(dates.length);
+  const errors: Array<{ fecha: string; error: unknown }> = [];
+  let cursor = 0;
+  let done = 0;
+  const worker = async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= dates.length) return;
+      try {
+        results[idx] = await fetchBankStatements(
+          { fechaEstadoCuenta: dates[idx], formatoElectronico: formato },
+          config,
+        );
+      } catch (error) {
+        results[idx] = [];
+        errors.push({ fecha: dates[idx], error });
+      }
+      done++;
+      options.onProgress?.(done, dates.length);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, dates.length) }, worker),
+  );
+
+  // ── Diagnóstico: ¿cuántos días respondieron con datos? ──
+  const daysWithData = results.reduce(
+    (n, r) => n + (r && r.length > 0 ? 1 : 0),
+    0,
+  );
+  const totalLines = results.reduce(
+    (n, r) => n + (r ? r.reduce((m, a) => m + a.movimientos.length, 0) : 0),
+    0,
+  );
+  console.info(
+    `[JDE range] ${from} → ${to}: ${dates.length} días solicitados, ${daysWithData} con datos, ${errors.length} con error, ${totalLines} líneas totales (pre-merge)`,
+  );
+  if (errors.length > 0 && errors.length <= 5) {
+    for (const e of errors) console.warn(`[JDE range] err ${e.fecha}:`, e.error);
+  } else if (errors.length > 5) {
+    console.warn(`[JDE range] ${errors.length} errores — primeros 5:`, errors.slice(0, 5));
+  }
+
+  // Merge by (cia, cuenta, moneda).
+  const merged = new Map<string, BankAccountStatement>();
+  const seen = new Map<string, Set<string>>();
+  const firstDate = new Map<string, string>();
+  const lastDate = new Map<string, string>();
+
+  for (let i = 0; i < dates.length; i++) {
+    const dayStatements = results[i] || [];
+    for (const s of dayStatements) {
+      const key = `${s.cia}::${s.cuenta}::${s.moneda}`;
+      let acc = merged.get(key);
+      if (!acc) {
+        acc = {
+          cia: s.cia,
+          banco: s.banco,
+          nombreBanco: s.nombreBanco,
+          cuenta: s.cuenta,
+          moneda: s.moneda,
+          fechaEstadoCuenta: s.fechaEstadoCuenta,
+          saldoInicial: s.saldoInicial,
+          saldoFinal: s.saldoFinal,
+          movimientos: [],
+        };
+        merged.set(key, acc);
+        seen.set(key, new Set());
+        firstDate.set(key, s.fechaEstadoCuenta);
+        lastDate.set(key, s.fechaEstadoCuenta);
+      }
+
+      // Track earliest/latest response dates per account.
+      if (s.fechaEstadoCuenta < (firstDate.get(key) ?? s.fechaEstadoCuenta)) {
+        firstDate.set(key, s.fechaEstadoCuenta);
+        if (s.saldoInicial !== undefined) acc.saldoInicial = s.saldoInicial;
+      }
+      if (s.fechaEstadoCuenta >= (lastDate.get(key) ?? s.fechaEstadoCuenta)) {
+        lastDate.set(key, s.fechaEstadoCuenta);
+        acc.fechaEstadoCuenta = s.fechaEstadoCuenta;
+        if (s.saldoFinal !== undefined) acc.saldoFinal = s.saldoFinal;
+        // Keep the most recent human-readable bank label too.
+        if (s.nombreBanco) acc.nombreBanco = s.nombreBanco;
+      }
+
+      const seenSet = seen.get(key)!;
+      for (const mov of s.movimientos) {
+        const mk = `${mov.fechaOperacion}|${mov.referencia}|${mov.tipoMovimiento}|${mov.importe}|${mov.concepto}`;
+        if (seenSet.has(mk)) continue;
+        seenSet.add(mk);
+        acc.movimientos.push(mov);
+      }
+    }
+  }
+
+  // Sort movimientos within each account chronologically.
+  for (const acc of merged.values()) {
+    acc.movimientos.sort((a, b) => a.fechaOperacion.localeCompare(b.fechaOperacion));
+  }
+
+  // ── Diagnóstico post-merge: fechas distintas cubiertas ──
+  const allDatesSeen = new Set<string>();
+  for (const acc of merged.values()) {
+    for (const mov of acc.movimientos) allDatesSeen.add(mov.fechaOperacion);
+  }
+  const sortedDates = Array.from(allDatesSeen).sort();
+  console.info(
+    `[JDE range] merge final: ${merged.size} cuentas, ${allDatesSeen.size} fechas distintas (${sortedDates[0] ?? '—'} → ${sortedDates[sortedDates.length - 1] ?? '—'})`,
+  );
+  if (allDatesSeen.size <= 3 && dates.length > 3) {
+    console.warn(
+      `[JDE range] ⚠️ Solo ${allDatesSeen.size} fechas distintas tras ${dates.length} requests. ` +
+      `Posibilidades: (1) el API ignora fechaEstadoCuenta y regresa siempre lo mismo, ` +
+      `(2) las fechas históricas están vacías, (3) todas las respuestas comparten Fecha_Estado_Cuenta. ` +
+      `Fechas vistas: ${sortedDates.join(', ')}`,
+    );
+  }
+
+  return Array.from(merged.values());
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -383,11 +568,11 @@ function mapCompany(raw: RawRecord): Company {
 }
 
 /**
- * GET /JDEdwards/Empresas
+ * GET /v1/erp/tesoreria/empresas
  * Retorna el catálogo de compañías disponible para el usuario autenticado.
  */
 export async function fetchCompanies(config: JdeClientConfig = {}): Promise<Company[]> {
-  const raw = await jdeClient.get<unknown>('/Empresas', config);
+  const raw = await jdeClient.get<unknown>('/empresas', config);
   return unwrapList(raw).map(mapCompany).filter(c => c.cia);
 }
 

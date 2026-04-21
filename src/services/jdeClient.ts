@@ -6,9 +6,8 @@
  *   VITE_JDE_TOKEN      — Bearer token de autenticación
  *
  * En desarrollo el `base` default ("/api/jde") es reescrito por el proxy
- * configurado en vite.config.ts hacia http://srv-desarrollo:90/JDEdwards.
- * En producción, apuntar VITE_JDE_BASE_URL al host correcto (una vez que
- * JDE publique la URL productiva).
+ * configurado en vite.config.ts hacia https://api.gruposenda.com/v1/erp/tesoreria.
+ * En producción, Vercel hace el mismo rewrite (ver vercel.json).
  */
 
 import { JdeApiError } from './jdeTypes';
