@@ -102,6 +102,7 @@ export default function Forecast({
 
   const childrenById = useMemo(() => buildChildrenIndex(plan), [plan]);
   const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
+  const editableScenarios = scenarios.filter((scenario) => !isBaseScenario(scenario));
   const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
     ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
@@ -334,17 +335,9 @@ export default function Forecast({
             {baseScenario && (
               <option value={baseScenario.id}>{baseScenario.name}</option>
             )}
-            {proposals.map((proposal) => {
-              const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === proposal.id);
-              if (proposalScenarios.length === 0) return null;
-              return (
-                <optgroup key={proposal.id} label={proposal.name}>
-                  {proposalScenarios.map((scenario) => (
-                    <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
-                  ))}
-                </optgroup>
-              );
-            })}
+            {editableScenarios.map((scenario) => (
+              <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
+            ))}
           </select>
           <div className="flex items-center gap-2 justify-end">
             <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-1">

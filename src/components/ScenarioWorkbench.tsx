@@ -214,6 +214,7 @@ interface ScenarioDraft {
   scenarioId: string | null;
   name: string;
   description: string;
+  simulationIds: string[];
 }
 
 function makeScenarioDraft(proposal?: Proposal | null, scenario?: Scenario | null): ScenarioDraft {
@@ -222,6 +223,7 @@ function makeScenarioDraft(proposal?: Proposal | null, scenario?: Scenario | nul
     scenarioId: scenario?.id ?? null,
     name: scenario?.name ?? proposal?.name ?? '',
     description: scenario?.description ?? proposal?.description ?? '',
+    simulationIds: scenario?.simulationIds ?? [],
   };
 }
 
@@ -276,6 +278,52 @@ function buildSimulationFromForm(plan: FlowPlan, form: AdjustmentForm, existing?
   return sim;
 }
 
+function formatCurrencyShort(value: number): string {
+  return new Intl.NumberFormat('es-MX', {
+    style: 'currency',
+    currency: 'MXN',
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function summarizeTargets(plan: FlowPlan, targetIds: string[]): string {
+  const labels = targetIds
+    .slice(0, 2)
+    .map((targetId) => resolveConceptLabel(plan, targetId))
+    .filter(Boolean);
+
+  if (labels.length === 0) return 'sin objetivo';
+  if (targetIds.length > 2) return `${labels.join(', ')} +${targetIds.length - 2}`;
+  return labels.join(', ');
+}
+
+function summarizeSimulationImpact(plan: FlowPlan, simulation: Simulation): string {
+  const targetsLabel = summarizeTargets(plan, simulation.targetIds ?? []);
+  const direction = simulation.operation === 'decrease' ? 'Reduce' : 'Incrementa';
+
+  switch (simulation.type) {
+    case 'percent_adjustment':
+      return `${direction} ${Math.round(Math.abs(simulation.percent ?? 0) * 100)}% en ${targetsLabel}`;
+    case 'amount_adjustment':
+      return `${direction} ${formatCurrencyShort(Math.abs(simulation.amount ?? 0))} en ${targetsLabel}`;
+    case 'recurring_series':
+      return `${direction} ${formatCurrencyShort(Math.abs(simulation.amount ?? 0))} de forma recurrente en ${targetsLabel}`;
+    case 'installment_plan':
+      return `${direction} ${formatCurrencyShort(Math.abs(simulation.amount ?? 0))} en ${simulation.installments ?? 0} parcialidades sobre ${targetsLabel}`;
+    case 'timing_shift': {
+      const ratio = Math.round((simulation.shiftRatio ?? 1) * 100);
+      const months = simulation.shiftMonths ?? 0;
+      const directionLabel = months >= 0 ? `+${months}` : `${months}`;
+      return `Mueve ${ratio}% de ${targetsLabel} ${directionLabel} mes${Math.abs(months) === 1 ? '' : 'es'}`;
+    }
+    case 'pause_expense':
+      return `Pausa ${targetsLabel} durante ${formatSimulationWindow(simulation)}`;
+    default:
+      return `${direction} ${targetsLabel}`;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════ */
@@ -292,41 +340,53 @@ export default function ScenarioWorkbench({
   const baseScenario = scenarios.find(s => isBaseScenario(s)) ?? null;
   const activeProposal = proposals.find(p => p.id === activeProposalId) ?? null;
   const activeScenario = scenarios.find(s => s.id === activeScenarioId) ?? baseScenario ?? null;
+  const proposalsById = useMemo(
+    () => new Map(proposals.map((proposal) => [proposal.id, proposal])),
+    [proposals],
+  );
   const editableScenarios = useMemo(
     () => scenarios.filter((scenario) => !isBaseScenario(scenario)),
     [scenarios],
   );
+  const resolveScenarioName = (scenario: Scenario) => (
+    scenario.name.trim()
+    || proposalsById.get(scenario.proposalId ?? '')?.name?.trim()
+    || 'Escenario sin nombre'
+  );
+  const resolveScenarioDescription = (scenario: Scenario) => (
+    scenario.description.trim()
+    || proposalsById.get(scenario.proposalId ?? '')?.description?.trim()
+    || 'Sin descripción todavía. Agrega un contexto breve para que el equipo entienda este escenario.'
+  );
+  const resolveAssignedScenarioIds = (simulationId: string): string[] => (
+    editableScenarios
+      .filter((scenario) => scenario.simulationIds.includes(simulationId))
+      .map((scenario) => scenario.id)
+  );
   const scenarioCards = useMemo(() => (
     editableScenarios.map((scenario) => {
-      const proposal = proposals.find((item) => item.id === scenario.proposalId) ?? null;
-      const name = scenario.name.trim() || proposal?.name?.trim() || 'Escenario sin nombre';
-      const description = scenario.description.trim()
-        || proposal?.description?.trim()
-        || 'Sin descripción todavía. Agrega un contexto breve para que el equipo entienda este escenario.';
+      const proposal = proposalsById.get(scenario.proposalId ?? '') ?? null;
+      const sharedCount = scenario.simulationIds.filter(
+        (simulationId) => resolveAssignedScenarioIds(simulationId).length > 1,
+      ).length;
 
       return {
         scenario,
         proposal,
-        name,
-        description,
+        name: resolveScenarioName(scenario),
+        description: resolveScenarioDescription(scenario),
         adjustmentCount: scenario.simulationIds.length,
+        sharedCount,
         isSelected: activeScenario?.id === scenario.id,
       };
     })
-  ), [activeScenario?.id, editableScenarios, proposals]);
+  ), [activeScenario?.id, editableScenarios, proposalsById]);
   const scenarioLabelsById = useMemo(() => new Map(
     editableScenarios.map((scenario) => {
-      const proposalName = proposals.find((proposal) => proposal.id === scenario.proposalId)?.name?.trim() ?? '';
-      const label = proposalName && proposalName !== scenario.name
-        ? `${proposalName} · ${scenario.name}`
-        : scenario.name;
+      const label = resolveScenarioName(scenario);
       return [scenario.id, label];
     }),
-  ), [editableScenarios, proposals]);
-
-  // For each proposal, get the first (auto) scenario
-  const scenarioForProposal = (proposalId: string) =>
-    scenarios.find(s => s.proposalId === proposalId && !isBaseScenario(s));
+  ), [editableScenarios]);
 
   /* ── Adjustment panel state ── */
   const [panelOpen, setPanelOpen] = useState(false);
@@ -334,9 +394,84 @@ export default function ScenarioWorkbench({
   const [form, setForm] = useState<AdjustmentForm>(() => defaultAdjustmentForm(plan));
   const [scenarioEditorOpen, setScenarioEditorOpen] = useState(false);
   const [scenarioDraft, setScenarioDraft] = useState<ScenarioDraft>(() => makeScenarioDraft());
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [scenarioAdjustmentQuery, setScenarioAdjustmentQuery] = useState('');
 
-  const assignedIds = new Set(activeScenario?.simulationIds ?? []);
-  const assignedSimulations = simulations.filter(s => assignedIds.has(s.id));
+  const assignedIds = useMemo(
+    () => new Set(activeScenario?.simulationIds ?? []),
+    [activeScenario?.simulationIds],
+  );
+  const assignedSimulations = useMemo(
+    () => simulations
+      .filter((simulation) => assignedIds.has(simulation.id))
+      .sort((left, right) => left.name.localeCompare(right.name, 'es')),
+    [assignedIds, simulations],
+  );
+  const adjustmentCatalog = useMemo(() => (
+    simulations
+      .map((simulation) => {
+        const assignedScenarioIds = resolveAssignedScenarioIds(simulation.id);
+        const assignedScenarioLabels = assignedScenarioIds
+          .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
+        return {
+          simulation,
+          assignedScenarioIds,
+          assignedScenarioLabels,
+          impactSummary: summarizeSimulationImpact(plan, simulation),
+          targetSummary: summarizeTargets(plan, simulation.targetIds ?? []),
+          inActiveScenario: assignedIds.has(simulation.id),
+        };
+      })
+      .sort((left, right) => {
+        if (right.assignedScenarioIds.length !== left.assignedScenarioIds.length) {
+          return right.assignedScenarioIds.length - left.assignedScenarioIds.length;
+        }
+        return left.simulation.name.localeCompare(right.simulation.name, 'es');
+      })
+  ), [assignedIds, editableScenarios, plan, scenarioLabelsById, simulations]);
+  const filteredAdjustmentCatalog = useMemo(() => {
+    const query = catalogQuery.trim().toLowerCase();
+    if (!query) return adjustmentCatalog;
+    return adjustmentCatalog.filter(({ simulation, assignedScenarioLabels, impactSummary, targetSummary }) => {
+      const haystack = [
+        simulation.name,
+        simulation.description,
+        simulation.comments,
+        impactSummary,
+        targetSummary,
+        ...assignedScenarioLabels,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [adjustmentCatalog, catalogQuery]);
+  const filteredScenarioDraftAdjustments = useMemo(() => {
+    const query = scenarioAdjustmentQuery.trim().toLowerCase();
+    if (!query) return adjustmentCatalog;
+    return adjustmentCatalog.filter(({ simulation, assignedScenarioLabels, impactSummary, targetSummary }) => {
+      const haystack = [
+        simulation.name,
+        simulation.description,
+        impactSummary,
+        targetSummary,
+        ...assignedScenarioLabels,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [adjustmentCatalog, scenarioAdjustmentQuery]);
+  const reusableAdjustmentsCount = useMemo(
+    () => adjustmentCatalog.filter((item) => item.assignedScenarioIds.length > 1).length,
+    [adjustmentCatalog],
+  );
+  const orphanAdjustmentsCount = useMemo(
+    () => adjustmentCatalog.filter((item) => item.assignedScenarioIds.length === 0).length,
+    [adjustmentCatalog],
+  );
 
   const targetConfig = useMemo(
     () => getTargetOptions(plan, form.category, form.type),
@@ -353,12 +488,6 @@ export default function ScenarioWorkbench({
       return { ...prev, targetIds: resolved };
     });
   }, [targetConfig]);
-
-  const resolveAssignedScenarioIds = (simulationId: string): string[] => (
-    editableScenarios
-      .filter((scenario) => scenario.simulationIds.includes(simulationId))
-      .map((scenario) => scenario.id)
-  );
 
   const syncSimulationAssignments = (simulationId: string, nextScenarioIds: string[]) => {
     const selectedIds = new Set(nextScenarioIds);
@@ -382,21 +511,34 @@ export default function ScenarioWorkbench({
 
   const openNewScenarioEditor = () => {
     setScenarioDraft(makeScenarioDraft());
+    setScenarioAdjustmentQuery('');
     setScenarioEditorOpen(true);
   };
 
   const openEditScenario = (scenario: Scenario) => {
     const proposal = proposals.find((item) => item.id === scenario.proposalId) ?? null;
     setScenarioDraft(makeScenarioDraft(proposal, scenario));
+    setScenarioAdjustmentQuery('');
     setScenarioEditorOpen(true);
   };
 
   const closeScenarioEditor = () => {
     setScenarioEditorOpen(false);
     setScenarioDraft(makeScenarioDraft());
+    setScenarioAdjustmentQuery('');
   };
 
-  const saveScenarioDraft = () => {
+  const openNewAdjustmentForScenario = (scenarioId: string | null) => {
+    setEditingId(null);
+    setForm(defaultAdjustmentForm(plan, scenarioId ? [scenarioId] : []));
+    setScenarioEditorOpen(false);
+    setScenarioDraft(makeScenarioDraft());
+    setScenarioAdjustmentQuery('');
+    setPanelOpen(true);
+  };
+
+  const saveScenarioDraft = (options?: { openAdjustmentAfterSave?: boolean }) => {
+    const openAdjustmentAfterSave = options?.openAdjustmentAfterSave ?? false;
     const name = scenarioDraft.name.trim();
     const description = scenarioDraft.description.trim();
     if (!name) return;
@@ -417,10 +559,15 @@ export default function ScenarioWorkbench({
         ...scenario,
         name,
         description,
+        simulationIds: scenarioDraft.simulationIds,
         updatedAt: ts,
       });
       onSelectProposal(proposal.id);
       onSelectScenario(scenario.id);
+      if (openAdjustmentAfterSave) {
+        openNewAdjustmentForScenario(scenario.id);
+        return;
+      }
       closeScenarioEditor();
       return;
     }
@@ -436,30 +583,28 @@ export default function ScenarioWorkbench({
       id: scenarioId, proposalId, kind: 'proposal',
       name, description, probability: 1,
       startYearMonth: `${plan.year}-01`, horizonMonths: 12,
-      simulationIds: [], createdAt: ts, updatedAt: ts,
+      simulationIds: scenarioDraft.simulationIds, createdAt: ts, updatedAt: ts,
     });
     onSelectProposal(proposalId);
     onSelectScenario(scenarioId);
+    if (openAdjustmentAfterSave) {
+      openNewAdjustmentForScenario(scenarioId);
+      return;
+    }
     closeScenarioEditor();
   };
 
-  const deleteScenarioFull = (proposalId: string) => {
-    onDelete(proposalId);
-  };
-
-  const selectScenarioByProposal = (proposalId: string) => {
-    onSelectProposal(proposalId);
-    const sc = scenarioForProposal(proposalId);
-    if (sc) onSelectScenario(sc.id);
+  const deleteScenarioFull = (scenario: Scenario) => {
+    const proposal = proposalsById.get(scenario.proposalId ?? '') ?? null;
+    if (proposal) {
+      onDelete(proposal.id);
+      return;
+    }
+    onDeleteScenario(scenario.id);
   };
 
   const openNewAdjustment = () => {
-    setEditingId(null);
-    setForm(defaultAdjustmentForm(
-      plan,
-      activeScenario && !isBaseScenario(activeScenario) ? [activeScenario.id] : [],
-    ));
-    setPanelOpen(true);
+    openNewAdjustmentForScenario(activeScenario && !isBaseScenario(activeScenario) ? activeScenario.id : null);
   };
 
   const openEditAdjustment = (sim: Simulation) => {
@@ -515,6 +660,34 @@ export default function ScenarioWorkbench({
     onDeleteSimulation(simId);
   };
 
+  const toggleScenarioDraftSimulation = (simulationId: string) => {
+    setScenarioDraft((current) => ({
+      ...current,
+      simulationIds: current.simulationIds.includes(simulationId)
+        ? current.simulationIds.filter((id) => id !== simulationId)
+        : [...current.simulationIds, simulationId],
+    }));
+  };
+
+  const toggleAdjustmentInScenario = (scenarioId: string, simulationId: string) => {
+    const scenario = editableScenarios.find((item) => item.id === scenarioId);
+    if (!scenario) return;
+
+    const exists = scenario.simulationIds.includes(simulationId);
+    onUpdateScenario({
+      ...scenario,
+      simulationIds: exists
+        ? scenario.simulationIds.filter((id) => id !== simulationId)
+        : [...scenario.simulationIds, simulationId],
+      updatedAt: now(),
+    });
+  };
+
+  const toggleAdjustmentInActiveScenario = (simulationId: string) => {
+    if (!activeScenario || isBaseScenario(activeScenario)) return;
+    toggleAdjustmentInScenario(activeScenario.id, simulationId);
+  };
+
   const toggleTarget = (id: string) => {
     setForm(prev => ({
       ...prev,
@@ -544,7 +717,7 @@ export default function ScenarioWorkbench({
           <div>
             <h1 className="text-[24px] font-semibold tracking-tight text-[var(--gray-950)]">Escenarios</h1>
             <p className="mt-1 text-[13px] text-[var(--gray-400)]">
-              Selecciona un escenario para trabajar sus ajustes. El escenario base siempre queda disponible como referencia rápida.
+              Los escenarios son combinaciones de ajustes reutilizables. Crea uno nuevo seleccionando ajustes existentes o agrega ajustes nuevos sobre la marcha.
             </p>
           </div>
           <button
@@ -558,7 +731,22 @@ export default function ScenarioWorkbench({
 
         {scenarioEditorOpen && (
           <div className="mt-5 rounded-2xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-4">
-            <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)_auto]">
+            <div className="flex flex-col gap-3 border-b border-[var(--gray-200)] pb-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h3 className="text-[16px] font-semibold text-[var(--gray-950)]">
+                  {scenarioDraft.scenarioId ? 'Editar escenario' : 'Nuevo escenario'}
+                </h3>
+                <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">
+                  Define el contexto del escenario y arma su combinación de ajustes. Puedes reutilizar ajustes ya existentes y después sumar nuevos.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge>{scenarioDraft.simulationIds.length} {scenarioDraft.simulationIds.length === 1 ? 'ajuste seleccionado' : 'ajustes seleccionados'}</Badge>
+                <Badge>{filteredScenarioDraftAdjustments.length} visibles</Badge>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
               <Field label="Nombre del escenario">
                 <input
                   value={scenarioDraft.name}
@@ -581,21 +769,105 @@ export default function ScenarioWorkbench({
                   className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none outline-none focus:border-[var(--primary)]"
                 />
               </Field>
-              <div className="flex items-end gap-2 xl:justify-end">
+            </div>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+                <Field label="Buscar ajustes reutilizables">
+                  <input
+                    value={scenarioAdjustmentQuery}
+                    onChange={(event) => setScenarioAdjustmentQuery(event.target.value)}
+                    placeholder="Ventas, cobranza, diferimiento..."
+                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] outline-none focus:border-[var(--primary)]"
+                  />
+                </Field>
+                <p className="mt-3 text-[12px] leading-6 text-[var(--gray-500)]">
+                  Selecciona ajustes ya existentes aunque estén asignados a otros escenarios. El escenario final será la combinación de los ajustes elegidos aquí.
+                </p>
                 <button
-                  onClick={saveScenarioDraft}
+                  onClick={() => saveScenarioDraft({ openAdjustmentAfterSave: true })}
                   disabled={!scenarioDraft.name.trim()}
-                  className="rounded-xl bg-[#1d1d1f] px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40"
+                  className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-4 text-[12px] font-medium text-[var(--gray-950)] transition hover:bg-white disabled:opacity-40"
                 >
-                  {scenarioDraft.scenarioId ? 'Guardar' : 'Crear'}
-                </button>
-                <button
-                  onClick={closeScenarioEditor}
-                  className="rounded-xl border border-[var(--gray-200)] px-4 py-2.5 text-[12px] text-[var(--gray-500)]"
-                >
-                  Cancelar
+                  {scenarioDraft.scenarioId ? 'Guardar y crear ajuste nuevo' : 'Crear escenario y agregar ajuste'}
                 </button>
               </div>
+
+              <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-[14px] font-semibold text-[var(--gray-950)]">Combinación de ajustes</h4>
+                    <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+                      Marca qué ajustes pertenecen a este escenario.
+                    </p>
+                  </div>
+                </div>
+
+                {filteredScenarioDraftAdjustments.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-10 text-center">
+                    <p className="text-[13px] font-medium text-[var(--gray-950)]">No hay ajustes para mostrar</p>
+                    <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+                      Ajusta la búsqueda o crea un ajuste nuevo para empezar a construir este escenario.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+                    {filteredScenarioDraftAdjustments.map(({ simulation, assignedScenarioLabels, impactSummary }) => {
+                      const selected = scenarioDraft.simulationIds.includes(simulation.id);
+                      return (
+                        <button
+                          key={simulation.id}
+                          type="button"
+                          onClick={() => toggleScenarioDraftSimulation(simulation.id)}
+                          className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                            selected
+                              ? 'border-[var(--primary)] bg-[var(--primary-muted)]/50 shadow-[0_8px_18px_rgba(10,132,255,0.06)]'
+                              : 'border-[var(--gray-200)] bg-[var(--surface-alt)] hover:border-[var(--gray-300)] hover:bg-white'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }} />
+                                <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{simulation.name}</p>
+                              </div>
+                              <p className="mt-2 text-[12px] leading-6 text-[var(--gray-500)]">{impactSummary}</p>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <Badge>{formatSimulationWindow(simulation)}</Badge>
+                                <Badge>{assignedScenarioLabels.length === 0 ? 'Sin escenario' : `${assignedScenarioLabels.length} escenario${assignedScenarioLabels.length === 1 ? '' : 's'}`}</Badge>
+                                {assignedScenarioLabels.slice(0, 2).map((label) => (
+                                  <Badge key={`${simulation.id}-${label}`}>{label}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                            <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${
+                              selected ? 'bg-[var(--primary)] text-white' : 'bg-white text-[var(--gray-500)] border border-[var(--gray-200)]'
+                            }`}>
+                              {selected ? 'Incluido' : 'Agregar'}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                onClick={() => saveScenarioDraft()}
+                disabled={!scenarioDraft.name.trim()}
+                className="rounded-xl bg-[#1d1d1f] px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40"
+              >
+                {scenarioDraft.scenarioId ? 'Guardar escenario' : 'Crear escenario'}
+              </button>
+              <button
+                onClick={closeScenarioEditor}
+                className="rounded-xl border border-[var(--gray-200)] px-4 py-2.5 text-[12px] text-[var(--gray-500)]"
+              >
+                Cancelar
+              </button>
             </div>
           </div>
         )}
@@ -630,7 +902,7 @@ export default function ScenarioWorkbench({
               <div>
                 <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Escenarios creados</h2>
                 <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                  Cada tarjeta muestra el escenario, su contexto breve y las acciones principales.
+                  Cada escenario representa una combinación distinta de ajustes reutilizables.
                 </p>
               </div>
               <span className="rounded-full bg-[var(--surface-alt)] px-3 py-1 text-[11px] font-medium text-[var(--gray-500)]">
@@ -643,12 +915,12 @@ export default function ScenarioWorkbench({
                 <FlaskConical className="mx-auto mb-3 h-6 w-6 text-[var(--gray-400)]" />
                 <p className="text-[13px] font-medium text-[var(--gray-950)]">Todavía no hay escenarios creados</p>
                 <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                  Crea tu primer escenario para empezar a probar ajustes sin tocar el Base.
+                  Crea tu primer escenario y arma su combinación con ajustes reutilizables del catálogo.
                 </p>
               </div>
             ) : (
               <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                {scenarioCards.map(({ scenario, proposal, name, description, adjustmentCount, isSelected }) => (
+                {scenarioCards.map(({ scenario, proposal, name, description, adjustmentCount, sharedCount, isSelected }) => (
                   <article
                     key={scenario.id}
                     className={`rounded-2xl border p-4 transition ${
@@ -681,7 +953,7 @@ export default function ScenarioWorkbench({
                         </button>
                         {proposal && (
                           <button
-                            onClick={() => deleteScenarioFull(proposal.id)}
+                            onClick={() => deleteScenarioFull(scenario)}
                             className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[#ff3b30]"
                             title="Eliminar escenario"
                           >
@@ -694,16 +966,16 @@ export default function ScenarioWorkbench({
                     <div className="mt-4 flex items-center justify-between gap-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge>{adjustmentCount} {adjustmentCount === 1 ? 'ajuste' : 'ajustes'}</Badge>
+                        {sharedCount > 0 && <Badge>{sharedCount} compartido{sharedCount === 1 ? '' : 's'}</Badge>}
                         {proposal?.status && <Badge>{proposal.status}</Badge>}
                       </div>
                       <button
-                        onClick={() => proposal && selectScenarioByProposal(proposal.id)}
-                        disabled={!proposal}
+                        onClick={() => onSelectScenario(scenario.id)}
                         className={`inline-flex h-9 items-center rounded-xl px-3 text-[12px] font-medium transition ${
                           isSelected
                             ? 'bg-white text-[var(--primary)] border border-[var(--primary)]/20'
                             : 'bg-[#1d1d1f] text-white hover:bg-black'
-                        } disabled:opacity-40`}
+                        }`}
                       >
                         {isSelected ? 'Seleccionado' : 'Abrir'}
                       </button>
@@ -739,11 +1011,10 @@ export default function ScenarioWorkbench({
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--gray-400)]">Escenario seleccionado</div>
                 <h2 className="mt-2 text-[22px] font-semibold tracking-tight text-[var(--gray-950)]">
-                  {activeScenario?.name ?? activeProposal?.name ?? 'Escenario'}
+                  {activeScenario ? resolveScenarioName(activeScenario) : activeProposal?.name ?? 'Escenario'}
                 </h2>
                 <p className="mt-2 max-w-3xl text-[13px] leading-6 text-[var(--gray-500)]">
-                  {activeScenario?.description?.trim()
-                    || activeProposal?.description?.trim()
+                  {activeScenario ? resolveScenarioDescription(activeScenario) : activeProposal?.description?.trim()
                     || 'Sin descripción todavía. Agrega un resumen corto para que el equipo entienda cuándo usar este escenario.'}
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -759,7 +1030,7 @@ export default function ScenarioWorkbench({
                     className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] px-4 text-[13px] font-medium text-[var(--gray-500)] transition hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]"
                   >
                     <Pencil className="w-4 h-4" />
-                    Editar escenario
+                    Editar composición
                   </button>
                 )}
                 <button
@@ -767,7 +1038,7 @@ export default function ScenarioWorkbench({
                   className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
                 >
                   <Plus className="w-4 h-4" />
-                  Agregar ajuste
+                  Nuevo ajuste
                 </button>
               </div>
             </div>
@@ -775,7 +1046,7 @@ export default function ScenarioWorkbench({
             <div>
               <h3 className="text-[15px] font-semibold text-[var(--gray-950)]">Ajustes del escenario</h3>
               <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                Aquí se concentran únicamente los ajustes asignados a este escenario.
+                Este escenario es la suma de los ajustes listados aquí. Puedes reutilizar más ajustes desde el catálogo global o crear uno nuevo.
               </p>
             </div>
 
@@ -784,14 +1055,12 @@ export default function ScenarioWorkbench({
                 <FlaskConical className="w-6 h-6 mx-auto mb-3 text-[var(--gray-400)]" />
                 <p className="text-[13px] font-medium text-[var(--gray-950)]">Sin ajustes todavía</p>
                 <p className="text-[12px] text-[var(--gray-400)] mt-1">
-                  Agrega tu primer ajuste para empezar a modelar este escenario.
+                  Reutiliza uno desde el catálogo o crea un ajuste nuevo para modelar este escenario.
                 </p>
               </div>
             ) : (
               <div className="space-y-2">
                 {assignedSimulations.map((sim) => {
-                  const targetLabel = sim.targetIds?.slice(0, 2).map((id) => resolveConceptLabel(plan, id)).join(', ') ?? '';
-                  const typeMeta = SIMULATION_TYPES.find((type) => type.value === sim.type);
                   const assignedScenarioLabels = resolveAssignedScenarioIds(sim.id)
                     .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
 
@@ -800,12 +1069,8 @@ export default function ScenarioWorkbench({
                       <div className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[sim.category] }} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{sim.name}</p>
+                        <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">{summarizeSimulationImpact(plan, sim)}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <Badge>{typeMeta?.label ?? sim.type}</Badge>
-                          <Badge>{sim.operation === 'decrease' ? 'Reducir' : 'Incrementar'}</Badge>
-                          <Badge>{targetLabel}{(sim.targetIds?.length ?? 0) > 2 ? ' +' : ''}</Badge>
-                          {sim.percent != null && <Badge>{Math.round(Math.abs(sim.percent) * 100)}%</Badge>}
-                          {sim.amount != null && <Badge>${sim.amount.toLocaleString()}</Badge>}
                           <Badge>{formatSimulationWindow(sim)}</Badge>
                           {assignedScenarioLabels.length > 1 && (
                             <Badge>{`Compartido en ${assignedScenarioLabels.length} escenarios`}</Badge>
@@ -830,6 +1095,125 @@ export default function ScenarioWorkbench({
             )}
           </div>
         )}
+      </section>
+
+      <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">Catálogo de ajustes</h2>
+            <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">
+              Consulta todos los ajustes existentes, en qué escenarios están y su impacto resumido. Desde aquí puedes reutilizarlos sin recrearlos.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge>{adjustmentCatalog.length} {adjustmentCatalog.length === 1 ? 'ajuste' : 'ajustes'}</Badge>
+            <Badge>{reusableAdjustmentsCount} reutilizable{reusableAdjustmentsCount === 1 ? '' : 's'}</Badge>
+            {orphanAdjustmentsCount > 0 && (
+              <Badge>{orphanAdjustmentsCount} sin escenario</Badge>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="rounded-2xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-4">
+            <Field label="Buscar ajuste">
+              <input
+                value={catalogQuery}
+                onChange={(event) => setCatalogQuery(event.target.value)}
+                placeholder="Nombre, impacto, escenario..."
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] outline-none focus:border-[var(--primary)]"
+              />
+            </Field>
+            <div className="mt-4 space-y-2 text-[12px] leading-6 text-[var(--gray-500)]">
+              <p>Los ajustes viven en un catálogo común y pueden pertenecer a uno o varios escenarios.</p>
+              <p>{isBase ? 'Selecciona un escenario para reutilizar un ajuste con un clic.' : `Escenario activo: ${resolveScenarioName(activeScenario as Scenario)}`}</p>
+            </div>
+            {!isBase && activeScenario && (
+              <button
+                onClick={() => openEditScenario(activeScenario)}
+                className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-xl border border-[var(--gray-200)] bg-white px-4 text-[12px] font-medium text-[var(--gray-950)] transition hover:bg-[var(--surface-alt)]"
+              >
+                Editar combinación del escenario
+              </button>
+            )}
+            <button
+              onClick={openNewAdjustment}
+              disabled={editableScenarios.length === 0}
+              className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-xl bg-[#1d1d1f] px-4 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-40"
+            >
+              Nuevo ajuste
+            </button>
+          </aside>
+
+          <div>
+            {filteredAdjustmentCatalog.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
+                <p className="text-[13px] font-medium text-[var(--gray-950)]">No hay ajustes que coincidan</p>
+                <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+                  Prueba otra búsqueda o crea un ajuste nuevo para ampliar el catálogo.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredAdjustmentCatalog.map(({ simulation, assignedScenarioIds, assignedScenarioLabels, impactSummary, inActiveScenario }) => (
+                  <article
+                    key={simulation.id}
+                    className="rounded-2xl border border-[var(--gray-200)]/60 bg-white p-4"
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }} />
+                          <h3 className="truncate text-[14px] font-semibold text-[var(--gray-950)]">{simulation.name}</h3>
+                          {assignedScenarioIds.length > 1 && (
+                            <span className="rounded-full bg-[var(--primary-muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--primary)]">
+                              Reutilizable
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-2 text-[12px] leading-6 text-[var(--gray-500)]">{impactSummary}</p>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <Badge>{formatSimulationWindow(simulation)}</Badge>
+                          <Badge>{assignedScenarioIds.length === 0 ? 'Sin escenario asignado' : `${assignedScenarioIds.length} escenario${assignedScenarioIds.length === 1 ? '' : 's'}`}</Badge>
+                          {assignedScenarioLabels.map((label) => (
+                            <Badge key={`${simulation.id}-${label}`}>{label}</Badge>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {!isBase && activeScenario && (
+                          <button
+                            onClick={() => toggleAdjustmentInActiveScenario(simulation.id)}
+                            className={`inline-flex h-9 items-center rounded-xl px-3 text-[12px] font-medium transition ${
+                              inActiveScenario
+                                ? 'border border-[var(--primary)]/20 bg-white text-[var(--primary)]'
+                                : 'bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)]'
+                            }`}
+                          >
+                            {inActiveScenario ? 'Quitar del escenario' : 'Usar en este escenario'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => openEditAdjustment(simulation)}
+                          className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-[var(--surface-alt)] hover:text-[var(--gray-950)]"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => deleteAdjustment(simulation.id)}
+                          className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-white hover:text-[#ff3b30]"
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </section>
 
       {/* ═══ SLIDE-OVER PANEL: Create / Edit Adjustment ═══ */}
