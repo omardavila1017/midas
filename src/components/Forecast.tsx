@@ -39,7 +39,6 @@ interface Props {
   overrides: ScenarioCellOverride[];
   granularity?: ForecastGranularity;
   onGranularityChange?: (granularity: ForecastGranularity) => void;
-  onSelectProposal: (proposalId: string) => void;
   onSelectScenario: (scenarioId: string | null) => void;
   onOverridesChange: (next: ScenarioCellOverride[]) => void;
 }
@@ -92,7 +91,6 @@ export default function Forecast({
   overrides,
   granularity = 'monthly',
   onGranularityChange,
-  onSelectProposal,
   onSelectScenario,
   onOverridesChange,
 }: Props) {
@@ -104,6 +102,7 @@ export default function Forecast({
 
   const childrenById = useMemo(() => buildChildrenIndex(plan), [plan]);
   const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
+  const editableScenarios = scenarios.filter((scenario) => !isBaseScenario(scenario));
   const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
     ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
@@ -317,7 +316,7 @@ export default function Forecast({
           Pronóstico unificado por escenario y ajustes activos. Doble clic en celdas hoja para editar manualmente.
         </p>
 
-        <div className="mt-5 grid grid-cols-[200px,200px,minmax(0,1fr),auto] gap-4">
+        <div className="mt-5 grid grid-cols-[200px,minmax(0,1fr),auto] gap-4">
           <button
             onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
             className={`rounded-xl border px-3 py-2 text-[13px] font-medium transition ${
@@ -329,17 +328,6 @@ export default function Forecast({
             {BASE_SCENARIO_NAME}
           </button>
           <select
-            value={activeProposal?.id ?? ''}
-            onChange={(event) => onSelectProposal(event.target.value)}
-            disabled={proposals.length === 0}
-            className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2 text-[13px]"
-          >
-            {proposals.length === 0 && <option value="">Sin escenarios</option>}
-            {proposals.map((proposal) => (
-              <option key={proposal.id} value={proposal.id}>{proposal.name}</option>
-            ))}
-          </select>
-          <select
             value={activeScenario.id}
             onChange={(event) => onSelectScenario(event.target.value)}
             className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2 text-[13px]"
@@ -347,11 +335,9 @@ export default function Forecast({
             {baseScenario && (
               <option value={baseScenario.id}>{baseScenario.name}</option>
             )}
-            {scenarios
-              .filter((scenario) => activeProposal ? scenario.proposalId === activeProposal.id : false)
-              .map((scenario) => (
-                <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
-              ))}
+            {editableScenarios.map((scenario) => (
+              <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
+            ))}
           </select>
           <div className="flex items-center gap-2 justify-end">
             <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-1">

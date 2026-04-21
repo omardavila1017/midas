@@ -78,7 +78,6 @@ describe('Forecast', () => {
         activeProposalId={proposal.id}
         activeScenarioId={scenario.id}
         overrides={[]}
-        onSelectProposal={() => undefined}
         onSelectScenario={() => undefined}
         onOverridesChange={onOverridesChange}
       />,

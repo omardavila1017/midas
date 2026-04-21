@@ -811,7 +811,6 @@ export default function App() {
                         overrides={scenarioCellOverrides}
                         granularity={forecastGranularity}
                         onGranularityChange={setForecastGranularity}
-                        onSelectProposal={selectProposal}
                         onSelectScenario={selectScenario}
                         onOverridesChange={setScenarioCellOverrides}
                       />
@@ -905,7 +904,6 @@ export default function App() {
                     overrides={scenarioCellOverrides}
                     granularity={forecastGranularity}
                     onGranularityChange={setForecastGranularity}
-                    onSelectProposal={selectProposal}
                     onSelectScenario={selectScenario}
                     onOverridesChange={setScenarioCellOverrides}
                   />
