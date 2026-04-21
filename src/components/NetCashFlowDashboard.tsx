@@ -108,6 +108,25 @@ export default function NetCashFlowDashboard({
   );
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Flexibility breakdown — "inamovible vs flexible" programming view
+  // ─────────────────────────────────────────────────────────────────────────
+  const flexibilityBreakdown = useMemo(() => {
+    const buckets = {
+      inamovible: 0,
+      flexible: 0,
+      revisar: 0,
+      unknown: 0,
+    };
+    for (const p of paymentEvents) {
+      if (!p.date.startsWith(String(assumptions.year))) continue;
+      if (p.kind !== 'pending') continue; // only pending outflows can be programmed
+      buckets[p.flexibility] += p.amount;
+    }
+    const total = buckets.inamovible + buckets.flexible + buckets.revisar + buckets.unknown;
+    return { ...buckets, total };
+  }, [paymentEvents, assumptions.year]);
+
+  // ─────────────────────────────────────────────────────────────────────────
   // State checks: empty, partial, or full data
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -324,6 +343,70 @@ export default function NetCashFlowDashboard({
         {/* Partial/Alert Banners */}
         {partialBanner}
         {alertBanner}
+
+        {/* Flexibility breakdown — programación de pagos */}
+        {flexibilityBreakdown.total > 0 && (
+          <div className="bg-white rounded-2xl p-5 border border-[#d2d2d7]/60 mb-6 animate-card-in stagger-2">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-15 font-semibold">Programación de pagos pendientes</h2>
+                <p className="text-11 text-[#999] mt-1">
+                  Clasificación del catálogo de proveedores. Los inamovibles deben pagarse en su
+                  tiempo de crédito; los flexibles pueden reprogramarse.
+                </p>
+              </div>
+              <div className="text-13 text-[#666]">
+                Total pendiente: <span className="font-semibold text-[#1d1d1f]">{fmt(flexibilityBreakdown.total)}</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-4 gap-3">
+              <div className="rounded-xl p-4 bg-[#ff3b30]/5 border border-[#ff3b30]/20">
+                <div className="text-10 font-semibold uppercase tracking-wider text-[#ff3b30]">
+                  Inamovibles
+                </div>
+                <div className="text-[22px] font-bold tabular-nums text-[#ff3b30] mt-1">
+                  {fmt(flexibilityBreakdown.inamovible)}
+                </div>
+                <div className="text-11 text-[#666] mt-1">
+                  {pctFmt(flexibilityBreakdown.inamovible / Math.max(flexibilityBreakdown.total, 1))} · sí o sí
+                </div>
+              </div>
+              <div className="rounded-xl p-4 bg-[#34c759]/5 border border-[#34c759]/20">
+                <div className="text-10 font-semibold uppercase tracking-wider text-[#34c759]">
+                  Flexibles
+                </div>
+                <div className="text-[22px] font-bold tabular-nums text-[#34c759] mt-1">
+                  {fmt(flexibilityBreakdown.flexible)}
+                </div>
+                <div className="text-11 text-[#666] mt-1">
+                  {pctFmt(flexibilityBreakdown.flexible / Math.max(flexibilityBreakdown.total, 1))} · reprogramables
+                </div>
+              </div>
+              <div className="rounded-xl p-4 bg-[#ff9f0a]/5 border border-[#ff9f0a]/20">
+                <div className="text-10 font-semibold uppercase tracking-wider text-[#ff9f0a]">
+                  A revisar
+                </div>
+                <div className="text-[22px] font-bold tabular-nums text-[#ff9f0a] mt-1">
+                  {fmt(flexibilityBreakdown.revisar)}
+                </div>
+                <div className="text-11 text-[#666] mt-1">
+                  {pctFmt(flexibilityBreakdown.revisar / Math.max(flexibilityBreakdown.total, 1))} · sign-off área
+                </div>
+              </div>
+              <div className="rounded-xl p-4 bg-[#8e8e93]/5 border border-[#8e8e93]/20">
+                <div className="text-10 font-semibold uppercase tracking-wider text-[#8e8e93]">
+                  Sin clasificar
+                </div>
+                <div className="text-[22px] font-bold tabular-nums text-[#8e8e93] mt-1">
+                  {fmt(flexibilityBreakdown.unknown)}
+                </div>
+                <div className="text-11 text-[#666] mt-1">
+                  {pctFmt(flexibilityBreakdown.unknown / Math.max(flexibilityBreakdown.total, 1))} · falta catalogar
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Main Chart */}
         <div className="bg-white rounded-2xl p-6 border border-[#d2d2d7]/60 mb-6 animate-card-in stagger-2">

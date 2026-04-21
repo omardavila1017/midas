@@ -12,6 +12,7 @@
 
 import { CollectionEvent, ConfirmedPayment, CashFlowAssumptions, eventKey } from './types';
 import { CXPRecord } from './persistence';
+import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Domain Types
@@ -106,16 +107,32 @@ export interface FlowSummary {
 /**
  * Payment event — normalized from CXPRecord for flow computations.
  * Simpler shape than CXPRecord, focused on timing and amount.
+ *
+ * Represents either:
+ *   - An actual expense already paid (kind = 'paid'), dated on the actual payment date
+ *   - A projected payment still pending (kind = 'pending'), dated on the scheduled/due date
  */
 export interface PaymentEvent {
-  /** ISO 8601 date string of due date (YYYY-MM-DD) */
+  /** ISO 8601 date string (YYYY-MM-DD) — actual payment date for 'paid', due date for 'pending' */
   date: string;
-  /** Amount in local currency (importePendientePesos) */
+  /** Amount in local currency (pesos) */
   amount: number;
   /** Supplier name */
   supplier: string;
   /** Supplier classification (from clasificacionProveedor) */
   classification: string;
+  /** Whether this event represents an actual historical payment or a projected future payment */
+  kind: 'paid' | 'pending';
+  /**
+   * Payment flexibility from the provider catalog.
+   *   - 'inamovible'  → must be paid on credit time, no rescheduling
+   *   - 'flexible'    → payment can be rescheduled / pushed out
+   *   - 'revisar'     → needs area sign-off before deciding
+   *   - 'unknown'     → provider not in catalog
+   */
+  flexibility: Flexibility;
+  /** DTI criticality (Alta/Media/Baja) if provider is in the DTI catalog. */
+  criticidad: Criticidad | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -123,37 +140,73 @@ export interface PaymentEvent {
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Parse a date string in DD/MM/YYYY or YYYY-MM-DD format to ISO 8601.
+ * Parse a date string coming from JDE / Excel exports into ISO 8601 (YYYY-MM-DD).
  *
- * @param dateStr Raw date string from CSV
- * @returns ISO date string (YYYY-MM-DD), or null if parsing fails
+ * Accepted formats (JDE CXP exports mix several):
+ *   - "YYYY-MM-DD"                 → ISO date
+ *   - "YYYY-MM-DD HH:MM:SS"        → ISO datetime (space separator)
+ *   - "YYYY-MM-DDTHH:MM:SS..."     → ISO datetime (T separator)
+ *   - "M/D/YYYY" or "MM/DD/YYYY"   → American format (JDE default)
+ *   - "D/M/YYYY" or "DD/MM/YYYY"   → Mexican format (used as fallback when
+ *                                    the first part is > 12 and cannot be a month)
+ *
+ * The /-separated branch auto-detects American vs. Mexican order:
+ *   - If the first part is > 12, it must be a day → DD/MM/YYYY
+ *   - Otherwise assume MM/DD/YYYY (JDE default for these exports)
+ *
+ * @param dateStr Raw date value (string). Null/undefined/non-string returns null.
+ * @returns ISO date string (YYYY-MM-DD), or null if parsing fails.
  */
 function parseDate(dateStr: string | null | undefined): string | null {
-  if (!dateStr || typeof dateStr !== 'string') {
-    return null;
-  }
-
-  const trimmed = dateStr.trim();
+  if (dateStr === null || dateStr === undefined) return null;
+  const trimmed = String(dateStr).trim();
   if (!trimmed) return null;
 
-  // Try YYYY-MM-DD format first
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    const date = new Date(trimmed + 'T00:00:00Z');
-    if (!isNaN(date.getTime())) {
-      return trimmed;
+  // YYYY-MM-DD (optionally followed by space/T and a time we ignore)
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/);
+  if (isoMatch) {
+    const year = parseInt(isoMatch[1], 10);
+    const month = parseInt(isoMatch[2], 10);
+    const day = parseInt(isoMatch[3], 10);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const d = new Date(Date.UTC(year, month - 1, day));
+      if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
     }
   }
 
-  // Try DD/MM/YYYY format
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) {
-    const parts = trimmed.split('/');
-    const day = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10);
-    const year = parseInt(parts[2], 10);
+  // M/D/YYYY or D/M/YYYY — decide by first-part value
+  const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T].*)?$/);
+  if (slashMatch) {
+    const first = parseInt(slashMatch[1], 10);
+    const second = parseInt(slashMatch[2], 10);
+    const year = parseInt(slashMatch[3], 10);
 
-    const date = new Date(Date.UTC(year, month - 1, day));
-    if (!isNaN(date.getTime())) {
-      return date.toISOString().split('T')[0];
+    let month: number;
+    let day: number;
+    if (first > 12 && second <= 12) {
+      // Unambiguously DD/MM/YYYY
+      day = first;
+      month = second;
+    } else {
+      // Assume MM/DD/YYYY (JDE default)
+      month = first;
+      day = second;
+    }
+
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const d = new Date(Date.UTC(year, month - 1, day));
+      if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+    }
+  }
+
+  // Last resort — let Date try to parse it
+  const fallback = new Date(trimmed);
+  if (!isNaN(fallback.getTime())) {
+    const y = fallback.getUTCFullYear();
+    const m = String(fallback.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(fallback.getUTCDate()).padStart(2, '0');
+    if (y > 1900 && y < 2200) {
+      return `${y}-${m}-${d}`;
     }
   }
 
@@ -233,8 +286,19 @@ function isDateInPastOrToday(dateStr: string): boolean {
  * Extract payment events from CXP records.
  *
  * Converts CXPRecord array to PaymentEvent array for unified cash flow engine.
- * Uses `fechaProgramacionPago` if available, falls back to `fechaVence`.
- * Skips records with zero or negative pending amounts.
+ * Emits up to TWO events per record so that both historical and projected
+ * expenses show up in the cash flow:
+ *
+ *   1. "paid" event   → (importeBrutoPesos − importePendientePesos) on fechaProgramacionPago
+ *                       Represents the portion of the invoice already paid, dated on the
+ *                       day it actually happened. Falls back to fechaFactura / fechaVence
+ *                       if fechaProgramacionPago is missing.
+ *   2. "pending" event → importePendientePesos on fechaProgramacionPago | fechaVence
+ *                        Represents the portion still owed, projected on the scheduled or
+ *                        due date.
+ *
+ * Fully paid invoices emit only the "paid" event. Fully open invoices emit only the
+ * "pending" event. Partially paid invoices emit both.
  *
  * @param cxpRecords Array of CXP records from CSV upload
  * @returns Array of payment events, sorted by date
@@ -243,24 +307,52 @@ export function extractPaymentEvents(cxpRecords: CXPRecord[]): PaymentEvent[] {
   const events: PaymentEvent[] = [];
 
   for (const record of cxpRecords) {
-    // Skip invalid amounts
-    if (record.importePendientePesos <= 0) {
-      continue;
+    const pending = record.importePendientePesos || 0;
+    const gross = record.importeBrutoPesos || 0;
+    const paid = Math.max(0, gross - pending);
+
+    const supplier = record.nombre || 'Unknown';
+    const classification = record.clasificacionProveedor || 'Uncategorized';
+    const enrich = enrichFromCatalog({ supplier, classification });
+
+    // Already-paid portion → use the actual payment date so the expense shows up
+    // in cash flow on the day it really happened.
+    if (paid > 0) {
+      const paidDate =
+        parseDate(record.fechaProgramacionPago) ||
+        parseDate(record.fechaFactura) ||
+        parseDate(record.fechaVence);
+
+      if (paidDate) {
+        events.push({
+          date: paidDate,
+          amount: paid,
+          supplier,
+          classification,
+          kind: 'paid',
+          flexibility: enrich.flexibility,
+          criticidad: enrich.criticidad,
+        });
+      }
     }
 
-    // Try programmed payment date first, fall back to due date
-    const dateStr = parseDate(record.fechaProgramacionPago) || parseDate(record.fechaVence);
+    // Still-pending portion → project on scheduled or due date.
+    if (pending > 0) {
+      const dueDate =
+        parseDate(record.fechaProgramacionPago) || parseDate(record.fechaVence);
 
-    if (!dateStr) {
-      continue;
+      if (dueDate) {
+        events.push({
+          date: dueDate,
+          amount: pending,
+          supplier,
+          classification,
+          kind: 'pending',
+          flexibility: enrich.flexibility,
+          criticidad: enrich.criticidad,
+        });
+      }
     }
-
-    events.push({
-      date: dateStr,
-      amount: record.importePendientePesos,
-      supplier: record.nombre || 'Unknown',
-      classification: record.clasificacionProveedor || 'Uncategorized',
-    });
   }
 
   // Sort by date for efficient grouping

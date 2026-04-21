@@ -22,7 +22,10 @@ export interface JdeClientConfig {
   timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 90_000;
+// Cada request a JDE tarda ~60s en producción. 90s estaba al filo y a veces
+// reventaba con AbortError antes de que respondiera. 180s da margen real
+// sin dejar requests colgados eternamente si algo se cuelga del lado server.
+const DEFAULT_TIMEOUT_MS = 180_000;
 
 function resolveBaseUrl(override?: string): string {
   const fromEnv = import.meta.env.VITE_JDE_BASE_URL as string | undefined;

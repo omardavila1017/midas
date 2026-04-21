@@ -17,7 +17,19 @@
 
 /** Request body para POST /JDEdwards/AntiguedadSaldos. */
 export interface AgedBalanceRequest {
-  /** Código de compañía JDE (p.ej. "00011"). */
+  /**
+   * Código de compañía JDE (p.ej. "00011"). UNA sola compañía por request.
+   *
+   * ⚠️ Patrones que el server rechaza (validado contra prod 2026-04-20):
+   *   • Múltiples objetos `{"cia":"00011"},{"cia":"00038"}` → 400
+   *   • N requests paralelos (uno por cia simultáneo)      → 500 (contención)
+   *   • CSV en el valor `{"cia":"00011,00038"}`            → 500 (lo sugirió
+   *     el equipo JDE como hipótesis pero no funciona en realidad)
+   *
+   * Único patrón que funciona: una compañía por request, secuenciales
+   * (await en serie). Cada request tarda ~60s, así que para múltiples
+   * compañías hay que hacer merge incremental para dar feedback al usuario.
+   */
   cia: string;
 }
 

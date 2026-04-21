@@ -19,14 +19,23 @@ import { DEFAULT_ACTIVE_KPI_IDS, type CustomKpiDefinition } from './domain/kpiCa
 // NetCashFlowDashboard disabled — needs real JDE data to be useful
 // import NetCashFlowDashboard from './components/NetCashFlowDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
+import { ToastProvider, useToast } from './components/Toast';
+import { ActivityFeedProvider, useActivityFeed, ActivityFeedPanel } from './components/ActivityFeed';
+import { useCommandPalette } from './components/CommandPalette';
+import CommandPalette from './components/CommandPalette';
+import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
+import { useDarkMode } from './hooks/useDarkMode';
+import './styles/dark.css';
 import {
   LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap,
   Users, UserSquare, FileSpreadsheet, Download, LineChart, DollarSign, Sliders,
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
   HandCoins, CreditCard, ChevronRight, BookUser, Activity, TrendingUp,
-  Receipt, Wallet,
+  Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
+  Bell, Moon, Sun, Keyboard,
 } from 'lucide-react';
 import { hex } from './theme';
+import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
 
 type SectionId = 'catalogos' | 'operacion' | 'planeacion';
 
@@ -94,9 +103,13 @@ export default function App() {
 
   // ── JDE integration state ──
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyGroups, setCompanyGroups] = useState<CompanyGroup[]>(() => loadCompanyGroups());
   const [selectedCia, setSelectedCia] = useState<string>(
     () => localStorage.getItem('flowsense.selectedCia') ?? 'all'
   );
+
+  // Persist company groups
+  useEffect(() => { saveCompanyGroups(companyGroups); }, [companyGroups]);
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [bankStatements, setBankStatements] = useState<BankAccountStatement[]>(() => {
@@ -117,6 +130,16 @@ export default function App() {
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
+
+  // ── New UI features state ──
+  const { dark, toggle: toggleDark } = useDarkMode();
+  const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
+  const [activityOpen, setActivityOpen] = useState(false);
+
+  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'collections', 'cxp', 'bancos', 'dashboard', 'kpis', 'forecast', 'scenarios'];
+  const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
+    onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
+  });
 
   // Load from persistence on mount
   useEffect(() => {
@@ -257,10 +280,11 @@ export default function App() {
   }, [selectedCia]);
   useEffect(() => {
     if (companies.length > 0 && selectedCia !== 'all'
-        && !companies.some(c => c.cia === selectedCia)) {
+        && !companies.some(c => c.cia === selectedCia)
+        && !companyGroups.some(g => g.id === selectedCia)) {
       setSelectedCia('all');
     }
-  }, [companies, selectedCia]);
+  }, [companies, selectedCia, companyGroups]);
 
   // Persist bank statements + last query
   useEffect(() => {
@@ -479,9 +503,9 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen" style={{ background: 'var(--surface-alt)' }}>
+    <div className="min-h-screen" style={{ background: '#ffffff' }}>
       {/* ─── HEADER ─── */}
-      <header className="glass border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)' }}>
+      <header className="border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)', background: '#ffffff' }}>
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-2.5 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
@@ -554,7 +578,7 @@ export default function App() {
           </nav>
 
           {/* Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <CompanySelector
               companies={companies}
               selectedCia={selectedCia}
@@ -562,7 +586,33 @@ export default function App() {
               error={companiesError}
               onSelect={setSelectedCia}
               onRetry={loadCompanies}
+              groups={companyGroups}
+              onGroupsChange={setCompanyGroups}
             />
+            {/* Dark mode toggle */}
+            <button
+              onClick={toggleDark}
+              title={dark ? 'Modo claro' : 'Modo oscuro'}
+              aria-label={dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+              className="flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
+              style={{ color: 'var(--gray-400)' }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
+            >
+              {dark ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
+            </button>
+            {/* Activity feed bell */}
+            <button
+              onClick={() => setActivityOpen(true)}
+              title="Actividad reciente"
+              aria-label="Ver actividad reciente"
+              className="flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
+              style={{ color: 'var(--gray-400)' }}
+              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
+              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
+            >
+              <Bell className="w-[18px] h-[18px]" />
+            </button>
             <button
               onClick={() => {
                 const json = exportStore({
@@ -807,6 +857,25 @@ export default function App() {
           </ErrorBoundary>
         </div>
       </main>
+
+      {/* ── Global overlays ── */}
+      <CommandPalette
+        open={cmdOpen}
+        onClose={() => setCmdOpen(false)}
+        onNavigate={(tabId) => { setActiveTab(tabId as TabId); setCmdOpen(false); }}
+        clients={clients.map(c => ({ id: c.id, name: c.name }))}
+        providers={providers.map(p => ({ id: p.id, name: p.name }))}
+        proposals={proposals.map(p => ({ id: p.id, name: p.name }))}
+      />
+      <ActivityFeedPanel
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        onNavigate={(tabId) => { setActiveTab(tabId as TabId); setActivityOpen(false); }}
+      />
+      <KeyboardShortcutsModal
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+      />
     </div>
   );
 }
@@ -818,6 +887,8 @@ function CompanySelector({
   error,
   onSelect,
   onRetry,
+  groups,
+  onGroupsChange,
 }: {
   companies: Company[];
   selectedCia: string;
@@ -825,8 +896,15 @@ function CompanySelector({
   error: string | null;
   onSelect: (cia: string) => void;
   onRetry: () => void;
+  groups: CompanyGroup[];
+  onGroupsChange: (groups: CompanyGroup[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'select' | 'create' | 'edit'>('select');
+  const [editGroupId, setEditGroupId] = useState<string | null>(null);
+  const [groupName, setGroupName] = useState('');
+  const [groupCias, setGroupCias] = useState<Set<string>>(new Set());
+  const [groupColor, setGroupColor] = useState<string>(GROUP_COLORS[0]);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -838,18 +916,69 @@ function CompanySelector({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) { setMode('select'); setEditGroupId(null); }
+  }, [open]);
+
+  const activeGroup = groups.find(g => g.id === selectedCia);
   const active = companies.find(c => c.cia === selectedCia);
   const label = selectedCia === 'all'
     ? 'Todas las compañías'
-    : active ? `${active.cia} — ${active.nombre}` : selectedCia;
+    : activeGroup
+      ? `${activeGroup.name} (${activeGroup.cias.length})`
+      : active ? `${active.cia} — ${active.nombre}` : selectedCia;
 
-  // Keyboard navigation for dropdown
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') setOpen(false);
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      setOpen(o => !o);
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o); }
+  };
+
+  const startCreate = () => {
+    setMode('create');
+    setGroupName('');
+    setGroupCias(new Set());
+    setGroupColor(GROUP_COLORS[groups.length % GROUP_COLORS.length]);
+    setEditGroupId(null);
+  };
+
+  const startEdit = (g: CompanyGroup) => {
+    setMode('edit');
+    setGroupName(g.name);
+    setGroupCias(new Set(g.cias));
+    setGroupColor(g.color ?? GROUP_COLORS[0]);
+    setEditGroupId(g.id);
+  };
+
+  const saveGroup = () => {
+    if (!groupName.trim() || groupCias.size === 0) return;
+    if (mode === 'edit' && editGroupId) {
+      onGroupsChange(groups.map(g => g.id === editGroupId
+        ? { ...g, name: groupName.trim(), cias: Array.from(groupCias), color: groupColor }
+        : g
+      ));
+    } else {
+      const newGroup: CompanyGroup = {
+        id: newGroupId(),
+        name: groupName.trim(),
+        cias: Array.from(groupCias),
+        color: groupColor,
+        createdAt: new Date().toISOString(),
+      };
+      onGroupsChange([...groups, newGroup]);
     }
+    setMode('select');
+    setEditGroupId(null);
+  };
+
+  const deleteGroup = (id: string) => {
+    onGroupsChange(groups.filter(g => g.id !== id));
+    if (selectedCia === id) onSelect('all');
+  };
+
+  const toggleCia = (cia: string) => {
+    const next = new Set(groupCias);
+    next.has(cia) ? next.delete(cia) : next.add(cia);
+    setGroupCias(next);
   };
 
   return (
@@ -860,11 +989,14 @@ function CompanySelector({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`Compañía activa: ${label}. Filtra datos globalmente.`}
-        className="flex items-center gap-1.5 h-10 px-3 rounded-xl text-[13px] font-medium transition-all duration-200 max-w-[260px]"
-        style={{ background: 'var(--gray-50)', color: 'var(--gray-950)' }}
-        title="Compañía JDE activa — filtra los datos de todas las pestañas"
+        className="flex items-center gap-1.5 h-10 px-3 rounded-xl text-[13px] font-medium transition-all duration-200 max-w-[300px]"
+        style={{ background: activeGroup ? `${activeGroup.color}12` : 'var(--gray-50)', color: 'var(--gray-950)' }}
+        title="Compañía o grupo activo — filtra los datos de todas las pestañas"
       >
-        <Building2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--primary)' }} />
+        {activeGroup
+          ? <FolderOpen className="w-4 h-4 flex-shrink-0" style={{ color: activeGroup.color ?? 'var(--primary)' }} />
+          : <Building2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--primary)' }} />
+        }
         <span className="truncate">{loading ? 'Cargando…' : label}</span>
         {loading
           ? <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" style={{ color: 'var(--gray-400)' }} />
@@ -874,9 +1006,7 @@ function CompanySelector({
 
       {open && (
         <div
-          role="listbox"
-          aria-label="Seleccionar compañía"
-          className="absolute right-0 top-12 w-[320px] rounded-2xl border p-1.5 z-50 max-h-[420px] overflow-y-auto animate-slide-down"
+          className="absolute right-0 top-12 w-[360px] rounded-2xl border p-1.5 z-50 max-h-[520px] overflow-y-auto animate-slide-down"
           style={{ background: 'var(--surface)', borderColor: 'var(--gray-200)', boxShadow: 'var(--shadow-lg)' }}
         >
           {error ? (
@@ -885,27 +1015,84 @@ function CompanySelector({
                 <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
                 <p className="text-[12px] leading-snug" style={{ color: 'var(--gray-500)' }}>{error}</p>
               </div>
-              <button
-                onClick={() => { onRetry(); }}
-                className="text-[12px] font-medium"
-                style={{ color: 'var(--primary)' }}
-              >Reintentar</button>
+              <button onClick={() => { onRetry(); }} className="text-[12px] font-medium" style={{ color: 'var(--primary)' }}>Reintentar</button>
             </div>
-          ) : (
+          ) : mode === 'select' ? (
             <>
+              {/* All companies */}
               <button
                 role="option"
                 aria-selected={selectedCia === 'all'}
                 onClick={() => { onSelect('all'); setOpen(false); }}
                 className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-[13px] text-left transition"
-                style={{
-                  background: selectedCia === 'all' ? 'var(--primary-muted)' : undefined,
-                  color: selectedCia === 'all' ? 'var(--primary)' : 'var(--gray-950)',
-                }}
+                style={{ background: selectedCia === 'all' ? 'var(--primary-muted)' : undefined, color: selectedCia === 'all' ? 'var(--primary)' : 'var(--gray-950)' }}
               >
                 <span className="font-medium">Todas las compañías</span>
                 {selectedCia === 'all' && <Check className="w-3.5 h-3.5" />}
               </button>
+
+              {/* Groups section */}
+              {groups.length > 0 && (
+                <div className="mt-2 mb-1">
+                  <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)] px-3 py-1 font-medium">Grupos</div>
+                  {groups.map(g => {
+                    const isActive = selectedCia === g.id;
+                    return (
+                      <div key={g.id} className="flex items-center group">
+                        <button
+                          onClick={() => { onSelect(g.id); setOpen(false); }}
+                          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition"
+                          style={{ background: isActive ? `${g.color}15` : undefined, color: isActive ? g.color : 'var(--gray-950)' }}
+                        >
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium truncate">{g.name}</p>
+                            <p className="text-[11px] truncate" style={{ color: 'var(--gray-400)' }}>
+                              {g.cias.map(cia => {
+                                const c = companies.find(co => co.cia === cia);
+                                return c?.nombre ?? cia;
+                              }).join(', ')}
+                            </p>
+                          </div>
+                          {isActive && <Check className="w-3.5 h-3.5 flex-shrink-0" />}
+                        </button>
+                        <div className="flex gap-0.5 pr-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); startEdit(g); }}
+                            className="p-1 rounded hover:bg-[var(--gray-100)] text-[var(--gray-400)] hover:text-[var(--gray-700)]"
+                            title="Editar grupo"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteGroup(g.id); }}
+                            className="p-1 rounded hover:bg-[var(--danger)]/10 text-[var(--gray-400)] hover:text-[var(--danger)]"
+                            title="Eliminar grupo"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Create group button */}
+              <button
+                onClick={startCreate}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition hover:bg-[var(--gray-50)]"
+                style={{ color: 'var(--primary)' }}
+              >
+                <FolderPlus className="w-4 h-4" />
+                <span className="font-medium">Crear grupo de empresas</span>
+              </button>
+
+              {/* Divider */}
+              <div className="h-px bg-[var(--gray-100)] my-1.5" />
+
+              {/* Individual companies */}
+              <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)] px-3 py-1 font-medium">Empresas individuales</div>
               {companies.length === 0 && !loading && (
                 <p className="text-[12px] px-3 py-2" style={{ color: 'var(--gray-400)' }}>Sin compañías disponibles.</p>
               )}
@@ -918,10 +1105,7 @@ function CompanySelector({
                       key={c.cia}
                       onClick={() => { onSelect(c.cia); setOpen(false); }}
                       className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition"
-                      style={{
-                        background: isActive ? 'var(--primary-muted)' : undefined,
-                        color: isActive ? 'var(--primary)' : 'var(--gray-950)',
-                      }}
+                      style={{ background: isActive ? 'var(--primary-muted)' : undefined, color: isActive ? 'var(--primary)' : 'var(--gray-950)' }}
                     >
                       <div className="min-w-0">
                         <p className="font-medium truncate">{c.cia} — {c.nombre}</p>
@@ -932,6 +1116,94 @@ function CompanySelector({
                   );
                 })}
             </>
+          ) : (
+            /* ── Create / Edit Group form ── */
+            <div className="p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">
+                  {mode === 'edit' ? 'Editar grupo' : 'Nuevo grupo'}
+                </h3>
+                <button onClick={() => setMode('select')} className="p-1 rounded hover:bg-[var(--gray-100)] text-[var(--gray-400)]">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Name input */}
+              <div>
+                <label className="text-[11px] text-[var(--gray-400)] mb-1 block">Nombre del grupo</label>
+                <input
+                  type="text"
+                  value={groupName}
+                  onChange={e => setGroupName(e.target.value)}
+                  placeholder="Ej: Grupo Norte, Pasaje Lujo..."
+                  className="input w-full"
+                  autoFocus
+                />
+              </div>
+
+              {/* Color picker */}
+              <div>
+                <label className="text-[11px] text-[var(--gray-400)] mb-1 block">Color</label>
+                <div className="flex gap-1.5">
+                  {GROUP_COLORS.map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setGroupColor(c)}
+                      className={`w-7 h-7 rounded-full transition-all ${groupColor === c ? 'ring-2 ring-offset-2 ring-[var(--gray-300)]' : 'hover:scale-110'}`}
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Company checkboxes */}
+              <div>
+                <label className="text-[11px] text-[var(--gray-400)] mb-1 block">
+                  Empresas ({groupCias.size} seleccionadas)
+                </label>
+                <div className="space-y-1 max-h-48 overflow-y-auto border border-[var(--gray-200)] rounded-lg p-1.5">
+                  {companies.filter(c => c.activa !== false).map(c => {
+                    const checked = groupCias.has(c.cia);
+                    return (
+                      <button
+                        key={c.cia}
+                        onClick={() => toggleCia(c.cia)}
+                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-left transition ${
+                          checked ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
+                        }`}
+                      >
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition ${
+                          checked ? 'bg-[var(--primary)] border-[var(--primary)]' : 'border-[var(--gray-300)]'
+                        }`}>
+                          {checked && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+                        </div>
+                        <span className={checked ? 'text-[var(--primary)] font-medium' : 'text-[var(--gray-700)]'}>
+                          {c.cia} — {c.nombre}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => setMode('select')}
+                  className="flex-1 h-9 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={saveGroup}
+                  disabled={!groupName.trim() || groupCias.size === 0}
+                  className="flex-1 h-9 rounded-lg text-white text-[13px] font-medium hover-press disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ background: groupColor }}
+                >
+                  {mode === 'edit' ? 'Guardar cambios' : 'Crear grupo'}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}

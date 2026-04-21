@@ -1,0 +1,3882 @@
+{
+  "version": "1.0",
+  "generated": "2026-04-20",
+  "flexibilityByName": {
+    "MICROSISTEMAS Y ACCESORIOS DE COMPUTACIO": "revisar",
+    "REDES Y ACCESORIOS COMPUTACIONALES SA": "revisar",
+    "AHAU": "flexible",
+    "VIDEO TURISMO, SA DE CV": "flexible",
+    "MARIA CAROLINA HERNANDEZ JUAREZ": "revisar",
+    "HOSPITAL Y CLINICA OCA, S.A. DE C.V.": "flexible",
+    "CLINICA DEL AZUCAR SAPI DE CV": "flexible",
+    "SALUD DIGNA A.C.": "flexible",
+    "CENTRO DE ALIANZA MEDICA LEONES SC": "flexible",
+    "CONTROL DE CLINICAS SC": "flexible",
+    "BANCO DEL BAJIO SA": "revisar",
+    "BBVA MEXICO, S.A., INSTITUCION DE": "revisar",
+    "BBVA BANCOMER, S.A.": "revisar",
+    "FOIMAX PACK-FILMS": "revisar",
+    "ASOCIACION PROTACIO RODRIGUEZ CUELLAR AC": "inamovible",
+    "GOB. EDO CHIH. SECRETARIA DE HACIENDA": "inamovible",
+    "PASE, SERVICIOS ELECTRONICOS, S.A DE C.V": "inamovible",
+    "PEGASO PCS SA DE CV": "inamovible",
+    "CENTRAL DE AUTOBUSES DE MAZATLAN, SA CV": "flexible",
+    "CENTRAL DE AUTOBUSES DE MONTERREY,SA CV": "flexible",
+    "CENTRAL DE AUT DE PASAJEROS CD JUAREZ": "flexible",
+    "TERMINAL CENTRAL DE AUTOBUSES DE CHIHUAH": "flexible",
+    "CENTRAL DE OMNIBUS EN AGUASCALIENTES SA": "flexible",
+    "CENTRAL DE AUTOBUSES PROTACIO RDZ": "flexible",
+    "CENTRAL CAMIONERA CD. VICTORIA, SA DE": "flexible",
+    "CENTRAL DE AUTOBUSES DE MATEHUALA, S.A.": "flexible",
+    "CENTRAL DE AUTOBUSES DE SALTILLO, S.A. D": "flexible",
+    "CENTRAL CAMIONERA DE GOMEZ PALACIO, DURA": "flexible",
+    "TERMINAL CENTRAL DEL NORTE DEL D.F.SA CV": "flexible",
+    "CENTRAL CAMIONERA DE TORREON": "flexible",
+    "TERMINAL TERRESTRE POTOSINA,S.A. DE C.": "flexible",
+    "LRQA INC": "inamovible",
+    "HUMBERTO PROA MARTINEZ": "flexible",
+    "FERNANDO HUGO GALLEGOS DIAZ": "flexible",
+    "GABRIELA PATRICIA GONZALEZ PINEYRO": "flexible",
+    "NEW WORLD FUEL SA DE CV": "inamovible",
+    "INYECCION DIESEL GH S DE RL DE CV": "inamovible",
+    "GASNGO MEXICO SA DE CV": "inamovible",
+    "COMBUSTIBLES Y REFINADOS BURGOS SA DE CV": "inamovible",
+    "ENERGETICOS INTERNACIONALES, S.A. DE C.V": "inamovible",
+    "RECARGAS GRUPO ENERGETICOS SA DE CV": "inamovible",
+    "COMBUSTIBLES ECOLOGICOS MEXICANOS SA DE": "inamovible",
+    "NG-CH4 SA DE CV": "inamovible",
+    "PETROGAS CORPORATION": "inamovible",
+    "DHGN1, S.A. DE C.V.": "inamovible",
+    "NATGAS QUERETARO SAPI DE CV": "inamovible",
+    "BSQ GLOBAL CORPORATION SA DE CV(NO USAR)": "inamovible",
+    "ERG MULTI ENERGETICOS SA DE CV": "inamovible",
+    "GAS E HIDROCARBUROS ECOLOGICOS SA DE CV": "inamovible",
+    "SERVICIOS GASOLINEROS DE MEXICO SA DE CV": "inamovible",
+    "ANYTON SA DE CV": "inamovible",
+    "COMEXIGAL COMERCIALIZADORA MEXICANA GALA": "inamovible",
+    "SERVICIOS TERMINAL QUERETARO, S.A. C.V.": "inamovible",
+    "LUIS ALFONSO FONSECA VALDEZ": "inamovible",
+    "INGENIERIA LOGISTICA Y PROYECTOS SADECV": "inamovible",
+    "VITOL MARKETING MEXICO S DE RL DE CV": "inamovible",
+    "OCSI SOLUCIONES SA DE CV": "inamovible",
+    "LOGISCOOR": "inamovible",
+    "SERGIO FLETES GARIBAY": "inamovible",
+    "GRUAS MARROQUIN JR S.A DE C.V": "inamovible",
+    "INSTITUTO GUADALUPE DE LINARES, A.C.": "revisar",
+    "MUSEO DE LINARESA.C.": "revisar",
+    "PILAR CAROLINA CERVANTES FUNATSU": "inamovible",
+    "OPERADORA DE PARQUES ESTRELLA, S.A. C.V.": "inamovible",
+    "AMIGOS DEL DESIERTO DE COAHUILA A.C.": "inamovible",
+    "FERRETERA INDUSTRIAL DEL NORTE, SA DE CV": "flexible",
+    "HIGHWAY TRUCKS, S.A.P.I DE CV": "flexible",
+    "VILLARREAL EXPRESS SA DE CV": "flexible",
+    "DHL EXPRESS MEXICOS.A. DE C.V.": "flexible",
+    "SAHUMA CONTROL DE PLAGAS S DE RL DE CV": "revisar",
+    "LIMPIFEX S.A DE C.V": "revisar",
+    "PARQUE FUNERAL VALLE DE LAS FLORES SA D": "inamovible",
+    "GLOBAL TRACK DE MEXICO SA DE CV": "flexible",
+    "COMPETITIVIDAD E INFORMATICA SA DE CV": "inamovible",
+    "GRUAS MONTERREY, S.A. DE C.V.": "inamovible",
+    "SUPER SERVICIO ZARATE, SA CV": "inamovible",
+    "MUNICIPIO DE SAN NICOLAS DE LOS GARZA N.": "flexible",
+    "MUNICIPIO DE SALTILLO COAHUILA": "flexible",
+    "ARTURO GUSTAVO LARA TENORIO": "revisar",
+    "C. P. & A SC": "revisar",
+    "FIRMA JURIDICA Y FISCAL ABOGADOS": "revisar",
+    "SERVICIOS JURIDICOS DE PLANEACION GUERRA": "revisar",
+    "MILLAN & VERASTEGUI ABOGADOS": "revisar",
+    "MARTINEZ COINDREAU Y ASOCIADOS S.C": "revisar",
+    "ALFARO, DAVILA Y SCHERER, S.C.": "revisar",
+    "ASESORIA JURIDICA Y SERVICIOS INTEGRALES": "revisar",
+    "JORGE LUIS SALGADO CEPEDA": "revisar",
+    "HERNANDEZ CANDELAS Y TOSTADO S.C": "revisar",
+    "VICTOR MANUEL ORTEGA MUÑOZ": "revisar",
+    "VANTAGE ATTORNEYS, S.C.": "revisar",
+    "JAVIER GUTIERREZ OROZCO": "revisar",
+    "CAROM CONSULTORES EN NEGOCIOS, S.A. DE C": "revisar",
+    "JAIME SANCHEZ RIOS": "revisar",
+    "ADRIAN CANTU GARZA": "revisar",
+    "GONZALEZ DE ANDA Y ASOCIADOS SC": "inamovible",
+    "SERGIO JIMENEZ MORALES": "revisar",
+    "NOTARIA PUBLICA 149 DE MONTERREY S C": "revisar",
+    "HELPSI CAPITAL HUMANO SC": "flexible",
+    "EMOTION TEAM, S.A. DE C.V.": "flexible",
+    "CONTROL DE PROCESOS Y APLICACIONES S.A.": "revisar",
+    "ZION CIBERSEGURIDAD SA DE CV": "revisar",
+    "RAYMUNDO VILLARREAL MIRANDA": "revisar",
+    "COMPU FORMAS, S.A. DE C.V.": "inamovible",
+    "ROGA PRINTER SA DE CV": "inamovible",
+    "MASTER FORMAS, S.A. DE C.V.": "inamovible",
+    "OFFICE DEPOT DE MEXICO, S.A. DE C.V.": "inamovible",
+    "TERA IMPRESIONES APODACA SA DE CV": "inamovible",
+    "GOBIERNO DE LA CIUDAD DE MEXICO": "revisar",
+    "BANCO NACIONAL DE MX, SA": "revisar",
+    "INSTITUTO MEXICANO DEL SEGURO SOCIAL": "revisar",
+    "DAVID ROBERTO VERASTEGUI HIGUERA": "revisar",
+    "MARTHA ALICIA LLANAS CAMPA": "revisar",
+    "JUANA MARIA CASTAÑEDA MARTINEZ": "revisar",
+    "ANGELICA GONZALEZ ROSALES": "flexible",
+    "COMERCIAL EL MOLINO AZTECA, S.A. DE C.V.": "flexible",
+    "SECRETARIA DE FINANZAS DEL GOBIERNO DEL": "revisar",
+    "RED DE SERVICIOS FINANCIEROS, S.A. DE C.": "revisar",
+    "GOAL SYSTEMS": "revisar",
+    "RADIO TRANSPORTES LOGO, S.A DE C.V": "revisar",
+    "EQUIPOS PARA MERCADOS SA DE CV": "revisar",
+    "CONDUCKTING S.C.": "revisar",
+    "LOS ANGELES SERVICIOS FARMACEUTICOS SA D": "revisar",
+    "MARÍA ELENA MARTÍNEZ REYES": "revisar",
+    "JUAN ANTONIO LOPEZ TORRES": "revisar",
+    "GUILLERMO ROCHA GONZÁLEZ": "revisar",
+    "HOSPITAL LA CARLOTA": "revisar",
+    "CAVIMEX DEL NTE. S.A. DE C.V.": "revisar",
+    "SEGUROS BBVA BANCOMER,SADECV.GPO FINANCI": "revisar",
+    "PRODUCTORA DE EVENTOS JM SA DE CV": "revisar",
+    "SEGUROS BANORTE-GENERALI SA DE.CV GPO FI": "revisar",
+    "MATRS": "revisar",
+    "JESUS MARIA RODRIGUEZ QUINTERO": "revisar",
+    "VICTAB GRAPHICS SA DE CV": "revisar",
+    "IVAN ALEJANDRO VEGA CISNEROS": "revisar",
+    "MARTINA PERALES RUVALCABA": "revisar",
+    "EQUIPO INDUSTRIAL Y MANTENIMIENTO JR SA": "revisar",
+    "ANA CLAUDIA REYNA BRICEÑO": "revisar",
+    "JONATHAN SEPULVEDA REYNA": "inamovible",
+    "SECRETARIA DE FINANZAS DEL ESTADO DE S.L": "revisar",
+    "CARLOS MACIAS MURO": "inamovible",
+    "TRANSPORTES VENCEDOR SA DE CV": "inamovible",
+    "JOSE EMILIO GONZALEZ ROJAS": "inamovible",
+    "SERGIO GARZA GOMEZ": "inamovible",
+    "KW IMPORTACIONES, S.A DE C.V": "inamovible",
+    "VERÓNICA CASTRO MELÉNDEZ": "inamovible",
+    "CIN CONSULTORIA EN INTELIGENCIA DE": "revisar",
+    "INSTITUTO DE CAPACITACION Y EDUCACION PA": "inamovible",
+    "LLANTAS COMPAÑIA SA DE CV": "flexible",
+    "ORGANIZACION EMOTION INTERNATIONAL": "flexible",
+    "LLANTERA AUTOMOTRIZ R. Y ASOCIADOS": "flexible",
+    "LLANTAS Y SERVICIOS DEGA,S.A. DE C.V.": "inamovible",
+    "BANDAREYS.A. DE C.V.": "flexible",
+    "RODATRAK ALLENDE, S.A. DE C.V.": "inamovible",
+    "VITALIZADORA OTTO´S TIRE S.A DE C.V": "flexible",
+    "CONTINENTAL TIRE DE MEXICO SA DE CV": "flexible",
+    "RALOY LUBRICANTES, S.A DE C.V": "inamovible",
+    "ELEAZAR SANCHEZ ENRIQUEZ": "inamovible",
+    "SISTEMAS INTEGRADOS DE TRANSPORTE Y ENER": "flexible",
+    "RECTIFICADORES MONTERREY, S.A.": "inamovible",
+    "FAVIO ALEJANDRO GUZMAN TOVAR": "inamovible",
+    "RUBEN GARZA ELIZONDO": "inamovible",
+    "RETARDADORES GOROS LOTU, S.A. DE C.V.": "flexible",
+    "JASON ISRAEL GOVEA MELENDEZ": "flexible",
+    "RICARDO MARIO GARZA GARCIA": "inamovible",
+    "JOSE ALFREDO BERNAL REYNA": "flexible",
+    "TECNICENTRO VITALIZADOR LLANTERO": "inamovible",
+    "ALMA NYDIA RODRIGUEZ CHAVEZ": "inamovible",
+    "(NO USAR) PROYECTOS VALADEZ SA DE": "flexible",
+    "BRISEIDA ELIZABETH DONJUAN PRADO": "inamovible",
+    "INGENIERIA Y SERVICIOS INDUSTRIALES AL3": "flexible",
+    "(NO USAR) FOTOELECTRONIX, S.A. DE C.V.": "flexible",
+    "LANDER SIMULATION & TRAINING SOLUTIONS,": "flexible",
+    "ANGEL MORAN CHAVEZ": "flexible",
+    "SERVICIOS INDUSTRIALES ARLEJ": "flexible",
+    "SUPER COLCHONES, S.A DE C.V": "inamovible",
+    "COMPAÑIA INTEGRA SOLUCIONES SA DE CV": "revisar",
+    "AIR COM MANTENIMIENTO INDUSTRIAL SAS DE": "revisar",
+    "MJ COLD AIRE ACONDICIONADO": "inamovible",
+    "EMILIO ARREDONDO ALAMILLA": "revisar",
+    "FERNANDO GARCIA GALVAN": "revisar",
+    "MAYOREO DE PLUMAS S.A. DE C.V.": "revisar",
+    "AIRE HIDRAULICOS Y NEUMATICOS SA DE CV": "revisar",
+    "CAMSA DEL NORTE": "revisar",
+    "PROYECTOS INDUSTRIALES BRASEL": "revisar",
+    "KLW INGENIERIA SA DE CV": "revisar",
+    "ADSE RED COMERCIALIZADORA SA DE CV": "revisar",
+    "ELIDIA GARCIA GONZALEZ": "inamovible",
+    "MARIO ANTONIO TOBIAS DIAZ": "flexible",
+    "MAQUINADOS Y SERVICIOS INDUSTRIALES LUMA": "flexible",
+    "JESUS ALBERTO HERNANDEZ ORTIZ": "flexible",
+    "PEDRO SALDAÑA MARTINEZ": "flexible",
+    "ALEJANDRO MENDEZ RUBIO": "flexible",
+    "ENRIQUE CEPEDA ROQUE": "flexible",
+    "FILOGONIO MARTINEZ SERRANO": "flexible",
+    "MARCADORES ACCESORIOS REPUESTOS VITALES": "flexible",
+    "SOFÍA ZAPATA JIMÉNEZ": "flexible",
+    "GRUPO COENDI": "flexible",
+    "JUAN JOSE CARRILLO IBARRA": "flexible",
+    "ERMILO PALOMARES FLORES": "flexible",
+    "ALMA GLORIA VARELA GUETA": "flexible",
+    "SERVI CLIMAS Y CALEFACCIONES MONTERREY S": "flexible",
+    "CIEM SERVICIOS INTEGRALES DEL CENTRO, S.": "flexible",
+    "JULIO ENRIQUE MARTINEZ GUAJARDO": "flexible",
+    "FAUSTINO GUADALUPE ALVAREZ DE LA CRUZ": "flexible",
+    "DIKEN INTERNATIONAL S DE RL DE CV": "inamovible",
+    "CONCEPTO E IMAGEN MAISA SA DE CV": "flexible",
+    "SERVI QUIM DE MONTERREY, S.A.": "flexible",
+    "DIINSEL, S.A. DE C.V.": "revisar",
+    "DIAZ COMERCIALIZADORA FARMACEUTICA SA DE": "revisar",
+    "KABLA COMERCIALS.A. DE C.V.": "revisar",
+    "CAR ONE MONTERREY S.A. DE C.V.": "revisar",
+    "ASOCIACION MEXICANA DE VENTA ONLINE, A.C": "flexible",
+    "SERVICIOS MOTOCICLISTAS S.A.": "flexible",
+    "TRANSPORTE GRUPO GONZALEZ GONZALEZ S.A D": "inamovible",
+    "AUTOBUSES CERRITENCES S.A. DE C.V": "inamovible",
+    "AUTOBUSES AMARILLOS, S.A. DE C.V.": "inamovible",
+    "MUNICIPIO DE TAMAZUNCHALE S.L.P": "inamovible",
+    "MUNICIPIO DE MATLAPA SAN LUIS POTOSI": "inamovible",
+    "YAJAIRA VIRIDIANA SANTIAGO MARTINEZ": "inamovible",
+    "MARIELA ROQUE HERNANDEZ": "inamovible",
+    "JESSICKA GUADALUPE SANCHEZ HERNANDEZ": "inamovible",
+    "HUKARI RODRIGUEZ GALLEGOS": "inamovible",
+    "ANA LIZETH LOPEZ GAYTAN": "inamovible",
+    "KARLA ELIZABETH MARTINEZ GUTIERREZ": "inamovible",
+    "JOSE IGNACIO IRACHETA MORALES": "inamovible",
+    "BLANCA ILIANA CALDERON CONTRERAS": "inamovible",
+    "INOCENCIA GARCIA LICONA": "inamovible",
+    "ALMA ROSA CHAVES CASTAÑUELA": "inamovible",
+    "MIRIAM ESTHELA TREVIÑO TORRES": "inamovible",
+    "DELIA BRISEIDY SANCHEZ SUSTAITA": "inamovible",
+    "MARIEL GUADALUPE CASTILLO GARCIA": "inamovible",
+    "LUCERO DE JESUS SALAS PUENTE": "inamovible",
+    "HECTOR CANDELARIA RIVERA": "inamovible",
+    "GUILLERMO ENRI- \"NO USAR REV ANEXOS\"": "flexible",
+    "CENTRO PATRONAL DE NUEVO LEON": "inamovible",
+    "SOLEMTI S.A. DE C.V.": "revisar",
+    "RAK SA DE CV": "revisar",
+    "RCG ESPECTACULARES, S. A. DE C. V.": "revisar",
+    "MERCADOTECNIA DIGITAL APLICADA DEL PACIF": "revisar",
+    "PUCOSA SA DE CV": "revisar",
+    "XPRESSION PUBLICITY SA DE CV": "revisar",
+    "HOLD MARKETING": "revisar",
+    "FUELYOUR BRANDS SA DE CV": "revisar",
+    "JUAN DANIEL MARTINEZ RODRIGUEZ": "revisar",
+    "CADENA RADIODIFUSORA MEXICANA SA DE CV": "revisar",
+    "GRUPO ESHERSA SA DE CV": "revisar",
+    "RAMON GUILLERMO URANGA FLORES": "revisar",
+    "IDEALO PUBLICIDAD DE COAHUILA SA DE CV": "revisar",
+    "JOSE RICARDO MIRANDA CANTU": "revisar",
+    "RAMSES ALDANA RAMIREZ": "revisar",
+    "FC GLOBAL CO SA DE CV": "revisar",
+    "VERONICA YOLANDA HERNANDEZ CANTU": "flexible",
+    "DAC DISEÑADORES, SA DE CV": "flexible",
+    "AUDITORIO INTEGRAL SA DE CV": "flexible",
+    "GRUPO MIUS SA DE CV": "flexible",
+    "CONTROLADORA DE MEDIOS DEL ALTIPLANO SA": "flexible",
+    "GOOGLE OPERACIONES DE MEXICO": "flexible",
+    "COMERCIALIZADORA EL ZUAUZ": "flexible",
+    "RECOLECCION ESPECIALIZADA Y SUSTENTO": "flexible",
+    "BIOTULLI SA DE CV": "inamovible",
+    "PROMOTORA AMBIENTAL DE LA LAGUNA SA DE C": "inamovible",
+    "PROACTIVA MEDIO AMBIENTE SETASA SA DE CV": "flexible",
+    "FUNDACION JOMAR AC.": "flexible",
+    "FEDERICO GARCIA LANDEROS": "flexible",
+    "RUBÉN ROMÁN HURTADO": "flexible",
+    "MA. MAGDALENA MENDOZA MARTINEZ": "flexible",
+    "ALEJANDRO GOMEZ MONTENEGRO": "flexible",
+    "HOLCIM MEXICO OPERACIONES S.A. DE C.V.": "flexible",
+    "JUAN L. BAUTISTA": "flexible",
+    "MARIA DE LOURDES DE LA PEÑA GIACOMAN": "flexible",
+    "MARIA INEZ HERNANDEZ JAQUEZ": "flexible",
+    "SCANIA COMERCIAL,S.A. DE C.V.": "flexible",
+    "DISTRIBUIDORA DE REFACCIONES FYR SADECV": "flexible",
+    "DAIMLER VEHICULOS COMERCIALES MEXICO": "inamovible",
+    "MULTILLANTAS NIETO, S.A. DE C.V.": "revisar",
+    "FRIO SERVICIO DE MONTERREY S.A DE C.V.": "revisar",
+    "DISTRIBUIDORA DE FILTROS FYR S.A. DE C.": "flexible",
+    "CORPORATIVO JYBSAJD": "revisar",
+    "SIERRA NORTE TRUCK CENTER": "revisar",
+    "DISTRIBUIDORA DE PINTURA AUTOMOTRIZ S.A": "revisar",
+    "AUTO PARTES Y MAS, S.A. DE C.V.": "revisar",
+    "ISDRAEL GOVEA GOMEZ": "flexible",
+    "DINA COMERCIALIZACION SERVICIOS Y REFACC": "inamovible",
+    "IRIZAR MEXICO, S.A. DE C.V.": "flexible",
+    "RODAMIENTOS Y ACCESORIOS SA DE CV": "revisar",
+    "FERRETERIA GONZALEZ V S.A. DE C.V.": "revisar",
+    "VITROCAR, S.A. DE C.V.": "inamovible",
+    "ALESSO SA DE CV": "inamovible",
+    "AUTOS Y VANES VILLAUTO SA DE CV": "revisar",
+    "HISPACOLD MEXICO SA DE CV": "revisar",
+    "PROVEEDORA DE REPUESTOS, SA DE CV": "revisar",
+    "MARIA HORTENSIA TREJO ACOSTA": "flexible",
+    "PASCUAL CERDA PEREZ": "revisar",
+    "FRANCISCO OVIEDO ESPINOSA": "flexible",
+    "KIT REGIO SA DE CV": "revisar",
+    "ARMANDO LINARES SANCHEZ": "flexible",
+    "TRES R DEL NORTE, S.A. DE C.V.": "revisar",
+    "COMERCIALIZADORA URCASA S.A. DE C.V": "flexible",
+    "JESUS TREVIÑO MARTINEZ": "flexible",
+    "DIMSER TRANSMISIONES AUTOMATICAS MTY SA": "revisar",
+    "ZAR KRUSE S.A.DE C.V.": "inamovible",
+    "GENERAL DE BALEROS": "revisar",
+    "ASIENTOS ESTEBAN MEXICO S.A DE C.V": "flexible",
+    "AUTOREPUESTOS DIESEL GM SA DE CV": "revisar",
+    "ARANDELAS Y TORNILLOS, S.A. DE C.V.": "revisar",
+    "ARNULFO SANCHEZ CAVAZOS": "revisar",
+    "AUTO ELECTRICA DIESEL, S.A. DE C.V.": "inamovible",
+    "MORENO DIESEL SA DE CV": "inamovible",
+    "TRACTOS Y CAJAS OM SA DE CV": "flexible",
+    "TAMBORES ROTORES Y MAZAS S.A. DE C.V.": "flexible",
+    "RIGOBERTO MARTINEZ DOMINGUEZ": "flexible",
+    "JOSE LUIS VALLE CANALES": "revisar",
+    "LG EMBRAGUES Y FRENOS S.A DE C.V.": "revisar",
+    "HMD SUMINISTRO INDUSTRIAL SA DE CV": "revisar",
+    "RICARDO GONZALEZ MARISCAL": "revisar",
+    "ALICIA ROSAS TORRES": "flexible",
+    "SPHEROS MEXICO": "revisar",
+    "ADOLFO GONZALEZ GONZALEZ": "revisar",
+    "TWO BROTHERS DE SALTILLO S DE RL DE CV": "flexible",
+    "COMERCIAL HIDALGO BANDAS Y MANGUERAS": "revisar",
+    "COMERCIAL RUSS, S.A. DE C.V.": "inamovible",
+    "MEC ESPEJOS RETROVISORES SA DE CV": "inamovible",
+    "MP SOPORTES Y SERVICIOS AMBIENTALES S.A": "revisar",
+    "ISL INDUSTRY SUPPLIER AND LOGISTCS S DE": "revisar",
+    "NANCY EDITH LOPEZ CAZARES": "flexible",
+    "INNOVACION EN SERVICIO PESADO, S.A. DE C": "revisar",
+    "FRENOS Y EMBRAGUES CIMA": "inamovible",
+    "FLEX-AUST DE MEXICO, S.A DE C.V.": "revisar",
+    "LAURA AGUIRRE HERNANDEZ": "revisar",
+    "UNIVERSAL GLASS DE MEXICO SA DE CV": "revisar",
+    "TERESA MACIAS MARTINEZ": "flexible",
+    "CENTRAL DE PARTES MONTERREYS.A. DE C.V": "revisar",
+    "NORTE SUR REPUESTOS SA DE CV": "revisar",
+    "JESSIE LAZCANO CONSTANTINO": "revisar",
+    "LED GE SERVICIOS": "flexible",
+    "HERRAMIENTAS DK SA DE CV": "flexible",
+    "ETALONET, SA DE CV": "revisar",
+    "FNX COMERCIAL AMERICA SA DE CV": "revisar",
+    "CAMIONES LIGEROS, S.A. DE C.V.": "flexible",
+    "ATENCION EFICIENTE S.A. DE C.V.": "flexible",
+    "TUZOMEX DE REFACCIONES SA DE CV": "revisar",
+    "SUBESTACIONES E ILUMINACION S.A. DE C.V.": "flexible",
+    "LUIS MIGUEL ESCAMILLA FUENTES": "flexible",
+    "MEKKAPARTS SA DE CV": "revisar",
+    "TURBO PERFORMANCE Y REFACCIONES": "revisar",
+    "COMERCIALIZADORA D COMP HID Y NEUMATICOS": "revisar",
+    "SALMA SUSETH HERNANDEZ GARCIA": "flexible",
+    "FRANCISCO JAVIER ARRIAGA CONTRERAS": "flexible",
+    "SERVICIOS HIDRAULICOS RUIZ CORTINEZ SA D": "flexible",
+    "AUTOPARTES Y COMPONENTES, S.A. DE C.V.": "inamovible",
+    "ACEROS Y SERVICIOS DE MONTERREY,S.A. DE": "inamovible",
+    "ALBERTO MANUEL VILLARREAL ALCALA": "inamovible",
+    "JOSE MANUEL QUEZADA VARELA": "flexible",
+    "HERRAMENTAL REGIOMONTANA S.A.": "flexible",
+    "THE AFTERMARKET PARTS COMPANY, LLC": "revisar",
+    "FRENOS DE AIRE MONTERREY, S.A. DE C.V.": "flexible",
+    "GLAFIRO E. MONTEMAYOR E HIJOS LLC": "flexible",
+    "MARIA SARAI TORRES ARENAS": "flexible",
+    "PATRICIA JANETH LOPEZ ROMERO": "flexible",
+    "VG MAYOREO DE MONTERREY, S.A DE C.V": "inamovible",
+    "SERVICIOS MULTIPLES DE TAMAULIPAS": "flexible",
+    "INMOBILIARIA Y ASESORIA REGIOFIN DE ME": "flexible",
+    "OSCAR JESUS CANTU VILLARREAL": "inamovible",
+    "INMOBILIARIA LUSSANE S.A. DE C.V.": "inamovible",
+    "LAS AGUILAS GRUPO PROMOTOR E INMOBILIARI": "inamovible",
+    "GP BIENES INMUEBLES S.A. DE C.V.": "inamovible",
+    "SISTEMAS DE EXCELENCIA YLOGISTICA SADECV": "inamovible",
+    "BALBEK PROYECTOS SA DE CV": "inamovible",
+    "ALBIOS ALFA": "inamovible",
+    "SUSTENTA DESARROLLOS S.A. DE C.V.": "inamovible",
+    "PLAZA BERNARDO REYES": "inamovible",
+    "MULTISERVICIOS LA ESPERANZA S.A. DE C.V.": "inamovible",
+    "DESARROLLOS E INMOBILIARIA DELTA SA DE C": "inamovible",
+    "TRANSPORTES ESPECIALIZADOS SAN ROBERTO,S": "inamovible",
+    "PATRICIA AVEYTIA TUDA": "inamovible",
+    "INVERSIONES RELLIS, S.A. DE C.V.": "inamovible",
+    "AEROPUERTO DE MONTERREY, SA CV": "inamovible",
+    "MARCELA GONZALEZ SANCHEZ": "inamovible",
+    "CADENA COMERCIAL OXXO": "flexible",
+    "GERARDO FLORES GARZA": "inamovible",
+    "ADMINISTRACION PROFESIONAL DE MONTERREY": "inamovible",
+    "MULTIMET SA DE CV": "inamovible",
+    "SERVANDO CANTU LOZANO": "inamovible",
+    "MAGDA HINOJOSA CAMACHO": "inamovible",
+    "TIM FRONTERA TRANSPORTE EMPRESARIAL S DE": "inamovible",
+    "INATEL SA DE CV": "inamovible",
+    "INMOBILIARIA BOSQUES DEL SUR SA": "inamovible",
+    "RAMSES VAZQUEZ DURON": "inamovible",
+    "JUAN DELGADO RODRIGUEZ": "inamovible",
+    "MARIA DE LOS DOLORES VILLARREAL GUZMAN": "inamovible",
+    "JESUS ANTONIO NADER NASRALLAH": "inamovible",
+    "MEPAR INMOBILIARIA": "inamovible",
+    "JOSE FRANCISCO MENA SALAZAR": "inamovible",
+    "GRUPO CORPORATIVO LOS EBANOS": "inamovible",
+    "PEDRO SERGIO MORENO": "inamovible",
+    "FAUSTO EMANUEL CHAVEZ PRIEGO": "inamovible",
+    "CLUB INDUSTRIAL A.C.": "inamovible",
+    "DESARROLLO Y SERVICIOS VIVA, S.A DE CV": "inamovible",
+    "GRUPO LIPAJE SA DE CV": "inamovible",
+    "MARIA DEL ROSARIO RODRIGUEZ VALERIO": "inamovible",
+    "NEREIDA ESTEFANIA DAVILA TREVIÑO": "inamovible",
+    "AUTO TRANSPORTES MUZQUIZ ROSITA": "inamovible",
+    "MARIA ELENA FERNANDEZ VILLANUEVA": "inamovible",
+    "SIMON ARRIAGA NIÑO": "inamovible",
+    "SAN MEX DEL NORTE SA DE CV": "inamovible",
+    "MENA SALAZAR INMOBILIARIOS SA DE CV": "inamovible",
+    "ELIZABETH ALMARAZ GARCIA": "inamovible",
+    "ELEMENT FLEET MANAGEMENT CORPORATION MEX": "flexible",
+    "GRUPO NACIONAL PROVINCIAL S.A.B.": "revisar",
+    "AIG SEGUROS MÉXICO, S.A. DE C.V.": "revisar",
+    "PRIMERO SEGUROS SA DE CV": "revisar",
+    "HIR COMPAÑIA DE SEGUROS": "revisar",
+    "ZURICH COMPAÑIA DE SEGUROS, S.A. DE C.V.": "revisar",
+    "SEKURA OPERADORA S.A. DE C.V.": "revisar",
+    "ASEGURADORA ASERTA. DE C.V.": "revisar",
+    "AXA SEGUROS SA DECV": "revisar",
+    "LUIS ANTONIO PUENTE ALMAGUER": "flexible",
+    "VISION CONSERVACION Y MANTENIMIENTO S DE": "flexible",
+    "FELIPE PATIÑO PÉREZ": "inamovible",
+    "CFE SUMINISTRADOR DE SERVICIOS BASICOS": "inamovible",
+    "INTERAPAS": "inamovible",
+    "SISTEMA MUNICIPAL DE AGUAS Y SANEAMIENTO": "inamovible",
+    "SISTEMA MUNICIPAL DE AGUAS Y SANEAMIENT": "inamovible",
+    "SERVICIOS DE AGUA Y DRENAJE MONTERREY": "inamovible",
+    "SIMAS": "inamovible",
+    "GAS NATURAL MEXICO, S.A. DE C.V.": "inamovible",
+    "SINDICATO INDUSTRIAL NACIONAL DE AUTOTRA": "revisar",
+    "JESUS BERINO GRANADOS": "revisar",
+    "DOC SOLUTIONS DE MEXICO, S.A. DE C.V.": "revisar",
+    "OPERBES": "revisar",
+    "SISTEMAS RIO BRAVO SAPI DE CV": "revisar",
+    "TOTAL PLAY TELECOMUNICACIONES SA DE CV": "revisar",
+    "RADIOMOVIL DIPSA, S.A.": "revisar",
+    "COORDINADORA DE CARRIER�S SA DE CV": "revisar",
+    "AT&T COMUNICACIONES DIGITALES": "revisar",
+    "NEXTA TECHNOLOGY SERVICES SA DE CV": "revisar",
+    "AVACOM, S.A. DE C.V.": "revisar",
+    "CONSULTORES EN TELEINFORMATICA EMPRESARI": "revisar",
+    "SERVICIO PANAMERICANO DE PROTECCION, S.": "inamovible",
+    "INNOVA IMAGEN,S.A. DE C.V.": "flexible",
+    "CALZADO INDUSTRIAL DURAMAX SA DE CV": "inamovible",
+    "DICR83 DESIGN TEXTIL": "inamovible",
+    "JR VERIFICACIONES": "inamovible",
+    "MER.K SERVICIOS S.A DE C.V.": "flexible",
+    "EASY FAST ADMINISTRATIVA": "flexible",
+    "WOLF&MEDUSSA DEL NORTE": "inamovible",
+    "SSM PROYECTOS S.A. DE C.V.": "flexible",
+    "ALSE FIRE SYSTEMS SA DE CV": "flexible",
+    "PABLO HIGINIO GARCIA ZAMARRON": "flexible",
+    "SINERGIA ENFOCADA EN SISTEMAS S.A DE C.V": "flexible",
+    "GRUPO GESH SA DE CV": "inamovible",
+    "TECSIEN SERVICIOS SA DE CV": "inamovible",
+    "ACCERTIFY INC": "flexible",
+    "BETTEREZ CANADA INC.": "inamovible",
+    "AMAZON WEB SERVICES MEXICO S DE RL DE CV": "revisar",
+    "BIPRAGMA SA DE CV": "revisar",
+    "ABBA NETWORKS SAPI DE CV": "revisar",
+    "COMERCIALIZADORA DIFRISA SA DE CV": "revisar",
+    "LAN COMUNICACIONES SA DE CV": "revisar",
+    "GALI SYSTEMS S.A DE C.V.": "revisar",
+    "DISITEM TECNOLOGIAS DE INFORMACION S.A.": "revisar",
+    "END TO END MANAGEMENT SA DE CV": "revisar",
+    "GRUPO WL SA DE CV": "revisar",
+    "OIL PRICE INFORMATION SERVICE, LLC": "revisar",
+    "GESTTOR INFORMATICA S.A. DE C.V.": "revisar",
+    "ALGORITMOS Y METODOS APLICADOS, S.A. DE": "revisar",
+    "SWON IT SERVICES MEXICO SA DE CV": "revisar",
+    "FRACTTAL APP MEXICO": "revisar",
+    "SOFT CONTROLS INTERNATIONAL SA DE CV": "revisar",
+    "LINKEDIN IRELAND LIMITED": "revisar",
+    "SFERP SC": "revisar"
+  },
+  "flexibilityByClass": {
+    "ACCESORIOS EQ COMPUTO": "revisar",
+    "AMENIDADES BUS": "flexible",
+    "ATENCIÓN MÉDICA": "revisar",
+    "BANCOS": "revisar",
+    "BOLSAS DE VALORES": "revisar",
+    "CAJA Y FONDO AHORRO": "inamovible",
+    "CASETAS": "inamovible",
+    "CELULARES OPERADORES": "inamovible",
+    "CENTRALES": "flexible",
+    "CERTIFICACIONES": "inamovible",
+    "CHATARRA": "flexible",
+    "COLEGIATURAS": "flexible",
+    "COMBUSTIBLE": "inamovible",
+    "CORDINADORA-SENDEX": "inamovible",
+    "CORRALÓN": "inamovible",
+    "DONATARIA": "revisar",
+    "EMBARGO SALARIO": "inamovible",
+    "ENTRADAS A PARQUES": "inamovible",
+    "FERRETERIA": "flexible",
+    "FLETES": "flexible",
+    "FUMIGACIONES": "revisar",
+    "FUNERALES": "inamovible",
+    "GPS": "flexible",
+    "GRUAS": "inamovible",
+    "GUBERNAMENTAL": "flexible",
+    "HONORARIOS AUDITORÍA": "revisar",
+    "HONORARIOS FINANZAS": "revisar",
+    "HONORARIOS FISCAL": "revisar",
+    "HONORARIOS LEGAL": "revisar",
+    "HONORARIOS RH": "flexible",
+    "HONORARIOS TI": "revisar",
+    "IMPRENTA/ PAPELERÍA": "inamovible",
+    "IMPUESTOS": "revisar",
+    "IMSS": "revisar",
+    "INDEMNIZACIÓN X ACCIDENTE": "revisar",
+    "INSUMOS ALIMENTICIOS": "flexible",
+    "INT CM": "revisar",
+    "INVESTIGACIONES LABORALES": "inamovible",
+    "ISN": "revisar",
+    "LAVADO UNIDADES": "inamovible",
+    "LESIONES POR ACCIDENTE": "inamovible",
+    "LICENCIAS BFISKUR/BAVEL": "revisar",
+    "LICENCIAS OPERADORES": "inamovible",
+    "LLANTAS": "flexible",
+    "LUBRICANTES Y ADHESIVOS": "inamovible",
+    "MANTENIMIENTO AUTOMOTRIZ": "inamovible",
+    "MANTENIMIENTO INDUSTRIAL": "inamovible",
+    "MATERIAL DE LIMPIEZA": "inamovible",
+    "MATERIAL DEPTO MEDICO": "revisar",
+    "MEMBRESÍAS": "revisar",
+    "PASES IMSS": "inamovible",
+    "PEMISOS P/ESTACIONAMIENTO": "inamovible",
+    "PENSION ALIMENTICIA": "inamovible",
+    "PIPAS DE AGUA": "inamovible",
+    "PRACTICANTES": "inamovible",
+    "PUBLICIDAD/MERCADOTECNIA": "revisar",
+    "RECOLECCIÓN RESIDUOS": "flexible",
+    "RECOLECION BASURA": "inamovible",
+    "REEMBOLSOS": "flexible",
+    "REFACCIONARIO": "flexible",
+    "RENTA DE LOCALES": "flexible",
+    "RENTA SANITARIOS": "inamovible",
+    "RENTA TRAILA": "inamovible",
+    "RENTA UNIDADES": "inamovible",
+    "SEGUROS Y FIANZAS": "revisar",
+    "SERV ASEO Y LIMPIEZA": "flexible",
+    "SERVICIO DE COMEDOR": "inamovible",
+    "SERVICIOS PÚBLICOS": "inamovible",
+    "SINDICATO": "revisar",
+    "SISTEMA DE ARCHIVO": "revisar",
+    "TELECOMUNICACIONES": "revisar",
+    "TRASLADO DE VALORES": "inamovible",
+    "UNIFORMES": "flexible",
+    "VERIFICACION UNIDADES": "inamovible",
+    "VIGILANCIA": "flexible",
+    "OUTSOURCIN ENFERMERIA": "flexible",
+    "AUTOCONSUMO": "inamovible",
+    "TECNOLOGIA Y SOPORTE": "flexible"
+  },
+  "dtiCatalog": {
+    "ABBA NETWORKS SAPI DE CV": {
+      "noProveedor": "72567815",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Servicios Administrados de Seguridad Informática"
+    },
+    "ACCERTIFY INC": {
+      "noProveedor": "12724268",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": ""
+    },
+    "ADSE RED COMERCIALIZADORA SA DE CV": {
+      "noProveedor": "20989602",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": ""
+    },
+    "ALGORITMOS Y METODOS APLICADOS, S.A. DE": {
+      "noProveedor": "70550462",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": ""
+    },
+    "AMAZON WEB SERVICES MEXICO S DE RL DE CV": {
+      "noProveedor": "80092557",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Servidores en Nube"
+    },
+    "AT&T COMUNICACIONES DIGITALES": {
+      "noProveedor": "1364126",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "AT&T / Líneas Fletes y Bitacoras Operadores Estados Unidos"
+    },
+    "BETTEREZ CANADA INC.": {
+      "noProveedor": "32324712",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Sistema VIA"
+    },
+    "BIPRAGMA SA DE CV": {
+      "noProveedor": "30480279",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Mantenimiento BI Cognos"
+    },
+    "CCT MEXICOS.A. DE C.V.": {
+      "noProveedor": "1222537",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Servicio de impresión Administrada"
+    },
+    "CIN CONSULTORIA EN INTELIGENCIA DE": {
+      "noProveedor": "25293161",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Mantenimiento Anual eBavel"
+    },
+    "COMERCIALIZADORA DIFRISA SA DE CV": {
+      "noProveedor": "7103299",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Pólizas de Soporte de Servidores"
+    },
+    "CONSULTORES EN TELEINFORMATICA EMPRESARI": {
+      "noProveedor": "4063261",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Refacciones"
+    },
+    "CONTROL DE PROCESOS Y APLICACIONES S.A.": {
+      "noProveedor": "34818548",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": ""
+    },
+    "COORDINADORA DE CARRIER�S SA DE CV": {
+      "noProveedor": "72428583",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Envío de SMS"
+    },
+    "DISITEM TECNOLOGIAS DE INFORMACION S.A.": {
+      "noProveedor": "1145076",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Gestión de telefonía móvil"
+    },
+    "DISPOSITIVOS MOVILES SA DE CV": {
+      "noProveedor": "28316314",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": ""
+    },
+    "END TO END MANAGEMENT SA DE CV": {
+      "noProveedor": "74410660",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Soporte CNC para JD Edwards"
+    },
+    "GESTTOR INFORMATICA S.A. DE C.V.": {
+      "noProveedor": "74189053",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Póliza de Soporte para Respaldos y Bóveda Inmutable"
+    },
+    "GLOBAL PORTFOLIO SOLUTIONS S.L": {
+      "noProveedor": "32839513",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": ""
+    },
+    "GOOGLE OPERACIONES DE MEXICO": {
+      "noProveedor": "32950094",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Mapas GoogleMaps"
+    },
+    "LAN COMUNICACIONES SA DE CV": {
+      "noProveedor": "30986780",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Póliza de Servicio y Extensión de Garantía - Red Inalámbrica"
+    },
+    "MICROSISTEMAS Y ACCESORIOS DE COMPUTACIO": {
+      "noProveedor": "1747923",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Renovación equipo de cómputo por diagnósticos."
+    },
+    "OPERBES": {
+      "noProveedor": "44866498",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Enlaces BESTEL/ Telum (SD-WAN, L2L, Internet Corporativol)"
+    },
+    "PEGASO PCS SA DE CV": {
+      "noProveedor": "1270256",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Movistar / (Celulares CITI) Operadores"
+    },
+    "RADIOMOVIL DIPSA, S.A.": {
+      "noProveedor": "103192",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Telcel / Líneas Internet a Bordo / Tablets VIA Mexico / 290 Operadores Federal"
+    },
+    "REDES Y ACCESORIOS COMPUTACIONALES SA": {
+      "noProveedor": "2298630",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Compra de accesorios para equipo de cómputo"
+    },
+    "SISTEMAS RIO BRAVO SAPI DE CV": {
+      "noProveedor": "55470894",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Instalación de certificado en servicio IVR"
+    },
+    "SOLEMTI S.A. DE C.V.": {
+      "noProveedor": "9550711",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Administración, soporte y mantenimiento de portales web"
+    },
+    "SWON IT SERVICES MEXICO SA DE CV": {
+      "noProveedor": "46690895",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Licenciamiento y Servicios Online Microsoft"
+    },
+    "ZION CIBERSEGURIDAD SA DE CV": {
+      "noProveedor": "57635171",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Servicio de Gestión de Dispositivos Móviles (MDM Tablets, Celulares)"
+    },
+    "ASD TECHNOLOGIES DE MEXICO SA": {
+      "noProveedor": "20281129",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Soporte Sistema INGREZA"
+    },
+    "CERT SUPERIOR S DE RL DE CV": {
+      "noProveedor": "30317682",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Certificados www"
+    },
+    "EXPERT DATA SC": {
+      "noProveedor": "26835778",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "OnBase"
+    },
+    "INFINIA SOLUTIONS & SERVICES S": {
+      "noProveedor": "68014281",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Licenciamiento de herramienta para respaldos de información crítica"
+    },
+    "INNCONSMX S.C.": {
+      "noProveedor": "39230137",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Timbrado"
+    },
+    "JOSE FRANKLIN RODRIGUEZ GARZA": {
+      "noProveedor": "77953192",
+      "area": "DTI",
+      "criticidad": "Baja",
+      "descripcion": "Eventos Senda como vamos"
+    },
+    "SISTEMAS INTERACTIVOS DE CONSU": {
+      "noProveedor": "30590582",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Sistema BOT de Competencia"
+    },
+    "SISTEMAS PERSEO SA DE CV": {
+      "noProveedor": "27607620",
+      "area": "DTI",
+      "criticidad": "Media",
+      "descripcion": "Sistema Biométricos NomiPlus"
+    },
+    "TECNOLOGIA EN SISTEMAS Y ENLAC": {
+      "noProveedor": "1283840",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Sistema Control Gas"
+    },
+    "TRESS ASESORIA Y DISTRIBUCION,": {
+      "noProveedor": "74004346",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Sistema TRESS y +Orden"
+    },
+    "VOITTAA CONSULTORES SA DE CV": {
+      "noProveedor": "36667114",
+      "area": "DTI",
+      "criticidad": "Alta",
+      "descripcion": "Sistema SIM"
+    }
+  },
+  "lastPayment": {
+    "NOMBRE": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "fecha_Ultimo_Pago",
+      "condPago": "Cond_Pago"
+    },
+    "INTERNATIONAL PRODUCTS INC": {
+      "ultimoMonto": 3520.0,
+      "ultimaFecha": "8/24/2021",
+      "condPago": "15"
+    },
+    "MORAIMA DIAZ PEREZ": {
+      "ultimoMonto": 77259.92,
+      "ultimaFecha": "3/19/2026",
+      "condPago": "1"
+    },
+    "THE AFTERMARKET PARTS COMPANY, LLC": {
+      "ultimoMonto": 4895.5,
+      "ultimaFecha": "7/15/2024",
+      "condPago": "1"
+    },
+    "(NO USAR) FOTOELECTRONIX, S.A. DE C.V.": {
+      "ultimoMonto": 13746.0,
+      "ultimaFecha": "2025-04-04 00:00:00",
+      "condPago": "60"
+    },
+    "(NO USAR) PROYECTOS VALADEZ SA DE": {
+      "ultimoMonto": 59976.0,
+      "ultimaFecha": "8/16/2024",
+      "condPago": "1"
+    },
+    "4PL EXPRESS SA DE CV": {
+      "ultimoMonto": 28990.72,
+      "ultimaFecha": "8/20/2021",
+      "condPago": "15"
+    },
+    "7011 HARRISBURG PARTNER, LLC": {
+      "ultimoMonto": 29507.18,
+      "ultimaFecha": "2/20/2025",
+      "condPago": "C"
+    },
+    "ABASTECEDORA DE OFICINAS SA CV": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "60"
+    },
+    "ABBA NETWORKS SAPI DE CV": {
+      "ultimoMonto": 30084.09,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "1"
+    },
+    "ABRAHAM PAREDES BOCARDO": {
+      "ultimoMonto": 22149.92,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "30"
+    },
+    "ACCERTIFY INC": {
+      "ultimoMonto": 261370.49,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "1"
+    },
+    "ACEROS Y SERVICIOS DE MONTERREY,S.A. DE": {
+      "ultimoMonto": 1647.2,
+      "ultimaFecha": "1/23/2026",
+      "condPago": "30"
+    },
+    "ADMINISTRACION FISCAL GENERAL DEL ESTADO": {
+      "ultimoMonto": 42187.0,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "C"
+    },
+    "ADMINISTRACION PROFESIONAL DE MONTERREY": {
+      "ultimoMonto": 52200.0,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "1"
+    },
+    "ADOLFO GONZALEZ GONZALEZ": {
+      "ultimoMonto": 4544.1,
+      "ultimaFecha": "12/19/2025",
+      "condPago": "60"
+    },
+    "ADRIAN CANTU GARZA": {
+      "ultimoMonto": 3328.0,
+      "ultimaFecha": "9/13/2024",
+      "condPago": ""
+    },
+    "ADRIAN HERNANDEZ & ASSOCIATES": {
+      "ultimoMonto": 5961.5,
+      "ultimaFecha": "12/31/2025",
+      "condPago": "C"
+    },
+    "ADSE RED COMERCIALIZADORA SA DE CV": {
+      "ultimoMonto": 1.15,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "60"
+    },
+    "AEROPUERTO DE MONTERREY, SA CV": {
+      "ultimoMonto": 73164.52,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "7"
+    },
+    "AEROVIAS DE MEXICO S.A. DE C.V.": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "AHAU": {
+      "ultimoMonto": 225100.53,
+      "ultimaFecha": "8/18/2023",
+      "condPago": "30"
+    },
+    "AIG SEGUROS MÉXICO, S.A. DE C.V.": {
+      "ultimoMonto": 150211.56,
+      "ultimaFecha": "2025-06-11 00:00:00",
+      "condPago": "30"
+    },
+    "AIR COM MANTENIMIENTO INDUSTRIAL SAS DE": {
+      "ultimoMonto": 66892.56,
+      "ultimaFecha": "8/26/2025",
+      "condPago": "1"
+    },
+    "AIRE HIDRAULICOS Y NEUMATICOS SA DE CV": {
+      "ultimoMonto": 24882.0,
+      "ultimaFecha": "2025-07-02 00:00:00",
+      "condPago": "30"
+    },
+    "ALBERTO MANUEL VILLARREAL ALCALA": {
+      "ultimoMonto": 11600.1,
+      "ultimaFecha": "2025-01-08 00:00:00",
+      "condPago": "30"
+    },
+    "ALBERTO SAUCEDO ARREOLA": {
+      "ultimoMonto": 7192.0,
+      "ultimaFecha": "2/14/2025",
+      "condPago": "30"
+    },
+    "ALBIOS ALFA": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "ALEJANDRO GOMEZ MONTENEGRO": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "ALEJANDRO MENDEZ RUBIO": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "C"
+    },
+    "ALESSO SA DE CV": {
+      "ultimoMonto": 331818.29,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "ALFARO, DAVILA Y SCHERER, S.C.": {
+      "ultimoMonto": 822337.92,
+      "ultimaFecha": "2026-05-03 00:00:00",
+      "condPago": "30"
+    },
+    "ALFREDO RAFAEL CARDENAS FARIAS": {
+      "ultimoMonto": 31111.47,
+      "ultimaFecha": "5/16/2025",
+      "condPago": "60"
+    },
+    "ALGORITMOS Y METODOS APLICADOS, S.A. DE": {
+      "ultimoMonto": 62151.47,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "ALICIA ROSAS TORRES": {
+      "ultimoMonto": 38523.6,
+      "ultimaFecha": "2025-03-10 00:00:00",
+      "condPago": "30"
+    },
+    "ALMA GLORIA VARELA GUETA": {
+      "ultimoMonto": 7290.6,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "ALMA LETICIA RODRIGUEZ BALBUENA": {
+      "ultimoMonto": 147.78,
+      "ultimaFecha": "1/31/2023",
+      "condPago": ""
+    },
+    "ALMA NYDIA RODRIGUEZ CHAVEZ": {
+      "ultimoMonto": 100000.0,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "ALMA ROSA CHAVES CASTAÑUELA": {
+      "ultimoMonto": 848.66,
+      "ultimaFecha": "4/15/2026",
+      "condPago": ""
+    },
+    "ALSE FIRE SYSTEMS SA DE CV": {
+      "ultimoMonto": 4988.0,
+      "ultimaFecha": "2025-04-04 00:00:00",
+      "condPago": "1"
+    },
+    "AMAZON WEB SERVICES MEXICO S DE RL DE CV": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "AMERICAN SCHOOL FOUNDATION S.C.": {
+      "ultimoMonto": 49725.0,
+      "ultimaFecha": "2020-03-09 00:00:00",
+      "condPago": "C"
+    },
+    "AMIGOS DEL DESIERTO DE COAHUILA A.C.": {
+      "ultimoMonto": 112000.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "ANA CLAUDIA REYNA BRICEÑO": {
+      "ultimoMonto": 769.57,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "C"
+    },
+    "ANA LIZETH LOPEZ GAYTAN": {
+      "ultimoMonto": 627.56,
+      "ultimaFecha": "5/14/2025",
+      "condPago": ""
+    },
+    "ANGEL MORAN CHAVEZ": {
+      "ultimoMonto": 86000.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "ANGELICA GONZALEZ ROSALES": {
+      "ultimoMonto": 36930.6,
+      "ultimaFecha": "2024-09-02 00:00:00",
+      "condPago": "30"
+    },
+    "ANYTON SA DE CV": {
+      "ultimoMonto": 987403.76,
+      "ultimaFecha": "2021-04-06 00:00:00",
+      "condPago": "C"
+    },
+    "ARANDELAS Y TORNILLOS, S.A. DE C.V.": {
+      "ultimoMonto": 1382.72,
+      "ultimaFecha": "12/30/2025",
+      "condPago": "30"
+    },
+    "ARMANDO LINARES SANCHEZ": {
+      "ultimoMonto": 30.71,
+      "ultimaFecha": "10/31/2022",
+      "condPago": "60"
+    },
+    "ARMANDO MONTEMAYOR RODRIGUEZ": {
+      "ultimoMonto": 6333.24,
+      "ultimaFecha": "2/26/2026",
+      "condPago": "1"
+    },
+    "ARNULFO SANCHEZ CAVAZOS": {
+      "ultimoMonto": 27930.48,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "ARTHUR J. GALLAGHER RISK MANAGEMENT SERV": {
+      "ultimoMonto": 83808.1,
+      "ultimaFecha": "8/13/2024",
+      "condPago": "7"
+    },
+    "ARTICULOS PROMOCIONALES PROMO PLUS": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "ARTURO GUSTAVO LARA TENORIO": {
+      "ultimoMonto": 47666.5,
+      "ultimaFecha": "3/24/2026",
+      "condPago": "1"
+    },
+    "ASEGURADORA ASERTA. DE C.V.": {
+      "ultimoMonto": 3454.65,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "C"
+    },
+    "ASESORIA JURIDICA Y SERVICIOS INTEGRALES": {
+      "ultimoMonto": 105560.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": ""
+    },
+    "ASIENTOS ESTEBAN MEXICO S.A DE C.V": {
+      "ultimoMonto": 50000.0,
+      "ultimaFecha": "2/17/2023",
+      "condPago": "30"
+    },
+    "ASOCIACION MEXICANA DE VENTA ONLINE, A.C": {
+      "ultimoMonto": 45200.0,
+      "ultimaFecha": "2025-02-05 00:00:00",
+      "condPago": "1"
+    },
+    "ASOCIACION PROTACIO RODRIGUEZ CUELLAR AC": {
+      "ultimoMonto": 35865.98,
+      "ultimaFecha": "4/14/2026",
+      "condPago": "C"
+    },
+    "AT&T COMUNICACIONES DIGITALES": {
+      "ultimoMonto": 23261.43,
+      "ultimaFecha": "2026-11-02 00:00:00",
+      "condPago": "1"
+    },
+    "ATENCION EFICIENTE S.A. DE C.V.": {
+      "ultimoMonto": 34800.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "AUDITORIO INTEGRAL SA DE CV": {
+      "ultimoMonto": 354.19,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "AUTO ELECTRICA DIESEL, S.A. DE C.V.": {
+      "ultimoMonto": 4528.64,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "AUTO MODIFICACIONES JAV, S.A. DE C.V.": {
+      "ultimoMonto": 17000.0,
+      "ultimaFecha": "2024-01-08 00:00:00",
+      "condPago": ""
+    },
+    "AUTO PARTES MOSAR": {
+      "ultimoMonto": 743.33,
+      "ultimaFecha": "2020-11-06 00:00:00",
+      "condPago": "60"
+    },
+    "AUTO PARTES Y MAS, S.A. DE C.V.": {
+      "ultimoMonto": 33883.8,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "60"
+    },
+    "AUTO TRANSPORTES MUZQUIZ ROSITA": {
+      "ultimoMonto": 12110.6,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "AUTOBUSES AMARILLOS, S.A. DE C.V.": {
+      "ultimoMonto": 46771.2,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "60"
+    },
+    "AUTOBUSES CERRITENCES S.A. DE C.V": {
+      "ultimoMonto": 28264.25,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "30"
+    },
+    "AUTOLINEAS VIFE S.A. DE .C.V.": {
+      "ultimoMonto": 121800.0,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "30"
+    },
+    "AUTOPARTES GARZA HERMANOS": {
+      "ultimoMonto": 3111.06,
+      "ultimaFecha": "2024-09-05 00:00:00",
+      "condPago": ""
+    },
+    "AUTOPARTES Y COMPONENTES, S.A. DE C.V.": {
+      "ultimoMonto": 7033.58,
+      "ultimaFecha": "2/13/2026",
+      "condPago": "30"
+    },
+    "AUTOREPUESTOS DIESEL GM SA DE CV": {
+      "ultimoMonto": 38560.5,
+      "ultimaFecha": "10/17/2025",
+      "condPago": "60"
+    },
+    "AUTOS Y VANES VILLAUTO SA DE CV": {
+      "ultimoMonto": 3491.6,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "AUTOTRANSPORTES PARRAS TORREON SA CV": {
+      "ultimoMonto": 112552.05,
+      "ultimaFecha": "2020-06-11 00:00:00",
+      "condPago": "8"
+    },
+    "AVACOM, S.A. DE C.V.": {
+      "ultimoMonto": 6.84,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": ""
+    },
+    "AVALUOS SCALA S.A. DE C.V.": {
+      "ultimoMonto": 613.59,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "C"
+    },
+    "AXA SEGUROS SA DECV": {
+      "ultimoMonto": 130725.85,
+      "ultimaFecha": "4/14/2026",
+      "condPago": "15"
+    },
+    "BALBEK PROYECTOS SA DE CV": {
+      "ultimoMonto": 348000.0,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "C"
+    },
+    "BANCO DEL BAJIO SA": {
+      "ultimoMonto": 201392.9,
+      "ultimaFecha": "4/15/2026",
+      "condPago": ""
+    },
+    "BANCO MERCANTIL DEL NORTE, S.A.": {
+      "ultimoMonto": 14042.0,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "60"
+    },
+    "BANCO NACIONAL DE MX, SA": {
+      "ultimoMonto": 94068.29,
+      "ultimaFecha": "4/14/2026",
+      "condPago": "60"
+    },
+    "BANDAREYS.A. DE C.V.": {
+      "ultimoMonto": 46142.48,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "BBVA BANCOMER, S.A.": {
+      "ultimoMonto": 2018554.85,
+      "ultimaFecha": "4/30/2018",
+      "condPago": "7"
+    },
+    "BBVA MEXICO, S.A., INSTITUCION DE": {
+      "ultimoMonto": 3936990.83,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "60"
+    },
+    "BEATRIZ ELIA LOZANO": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "BELUM PRODUCTOS Y SERVICIOS S. DE R. L.": {
+      "ultimoMonto": 124872.14,
+      "ultimaFecha": "2/13/2026",
+      "condPago": "30"
+    },
+    "BENJAMIN AGUILAR BAUTISTA": {
+      "ultimoMonto": 168.61,
+      "ultimaFecha": "4/30/2025",
+      "condPago": ""
+    },
+    "BEST WESTERN PLUS EDISON INN": {
+      "ultimoMonto": 7395.47,
+      "ultimaFecha": "2020-12-02 00:00:00",
+      "condPago": "C"
+    },
+    "BETTEREZ CANADA INC.": {
+      "ultimoMonto": 1098766.32,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "30"
+    },
+    "BIOTULLI SA DE CV": {
+      "ultimoMonto": 16209.84,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "BIPRAGMA SA DE CV": {
+      "ultimoMonto": 125020.16,
+      "ultimaFecha": "6/13/2025",
+      "condPago": "60"
+    },
+    "BLANCA ILIANA CALDERON CONTRERAS": {
+      "ultimoMonto": 1393.4,
+      "ultimaFecha": "4/15/2026",
+      "condPago": ""
+    },
+    "BOMBEROS DE NUEVO LEON,ABP": {
+      "ultimoMonto": 5.94,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "15"
+    },
+    "BRISEIDA ELIZABETH DONJUAN PRADO": {
+      "ultimoMonto": 12048.75,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "BSQ GLOBAL CORPORATION SA DE CV(NO USAR)": {
+      "ultimoMonto": 762493.62,
+      "ultimaFecha": "2025-12-03 00:00:00",
+      "condPago": "15"
+    },
+    "C. P. & A SC": {
+      "ultimoMonto": 2962.79,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "30"
+    },
+    "CADENA COMERCIAL OXXO": {
+      "ultimoMonto": 50000.0,
+      "ultimaFecha": "2022-09-09 00:00:00",
+      "condPago": "1"
+    },
+    "CADENA RADIODIFUSORA MEXICANA SA DE CV": {
+      "ultimoMonto": 85840.0,
+      "ultimaFecha": "2024-10-09 00:00:00",
+      "condPago": "60"
+    },
+    "CALZADO INDUSTRIAL DURAMAX SA DE CV": {
+      "ultimoMonto": 14188.6,
+      "ultimaFecha": "10/31/2025",
+      "condPago": "60"
+    },
+    "CAMIONES LIGEROS, S.A. DE C.V.": {
+      "ultimoMonto": 58788.72,
+      "ultimaFecha": "4/25/2022",
+      "condPago": "1"
+    },
+    "CAMSA DEL NORTE": {
+      "ultimoMonto": 32582.08,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": "30"
+    },
+    "CAR ONE MONTERREY S.A. DE C.V.": {
+      "ultimoMonto": 829900.0,
+      "ultimaFecha": "3/15/2024",
+      "condPago": "C"
+    },
+    "CARGA CENTRAL DEL BAJIO S.A. DE C.V.": {
+      "ultimoMonto": 123092.24,
+      "ultimaFecha": "2023-06-01 00:00:00",
+      "condPago": "21"
+    },
+    "CARLOS EDUARDO MARTINEZ MIRELES": {
+      "ultimoMonto": 20.67,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": ""
+    },
+    "CARLOS MACIAS MURO": {
+      "ultimoMonto": 93636.0,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "CAROM CONSULTORES EN NEGOCIOS, S.A. DE C": {
+      "ultimoMonto": 20000.0,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "1"
+    },
+    "CAVIMEX DEL NTE. S.A. DE C.V.": {
+      "ultimoMonto": 9781.7,
+      "ultimaFecha": "2022-05-07 00:00:00",
+      "condPago": "30"
+    },
+    "CCT MEXICOS.A. DE C.V.": {
+      "ultimoMonto": 82931.83,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "CENTRAL CAMIONERA CD. VICTORIA, SA DE": {
+      "ultimoMonto": 14993.0,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "7"
+    },
+    "CENTRAL CAMIONERA DE GOMEZ PALACIO, DURA": {
+      "ultimoMonto": 74630.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "CENTRAL CAMIONERA DE TORREON": {
+      "ultimoMonto": 12528.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "15"
+    },
+    "CENTRAL DE AUT DE PASAJEROS CD JUAREZ": {
+      "ultimoMonto": 341834.0,
+      "ultimaFecha": "5/31/2024",
+      "condPago": "4"
+    },
+    "CENTRAL DE AUTOBUSES DE MATEHUALA, S.A.": {
+      "ultimoMonto": 21403.21,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "CENTRAL DE AUTOBUSES DE MAZATLAN, SA CV": {
+      "ultimoMonto": 337318.0,
+      "ultimaFecha": "2024-09-08 00:00:00",
+      "condPago": "4"
+    },
+    "CENTRAL DE AUTOBUSES DE MONTERREY,SA CV": {
+      "ultimoMonto": 6902.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "CENTRAL DE AUTOBUSES DE SALTILLO, S.A. D": {
+      "ultimoMonto": 10913.28,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "7"
+    },
+    "CENTRAL DE AUTOBUSES PROTACIO RDZ": {
+      "ultimoMonto": 11327.43,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": "30"
+    },
+    "CENTRAL DE OMNIBUS EN AGUASCALIENTES SA": {
+      "ultimoMonto": 515366.0,
+      "ultimaFecha": "4/18/2024",
+      "condPago": "7"
+    },
+    "CENTRAL DE PARTES MONTERREYS.A. DE C.V": {
+      "ultimoMonto": 35635.2,
+      "ultimaFecha": "11/21/2025",
+      "condPago": "30"
+    },
+    "CENTRO DE ALIANZA MEDICA LEONES SC": {
+      "ultimoMonto": 25.14,
+      "ultimaFecha": "1/31/2024",
+      "condPago": "30"
+    },
+    "CENTRO PATRONAL DE NUEVO LEON": {
+      "ultimoMonto": 27994.5,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "1"
+    },
+    "CFE SUMINISTRADOR DE SERVICIOS BASICOS": {
+      "ultimoMonto": 117.0,
+      "ultimaFecha": "4/13/2026",
+      "condPago": "60"
+    },
+    "CIEM SERVICIOS INTEGRALES DEL CENTRO, S.": {
+      "ultimoMonto": 47560.0,
+      "ultimaFecha": "2026-08-04 00:00:00",
+      "condPago": "1"
+    },
+    "CIN CONSULTORIA EN INTELIGENCIA DE": {
+      "ultimoMonto": 5533.2,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "30"
+    },
+    "CITY OF DALLAS": {
+      "ultimoMonto": 74.93,
+      "ultimaFecha": "11/17/2021",
+      "condPago": "C"
+    },
+    "CITY OF EAGLE PASS": {
+      "ultimoMonto": 16.38,
+      "ultimaFecha": "2/25/2021",
+      "condPago": "C"
+    },
+    "CITY OF MCALLEN": {
+      "ultimoMonto": 48.2,
+      "ultimaFecha": "2021-03-03 00:00:00",
+      "condPago": "C"
+    },
+    "CLINICA DEL AZUCAR SAPI DE CV": {
+      "ultimoMonto": 828.23,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "15"
+    },
+    "CLODOALDO FERNANDEZ ALFONSO": {
+      "ultimoMonto": 45779.4,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "30"
+    },
+    "CLUB INDUSTRIAL A.C.": {
+      "ultimoMonto": 7975.0,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "C"
+    },
+    "COLCHAS MEXICO": {
+      "ultimoMonto": 66941.09,
+      "ultimaFecha": "12/26/2025",
+      "condPago": ""
+    },
+    "COMAPA DEL MUNICIPIO DE REYNOSA": {
+      "ultimoMonto": 501.0,
+      "ultimaFecha": "4/13/2026",
+      "condPago": "C"
+    },
+    "COMBUSTIBLES ECOLOGICOS MEXICANOS SA DE": {
+      "ultimoMonto": 494111.4,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "C"
+    },
+    "COMBUSTIBLES Y REFINADOS BURGOS SA DE CV": {
+      "ultimoMonto": 1586654.51,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "10"
+    },
+    "COMED": {
+      "ultimoMonto": 145.66,
+      "ultimaFecha": "3/31/2025",
+      "condPago": "7"
+    },
+    "COMERCIAL EL MOLINO AZTECA, S.A. DE C.V.": {
+      "ultimoMonto": 2574.0,
+      "ultimaFecha": "11/27/2025",
+      "condPago": "30"
+    },
+    "COMERCIAL HIDALGO BANDAS Y MANGUERAS": {
+      "ultimoMonto": 5669.82,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "60"
+    },
+    "COMERCIAL RUSS, S.A. DE C.V.": {
+      "ultimoMonto": 1941.84,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "COMERCIALIZADORA D COMP HID Y NEUMATICOS": {
+      "ultimoMonto": 149.52,
+      "ultimaFecha": "2024-11-04 00:00:00",
+      "condPago": "30"
+    },
+    "COMERCIALIZADORA DIFRISA SA DE CV": {
+      "ultimoMonto": 149582.77,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "COMERCIALIZADORA EL ZUAUZ": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "15"
+    },
+    "COMERCIALIZADORA URCASA S.A. DE C.V": {
+      "ultimoMonto": 65327.03,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "45"
+    },
+    "COMEXIGAL COMERCIALIZADORA MEXICANA GALA": {
+      "ultimoMonto": 67986.21,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "COMPAÑIA INTEGRA SOLUCIONES SA DE CV": {
+      "ultimoMonto": 41987.87,
+      "ultimaFecha": "1/30/2026",
+      "condPago": "1"
+    },
+    "COMPETITIVIDAD E INFORMATICA SA DE CV": {
+      "ultimoMonto": 118236.48,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "COMPU FORMAS, S.A. DE C.V.": {
+      "ultimoMonto": 64960.0,
+      "ultimaFecha": "2026-06-02 00:00:00",
+      "condPago": "60"
+    },
+    "CONCEPTO E IMAGEN MAISA SA DE CV": {
+      "ultimoMonto": 6472.8,
+      "ultimaFecha": "2023-10-03 00:00:00",
+      "condPago": "60"
+    },
+    "CONDUCKTING S.C.": {
+      "ultimoMonto": 187.34,
+      "ultimaFecha": "4/30/2025",
+      "condPago": "30"
+    },
+    "CONSULTORES EN TELEINFORMATICA EMPRESARI": {
+      "ultimoMonto": 0.42,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "30"
+    },
+    "CONTINENTAL TIRE DE MEXICO SA DE CV": {
+      "ultimoMonto": 40000.0,
+      "ultimaFecha": "2024-06-09 00:00:00",
+      "condPago": "60"
+    },
+    "CONTROL DE CLINICAS SC": {
+      "ultimoMonto": 5.94,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "7"
+    },
+    "CONTROL DE PROCESOS Y APLICACIONES S.A.": {
+      "ultimoMonto": 86246.0,
+      "ultimaFecha": "2024-08-08 00:00:00",
+      "condPago": "15"
+    },
+    "CONTROL INTEGRAL DE AUTOTRANSPORTE SA DE": {
+      "ultimoMonto": 23216.05,
+      "ultimaFecha": "11/14/2025",
+      "condPago": "45"
+    },
+    "CONTROLADORA DE MEDIOS DEL ALTIPLANO SA": {
+      "ultimoMonto": 15.08,
+      "ultimaFecha": "1/31/2024",
+      "condPago": "1"
+    },
+    "COOK COUNTR TREASURER´S OFFICE": {
+      "ultimoMonto": 35636.33,
+      "ultimaFecha": "9/30/2024",
+      "condPago": ""
+    },
+    "COORDINADORA DE CARRIER�S SA DE CV": {
+      "ultimoMonto": 55677.68,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "CORPORACION MEDICA MAYRAN S.C": {
+      "ultimoMonto": 14.19,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "C"
+    },
+    "CORPORATIVO JYBSAJD": {
+      "ultimoMonto": 276090.25,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "DAC DISEÑADORES, SA DE CV": {
+      "ultimoMonto": 343.04,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": ""
+    },
+    "DAIMLER VEHICULOS COMERCIALES MEXICO": {
+      "ultimoMonto": 110987.54,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "45"
+    },
+    "DAVID ROBERTO VERASTEGUI HIGUERA": {
+      "ultimoMonto": 127500.0,
+      "ultimaFecha": "4/20/2023",
+      "condPago": "30"
+    },
+    "DEL PRADO LOGISTICS INC": {
+      "ultimoMonto": 0.06,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "C"
+    },
+    "DELIA BRISEIDY SANCHEZ SUSTAITA": {
+      "ultimoMonto": 1847.14,
+      "ultimaFecha": "3/17/2026",
+      "condPago": ""
+    },
+    "DESARROLLO Y SERVICIOS VIVA, S.A DE CV": {
+      "ultimoMonto": 10800.0,
+      "ultimaFecha": "2026-11-03 00:00:00",
+      "condPago": "C"
+    },
+    "DESARROLLOS E INMOBILIARIA DELTA SA DE C": {
+      "ultimoMonto": 160579.79,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "DHGN1, S.A. DE C.V.": {
+      "ultimoMonto": 190299.88,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "DHL EXPRESS MEXICOS.A. DE C.V.": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "C"
+    },
+    "DIAZ COMERCIALIZADORA FARMACEUTICA SA DE": {
+      "ultimoMonto": 9055.68,
+      "ultimaFecha": "1/22/2026",
+      "condPago": "30"
+    },
+    "DICR83 DESIGN TEXTIL": {
+      "ultimoMonto": 425186.4,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": ""
+    },
+    "DIINSEL, S.A. DE C.V.": {
+      "ultimoMonto": 1740.0,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "90"
+    },
+    "DIKEN INTERNATIONAL S DE RL DE CV": {
+      "ultimoMonto": 21058.21,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "DIMSER TRANSMISIONES AUTOMATICAS MTY SA": {
+      "ultimoMonto": 3944.0,
+      "ultimaFecha": "2025-07-11 00:00:00",
+      "condPago": "45"
+    },
+    "DINA COMERCIALIZACION SERVICIOS Y REFACC": {
+      "ultimoMonto": 946574.61,
+      "ultimaFecha": "2026-06-04 00:00:00",
+      "condPago": "60"
+    },
+    "DIRECCION DE PROYECTOS Y CONSULTORIA, S.": {
+      "ultimoMonto": 73446.0,
+      "ultimaFecha": "2022-05-07 00:00:00",
+      "condPago": ""
+    },
+    "DISITEM TECNOLOGIAS DE INFORMACION S.A.": {
+      "ultimoMonto": 7209.45,
+      "ultimaFecha": "3/26/2026",
+      "condPago": "60"
+    },
+    "DISPOSITIVOS MOVILES SA DE CV": {
+      "ultimoMonto": 253.08,
+      "ultimaFecha": "1/31/2024",
+      "condPago": "20"
+    },
+    "DISSER DISTRIBUIDORES Y SERVICIOS SADECV": {
+      "ultimoMonto": 201.82,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "60"
+    },
+    "DISTRIBUIDORA DE FILTROS FYR S.A. DE C.": {
+      "ultimoMonto": 16089.67,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "DISTRIBUIDORA DE PINTURA AUTOMOTRIZ S.A": {
+      "ultimoMonto": 150996.79,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "30"
+    },
+    "DISTRIBUIDORA DE REFACCIONES FYR SADECV": {
+      "ultimoMonto": 100656.86,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "60"
+    },
+    "DOC SOLUTIONS DE MEXICO, S.A. DE C.V.": {
+      "ultimoMonto": 45492.8,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "60"
+    },
+    "DRENVIO": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "DUPLAN": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "EASY FAST ADMINISTRATIVA": {
+      "ultimoMonto": 169582.55,
+      "ultimaFecha": "6/13/2025",
+      "condPago": "45"
+    },
+    "EDENRED MEXICO S.A. DE C.V.": {
+      "ultimoMonto": 26111.88,
+      "ultimaFecha": "2024-02-09 00:00:00",
+      "condPago": "7"
+    },
+    "EL MOVIMIENTO ALTERNATIVO PARA SU ADMINI": {
+      "ultimoMonto": 85.05,
+      "ultimaFecha": "4/30/2025",
+      "condPago": ""
+    },
+    "ELEAZAR SANCHEZ ENRIQUEZ": {
+      "ultimoMonto": 149111.76,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "ELEMENT FLEET MANAGEMENT CORPORATION MEX": {
+      "ultimoMonto": 13912.23,
+      "ultimaFecha": "2024-01-08 00:00:00",
+      "condPago": "7"
+    },
+    "ELIDA ALEJO CALZADA": {
+      "ultimoMonto": 2500.03,
+      "ultimaFecha": "4/13/2022",
+      "condPago": "15"
+    },
+    "ELIDIA GARCIA GONZALEZ": {
+      "ultimoMonto": 783.0,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "ELIZABETH ALMARAZ GARCIA": {
+      "ultimoMonto": 20880.0,
+      "ultimaFecha": "2025-11-12 00:00:00",
+      "condPago": "1"
+    },
+    "EMILIO ARREDONDO ALAMILLA": {
+      "ultimoMonto": 4099.2,
+      "ultimaFecha": "11/13/2025",
+      "condPago": "15"
+    },
+    "EMILIO PADILLA ZARAGOZA": {
+      "ultimoMonto": 4000.0,
+      "ultimaFecha": "2022-05-07 00:00:00",
+      "condPago": "30"
+    },
+    "EMOTION TEAM, S.A. DE C.V.": {
+      "ultimoMonto": 3.97,
+      "ultimaFecha": "1/31/2024",
+      "condPago": ""
+    },
+    "END TO END MANAGEMENT SA DE CV": {
+      "ultimoMonto": 59751.6,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "1"
+    },
+    "ENERGETICOS INTERNACIONALES, S.A. DE C.V": {
+      "ultimoMonto": 5383.59,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "15"
+    },
+    "ENLACE GLOBAL LOGISTIC S DE RL DE CV": {
+      "ultimoMonto": 5040.0,
+      "ultimaFecha": "2025-07-04 00:00:00",
+      "condPago": "30"
+    },
+    "ENRIQUE ADOLFO RODRIGUEZ PEREZ": {
+      "ultimoMonto": 54.69,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "60"
+    },
+    "ENRIQUE CEPEDA ROQUE": {
+      "ultimoMonto": 10423.88,
+      "ultimaFecha": "8/24/2023",
+      "condPago": "15"
+    },
+    "EQUIPO INDUSTRIAL Y MANTENIMIENTO JR SA": {
+      "ultimoMonto": 2227.2,
+      "ultimaFecha": "2022-05-07 00:00:00",
+      "condPago": "30"
+    },
+    "EQUIPOS PARA MERCADOS SA DE CV": {
+      "ultimoMonto": 468.04,
+      "ultimaFecha": "4/30/2025",
+      "condPago": "30"
+    },
+    "ERG MULTI ENERGETICOS SA DE CV": {
+      "ultimoMonto": 216916.01,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "ERMILO PALOMARES FLORES": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "ERNESTO LOBO SALAZAR": {
+      "ultimoMonto": 19380.0,
+      "ultimaFecha": "6/30/2022",
+      "condPago": "7"
+    },
+    "ETALONET, SA DE CV": {
+      "ultimoMonto": 11794.88,
+      "ultimaFecha": "2025-02-09 00:00:00",
+      "condPago": "30"
+    },
+    "ETIQUETAS ELECTRONICAS DE OCCTE S.A. DE": {
+      "ultimoMonto": 27097.6,
+      "ultimaFecha": "2/20/2026",
+      "condPago": "30"
+    },
+    "EUGENIO MALDONADO SOLORZANO": {
+      "ultimoMonto": 22.85,
+      "ultimaFecha": "10/31/2022",
+      "condPago": "15"
+    },
+    "EXPORT DEVELOPMENT CANADA": {
+      "ultimoMonto": 1574725.86,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": ""
+    },
+    "EXXON MOBILE": {
+      "ultimoMonto": 799.2,
+      "ultimaFecha": "3/31/2025",
+      "condPago": "60"
+    },
+    "EYPRO": {
+      "ultimoMonto": 1200.6,
+      "ultimaFecha": "2/15/2018",
+      "condPago": ""
+    },
+    "FAUSTINO GUADALUPE ALVAREZ DE LA CRUZ": {
+      "ultimoMonto": 122467.0,
+      "ultimaFecha": "2026-12-02 00:00:00",
+      "condPago": "1"
+    },
+    "FAUSTO EMANUEL CHAVEZ PRIEGO": {
+      "ultimoMonto": 7000.0,
+      "ultimaFecha": "3/30/2026",
+      "condPago": ""
+    },
+    "FAVIO ALEJANDRO GUZMAN TOVAR": {
+      "ultimoMonto": 50483.2,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "30"
+    },
+    "FC GLOBAL CO SA DE CV": {
+      "ultimoMonto": 17655.2,
+      "ultimaFecha": "10/17/2025",
+      "condPago": "30"
+    },
+    "FEDERAL EXPRESS HOLDINGS MEXICO Y COMPAÑ": {
+      "ultimoMonto": 292.35,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "30"
+    },
+    "FEDERICO GARCIA LANDEROS": {
+      "ultimoMonto": 3840.0,
+      "ultimaFecha": "3/24/2021",
+      "condPago": ""
+    },
+    "FELIPE PATIÑO PÉREZ": {
+      "ultimoMonto": 34549.44,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": ""
+    },
+    "FERNANDO GARCIA GALVAN": {
+      "ultimoMonto": 81780.0,
+      "ultimaFecha": "2025-09-05 00:00:00",
+      "condPago": "60"
+    },
+    "FERNANDO HUGO GALLEGOS DIAZ": {
+      "ultimoMonto": 60071.64,
+      "ultimaFecha": "2025-06-06 00:00:00",
+      "condPago": "30"
+    },
+    "FERRETERA INDUSTRIAL DEL NORTE, SA DE CV": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "FERRETERIA GONZALEZ V S.A. DE C.V.": {
+      "ultimoMonto": 1144.96,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "FILOGONIO MARTINEZ SERRANO": {
+      "ultimoMonto": 1519.53,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "60"
+    },
+    "FIRMA JURIDICA Y FISCAL ABOGADOS": {
+      "ultimoMonto": 2925966.6,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "1"
+    },
+    "FIRST INSURANCE FUNDING": {
+      "ultimoMonto": 18656.88,
+      "ultimaFecha": "2025-06-06 00:00:00",
+      "condPago": "7"
+    },
+    "FLEETONE LLC": {
+      "ultimoMonto": 16254.72,
+      "ultimaFecha": "12/19/2024",
+      "condPago": "7"
+    },
+    "FLEX-AUST DE MEXICO, S.A DE C.V.": {
+      "ultimoMonto": 2436.0,
+      "ultimaFecha": "2025-04-12 00:00:00",
+      "condPago": "45"
+    },
+    "FNX COMERCIAL AMERICA SA DE CV": {
+      "ultimoMonto": 3016.0,
+      "ultimaFecha": "8/25/2025",
+      "condPago": "45"
+    },
+    "FOIMAX PACK-FILMS": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "FRACTTAL APP MEXICO": {
+      "ultimoMonto": 40920.98,
+      "ultimaFecha": "2/24/2026",
+      "condPago": "30"
+    },
+    "FRANCISCO JAVIER ARRIAGA CONTRERAS": {
+      "ultimoMonto": 780.09,
+      "ultimaFecha": "8/25/2025",
+      "condPago": "30"
+    },
+    "FRANCISCO OVIEDO ESPINOSA": {
+      "ultimoMonto": 23322.87,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "FRENOS DE AIRE MONTERREY, S.A. DE C.V.": {
+      "ultimoMonto": 205.43,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "60"
+    },
+    "FRENOS Y EMBRAGUES CIMA": {
+      "ultimoMonto": 148032.36,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "15"
+    },
+    "FRIO SERVICIO DE MONTERREY S.A DE C.V.": {
+      "ultimoMonto": 257120.13,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "60"
+    },
+    "FUELYOUR BRANDS SA DE CV": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "FUNDACION JOMAR AC.": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "7"
+    },
+    "GABRIELA PATRICIA GONZALEZ PINEYRO": {
+      "ultimoMonto": 17731.94,
+      "ultimaFecha": "5/27/2022",
+      "condPago": "30"
+    },
+    "GALI SYSTEMS S.A DE C.V.": {
+      "ultimoMonto": 51040.0,
+      "ultimaFecha": "2025-03-01 00:00:00",
+      "condPago": "30"
+    },
+    "GAS E HIDROCARBUROS ECOLOGICOS SA DE CV": {
+      "ultimoMonto": 84911.43,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "GAS NATURAL MEXICO, S.A. DE C.V.": {
+      "ultimoMonto": 3501.0,
+      "ultimaFecha": "3/30/2026",
+      "condPago": "7"
+    },
+    "GASNGO MEXICO SA DE CV": {
+      "ultimoMonto": 1267545.08,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "21"
+    },
+    "GEN INDUSTRIAL. S.A. DE C.V.": {
+      "ultimoMonto": 1334.04,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "GENERAL DE BALEROS": {
+      "ultimoMonto": 15441.92,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "60"
+    },
+    "GERARDO ABRAHAM GARCIA VELAZQUEZ": {
+      "ultimoMonto": 30944.92,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": "1"
+    },
+    "GERARDO FLORES GARZA": {
+      "ultimoMonto": 112409.64,
+      "ultimaFecha": "3/13/2026",
+      "condPago": ""
+    },
+    "GERARDO GARCIA PONCE": {
+      "ultimoMonto": 4106.4,
+      "ultimaFecha": "2026-08-04 00:00:00",
+      "condPago": "30"
+    },
+    "GESTTOR INFORMATICA S.A. DE C.V.": {
+      "ultimoMonto": 118598.4,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "1"
+    },
+    "GLAFIRO E. MONTEMAYOR E HIJOS LLC": {
+      "ultimoMonto": 1.87,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "1"
+    },
+    "GLOBAL PORTFOLIO SOLUTIONS S.L": {
+      "ultimoMonto": 267.79,
+      "ultimaFecha": "4/30/2025",
+      "condPago": "C"
+    },
+    "GLOBAL TRACK DE MEXICO SA DE CV": {
+      "ultimoMonto": 98170.8,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "GOAL SYSTEMS": {
+      "ultimoMonto": 1695.02,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "GOB. EDO CHIH. SECRETARIA DE HACIENDA": {
+      "ultimoMonto": 17004.0,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "7"
+    },
+    "GOBIERNO DE LA CIUDAD DE MEXICO": {
+      "ultimoMonto": 2929.0,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "C"
+    },
+    "GOBIERNO DEL ESTADO DE GUANAJUATO": {
+      "ultimoMonto": 2734.0,
+      "ultimaFecha": "3/17/2026",
+      "condPago": ""
+    },
+    "GOBIERNO DEL ESTADO DE MEXICO": {
+      "ultimoMonto": 755.0,
+      "ultimaFecha": "2024-05-03 00:00:00",
+      "condPago": "C"
+    },
+    "GOIPACK SA DE CV": {
+      "ultimoMonto": 574681.63,
+      "ultimaFecha": "2025-04-12 00:00:00",
+      "condPago": "30"
+    },
+    "GONZALEZ DE ANDA Y ASOCIADOS SC": {
+      "ultimoMonto": 14130.85,
+      "ultimaFecha": "2026-09-03 00:00:00",
+      "condPago": "1"
+    },
+    "GOOGLE OPERACIONES DE MEXICO": {
+      "ultimoMonto": 20000.0,
+      "ultimaFecha": "2026-10-03 00:00:00",
+      "condPago": "1"
+    },
+    "GP BIENES INMUEBLES S.A. DE C.V.": {
+      "ultimoMonto": 1135855.63,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "GRACIELA DEL CARMEN MARTINEZ CUELLAR": {
+      "ultimoMonto": 587.68,
+      "ultimaFecha": "8/16/2019",
+      "condPago": "7"
+    },
+    "GRANMARK": {
+      "ultimoMonto": 88.26,
+      "ultimaFecha": "2024-12-02 00:00:00",
+      "condPago": "60"
+    },
+    "GRMCOLLISION S.A. DE C.V.": {
+      "ultimoMonto": 10915.6,
+      "ultimaFecha": "10/13/2025",
+      "condPago": "7"
+    },
+    "GRUAS MARROQUIN JR S.A DE C.V": {
+      "ultimoMonto": 21460.0,
+      "ultimaFecha": "3/19/2026",
+      "condPago": ""
+    },
+    "GRUAS MONTERREY, S.A. DE C.V.": {
+      "ultimoMonto": 99760.0,
+      "ultimaFecha": "3/25/2026",
+      "condPago": "7"
+    },
+    "GRUAS SAN JOSE,S.A. DE C.V.": {
+      "ultimoMonto": 17663.78,
+      "ultimaFecha": "3/25/2025",
+      "condPago": "7"
+    },
+    "GRUPO COENDI": {
+      "ultimoMonto": 80022.9,
+      "ultimaFecha": "2/26/2026",
+      "condPago": ""
+    },
+    "GRUPO CORPORATIVO LOS EBANOS": {
+      "ultimoMonto": 16820.0,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "GRUPO ESHERSA SA DE CV": {
+      "ultimoMonto": 131846.76,
+      "ultimaFecha": "5/25/2016",
+      "condPago": "30"
+    },
+    "GRUPO GESH SA DE CV": {
+      "ultimoMonto": 366352.63,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "GRUPO INSOLIT, S.A. DE C.V.": {
+      "ultimoMonto": 2757.92,
+      "ultimaFecha": "6/19/2015",
+      "condPago": "C"
+    },
+    "GRUPO INTELLMEDIA SA DE CV": {
+      "ultimoMonto": 1471.26,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "GRUPO LIPAJE SA DE CV": {
+      "ultimoMonto": 9042.5,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "GRUPO MIUS SA DE CV": {
+      "ultimoMonto": 22.19,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": ""
+    },
+    "GRUPO NACIONAL PROVINCIAL S.A.B.": {
+      "ultimoMonto": 4142841.43,
+      "ultimaFecha": "2026-10-02 00:00:00",
+      "condPago": "60"
+    },
+    "GRUPO TURISTICO DE COAHUILA S.A. DE C.V.": {
+      "ultimoMonto": 4640.0,
+      "ultimaFecha": "1/27/2020",
+      "condPago": ""
+    },
+    "GRUPO WL SA DE CV": {
+      "ultimoMonto": 2871.0,
+      "ultimaFecha": "5/27/2022",
+      "condPago": "10"
+    },
+    "GUILLERMO ENRI- \"NO USAR REV ANEXOS\"": {
+      "ultimoMonto": 28188.0,
+      "ultimaFecha": "2024-08-03 00:00:00",
+      "condPago": "1"
+    },
+    "GUILLERMO ROCHA GONZÁLEZ": {
+      "ultimoMonto": 283.35,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "HECTOR CANDELARIA RIVERA": {
+      "ultimoMonto": 45240.0,
+      "ultimaFecha": "2026-05-03 00:00:00",
+      "condPago": "30"
+    },
+    "HECTOR CASTILLO CALVILLO": {
+      "ultimoMonto": 168.08,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "60"
+    },
+    "HELPSI CAPITAL HUMANO SC": {
+      "ultimoMonto": 34800.0,
+      "ultimaFecha": "7/28/2021",
+      "condPago": "1"
+    },
+    "HERNANDEZ CANDELAS Y TOSTADO S.C": {
+      "ultimoMonto": 66259.2,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "HERRAMENTAL REGIOMONTANA S.A.": {
+      "ultimoMonto": 27.06,
+      "ultimaFecha": "10/31/2022",
+      "condPago": "60"
+    },
+    "HERRAMIENTAS DK SA DE CV": {
+      "ultimoMonto": 20397.93,
+      "ultimaFecha": "2025-08-08 00:00:00",
+      "condPago": "30"
+    },
+    "HIGHWAY TRUCKS, S.A.P.I DE CV": {
+      "ultimoMonto": 134801.97,
+      "ultimaFecha": "2021-10-12 00:00:00",
+      "condPago": "30"
+    },
+    "HIR COMPAÑIA DE SEGUROS": {
+      "ultimoMonto": 333727.28,
+      "ultimaFecha": "2/27/2026",
+      "condPago": ""
+    },
+    "HISPACOLD MEXICO SA DE CV": {
+      "ultimoMonto": 87518.09,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "HMD SUMINISTRO INDUSTRIAL SA DE CV": {
+      "ultimoMonto": 8816.0,
+      "ultimaFecha": "2025-04-12 00:00:00",
+      "condPago": "60"
+    },
+    "HOLCIM MEXICO OPERACIONES S.A. DE C.V.": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "HOLD MARKETING": {
+      "ultimoMonto": 43795.8,
+      "ultimaFecha": "3/20/2026",
+      "condPago": ""
+    },
+    "HOSPITAL LA CARLOTA": {
+      "ultimoMonto": 60.57,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "7"
+    },
+    "HOSPITAL Y CLINICA OCA, S.A. DE C.V.": {
+      "ultimoMonto": 38167.5,
+      "ultimaFecha": "8/29/2025",
+      "condPago": "1"
+    },
+    "HUKARI RODRIGUEZ GALLEGOS": {
+      "ultimoMonto": 906.24,
+      "ultimaFecha": "5/13/2019",
+      "condPago": ""
+    },
+    "HUMBERTO PROA MARTINEZ": {
+      "ultimoMonto": 189635.88,
+      "ultimaFecha": "10/29/2024",
+      "condPago": "30"
+    },
+    "IDEALO PUBLICIDAD DE COAHUILA SA DE CV": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "IMELDA OLVERA GARCIA": {
+      "ultimoMonto": 2441.52,
+      "ultimaFecha": "4/15/2026",
+      "condPago": ""
+    },
+    "IMPORTADORA ACTIVA": {
+      "ultimoMonto": 1200.6,
+      "ultimaFecha": "9/15/2017",
+      "condPago": "C"
+    },
+    "INATEL SA DE CV": {
+      "ultimoMonto": 32398.8,
+      "ultimaFecha": "2025-08-08 00:00:00",
+      "condPago": "1"
+    },
+    "INFONACOT": {
+      "ultimoMonto": 377563.91,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "30"
+    },
+    "INGENIERIA LOGISTICA Y PROYECTOS SADECV": {
+      "ultimoMonto": 891.89,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "C"
+    },
+    "INGENIERIA Y SERVICIOS INDUSTRIALES AL3": {
+      "ultimoMonto": 235.21,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "INMOBILIARIA BOSQUES DEL SUR SA": {
+      "ultimoMonto": 31900.0,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "INMOBILIARIA LUSSANE S.A. DE C.V.": {
+      "ultimoMonto": 59973.21,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "INMOBILIARIA Y ASESORIA REGIOFIN DE ME": {
+      "ultimoMonto": 367633.0,
+      "ultimaFecha": "3/19/2026",
+      "condPago": "1"
+    },
+    "INNOVA IMAGEN,S.A. DE C.V.": {
+      "ultimoMonto": 62190.37,
+      "ultimaFecha": "1/23/2026",
+      "condPago": "120"
+    },
+    "INNOVA SPORT, S.A. DE C.V": {
+      "ultimoMonto": 113.95,
+      "ultimaFecha": "3/31/2013",
+      "condPago": "60"
+    },
+    "INNOVACION EN SERVICIO PESADO, S.A. DE C": {
+      "ultimoMonto": 53028.88,
+      "ultimaFecha": "2026-10-03 00:00:00",
+      "condPago": "60"
+    },
+    "INOCENCIA GARCIA LICONA": {
+      "ultimoMonto": 1353.55,
+      "ultimaFecha": "4/15/2026",
+      "condPago": ""
+    },
+    "INSTITUTO MEXICANO DEL SEGURO SOCIAL": {
+      "ultimoMonto": 11185.66,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": ""
+    },
+    "INSTITUTO DE CAPACITACION Y EDUCACION PA": {
+      "ultimoMonto": 3200.0,
+      "ultimaFecha": "2026-09-01 00:00:00",
+      "condPago": "30"
+    },
+    "INSTITUTO GUADALUPE DE LINARES, A.C.": {
+      "ultimoMonto": 100000.0,
+      "ultimaFecha": "3/25/2026",
+      "condPago": "1"
+    },
+    "INTERAPAS": {
+      "ultimoMonto": 5942.0,
+      "ultimaFecha": "3/30/2026",
+      "condPago": "30"
+    },
+    "INTERNATIONAL LPS L.L.C": {
+      "ultimoMonto": 2750.0,
+      "ultimaFecha": "2/17/2026",
+      "condPago": "C"
+    },
+    "INVERSIONES RELLIS, S.A. DE C.V.": {
+      "ultimoMonto": 224740.78,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "INYECCION DIESEL GH S DE RL DE CV": {
+      "ultimoMonto": 53824.0,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "IPFS CORPORATION": {
+      "ultimoMonto": 6240.23,
+      "ultimaFecha": "2021-08-03 00:00:00",
+      "condPago": "C"
+    },
+    "IRIZAR MEXICO, S.A. DE C.V.": {
+      "ultimoMonto": 51340.53,
+      "ultimaFecha": "11/14/2025",
+      "condPago": "30"
+    },
+    "ISDRAEL GOVEA GOMEZ": {
+      "ultimoMonto": 54612.8,
+      "ultimaFecha": "2/13/2026",
+      "condPago": "60"
+    },
+    "ISL INDUSTRY SUPPLIER AND LOGISTCS S DE": {
+      "ultimoMonto": 812.0,
+      "ultimaFecha": "2026-06-02 00:00:00",
+      "condPago": "60"
+    },
+    "IVAN ALEJANDRO VEGA CISNEROS": {
+      "ultimoMonto": 57.22,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "60"
+    },
+    "IVAN CASTELLANOS AVENDAÑO": {
+      "ultimoMonto": 32812.61,
+      "ultimaFecha": "2021-06-04 00:00:00",
+      "condPago": "30"
+    },
+    "J&J CAJAS Y EMPAQUES, S.A. DE C.V.": {
+      "ultimoMonto": 25317.3,
+      "ultimaFecha": "2024-06-06 00:00:00",
+      "condPago": "30"
+    },
+    "JAIME SANCHEZ RIOS": {
+      "ultimoMonto": 17827.27,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "1"
+    },
+    "JASON ISRAEL GOVEA MELENDEZ": {
+      "ultimoMonto": 35960.0,
+      "ultimaFecha": "2024-06-06 00:00:00",
+      "condPago": "45"
+    },
+    "JAVIER GUTIERREZ OROZCO": {
+      "ultimoMonto": 17400.0,
+      "ultimaFecha": "2025-07-11 00:00:00",
+      "condPago": "7"
+    },
+    "JESSICKA GUADALUPE SANCHEZ HERNANDEZ": {
+      "ultimoMonto": 1282.09,
+      "ultimaFecha": "2019-02-09 00:00:00",
+      "condPago": "7"
+    },
+    "JESSIE LAZCANO CONSTANTINO": {
+      "ultimoMonto": 13583.6,
+      "ultimaFecha": "2025-04-12 00:00:00",
+      "condPago": ""
+    },
+    "JESUS ALBERTO HERNANDEZ ORTIZ": {
+      "ultimoMonto": 25392.4,
+      "ultimaFecha": "2025-07-11 00:00:00",
+      "condPago": "1"
+    },
+    "JESUS ANTONIO NADER NASRALLAH": {
+      "ultimoMonto": 20659.31,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "JESUS BERINO GRANADOS": {
+      "ultimoMonto": 6000.0,
+      "ultimaFecha": "2/21/2023",
+      "condPago": "C"
+    },
+    "JESUS MARIA RODRIGUEZ QUINTERO": {
+      "ultimoMonto": 32.4,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "C"
+    },
+    "JESUS TREVIÑO MARTINEZ": {
+      "ultimoMonto": 1276.0,
+      "ultimaFecha": "2025-07-11 00:00:00",
+      "condPago": "45"
+    },
+    "JOEL MORALES MENDOZA": {
+      "ultimoMonto": 2737.09,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "45"
+    },
+    "JONATHAN SEPULVEDA REYNA": {
+      "ultimoMonto": 3860.48,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "30"
+    },
+    "JORGE CABRERA ROBLES": {
+      "ultimoMonto": 66781.85,
+      "ultimaFecha": "5/30/2023",
+      "condPago": "1"
+    },
+    "JORGE LUIS SALGADO CEPEDA": {
+      "ultimoMonto": 40019.1,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "JOSE ALFREDO BERNAL REYNA": {
+      "ultimoMonto": 28768.0,
+      "ultimaFecha": "5/21/2021",
+      "condPago": "C"
+    },
+    "JOSE EMILIO GONZALEZ ROJAS": {
+      "ultimoMonto": 94381.88,
+      "ultimaFecha": "2026-05-03 00:00:00",
+      "condPago": "15"
+    },
+    "JOSE FRANCISCO MENA SALAZAR": {
+      "ultimoMonto": 17400.0,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "15"
+    },
+    "JOSE IGNACIO IRACHETA MORALES": {
+      "ultimoMonto": 13.29,
+      "ultimaFecha": "11/26/2025",
+      "condPago": ""
+    },
+    "JOSE LUIS PUGA KORRODI": {
+      "ultimoMonto": 14026.43,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "JOSE LUIS VALLE CANALES": {
+      "ultimoMonto": 21523.8,
+      "ultimaFecha": "2026-10-03 00:00:00",
+      "condPago": "30"
+    },
+    "JOSE MANUEL QUEZADA VARELA": {
+      "ultimoMonto": 1587.6,
+      "ultimaFecha": "5/31/2021",
+      "condPago": "7"
+    },
+    "JOSE RICARDO MIRANDA CANTU": {
+      "ultimoMonto": 18560.0,
+      "ultimaFecha": "10/24/2022",
+      "condPago": "1"
+    },
+    "JOSE SALVADOR ROSAS QUINTANILLA": {
+      "ultimoMonto": 66.07,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": ""
+    },
+    "JOSUE CALEB ROMERO GARNICA": {
+      "ultimoMonto": 230812.16,
+      "ultimaFecha": "2019-04-07 00:00:00",
+      "condPago": ""
+    },
+    "JR VERIFICACIONES": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "JUAN ANTONIO LOPEZ TORRES": {
+      "ultimoMonto": 40.38,
+      "ultimaFecha": "4/30/2025",
+      "condPago": ""
+    },
+    "JUAN DANIEL MARTINEZ RODRIGUEZ": {
+      "ultimoMonto": 67674.85,
+      "ultimaFecha": "5/21/2025",
+      "condPago": "1"
+    },
+    "JUAN DELGADO RODRIGUEZ": {
+      "ultimoMonto": 30778.25,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "JUAN JOSE CARRILLO IBARRA": {
+      "ultimoMonto": 54752.0,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": "1"
+    },
+    "JUAN L. BAUTISTA": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "JUAN MARTIN GALAVIZ TOVAR": {
+      "ultimoMonto": 280.54,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "JUANA MARIA CASTAÑEDA MARTINEZ": {
+      "ultimoMonto": 100000.0,
+      "ultimaFecha": "2/28/2022",
+      "condPago": "1"
+    },
+    "JULIO ENRIQUE MARTINEZ GUAJARDO": {
+      "ultimoMonto": 62060.0,
+      "ultimaFecha": "2026-12-02 00:00:00",
+      "condPago": ""
+    },
+    "KABELL DISTRIBUIDORA": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "KABLA COMERCIALS.A. DE C.V.": {
+      "ultimoMonto": 8485.4,
+      "ultimaFecha": "2026-09-01 00:00:00",
+      "condPago": "30"
+    },
+    "KARLA ELIZABETH MARTINEZ GUTIERREZ": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "C"
+    },
+    "KIT REGIO SA DE CV": {
+      "ultimoMonto": 54752.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "KITCHEN SUPPLIES & PARTS": {
+      "ultimoMonto": 461.0,
+      "ultimaFecha": "8/29/2023",
+      "condPago": "7"
+    },
+    "KLW INGENIERIA SA DE CV": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "1"
+    },
+    "KPMG CARDENAS DOSAL, S.C.": {
+      "ultimoMonto": 12.28,
+      "ultimaFecha": "10/31/2022",
+      "condPago": "30"
+    },
+    "KW IMPORTACIONES, S.A DE C.V": {
+      "ultimoMonto": 22462.4,
+      "ultimaFecha": "4/14/2026",
+      "condPago": "15"
+    },
+    "LAKESONS EXPRESS SA DE C V.": {
+      "ultimoMonto": 233.53,
+      "ultimaFecha": "4/30/2025",
+      "condPago": "30"
+    },
+    "LAMBA & ASSOCIATES, PC": {
+      "ultimoMonto": 17000.0,
+      "ultimaFecha": "3/27/2026",
+      "condPago": ""
+    },
+    "LAN COMUNICACIONES SA DE CV": {
+      "ultimoMonto": 68578.16,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "30"
+    },
+    "LANDER SIMULATION & TRAINING SOLUTIONS,": {
+      "ultimoMonto": 4909.43,
+      "ultimaFecha": "2025-11-09 00:00:00",
+      "condPago": "1"
+    },
+    "LAREDO EXAMINERS INC NO USAR": {
+      "ultimoMonto": 0.4,
+      "ultimaFecha": "2023-04-05 00:00:00",
+      "condPago": "60"
+    },
+    "LAREDO NATIONAL BANK": {
+      "ultimoMonto": 23152.39,
+      "ultimaFecha": "5/27/2024",
+      "condPago": "C"
+    },
+    "LAS AGUILAS GRUPO PROMOTOR E INMOBILIARI": {
+      "ultimoMonto": 757218.02,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "60"
+    },
+    "LAURA AGUIRRE HERNANDEZ": {
+      "ultimoMonto": 9416.88,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "LED GE SERVICIOS": {
+      "ultimoMonto": 13920.0,
+      "ultimaFecha": "8/16/2024",
+      "condPago": "30"
+    },
+    "LEGAL GLOBAL CONSULTING DE MEXICO, S.C.": {
+      "ultimoMonto": 580.0,
+      "ultimaFecha": "7/15/2022",
+      "condPago": "1"
+    },
+    "LG EMBRAGUES Y FRENOS S.A DE C.V.": {
+      "ultimoMonto": 59450.15,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "LIMPIFEX S.A DE C.V": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "LINKEDIN IRELAND LIMITED": {
+      "ultimoMonto": 4.11,
+      "ultimaFecha": "2023-03-05 00:00:00",
+      "condPago": "30"
+    },
+    "LLANTAS COMPAÑIA SA DE CV": {
+      "ultimoMonto": 51671.88,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "60"
+    },
+    "LLANTAS Y SERVICIOS DEGA,S.A. DE C.V.": {
+      "ultimoMonto": 55120.0,
+      "ultimaFecha": "3/31/2026",
+      "condPago": "60"
+    },
+    "LLANTERA AUTOMOTRIZ R. Y ASOCIADOS": {
+      "ultimoMonto": 126066.38,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "LOGISCOOR": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "LOS ANGELES SERVICIOS FARMACEUTICOS SA D": {
+      "ultimoMonto": 658.32,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "60"
+    },
+    "LRQA INC": {
+      "ultimoMonto": 358469.57,
+      "ultimaFecha": "1/15/2026",
+      "condPago": "30"
+    },
+    "LUCERO DE JESUS SALAS PUENTE": {
+      "ultimoMonto": 3033.45,
+      "ultimaFecha": "4/15/2026",
+      "condPago": ""
+    },
+    "LUIS ALEJANDRO REYNA CONTRERAS": {
+      "ultimoMonto": 117.36,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "21"
+    },
+    "LUIS ALFONSO FONSECA VALDEZ": {
+      "ultimoMonto": 44724.86,
+      "ultimaFecha": "9/27/2023",
+      "condPago": "1"
+    },
+    "LUIS ANTONIO PUENTE ALMAGUER": {
+      "ultimoMonto": 53360.0,
+      "ultimaFecha": "2025-09-01 00:00:00",
+      "condPago": "30"
+    },
+    "LUIS MIGUEL ESCAMILLA FUENTES": {
+      "ultimoMonto": 24244.0,
+      "ultimaFecha": "2025-04-12 00:00:00",
+      "condPago": "15"
+    },
+    "LUNEGA INMOBILIARIA SC": {
+      "ultimoMonto": 26133.96,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": "1"
+    },
+    "MA. MAGDALENA MENDOZA MARTINEZ": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "MAGDA HINOJOSA CAMACHO": {
+      "ultimoMonto": 44404.6,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "1"
+    },
+    "MANTENIMIENTO INTEGRAL FINSA": {
+      "ultimoMonto": 14816.68,
+      "ultimaFecha": "9/15/2022",
+      "condPago": ""
+    },
+    "MAQUINADOS Y SERVICIOS INDUSTRIALES LUMA": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "MARCADORES ACCESORIOS REPUESTOS VITALES": {
+      "ultimoMonto": 870.0,
+      "ultimaFecha": "2024-09-08 00:00:00",
+      "condPago": "60"
+    },
+    "MARCELA GONZALEZ SANCHEZ": {
+      "ultimoMonto": 41613.33,
+      "ultimaFecha": "1/30/2026",
+      "condPago": "1"
+    },
+    "MARIA ANGELICA CEPEDA HERNANDEZ": {
+      "ultimoMonto": 65807.06,
+      "ultimaFecha": "2021-06-05 00:00:00",
+      "condPago": "C"
+    },
+    "MARIA CAROLINA HERNANDEZ JUAREZ": {
+      "ultimoMonto": 40000.0,
+      "ultimaFecha": "2022-11-11 00:00:00",
+      "condPago": "30"
+    },
+    "MARIA DE LOS DOLORES VILLARREAL GUZMAN": {
+      "ultimoMonto": 26216.57,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "1"
+    },
+    "MARIA DE LOURDES DE LA PEÑA GIACOMAN": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "7"
+    },
+    "MARIA DEL ROSARIO RODRIGUEZ VALERIO": {
+      "ultimoMonto": 7233.77,
+      "ultimaFecha": "3/31/2026",
+      "condPago": ""
+    },
+    "MARIA ELENA FERNANDEZ VILLANUEVA": {
+      "ultimoMonto": 27.01,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "MARÍA ELENA MARTÍNEZ REYES": {
+      "ultimoMonto": 125000.0,
+      "ultimaFecha": "12/20/2021",
+      "condPago": "1"
+    },
+    "MARIA GUADALUPE SIFUENTES SANCHEZ": {
+      "ultimoMonto": 5.7,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "30"
+    },
+    "MARIA HORTENSIA TREJO ACOSTA": {
+      "ultimoMonto": 156600.0,
+      "ultimaFecha": "7/25/2025",
+      "condPago": "45"
+    },
+    "MARIA INEZ HERNANDEZ JAQUEZ": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "7"
+    },
+    "MARIA SARAI TORRES ARENAS": {
+      "ultimoMonto": 22.11,
+      "ultimaFecha": "1/31/2024",
+      "condPago": "90"
+    },
+    "MARIEL GUADALUPE CASTILLO GARCIA": {
+      "ultimoMonto": 2578.72,
+      "ultimaFecha": "8/20/2025",
+      "condPago": ""
+    },
+    "MARIELA ROQUE HERNANDEZ": {
+      "ultimoMonto": 40266.34,
+      "ultimaFecha": "2025-12-05 00:00:00",
+      "condPago": "C"
+    },
+    "MARIO ANTONIO TOBIAS DIAZ": {
+      "ultimoMonto": 9512.0,
+      "ultimaFecha": "1/21/2026",
+      "condPago": "60"
+    },
+    "MARTHA ALICIA LLANAS CAMPA": {
+      "ultimoMonto": 100000.0,
+      "ultimaFecha": "2/28/2022",
+      "condPago": "1"
+    },
+    "MARTINA PERALES RUVALCABA": {
+      "ultimoMonto": 41100.0,
+      "ultimaFecha": "2022-01-04 00:00:00",
+      "condPago": "C"
+    },
+    "MARTINEZ COINDREAU Y ASOCIADOS S.C": {
+      "ultimoMonto": 104400.0,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": "30"
+    },
+    "MASTER FORMAS, S.A. DE C.V.": {
+      "ultimoMonto": 5568.0,
+      "ultimaFecha": "3/19/2026",
+      "condPago": "60"
+    },
+    "MASTER LOYALTY GROUP": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "MATRS": {
+      "ultimoMonto": 21297.6,
+      "ultimaFecha": "2022-05-07 00:00:00",
+      "condPago": "C"
+    },
+    "MAYOREO DE PLUMAS S.A. DE C.V.": {
+      "ultimoMonto": 20112.89,
+      "ultimaFecha": "2025-07-10 00:00:00",
+      "condPago": "60"
+    },
+    "MCI SALES AND SERVICES INC": {
+      "ultimoMonto": 511.01,
+      "ultimaFecha": "12/30/2022",
+      "condPago": "60"
+    },
+    "MEC ESPEJOS RETROVISORES SA DE CV": {
+      "ultimoMonto": 49736.95,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "45"
+    },
+    "MEDIX DEL NORTE S.A. DE C.V": {
+      "ultimoMonto": 2139.93,
+      "ultimaFecha": "2022-05-07 00:00:00",
+      "condPago": "60"
+    },
+    "MEKKAPARTS SA DE CV": {
+      "ultimoMonto": 15307.36,
+      "ultimaFecha": "2025-04-12 00:00:00",
+      "condPago": "30"
+    },
+    "MENA SALAZAR INMOBILIARIOS SA DE CV": {
+      "ultimoMonto": 275.7,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "30"
+    },
+    "MENSAJERIA SPLINTER S DE RL DE CV": {
+      "ultimoMonto": 333.01,
+      "ultimaFecha": "4/30/2025",
+      "condPago": "30"
+    },
+    "MEPAR INMOBILIARIA": {
+      "ultimoMonto": 6284.22,
+      "ultimaFecha": "1/30/2026",
+      "condPago": ""
+    },
+    "MER.K SERVICIOS S.A DE C.V.": {
+      "ultimoMonto": 505218.66,
+      "ultimaFecha": "2024-06-12 00:00:00",
+      "condPago": "60"
+    },
+    "MERCADOTECNIA DIGITAL APLICADA DEL PACIF": {
+      "ultimoMonto": 1747.94,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": ""
+    },
+    "MICROSISTEMAS Y ACCESORIOS DE COMPUTACIO": {
+      "ultimoMonto": 67535.2,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "MILLAN & VERASTEGUI ABOGADOS": {
+      "ultimoMonto": 2000000.0,
+      "ultimaFecha": "3/31/2026",
+      "condPago": "C"
+    },
+    "MIRIAM ESTHELA TREVIÑO TORRES": {
+      "ultimoMonto": 1637.39,
+      "ultimaFecha": "1/21/2026",
+      "condPago": ""
+    },
+    "MJ COLD AIRE ACONDICIONADO": {
+      "ultimoMonto": 100409.6,
+      "ultimaFecha": "2026-06-02 00:00:00",
+      "condPago": "30"
+    },
+    "MORENO DIESEL SA DE CV": {
+      "ultimoMonto": 52432.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "90"
+    },
+    "MP SOPORTES Y SERVICIOS AMBIENTALES S.A": {
+      "ultimoMonto": 30227.86,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "30"
+    },
+    "MULTILLANTAS NIETO, S.A. DE C.V.": {
+      "ultimoMonto": 167267.17,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "45"
+    },
+    "MULTIMET SA DE CV": {
+      "ultimoMonto": 13456.0,
+      "ultimaFecha": "2026-05-03 00:00:00",
+      "condPago": "7"
+    },
+    "MULTISERVICIOS LA ESPERANZA S.A. DE C.V.": {
+      "ultimoMonto": 187020.36,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "7"
+    },
+    "MULTISERVICIOS VILLEGAS S.C.": {
+      "ultimoMonto": 105.31,
+      "ultimaFecha": "7/31/2024",
+      "condPago": ""
+    },
+    "MUNICIPIO DE MATLAPA SAN LUIS POTOSI": {
+      "ultimoMonto": 58655.0,
+      "ultimaFecha": "2026-06-04 00:00:00",
+      "condPago": ""
+    },
+    "MUNICIPIO DE SALTILLO COAHUILA": {
+      "ultimoMonto": 56195.84,
+      "ultimaFecha": "1/23/2025",
+      "condPago": "7"
+    },
+    "MUNICIPIO DE SAN NICOLAS DE LOS GARZA N.": {
+      "ultimoMonto": 92100.9,
+      "ultimaFecha": "1/28/2025",
+      "condPago": "C"
+    },
+    "MUNICIPIO DE TAMAZUNCHALE S.L.P": {
+      "ultimoMonto": 3519.3,
+      "ultimaFecha": "2026-06-04 00:00:00",
+      "condPago": "7"
+    },
+    "MUNICIPIO DE TLALNEPANTLA DE BAZ": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "C"
+    },
+    "MUSEO DE LINARESA.C.": {
+      "ultimoMonto": 30000.0,
+      "ultimaFecha": "2/24/2026",
+      "condPago": "C"
+    },
+    "NACIONAL DE ALARMAS SA CV": {
+      "ultimoMonto": 41.11,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "60"
+    },
+    "NANCY EDITH LOPEZ CAZARES": {
+      "ultimoMonto": 21228.75,
+      "ultimaFecha": "8/22/2025",
+      "condPago": "30"
+    },
+    "NATGAS QUERETARO SAPI DE CV": {
+      "ultimoMonto": 211070.28,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "C"
+    },
+    "NEREIDA ESTEFANIA DAVILA TREVIÑO": {
+      "ultimoMonto": 6999.98,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "1"
+    },
+    "NESTOR ISRAEL LOPEZ": {
+      "ultimoMonto": 2450.0,
+      "ultimaFecha": "8/27/2024",
+      "condPago": "30"
+    },
+    "NEW WORLD FUEL SA DE CV": {
+      "ultimoMonto": 1385414.91,
+      "ultimaFecha": "3/31/2026",
+      "condPago": "15"
+    },
+    "NEXTA TECHNOLOGY SERVICES SA DE CV": {
+      "ultimoMonto": 540.18,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "NG-CH4 SA DE CV": {
+      "ultimoMonto": 169469.03,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "NOE ARRIAGA MARTINEZ": {
+      "ultimoMonto": 82867.15,
+      "ultimaFecha": "3/26/2026",
+      "condPago": "C"
+    },
+    "NORTE SUR REPUESTOS SA DE CV": {
+      "ultimoMonto": 885.54,
+      "ultimaFecha": "8/29/2025",
+      "condPago": "30"
+    },
+    "NOTARIA PUBLICA 149 DE MONTERREY S C": {
+      "ultimoMonto": 928.0,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": ""
+    },
+    "OCSI SOLUCIONES SA DE CV": {
+      "ultimoMonto": 58731.53,
+      "ultimaFecha": "4/14/2026",
+      "condPago": "C"
+    },
+    "OFFICE DEPOT DE MEXICO, S.A. DE C.V.": {
+      "ultimoMonto": 80278.53,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "OIL PRICE INFORMATION SERVICE, LLC": {
+      "ultimoMonto": 1051.32,
+      "ultimaFecha": "8/28/2025",
+      "condPago": "1"
+    },
+    "OPERADORA DE PARQUES ESTRELLA, S.A. C.V.": {
+      "ultimoMonto": 624000.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "OPERBES": {
+      "ultimoMonto": 591821.3,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "ORGANIZACION EMOTION INTERNATIONAL": {
+      "ultimoMonto": 56716.57,
+      "ultimaFecha": "8/19/2024",
+      "condPago": "30"
+    },
+    "OSCAR ELIZONDO ALONSO": {
+      "ultimoMonto": 1.49,
+      "ultimaFecha": "2023-07-06 00:00:00",
+      "condPago": "60"
+    },
+    "OSCAR JESUS CANTU VILLARREAL": {
+      "ultimoMonto": 381333.6,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "1"
+    },
+    "PABLO HIGINIO GARCIA ZAMARRON": {
+      "ultimoMonto": 382045.33,
+      "ultimaFecha": "1/16/2026",
+      "condPago": "60"
+    },
+    "PARQUE FUNERAL VALLE DE LAS FLORES SA D": {
+      "ultimoMonto": 3422.0,
+      "ultimaFecha": "2/26/2026",
+      "condPago": "7"
+    },
+    "PASCUAL CERDA PEREZ": {
+      "ultimoMonto": 50460.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "PASE, SERVICIOS ELECTRONICOS, S.A DE C.V": {
+      "ultimoMonto": 1236026.0,
+      "ultimaFecha": "4/14/2026",
+      "condPago": "7"
+    },
+    "PATRICIA AVEYTIA TUDA": {
+      "ultimoMonto": 257176.87,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "PATRICIA JANETH LOPEZ ROMERO": {
+      "ultimoMonto": 21.6,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "C"
+    },
+    "PAULINA LEON GUADARRAMA": {
+      "ultimoMonto": 11600.0,
+      "ultimaFecha": "2026-05-02 00:00:00",
+      "condPago": "C"
+    },
+    "PEDRO GURROLA GARCÍA": {
+      "ultimoMonto": 13340.0,
+      "ultimaFecha": "2021-03-09 00:00:00",
+      "condPago": "C"
+    },
+    "PEDRO SALDAÑA MARTINEZ": {
+      "ultimoMonto": 2726.0,
+      "ultimaFecha": "8/25/2025",
+      "condPago": "30"
+    },
+    "PEDRO SERGIO MORENO": {
+      "ultimoMonto": 29832.78,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "C"
+    },
+    "PEGASO PCS SA DE CV": {
+      "ultimoMonto": 419866.14,
+      "ultimaFecha": "3/26/2026",
+      "condPago": "60"
+    },
+    "PETROGAS CORPORATION": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "PILAR CAROLINA CERVANTES FUNATSU": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "PLAZA BERNARDO REYES": {
+      "ultimoMonto": 398157.94,
+      "ultimaFecha": "3/30/2026",
+      "condPago": "60"
+    },
+    "PRICEWATERHOUSECOOPERS, S.C.": {
+      "ultimoMonto": 11833.62,
+      "ultimaFecha": "10/31/2024",
+      "condPago": "30"
+    },
+    "PRIMERO SEGUROS SA DE CV": {
+      "ultimoMonto": 393000.0,
+      "ultimaFecha": "2025-11-11 00:00:00",
+      "condPago": "7"
+    },
+    "PROACTIVA MEDIO AMBIENTE SETASA SA DE CV": {
+      "ultimoMonto": 4798.28,
+      "ultimaFecha": "2024-08-11 00:00:00",
+      "condPago": "30"
+    },
+    "PRODUCTORA DE EVENTOS JM SA DE CV": {
+      "ultimoMonto": 72.49,
+      "ultimaFecha": "1/31/2024",
+      "condPago": "C"
+    },
+    "PROMOTORA AMBIENTAL DE LA LAGUNA SA DE C": {
+      "ultimoMonto": 27984.98,
+      "ultimaFecha": "4/14/2026",
+      "condPago": "30"
+    },
+    "PROVEEDORA DE REPUESTOS, SA DE CV": {
+      "ultimoMonto": 2541.28,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "PROYECTOS INDUSTRIALES BRASEL": {
+      "ultimoMonto": 133640.7,
+      "ultimaFecha": "4/25/2025",
+      "condPago": "60"
+    },
+    "PUBLIMAIL SC": {
+      "ultimoMonto": 72.27,
+      "ultimaFecha": "1/31/2024",
+      "condPago": "C"
+    },
+    "PUCOSA SA DE CV": {
+      "ultimoMonto": 100001.28,
+      "ultimaFecha": "6/16/2023",
+      "condPago": "1"
+    },
+    "RADIO TRANSPORTES LOGO, S.A DE C.V": {
+      "ultimoMonto": 378.21,
+      "ultimaFecha": "4/30/2025",
+      "condPago": "1"
+    },
+    "RADIOMOVIL DIPSA, S.A.": {
+      "ultimoMonto": 396666.95,
+      "ultimaFecha": "4/13/2026",
+      "condPago": "60"
+    },
+    "RAK SA DE CV": {
+      "ultimoMonto": 91872.0,
+      "ultimaFecha": "9/29/2023",
+      "condPago": "15"
+    },
+    "RALOY LUBRICANTES, S.A DE C.V": {
+      "ultimoMonto": 79170.56,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "RAMON GUILLERMO URANGA FLORES": {
+      "ultimoMonto": 23200.0,
+      "ultimaFecha": "5/27/2024",
+      "condPago": "1"
+    },
+    "RAMSES ALDANA RAMIREZ": {
+      "ultimoMonto": 18900.0,
+      "ultimaFecha": "12/28/2021",
+      "condPago": "1"
+    },
+    "RAMSES VAZQUEZ DURON": {
+      "ultimoMonto": 31676.26,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "1"
+    },
+    "RAYMUNDO VILLARREAL MIRANDA": {
+      "ultimoMonto": 32130.0,
+      "ultimaFecha": "2/24/2026",
+      "condPago": "30"
+    },
+    "RCG ESPECTACULARES, S. A. DE C. V.": {
+      "ultimoMonto": 80214.0,
+      "ultimaFecha": "9/29/2023",
+      "condPago": "60"
+    },
+    "RECARGAS GRUPO ENERGETICOS SA DE CV": {
+      "ultimoMonto": 25350.79,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "7"
+    },
+    "RECOLECCION ESPECIALIZADA Y SUSTENTO": {
+      "ultimoMonto": 18322.2,
+      "ultimaFecha": "12/15/2025",
+      "condPago": "1"
+    },
+    "RECTIFICADORES MONTERREY, S.A.": {
+      "ultimoMonto": 83915.56,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "60"
+    },
+    "RED DE SERVICIOS FINANCIEROS, S.A. DE C.": {
+      "ultimoMonto": 2103.0,
+      "ultimaFecha": "10/15/2015",
+      "condPago": "7"
+    },
+    "REDES Y ACCESORIOS COMPUTACIONALES SA": {
+      "ultimoMonto": 1164.64,
+      "ultimaFecha": "2025-07-11 00:00:00",
+      "condPago": "60"
+    },
+    "RETARDADORES GOROS LOTU, S.A. DE C.V.": {
+      "ultimoMonto": 20880.0,
+      "ultimaFecha": "9/26/2025",
+      "condPago": "60"
+    },
+    "RICARDO GONZALEZ MARISCAL": {
+      "ultimoMonto": 20000.0,
+      "ultimaFecha": "2026-06-02 00:00:00",
+      "condPago": "30"
+    },
+    "RICARDO MARIO GARZA GARCIA": {
+      "ultimoMonto": 641.48,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "45"
+    },
+    "RIGOBERTO MARTINEZ DOMINGUEZ": {
+      "ultimoMonto": 47328.0,
+      "ultimaFecha": "11/21/2025",
+      "condPago": "30"
+    },
+    "ROBERTO CARLOS PEREZ AGUILLON": {
+      "ultimoMonto": 22.21,
+      "ultimaFecha": "4/30/2025",
+      "condPago": "60"
+    },
+    "RODAMIENTOS Y ACCESORIOS SA DE CV": {
+      "ultimoMonto": 51001.31,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "45"
+    },
+    "RODANDO SEGURO S.A. DE C.V.": {
+      "ultimoMonto": 68632.09,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "30"
+    },
+    "RODATRAK ALLENDE, S.A. DE C.V.": {
+      "ultimoMonto": 55216.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "ROGA PRINTER SA DE CV": {
+      "ultimoMonto": 60552.0,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "RUBEN GARZA ELIZONDO": {
+      "ultimoMonto": 5888.16,
+      "ultimaFecha": "3/31/2026",
+      "condPago": "45"
+    },
+    "RUBÉN ROMÁN HURTADO": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": ""
+    },
+    "SAHUMA CONTROL DE PLAGAS S DE RL DE CV": {
+      "ultimoMonto": 12620.8,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "60"
+    },
+    "SALMA SUSETH HERNANDEZ GARCIA": {
+      "ultimoMonto": 0.0,
+      "ultimaFecha": "",
+      "condPago": "30"
+    },
+    "SALUD DIGNA A.C.": {
+      "ultimoMonto": 41289.7,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "30"
+    },
+    "SAN MEX DEL NORTE SA DE CV": {
+      "ultimoMonto": 2088.0,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "SAUCEDO SANTOS S.C.": {
+      "ultimoMonto": 178.51,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": ""
+    },
+    "SCANIA COMERCIAL,S.A. DE C.V.": {
+      "ultimoMonto": 998572.36,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "7"
+    },
+    "SECRETARIA DE FINANZAS DEL GOBIERNO DEL": {
+      "ultimoMonto": 45248.0,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "60"
+    },
+    "SECRETARIA DE FINANZAS DEL ESTADO DE S.L": {
+      "ultimoMonto": 30614.0,
+      "ultimaFecha": "4/15/2026",
+      "condPago": ""
+    },
+    "SEGUROS BANORTE-GENERALI SA DE.CV GPO FI": {
+      "ultimoMonto": 174772.92,
+      "ultimaFecha": "2/23/2018",
+      "condPago": "60"
+    },
+    "SEGUROS BBVA BANCOMER,SADECV.GPO FINANCI": {
+      "ultimoMonto": 8000.0,
+      "ultimaFecha": "2022-05-07 00:00:00",
+      "condPago": "60"
+    },
+    "SEKURA OPERADORA S.A. DE C.V.": {
+      "ultimoMonto": 105391.79,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "SERGIO FLETES GARIBAY": {
+      "ultimoMonto": 36424.0,
+      "ultimaFecha": "3/13/2026",
+      "condPago": ""
+    },
+    "SERGIO GARZA GOMEZ": {
+      "ultimoMonto": 21802.5,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "1"
+    },
+    "SERGIO JIMENEZ MORALES": {
+      "ultimoMonto": 13999.96,
+      "ultimaFecha": "2026-09-03 00:00:00",
+      "condPago": "1"
+    },
+    "SERGIO JOAQUIN GARCIA ARREDONDO": {
+      "ultimoMonto": 17748.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": ""
+    },
+    "SERVANDO CANTU LOZANO": {
+      "ultimoMonto": 28094.64,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "1"
+    },
+    "SERVI CLIMAS Y CALEFACCIONES MONTERREY S": {
+      "ultimoMonto": 5416.57,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "SERVI QUIM DE MONTERREY, S.A.": {
+      "ultimoMonto": 11.23,
+      "ultimaFecha": "2023-01-03 00:00:00",
+      "condPago": "30"
+    },
+    "SERVICIO ANCIRA GARZA, S.A. DE C.V.": {
+      "ultimoMonto": 25.46,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "C"
+    },
+    "SERVICIO INTEGRAL DE SEGURIDAD SA DE CV": {
+      "ultimoMonto": 75811.81,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "45"
+    },
+    "SERVICIO PANAMERICANO DE PROTECCION, S.": {
+      "ultimoMonto": 34195.39,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "60"
+    },
+    "SERVICIO ROT SA DE CV": {
+      "ultimoMonto": 60.48,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "60"
+    },
+    "SERVICIOS BTF, S.A. DE C.V.": {
+      "ultimoMonto": 15993.42,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": "30"
+    },
+    "SERVICIOS DE AGUA Y DRENAJE MONTERREY": {
+      "ultimoMonto": 2417.0,
+      "ultimaFecha": "4/13/2026",
+      "condPago": "60"
+    },
+    "SERVICIOS GASOLINEROS DE MEXICO SA DE CV": {
+      "ultimoMonto": 1741.46,
+      "ultimaFecha": "2025-03-10 00:00:00",
+      "condPago": "21"
+    },
+    "SERVICIOS HIDRAULICOS RUIZ CORTINEZ SA D": {
+      "ultimoMonto": 26796.0,
+      "ultimaFecha": "3/15/2024",
+      "condPago": "30"
+    },
+    "SERVICIOS INDUSTRIALES ARLEJ": {
+      "ultimoMonto": 25404.0,
+      "ultimaFecha": "2025-08-08 00:00:00",
+      "condPago": "30"
+    },
+    "SERVICIOS JURIDICOS DE PLANEACION GUERRA": {
+      "ultimoMonto": 1024802.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "SERVICIOS MOTOCICLISTAS S.A.": {
+      "ultimoMonto": 1530.0,
+      "ultimaFecha": "1/19/2026",
+      "condPago": "7"
+    },
+    "SERVICIOS MULTIPLES DE TAMAULIPAS": {
+      "ultimoMonto": 33408.0,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "15"
+    },
+    "SERVICIOS SERUMSE RG": {
+      "ultimoMonto": 5916.0,
+      "ultimaFecha": "2023-06-01 00:00:00",
+      "condPago": "30"
+    },
+    "SERVICIOS TERMINAL QUERETARO, S.A. C.V.": {
+      "ultimoMonto": 72873.68,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "4"
+    },
+    "SFERP SC": {
+      "ultimoMonto": 5149.61,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "30"
+    },
+    "SIERRA NORTE TRUCK CENTER": {
+      "ultimoMonto": 258486.3,
+      "ultimaFecha": "2026-01-04 00:00:00",
+      "condPago": "60"
+    },
+    "SIMAS": {
+      "ultimoMonto": 2080.0,
+      "ultimaFecha": "3/17/2026",
+      "condPago": "C"
+    },
+    "SIMON ARRIAGA NIÑO": {
+      "ultimoMonto": 8.46,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "C"
+    },
+    "SINDICATO INDUSTRIAL NACIONAL DE AUTOTRA": {
+      "ultimoMonto": 126400.0,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "7"
+    },
+    "SINERGIA ENFOCADA EN SISTEMAS S.A DE C.V": {
+      "ultimoMonto": 22081.95,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "45"
+    },
+    "SISTEMA MUNICIPAL DE AGUAS Y SANEAMIENT": {
+      "ultimoMonto": 3326.93,
+      "ultimaFecha": "2026-04-02 00:00:00",
+      "condPago": "C"
+    },
+    "SISTEMA MUNICIPAL DE AGUAS Y SANEAMIENTO": {
+      "ultimoMonto": 11501.0,
+      "ultimaFecha": "3/26/2026",
+      "condPago": "C"
+    },
+    "SISTEMAS DE EXCELENCIA YLOGISTICA SADECV": {
+      "ultimoMonto": 87.96,
+      "ultimaFecha": "10/31/2022",
+      "condPago": "30"
+    },
+    "SISTEMAS DE GEOLOCALIZACION DIGITAL SACV": {
+      "ultimoMonto": 2551.7,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "C"
+    },
+    "SISTEMAS INTEGRADOS DE TRANSPORTE Y ENER": {
+      "ultimoMonto": 260000.0,
+      "ultimaFecha": "1/16/2026",
+      "condPago": "15"
+    },
+    "SISTEMAS RIO BRAVO SAPI DE CV": {
+      "ultimoMonto": 14937.48,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "SOFÍA ZAPATA JIMÉNEZ": {
+      "ultimoMonto": 96.22,
+      "ultimaFecha": "1/31/2024",
+      "condPago": "30"
+    },
+    "SOFT CONTROLS INTERNATIONAL SA DE CV": {
+      "ultimoMonto": 21319.36,
+      "ultimaFecha": "3/24/2026",
+      "condPago": "40"
+    },
+    "SOLEMTI S.A. DE C.V.": {
+      "ultimoMonto": 1198.8,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "SPHEROS MEXICO": {
+      "ultimoMonto": 21025.64,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "45"
+    },
+    "SSM PROYECTOS S.A. DE C.V.": {
+      "ultimoMonto": 1044.0,
+      "ultimaFecha": "10/16/2024",
+      "condPago": "30"
+    },
+    "STUART & ASSOCIATES PC": {
+      "ultimoMonto": 2500.0,
+      "ultimaFecha": "1/17/2025",
+      "condPago": "C"
+    },
+    "SUBESTACIONES E ILUMINACION S.A. DE C.V.": {
+      "ultimoMonto": 32512.64,
+      "ultimaFecha": "2024-09-08 00:00:00",
+      "condPago": "30"
+    },
+    "SUPER COLCHONES, S.A DE C.V": {
+      "ultimoMonto": 159036.59,
+      "ultimaFecha": "2026-09-01 00:00:00",
+      "condPago": "30"
+    },
+    "SUPER SERVICIO ZARATE, SA CV": {
+      "ultimoMonto": 35873.85,
+      "ultimaFecha": "7/18/2025",
+      "condPago": "8"
+    },
+    "SUSTENTA DESARROLLOS S.A. DE C.V.": {
+      "ultimoMonto": 234073.61,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "SWON IT SERVICES MEXICO SA DE CV": {
+      "ultimoMonto": 46327.75,
+      "ultimaFecha": "2025-11-12 00:00:00",
+      "condPago": "30"
+    },
+    "TAMBORES ROTORES Y MAZAS S.A. DE C.V.": {
+      "ultimoMonto": 53360.0,
+      "ultimaFecha": "2025-12-09 00:00:00",
+      "condPago": "60"
+    },
+    "TARGA FUELS SA DE CV": {
+      "ultimoMonto": 106.52,
+      "ultimaFecha": "10/31/2022",
+      "condPago": ""
+    },
+    "TECNICENTRO VITALIZADOR LLANTERO": {
+      "ultimoMonto": 17820.0,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "TECSIEN SERVICIOS SA DE CV": {
+      "ultimoMonto": 159024.94,
+      "ultimaFecha": "2026-04-03 00:00:00",
+      "condPago": "1"
+    },
+    "TERA IMPRESIONES APODACA SA DE CV": {
+      "ultimoMonto": 2969.6,
+      "ultimaFecha": "2023-12-10 00:00:00",
+      "condPago": "60"
+    },
+    "TERESA MACIAS MARTINEZ": {
+      "ultimoMonto": 27840.0,
+      "ultimaFecha": "6/20/2025",
+      "condPago": "30"
+    },
+    "TERMINAL CENTRAL DE AUTOBUSES DE CHIHUAH": {
+      "ultimoMonto": 260888.0,
+      "ultimaFecha": "5/31/2024",
+      "condPago": "4"
+    },
+    "TERMINAL CENTRAL DEL NORTE DEL D.F.SA CV": {
+      "ultimoMonto": 31320.0,
+      "ultimaFecha": "2025-09-12 00:00:00",
+      "condPago": "60"
+    },
+    "TERMINAL TERRESTRE POTOSINA,S.A. DE C.": {
+      "ultimoMonto": 498398.31,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "60"
+    },
+    "TESORERIA DE LA FEDERACION": {
+      "ultimoMonto": 157209.0,
+      "ultimaFecha": "3/31/2026",
+      "condPago": "C"
+    },
+    "TEXAS MUTUAL": {
+      "ultimoMonto": 1671.34,
+      "ultimaFecha": "1/23/2025",
+      "condPago": "C"
+    },
+    "TIM FRONTERA TRANSPORTE EMPRESARIAL S DE": {
+      "ultimoMonto": 17226.0,
+      "ultimaFecha": "2026-06-03 00:00:00",
+      "condPago": "30"
+    },
+    "T-MOBILE": {
+      "ultimoMonto": 1326.77,
+      "ultimaFecha": "2/20/2025",
+      "condPago": "C"
+    },
+    "TOMAS PERALES DOMINGUEZ": {
+      "ultimoMonto": 31112.5,
+      "ultimaFecha": "12/13/2024",
+      "condPago": "1"
+    },
+    "TORITO & TORITO S.A DE C.V": {
+      "ultimoMonto": 98.08,
+      "ultimaFecha": "2026-03-02 00:00:00",
+      "condPago": "30"
+    },
+    "TOTAL PLAY TELECOMUNICACIONES SA DE CV": {
+      "ultimoMonto": 128135.89,
+      "ultimaFecha": "3/13/2026",
+      "condPago": "30"
+    },
+    "TPK LOGISTICA": {
+      "ultimoMonto": 177610.85,
+      "ultimaFecha": "3/26/2026",
+      "condPago": "30"
+    },
+    "TRACTOS Y CAJAS OM SA DE CV": {
+      "ultimoMonto": 32074.0,
+      "ultimaFecha": "10/17/2025",
+      "condPago": "30"
+    },
+    "TRANSPORTE GRUPO GONZALEZ GONZALEZ S.A D": {
+      "ultimoMonto": 183697.6,
+      "ultimaFecha": "2/27/2026",
+      "condPago": ""
+    },
+    "TRANSPORTES ESPECIALIZADOS SAN ROBERTO,S": {
+      "ultimoMonto": 144833.59,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "30"
+    },
+    "TRANSPORTES VENCEDOR SA DE CV": {
+      "ultimoMonto": 106883.06,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "1"
+    },
+    "TRES DISTRIBUCIONES, S.A. DE C.V.": {
+      "ultimoMonto": 1540.2,
+      "ultimaFecha": "3/13/2020",
+      "condPago": ""
+    },
+    "TRES R DEL NORTE, S.A. DE C.V.": {
+      "ultimoMonto": 54570.52,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "TURBO PERFORMANCE Y REFACCIONES": {
+      "ultimoMonto": 38280.0,
+      "ultimaFecha": "12/23/2025",
+      "condPago": "30"
+    },
+    "TUZOMEX DE REFACCIONES SA DE CV": {
+      "ultimoMonto": 389.18,
+      "ultimaFecha": "8/25/2025",
+      "condPago": "60"
+    },
+    "TWO BROTHERS DE SALTILLO S DE RL DE CV": {
+      "ultimoMonto": 9061.92,
+      "ultimaFecha": "2025-04-12 00:00:00",
+      "condPago": "30"
+    },
+    "UNITED PARCEL SERVICE DE MEXICO, S.A.C.V": {
+      "ultimoMonto": 1.28,
+      "ultimaFecha": "2023-02-05 00:00:00",
+      "condPago": "15"
+    },
+    "UNIVERSAL GLASS DE MEXICO SA DE CV": {
+      "ultimoMonto": 5800.0,
+      "ultimaFecha": "12/16/2025",
+      "condPago": "30"
+    },
+    "VANTAGE ATTORNEYS, S.C.": {
+      "ultimoMonto": 53193.84,
+      "ultimaFecha": "10/19/2023",
+      "condPago": "30"
+    },
+    "VERÓNICA CASTRO MELÉNDEZ": {
+      "ultimoMonto": 14650.0,
+      "ultimaFecha": "2/27/2026",
+      "condPago": "7"
+    },
+    "VERONICA MONCADA DE LEON.": {
+      "ultimoMonto": 53460.0,
+      "ultimaFecha": "2022-11-11 00:00:00",
+      "condPago": "1"
+    },
+    "VERONICA YOLANDA HERNANDEZ CANTU": {
+      "ultimoMonto": 5163.76,
+      "ultimaFecha": "2024-06-12 00:00:00",
+      "condPago": "30"
+    },
+    "VG MAYOREO DE MONTERREY, S.A DE C.V": {
+      "ultimoMonto": 224750.0,
+      "ultimaFecha": "3/26/2026",
+      "condPago": "30"
+    },
+    "VICTAB GRAPHICS SA DE CV": {
+      "ultimoMonto": 19140.0,
+      "ultimaFecha": "5/21/2021",
+      "condPago": "30"
+    },
+    "VICTOR HUGO DE LA ROSA RODRIGUEZ": {
+      "ultimoMonto": 44755.69,
+      "ultimaFecha": "2026-12-03 00:00:00",
+      "condPago": ""
+    },
+    "VICTOR MANUEL ORTEGA MUÑOZ": {
+      "ultimoMonto": 19000.31,
+      "ultimaFecha": "2025-07-02 00:00:00",
+      "condPago": "1"
+    },
+    "VIDEO TURISMO, SA DE CV": {
+      "ultimoMonto": 86044.95,
+      "ultimaFecha": "3/20/2026",
+      "condPago": "60"
+    },
+    "VILLA TOURS SA DE CV": {
+      "ultimoMonto": 6713.33,
+      "ultimaFecha": "4/15/2026",
+      "condPago": "30"
+    },
+    "VILLARREAL EXPRESS SA DE CV": {
+      "ultimoMonto": 26880.0,
+      "ultimaFecha": "2021-11-06 00:00:00",
+      "condPago": "C"
+    },
+    "VISION CONSERVACION Y MANTENIMIENTO S DE": {
+      "ultimoMonto": 82123.73,
+      "ultimaFecha": "1/16/2026",
+      "condPago": "30"
+    },
+    "VITALIZADORA OTTO´S TIRE S.A DE C.V": {
+      "ultimoMonto": 20000.0,
+      "ultimaFecha": "6/13/2024",
+      "condPago": "60"
+    },
+    "VITOL MARKETING MEXICO S DE RL DE CV": {
+      "ultimoMonto": 0.62,
+      "ultimaFecha": "10/31/2024",
+      "condPago": ""
+    },
+    "VITROCAR, S.A. DE C.V.": {
+      "ultimoMonto": 52036.34,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "60"
+    },
+    "WASTE MANAGEMENT": {
+      "ultimoMonto": 161.9,
+      "ultimaFecha": "3/31/2025",
+      "condPago": "C"
+    },
+    "WOLF&MEDUSSA DEL NORTE": {
+      "ultimoMonto": 50404.25,
+      "ultimaFecha": "2026-09-04 00:00:00",
+      "condPago": "45"
+    },
+    "XPRESSION PUBLICITY SA DE CV": {
+      "ultimoMonto": 30000.0,
+      "ultimaFecha": "3/28/2025",
+      "condPago": "30"
+    },
+    "YAJAIRA VIRIDIANA SANTIAGO MARTINEZ": {
+      "ultimoMonto": 663.47,
+      "ultimaFecha": "2024-05-09 00:00:00",
+      "condPago": ""
+    },
+    "YASUNARI GONZALEZ GOMEZ": {
+      "ultimoMonto": 119182.91,
+      "ultimaFecha": "3/26/2026",
+      "condPago": "15"
+    },
+    "ZAR KRUSE S.A.DE C.V.": {
+      "ultimoMonto": 30693.6,
+      "ultimaFecha": "2026-10-04 00:00:00",
+      "condPago": "30"
+    },
+    "ZION CIBERSEGURIDAD SA DE CV": {
+      "ultimoMonto": 148400.58,
+      "ultimaFecha": "2025-07-11 00:00:00",
+      "condPago": "1"
+    },
+    "ZURICH COMPAÑIA DE SEGUROS, S.A. DE C.V.": {
+      "ultimoMonto": 2197658.01,
+      "ultimaFecha": "2024-06-12 00:00:00",
+      "condPago": "60"
+    }
+  }
+}

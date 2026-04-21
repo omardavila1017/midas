@@ -55,6 +55,23 @@ function toStr(v: unknown): string {
   return String(v).trim();
 }
 
+/**
+ * Normaliza el campo `cia` de la respuesta JDE.
+ *
+ * El API a veces devuelve solo el código ("00011") y a veces el código
+ * concatenado con el nombre de la compañía ("00011 - SERVICIO INDUSTRIAL
+ * REGIOMONTANO"). Para poder agrupar/filtrar registros por compañía, aquí
+ * extraemos siempre el código puro (primeros caracteres antes de espacio
+ * o guión) y hacemos pad a 5 dígitos si es numérico.
+ */
+function normalizeCia(v: unknown): string {
+  const raw = toStr(v);
+  if (!raw) return '';
+  const head = raw.split(/[\s-]/)[0].trim();
+  if (/^\d+$/.test(head)) return head.padStart(5, '0');
+  return head;
+}
+
 /** Desenvuelve respuestas tipo { data: [...] } o { result: [...] } o arreglo directo. */
 function unwrapList(raw: unknown): RawRecord[] {
   if (Array.isArray(raw)) return raw as RawRecord[];
@@ -74,7 +91,7 @@ function unwrapList(raw: unknown): RawRecord[] {
 
 function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
   return {
-    cia:                     toStr(pick(raw, ['cia', 'compania', 'company'])),
+    cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company'])),
     noProveedor:             toStr(pick(raw, ['noProveedor', 'no_prov', 'no_proveedor', 'proveedor'])),
     nombre:                  toStr(pick(raw, ['nombre', 'nombreProveedor', 'razonSocial'])),
     noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura'])),

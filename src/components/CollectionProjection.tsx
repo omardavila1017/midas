@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Client, CashFlowAssumptions, Frequency, CollectionEvent, ConfirmedPayment, eventKey } from '../domain/types';
 import { projectYear } from '../domain/collectionEngine';
 import { extractPaymentEvents, PaymentEvent } from '../domain/netCashFlowEngine';
+import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement } from '../services/jde';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, Check, Download, Landmark } from 'lucide-react';
+import { Search, Settings2, ChevronDown, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency } from '../formatters';
@@ -288,6 +289,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           onConfirm={onConfirm}
           onUnconfirm={onUnconfirm}
           payments={paymentEvents}
+          bankStatements={bankStatements}
         />
       )}
       {view === 'month' && <MonthView events={events} total={total} />}
@@ -310,7 +312,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 //   Blue   = projected (future, not yet confirmed)
 //   Amber  = past-due (date already passed, not confirmed = didn't pay yet)
 // ---------------------------------------------------------------------------
-function CalendarView({ events, clients, year, month, onMonthChange, confirmedPayments, onConfirm, onUnconfirm, payments }: {
+function CalendarView({ events, clients, year, month, onMonthChange, confirmedPayments, onConfirm, onUnconfirm, payments, bankStatements = [] }: {
   events: CollectionEvent[];
   clients: Client[];
   year: number;
@@ -320,8 +322,10 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   onConfirm: (p: ConfirmedPayment) => void;
   onUnconfirm: (key: string) => void;
   payments: PaymentEvent[];
+  bankStatements?: BankAccountStatement[];
 }) {
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [showReconciliation, setShowReconciliation] = useState(true);
 
   useEffect(() => {
     setSelectedDay(null);
@@ -330,6 +334,15 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   const byId = new Map(clients.map(c => [c.id, c]));
   const confirmedSet = useMemo(() => new Set(confirmedPayments.map(p => p.key)), [confirmedPayments]);
   const todayISO = new Date().toISOString().slice(0, 10);
+
+  // ── Bank Reconciliation ──
+  const { matches: reconMatches, summary: reconSummary } = useMemo(
+    () => bankStatements.length > 0
+      ? reconcileCollections(events, clients, bankStatements, year, month)
+      : { matches: [] as ReconciliationMatch[], summary: null as ReconciliationSummary | null },
+    [events, clients, bankStatements, year, month],
+  );
+  const reconMap = useMemo(() => buildReconciliationMap(reconMatches), [reconMatches]);
 
   const monthEventsList = useMemo(() => {
     return events.filter(e => {
@@ -421,6 +434,8 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   const handleExport = () => {
     const rows = monthEventsList.map(e => {
       const c = byId.get(e.clientId);
+      const key = eventKey(e);
+      const recon = reconMap.get(key);
       return {
         Cliente: c?.name ?? e.clientId,
         'Fecha Cobro': e.realDate,
@@ -428,7 +443,12 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
         Monto: e.amount,
         'Días Lag': e.lagDays,
         'Regla Pago': c?.paymentDayRaw ?? '',
-        Confirmado: confirmedSet.has(eventKey(e)) ? 'Sí' : 'No',
+        Confirmado: confirmedSet.has(key) ? 'Sí' : 'No',
+        'Estado Banco': recon?.status === 'matched' ? 'Cruzado' : recon?.status === 'likely' ? 'Probable' : 'Sin cruzar',
+        'Monto Banco': recon?.actualAmount ?? '',
+        'Fecha Banco': recon?.actualDate ?? '',
+        'Ref Bancaria': recon?.bankReference ?? '',
+        'Confianza': recon?.confidence ? `${(recon.confidence * 100).toFixed(0)}%` : '',
       };
     });
     downloadFile(toCSV(rows), `cobranza-${year}-${String(month + 1).padStart(2, '0')}.csv`);
@@ -480,6 +500,104 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
         </div>
       </div>
 
+      {/* ── Reconciliation Panel ─────────────────────── */}
+      {bankStatements.length > 0 && reconSummary && (
+        <div className="bg-white border border-[var(--primary)]/20 rounded-xl overflow-hidden animate-card-in stagger-4">
+          <button
+            onClick={() => setShowReconciliation(!showReconciliation)}
+            className="w-full flex items-center justify-between px-5 py-3 hover:bg-[var(--gray-50)]/50 transition-colors"
+          >
+            <div className="flex items-center gap-2.5">
+              <ArrowRightLeft className="w-4 h-4 text-[var(--primary)]" />
+              <span className="text-[13px] font-semibold text-[var(--gray-950)]">Reconciliación Bancaria</span>
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--primary-muted)] text-[var(--primary)] font-medium">
+                {(reconSummary.matchRate * 100).toFixed(0)}% cruzado
+              </span>
+            </div>
+            <ChevronDown className={`w-4 h-4 text-[var(--gray-400)] transition-transform ${showReconciliation ? 'rotate-180' : ''}`} />
+          </button>
+          {showReconciliation && (
+            <div className="px-5 pb-4 pt-1 space-y-3">
+              <div className="grid grid-cols-4 gap-4">
+                <div className="p-3 rounded-lg bg-[var(--success)]/5 border border-[var(--success)]/20">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" />
+                    <span className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cruzados</span>
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(reconSummary.totalMatched)}</div>
+                  <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.matchedCount} pago{reconSummary.matchedCount !== 1 ? 's' : ''} confirmados en banco</div>
+                </div>
+                <div className="p-3 rounded-lg bg-[var(--info)]/5 border border-[var(--info)]/20">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <HelpCircle className="w-3.5 h-3.5 text-[var(--info)]" />
+                    <span className="text-[11px] uppercase tracking-wide text-[var(--info)]">Probables</span>
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-[var(--info)]">{fmtCurrency(reconSummary.totalLikely)}</div>
+                  <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.likelyCount} pago{reconSummary.likelyCount !== 1 ? 's' : ''} con match parcial</div>
+                </div>
+                <div className="p-3 rounded-lg bg-[var(--warning)]/5 border border-[var(--warning)]/20">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <AlertTriangle className="w-3.5 h-3.5 text-[var(--warning)]" />
+                    <span className="text-[11px] uppercase tracking-wide text-[var(--warning)]">Sin cruzar</span>
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-[var(--warning)]">{fmtCurrency(reconSummary.totalUnmatched)}</div>
+                  <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.unmatchedCount} pago{reconSummary.unmatchedCount !== 1 ? 's' : ''} sin movimiento bancario</div>
+                </div>
+                <div className="p-3 rounded-lg bg-[var(--gray-50)] border border-[var(--gray-200)]/60">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Banknote className="w-3.5 h-3.5 text-[var(--gray-400)]" />
+                    <span className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Abonos no asignados</span>
+                  </div>
+                  <div className="text-lg font-semibold tabular-nums text-[var(--gray-700)]">
+                    {fmtCurrency(reconSummary.unmatchedBankAbonos.reduce((s, a) => s + a.importe, 0))}
+                  </div>
+                  <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.unmatchedBankAbonos.length} depósito{reconSummary.unmatchedBankAbonos.length !== 1 ? 's' : ''} sin proyección</div>
+                </div>
+              </div>
+              {/* Progress bar */}
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-3 bg-[var(--gray-50)] rounded-full overflow-hidden flex">
+                  <div
+                    className="h-full bg-[var(--success)] transition-all"
+                    style={{ width: `${reconSummary.matchedCount / Math.max(1, reconSummary.matchedCount + reconSummary.likelyCount + reconSummary.unmatchedCount) * 100}%` }}
+                    title={`Cruzados: ${reconSummary.matchedCount}`}
+                  />
+                  <div
+                    className="h-full bg-[var(--info)] transition-all"
+                    style={{ width: `${reconSummary.likelyCount / Math.max(1, reconSummary.matchedCount + reconSummary.likelyCount + reconSummary.unmatchedCount) * 100}%` }}
+                    title={`Probables: ${reconSummary.likelyCount}`}
+                  />
+                </div>
+                <span className="text-[12px] font-medium tabular-nums text-[var(--gray-400)] w-14 text-right">
+                  {(reconSummary.matchRate * 100).toFixed(0)}%
+                </span>
+              </div>
+              {/* Unmatched bank abonos list (collapsed by default, show first 5) */}
+              {reconSummary.unmatchedBankAbonos.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)] mb-1.5">Depósitos bancarios sin proyección asociada</div>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {reconSummary.unmatchedBankAbonos.slice(0, 8).map((a, i) => (
+                      <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-[var(--gray-50)] text-[12px]">
+                        <span className="text-[var(--gray-400)]">{a.fechaOperacion}</span>
+                        <span className="text-[var(--gray-700)] truncate flex-1">{a.concepto}</span>
+                        <span className="text-[var(--gray-400)]">{a.referencia}</span>
+                        <span className="font-semibold tabular-nums text-[var(--success)]">+{fmtCurrency(a.importe)}</span>
+                      </div>
+                    ))}
+                    {reconSummary.unmatchedBankAbonos.length > 8 && (
+                      <div className="text-[11px] text-[var(--gray-400)] px-3 py-1">
+                        +{reconSummary.unmatchedBankAbonos.length - 8} depósitos más
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Calendar header */}
       <div className="flex items-center justify-between">
         <button onClick={prevMonth} className="p-2 rounded-lg hover:bg-[var(--gray-50)] transition-colors hover-press">
@@ -521,12 +639,18 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             const isSelected = selectedDay === iso;
             const isPast = iso < todayISO;
 
-            // Color logic per day
+            // Color logic per day — now includes reconciliation status
             const dayConfirmed = dayEvents.filter(e => confirmedSet.has(eventKey(e)));
             const dayPending = dayEvents.filter(e => !confirmedSet.has(eventKey(e)));
+            const dayReconciled = dayEvents.filter(e => {
+              const r = reconMap.get(eventKey(e));
+              return r?.status === 'matched' || r?.status === 'likely';
+            });
             const allConfirmed = dayEvents.length > 0 && dayConfirmed.length === dayEvents.length;
+            const allReconciled = dayEvents.length > 0 && !allConfirmed && dayReconciled.length === dayEvents.length;
             const someConfirmed = dayConfirmed.length > 0 && dayPending.length > 0;
-            const hasPastDue = isPast && dayPending.length > 0;
+            const someReconciled = !allConfirmed && !allReconciled && dayReconciled.length > 0;
+            const hasPastDue = isPast && dayPending.length > 0 && dayReconciled.length === 0;
 
             // Pick dominant color for the pill
             let pillBg: string, pillFg: string;
@@ -571,7 +695,9 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                   {dayEvents.length > 0 && (
                     <div className="flex items-center gap-0.5">
                       {allConfirmed && <Check className="w-3 h-3 text-[var(--success)]" />}
-                      {hasPastDue && !allConfirmed && <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)]" />}
+                      {allReconciled && <ArrowRightLeft className="w-3 h-3 text-[var(--success)]" />}
+                      {someReconciled && <ArrowRightLeft className="w-3 h-3 text-[var(--info)]" />}
+                      {hasPastDue && !allConfirmed && !allReconciled && <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)]" />}
                       <span className="text-[10px] text-[var(--gray-400)]">{dayEvents.length}</span>
                     </div>
                   )}
@@ -656,11 +782,18 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
               const key = eventKey(e);
               const isConfirmed = confirmedSet.has(key);
               const isPastDue = !isConfirmed && e.realDate < todayISO;
+              const recon = reconMap.get(key);
+              const isReconciled = recon?.status === 'matched';
+              const isLikely = recon?.status === 'likely';
               const rowBg = isConfirmed
                 ? 'bg-[var(--success)]/10 border border-[var(--success)]/30'
-                : isPastDue
-                  ? 'bg-[var(--warning)]/10 border border-[var(--warning)]/30'
-                  : 'bg-[var(--gray-50)] border border-transparent';
+                : isReconciled
+                  ? 'bg-[var(--success)]/5 border border-[var(--success)]/20'
+                  : isLikely
+                    ? 'bg-[var(--info)]/5 border border-[var(--info)]/20'
+                    : isPastDue
+                      ? 'bg-[var(--warning)]/10 border border-[var(--warning)]/30'
+                      : 'bg-[var(--gray-50)] border border-transparent';
               return (
                 <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-lg ${rowBg} hover:brightness-95 transition-all`}>
                   {/* Confirm / Unconfirm toggle */}
@@ -674,33 +807,69 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                           clientId: e.clientId,
                           realDate: e.realDate,
                           invoiceDate: e.invoiceDate,
-                          amount: e.amount,
+                          amount: recon?.actualAmount ?? e.amount,
                           confirmedAt: new Date().toISOString(),
                         });
                       }
                     }}
-                    title={isConfirmed ? 'Desmarcar cobro' : 'Marcar como cobrado'}
+                    title={isConfirmed ? 'Desmarcar cobro' : isReconciled ? 'Confirmar (cruzado con banco)' : 'Marcar como cobrado'}
                     className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-all ${
                       isConfirmed
                         ? 'bg-[var(--success)] text-white shadow-sm shadow-[var(--success)]/30'
-                        : isPastDue
-                          ? 'border-2 border-[var(--warning)] text-[var(--warning)] hover:bg-[var(--warning)] hover:text-white'
-                          : 'border-2 border-[var(--gray-200)] text-[var(--gray-200)] hover:border-[var(--primary)] hover:text-[var(--primary)]'
+                        : isReconciled
+                          ? 'bg-[var(--success)]/20 text-[var(--success)] border-2 border-[var(--success)] hover:bg-[var(--success)] hover:text-white'
+                          : isPastDue
+                            ? 'border-2 border-[var(--warning)] text-[var(--warning)] hover:bg-[var(--warning)] hover:text-white'
+                            : 'border-2 border-[var(--gray-200)] text-[var(--gray-200)] hover:border-[var(--primary)] hover:text-[var(--primary)]'
                     }`}
                   >
-                    {isConfirmed ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> : <span className="w-2 h-2" />}
+                    {isConfirmed ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> : isReconciled ? <CheckCircle2 className="w-3.5 h-3.5" /> : <span className="w-2 h-2" />}
                   </button>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-medium text-[var(--gray-950)] truncate">{c?.name ?? e.clientId}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[13px] font-medium text-[var(--gray-950)] truncate">{c?.name ?? e.clientId}</span>
+                      {isReconciled && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--success)]/15 text-[var(--success)] font-semibold uppercase tracking-wide flex-shrink-0">
+                          Cruzado
+                        </span>
+                      )}
+                      {isLikely && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--info)]/15 text-[var(--info)] font-semibold uppercase tracking-wide flex-shrink-0">
+                          Probable
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] text-[var(--gray-400)]">
                       {c?.paymentDayRaw ?? '—'} · {c?.creditDays}d crédito
                       {e.lagDays > 0 && <span className="text-[var(--danger)] font-medium"> (+{e.lagDays}d lag)</span>}
                       {isConfirmed && <span className="text-[var(--success)] font-medium"> · Cobrado ✓</span>}
-                      {isPastDue && <span className="text-[var(--warning)] font-medium"> · Vencido</span>}
+                      {isPastDue && !isReconciled && !isLikely && <span className="text-[var(--warning)] font-medium"> · Vencido</span>}
                     </div>
+                    {/* Bank match detail */}
+                    {(isReconciled || isLikely) && recon?.bankMovement && (
+                      <div className="text-[10px] text-[var(--gray-400)] mt-0.5 flex items-center gap-1.5">
+                        <Landmark className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">{recon.bankMovement.concepto}</span>
+                        <span className="text-[var(--gray-300)]">·</span>
+                        <span>Ref: {recon.bankReference}</span>
+                        {recon.dateDelta !== undefined && recon.dateDelta !== 0 && (
+                          <>
+                            <span className="text-[var(--gray-300)]">·</span>
+                            <span className={recon.dateDelta > 0 ? 'text-[var(--warning)]' : 'text-[var(--success)]'}>
+                              {recon.dateDelta > 0 ? `+${recon.dateDelta}d` : `${recon.dateDelta}d`}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="text-right ml-3">
-                    <div className={`text-[13px] font-semibold tabular-nums ${isConfirmed ? 'text-[var(--success)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(e.amount)}</div>
+                    <div className={`text-[13px] font-semibold tabular-nums ${isConfirmed || isReconciled ? 'text-[var(--success)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(e.amount)}</div>
+                    {recon?.actualAmount && Math.abs((recon.actualAmount ?? 0) - e.amount) > 0.01 && (
+                      <div className={`text-[10px] font-medium tabular-nums ${(recon.amountDelta ?? 0) > 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
+                        Banco: {fmtCurrency(recon.actualAmount)} ({(recon.amountDelta ?? 0) > 0 ? '+' : ''}{fmtCurrency(recon.amountDelta ?? 0)})
+                      </div>
+                    )}
                     <div className="text-[10px] text-[var(--gray-400)]">Fact: {e.invoiceDate.slice(5)}</div>
                   </div>
                 </div>

@@ -761,7 +761,46 @@ function DayDetail({
             {pagoEvents.sort((a, b) => b.amount - a.amount).map((p, i) => (
               <div key={i} className="flex items-center justify-between text-[12px] bg-white px-2.5 py-1.5 rounded border border-[var(--gray-200)]/40">
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium text-[var(--gray-950)] truncate">{p.supplier}</div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-medium text-[var(--gray-950)] truncate">{p.supplier}</span>
+                    <span
+                      className={`text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                        p.kind === 'paid'
+                          ? 'bg-[var(--gray-200)]/60 text-[var(--gray-500)]'
+                          : 'bg-[var(--warning)]/10 text-[var(--warning)]'
+                      }`}
+                    >
+                      {p.kind === 'paid' ? 'Pagado' : 'Pendiente'}
+                    </span>
+                    {p.flexibility === 'inamovible' && (
+                      <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--danger)]/10 text-[var(--danger)]">
+                        Inamovible
+                      </span>
+                    )}
+                    {p.flexibility === 'flexible' && (
+                      <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--success)]/10 text-[var(--success)]">
+                        Flexible
+                      </span>
+                    )}
+                    {p.flexibility === 'revisar' && (
+                      <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--info)]/10 text-[var(--info)]">
+                        Revisar
+                      </span>
+                    )}
+                    {p.criticidad && (
+                      <span
+                        className={`text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                          p.criticidad === 'Alta'
+                            ? 'bg-[var(--danger)]/10 text-[var(--danger)]'
+                            : p.criticidad === 'Media'
+                            ? 'bg-[var(--warning)]/10 text-[var(--warning)]'
+                            : 'bg-[var(--gray-200)]/60 text-[var(--gray-500)]'
+                        }`}
+                      >
+                        DTI {p.criticidad}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-[10px] text-[var(--gray-400)]">{p.classification}</div>
                 </div>
                 <div className="tabular-nums font-medium text-[var(--danger)] ml-2">{fmtCurrency(p.amount)}</div>

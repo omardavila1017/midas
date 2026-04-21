@@ -1038,39 +1038,43 @@ const CXP = ({
       return;
     }
     setLoading(true); setError(null);
-    try {
-      const results = await Promise.allSettled(
-        activeCias.map(cia => fetchAgedBalances({ cia })),
-      );
-      const merged: CXPRecord[] = [];
-      const succeededCias: string[] = [];
-      const failures: { cia: string; reason: string }[] = [];
-      results.forEach((r, i) => {
-        const cia = activeCias[i];
-        if (r.status === 'fulfilled') {
-          // Stamp the requested cia so filtering by company works downstream.
-          const stamped = (r.value as CXPRecord[]).map(rec => ({ ...rec, cia }));
-          merged.push(...stamped);
-          succeededCias.push(cia);
-        } else {
-          const reason = r.reason instanceof JdeApiError
-            ? `${r.reason.status}: ${r.reason.message}`
-            : (r.reason instanceof Error ? r.reason.message : String(r.reason));
-          failures.push({ cia, reason });
-        }
-      });
-      if (succeededCias.length > 0) {
-        onReplaceAll(merged, succeededCias);
+
+    // El server JDE solo acepta UNA compañía por request. Llamadas paralelas
+    // revientan con 500 por contención, y el batch CSV (`"00011,00038"`)
+    // tampoco funciona — Carlos lo sugirió pero no había sido probado.
+    // Único patrón que funciona en prod: secuencial, una a la vez. Cada
+    // request tarda ~60s, así que mergeamos incrementalmente para que el
+    // usuario vea progreso (las compañías van apareciendo conforme cargan
+    // en lugar de quedarse en blanco varios minutos).
+    const failures: { cia: string; reason: string }[] = [];
+    let succeededCount = 0;
+
+    for (const cia of activeCias) {
+      try {
+        const data = await fetchAgedBalances({ cia });
+        const stamped = (data as CXPRecord[]).map(r => ({ ...r, cia }));
+        onMergeCia(cia, stamped);
+        succeededCount++;
+      } catch (e) {
+        const reason = e instanceof JdeApiError
+          ? `${e.status}: ${e.message}`
+          : (e instanceof Error ? e.message : String(e));
+        failures.push({ cia, reason });
       }
-      if (failures.length > 0) {
-        const summary = failures.slice(0, 3).map(f => `${f.cia} (${f.reason})`).join('; ');
-        const more = failures.length > 3 ? ` y ${failures.length - 3} más` : '';
-        setError(`Fallaron ${failures.length}/${activeCias.length}: ${summary}${more}`);
-      }
-    } finally {
-      setLoading(false);
     }
-  }, [activeCias, onReplaceAll]);
+
+    setLoading(false);
+
+    if (succeededCount === 0 && failures.length > 0) {
+      const summary = failures.slice(0, 3).map(f => `${f.cia} (${f.reason})`).join('; ');
+      const more = failures.length > 3 ? ` y ${failures.length - 3} más` : '';
+      setError(`Fallaron ${failures.length}/${activeCias.length}: ${summary}${more}`);
+    } else if (failures.length > 0) {
+      const ciasStr = failures.slice(0, 3).map(f => f.cia).join(', ');
+      const more = failures.length > 3 ? ` y ${failures.length - 3} más` : '';
+      setError(`Algunas compañías no cargaron: ${ciasStr}${more}. Las demás ya están disponibles.`);
+    }
+  }, [activeCias, onMergeCia]);
 
   // When the user switches company, allow auto-fetch to retry this cia
   // (the attempt-guard is only to prevent infinite retries within one selection).
