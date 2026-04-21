@@ -155,34 +155,54 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       </div>
 
       {/* ── Bank real data strip ─────────────────────────── */}
-      {bankStatements.length > 0 && (
-        <div className="bg-white border border-[var(--primary)]/20 rounded-xl p-4 flex items-end gap-8 animate-card-in stagger-1">
-          <div className="flex items-center gap-2">
-            <Landmark className="w-4 h-4 text-[var(--primary)]" />
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo real bancos</div>
-              <div className="text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5">{fmtCurrency(totalBankSaldo)}</div>
+      {bankStatements.length > 0 && (() => {
+        const bankEmpresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
+        return (
+          <div className="bg-white border border-[var(--primary)]/20 rounded-xl animate-card-in stagger-1">
+            <div className="flex items-end gap-8 p-4">
+              <div className="flex items-center gap-2">
+                <Landmark className="w-4 h-4 text-[var(--primary)]" />
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo real bancos</div>
+                  <div className="text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5">{fmtCurrency(totalBankSaldo)}</div>
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobros reales (abonos)</div>
+                <div className="text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5">{fmtCurrency(bankRealAbonos)}</div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Empresas</div>
+                <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5">
+                  {bankEmpresas.length > 0 ? bankEmpresas.length : <span className="text-[var(--gray-300)]">—</span>}
+                </div>
+              </div>
+              <div className="ml-auto text-[11px] text-[var(--gray-400)]">
+                Al {bankStatements[0]?.fechaEstadoCuenta} · {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''} · SWIFT
+              </div>
             </div>
+            {bankEmpresas.length > 0 && (
+              <div className="px-4 py-3 border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)] rounded-b-xl">
+                <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)] flex-shrink-0">
+                    Activas
+                  </span>
+                  <div className="flex items-center gap-1.5 flex-nowrap">
+                    {bankEmpresas.map(cia => (
+                      <span
+                        key={cia}
+                        className="inline-flex flex-shrink-0 px-2 py-0.5 rounded-md bg-white border border-[var(--gray-200)] text-[11px] font-medium text-[var(--gray-500)] whitespace-nowrap"
+                      >
+                        {ciaNameMap.get(cia) ?? `Cia ${cia}`}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-          <div>
-            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobros reales (abonos)</div>
-            <div className="text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5">{fmtCurrency(bankRealAbonos)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Empresas</div>
-            <div className="flex items-center gap-1 mt-1">
-              {Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean))).map(cia => (
-                <span key={cia} className="px-2 py-0.5 rounded-full bg-[var(--gray-50)] text-[10px] font-medium text-[var(--gray-500)]">
-                  {ciaNameMap.get(cia) ?? `Cia ${cia}`}
-                </span>
-              ))}
-            </div>
-          </div>
-          <div className="ml-auto text-[11px] text-[var(--gray-400)]">
-            Al {bankStatements[0]?.fechaEstadoCuenta} · {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''} · SWIFT
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {showSettings && (
         <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex gap-6 items-end">
