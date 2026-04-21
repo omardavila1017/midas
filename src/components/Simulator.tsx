@@ -2,7 +2,14 @@ import { useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
+  ComposedChart,
+  Legend,
+  Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,6 +22,9 @@ import {
   ChevronRight,
   Columns2,
   FlaskConical,
+  Minus,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react';
 import {
   BASE_SCENARIO_ID,
@@ -58,6 +68,13 @@ const KPI_CONFIG = [
   { key: 'cajaMinima', label: 'Caja Mínima', color: 'text-[var(--chart-4)]' },
   { key: 'cobranza12m', label: 'Cobranza', color: 'text-[var(--primary)]' },
   { key: 'pagosProveedores12m', label: 'Pagos Proveedores', color: 'text-[var(--warning)]' },
+] as const;
+
+const DELTA_KPIS = [
+  { key: 'flujoNeto12m', label: 'Flujo Neto 12m', betterIs: 'higher' as const },
+  { key: 'cajaFinal', label: 'Caja Final', betterIs: 'higher' as const },
+  { key: 'ingresos12m', label: 'Ingresos 12m', betterIs: 'higher' as const },
+  { key: 'egresos12m', label: 'Egresos 12m', betterIs: 'lower' as const },
 ] as const;
 
 const VIRTUAL_BASE_PROPOSAL: Proposal = {
@@ -124,12 +141,22 @@ export default function Simulator({
   const assignedSimulationIds = new Set(activeScenario?.simulationIds ?? []);
   const chartData = useMemo(() => {
     if (!activeEvaluation || !baseEvaluation) return [];
-    return activeEvaluation.months.map((month, index) => ({
-      month: month.label,
-      base: baseEvaluation.metrics.cajaFinal[index] ?? 0,
-      escenario: activeEvaluation.metrics.cajaFinal[index] ?? 0,
-      diff: (activeEvaluation.metrics.cajaFinal[index] ?? 0) - (baseEvaluation.metrics.cajaFinal[index] ?? 0),
-    }));
+    return activeEvaluation.months.map((month, index) => {
+      const base = baseEvaluation.metrics.cajaFinal[index] ?? 0;
+      const escenario = activeEvaluation.metrics.cajaFinal[index] ?? 0;
+      const diff = escenario - base;
+      const lower = Math.min(base, escenario);
+      const absDiff = Math.abs(diff);
+      return {
+        month: month.label,
+        base,
+        escenario,
+        diff,
+        lower,
+        gainBand: diff > 0 ? absDiff : 0,
+        lossBand: diff < 0 ? absDiff : 0,
+      };
+    });
   }, [activeEvaluation, baseEvaluation]);
 
   const metricRows = useMemo(() => {
@@ -339,29 +366,172 @@ export default function Simulator({
         <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Caja base vs escenario</h2>
+              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Línea de tiempo · Base vs Escenario</h2>
               <p className="text-[12px] text-[var(--gray-400)]">
-                Cada cambio en propuestas y celdas recalcula el flujo completo en vista {granularity === 'monthly' ? 'mensual' : granularity === 'weekly' ? 'semanal' : 'diaria'}.
+                La banda coloreada muestra la diferencia entre el {BASE_SCENARIO_NAME} y <span className="font-medium text-[var(--gray-500)]">{activeScenario.name}</span> en vista {granularity === 'monthly' ? 'mensual' : granularity === 'weekly' ? 'semanal' : 'diaria'}.
               </p>
             </div>
             <div className="rounded-full bg-[var(--gray-50)] px-3 py-1 text-[12px] text-[var(--gray-500)]">
               {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.simulationIds.length} propuestas activas`}
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={chartData}>
-              <defs />
+
+          {!isBaseScenario(activeScenario) && (
+            <div className="mb-5 grid grid-cols-4 gap-3">
+              {DELTA_KPIS.map((kpi) => (
+                <DeltaChip
+                  key={kpi.key}
+                  label={kpi.label}
+                  base={baseEvaluation.kpis[kpi.key]}
+                  scenario={activeEvaluation.kpis[kpi.key]}
+                  betterIs={kpi.betterIs}
+                />
+              ))}
+            </div>
+          )}
+
+          <ResponsiveContainer width="100%" height={340}>
+            <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 0, bottom: 0 }} stackOffset="none">
+              <defs>
+                <linearGradient id="gradGain" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--success)" stopOpacity={0.55} />
+                  <stop offset="100%" stopColor="var(--success)" stopOpacity={0.08} />
+                </linearGradient>
+                <linearGradient id="gradLoss" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--danger)" stopOpacity={0.08} />
+                  <stop offset="100%" stopColor="var(--danger)" stopOpacity={0.55} />
+                </linearGradient>
+              </defs>
               <CartesianGrid stroke="var(--gray-100)" vertical={false} />
-              <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} minTickGap={24} />
-              <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} />
-              <Tooltip
-                formatter={(value: number) => formatCurrency(value)}
-                contentStyle={{ borderRadius: 16, borderColor: 'var(--gray-200)' }}
+              <XAxis
+                dataKey="month"
+                tick={{ fill: 'var(--gray-400)', fontSize: 11 }}
+                tickLine={false}
+                axisLine={{ stroke: 'var(--gray-100)' }}
+                minTickGap={24}
               />
-              <Area type="monotone" dataKey="base" stroke="var(--gray-300)" strokeWidth={1.5} fill="none" name="Base" />
-              <Area type="monotone" dataKey="escenario" stroke="var(--primary)" strokeWidth={1.5} fill="none" name="Escenario" />
-            </AreaChart>
+              <YAxis
+                tick={{ fill: 'var(--gray-400)', fontSize: 11 }}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={(value) => formatCompactNumber(value)}
+                width={72}
+              />
+              <Tooltip
+                content={<TimelineTooltip />}
+                cursor={{ stroke: 'var(--gray-300)', strokeWidth: 1, strokeDasharray: '4 4' }}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 12, paddingTop: 10 }}
+                iconType="circle"
+                iconSize={8}
+                payload={[
+                  { value: 'Base', type: 'circle', color: 'var(--gray-400)', id: 'base' },
+                  { value: 'Escenario', type: 'circle', color: 'var(--primary)', id: 'escenario' },
+                  { value: 'Mejora vs Base', type: 'square', color: 'var(--success)', id: 'gain' },
+                  { value: 'Deterioro vs Base', type: 'square', color: 'var(--danger)', id: 'loss' },
+                ]}
+              />
+              <ReferenceLine y={0} stroke="var(--gray-200)" strokeDasharray="3 3" />
+
+              {/* Invisible baseline the bands stack on top of */}
+              <Area
+                type="monotone"
+                dataKey="lower"
+                stackId="band"
+                stroke="none"
+                fill="transparent"
+                isAnimationActive={false}
+                legendType="none"
+              />
+              {/* Gain band: visible only where scenario > base */}
+              <Area
+                type="monotone"
+                dataKey="gainBand"
+                stackId="band"
+                stroke="none"
+                fill="url(#gradGain)"
+                name="Mejora"
+                isAnimationActive={false}
+                legendType="none"
+              />
+              {/* Loss band: visible only where scenario < base */}
+              <Area
+                type="monotone"
+                dataKey="lossBand"
+                stackId="band"
+                stroke="none"
+                fill="url(#gradLoss)"
+                name="Deterioro"
+                isAnimationActive={false}
+                legendType="none"
+              />
+
+              <Line
+                type="monotone"
+                dataKey="base"
+                stroke="var(--gray-400)"
+                strokeWidth={2}
+                strokeDasharray="5 4"
+                dot={false}
+                activeDot={{ r: 4, fill: 'var(--gray-400)', stroke: 'white', strokeWidth: 2 }}
+                name="Base"
+                legendType="none"
+              />
+              <Line
+                type="monotone"
+                dataKey="escenario"
+                stroke="var(--primary)"
+                strokeWidth={2.5}
+                dot={false}
+                activeDot={{ r: 5, fill: 'var(--primary)', stroke: 'white', strokeWidth: 2 }}
+                name="Escenario"
+                legendType="none"
+              />
+            </ComposedChart>
           </ResponsiveContainer>
+
+          {!isBaseScenario(activeScenario) && (
+            <div className="mt-5 rounded-xl bg-[var(--surface-alt)] p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Diferencia por {granularity === 'monthly' ? 'mes' : granularity === 'weekly' ? 'semana' : 'día'}</h3>
+                  <p className="text-[11px] text-[var(--gray-400)]">Δ Caja final generada por las propuestas aplicadas.</p>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-[var(--gray-500)]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[var(--success)]" /> Mejora
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[var(--danger)]" /> Deterioro
+                  </span>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke="var(--gray-100)" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} minTickGap={24} />
+                  <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} width={72} />
+                  <Tooltip
+                    formatter={(value: number) => formatCurrency(value)}
+                    labelFormatter={(label) => `${label} — Δ vs Base`}
+                    contentStyle={{ borderRadius: 12, borderColor: 'var(--gray-200)', fontSize: 12, boxShadow: '0 8px 25px -5px rgba(0,0,0,0.08)' }}
+                    cursor={{ fill: 'var(--gray-100)', opacity: 0.5 }}
+                  />
+                  <ReferenceLine y={0} stroke="var(--gray-300)" />
+                  <Bar dataKey="diff" name="Δ Caja" radius={[4, 4, 0, 0]}>
+                    {chartData.map((entry, index) => (
+                      <Cell
+                        key={`diff-${index}`}
+                        fill={entry.diff >= 0 ? 'var(--success)' : 'var(--danger)'}
+                        fillOpacity={Math.abs(entry.diff) < 0.01 ? 0.2 : 0.85}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </section>
 
         <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
@@ -536,6 +706,83 @@ export default function Simulator({
           })}
         </div>
       </aside>
+    </div>
+  );
+}
+
+function DeltaChip({
+  label,
+  base,
+  scenario,
+  betterIs,
+}: {
+  label: string;
+  base: number;
+  scenario: number;
+  betterIs: 'higher' | 'lower';
+}) {
+  const delta = scenario - base;
+  const deltaPct = base !== 0 ? (delta / Math.abs(base)) * 100 : 0;
+  const isNeutral = Math.abs(delta) < 0.01;
+  const isImprovement = betterIs === 'higher' ? delta > 0 : delta < 0;
+  const tone = isNeutral ? 'neutral' : isImprovement ? 'good' : 'bad';
+  const classes = {
+    good: { bg: 'bg-[var(--success-muted)]', border: 'border-[var(--success)]/20', text: 'text-[var(--success)]', Icon: TrendingUp },
+    bad: { bg: 'bg-[var(--danger-muted)]', border: 'border-[var(--danger)]/20', text: 'text-[var(--danger)]', Icon: TrendingDown },
+    neutral: { bg: 'bg-[var(--gray-50)]', border: 'border-[var(--gray-200)]/60', text: 'text-[var(--gray-500)]', Icon: Minus },
+  }[tone];
+  const Icon = classes.Icon;
+  const sign = delta > 0 ? '+' : '';
+
+  return (
+    <div className={`rounded-xl border ${classes.border} ${classes.bg} px-3 py-3`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
+        <span className={`flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-sm ${classes.text}`}>
+          <Icon className="w-3.5 h-3.5" />
+        </span>
+      </div>
+      <p className={`mt-2 text-[18px] font-semibold ${classes.text}`}>
+        {isNeutral ? '—' : `${sign}${formatCurrency(delta)}`}
+      </p>
+      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-[var(--gray-400)]">
+        <span>Base {formatCompactNumber(base)}</span>
+        {!isNeutral && (
+          <span className={`font-medium ${classes.text}`}>{sign}{deltaPct.toFixed(1)}%</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TimelineTooltip({ active, payload, label }: {
+  active?: boolean;
+  payload?: Array<{ payload: { base: number; escenario: number; diff: number } }>;
+  label?: string;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const row = payload[0].payload;
+  const diffColor = row.diff > 0 ? 'var(--success)' : row.diff < 0 ? 'var(--danger)' : 'var(--gray-500)';
+  const sign = row.diff > 0 ? '+' : '';
+  return (
+    <div className="rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[12px] shadow-[0_8px_25px_-5px_rgba(0,0,0,0.08)]">
+      <p className="mb-1.5 font-semibold text-[var(--gray-950)]">{label}</p>
+      <div className="grid grid-cols-[auto,1fr] items-center gap-x-3 gap-y-1 font-mono">
+        <span className="inline-flex items-center gap-1.5 text-[var(--gray-500)]">
+          <span className="h-2 w-2 rounded-full bg-[var(--gray-400)]" /> Base
+        </span>
+        <span className="text-right text-[var(--gray-950)]">{formatCurrency(row.base)}</span>
+        <span className="inline-flex items-center gap-1.5 text-[var(--gray-500)]">
+          <span className="h-2 w-2 rounded-full bg-[var(--primary)]" /> Escenario
+        </span>
+        <span className="text-right text-[var(--gray-950)]">{formatCurrency(row.escenario)}</span>
+        <span className="col-span-2 border-t border-[var(--gray-100)] pt-1.5 text-[var(--gray-400)]">
+          <div className="flex items-center justify-between">
+            <span>Diferencia</span>
+            <span className="font-semibold" style={{ color: diffColor }}>{sign}{formatCurrency(row.diff)}</span>
+          </div>
+        </span>
+      </div>
     </div>
   );
 }
