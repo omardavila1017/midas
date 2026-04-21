@@ -169,7 +169,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     [results]
   );
 
-  // Auto-focus input when modal opens
+  // Focus input when modal opens
   useEffect(() => {
     if (open && inputRef.current) {
       inputRef.current.focus();

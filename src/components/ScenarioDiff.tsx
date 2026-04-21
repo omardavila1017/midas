@@ -77,14 +77,14 @@ export default function ScenarioDiff({
   }, [scenarioA, scenarioB]);
 
   const isDarkBg = false;
-  const textColor = isDarkBg ? '#ffffff' : '#000000';
-  const gridColor = isDarkBg ? '#404040' : '#e5e7eb';
+  const textColor = isDarkBg ? 'var(--card)' : 'var(--card-foreground)';
+  const gridColor = isDarkBg ? 'var(--gray-700)' : 'var(--border)';
 
   return (
     <div className="animate-card-in fixed inset-0 z-[400] flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-lg bg-white shadow-lg">
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-blue-50 to-blue-100 px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="sticky top-0 bg-[var(--gray-50)] px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-semibold text-gray-900">Comparativa de Escenarios</h2>
             <p className="text-sm text-gray-600 mt-1">
@@ -187,7 +187,7 @@ export default function ScenarioDiff({
           </section>
 
           {/* Verdict */}
-          <section className="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg border border-blue-200 p-4">
+          <section className="bg-[var(--gray-50)] rounded-lg border border-blue-200 p-4">
             <h3 className="text-sm font-semibold text-gray-900 mb-2 uppercase tracking-wider">
               Veredicto
             </h3>
@@ -225,22 +225,20 @@ export default function ScenarioDiff({
             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart
+                  layout="vertical"
                   data={chartData}
-                  margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                  margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                 >
                   <CartesianGrid
                     strokeDasharray="3 3"
                     stroke={gridColor}
-                    vertical={false}
+                    horizontal={false}
                   />
                   <XAxis
-                    dataKey="name"
-                    angle={-20}
-                    textAnchor="end"
-                    height={100}
+                    type="number"
                     tick={{ fontSize: 12, fill: textColor }}
                   />
-                  <YAxis tick={{ fontSize: 12, fill: textColor }} />
+                  <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 12, fill: textColor }} />
                   <Tooltip
                     formatter={(value: number) => fmtCurrency(value)}
                     contentStyle={{
@@ -255,8 +253,8 @@ export default function ScenarioDiff({
                     wrapperStyle={{ paddingTop: '20px' }}
                     iconType="rect"
                   />
-                  <Bar dataKey={scenarioA.name} fill={hex.primary} radius={[4, 4, 0, 0]} />
-                  <Bar dataKey={scenarioB.name} fill={hex.success} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey={scenarioA.name} fill={hex.primary} radius={[0, 4, 4, 0]} />
+                  <Bar dataKey={scenarioB.name} fill={hex.success} radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

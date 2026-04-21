@@ -60,13 +60,13 @@ const ACTION_ICONS: Record<ActivityAction, React.ComponentType<any>> = {
 
 const ENTITY_COLOR_MAP: Record<ActivityEntity, string> = {
   client: 'var(--primary)',
-  provider: '#a855f7',          // purple
+  provider: 'var(--chart-4)',          // purple
   proposal: 'var(--success)',
   scenario: 'var(--warning)',
-  simulation: '#06b6d4',         // cyan
-  kpi: '#f97316',               // orange
-  cxp: '#ef4444',               // red
-  plan: '#3b82f6',              // blue
+  simulation: 'var(--info)',         // cyan
+  kpi: 'var(--chart-5)',               // orange
+  cxp: 'var(--danger)',               // red
+  plan: 'var(--primary)',              // blue
   payment: 'var(--success)',
 };
 
@@ -116,7 +116,7 @@ function saveToStorage(entries: ActivityEntry[]): void {
     const capped = entries.slice(-MAX_ENTRIES);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(capped));
   } catch {
-    console.error('Failed to save activity feed to localStorage');
+    // Ignore storage quota failures; activity history is non-critical.
   }
 }
 
@@ -512,7 +512,7 @@ function ActivityEntryItem({ entry, onNavigate }: ActivityEntryItemProps) {
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                strokeWidth={2}
+                strokeWidth={1.5}
                 d="M9 5l7 7-7 7"
               />
             </svg>

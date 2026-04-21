@@ -305,7 +305,7 @@ export default function Forecast({
           {directOverrideCount > 0 && (
             <button
               onClick={handleClearScenarioOverrides}
-              className="inline-flex items-center gap-2 rounded-full border border-[#ff9500]/40 bg-[#ff9500]/10 px-3 py-2 text-[12px] font-medium text-[#ff9500]"
+              className="inline-flex items-center gap-2 rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-[12px] font-medium text-[var(--warning)]"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               Restaurar {directOverrideCount}
@@ -321,7 +321,7 @@ export default function Forecast({
             onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
             className={`rounded-xl border px-3 py-2 text-[13px] font-medium transition ${
               isBaseScenario(activeScenario)
-                ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+                ? 'border-[var(--card-foreground)] bg-[var(--card-foreground)] text-white'
                 : 'border-[var(--gray-200)] bg-[var(--surface-alt)] text-[var(--gray-950)]'
             }`}
           >
@@ -374,9 +374,9 @@ export default function Forecast({
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-4 text-[12px] text-[var(--gray-400)]">
-          <LegendDot color="bg-[#d2d2d7]" label="Base" />
+          <LegendDot color="bg-[var(--gray-200)]" label="Base" />
           <LegendDot color="bg-[var(--primary)]" label="Impactada por ajuste" />
-          <LegendDot color="bg-[#ff9500]" label={`Ajuste manual${directOverrideCount > 0 ? ` (${directOverrideCount})` : ''}`} />
+          <LegendDot color="bg-[var(--warning)]" label={`Ajuste manual${directOverrideCount > 0 ? ` (${directOverrideCount})` : ''}`} />
           <span className="inline-flex items-center gap-1.5">
             <MessageSquare className="w-3.5 h-3.5 text-[var(--primary)]" />
             Comentarios{commentCount > 0 ? ` (${commentCount})` : ''}
@@ -406,7 +406,7 @@ export default function Forecast({
       <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[980px] text-[13px]">
-            <thead className="border-b border-[#e8e8ed] bg-[var(--surface-alt)]">
+            <thead className="border-b border-[var(--gray-100)] bg-[var(--surface-alt)]">
               <tr>
                 <th className={`${STICKY_CONCEPT_HEADER} px-4 py-2.5 text-left font-medium text-[var(--gray-400)]`}>Concepto</th>
                 {months.map((month) => (
@@ -531,7 +531,7 @@ export default function Forecast({
               )}
             </tbody>
             {view === 'cashflow' && (
-              <tfoot className="border-t-2 border-[#1d1d1f]/10 bg-[var(--surface-alt)]">
+              <tfoot className="border-t-2 border-[var(--card-foreground)]/10 bg-[var(--surface-alt)]">
                 <tr>
                   <td className={`${STICKY_CONCEPT_CELL} bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--gray-950)]`}>Caja inicial</td>
                   {months.map((month, index) => (
@@ -782,7 +782,7 @@ function EditableCell({
 
   const value = displayValue(cell, layerMode);
   const colorClass = cell.hasManualDelta
-    ? 'bg-[#ff9500]/10 text-[#ff9500]'
+    ? 'bg-[var(--warning)]/10 text-[var(--warning)]'
     : cell.hasSimulationDelta
       ? 'bg-[var(--primary)]/8 text-[var(--primary)]'
       : 'text-[var(--gray-950)]';
@@ -819,13 +819,13 @@ function EditableCell({
             if (event.key === 'Enter') commit();
             if (event.key === 'Escape') setEditing(null);
           }}
-          className="w-full rounded border border-[#0071e3] bg-white px-1 py-0.5 text-right outline-none"
+          className="w-full rounded border border-[var(--primary)] bg-white px-1 py-0.5 text-right outline-none"
         />
       ) : (
         <>
           <span className="inline-flex items-center justify-end gap-1">
             {(cell.hasManualDelta || cell.hasSimulationDelta) && (
-              <span className={`h-1.5 w-1.5 rounded-full ${cell.hasManualDelta ? 'bg-[#ff9500]' : 'bg-[var(--primary)]'}`} />
+              <span className={`h-1.5 w-1.5 rounded-full ${cell.hasManualDelta ? 'bg-[var(--warning)]' : 'bg-[var(--primary)]'}`} />
             )}
             {cell.comment && <MessageSquare className="w-3 h-3 text-[var(--primary)]" />}
             <span>{value === 0 ? '—' : `${layerMode === 'diff' && value > 0 ? '+' : ''}${formatCompactNumber(value)}`}</span>
@@ -924,7 +924,7 @@ function CellPopover({
             onChange={(event) => setCommentDraft(event.target.value)}
             onBlur={() => onSetComment(commentDraft)}
             rows={2}
-            className="w-full resize-none rounded-lg border border-[var(--gray-200)] px-2 py-1.5 text-[12px] outline-none focus:border-[#0071e3]"
+            className="w-full resize-none rounded-lg border border-[var(--gray-200)] px-2 py-1.5 text-[12px] outline-none focus:border-[var(--primary)]"
             placeholder="Nota o explicación..."
           />
         </div>
@@ -964,7 +964,7 @@ function PopoverRow({
 }) {
   const colorClass =
     accent === 'sim' ? 'text-[var(--primary)]' :
-    accent === 'manual' ? 'text-[#ff9500]' :
+    accent === 'manual' ? 'text-[var(--warning)]' :
     accent === 'delta' ? (value >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]') :
     accent === 'final' ? 'text-[var(--gray-950)] font-semibold' :
     'text-[var(--gray-950)]';

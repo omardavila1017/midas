@@ -55,9 +55,9 @@ const KPI_CONFIG = [
   { key: 'egresos12m', label: 'Egresos 12m', color: 'text-[var(--danger)]' },
   { key: 'flujoNeto12m', label: 'Flujo Neto', color: 'text-[var(--success)]' },
   { key: 'cajaFinal', label: 'Caja Final', color: 'text-[var(--gray-950)]' },
-  { key: 'cajaMinima', label: 'Caja Mínima', color: 'text-[#af52de]' },
+  { key: 'cajaMinima', label: 'Caja Mínima', color: 'text-[var(--chart-4)]' },
   { key: 'cobranza12m', label: 'Cobranza', color: 'text-[var(--primary)]' },
-  { key: 'pagosProveedores12m', label: 'Pagos Proveedores', color: 'text-[#ff9500]' },
+  { key: 'pagosProveedores12m', label: 'Pagos Proveedores', color: 'text-[var(--warning)]' },
 ] as const;
 
 const VIRTUAL_BASE_PROPOSAL: Proposal = {
@@ -224,7 +224,7 @@ export default function Simulator({
               onClick={() => onSelectScenario(baseScenario.id)}
               className={`w-full rounded-xl border px-3 py-3 text-left transition ${
                 activeScenario.id === baseScenario.id
-                  ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+                  ? 'border-[var(--card-foreground)] bg-[var(--card-foreground)] text-white'
                   : 'border-[var(--gray-200)]/50 bg-[var(--surface-alt)] hover:bg-white'
               }`}
             >
@@ -269,7 +269,7 @@ export default function Simulator({
                           }}
                           className={`w-full rounded-lg px-3 py-2 text-left transition ${
                             isActive
-                              ? 'bg-[#e8faf0] text-[#248a3d]'
+                              ? 'bg-[var(--success-muted)] text-[var(--success)]'
                               : 'text-[var(--gray-500)] hover:bg-white hover:text-[var(--gray-950)]'
                           }`}
                         >
@@ -350,25 +350,16 @@ export default function Simulator({
           </div>
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={chartData}>
-              <defs>
-                <linearGradient id="sim-base" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--gray-300)" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="var(--gray-300)" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="sim-scenario" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.18} />
-                  <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#e8e8ed" vertical={false} />
+              <defs />
+              <CartesianGrid stroke="var(--gray-100)" vertical={false} />
               <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} minTickGap={24} />
               <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} />
               <Tooltip
                 formatter={(value: number) => formatCurrency(value)}
                 contentStyle={{ borderRadius: 16, borderColor: 'var(--gray-200)' }}
               />
-              <Area type="monotone" dataKey="base" stroke="var(--gray-300)" strokeWidth={2} fill="url(#sim-base)" name="Base" />
-              <Area type="monotone" dataKey="escenario" stroke="var(--primary)" strokeWidth={2.5} fill="url(#sim-scenario)" name="Escenario" />
+              <Area type="monotone" dataKey="base" stroke="var(--gray-300)" strokeWidth={1.5} fill="none" name="Base" />
+              <Area type="monotone" dataKey="escenario" stroke="var(--primary)" strokeWidth={1.5} fill="none" name="Escenario" />
             </AreaChart>
           </ResponsiveContainer>
         </section>
@@ -462,7 +453,7 @@ export default function Simulator({
                 </thead>
                 <tbody>
                   {KPI_CONFIG.map((kpi) => (
-                    <tr key={kpi.key} className="border-b border-[#f5f5f7]">
+                    <tr key={kpi.key} className="border-b border-[var(--gray-50)]">
                       <td className="px-4 py-3 font-medium text-[var(--gray-950)]">{kpi.label}</td>
                       <td className="px-4 py-3 text-right font-mono text-[var(--gray-950)]">
                         {formatCurrency(activeEvaluation.kpis[kpi.key])}
@@ -566,7 +557,7 @@ function MetricTableRow({
     'text-[var(--gray-500)]';
 
   return (
-    <tr className="border-b border-[#f5f5f7]">
+    <tr className="border-b border-[var(--gray-50)]">
       <td className="sticky left-0 bg-white px-4 py-3 font-medium text-[var(--gray-950)]">{label}</td>
       {values.map((value, index) => (
         <td key={`${label}-${index}`} className={`px-2 py-3 text-right font-mono ${colorClass}`}>

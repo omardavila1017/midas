@@ -64,7 +64,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
         return updated;
       });
 
-      // Auto-dismiss after duration
+      // Dismiss after duration
       const timer = setTimeout(() => {
         setToasts(prev => prev.filter(t => t.id !== id));
       }, duration);

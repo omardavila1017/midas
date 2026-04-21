@@ -90,10 +90,10 @@ type SortDir = 'asc' | 'desc';
    Constants
    ═══════════════════════════════════════════════════════════════════════ */
 
-const AGING_COLORS = [hex.success, hex.primary, hex.info, hex.warning, '#ff6723', hex.danger, '#af52de', '#8e2d5c'];
+const AGING_COLORS = [hex.success, hex.primary, hex.info, hex.warning, 'var(--chart-5)', hex.danger, 'var(--chart-4)', 'var(--chart-5)'];
 const BUCKET_LABELS = ['Por Vencer','1-30','31-60','61-90','91-120','121-150','151-180','180+'];
 const BUCKET_KEYS: (keyof CXPRecord)[] = ['porVencer','v1_30','v31_60','v61_90','v91_120','v121_150','v151_180','mas180'];
-const PIE_COLORS = [hex.primary, hex.success, hex.warning, '#af52de', hex.danger, hex.info, '#ff6723', '#8e2d5c', '#30b0c7', '#a2845e'];
+const PIE_COLORS = [hex.primary, hex.success, hex.warning, 'var(--chart-4)', hex.danger, hex.info, 'var(--chart-5)', 'var(--chart-5)', 'var(--chart-3)', 'var(--chart-5)'];
 const PAGE_SIZE = 50;
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -279,7 +279,7 @@ const CXPUpload = ({
   return (
     <div className="w-full max-w-3xl mx-auto">
       <div className="text-center mb-8">
-        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--info)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
+        <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
           <Clock className="text-white" size={26} />
         </div>
         <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Cuentas por Pagar</h1>
@@ -635,17 +635,17 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
               <p className="text-[12px] text-[var(--gray-400)]">Click en barra para filtrar</p>
             </div>
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={agingBuckets} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                <CartesianGrid stroke="var(--gray-100)" strokeDasharray="0" vertical={false} />
-                <XAxis dataKey="name" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={{ stroke: 'var(--gray-100)' }} tickLine={false} />
-                <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} />
+              <BarChart layout="vertical" data={agingBuckets} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                <CartesianGrid stroke="var(--gray-100)" strokeDasharray="0" horizontal={false} />
+                <XAxis type="number" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={{ stroke: 'var(--gray-100)' }} tickLine={false} tickFormatter={v => fmt(v)} />
+                <YAxis type="category" dataKey="name" width={86} tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={false} tickLine={false} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="total" radius={[6, 6, 0, 0]} cursor="pointer"
+                <Bar dataKey="total" radius={[0, 6, 6, 0]} cursor="pointer"
                   onClick={(data: any) => { clearDrill(); setActiveBucket(activeBucket === data.name ? null : data.name); setTab('proveedores'); }}>
                   {agingBuckets.map((b, i) => (
                     <Cell key={i} fill={b.color}
                       fillOpacity={activeBucket === b.name ? 1 : activeBucket ? 0.25 : 0.85}
-                      stroke={activeBucket === b.name ? b.color : 'none'} strokeWidth={activeBucket === b.name ? 2 : 0} />
+                      stroke={activeBucket === b.name ? b.color : 'none'} strokeWidth={1.5} />
                   ))}
                 </Bar>
               </BarChart>
@@ -680,7 +680,7 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
                       <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]}
                         fillOpacity={activeClassification === e.name ? 1 : activeClassification ? 0.25 : 0.85}
                         stroke={activeClassification === e.name ? PIE_COLORS[i % PIE_COLORS.length] : 'none'}
-                        strokeWidth={activeClassification === e.name ? 3 : 0} />
+                        strokeWidth={1.5} />
                     ))}
                   </Pie>
                   <Tooltip content={<ChartTooltip />} />
@@ -967,7 +967,7 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
 };
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Main CXP Component — per-cia cache + auto-fetch
+   Main CXP Component — per-cia cache + background fetch
    ═══════════════════════════════════════════════════════════════════════ */
 
 interface CXPProps {
@@ -1076,13 +1076,13 @@ const CXP = ({
     }
   }, [activeCias, onMergeCia]);
 
-  // When the user switches company, allow auto-fetch to retry this cia
+  // When the user switches company, allow background fetch to retry this cia
   // (the attempt-guard is only to prevent infinite retries within one selection).
   useEffect(() => {
     autoFetchAttempted.current.delete(selectedCia);
   }, [selectedCia]);
 
-  // Auto-fetch on cia change when we have a token and the cia isn't cached yet.
+  // Fetch on cia change when credentials exist and the cia isn't cached yet.
   useEffect(() => {
     if (selectedCia === 'all') return;
     if (loadedCias[selectedCia]) return;
@@ -1092,7 +1092,7 @@ const CXP = ({
     loadSingle(selectedCia);
   }, [selectedCia, loadedCias, loading, loadSingle]);
 
-  // Allow re-attempting auto-fetch after a manual reset.
+  // Allow re-attempting background fetch after a manual reset.
   useEffect(() => {
     if (loadedCiaList.length === 0 && !loading) {
       autoFetchAttempted.current.clear();
@@ -1150,7 +1150,7 @@ const CXP = ({
       <div className="min-h-[60vh] flex items-center justify-center p-6">
         <div className="w-full max-w-3xl mx-auto">
           <div className="text-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--info)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
+            <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
               <Clock className="text-white" size={26} />
             </div>
             <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Cuentas por Pagar</h1>

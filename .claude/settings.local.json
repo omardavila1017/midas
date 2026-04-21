@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ':*)",
+      "Bash(npx tsc:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(gh auth:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(tree -L 3 /Users/paolo/Documents/GitHub/flujo-senda/src --ignore node_modules)",
+      "Bash(git commit -m ' *)",
+      "Bash(gh repo *)",
+      "Bash(npm test *)",
+      "Bash(git stash *)",
+      "Bash(npm run *)"
+    ]
+  }
+}

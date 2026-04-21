@@ -749,7 +749,7 @@ export default function ProposalCreator({
         </div>
       </div>
 
-      <div className="rounded-2xl border border-[#d2d2d7]/50 bg-white p-4 shadow-sm">
+      <div className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-4 shadow-sm">
         <div className="grid grid-cols-3 gap-3">
           <ContextPill
             step="Paso 1"
@@ -786,7 +786,7 @@ export default function ProposalCreator({
             onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
             className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
               activeScenario?.id === BASE_SCENARIO_ID
-                ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+                ? 'border-[var(--card-foreground)] bg-[var(--card-foreground)] text-white'
                 : 'border-[var(--gray-200)]/60 bg-[var(--surface-alt)] hover:bg-white'
             }`}
           >
@@ -888,7 +888,7 @@ export default function ProposalCreator({
                           event.stopPropagation();
                           onDelete(proposal.id);
                         }}
-                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]"
                         title="Eliminar simulación"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1015,7 +1015,7 @@ export default function ProposalCreator({
                       <div className="flex items-center gap-2">
                         <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{scenario.name}</p>
                         {selected && (
-                          <span className="rounded-full bg-[var(--success)]/15 px-2 py-0.5 text-[10px] font-medium text-[#248a3d]">Activo</span>
+                          <span className="rounded-full bg-[var(--success)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--success)]">Activo</span>
                         )}
                       </div>
                       <p className="mt-1 line-clamp-2 text-[11px] text-[var(--gray-400)]">{scenario.description || 'Sin descripción'}</p>
@@ -1027,7 +1027,7 @@ export default function ProposalCreator({
                         <span>{scenario.horizonMonths} meses</span>
                       </div>
                       {appliedProposalNames.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-[#6e6e73]">
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-[var(--gray-400)]">
                           {appliedProposalNames.slice(0, 2).map((name) => (
                             <Badge key={name}>{name}</Badge>
                           ))}
@@ -1053,7 +1053,7 @@ export default function ProposalCreator({
                           event.stopPropagation();
                           onDeleteScenario(scenario.id);
                         }}
-                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]"
                         title="Eliminar escenario"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1132,9 +1132,9 @@ export default function ProposalCreator({
                 </div>
               )}
 
-              <div className="rounded-xl border border-[#0071e3]/15 bg-[#e8f4fd]/65 p-3">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-[#0071e3]">Vista rápida</p>
-                <p className="mt-1 text-[13px] text-[#1d1d1f]">{proposalPreview}</p>
+              <div className="rounded-xl border border-[var(--primary)]/15 bg-[var(--primary-muted)]/65 p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--primary)]">Vista rápida</p>
+                <p className="mt-1 text-[13px] text-[var(--card-foreground)]">{proposalPreview}</p>
               </div>
 
               {!['timing_shift', 'pause_expense'].includes(simulationForm.type) && (
@@ -1426,7 +1426,7 @@ export default function ProposalCreator({
                       </button>
                       <button
                         onClick={() => onDeleteSimulation(simulation.id)}
-                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]"
+                        className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]"
                         title="Eliminar propuesta"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -1456,7 +1456,7 @@ function StepCard({
     <div className="rounded-2xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)] p-4">
       <div className="mb-3 flex items-center justify-between">
         <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-[var(--primary)]">{index}</span>
-        <ArrowRight className="w-4 h-4 text-[#c7c7cc]" />
+        <ArrowRight className="w-4 h-4 text-[var(--gray-300)]" />
       </div>
       <p className="text-[13px] font-semibold text-[var(--gray-950)]">{title}</p>
       <p className="mt-1 text-[12px] text-[var(--gray-500)]">{description}</p>
@@ -1511,11 +1511,11 @@ function ContextPill({
   helper: string;
 }) {
   return (
-    <div className="rounded-2xl border border-[#d2d2d7]/50 bg-[#fbfbfd] p-3">
-      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#0071e3]">{step}</p>
-      <p className="mt-1 text-[12px] font-medium text-[#6e6e73]">{title}</p>
-      <p className="mt-2 text-[14px] font-semibold text-[#1d1d1f]">{value}</p>
-      <p className="mt-1 text-[11px] text-[#86868b]">{helper}</p>
+    <div className="rounded-2xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)] p-3">
+      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--primary)]">{step}</p>
+      <p className="mt-1 text-[12px] font-medium text-[var(--gray-400)]">{title}</p>
+      <p className="mt-2 text-[14px] font-semibold text-[var(--card-foreground)]">{value}</p>
+      <p className="mt-1 text-[11px] text-[var(--gray-400)]">{helper}</p>
     </div>
   );
 }
@@ -1552,7 +1552,7 @@ function InlineActions({
       </button>
       <button
         onClick={onSave}
-        className="rounded-xl bg-[#1d1d1f] px-3 py-2 text-[12px] font-medium text-white"
+        className="rounded-xl bg-[var(--card-foreground)] px-3 py-2 text-[12px] font-medium text-white"
       >
         Guardar
       </button>

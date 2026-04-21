@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth, CashFlowAssumptions } from '../domain/types';
-import { ImportIssue } from '../domain/importClients';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { projectClientMonth } from '../domain/collectionEngine';
 import { MONTHS } from '../types';
@@ -10,10 +9,15 @@ import { toCSV, downloadFile } from '../utils/export';
 /**
  * Clientes tab.
  *
- * Full CRUD + Excel import (cross-references RESUMEN VENTA and
- * PROYECCION COBRANZA). Shows per-client seasonality (12 months),
- * parsing status of Column C, and lets the user fix patterns inline.
+ * Full CRUD backed by the client catalog service.
+ * Shows per-client seasonality, parsing status, and inline corrections.
  */
+
+interface ImportIssue {
+  clientName: string;
+  kind: 'no-billing' | 'unparsed-day' | 'unknown-frequency' | 'invalid-row';
+  detail?: string;
+}
 
 const FREQUENCIES: Frequency[] = ['Semanal', 'Quincenal', 'Mensual', 'Contado'];
 const DOW_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
@@ -167,7 +171,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
             {filtered.length === 0 && (
               <tr><td colSpan={10} className="text-center text-[var(--gray-400)] py-10">
                 {clients.length === 0
-                  ? 'Sin clientes. Importa tu Excel o agrega uno manual.'
+                  ? 'Sin clientes. Sincroniza el catálogo o agrega uno manual.'
                   : 'Sin coincidencias.'}
               </td></tr>
             )}
@@ -513,7 +517,7 @@ function IssuesPanel({ issues, onDismiss }: { issues: ImportIssue[]; onDismiss: 
           <div key={k}>
             <span className="font-medium">{i.clientName}</span>
             {' — '}
-            {i.kind === 'no-billing' && 'sin facturación en RESUMEN VENTA'}
+            {i.kind === 'no-billing' && 'sin facturación disponible'}
             {i.kind === 'unparsed-day' && `día de pago no reconocido: "${i.detail}"`}
             {i.kind === 'unknown-frequency' && `frecuencia desconocida: "${i.detail}"`}
             {i.kind === 'invalid-row' && (i.detail ?? 'fila inválida')}

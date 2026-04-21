@@ -132,9 +132,9 @@ export function signColor(value: number): string {
   return 'oklch(56% 0.008 255)';                    // neutral gray
 }
 
-/** Hex color for positive/negative (Tailwind/Recharts compatible) */
+/** Token color for positive/negative values. */
 export function signHex(value: number): string {
-  if (value > 0) return '#34c759';
-  if (value < 0) return '#ff3b30';
-  return '#86868b';
+  if (value > 0) return 'var(--success)';
+  if (value < 0) return 'var(--danger)';
+  return 'var(--gray-400)';
 }

@@ -41,7 +41,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 
 /** Trigger browser download of a string as a file */
 export function downloadFile(content: string, filename: string, mime = 'text/csv;charset=utf-8') {
-  const blob = new Blob(['\ufeff' + content], { type: mime }); // BOM for Excel
+  const blob = new Blob(['\ufeff' + content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

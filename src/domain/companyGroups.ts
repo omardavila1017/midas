@@ -90,12 +90,12 @@ export function isCiaActive(
  * Default group colors (for UI badges).
  */
 export const GROUP_COLORS = [
-  '#0071e3', // primary blue
-  '#34c759', // green
-  '#ff9f0a', // amber
-  '#af52de', // purple
-  '#ff3b30', // red
-  '#5ac8fa', // sky
-  '#ff6482', // pink
-  '#30b0c7', // teal
+  'var(--primary)', // primary blue
+  'var(--success)', // green
+  'var(--warning)', // amber
+  'var(--chart-4)', // purple
+  'var(--danger)', // red
+  'var(--info)', // sky
+  'var(--chart-5)', // pink
+  'var(--chart-3)', // teal
 ] as const;

@@ -83,7 +83,7 @@ export default function BatchActions({
           className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all hover:opacity-90 active:scale-95"
           style={{
             backgroundColor: 'var(--success)',
-            color: '#ffffff',
+            color: 'var(--card)',
             cursor: 'pointer',
           }}
           aria-label="Confirmar todos"

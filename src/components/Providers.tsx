@@ -1,16 +1,15 @@
-import { useMemo, useRef, useState } from 'react';
-import * as XLSX from 'xlsx';
+import { useMemo, useState } from 'react';
 import {
   Provider,
   ProviderRisk,
   ProviderPaymentPeriod,
   ProviderFlexibility,
 } from '../domain/types';
-import { importProvidersFromWorkbook } from '../domain/importProviders';
+import { fetchProviderCatalog } from '../services/catalog.service';
 import {
   Plus,
   Trash2,
-  Upload as UploadIcon,
+  RefreshCw,
   Search,
   Lock,
   Unlock,
@@ -22,7 +21,7 @@ import {
 /**
  * Proveedores tab.
  * Campos por proveedor: Tipo · Riesgo · Periodo de pago · Flexibilidad.
- * Importación desde Excel + CRUD inline.
+ * Provider catalog tab with service sync and inline CRUD.
  */
 
 const TYPE_SUGGESTIONS = [
@@ -75,10 +74,11 @@ type RiskFilter = 'all' | ProviderRisk;
 type FlexFilter = 'all' | ProviderFlexibility;
 
 export default function Providers({ providers, onReplace, onAdd, onUpdate, onDelete }: Props) {
-  const fileRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
   const [flexFilter, setFlexFilter] = useState<FlexFilter>('all');
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Omit<Provider, 'id'>>({
     name: '',
     type: 'Servicios',
@@ -128,11 +128,17 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
     });
   };
 
-  const handleFile = async (file: File) => {
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
-    const result = importProvidersFromWorkbook(wb);
-    onReplace(result.providers);
+  const handleSyncCatalog = async () => {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const nextProviders = await fetchProviderCatalog();
+      onReplace(nextProviders);
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'No se pudo sincronizar el catálogo.');
+    } finally {
+      setSyncing(false);
+    }
   };
 
   return (
@@ -143,24 +149,19 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
           <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Proveedores</h1>
           <p className="text-[13px] text-[var(--gray-400)] mt-1">
             {providers.length === 0
-              ? 'Importa el catálogo o agrega proveedores uno a uno.'
+              ? 'Sincroniza el catálogo o agrega proveedores uno a uno.'
               : `${providers.length} ${providers.length === 1 ? 'proveedor' : 'proveedores'} en el catálogo`}
+            {syncError && <span className="ml-2 text-[var(--danger)]">· {syncError}</span>}
           </p>
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => fileRef.current?.click()}
+            onClick={handleSyncCatalog}
+            disabled={syncing}
             className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
           >
-            <UploadIcon className="w-3.5 h-3.5" /> Importar Excel
+            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} /> Sincronizar
           </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls"
-            className="hidden"
-            onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])}
-          />
         </div>
       </header>
 
@@ -311,8 +312,8 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                   <td colSpan={6} className="text-center text-[var(--gray-400)] py-12">
                     {providers.length === 0 ? (
                       <div className="flex flex-col items-center gap-2">
-                        <UploadIcon className="w-5 h-5 text-[var(--gray-300)]" />
-                        <div>Sin proveedores. Importa un Excel o agrega uno arriba.</div>
+                        <RefreshCw className="w-5 h-5 text-[var(--gray-300)]" />
+                        <div>Sin proveedores. Sincroniza el catálogo o agrega uno arriba.</div>
                       </div>
                     ) : (
                       <div className="flex flex-col items-center gap-2">

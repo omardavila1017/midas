@@ -429,7 +429,6 @@ export async function fetchBankStatementsRange(
 
   // Parallel fetch with a simple worker pool.
   const results: BankAccountStatement[][] = new Array(dates.length);
-  const errors: Array<{ fecha: string; error: unknown }> = [];
   let cursor = 0;
   let done = 0;
   const worker = async () => {
@@ -441,9 +440,8 @@ export async function fetchBankStatementsRange(
           { fechaEstadoCuenta: dates[idx], formatoElectronico: formato },
           config,
         );
-      } catch (error) {
+      } catch {
         results[idx] = [];
-        errors.push({ fecha: dates[idx], error });
       }
       done++;
       options.onProgress?.(done, dates.length);
@@ -452,24 +450,6 @@ export async function fetchBankStatementsRange(
   await Promise.all(
     Array.from({ length: Math.min(concurrency, dates.length) }, worker),
   );
-
-  // ── Diagnóstico: ¿cuántos días respondieron con datos? ──
-  const daysWithData = results.reduce(
-    (n, r) => n + (r && r.length > 0 ? 1 : 0),
-    0,
-  );
-  const totalLines = results.reduce(
-    (n, r) => n + (r ? r.reduce((m, a) => m + a.movimientos.length, 0) : 0),
-    0,
-  );
-  console.info(
-    `[JDE range] ${from} → ${to}: ${dates.length} días solicitados, ${daysWithData} con datos, ${errors.length} con error, ${totalLines} líneas totales (pre-merge)`,
-  );
-  if (errors.length > 0 && errors.length <= 5) {
-    for (const e of errors) console.warn(`[JDE range] err ${e.fecha}:`, e.error);
-  } else if (errors.length > 5) {
-    console.warn(`[JDE range] ${errors.length} errores — primeros 5:`, errors.slice(0, 5));
-  }
 
   // Merge by (cia, cuenta, moneda).
   const merged = new Map<string, BankAccountStatement>();
@@ -526,24 +506,6 @@ export async function fetchBankStatementsRange(
   // Sort movimientos within each account chronologically.
   for (const acc of merged.values()) {
     acc.movimientos.sort((a, b) => a.fechaOperacion.localeCompare(b.fechaOperacion));
-  }
-
-  // ── Diagnóstico post-merge: fechas distintas cubiertas ──
-  const allDatesSeen = new Set<string>();
-  for (const acc of merged.values()) {
-    for (const mov of acc.movimientos) allDatesSeen.add(mov.fechaOperacion);
-  }
-  const sortedDates = Array.from(allDatesSeen).sort();
-  console.info(
-    `[JDE range] merge final: ${merged.size} cuentas, ${allDatesSeen.size} fechas distintas (${sortedDates[0] ?? '—'} → ${sortedDates[sortedDates.length - 1] ?? '—'})`,
-  );
-  if (allDatesSeen.size <= 3 && dates.length > 3) {
-    console.warn(
-      `[JDE range] ⚠️ Solo ${allDatesSeen.size} fechas distintas tras ${dates.length} requests. ` +
-      `Posibilidades: (1) el API ignora fechaEstadoCuenta y regresa siempre lo mismo, ` +
-      `(2) las fechas históricas están vacías, (3) todas las respuestas comparten Fecha_Estado_Cuenta. ` +
-      `Fechas vistas: ${sortedDates.join(', ')}`,
-    );
   }
 
   return Array.from(merged.values());

@@ -286,8 +286,8 @@ export const MONTHS_FULL = [
 ];
 
 export const CATEGORY_COLORS: Record<SimulationCategory, string> = {
-  'Reducción de Costos': '#0071e3',
-  'Incremento de Ingresos': '#34c759',
-  'Diferimiento': '#ff9f0a',
-  'Renegociación': '#af52de',
+  'Reducción de Costos': 'var(--primary)',
+  'Incremento de Ingresos': 'var(--success)',
+  'Diferimiento': 'var(--warning)',
+  'Renegociación': 'var(--chart-4)',
 };

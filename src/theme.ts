@@ -1,22 +1,22 @@
 /**
- * FlowSense Design System — Single source of truth
+ * FlowSense Design System - Single source of truth
  *
  * Follows the Impeccable framework:
  * - OKLCH color space for perceptually uniform palette
  * - 4pt spacing grid
  * - Modular type scale (1.25 ratio)
- * - Semantic tokens for every visual decision
+ * - Semantic variables for every visual decision
  */
 
-/* ─── Color Palette (OKLCH) ─── */
+/* Color Palette (OKLCH) */
 export const color = {
-  // Primary — Senda Blue
-  primary:       'oklch(55% 0.22 255)',    // #0071e3 equivalent
+  // Primary
+  primary:       'oklch(55% 0.22 255)',
   primaryHover:  'oklch(58% 0.22 255)',    // slightly lighter on hover
   primaryMuted:  'oklch(95% 0.04 255)',    // tinted background
   primarySubtle: 'oklch(97% 0.02 255)',    // barely there
 
-  // Neutrals — tinted toward blue (chroma 0.008) for cohesion
+  // Neutrals
   gray950: 'oklch(18% 0.008 255)',   // near-black text
   gray900: 'oklch(22% 0.008 255)',   // headings
   gray700: 'oklch(40% 0.008 255)',   // secondary text
@@ -28,21 +28,21 @@ export const color = {
   gray50:  'oklch(97% 0.002 255)',   // surface tertiary / background
 
   // Semantic
-  success:       'oklch(62% 0.19 145)',   // #34c759
+  success:       'oklch(62% 0.19 145)',   // var(--success)
   successMuted:  'oklch(95% 0.04 145)',
-  warning:       'oklch(72% 0.18 70)',    // #ff9f0a
+  warning:       'oklch(72% 0.18 70)',    // var(--warning)
   warningMuted:  'oklch(95% 0.04 70)',
-  danger:        'oklch(58% 0.22 25)',    // #ff3b30
+  danger:        'oklch(58% 0.22 25)',
   dangerMuted:   'oklch(95% 0.04 25)',
   info:          'oklch(68% 0.15 230)',   // lighter blue
   infoMuted:     'oklch(95% 0.03 230)',
 
   // Surfaces
-  surface:     '#ffffff',
-  surfaceAlt:  'oklch(97.5% 0.002 255)', // #f5f5f7 equivalent
-  surfaceRaised: '#ffffff',
+  surface:     'var(--card)',
+  surfaceAlt:  'oklch(97.5% 0.002 255)',
+  surfaceRaised: 'var(--card)',
 
-  // Chart palette — 8 perceptually distinct colors
+  // Chart palette
   chart: [
     'oklch(62% 0.19 145)',  // green
     'oklch(55% 0.22 255)',  // blue
@@ -54,7 +54,7 @@ export const color = {
     'oklch(48% 0.16 320)',  // plum
   ] as const,
 
-  // Aging buckets — heat progression
+  // Aging buckets
   aging: [
     'oklch(62% 0.19 145)',  // current (green)
     'oklch(55% 0.22 255)',  // 1-30 (blue)
@@ -67,23 +67,23 @@ export const color = {
   ] as const,
 } as const;
 
-/* ─── Fallback hex colors for Tailwind classes (until full OKLCH support) ─── */
+/* CSS variable colors for Tailwind classes and Recharts */
 export const hex = {
-  primary:      '#0071e3',
-  primaryHover: '#0077ed',
-  primaryMuted: '#e8f4fd',
-  gray950:      '#1d1d1f',
-  gray700:      '#515154',
-  gray500:      '#636366',
-  gray400:      '#6e6e73',
-  gray300:      '#b0b0b5',
-  gray200:      '#d2d2d7',
-  gray100:      '#e8e8ed',
-  gray50:       '#f5f5f7',
-  success:      '#34c759',
-  warning:      '#ff9f0a',
-  danger:       '#ff3b30',
-  info:         '#5ac8fa',
+  primary:      'var(--primary)',
+  primaryHover: 'var(--accent)',
+  primaryMuted: 'var(--primary-muted)',
+  gray950:      'var(--card-foreground)',
+  gray700:      'var(--gray-700)',
+  gray500:      'var(--gray-500)',
+  gray400:      'var(--gray-400)',
+  gray300:      'var(--gray-300)',
+  gray200:      'var(--gray-200)',
+  gray100:      'var(--gray-100)',
+  gray50:       'var(--gray-50)',
+  success:      'var(--success)',
+  warning:      'var(--warning)',
+  danger:       'var(--danger)',
+  info:         'var(--info)',
 } as const;
 
 /* ─── Spacing (4pt grid) ─── */

@@ -1882,7 +1882,7 @@ function KpiDetailModal({
                     dataKey="comparison"
                     name="comparison"
                     stroke={hex.gray300}
-                    strokeWidth={2.5}
+                    strokeWidth={1.5}
                     strokeDasharray="7 5"
                     dot={false}
                     connectNulls
@@ -1892,7 +1892,7 @@ function KpiDetailModal({
                     dataKey="value"
                     name="value"
                     stroke={entry.accentColor}
-                    strokeWidth={3}
+                    strokeWidth={1.5}
                     dot={(props: any) => {
                       const { cx, cy, payload } = props;
                       if (typeof cx !== 'number' || typeof cy !== 'number') {
@@ -1905,9 +1905,9 @@ function KpiDetailModal({
                           : payload.status === 'missed'
                             ? hex.danger
                             : hex.gray300;
-                      return <circle cx={cx} cy={cy} r={5} fill={fill} stroke="white" strokeWidth={2} />;
+                      return <circle cx={cx} cy={cy} r={5} fill={fill} stroke="white" strokeWidth={1.5} />;
                     }}
-                    activeDot={{ r: 6, stroke: entry.accentColor, strokeWidth: 2, fill: '#fff' }}
+                    activeDot={{ r: 6, stroke: entry.accentColor, strokeWidth: 1.5, fill: 'var(--card)' }}
                   />
                 </LineChart>
               </ResponsiveContainer>

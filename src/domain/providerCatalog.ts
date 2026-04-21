@@ -2,16 +2,16 @@
  * Provider Catalog — flexibility & criticality lookup for CXP payments.
  *
  * Sources (compiled into src/assets/providerCatalog.json):
- *   - "Proveedores_2026_conciliado.xlsx" — sheet "resumen clasificado"
+ *   - Conciliated provider catalog — "resumen clasificado"
  *       Column A categories → map to flexibility
  *         sigue, sigue nomina    → inamovible (must pay on credit time)
  *         pausar, pausa, pausat  → flexible   (payment can be rescheduled)
  *         netear, no critico     → flexible
  *         finanzas, administrar, sistemas, tesoreria, legal, proyecto,
  *         martha, sr sampayo, revisar rh, etc. → revisar (needs area sign-off)
- *   - "Proveedores Criticos TI 2026.xlsx" — sheet "Prov. Crit. DTI"
+ *   - Critical IT provider catalog — "Prov. Crit. DTI"
  *       Criticidad DTI column: Alta / Media / Baja
- *   - "Proveedores_2026_conciliado.xlsx" — sheet "bdd"
+ *   - Last-payment history — "bdd"
  *       Último pago realizado + fecha + condición de pago
  */
 
