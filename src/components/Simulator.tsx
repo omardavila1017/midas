@@ -2,7 +2,12 @@ import { useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
+  Legend,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,6 +20,9 @@ import {
   ChevronRight,
   Columns2,
   FlaskConical,
+  Minus,
+  TrendingDown,
+  TrendingUp,
 } from 'lucide-react';
 import {
   BASE_SCENARIO_ID,
@@ -58,6 +66,13 @@ const KPI_CONFIG = [
   { key: 'cajaMinima', label: 'Caja Mínima', color: 'text-[var(--chart-4)]' },
   { key: 'cobranza12m', label: 'Cobranza', color: 'text-[var(--primary)]' },
   { key: 'pagosProveedores12m', label: 'Pagos Proveedores', color: 'text-[var(--warning)]' },
+] as const;
+
+const DELTA_KPIS = [
+  { key: 'flujoNeto12m', label: 'Flujo Neto 12m', betterIs: 'higher' as const },
+  { key: 'cajaFinal', label: 'Caja Final', betterIs: 'higher' as const },
+  { key: 'ingresos12m', label: 'Ingresos 12m', betterIs: 'higher' as const },
+  { key: 'egresos12m', label: 'Egresos 12m', betterIs: 'lower' as const },
 ] as const;
 
 const VIRTUAL_BASE_PROPOSAL: Proposal = {
@@ -341,27 +356,117 @@ export default function Simulator({
             <div>
               <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Caja base vs escenario</h2>
               <p className="text-[12px] text-[var(--gray-400)]">
-                Cada cambio en propuestas y celdas recalcula el flujo completo en vista {granularity === 'monthly' ? 'mensual' : granularity === 'weekly' ? 'semanal' : 'diaria'}.
+                Comparación visual entre el {BASE_SCENARIO_NAME} y <span className="font-medium text-[var(--gray-500)]">{activeScenario.name}</span> en vista {granularity === 'monthly' ? 'mensual' : granularity === 'weekly' ? 'semanal' : 'diaria'}.
               </p>
             </div>
             <div className="rounded-full bg-[var(--gray-50)] px-3 py-1 text-[12px] text-[var(--gray-500)]">
               {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.simulationIds.length} propuestas activas`}
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={chartData}>
-              <defs />
+
+          {!isBaseScenario(activeScenario) && (
+            <div className="mb-5 grid grid-cols-4 gap-3">
+              {DELTA_KPIS.map((kpi) => (
+                <DeltaChip
+                  key={kpi.key}
+                  label={kpi.label}
+                  base={baseEvaluation.kpis[kpi.key]}
+                  scenario={activeEvaluation.kpis[kpi.key]}
+                  betterIs={kpi.betterIs}
+                />
+              ))}
+            </div>
+          )}
+
+          <ResponsiveContainer width="100%" height={320}>
+            <AreaChart data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gradBase" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--gray-400)" stopOpacity={0.22} />
+                  <stop offset="100%" stopColor="var(--gray-400)" stopOpacity={0.02} />
+                </linearGradient>
+                <linearGradient id="gradEscenario" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="var(--primary)" stopOpacity={0.04} />
+                </linearGradient>
+              </defs>
               <CartesianGrid stroke="var(--gray-100)" vertical={false} />
               <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} minTickGap={24} />
-              <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} />
+              <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} width={70} />
               <Tooltip
                 formatter={(value: number) => formatCurrency(value)}
-                contentStyle={{ borderRadius: 16, borderColor: 'var(--gray-200)' }}
+                contentStyle={{ borderRadius: 12, borderColor: 'var(--gray-200)', fontSize: 12, boxShadow: '0 8px 25px -5px rgba(0,0,0,0.08)' }}
+                cursor={{ stroke: 'var(--gray-200)', strokeWidth: 1, strokeDasharray: '4 4' }}
               />
-              <Area type="monotone" dataKey="base" stroke="var(--gray-300)" strokeWidth={1.5} fill="none" name="Base" />
-              <Area type="monotone" dataKey="escenario" stroke="var(--primary)" strokeWidth={1.5} fill="none" name="Escenario" />
+              <Legend
+                wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+                iconType="circle"
+                iconSize={8}
+              />
+              <ReferenceLine y={0} stroke="var(--gray-200)" strokeDasharray="3 3" />
+              <Area
+                type="monotone"
+                dataKey="base"
+                stroke="var(--gray-400)"
+                strokeWidth={2}
+                strokeDasharray="4 4"
+                fill="url(#gradBase)"
+                name="Base"
+                activeDot={{ r: 4, fill: 'var(--gray-400)', stroke: 'white', strokeWidth: 2 }}
+              />
+              <Area
+                type="monotone"
+                dataKey="escenario"
+                stroke="var(--primary)"
+                strokeWidth={2.5}
+                fill="url(#gradEscenario)"
+                name="Escenario"
+                activeDot={{ r: 5, fill: 'var(--primary)', stroke: 'white', strokeWidth: 2 }}
+              />
             </AreaChart>
           </ResponsiveContainer>
+
+          {!isBaseScenario(activeScenario) && (
+            <div className="mt-5 rounded-xl bg-[var(--surface-alt)] p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Impacto por {granularity === 'monthly' ? 'mes' : granularity === 'weekly' ? 'semana' : 'día'} vs Base</h3>
+                  <p className="text-[11px] text-[var(--gray-400)]">Diferencia en caja final generada por las propuestas aplicadas.</p>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-[var(--gray-500)]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[var(--success)]" /> Mejora
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[var(--danger)]" /> Deterioro
+                  </span>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={chartData} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke="var(--gray-100)" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={{ stroke: 'var(--gray-100)' }} minTickGap={24} />
+                  <YAxis tick={{ fill: 'var(--gray-400)', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => formatCompactNumber(value)} width={70} />
+                  <Tooltip
+                    formatter={(value: number) => formatCurrency(value)}
+                    labelFormatter={(label) => `${label} — Δ vs Base`}
+                    contentStyle={{ borderRadius: 12, borderColor: 'var(--gray-200)', fontSize: 12, boxShadow: '0 8px 25px -5px rgba(0,0,0,0.08)' }}
+                    cursor={{ fill: 'var(--gray-100)', opacity: 0.5 }}
+                  />
+                  <ReferenceLine y={0} stroke="var(--gray-300)" />
+                  <Bar dataKey="diff" name="Δ Caja" radius={[4, 4, 0, 0]}>
+                    {chartData.map((entry, index) => (
+                      <Cell
+                        key={`diff-${index}`}
+                        fill={entry.diff >= 0 ? 'var(--success)' : 'var(--danger)'}
+                        fillOpacity={Math.abs(entry.diff) < 0.01 ? 0.2 : 0.85}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </section>
 
         <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
@@ -536,6 +641,69 @@ export default function Simulator({
           })}
         </div>
       </aside>
+    </div>
+  );
+}
+
+function DeltaChip({
+  label,
+  base,
+  scenario,
+  betterIs,
+}: {
+  label: string;
+  base: number;
+  scenario: number;
+  betterIs: 'higher' | 'lower';
+}) {
+  const delta = scenario - base;
+  const deltaPct = base !== 0 ? (delta / Math.abs(base)) * 100 : 0;
+  const isNeutral = Math.abs(delta) < 0.01;
+  const isImprovement = betterIs === 'higher' ? delta > 0 : delta < 0;
+
+  const tone = isNeutral ? 'neutral' : isImprovement ? 'good' : 'bad';
+  const toneClasses = {
+    good: {
+      bg: 'bg-[var(--success-muted)]',
+      border: 'border-[var(--success)]/20',
+      text: 'text-[var(--success)]',
+      icon: TrendingUp,
+    },
+    bad: {
+      bg: 'bg-[var(--danger-muted)]',
+      border: 'border-[var(--danger)]/20',
+      text: 'text-[var(--danger)]',
+      icon: TrendingDown,
+    },
+    neutral: {
+      bg: 'bg-[var(--gray-50)]',
+      border: 'border-[var(--gray-200)]/60',
+      text: 'text-[var(--gray-500)]',
+      icon: Minus,
+    },
+  }[tone];
+  const Icon = toneClasses.icon;
+  const sign = delta > 0 ? '+' : '';
+
+  return (
+    <div className={`rounded-xl border ${toneClasses.border} ${toneClasses.bg} px-3 py-3`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
+        <span className={`flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-sm ${toneClasses.text}`}>
+          <Icon className="w-3.5 h-3.5" />
+        </span>
+      </div>
+      <p className={`mt-2 text-[18px] font-semibold ${toneClasses.text}`}>
+        {isNeutral ? '—' : `${sign}${formatCurrency(delta)}`}
+      </p>
+      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-[var(--gray-400)]">
+        <span>Base {formatCompactNumber(base)}</span>
+        {!isNeutral && (
+          <span className={`font-medium ${toneClasses.text}`}>
+            {sign}{deltaPct.toFixed(1)}%
+          </span>
+        )}
+      </div>
     </div>
   );
 }
