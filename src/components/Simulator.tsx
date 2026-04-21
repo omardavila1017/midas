@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
