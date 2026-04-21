@@ -548,15 +548,18 @@ export default function KpiCenter({
     const previousWarningThreshold = entry.warningThreshold ?? previousTargetValue;
     const previousTargetSource = entry.targetSource ?? 'manual';
     const previousTargetOwner = entry.targetOwner ?? 'user';
+    const previousGoal = entry.goal;
     const changedTarget =
       previousTargetValue !== targetValue ||
       previousWarningThreshold !== warningThreshold ||
       previousTargetSource !== configDraft.targetSource ||
       (entry.targetSourceVariable ?? '') !== (configDraft.targetSource === 'auto' ? targetSourceVariable : '') ||
-      previousTargetOwner !== configDraft.targetOwner;
+      previousTargetOwner !== configDraft.targetOwner ||
+      previousGoal !== configDraft.goal;
     const nextHistoryEntry: KpiTargetHistoryEntry = {
       value: targetValue,
       warningThreshold,
+      goal: configDraft.goal,
       targetSource: configDraft.targetSource,
       targetSourceVariable: configDraft.targetSource === 'auto' ? targetSourceVariable : undefined,
       targetOwner: configDraft.targetOwner,
@@ -569,6 +572,7 @@ export default function KpiCenter({
       targetSource: configDraft.targetSource,
       targetSourceVariable: configDraft.targetSource === 'auto' ? targetSourceVariable : undefined,
       targetOwner: configDraft.targetOwner,
+      goal: configDraft.goal,
       warningThreshold,
       notes,
       updatedAt: now,
@@ -638,6 +642,7 @@ export default function KpiCenter({
       ...(changedTarget ? [{
         value: targetValue,
         warningThreshold,
+        goal: draft.goal,
         targetSource: draft.targetSource,
         targetSourceVariable: draft.targetSource === 'auto' ? targetSourceVariable : undefined,
         targetOwner: draft.targetOwner,
@@ -670,6 +675,7 @@ export default function KpiCenter({
       ? customKpis.map((item) => (item.id === nextDefinition.id ? nextDefinition : item))
       : [...customKpis, nextDefinition];
     onCustomKpisChange(nextDefinitions);
+    onKpiConfigsChange(kpiConfigs.filter((item) => item.kpiId !== nextDefinition.id));
     if (!activeKpiIds.includes(nextDefinition.id)) {
       onActiveKpiIdsChange([...activeKpiIds, nextDefinition.id]);
     }
@@ -682,9 +688,9 @@ export default function KpiCenter({
       <section className="rounded-2xl border border-[var(--gray-200)]/60 bg-white overflow-hidden">
         <div className="px-5 py-4 border-b border-[var(--gray-200)]/40 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-[24px] font-semibold tracking-tight text-[var(--gray-950)]">Todos los KPIs</h1>
+            <h1 className="text-[24px] font-semibold tracking-tight text-[var(--gray-950)]">KPIs de flujo de efectivo</h1>
             <p className="mt-1 text-[13px] text-[var(--gray-400)]">
-              Crea KPIs personalizados con fórmula, meta, periodo, semáforo y notas. Se recalculan automáticamente con tus proyecciones y escenarios.
+              Monitorea caja, cobranza, egresos y riesgo con metas editables, fuente de datos clara, semáforo y notas.
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -711,7 +717,7 @@ export default function KpiCenter({
               className="inline-flex h-9 items-center gap-2 rounded-xl bg-[var(--primary)] px-3 text-[13px] font-medium text-white transition hover:brightness-110"
             >
               <Plus className="w-4 h-4" />
-              Nuevo KPI personalizado
+              Nuevo KPI
             </button>
           </div>
         </div>
@@ -1108,7 +1114,7 @@ function KpiConfigEditor({
                 ))}
               </select>
             </Field>
-            <Field label="Semáforo">
+            <Field label="Regla del semáforo">
               <select
                 value={draft.goal}
                 onChange={(event) => onDraftChange({ ...draft, goal: event.target.value as KpiGoal })}
@@ -1688,7 +1694,7 @@ function WizardStep3({
           />
           <p className="mt-1 text-[11px] text-[var(--gray-400)]">{thresholdHint}</p>
         </Field>
-        <Field label="Semáforo">
+        <Field label="Regla del semáforo">
           <select
             value={draft.goal}
             onChange={(event) => onDraftChange({ ...draft, goal: event.target.value as KpiGoal })}

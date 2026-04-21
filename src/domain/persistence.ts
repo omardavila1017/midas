@@ -24,6 +24,7 @@ import {
   DEFAULT_ACTIVE_KPI_IDS,
   type CustomKpiDefinition,
   type KpiConfigOverride,
+  type KpiGoal,
   type KpiTargetHistoryEntry,
   type KpiTargetOwner,
   type KpiTargetSource,
@@ -587,6 +588,7 @@ function normalizeCustomKpi(value: CustomKpiDefinition): CustomKpiDefinition {
     targetSourceVariable?: unknown;
     targetOwner?: unknown;
     targetHistory?: unknown;
+    goal?: unknown;
   };
   const rawSource = anyValue.targetSource;
   const targetSource: KpiTargetSource = rawSource === 'auto' ? 'auto' : 'manual';
@@ -598,6 +600,7 @@ function normalizeCustomKpi(value: CustomKpiDefinition): CustomKpiDefinition {
     ...value,
     targetSource,
     targetSourceVariable: targetSource === 'auto' ? targetSourceVariable : undefined,
+    goal: normalizeKpiGoal(anyValue.goal),
     targetOwner,
     targetHistory: normalizeTargetHistory(anyValue.targetHistory),
   };
@@ -612,6 +615,10 @@ function normalizeTargetSource(value: unknown): KpiTargetSource {
   return value === 'auto' ? 'auto' : 'manual';
 }
 
+function normalizeKpiGoal(value: unknown): KpiGoal {
+  return value === 'lower' ? 'lower' : 'higher';
+}
+
 function normalizeNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -623,6 +630,7 @@ function normalizeTargetHistory(value: unknown): KpiTargetHistoryEntry[] {
     .map((item) => ({
       value: normalizeNumber(item.value, 0),
       warningThreshold: normalizeNumber(item.warningThreshold, 0),
+      goal: normalizeKpiGoal(item.goal),
       targetSource: normalizeTargetSource(item.targetSource),
       targetSourceVariable: typeof item.targetSourceVariable === 'string' ? item.targetSourceVariable : undefined,
       targetOwner: normalizeTargetOwner(item.targetOwner),
@@ -643,6 +651,7 @@ function normalizeKpiConfig(value: KpiConfigOverride): KpiConfigOverride {
     targetSource,
     targetSourceVariable: targetSource === 'auto' ? targetSourceVariable : undefined,
     targetOwner: normalizeTargetOwner(anyValue.targetOwner),
+    goal: normalizeKpiGoal(anyValue.goal),
     warningThreshold: normalizeNumber(anyValue.warningThreshold, 0),
     notes: typeof anyValue.notes === 'string' ? anyValue.notes : '',
     updatedAt: validateISODate(anyValue.updatedAt, 'kpiConfig.updatedAt'),

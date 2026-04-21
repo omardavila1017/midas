@@ -27,6 +27,7 @@ export type KpiTargetOwner = 'user' | 'system' | 'historical';
 export interface KpiTargetHistoryEntry {
   value: number;
   warningThreshold: number;
+  goal: KpiGoal;
   targetSource: KpiTargetSource;
   targetSourceVariable?: string;
   targetOwner: KpiTargetOwner;
@@ -40,6 +41,7 @@ export interface KpiConfigOverride {
   targetSource: KpiTargetSource;
   targetSourceVariable?: string;
   targetOwner: KpiTargetOwner;
+  goal: KpiGoal;
   warningThreshold: number;
   notes: string;
   updatedAt: string;
@@ -1314,12 +1316,17 @@ function buildForecastFormulaData(input: KpiCatalogInput): Record<KpiPeriod, For
       [],
       { granularity },
     );
+    const safetyCashReference = averageMonthly(activeEvaluation.metrics.egresos);
 
     const variables: FormulaVariableMap = {
       ingresos: activeEvaluation.metrics.ingresos,
       egresos: activeEvaluation.metrics.egresos,
       flujo_neto: activeEvaluation.metrics.flujoNeto,
       caja_final: activeEvaluation.metrics.cajaFinal,
+      egresos_proyectados: activeEvaluation.metrics.egresos,
+      flujo_neto_proyectado: activeEvaluation.metrics.flujoNeto,
+      caja_proyectada_final: activeEvaluation.metrics.cajaFinal,
+      caja_seguridad_minima: buildConstantSeries(activeEvaluation.months.length, safetyCashReference),
       cobranza: activeEvaluation.metrics.cobranza,
       pagos_proveedores: activeEvaluation.metrics.pagosProveedores,
       base_ingresos: baseEvaluation.metrics.ingresos,
@@ -1469,6 +1476,7 @@ interface ManagedTargetConfig {
   targetSource: KpiTargetSource;
   targetSourceVariable?: string;
   targetOwner: KpiTargetOwner;
+  goal: KpiGoal;
   warningThreshold: number;
   notes: string;
   updatedAt: string | null;
@@ -1486,6 +1494,7 @@ function resolveManagedTargetConfig(
     targetSource: override?.targetSource ?? defaults.targetSource,
     targetSourceVariable: override?.targetSourceVariable ?? defaults.targetSourceVariable,
     targetOwner: override?.targetOwner ?? defaults.targetOwner,
+    goal: override?.goal ?? defaults.goal,
     warningThreshold: override?.warningThreshold ?? defaults.warningThreshold,
     notes: override?.notes ?? defaults.notes,
     updatedAt: override?.updatedAt ?? null,
@@ -1546,7 +1555,7 @@ function buildManagedTargetEntry(config: {
       config.valueSeries[index] ?? 0,
       targetSeries[index] ?? config.targetConfig.targetValue,
       config.targetConfig.warningThreshold,
-      config.goal,
+      config.targetConfig.goal,
     ),
   }));
 
@@ -1558,7 +1567,7 @@ function buildManagedTargetEntry(config: {
     unit: config.unit,
     accentColor: config.accentColor,
     comparisonKind: 'target',
-    goal: config.goal,
+    goal: config.targetConfig.goal,
     source: 'template',
     isCustom: false,
     available: true,
@@ -1569,7 +1578,7 @@ function buildManagedTargetEntry(config: {
     comparisonValue: currentTarget,
     comparisonLabel: 'Meta',
     diffValue: currentValue - currentTarget,
-    status: customStatusForValue(currentValue, currentTarget, config.targetConfig.warningThreshold, config.goal),
+    status: customStatusForValue(currentValue, currentTarget, config.targetConfig.warningThreshold, config.targetConfig.goal),
     points,
     chartValueLabel: 'Resultado',
     chartComparisonLabel: 'Meta',
@@ -1602,37 +1611,56 @@ function averageMonthly(values: number[]): number {
 
 function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext): KpiCatalogEntry[] {
   const { collection, forecast, operations } = context;
-  if (!forecast || !collection) return [];
+  if (!forecast) return [];
 
   const kpiConfigs = input.kpiConfigs ?? [];
   const labels = forecast.monthlyLabels;
   const activeMonth = input.activeMonth;
+  const zeroSeries = buildConstantSeries(labels.length, 0);
+  const monthlyCollectionFormulaData = buildCollectionFormulaData(input.clients, input.assumptions, input.confirmedPayments)?.monthly;
+  const monthlyForecastFormulaData = buildForecastFormulaData(input)?.monthly;
+  const collectionTargetMonthly = collection?.targetMonthly ?? zeroSeries;
+  const collectionConfirmedMonthly = collection?.confirmedMonthly ?? zeroSeries;
+  const collectionProjectedMonthly = collection?.projectedMonthly ?? forecast.activeMetrics.cobranza;
+  const collectionCoverageMonthly = collection?.coverageMonthly ?? zeroSeries;
   const avgMonthlyExpenses = averageMonthly(forecast.activeMetrics.egresos);
   const minimumSafetyDefault = avgMonthlyExpenses;
+  const baseTargetContextVariables: FormulaVariableMap = {
+    ...(monthlyForecastFormulaData?.variables ?? {}),
+    ...(monthlyCollectionFormulaData?.variables ?? {}),
+    meta_cobranza: collectionTargetMonthly,
+    cobranza_confirmada: collectionConfirmedMonthly,
+    cobranza_proyectada: collectionProjectedMonthly,
+    porcentaje_cobranza: collectionCoverageMonthly,
+    egresos_proyectados: forecast.activeMetrics.egresos,
+    flujo_neto_proyectado: forecast.activeMetrics.flujoNeto,
+    caja_proyectada_final: forecast.activeMetrics.cajaFinal,
+  };
   const minimumSafetyConfig = resolveManagedTargetConfig(
     'cash_minimum_safety',
     {
       targetValue: minimumSafetyDefault,
       targetSource: 'manual',
       targetOwner: 'system',
+      goal: 'higher',
       warningThreshold: defaultWarningThreshold(minimumSafetyDefault, 'higher'),
       notes: 'Meta sugerida automáticamente como un mes promedio de egresos proyectados.',
     },
     kpiConfigs,
   );
-  const minimumSafetySeries = resolveConfiguredTargetSeries(labels, null, minimumSafetyConfig);
+  const minimumSafetySeries = resolveConfiguredTargetSeries(labels, baseTargetContextVariables, minimumSafetyConfig);
   const actualOutflows = operations?.actualOutflowsMonthly ?? Array(12).fill(0);
   const actualInflows = operations?.actualInflowsMonthly ?? Array(12).fill(0);
   const actualNetFlow = operations?.actualNetFlowMonthly ?? Array(12).fill(0);
   const scheduledOutflows = operations?.scheduledOutflowsMonthly ?? Array(12).fill(0);
   const paymentDays = operations?.paymentDaysMonthly ?? Array(12).fill(0);
-  const overdueCollection = cumulativePositiveGap(collection.targetMonthly, collection.confirmedMonthly);
+  const overdueCollection = cumulativePositiveGap(collectionTargetMonthly, collectionConfirmedMonthly);
   const expenseCompliance = forecast.activeMetrics.egresos.map((targetValue, index) => {
     const actual = actualOutflows[index] ?? 0;
     return targetValue > 0 ? actual / targetValue : 0;
   });
   const flowVariance = forecast.activeMetrics.flujoNeto.map((projected, index) => Math.abs((actualNetFlow[index] ?? 0) - projected));
-  const workingCapital = forecast.activeMetrics.cajaFinal.map((cashValue, index) => cashValue + (collection.projectedMonthly[index] ?? 0) - (scheduledOutflows[index] ?? 0));
+  const workingCapital = forecast.activeMetrics.cajaFinal.map((cashValue, index) => cashValue + (collectionProjectedMonthly[index] ?? 0) - (scheduledOutflows[index] ?? 0));
   const coverageMonths = forecast.activeMetrics.cajaFinal.map((cashValue) => avgMonthlyExpenses > 0 ? cashValue / avgMonthlyExpenses : 0);
   const burnRate = actualOutflows.some((value) => value > 0)
     ? actualOutflows.map((outflow, index) => Math.max(outflow - (actualInflows[index] ?? 0), 0))
@@ -1646,17 +1674,13 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
       return cashValue < threshold;
     }).length
   ));
-  const monthlyCollectionFormulaData = buildCollectionFormulaData(input.clients, input.assumptions, input.confirmedPayments)?.monthly;
   const collectionLagSeries = buildConstantSeries(labels.length, 0).map((_, index) => (
     monthlyCollectionFormulaData?.variables.lag_promedio_dias?.[index] ?? 0
   ));
   const cycleConversionSeries = collectionLagSeries.map((lagValue, index) => lagValue - (paymentDays[index] ?? 0));
 
   const targetContextVariables: FormulaVariableMap = {
-    meta_cobranza: collection.targetMonthly,
-    egresos_proyectados: forecast.activeMetrics.egresos,
-    flujo_neto_proyectado: forecast.activeMetrics.flujoNeto,
-    caja_proyectada_final: forecast.activeMetrics.cajaFinal,
+    ...baseTargetContextVariables,
     caja_seguridad_minima: minimumSafetySeries,
   };
 
@@ -1672,10 +1696,11 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
     dataSourceLabel: string;
     note: string;
     formula: string | null;
-    defaults: Omit<ManagedTargetConfig, 'updatedAt' | 'history'>;
+    defaults: Omit<ManagedTargetConfig, 'updatedAt' | 'history' | 'goal'>;
     available?: boolean;
     availabilityReason?: string | null;
   }): KpiCatalogEntry => {
+    const targetConfig = resolveManagedTargetConfig(config.id, { ...config.defaults, goal: config.goal }, kpiConfigs);
     if (config.available === false) {
       return {
         id: config.id,
@@ -1685,7 +1710,7 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
         unit: config.unit,
         accentColor: config.accentColor,
         comparisonKind: 'target',
-        goal: config.goal,
+        goal: targetConfig.goal,
         source: 'template',
         isCustom: false,
         available: false,
@@ -1693,7 +1718,7 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
         periodLabel: null,
         periodKey: 'monthly',
         value: null,
-        comparisonValue: config.defaults.targetValue,
+        comparisonValue: targetConfig.targetValue,
         comparisonLabel: 'Meta',
         diffValue: null,
         status: 'na',
@@ -1703,19 +1728,18 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
         note: config.note,
         formula: config.formula,
         sourceDataLabel: config.dataSourceLabel,
-        targetValue: config.defaults.targetValue,
-        targetSource: config.defaults.targetSource,
-        targetSourceVariable: config.defaults.targetSourceVariable ?? null,
-        targetOwner: config.defaults.targetOwner,
-        targetUpdatedAt: null,
-        warningThreshold: config.defaults.warningThreshold,
-        manualNotes: config.defaults.notes,
-        targetHistory: [],
+        targetValue: targetConfig.targetValue,
+        targetSource: targetConfig.targetSource,
+        targetSourceVariable: targetConfig.targetSourceVariable ?? null,
+        targetOwner: targetConfig.targetOwner,
+        targetUpdatedAt: targetConfig.updatedAt,
+        warningThreshold: targetConfig.warningThreshold,
+        manualNotes: targetConfig.notes,
+        targetHistory: targetConfig.history,
         customUnitLabel: null,
       };
     }
 
-    const targetConfig = resolveManagedTargetConfig(config.id, config.defaults, kpiConfigs);
     return buildManagedTargetEntry({
       id: config.id,
       label: config.label,
@@ -1745,18 +1769,20 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
       unit: 'currency',
       accentColor: hex.success,
       goal: 'higher',
-      valueSeries: collection.confirmedMonthly,
+      valueSeries: collectionConfirmedMonthly,
       dataSourceLabel: 'Cobranza confirmada del módulo de clientes y meta teórica al 100% de cumplimiento.',
       note: 'Mide cuánto se cobró realmente contra la meta esperada del periodo.',
       formula: 'cobranza_confirmada',
       defaults: {
-        targetValue: collection.targetMonthly[activeMonth] ?? 0,
+        targetValue: collectionTargetMonthly[activeMonth] ?? 0,
         targetSource: 'auto',
         targetSourceVariable: 'meta_cobranza',
         targetOwner: 'historical',
-        warningThreshold: defaultWarningThreshold(collection.targetMonthly[activeMonth] ?? 0, 'higher'),
+        warningThreshold: defaultWarningThreshold(collectionTargetMonthly[activeMonth] ?? 0, 'higher'),
         notes: 'Meta automática basada en la agenda de cobranza con cumplimiento total.',
       },
+      available: Boolean(collection),
+      availabilityReason: 'Carga clientes y cobranza confirmada para medir la meta de cobranza.',
     }),
     makeEntry({
       id: 'cash_expense_target',
@@ -1821,8 +1847,8 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
         warningThreshold: 45,
         notes: 'Meta sugerida como máximo aceptable del ciclo de conversión.',
       },
-      available: Boolean(operations && operations.paymentDaysAverage > 0),
-      availabilityReason: 'Carga registros de CXP con fecha de factura y programación de pago para medir el ciclo.',
+      available: Boolean(collection && operations && operations.paymentDaysAverage > 0),
+      availabilityReason: 'Carga clientes y CXP con fechas de factura/programación para medir el ciclo.',
     }),
     makeEntry({
       id: 'cash_working_capital',
@@ -1863,6 +1889,8 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
         warningThreshold: 45,
         notes: 'Meta histórica sugerida para días promedio de cobranza.',
       },
+      available: Boolean(collection),
+      availabilityReason: 'Carga clientes para calcular los días promedio de cobranza.',
     }),
     makeEntry({
       id: 'cash_avg_payment_days',
@@ -1967,9 +1995,11 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
         targetValue: 0,
         targetSource: 'manual',
         targetOwner: 'historical',
-        warningThreshold: collection.targetMonthly[activeMonth] ?? 0,
+        warningThreshold: collectionTargetMonthly[activeMonth] ?? 0,
         notes: 'La meta deseable es cero vencido acumulado.',
       },
+      available: Boolean(collection),
+      availabilityReason: 'Carga clientes y cobros confirmados para calcular cobranza vencida.',
     }),
     makeEntry({
       id: 'cash_collection_compliance',
@@ -1979,7 +2009,7 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
       unit: 'percent',
       accentColor: hex.info,
       goal: 'higher',
-      valueSeries: collection.coverageMonthly,
+      valueSeries: collectionCoverageMonthly,
       dataSourceLabel: 'Cobros confirmados y meta de cobranza.',
       note: 'Un valor de 100% o más indica cumplimiento de la meta.',
       formula: 'porcentaje_cobranza',
@@ -1990,6 +2020,8 @@ function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext):
         warningThreshold: 0.85,
         notes: 'La meta recomendada es al menos 100% de cumplimiento.',
       },
+      available: Boolean(collection),
+      availabilityReason: 'Carga clientes y cobros confirmados para medir cumplimiento de cobranza.',
     }),
     makeEntry({
       id: 'cash_expense_compliance',
@@ -2146,6 +2178,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         targetSource: definition.targetSource,
         targetSourceVariable: definition.targetSourceVariable,
         targetOwner,
+        goal: definition.goal,
         warningThreshold: definition.warningThreshold,
         notes: definition.notes,
       },
@@ -2181,7 +2214,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         unit: definition.unit,
         accentColor: hex.primary,
         comparisonKind: 'target',
-        goal: definition.goal,
+        goal: targetConfig.goal,
         source: 'custom',
         isCustom: true,
         available: false,
@@ -2220,7 +2253,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         unit: definition.unit,
         accentColor: hex.primary,
         comparisonKind: 'target',
-        goal: definition.goal,
+        goal: targetConfig.goal,
         source: 'custom',
         isCustom: true,
         available: false,
@@ -2270,7 +2303,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         label,
         value: values[index] ?? 0,
         comparison: targetValueForPoint,
-        status: customStatusForValue(values[index] ?? 0, targetValueForPoint, targetConfig.warningThreshold, definition.goal),
+        status: customStatusForValue(values[index] ?? 0, targetValueForPoint, targetConfig.warningThreshold, targetConfig.goal),
       };
     });
     const currentValue = values[currentIndex] ?? 0;
@@ -2288,7 +2321,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
       unit: definition.unit,
       accentColor: hex.primary,
       comparisonKind: 'target',
-      goal: definition.goal,
+      goal: targetConfig.goal,
       source: 'custom',
       isCustom: true,
       available: true,
@@ -2299,7 +2332,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
       comparisonValue: currentTarget,
       comparisonLabel: 'Meta',
       diffValue: currentValue - currentTarget,
-      status: customStatusForValue(currentValue, currentTarget, targetConfig.warningThreshold, definition.goal),
+      status: customStatusForValue(currentValue, currentTarget, targetConfig.warningThreshold, targetConfig.goal),
       points,
       chartValueLabel: 'Resultado',
       chartComparisonLabel: 'Meta',
