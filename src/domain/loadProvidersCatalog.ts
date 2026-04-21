@@ -93,12 +93,6 @@ function flexibilityCommentFromFlexibility(flex: Flexibility): string {
   }
 }
 
-function estimateCreditLimit(last: LastPaymentEntry | undefined, flex: Flexibility): number | undefined {
-  if (!last?.ultimoMonto || last.ultimoMonto <= 0) return undefined;
-  const multiplier = flex === 'inamovible' ? 2 : flex === 'revisar' ? 1.5 : 1.25;
-  return Math.round((last.ultimoMonto * multiplier) / 1000) * 1000;
-}
-
 function normalizeDateLike(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -178,8 +172,8 @@ export function loadProvidersCatalog(): Provider[] {
       paymentPeriod: paymentPeriodFromCondPago(last?.condPago),
       flexibility: flex,
       flexibilityComment: flexibilityCommentFromFlexibility(flex),
-      creditLimit: estimateCreditLimit(last, flex),
-      lastUpdatedAt: normalizeDateLike(last?.ultimaFecha),
+      creditLimit: undefined,
+      lastUpdatedAt: normalizeDateLike(catalog.generated),
       dtiArea: dti?.area,
       dtiCriticidad: dti?.criticidad,
     });

@@ -348,8 +348,8 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                 <Th>Riesgo</Th>
                 <Th>Periodo de pago</Th>
                 <Th>Flexibilidad</Th>
-                <Th>Credito</Th>
-                <Th>Actualizacion</Th>
+                <Th>Limite credito</Th>
+                <Th>Ultima actualizacion</Th>
                 <Th>Comentarios</Th>
                 <Th className="w-10 pr-3" />
               </tr>
@@ -452,8 +452,8 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                       value={p.creditLimit ?? ''}
                       onChange={e => updateProvider({ ...p, creditLimit: e.target.value === '' ? undefined : Number(e.target.value) })}
                       className="w-28 bg-transparent tabular-nums text-right focus:outline-none text-[var(--gray-700)]"
-                      placeholder="Sin limite"
-                      title="Limite de credito por proveedor"
+                      placeholder="Capturar"
+                      title="Limite de credito capturado para este proveedor"
                     />
                   </Td>
                   <Td>
@@ -463,6 +463,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                         value={(p.lastUpdatedAt ?? '').slice(0, 10)}
                         onChange={e => onUpdate({ ...p, lastUpdatedAt: e.target.value ? `${e.target.value}T00:00:00.000Z` : undefined })}
                         className="w-32 bg-transparent text-[12px] text-[var(--gray-700)] focus:outline-none"
+                        title="Fecha de ultima actualizacion del registro de proveedor"
                       />
                       <span className={`block text-[10px] ${staleTone(p.lastUpdatedAt)}`}>
                         {daysWithoutUpdateLabel(p.lastUpdatedAt)}
