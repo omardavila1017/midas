@@ -688,11 +688,7 @@ export function evaluateScenario(
             ? baseValue * effect.value * weight
             : effect.value * weight;
 
-        applyDelta(simulatedValuesByConceptId, effect.conceptId, periodIndex, delta, {
-          simulationId: simulation.id,
-          simulationName: simulation.name,
-          yearMonth: periodKey,
-        });
+        applyDelta(simulatedValuesByConceptId, effect.conceptId, periodIndex, delta);
         applyDelta(finalValuesByConceptId, effect.conceptId, periodIndex, delta, {
           simulationId: simulation.id,
           simulationName: simulation.name,
