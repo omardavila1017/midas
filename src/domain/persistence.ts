@@ -380,7 +380,7 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
     activeKpiIds: Array.isArray(data.activeKpiIds)
       ? data.activeKpiIds.filter((value): value is string => typeof value === 'string')
       : [...DEFAULT_ACTIVE_KPI_IDS],
-    customKpis: validateArray<CustomKpiDefinition>(data.customKpis, 'customKpis'),
+    customKpis: validateArray<CustomKpiDefinition>(data.customKpis, 'customKpis').map(normalizeCustomKpi),
     scenarioCellOverrides: validateArray<ScenarioCellOverride>(
       data.scenarioCellOverrides,
       'scenarioCellOverrides',
@@ -568,6 +568,20 @@ function validateArray<T>(value: unknown, fieldName: string): T[] {
     return [];
   }
   return value;
+}
+
+function normalizeCustomKpi(value: CustomKpiDefinition): CustomKpiDefinition {
+  const anyValue = value as CustomKpiDefinition & { targetSource?: unknown; targetSourceVariable?: unknown };
+  const rawSource = anyValue.targetSource;
+  const targetSource: CustomKpiDefinition['targetSource'] = rawSource === 'auto' ? 'auto' : 'manual';
+  const targetSourceVariable = typeof anyValue.targetSourceVariable === 'string' && anyValue.targetSourceVariable.length > 0
+    ? anyValue.targetSourceVariable
+    : undefined;
+  return {
+    ...value,
+    targetSource,
+    targetSourceVariable: targetSource === 'auto' ? targetSourceVariable : undefined,
+  };
 }
 
 function validateAssumptions(value: unknown): CashFlowAssumptions {

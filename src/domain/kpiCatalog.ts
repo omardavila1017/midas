@@ -20,12 +20,16 @@ export type KpiComparisonKind = 'target' | 'base';
 export type KpiStatus = 'met' | 'warning' | 'missed' | 'na';
 export type KpiPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
+export type KpiTargetSource = 'manual' | 'auto';
+
 export interface CustomKpiDefinition {
   id: string;
   name: string;
   category: string;
   formula: string;
   targetValue: number;
+  targetSource: KpiTargetSource;
+  targetSourceVariable?: string;
   period: KpiPeriod;
   unit: KpiUnit;
   customUnitLabel?: string;
@@ -81,6 +85,9 @@ export interface KpiCatalogEntry {
   note: string | null;
   formula: string | null;
   targetValue: number | null;
+  targetSource: KpiTargetSource | null;
+  targetSourceVariable: string | null;
+  targetUpdatedAt: string | null;
   warningThreshold: number | null;
   customUnitLabel: string | null;
 }
@@ -123,6 +130,9 @@ interface KpiDefinition {
     | 'goal'
     | 'source'
     | 'isCustom'
+    | 'targetSource'
+    | 'targetSourceVariable'
+    | 'targetUpdatedAt'
   >;
 }
 
@@ -216,6 +226,14 @@ export const KPI_GOAL_OPTIONS: Array<{ value: KpiGoal; label: string }> = [
   { value: 'lower', label: 'Más bajo es mejor' },
 ];
 
+export const KPI_VARIABLE_GROUP_ORIGIN: Record<string, string> = {
+  'Pronóstico': 'Pronóstico del escenario activo',
+  'Base / presupuesto': 'Plan de flujo base (pronóstico original)',
+  'Desviaciones': 'Diferencia entre escenario activo y base',
+  'Cobranza': 'Módulo Cobranza (clientes + pagos confirmados)',
+  'Conceptos del plan': 'Concepto del plan de flujo cargado',
+};
+
 export const KPI_FORMULA_HELPERS: KpiFormulaHelperDoc[] = [
   { signature: 'safe_div(a, b)', description: 'Divide y regresa 0 si el denominador es 0.' },
   { signature: 'pct(a, b)', description: 'Atajo de porcentaje: a / b.' },
@@ -289,6 +307,9 @@ function unavailable(definition: KpiDefinition, reason: string): KpiCatalogEntry
     note: null,
     formula: null,
     targetValue: null,
+    targetSource: null,
+    targetSourceVariable: null,
+    targetUpdatedAt: null,
     warningThreshold: null,
     customUnitLabel: null,
   };
@@ -413,6 +434,9 @@ function buildCollectionMonthlyEntry(
   | 'goal'
   | 'source'
   | 'isCustom'
+  | 'targetSource'
+  | 'targetSourceVariable'
+  | 'targetUpdatedAt'
 > {
   const collection = context.collection!;
   const value = config.valueSeries[context.activeMonth] ?? 0;
@@ -458,6 +482,9 @@ function buildForecastMonthlyEntry(
   | 'goal'
   | 'source'
   | 'isCustom'
+  | 'targetSource'
+  | 'targetSourceVariable'
+  | 'targetUpdatedAt'
 > {
   const forecast = context.forecast!;
   const value = config.valueSeries[context.activeMonth] ?? 0;
@@ -505,6 +532,9 @@ function buildForecastSummaryEntry(
   | 'goal'
   | 'source'
   | 'isCustom'
+  | 'targetSource'
+  | 'targetSourceVariable'
+  | 'targetUpdatedAt'
 > {
   const forecast = context.forecast!;
   return {
@@ -1193,6 +1223,11 @@ function buildForecastFormulaData(input: KpiCatalogInput): Record<KpiPeriod, For
   return periodData;
 }
 
+export function extractFormulaIdentifiers(expression: string): string[] {
+  const identifiers = expression.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+  return Array.from(new Set(identifiers));
+}
+
 function validateFormula(expression: string, allowedVariables: string[]): string | null {
   const trimmed = expression.trim();
   if (!trimmed) return 'Escribe una fórmula para el KPI.';
@@ -1250,15 +1285,15 @@ function currentIndexForPeriod(period: KpiPeriod, activeMonth: number, values: n
   return latestMeaningfulIndex(values, comparisonValue);
 }
 
-function customStatusForValue(value: number, definition: CustomKpiDefinition): KpiStatus {
-  if (definition.goal === 'higher') {
-    if (value >= definition.targetValue) return 'met';
-    if (value >= definition.warningThreshold) return 'warning';
+function customStatusForValue(value: number, target: number, warningThreshold: number, goal: KpiGoal): KpiStatus {
+  if (goal === 'higher') {
+    if (value >= target) return 'met';
+    if (value >= warningThreshold) return 'warning';
     return 'missed';
   }
 
-  if (value <= definition.targetValue) return 'met';
-  if (value <= definition.warningThreshold) return 'warning';
+  if (value <= target) return 'met';
+  if (value <= warningThreshold) return 'warning';
   return 'missed';
 }
 
@@ -1288,6 +1323,8 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
 
     const formulaError = validateFormula(definition.formula, allowedVariables);
 
+    const autoVariable = definition.targetSource === 'auto' ? definition.targetSourceVariable : undefined;
+
     if (!periodData || periodData.labels.length === 0) {
       return {
         id: definition.id,
@@ -1315,6 +1352,9 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         note: definition.notes,
         formula: definition.formula,
         targetValue: definition.targetValue,
+        targetSource: definition.targetSource,
+        targetSourceVariable: autoVariable ?? null,
+        targetUpdatedAt: definition.updatedAt,
         warningThreshold: definition.warningThreshold,
         customUnitLabel: definition.customUnitLabel ?? null,
       };
@@ -1347,6 +1387,9 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         note: definition.notes,
         formula: definition.formula,
         targetValue: definition.targetValue,
+        targetSource: definition.targetSource,
+        targetSourceVariable: autoVariable ?? null,
+        targetUpdatedAt: definition.updatedAt,
         warningThreshold: definition.warningThreshold,
         customUnitLabel: definition.customUnitLabel ?? null,
       };
@@ -1359,14 +1402,28 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
       return evaluateFormula(definition.formula, scope);
     });
 
-    const currentIndex = currentIndexForPeriod(definition.period, input.activeMonth, values, definition.targetValue);
-    const points = periodData.labels.map((label, index) => ({
-      label,
-      value: values[index] ?? 0,
-      comparison: definition.targetValue,
-      status: customStatusForValue(values[index] ?? 0, definition),
-    }));
+    const autoSeries = autoVariable ? periodData.variables[autoVariable] : undefined;
+    const autoIsValid = autoVariable ? Array.isArray(autoSeries) : false;
+    const targetSeries = autoIsValid
+      ? periodData.labels.map((_, index) => autoSeries?.[index] ?? definition.targetValue)
+      : periodData.labels.map(() => definition.targetValue);
+
+    const currentIndex = currentIndexForPeriod(definition.period, input.activeMonth, values, targetSeries[0] ?? definition.targetValue);
+    const points = periodData.labels.map((label, index) => {
+      const targetValueForPoint = targetSeries[index] ?? definition.targetValue;
+      return {
+        label,
+        value: values[index] ?? 0,
+        comparison: targetValueForPoint,
+        status: customStatusForValue(values[index] ?? 0, targetValueForPoint, definition.warningThreshold, definition.goal),
+      };
+    });
     const currentValue = values[currentIndex] ?? 0;
+    const currentTarget = targetSeries[currentIndex] ?? definition.targetValue;
+
+    const availabilityReason = autoVariable && !autoIsValid
+      ? `La meta automática referencia "${autoVariable}" pero no está disponible en este contexto.`
+      : null;
 
     return {
       id: definition.id,
@@ -1380,20 +1437,23 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
       source: 'custom',
       isCustom: true,
       available: true,
-      availabilityReason: null,
+      availabilityReason,
       periodLabel: periodData.labels[currentIndex] ?? null,
       periodKey: definition.period,
       value: currentValue,
-      comparisonValue: definition.targetValue,
+      comparisonValue: currentTarget,
       comparisonLabel: 'Meta',
-      diffValue: currentValue - definition.targetValue,
-      status: customStatusForValue(currentValue, definition),
+      diffValue: currentValue - currentTarget,
+      status: customStatusForValue(currentValue, currentTarget, definition.warningThreshold, definition.goal),
       points,
       chartValueLabel: 'Resultado',
       chartComparisonLabel: 'Meta',
       note: definition.notes,
       formula: definition.formula,
       targetValue: definition.targetValue,
+      targetSource: definition.targetSource,
+      targetSourceVariable: autoVariable ?? null,
+      targetUpdatedAt: definition.updatedAt,
       warningThreshold: definition.warningThreshold,
       customUnitLabel: definition.customUnitLabel ?? null,
     };
@@ -1427,6 +1487,9 @@ export function buildKpiCatalog(input: KpiCatalogInput): KpiCatalogEntry[] {
       goal: definition.goal,
       source: 'template',
       isCustom: false,
+      targetSource: null,
+      targetSourceVariable: null,
+      targetUpdatedAt: null,
       ...definition.build(context),
     };
   });
