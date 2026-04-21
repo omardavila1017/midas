@@ -34,12 +34,17 @@ import {
   KPI_VARIABLE_GROUP_ORIGIN,
   type CustomKpiDefinition,
   type KpiCatalogEntry,
+  type KpiConfigOverride,
   type KpiGoal,
   type KpiPeriod,
   type KpiStatus,
+  type KpiTargetHistoryEntry,
+  type KpiTargetOwner,
   type KpiTargetSource,
   type KpiUnit,
 } from '../domain/kpiCatalog';
+import type { CXPRecord } from '../domain/persistence';
+import type { BankAccountStatement } from '../services/jdeTypes';
 import type { FlowPlan, Proposal, Scenario, ScenarioCellOverride, Simulation } from '../types';
 import { MONTHS_FULL } from '../types';
 import { hex } from '../theme';
@@ -49,6 +54,8 @@ interface Props {
   clients: Client[];
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
+  cxpRecords: CXPRecord[];
+  bankStatements: BankAccountStatement[];
   plan: FlowPlan | null;
   proposals: Proposal[];
   scenarios: Scenario[];
@@ -61,6 +68,8 @@ interface Props {
   defaultKpiIds: readonly string[];
   customKpis: CustomKpiDefinition[];
   onCustomKpisChange: (kpis: CustomKpiDefinition[]) => void;
+  kpiConfigs: KpiConfigOverride[];
+  onKpiConfigsChange: (configs: KpiConfigOverride[]) => void;
 }
 
 interface CustomKpiDraft {
@@ -71,6 +80,7 @@ interface CustomKpiDraft {
   targetValue: string;
   targetSource: KpiTargetSource;
   targetSourceVariable: string;
+  targetOwner: KpiTargetOwner;
   period: KpiPeriod;
   unit: KpiUnit;
   customUnitLabel: string;
@@ -78,6 +88,20 @@ interface CustomKpiDraft {
   warningThreshold: string;
   notes: string;
   presetId: string;
+}
+
+interface KpiConfigDraft {
+  kpiId: string;
+  label: string;
+  unit: KpiUnit;
+  customUnitLabel: string | null;
+  goal: KpiGoal;
+  targetValue: string;
+  targetSource: KpiTargetSource;
+  targetSourceVariable: string;
+  targetOwner: KpiTargetOwner;
+  warningThreshold: string;
+  notes: string;
 }
 
 type WizardStep = 1 | 2 | 3;
@@ -172,6 +196,12 @@ const KPI_PRESETS: KpiPreset[] = [
 
 const CUSTOM_PRESET_ID = 'custom';
 
+const KPI_TARGET_OWNER_OPTIONS: Array<{ value: KpiTargetOwner; label: string; description: string }> = [
+  { value: 'user', label: 'Usuario', description: 'Meta capturada o aprobada manualmente.' },
+  { value: 'system', label: 'Sistema', description: 'Meta sugerida por reglas del sistema.' },
+  { value: 'historical', label: 'Datos históricos', description: 'Meta basada en comportamiento histórico.' },
+];
+
 function defaultActiveMonth(year: number): number {
   const now = new Date();
   return now.getFullYear() === year ? now.getMonth() : 0;
@@ -197,6 +227,7 @@ function makeDraft(definition?: CustomKpiDefinition): CustomKpiDraft {
     targetValue,
     targetSource: definition?.targetSource ?? 'manual',
     targetSourceVariable: definition?.targetSourceVariable ?? '',
+    targetOwner: definition?.targetOwner ?? 'user',
     period: definition?.period ?? 'monthly',
     unit: definition?.unit ?? 'percent',
     customUnitLabel: definition?.customUnitLabel ?? '',
@@ -205,6 +236,46 @@ function makeDraft(definition?: CustomKpiDefinition): CustomKpiDraft {
     notes: definition?.notes ?? '',
     presetId: definition ? CUSTOM_PRESET_ID : 'porcentaje_cobranza',
   };
+}
+
+function valueToDraft(unit: KpiUnit, value: number | null | undefined): string {
+  const safeValue = value ?? 0;
+  return unit === 'percent' ? String(safeValue * 100) : String(safeValue);
+}
+
+function draftToValue(unit: KpiUnit, value: string): number {
+  const parsed = Number(value);
+  return unit === 'percent' ? parsed / 100 : parsed;
+}
+
+function makeConfigDraft(entry: KpiCatalogEntry): KpiConfigDraft {
+  return {
+    kpiId: entry.id,
+    label: entry.label,
+    unit: entry.unit,
+    customUnitLabel: entry.customUnitLabel,
+    goal: entry.goal,
+    targetValue: valueToDraft(entry.unit, entry.targetValue ?? entry.comparisonValue ?? 0),
+    targetSource: entry.targetSource ?? 'manual',
+    targetSourceVariable: entry.targetSourceVariable ?? '',
+    targetOwner: entry.targetOwner ?? 'user',
+    warningThreshold: valueToDraft(entry.unit, entry.warningThreshold ?? entry.targetValue ?? entry.comparisonValue ?? 0),
+    notes: entry.manualNotes ?? entry.note ?? '',
+  };
+}
+
+function targetOwnerLabel(owner: KpiTargetOwner | null): string {
+  if (owner === 'system') return 'Sistema';
+  if (owner === 'historical') return 'Datos históricos';
+  return 'Usuario';
+}
+
+function targetSourceLabel(source: KpiTargetSource | null): string {
+  return source === 'auto' ? 'Automática' : 'Manual';
+}
+
+function periodLabel(period: KpiPeriod | null): string {
+  return KPI_PERIOD_OPTIONS.find((option) => option.value === period)?.label ?? 'Sin periodo';
 }
 
 function applyPresetToDraft(draft: CustomKpiDraft, preset: KpiPreset): CustomKpiDraft {
@@ -266,12 +337,10 @@ function formatKpiUpdatedAt(iso: string | null): string | null {
 }
 
 function statusLabel(entry: KpiCatalogEntry, status: KpiStatus): string {
+  void entry;
   if (status === 'na') return 'Sin datos';
-  if (status === 'warning') return 'Alerta';
-  if (entry.comparisonKind === 'target') {
-    return status === 'met' ? 'Meta cumplida' : 'Crítico';
-  }
-  return status === 'met' ? 'Mejor que base' : 'Peor que base';
+  if (status === 'warning') return 'En riesgo';
+  return status === 'met' ? 'Bien' : 'Crítico';
 }
 
 function statusClasses(status: KpiStatus): string {
@@ -289,10 +358,16 @@ function StatusBadge({ entry, status }: { entry: KpiCatalogEntry; status: KpiSta
   );
 }
 
+function canConfigureEntry(entry: KpiCatalogEntry): boolean {
+  return entry.targetSource !== null || entry.isCustom;
+}
+
 export default function KpiCenter({
   clients,
   assumptions,
   confirmedPayments,
+  cxpRecords,
+  bankStatements,
   plan,
   proposals,
   scenarios,
@@ -305,6 +380,8 @@ export default function KpiCenter({
   defaultKpiIds,
   customKpis,
   onCustomKpisChange,
+  kpiConfigs,
+  onKpiConfigsChange,
 }: Props) {
   const [activeMonth, setActiveMonth] = useState(() => defaultActiveMonth(assumptions.year));
   const [selectedKpiId, setSelectedKpiId] = useState<string | null>(null);
@@ -312,6 +389,9 @@ export default function KpiCenter({
   const [showEditor, setShowEditor] = useState(false);
   const [draft, setDraft] = useState<CustomKpiDraft>(() => makeDraft());
   const [formError, setFormError] = useState<string | null>(null);
+  const [showConfigEditor, setShowConfigEditor] = useState(false);
+  const [configDraft, setConfigDraft] = useState<KpiConfigDraft | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveMonth(defaultActiveMonth(assumptions.year));
@@ -324,6 +404,8 @@ export default function KpiCenter({
       clients,
       assumptions,
       confirmedPayments,
+      cxpRecords,
+      bankStatements,
       plan,
       proposals,
       scenarios,
@@ -333,11 +415,14 @@ export default function KpiCenter({
       activeScenarioId,
       activeMonth,
       customKpis,
+      kpiConfigs,
     }),
     [
       clients,
       assumptions,
       confirmedPayments,
+      cxpRecords,
+      bankStatements,
       plan,
       proposals,
       scenarios,
@@ -347,6 +432,7 @@ export default function KpiCenter({
       activeScenarioId,
       activeMonth,
       customKpis,
+      kpiConfigs,
     ],
   );
 
@@ -392,6 +478,7 @@ export default function KpiCenter({
 
   const deleteCustomKpi = (id: string) => {
     onCustomKpisChange(customKpis.filter((item) => item.id !== id));
+    onKpiConfigsChange(kpiConfigs.filter((item) => item.kpiId !== id));
     onActiveKpiIdsChange(activeKpiIds.filter((item) => item !== id));
     if (selectedKpiId === id) setSelectedKpiId(null);
   };
@@ -412,6 +499,90 @@ export default function KpiCenter({
     setDraft(makeDraft(definition));
     setFormError(null);
     setShowEditor(true);
+  };
+
+  const openConfig = (entry: KpiCatalogEntry) => {
+    if (!canConfigureEntry(entry)) return;
+    setConfigDraft(makeConfigDraft(entry));
+    setConfigError(null);
+    setShowConfigEditor(true);
+  };
+
+  const saveConfigDraft = () => {
+    if (!configDraft) return;
+    const entry = entryById.get(configDraft.kpiId);
+    if (!entry) {
+      setConfigError('No se encontró el KPI que quieres editar.');
+      return;
+    }
+
+    const targetValue = draftToValue(configDraft.unit, configDraft.targetValue);
+    const warningThreshold = draftToValue(configDraft.unit, configDraft.warningThreshold);
+    const targetSourceVariable = configDraft.targetSourceVariable.trim();
+    const notes = configDraft.notes.trim();
+
+    if (!Number.isFinite(targetValue)) {
+      setConfigError('La meta debe ser un número válido.');
+      return;
+    }
+    if (!Number.isFinite(warningThreshold)) {
+      setConfigError('El umbral de alerta debe ser un número válido.');
+      return;
+    }
+    if (configDraft.targetSource === 'auto' && !targetSourceVariable) {
+      setConfigError('Selecciona una variable para la meta automática.');
+      return;
+    }
+    if (configDraft.goal === 'higher' && warningThreshold > targetValue) {
+      setConfigError('Cuando más alto es mejor, la alerta debe ser menor o igual a la meta.');
+      return;
+    }
+    if (configDraft.goal === 'lower' && warningThreshold < targetValue) {
+      setConfigError('Cuando más bajo es mejor, la alerta debe ser mayor o igual a la meta.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const previousConfig = kpiConfigs.find((item) => item.kpiId === configDraft.kpiId);
+    const previousTargetValue = entry.targetValue ?? entry.comparisonValue ?? 0;
+    const previousWarningThreshold = entry.warningThreshold ?? previousTargetValue;
+    const previousTargetSource = entry.targetSource ?? 'manual';
+    const previousTargetOwner = entry.targetOwner ?? 'user';
+    const changedTarget =
+      previousTargetValue !== targetValue ||
+      previousWarningThreshold !== warningThreshold ||
+      previousTargetSource !== configDraft.targetSource ||
+      (entry.targetSourceVariable ?? '') !== (configDraft.targetSource === 'auto' ? targetSourceVariable : '') ||
+      previousTargetOwner !== configDraft.targetOwner;
+    const nextHistoryEntry: KpiTargetHistoryEntry = {
+      value: targetValue,
+      warningThreshold,
+      targetSource: configDraft.targetSource,
+      targetSourceVariable: configDraft.targetSource === 'auto' ? targetSourceVariable : undefined,
+      targetOwner: configDraft.targetOwner,
+      note: notes || undefined,
+      changedAt: now,
+    };
+    const nextConfig: KpiConfigOverride = {
+      kpiId: configDraft.kpiId,
+      targetValue,
+      targetSource: configDraft.targetSource,
+      targetSourceVariable: configDraft.targetSource === 'auto' ? targetSourceVariable : undefined,
+      targetOwner: configDraft.targetOwner,
+      warningThreshold,
+      notes,
+      updatedAt: now,
+      history: changedTarget
+        ? [...(previousConfig?.history ?? entry.targetHistory), nextHistoryEntry]
+        : (previousConfig?.history ?? entry.targetHistory),
+    };
+
+    const exists = kpiConfigs.some((item) => item.kpiId === configDraft.kpiId);
+    onKpiConfigsChange(exists
+      ? kpiConfigs.map((item) => (item.kpiId === configDraft.kpiId ? nextConfig : item))
+      : [...kpiConfigs, nextConfig]);
+    setShowConfigEditor(false);
+    setSelectedKpiId(configDraft.kpiId);
   };
 
   const saveDraft = () => {
@@ -454,6 +625,26 @@ export default function KpiCenter({
     }
 
     const now = new Date().toISOString();
+    const existingDefinition = draft.id ? customKpis.find((item) => item.id === draft.id) : null;
+    const changedTarget =
+      !existingDefinition ||
+      existingDefinition.targetValue !== targetValue ||
+      existingDefinition.warningThreshold !== warningThreshold ||
+      existingDefinition.targetSource !== draft.targetSource ||
+      (existingDefinition.targetSourceVariable ?? '') !== (draft.targetSource === 'auto' ? targetSourceVariable : '') ||
+      (existingDefinition.targetOwner ?? 'user') !== draft.targetOwner;
+    const targetHistory: KpiTargetHistoryEntry[] = [
+      ...(existingDefinition?.targetHistory ?? []),
+      ...(changedTarget ? [{
+        value: targetValue,
+        warningThreshold,
+        targetSource: draft.targetSource,
+        targetSourceVariable: draft.targetSource === 'auto' ? targetSourceVariable : undefined,
+        targetOwner: draft.targetOwner,
+        note: draft.notes.trim() || undefined,
+        changedAt: now,
+      }] : []),
+    ];
     const nextDefinition: CustomKpiDefinition = {
       id: draft.id ?? `custom-kpi-${Date.now()}`,
       name,
@@ -467,8 +658,10 @@ export default function KpiCenter({
       customUnitLabel: draft.unit === 'custom' ? draft.customUnitLabel.trim() : undefined,
       goal: draft.goal,
       warningThreshold,
+      targetOwner: draft.targetOwner,
       notes: draft.notes.trim(),
-      createdAt: draft.id ? (customKpis.find((item) => item.id === draft.id)?.createdAt ?? now) : now,
+      targetHistory,
+      createdAt: draft.id ? (existingDefinition?.createdAt ?? now) : now,
       updatedAt: now,
     };
 
@@ -535,6 +728,7 @@ export default function KpiCenter({
             <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] uppercase tracking-wide text-[11px]">
               <tr>
                 <th className="px-5 py-3 text-left font-medium">KPI</th>
+                <th className="px-4 py-3 text-left font-medium">Fuente</th>
                 <th className="px-4 py-3 text-left font-medium">Categoría</th>
                 <th className="px-4 py-3 text-left font-medium">Periodo</th>
                 <th className="px-4 py-3 text-right font-medium">Resultado</th>
@@ -583,6 +777,11 @@ export default function KpiCenter({
                         </div>
                       </div>
                     </td>
+                    <td className="px-4 py-3.5 text-[var(--gray-500)]">
+                      <div className="max-w-[220px] leading-5">
+                        {entry.sourceDataLabel ?? 'Datos del plan y escenario activo'}
+                      </div>
+                    </td>
                     <td className="px-4 py-3.5 text-[var(--gray-500)]">{entry.category}</td>
                     <td className="px-4 py-3.5 text-[var(--gray-500)]">{entry.periodLabel ?? '—'}</td>
                     <td className="px-4 py-3.5 text-right font-medium tabular-nums text-[var(--gray-950)]">
@@ -594,11 +793,12 @@ export default function KpiCenter({
                       ) : (
                         <>
                           <div>{entry.comparisonLabel}: {formatKpiCompact(entry.unit, entry.comparisonValue, entry.customUnitLabel)}</div>
-                          {entry.isCustom && entry.targetSource && (
+                          {entry.targetSource && (
                             <div className="mt-0.5 text-[11px] text-[var(--gray-400)] normal-case tracking-normal">
                               {entry.targetSource === 'auto'
                                 ? `Auto${entry.targetSourceVariable ? ` · ${entry.targetSourceVariable}` : ''}`
                                 : 'Manual'}
+                              {entry.targetOwner ? ` · ${targetOwnerLabel(entry.targetOwner)}` : ''}
                             </div>
                           )}
                         </>
@@ -624,6 +824,18 @@ export default function KpiCenter({
                             <Pencil className="w-4 h-4" />
                           </button>
                         )}
+                        {canConfigureEntry(entry) && (
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openConfig(entry);
+                            }}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--gray-200)] text-[var(--gray-400)] transition-colors hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]"
+                            aria-label={`Editar meta de ${entry.label}`}
+                          >
+                            <Target className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           onClick={(event) => {
                             event.stopPropagation();
@@ -642,7 +854,7 @@ export default function KpiCenter({
               })}
               {activeEntries.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-12 text-center">
+                  <td colSpan={9} className="px-5 py-12 text-center">
                     <p className="text-[15px] font-medium text-[var(--gray-950)]">No hay KPIs activos</p>
                     <p className="mt-1 text-[13px] text-[var(--gray-400)]">Agrega plantillas o crea KPIs personalizados para construir tu tablero.</p>
                   </td>
@@ -736,6 +948,7 @@ export default function KpiCenter({
         <KpiDetailModal
           entry={selectedEntry}
           variableDocs={variableDocs}
+          onConfigure={() => openConfig(selectedEntry)}
           onClose={() => setSelectedKpiId(null)}
         />
       )}
@@ -750,6 +963,195 @@ export default function KpiCenter({
           variableDocs={variableDocs}
         />
       )}
+
+      {showConfigEditor && configDraft && (
+        <KpiConfigEditor
+          draft={configDraft}
+          onDraftChange={setConfigDraft}
+          onClose={() => setShowConfigEditor(false)}
+          onSave={saveConfigDraft}
+          error={configError}
+          variableDocs={variableDocs}
+        />
+      )}
+    </div>
+  );
+}
+
+function KpiConfigEditor({
+  draft,
+  onDraftChange,
+  onClose,
+  onSave,
+  error,
+  variableDocs,
+}: {
+  draft: KpiConfigDraft;
+  onDraftChange: (draft: KpiConfigDraft) => void;
+  onClose: () => void;
+  onSave: () => void;
+  error: string | null;
+  variableDocs: ReturnType<typeof getKpiVariableDocs>;
+}) {
+  const targetHint = draft.unit === 'percent'
+    ? 'Captura el porcentaje completo. Ejemplo: 85 equivale a 85%.'
+    : 'Captura la meta en la unidad del KPI.';
+
+  return (
+    <div
+      className="fixed inset-0 px-4 py-6 md:py-10"
+      style={{ backgroundColor: 'rgba(29, 29, 31, 0.34)', zIndex: 75 }}
+      onClick={onClose}
+    >
+      <div
+        className="mx-auto max-w-2xl rounded-[28px] bg-white shadow-2xl shadow-black/10 overflow-hidden"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="px-6 md:px-8 py-5 border-b border-[var(--gray-200)]/60 flex items-start justify-between gap-3">
+          <div>
+            <div className="inline-flex rounded-xl bg-[var(--primary)]/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--primary)]">
+              Meta y monitoreo
+            </div>
+            <h2 className="mt-3 text-[22px] font-semibold tracking-tight text-[var(--gray-950)]">{draft.label}</h2>
+            <p className="mt-1 text-[13px] text-[var(--gray-500)]">
+              Edita la meta, quién la definió, el semáforo y las notas visibles del KPI.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center rounded-full text-[var(--gray-400)] transition-colors hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]"
+            aria-label="Cerrar editor de meta"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-6 md:px-8 py-6 max-h-[65vh] overflow-y-auto space-y-5">
+          <div>
+            <div className="text-[12px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">
+              Fuente de la meta
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => onDraftChange({ ...draft, targetSource: 'manual' })}
+                className={`rounded-2xl border px-4 py-3 text-left transition ${
+                  draft.targetSource === 'manual'
+                    ? 'border-[var(--primary)] bg-[var(--primary)]/5'
+                    : 'border-[var(--gray-200)]/60 bg-white hover:bg-[var(--gray-50)]'
+                }`}
+              >
+                <div className="text-[13px] font-semibold text-[var(--gray-950)]">Manual</div>
+                <p className="mt-1 text-[12px] text-[var(--gray-500)]">Valor fijo definido por el equipo.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => onDraftChange({ ...draft, targetSource: 'auto' })}
+                className={`rounded-2xl border px-4 py-3 text-left transition ${
+                  draft.targetSource === 'auto'
+                    ? 'border-[var(--primary)] bg-[var(--primary)]/5'
+                    : 'border-[var(--gray-200)]/60 bg-white hover:bg-[var(--gray-50)]'
+                }`}
+              >
+                <div className="text-[13px] font-semibold text-[var(--gray-950)]">Automática</div>
+                <p className="mt-1 text-[12px] text-[var(--gray-500)]">Usa una variable como meta por periodo.</p>
+              </button>
+            </div>
+          </div>
+
+          {draft.targetSource === 'auto' && (
+            <Field label="Variable que define la meta">
+              <select
+                value={draft.targetSourceVariable}
+                onChange={(event) => onDraftChange({ ...draft, targetSourceVariable: event.target.value })}
+                className="input w-full"
+              >
+                <option value="">Selecciona una variable...</option>
+                {variableDocs.map((variable) => (
+                  <option key={variable.key} value={variable.key}>
+                    {variable.key} — {variable.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label={draft.targetSource === 'auto' ? 'Meta manual de respaldo' : 'Meta definida'}>
+              <input
+                type="number"
+                value={draft.targetValue}
+                onChange={(event) => onDraftChange({ ...draft, targetValue: event.target.value })}
+                className="input w-full"
+              />
+              <p className="mt-1 text-[11px] text-[var(--gray-400)]">{targetHint}</p>
+            </Field>
+            <Field label="Umbral de riesgo">
+              <input
+                type="number"
+                value={draft.warningThreshold}
+                onChange={(event) => onDraftChange({ ...draft, warningThreshold: event.target.value })}
+                className="input w-full"
+              />
+              <p className="mt-1 text-[11px] text-[var(--gray-400)]">
+                Define cuándo el semáforo pasa a “En riesgo”; fuera de ese umbral queda “Crítico”.
+              </p>
+            </Field>
+            <Field label="Quién definió la meta">
+              <select
+                value={draft.targetOwner}
+                onChange={(event) => onDraftChange({ ...draft, targetOwner: event.target.value as KpiTargetOwner })}
+                className="input w-full"
+              >
+                {KPI_TARGET_OWNER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Semáforo">
+              <select
+                value={draft.goal}
+                onChange={(event) => onDraftChange({ ...draft, goal: event.target.value as KpiGoal })}
+                className="input w-full"
+              >
+                {KPI_GOAL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <Field label="Comentarios o notas manuales">
+            <textarea
+              value={draft.notes}
+              onChange={(event) => onDraftChange({ ...draft, notes: event.target.value })}
+              className="input min-h-[96px] w-full py-3"
+              placeholder="Criterio de meta, excepción del periodo, responsable, contexto..."
+            />
+          </Field>
+        </div>
+
+        {error && (
+          <div className="mx-6 md:mx-8 mb-3 rounded-2xl bg-[var(--danger)]/10 px-4 py-3 text-[13px] text-[var(--danger)]">
+            {error}
+          </div>
+        )}
+
+        <div className="px-6 md:px-8 py-4 border-t border-[var(--gray-200)]/60 flex justify-end gap-3 bg-[var(--surface-alt)]">
+          <button
+            onClick={onClose}
+            className="h-10 rounded-xl border border-[var(--gray-200)] bg-white px-4 text-[13px] font-medium text-[var(--gray-500)] transition-colors hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onSave}
+            className="h-10 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:brightness-110"
+          >
+            Guardar configuración
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1297,6 +1699,17 @@ function WizardStep3({
             ))}
           </select>
         </Field>
+        <Field label="Quién definió la meta">
+          <select
+            value={draft.targetOwner}
+            onChange={(event) => onDraftChange({ ...draft, targetOwner: event.target.value as KpiTargetOwner })}
+            className="input w-full"
+          >
+            {KPI_TARGET_OWNER_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="Periodo de medición">
           <select
             value={draft.period}
@@ -1337,10 +1750,12 @@ function WizardStep3({
 function KpiDetailModal({
   entry,
   variableDocs,
+  onConfigure,
   onClose,
 }: {
   entry: KpiCatalogEntry;
   variableDocs: ReturnType<typeof getKpiVariableDocs>;
+  onConfigure: () => void;
   onClose: () => void;
 }) {
   const comparisonCount = entry.points.filter((point) => point.comparison !== null).length;
@@ -1408,6 +1823,11 @@ function KpiDetailModal({
                 {entry.formula && (
                   <div className="mt-4 rounded-2xl bg-[var(--surface-alt)] px-4 py-3 font-mono text-[12px] text-[var(--gray-500)]">
                     {entry.formula}
+                  </div>
+                )}
+                {entry.sourceDataLabel && (
+                  <div className="mt-3 rounded-2xl border border-[var(--gray-200)]/60 bg-white px-4 py-3 text-[12px] text-[var(--gray-500)]">
+                    <span className="font-semibold text-[var(--gray-950)]">Fuente de datos:</span> {entry.sourceDataLabel}
                   </div>
                 )}
               </div>
@@ -1560,20 +1980,32 @@ function KpiDetailModal({
               </div>
             </div>
 
-            {entry.isCustom && entry.targetSource && (
+            {canConfigureEntry(entry) && (
+              <button
+                onClick={onConfigure}
+                className="mt-7 inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-[var(--gray-950)] px-4 text-[13px] font-medium text-white transition hover:brightness-110"
+              >
+                <Target className="w-4 h-4" />
+                Editar meta y notas
+              </button>
+            )}
+
+            {entry.targetSource && (
               <div className="mt-7 rounded-2xl bg-white p-4 border border-[var(--gray-200)]/60">
-                <div className="text-[12px] uppercase tracking-wide text-[var(--gray-400)]">Fuente de la meta</div>
+                <div className="text-[12px] uppercase tracking-wide text-[var(--gray-400)]">Meta definida</div>
                 <div className="mt-2 flex items-center gap-2 text-[13px] font-semibold text-[var(--gray-950)]">
                   {entry.targetSource === 'auto' ? (
                     <>
-                      <Zap className="w-4 h-4 text-[var(--primary)]" /> Automática
+                      <Zap className="w-4 h-4 text-[var(--primary)]" /> {targetSourceLabel(entry.targetSource)}
                     </>
                   ) : (
                     <>
-                      <User className="w-4 h-4 text-[var(--primary)]" /> Manual
+                      <User className="w-4 h-4 text-[var(--primary)]" /> {targetSourceLabel(entry.targetSource)}
                     </>
                   )}
                 </div>
+                <div className="mt-1 text-[12px] text-[var(--gray-500)]">Definida por: {targetOwnerLabel(entry.targetOwner)}</div>
+                <div className="mt-1 text-[12px] text-[var(--gray-500)]">Periodo: {periodLabel(entry.periodKey)}</div>
                 {entry.targetSource === 'auto' && entry.targetSourceVariable && (
                   <div className="mt-1 font-mono text-[12px] text-[var(--gray-500)]">{entry.targetSourceVariable}</div>
                 )}
@@ -1582,6 +2014,36 @@ function KpiDetailModal({
                 )}
               </div>
             )}
+
+            {entry.manualNotes && (
+              <div className="mt-7 rounded-2xl bg-white p-4 border border-[var(--gray-200)]/60">
+                <div className="text-[12px] uppercase tracking-wide text-[var(--gray-400)]">Comentarios manuales</div>
+                <div className="mt-2 text-[13px] leading-6 text-[var(--gray-500)]">{entry.manualNotes}</div>
+              </div>
+            )}
+
+            <div className="mt-7 rounded-2xl bg-white p-4 border border-[var(--gray-200)]/60">
+              <div className="text-[12px] uppercase tracking-wide text-[var(--gray-400)]">Historial de meta</div>
+              {entry.targetHistory.length === 0 ? (
+                <div className="mt-2 text-[12px] text-[var(--gray-400)]">Aún no hay cambios guardados.</div>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {entry.targetHistory.slice().reverse().slice(0, 5).map((item) => (
+                    <div key={`${item.changedAt}-${item.value}-${item.warningThreshold}`} className="rounded-xl bg-[var(--surface-alt)] px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12px] font-semibold text-[var(--gray-950)]">
+                          {formatKpiCompact(entry.unit, item.value, entry.customUnitLabel)}
+                        </span>
+                        <span className="text-[11px] text-[var(--gray-400)]">{formatKpiUpdatedAt(item.changedAt)}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-[var(--gray-500)]">
+                        {targetSourceLabel(item.targetSource)} · {targetOwnerLabel(item.targetOwner)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {entry.isCustom && usedVariables.length > 0 && (
               <div className="mt-7 rounded-2xl bg-white p-4 border border-[var(--gray-200)]/60">

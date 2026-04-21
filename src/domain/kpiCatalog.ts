@@ -2,6 +2,7 @@ import { projectYear } from './collectionEngine';
 import { evaluateScenario } from './scenarioEngine';
 import { isBaseScenario } from './simulationCompiler';
 import type { CashFlowAssumptions, Client, ConfirmedPayment } from './types';
+import type { BankAccountStatement } from '../services/jdeTypes';
 import {
   BASE_SCENARIO_NAME,
   FlowPlan,
@@ -21,6 +22,29 @@ export type KpiStatus = 'met' | 'warning' | 'missed' | 'na';
 export type KpiPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
 export type KpiTargetSource = 'manual' | 'auto';
+export type KpiTargetOwner = 'user' | 'system' | 'historical';
+
+export interface KpiTargetHistoryEntry {
+  value: number;
+  warningThreshold: number;
+  targetSource: KpiTargetSource;
+  targetSourceVariable?: string;
+  targetOwner: KpiTargetOwner;
+  note?: string;
+  changedAt: string;
+}
+
+export interface KpiConfigOverride {
+  kpiId: string;
+  targetValue: number;
+  targetSource: KpiTargetSource;
+  targetSourceVariable?: string;
+  targetOwner: KpiTargetOwner;
+  warningThreshold: number;
+  notes: string;
+  updatedAt: string;
+  history: KpiTargetHistoryEntry[];
+}
 
 export interface CustomKpiDefinition {
   id: string;
@@ -35,7 +59,9 @@ export interface CustomKpiDefinition {
   customUnitLabel?: string;
   goal: KpiGoal;
   warningThreshold: number;
+  targetOwner: KpiTargetOwner;
   notes: string;
+  targetHistory: KpiTargetHistoryEntry[];
   createdAt: string;
   updatedAt: string;
 }
@@ -84,11 +110,15 @@ export interface KpiCatalogEntry {
   chartComparisonLabel: string | null;
   note: string | null;
   formula: string | null;
+  sourceDataLabel: string | null;
   targetValue: number | null;
   targetSource: KpiTargetSource | null;
   targetSourceVariable: string | null;
+  targetOwner: KpiTargetOwner | null;
   targetUpdatedAt: string | null;
   warningThreshold: number | null;
+  manualNotes: string | null;
+  targetHistory: KpiTargetHistoryEntry[];
   customUnitLabel: string | null;
 }
 
@@ -96,6 +126,14 @@ export interface KpiCatalogInput {
   clients: Client[];
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
+  cxpRecords: Array<{
+    fechaFactura: string;
+    fechaProgramacionPago: string;
+    fechaVence: string;
+    importePendientePesos: number;
+    diasVencida: number;
+  }>;
+  bankStatements: BankAccountStatement[];
   plan: FlowPlan | null;
   proposals: Proposal[];
   scenarios: Scenario[];
@@ -105,6 +143,7 @@ export interface KpiCatalogInput {
   activeScenarioId: string | null;
   activeMonth: number;
   customKpis?: CustomKpiDefinition[];
+  kpiConfigs?: KpiConfigOverride[];
 }
 
 interface KpiDefinition {
@@ -130,9 +169,6 @@ interface KpiDefinition {
     | 'goal'
     | 'source'
     | 'isCustom'
-    | 'targetSource'
-    | 'targetSourceVariable'
-    | 'targetUpdatedAt'
   >;
 }
 
@@ -187,21 +223,35 @@ interface ForecastSnapshot {
   };
 }
 
+interface OperationsSnapshot {
+  year: number;
+  actualInflowsMonthly: number[];
+  actualOutflowsMonthly: number[];
+  actualNetFlowMonthly: number[];
+  scheduledOutflowsMonthly: number[];
+  paymentDaysMonthly: number[];
+  paymentDaysAverage: number;
+  pendingLiabilities: number;
+  latestLiquidity: number | null;
+  latestLiquidityDate: string | null;
+}
+
 interface BuildContext {
   activeMonth: number;
   collection: CollectionSnapshot | null;
   forecast: ForecastSnapshot | null;
+  operations: OperationsSnapshot | null;
 }
 
 export const DEFAULT_ACTIVE_KPI_IDS = [
-  'collection_projected_month',
-  'collection_confirmed_month',
-  'collection_coverage_month',
-  'forecast_ingresos_12m',
-  'forecast_flujo_neto_12m',
-  'forecast_caja_final',
-  'forecast_caja_minima',
-  'forecast_cobranza_month',
+  'cash_collection_target',
+  'cash_expense_target',
+  'cash_minimum_safety',
+  'cash_net_flow_projected',
+  'cash_projected_ending_balance',
+  'cash_deficit_risk',
+  'cash_collection_compliance',
+  'cash_coverage_months',
 ] as const;
 
 export const KPI_PERIOD_OPTIONS: Array<{ value: KpiPeriod; label: string }> = [
@@ -231,6 +281,7 @@ export const KPI_VARIABLE_GROUP_ORIGIN: Record<string, string> = {
   'Base / presupuesto': 'Plan de flujo base (pronóstico original)',
   'Desviaciones': 'Diferencia entre escenario activo y base',
   'Cobranza': 'Módulo Cobranza (clientes + pagos confirmados)',
+  'Flujo de efectivo': 'KPIs de flujo de efectivo, bancos, CXP y escenario activo',
   'Conceptos del plan': 'Concepto del plan de flujo cargado',
 };
 
@@ -306,11 +357,15 @@ function unavailable(definition: KpiDefinition, reason: string): KpiCatalogEntry
     chartComparisonLabel: null,
     note: null,
     formula: null,
+    sourceDataLabel: null,
     targetValue: null,
     targetSource: null,
     targetSourceVariable: null,
+    targetOwner: null,
     targetUpdatedAt: null,
     warningThreshold: null,
+    manualNotes: null,
+    targetHistory: [],
     customUnitLabel: null,
   };
 }
@@ -412,6 +467,95 @@ function buildForecastSnapshot(input: KpiCatalogInput): ForecastSnapshot | null 
   };
 }
 
+function isValidIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T12:00:00Z`);
+  return !Number.isNaN(date.getTime());
+}
+
+function safeMonthIndexFromIso(isoDate: string): number | null {
+  if (!isValidIsoDate(isoDate)) return null;
+  const monthIndex = monthIndexFromIso(isoDate);
+  return monthIndex >= 0 && monthIndex < 12 ? monthIndex : null;
+}
+
+function diffDaysBetween(startDate: string, endDate: string): number | null {
+  if (!isValidIsoDate(startDate) || !isValidIsoDate(endDate)) return null;
+  const start = new Date(`${startDate}T12:00:00Z`).getTime();
+  const end = new Date(`${endDate}T12:00:00Z`).getTime();
+  return Math.round((end - start) / 86_400_000);
+}
+
+function latestIsoDate(values: string[]): string | null {
+  const sorted = values.filter(isValidIsoDate).sort();
+  return sorted.length > 0 ? sorted[sorted.length - 1] : null;
+}
+
+function buildOperationsSnapshot(input: KpiCatalogInput): OperationsSnapshot | null {
+  const year = input.plan?.year ?? input.assumptions.year;
+  const actualInflowsMonthly = new Array(12).fill(0);
+  const actualOutflowsMonthly = new Array(12).fill(0);
+  const scheduledOutflowsMonthly = new Array(12).fill(0);
+  const paymentDaySumsMonthly = new Array(12).fill(0);
+  const paymentDayCountsMonthly = new Array(12).fill(0);
+  let pendingLiabilities = 0;
+
+  for (const statement of input.bankStatements) {
+    for (const movement of statement.movimientos) {
+      if (!movement.fechaOperacion.startsWith(String(year))) continue;
+      const monthIndex = safeMonthIndexFromIso(movement.fechaOperacion);
+      if (monthIndex === null) continue;
+      const isOutflow = String(movement.tipoMovimiento).toUpperCase().includes('CARGO') || String(movement.tipoMovimiento).toUpperCase().includes('DEBIT');
+      if (isOutflow) actualOutflowsMonthly[monthIndex] += movement.importe;
+      else actualInflowsMonthly[monthIndex] += movement.importe;
+    }
+  }
+
+  for (const record of input.cxpRecords) {
+    pendingLiabilities += Math.max(0, record.importePendientePesos ?? 0);
+    const paymentMonth = safeMonthIndexFromIso(record.fechaProgramacionPago);
+    if (paymentMonth !== null && record.fechaProgramacionPago.startsWith(String(year))) {
+      scheduledOutflowsMonthly[paymentMonth] += Math.max(0, record.importePendientePesos ?? 0);
+      const days = diffDaysBetween(record.fechaFactura, record.fechaProgramacionPago);
+      if (days !== null) {
+        paymentDaySumsMonthly[paymentMonth] += days;
+        paymentDayCountsMonthly[paymentMonth] += 1;
+      }
+    }
+  }
+
+  const paymentDaysMonthly = paymentDaySumsMonthly.map((sumValue, index) => (
+    paymentDayCountsMonthly[index] > 0 ? sumValue / paymentDayCountsMonthly[index] : 0
+  ));
+  const paymentDayCountTotal = paymentDayCountsMonthly.reduce((total, value) => total + value, 0);
+  const paymentDaysAverage = paymentDayCountTotal > 0
+    ? paymentDaySumsMonthly.reduce((total, value) => total + value, 0) / paymentDayCountTotal
+    : 0;
+  const actualNetFlowMonthly = actualInflowsMonthly.map((value, index) => value - (actualOutflowsMonthly[index] ?? 0));
+  const latestDate = latestIsoDate(input.bankStatements.map((statement) => statement.fechaEstadoCuenta));
+  const latestLiquidity = latestDate
+    ? input.bankStatements
+      .filter((statement) => statement.fechaEstadoCuenta === latestDate)
+      .reduce((total, statement) => total + (statement.saldoFinal ?? 0), 0)
+    : null;
+
+  const hasData = input.bankStatements.length > 0 || input.cxpRecords.length > 0;
+  if (!hasData) return null;
+
+  return {
+    year,
+    actualInflowsMonthly,
+    actualOutflowsMonthly,
+    actualNetFlowMonthly,
+    scheduledOutflowsMonthly,
+    paymentDaysMonthly,
+    paymentDaysAverage,
+    pendingLiabilities,
+    latestLiquidity,
+    latestLiquidityDate: latestDate,
+  };
+}
+
 function buildCollectionMonthlyEntry(
   context: BuildContext,
   config: {
@@ -434,9 +578,6 @@ function buildCollectionMonthlyEntry(
   | 'goal'
   | 'source'
   | 'isCustom'
-  | 'targetSource'
-  | 'targetSourceVariable'
-  | 'targetUpdatedAt'
 > {
   const collection = context.collection!;
   const value = config.valueSeries[context.activeMonth] ?? 0;
@@ -456,8 +597,15 @@ function buildCollectionMonthlyEntry(
     chartComparisonLabel: config.comparisonLabel,
     note: config.note,
     formula: null,
+    sourceDataLabel: null,
     targetValue: comparisonValue,
+    targetSource: null,
+    targetSourceVariable: null,
+    targetOwner: null,
+    targetUpdatedAt: null,
     warningThreshold: null,
+    manualNotes: null,
+    targetHistory: [],
     customUnitLabel: null,
   };
 }
@@ -482,9 +630,6 @@ function buildForecastMonthlyEntry(
   | 'goal'
   | 'source'
   | 'isCustom'
-  | 'targetSource'
-  | 'targetSourceVariable'
-  | 'targetUpdatedAt'
 > {
   const forecast = context.forecast!;
   const value = config.valueSeries[context.activeMonth] ?? 0;
@@ -504,8 +649,15 @@ function buildForecastMonthlyEntry(
     chartComparisonLabel: 'Base',
     note: config.note,
     formula: null,
+    sourceDataLabel: null,
     targetValue: comparisonValue,
+    targetSource: null,
+    targetSourceVariable: null,
+    targetOwner: null,
+    targetUpdatedAt: null,
     warningThreshold: null,
+    manualNotes: null,
+    targetHistory: [],
     customUnitLabel: null,
   };
 }
@@ -532,9 +684,6 @@ function buildForecastSummaryEntry(
   | 'goal'
   | 'source'
   | 'isCustom'
-  | 'targetSource'
-  | 'targetSourceVariable'
-  | 'targetUpdatedAt'
 > {
   const forecast = context.forecast!;
   return {
@@ -552,8 +701,15 @@ function buildForecastSummaryEntry(
     chartComparisonLabel: 'Base',
     note: config.note,
     formula: null,
+    sourceDataLabel: null,
     targetValue: config.comparisonValue,
+    targetSource: null,
+    targetSourceVariable: null,
+    targetOwner: null,
+    targetUpdatedAt: null,
     warningThreshold: null,
+    manualNotes: null,
+    targetHistory: [],
     customUnitLabel: null,
   };
 }
@@ -948,6 +1104,10 @@ export function getKpiVariableDocs(plan: FlowPlan | null): KpiVariableDoc[] {
     { key: 'egresos', label: 'Egresos', description: 'Egresos del periodo en el escenario activo.', group: 'Pronóstico' },
     { key: 'flujo_neto', label: 'Flujo neto', description: 'Ingresos menos egresos del periodo.', group: 'Pronóstico' },
     { key: 'caja_final', label: 'Caja final', description: 'Saldo de caja al cierre del periodo.', group: 'Pronóstico' },
+    { key: 'egresos_proyectados', label: 'Egresos proyectados', description: 'Egresos proyectados del escenario activo usados como presupuesto de salida.', group: 'Flujo de efectivo' },
+    { key: 'flujo_neto_proyectado', label: 'Flujo neto proyectado', description: 'Flujo neto esperado del escenario activo.', group: 'Flujo de efectivo' },
+    { key: 'caja_proyectada_final', label: 'Caja proyectada final', description: 'Saldo de caja proyectado al cierre del periodo.', group: 'Flujo de efectivo' },
+    { key: 'caja_seguridad_minima', label: 'Caja de seguridad mínima', description: 'Meta mínima de caja disponible para operar sin riesgo.', group: 'Flujo de efectivo' },
     { key: 'cobranza', label: 'Cobranza', description: 'Cobranza del periodo en el escenario activo.', group: 'Pronóstico' },
     { key: 'pagos_proveedores', label: 'Pagos proveedores', description: 'Pagos a proveedores del periodo.', group: 'Pronóstico' },
     { key: 'presupuesto_ingresos', label: 'Presupuesto ingresos', description: 'Serie base para comparar ingresos.', group: 'Base / presupuesto' },
@@ -1297,6 +1457,675 @@ function customStatusForValue(value: number, target: number, warningThreshold: n
   return 'missed';
 }
 
+function defaultWarningThreshold(targetValue: number, goal: KpiGoal): number {
+  if (goal === 'higher') {
+    return targetValue > 0 ? targetValue * 0.9 : targetValue;
+  }
+  return targetValue > 0 ? targetValue * 1.1 : targetValue;
+}
+
+interface ManagedTargetConfig {
+  targetValue: number;
+  targetSource: KpiTargetSource;
+  targetSourceVariable?: string;
+  targetOwner: KpiTargetOwner;
+  warningThreshold: number;
+  notes: string;
+  updatedAt: string | null;
+  history: KpiTargetHistoryEntry[];
+}
+
+function resolveManagedTargetConfig(
+  kpiId: string,
+  defaults: Omit<ManagedTargetConfig, 'updatedAt' | 'history'>,
+  overrides: KpiConfigOverride[],
+): ManagedTargetConfig {
+  const override = overrides.find((item) => item.kpiId === kpiId) ?? null;
+  return {
+    targetValue: override?.targetValue ?? defaults.targetValue,
+    targetSource: override?.targetSource ?? defaults.targetSource,
+    targetSourceVariable: override?.targetSourceVariable ?? defaults.targetSourceVariable,
+    targetOwner: override?.targetOwner ?? defaults.targetOwner,
+    warningThreshold: override?.warningThreshold ?? defaults.warningThreshold,
+    notes: override?.notes ?? defaults.notes,
+    updatedAt: override?.updatedAt ?? null,
+    history: override?.history ?? [],
+  };
+}
+
+function buildConstantSeries(length: number, value: number): number[] {
+  return Array.from({ length }, () => value);
+}
+
+function resolveConfiguredTargetSeries(
+  labels: string[],
+  variables: FormulaVariableMap | null,
+  config: ManagedTargetConfig,
+): number[] {
+  if (config.targetSource === 'auto' && config.targetSourceVariable && variables?.[config.targetSourceVariable]) {
+    const series = variables[config.targetSourceVariable];
+    return labels.map((_, index) => series[index] ?? config.targetValue);
+  }
+  return buildConstantSeries(labels.length, config.targetValue);
+}
+
+function buildManagedTargetEntry(config: {
+  id: string;
+  label: string;
+  description: string;
+  category: string;
+  unit: KpiUnit;
+  accentColor: string;
+  goal: KpiGoal;
+  periodKey: KpiPeriod;
+  activeMonth: number;
+  labels: string[];
+  valueSeries: number[];
+  variables: FormulaVariableMap | null;
+  targetConfig: ManagedTargetConfig;
+  dataSourceLabel: string;
+  note: string;
+  formula: string | null;
+  customUnitLabel?: string | null;
+}): KpiCatalogEntry {
+  const targetSeries = resolveConfiguredTargetSeries(config.labels, config.variables, config.targetConfig);
+  const currentIndex = currentIndexForPeriod(
+    config.periodKey,
+    config.activeMonth,
+    config.valueSeries,
+    targetSeries[0] ?? config.targetConfig.targetValue,
+  );
+  const safeIndex = Math.max(0, Math.min(config.labels.length - 1, currentIndex));
+  const currentValue = config.valueSeries[safeIndex] ?? 0;
+  const currentTarget = targetSeries[safeIndex] ?? config.targetConfig.targetValue;
+  const points = config.labels.map((label, index) => ({
+    label,
+    value: config.valueSeries[index] ?? 0,
+    comparison: targetSeries[index] ?? config.targetConfig.targetValue,
+    status: customStatusForValue(
+      config.valueSeries[index] ?? 0,
+      targetSeries[index] ?? config.targetConfig.targetValue,
+      config.targetConfig.warningThreshold,
+      config.goal,
+    ),
+  }));
+
+  return {
+    id: config.id,
+    label: config.label,
+    description: config.description,
+    category: config.category,
+    unit: config.unit,
+    accentColor: config.accentColor,
+    comparisonKind: 'target',
+    goal: config.goal,
+    source: 'template',
+    isCustom: false,
+    available: true,
+    availabilityReason: null,
+    periodLabel: config.labels[safeIndex] ?? null,
+    periodKey: config.periodKey,
+    value: currentValue,
+    comparisonValue: currentTarget,
+    comparisonLabel: 'Meta',
+    diffValue: currentValue - currentTarget,
+    status: customStatusForValue(currentValue, currentTarget, config.targetConfig.warningThreshold, config.goal),
+    points,
+    chartValueLabel: 'Resultado',
+    chartComparisonLabel: 'Meta',
+    note: config.note,
+    formula: config.formula,
+    sourceDataLabel: config.dataSourceLabel,
+    targetValue: config.targetConfig.targetValue,
+    targetSource: config.targetConfig.targetSource,
+    targetSourceVariable: config.targetConfig.targetSourceVariable ?? null,
+    targetOwner: config.targetConfig.targetOwner,
+    targetUpdatedAt: config.targetConfig.updatedAt,
+    warningThreshold: config.targetConfig.warningThreshold,
+    manualNotes: config.targetConfig.notes,
+    targetHistory: config.targetConfig.history,
+    customUnitLabel: config.customUnitLabel ?? null,
+  };
+}
+
+function cumulativePositiveGap(left: number[], right: number[]): number[] {
+  let runningGap = 0;
+  return left.map((value, index) => {
+    runningGap += Math.max((value ?? 0) - (right[index] ?? 0), 0);
+    return runningGap;
+  });
+}
+
+function averageMonthly(values: number[]): number {
+  return values.length > 0 ? sum(values) / values.length : 0;
+}
+
+function buildCashFlowKpiEntries(input: KpiCatalogInput, context: BuildContext): KpiCatalogEntry[] {
+  const { collection, forecast, operations } = context;
+  if (!forecast || !collection) return [];
+
+  const kpiConfigs = input.kpiConfigs ?? [];
+  const labels = forecast.monthlyLabels;
+  const activeMonth = input.activeMonth;
+  const avgMonthlyExpenses = averageMonthly(forecast.activeMetrics.egresos);
+  const minimumSafetyDefault = avgMonthlyExpenses;
+  const minimumSafetyConfig = resolveManagedTargetConfig(
+    'cash_minimum_safety',
+    {
+      targetValue: minimumSafetyDefault,
+      targetSource: 'manual',
+      targetOwner: 'system',
+      warningThreshold: defaultWarningThreshold(minimumSafetyDefault, 'higher'),
+      notes: 'Meta sugerida automáticamente como un mes promedio de egresos proyectados.',
+    },
+    kpiConfigs,
+  );
+  const minimumSafetySeries = resolveConfiguredTargetSeries(labels, null, minimumSafetyConfig);
+  const actualOutflows = operations?.actualOutflowsMonthly ?? Array(12).fill(0);
+  const actualInflows = operations?.actualInflowsMonthly ?? Array(12).fill(0);
+  const actualNetFlow = operations?.actualNetFlowMonthly ?? Array(12).fill(0);
+  const scheduledOutflows = operations?.scheduledOutflowsMonthly ?? Array(12).fill(0);
+  const paymentDays = operations?.paymentDaysMonthly ?? Array(12).fill(0);
+  const overdueCollection = cumulativePositiveGap(collection.targetMonthly, collection.confirmedMonthly);
+  const expenseCompliance = forecast.activeMetrics.egresos.map((targetValue, index) => {
+    const actual = actualOutflows[index] ?? 0;
+    return targetValue > 0 ? actual / targetValue : 0;
+  });
+  const flowVariance = forecast.activeMetrics.flujoNeto.map((projected, index) => Math.abs((actualNetFlow[index] ?? 0) - projected));
+  const workingCapital = forecast.activeMetrics.cajaFinal.map((cashValue, index) => cashValue + (collection.projectedMonthly[index] ?? 0) - (scheduledOutflows[index] ?? 0));
+  const coverageMonths = forecast.activeMetrics.cajaFinal.map((cashValue) => avgMonthlyExpenses > 0 ? cashValue / avgMonthlyExpenses : 0);
+  const burnRate = actualOutflows.some((value) => value > 0)
+    ? actualOutflows.map((outflow, index) => Math.max(outflow - (actualInflows[index] ?? 0), 0))
+    : forecast.activeMetrics.flujoNeto.map((value) => Math.max(-value, 0));
+  const liquiditySeries = operations?.latestLiquidity !== null && operations?.latestLiquidity !== undefined
+    ? buildConstantSeries(labels.length, operations.latestLiquidity)
+    : [...forecast.activeMetrics.cajaFinal];
+  const deficitRisk = forecast.activeMetrics.cajaFinal.map((_, index) => (
+    forecast.activeMetrics.cajaFinal.slice(index).filter((cashValue, futureIndex) => {
+      const threshold = minimumSafetySeries[Math.min(index + futureIndex, minimumSafetySeries.length - 1)] ?? 0;
+      return cashValue < threshold;
+    }).length
+  ));
+  const monthlyCollectionFormulaData = buildCollectionFormulaData(input.clients, input.assumptions, input.confirmedPayments)?.monthly;
+  const collectionLagSeries = buildConstantSeries(labels.length, 0).map((_, index) => (
+    monthlyCollectionFormulaData?.variables.lag_promedio_dias?.[index] ?? 0
+  ));
+  const cycleConversionSeries = collectionLagSeries.map((lagValue, index) => lagValue - (paymentDays[index] ?? 0));
+
+  const targetContextVariables: FormulaVariableMap = {
+    meta_cobranza: collection.targetMonthly,
+    egresos_proyectados: forecast.activeMetrics.egresos,
+    flujo_neto_proyectado: forecast.activeMetrics.flujoNeto,
+    caja_proyectada_final: forecast.activeMetrics.cajaFinal,
+    caja_seguridad_minima: minimumSafetySeries,
+  };
+
+  const makeEntry = (config: {
+    id: string;
+    label: string;
+    description: string;
+    category: string;
+    unit: KpiUnit;
+    accentColor: string;
+    goal: KpiGoal;
+    valueSeries: number[];
+    dataSourceLabel: string;
+    note: string;
+    formula: string | null;
+    defaults: Omit<ManagedTargetConfig, 'updatedAt' | 'history'>;
+    available?: boolean;
+    availabilityReason?: string | null;
+  }): KpiCatalogEntry => {
+    if (config.available === false) {
+      return {
+        id: config.id,
+        label: config.label,
+        description: config.description,
+        category: config.category,
+        unit: config.unit,
+        accentColor: config.accentColor,
+        comparisonKind: 'target',
+        goal: config.goal,
+        source: 'template',
+        isCustom: false,
+        available: false,
+        availabilityReason: config.availabilityReason ?? 'No hay datos suficientes para calcular este KPI.',
+        periodLabel: null,
+        periodKey: 'monthly',
+        value: null,
+        comparisonValue: config.defaults.targetValue,
+        comparisonLabel: 'Meta',
+        diffValue: null,
+        status: 'na',
+        points: [],
+        chartValueLabel: 'Resultado',
+        chartComparisonLabel: 'Meta',
+        note: config.note,
+        formula: config.formula,
+        sourceDataLabel: config.dataSourceLabel,
+        targetValue: config.defaults.targetValue,
+        targetSource: config.defaults.targetSource,
+        targetSourceVariable: config.defaults.targetSourceVariable ?? null,
+        targetOwner: config.defaults.targetOwner,
+        targetUpdatedAt: null,
+        warningThreshold: config.defaults.warningThreshold,
+        manualNotes: config.defaults.notes,
+        targetHistory: [],
+        customUnitLabel: null,
+      };
+    }
+
+    const targetConfig = resolveManagedTargetConfig(config.id, config.defaults, kpiConfigs);
+    return buildManagedTargetEntry({
+      id: config.id,
+      label: config.label,
+      description: config.description,
+      category: config.category,
+      unit: config.unit,
+      accentColor: config.accentColor,
+      goal: config.goal,
+      periodKey: 'monthly',
+      activeMonth,
+      labels,
+      valueSeries: config.valueSeries,
+      variables: targetContextVariables,
+      targetConfig,
+      dataSourceLabel: config.dataSourceLabel,
+      note: config.note,
+      formula: config.formula,
+    });
+  };
+
+  return [
+    makeEntry({
+      id: 'cash_collection_target',
+      label: 'Meta de cobranza',
+      description: 'Cobranza real del periodo contra la meta de cobranza.',
+      category: 'Flujo de efectivo',
+      unit: 'currency',
+      accentColor: hex.success,
+      goal: 'higher',
+      valueSeries: collection.confirmedMonthly,
+      dataSourceLabel: 'Cobranza confirmada del módulo de clientes y meta teórica al 100% de cumplimiento.',
+      note: 'Mide cuánto se cobró realmente contra la meta esperada del periodo.',
+      formula: 'cobranza_confirmada',
+      defaults: {
+        targetValue: collection.targetMonthly[activeMonth] ?? 0,
+        targetSource: 'auto',
+        targetSourceVariable: 'meta_cobranza',
+        targetOwner: 'historical',
+        warningThreshold: defaultWarningThreshold(collection.targetMonthly[activeMonth] ?? 0, 'higher'),
+        notes: 'Meta automática basada en la agenda de cobranza con cumplimiento total.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_expense_target',
+      label: 'Meta de egresos',
+      description: 'Egresos reales contra el gasto esperado del periodo.',
+      category: 'Flujo de efectivo',
+      unit: 'currency',
+      accentColor: hex.danger,
+      goal: 'lower',
+      valueSeries: actualOutflows,
+      dataSourceLabel: 'Cargos reales bancarios comparados contra egresos proyectados del escenario.',
+      note: 'Sirve para controlar la salida real de efectivo frente al presupuesto del periodo.',
+      formula: 'egresos_reales',
+      defaults: {
+        targetValue: forecast.activeMetrics.egresos[activeMonth] ?? 0,
+        targetSource: 'auto',
+        targetSourceVariable: 'egresos_proyectados',
+        targetOwner: 'system',
+        warningThreshold: defaultWarningThreshold(forecast.activeMetrics.egresos[activeMonth] ?? 0, 'lower'),
+        notes: 'La meta inicial toma el egreso proyectado del escenario activo.',
+      },
+      available: Boolean(operations && actualOutflows.some((value) => value !== 0)),
+      availabilityReason: 'Carga estados de cuenta bancarios para comparar egresos reales contra la meta.',
+    }),
+    makeEntry({
+      id: 'cash_minimum_safety',
+      label: 'Caja de seguridad mínima',
+      description: 'Saldo de caja disponible frente al mínimo requerido para operar.',
+      category: 'Liquidez',
+      unit: 'currency',
+      accentColor: '#5ac8fa',
+      goal: 'higher',
+      valueSeries: forecast.activeMetrics.cajaFinal,
+      dataSourceLabel: 'Saldo final de caja proyectado del escenario activo.',
+      note: 'Detecta rápidamente si la empresa cae por debajo del colchón mínimo deseado.',
+      formula: 'caja_final',
+      defaults: {
+        targetValue: minimumSafetyConfig.targetValue,
+        targetSource: minimumSafetyConfig.targetSource,
+        targetSourceVariable: minimumSafetyConfig.targetSourceVariable,
+        targetOwner: minimumSafetyConfig.targetOwner,
+        warningThreshold: minimumSafetyConfig.warningThreshold,
+        notes: minimumSafetyConfig.notes,
+      },
+    }),
+    makeEntry({
+      id: 'cash_cycle_conversion',
+      label: 'Conversión del ciclo de flujo',
+      description: 'Días de cobranza promedio menos días de pago promedio.',
+      category: 'Eficiencia de caja',
+      unit: 'days',
+      accentColor: '#af52de',
+      goal: 'lower',
+      valueSeries: cycleConversionSeries,
+      dataSourceLabel: 'Lag promedio de cobranza más calendario de pago capturado en CXP.',
+      note: 'Menor número de días implica un retorno más rápido del efectivo.',
+      formula: 'dias_cobro - dias_pago_promedio',
+      defaults: {
+        targetValue: 30,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: 45,
+        notes: 'Meta sugerida como máximo aceptable del ciclo de conversión.',
+      },
+      available: Boolean(operations && operations.paymentDaysAverage > 0),
+      availabilityReason: 'Carga registros de CXP con fecha de factura y programación de pago para medir el ciclo.',
+    }),
+    makeEntry({
+      id: 'cash_working_capital',
+      label: 'Capital de trabajo',
+      description: 'Caja proyectada más cobranza proyectada menos egresos programados.',
+      category: 'Liquidez',
+      unit: 'currency',
+      accentColor: hex.primary,
+      goal: 'higher',
+      valueSeries: workingCapital,
+      dataSourceLabel: 'Caja proyectada, cobranza del escenario y CXP programada.',
+      note: 'Aproxima la capacidad operativa de corto plazo con los datos disponibles en la plataforma.',
+      formula: 'caja_final + cobranza - egresos_programados',
+      defaults: {
+        targetValue: 0,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: 0,
+        notes: 'Un capital de trabajo positivo indica mayor holgura operativa.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_avg_collection_days',
+      label: 'Días de cobranza promedio',
+      description: 'Tiempo promedio entre la fecha teórica de cobro y la fecha real de pago.',
+      category: 'Cobranza',
+      unit: 'days',
+      accentColor: hex.info,
+      goal: 'lower',
+      valueSeries: collectionLagSeries,
+      dataSourceLabel: 'Motor de proyección de cobranza con clientes, crédito y cumplimiento.',
+      note: 'Ayuda a medir qué tan rápido se convierte la facturación en efectivo.',
+      formula: 'dias_cobro',
+      defaults: {
+        targetValue: 30,
+        targetSource: 'manual',
+        targetOwner: 'historical',
+        warningThreshold: 45,
+        notes: 'Meta histórica sugerida para días promedio de cobranza.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_avg_payment_days',
+      label: 'Días de pago promedio',
+      description: 'Tiempo promedio entre fecha de factura y fecha de programación de pago.',
+      category: 'Pagos',
+      unit: 'days',
+      accentColor: '#ff9500',
+      goal: 'higher',
+      valueSeries: paymentDays,
+      dataSourceLabel: 'Registros de CXP y calendario de programación de pagos.',
+      note: 'Más días de pago extienden la caja, aunque deben monitorearse sin deteriorar la operación.',
+      formula: 'dias_pago_promedio',
+      defaults: {
+        targetValue: operations?.paymentDaysAverage || 30,
+        targetSource: 'manual',
+        targetOwner: 'historical',
+        warningThreshold: Math.max(1, (operations?.paymentDaysAverage || 30) * 0.8),
+        notes: 'Referencia histórica estimada con las fechas de pago programadas.',
+      },
+      available: Boolean(operations && operations.paymentDaysAverage > 0),
+      availabilityReason: 'Carga CXP para medir los días promedio de pago.',
+    }),
+    makeEntry({
+      id: 'cash_net_flow_projected',
+      label: 'Flujo neto proyectado',
+      description: 'Ingresos proyectados menos egresos proyectados en el periodo.',
+      category: 'Flujo de efectivo',
+      unit: 'currency',
+      accentColor: hex.success,
+      goal: 'higher',
+      valueSeries: forecast.activeMetrics.flujoNeto,
+      dataSourceLabel: 'Pronóstico del escenario activo.',
+      note: 'Resume la generación esperada de caja del periodo.',
+      formula: 'flujo_neto',
+      defaults: {
+        targetValue: 0,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: 0,
+        notes: 'La meta por defecto exige no cerrar el periodo con flujo neto negativo.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_net_flow_real',
+      label: 'Flujo neto real',
+      description: 'Ingresos reales menos egresos reales del periodo.',
+      category: 'Flujo de efectivo',
+      unit: 'currency',
+      accentColor: '#34c759',
+      goal: 'higher',
+      valueSeries: actualNetFlow,
+      dataSourceLabel: 'Movimientos bancarios reales (abonos menos cargos).',
+      note: 'Contrasta el comportamiento real de caja frente a lo planeado.',
+      formula: 'flujo_neto_real',
+      defaults: {
+        targetValue: forecast.activeMetrics.flujoNeto[activeMonth] ?? 0,
+        targetSource: 'auto',
+        targetSourceVariable: 'flujo_neto_proyectado',
+        targetOwner: 'system',
+        warningThreshold: defaultWarningThreshold(forecast.activeMetrics.flujoNeto[activeMonth] ?? 0, 'higher'),
+        notes: 'La referencia inicial usa el flujo neto proyectado del escenario activo.',
+      },
+      available: Boolean(operations && (actualInflows.some((value) => value !== 0) || actualOutflows.some((value) => value !== 0))),
+      availabilityReason: 'Carga movimientos bancarios para medir el flujo neto real.',
+    }),
+    makeEntry({
+      id: 'cash_flow_variance',
+      label: 'Desviación flujo proyectado vs real',
+      description: 'Diferencia absoluta entre flujo neto proyectado y flujo neto real.',
+      category: 'Control',
+      unit: 'currency',
+      accentColor: hex.warning,
+      goal: 'lower',
+      valueSeries: flowVariance,
+      dataSourceLabel: 'Pronóstico del escenario activo y movimientos bancarios reales.',
+      note: 'Mientras más cerca de cero, mejor alineado está lo real contra el plan.',
+      formula: 'abs(flujo_neto_real - flujo_neto)',
+      defaults: {
+        targetValue: 0,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: avgMonthlyExpenses * 0.15,
+        notes: 'La meta ideal es cero desviación; la alerta inicial usa 15% del egreso mensual promedio.',
+      },
+      available: Boolean(operations && (actualInflows.some((value) => value !== 0) || actualOutflows.some((value) => value !== 0))),
+      availabilityReason: 'Carga movimientos bancarios para comparar flujo real contra proyectado.',
+    }),
+    makeEntry({
+      id: 'cash_overdue_collection',
+      label: 'Cobranza vencida',
+      description: 'Monto acumulado pendiente de cobro respecto a la meta esperada.',
+      category: 'Cobranza',
+      unit: 'currency',
+      accentColor: hex.danger,
+      goal: 'lower',
+      valueSeries: overdueCollection,
+      dataSourceLabel: 'Meta de cobranza teórica y cobros confirmados.',
+      note: 'Cuantifica el rezago acumulado de cobranza en el año.',
+      formula: 'max(meta_cobranza - cobranza_confirmada, 0)',
+      defaults: {
+        targetValue: 0,
+        targetSource: 'manual',
+        targetOwner: 'historical',
+        warningThreshold: collection.targetMonthly[activeMonth] ?? 0,
+        notes: 'La meta deseable es cero vencido acumulado.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_collection_compliance',
+      label: '% cumplimiento de cobranza',
+      description: 'Cobranza real dividida entre la meta de cobranza.',
+      category: 'Cobranza',
+      unit: 'percent',
+      accentColor: hex.info,
+      goal: 'higher',
+      valueSeries: collection.coverageMonthly,
+      dataSourceLabel: 'Cobros confirmados y meta de cobranza.',
+      note: 'Un valor de 100% o más indica cumplimiento de la meta.',
+      formula: 'porcentaje_cobranza',
+      defaults: {
+        targetValue: 1,
+        targetSource: 'manual',
+        targetOwner: 'historical',
+        warningThreshold: 0.85,
+        notes: 'La meta recomendada es al menos 100% de cumplimiento.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_expense_compliance',
+      label: '% cumplimiento de egresos',
+      description: 'Egresos reales comparados contra el egreso objetivo del periodo.',
+      category: 'Control',
+      unit: 'percent',
+      accentColor: '#ff9500',
+      goal: 'lower',
+      valueSeries: expenseCompliance,
+      dataSourceLabel: 'Cargos bancarios reales contra egresos proyectados.',
+      note: 'Un valor por debajo de 100% indica que el gasto real se mantuvo por debajo de la meta.',
+      formula: 'safe_div(egresos_reales, egresos_proyectados)',
+      defaults: {
+        targetValue: 1,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: 1.1,
+        notes: 'La meta recomendada es no exceder 100% del egreso objetivo.',
+      },
+      available: Boolean(operations && actualOutflows.some((value) => value !== 0)),
+      availabilityReason: 'Carga movimientos bancarios para medir cumplimiento real de egresos.',
+    }),
+    makeEntry({
+      id: 'cash_coverage_months',
+      label: 'Meses de cobertura de caja',
+      description: 'Cuántos meses podría operar la empresa con la caja proyectada actual.',
+      category: 'Liquidez',
+      unit: 'times',
+      accentColor: '#5ac8fa',
+      goal: 'higher',
+      valueSeries: coverageMonths,
+      dataSourceLabel: 'Caja final proyectada y egreso mensual promedio del escenario.',
+      note: 'Una mayor cobertura indica más resiliencia de caja.',
+      formula: 'safe_div(caja_final, egresos_promedio_mensual)',
+      defaults: {
+        targetValue: 3,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: 2,
+        notes: 'Meta sugerida de tres meses de cobertura.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_burn_rate',
+      label: 'Burn rate operativo',
+      description: 'Cuánto efectivo se consume en el periodo.',
+      category: 'Flujo de efectivo',
+      unit: 'currency',
+      accentColor: hex.warning,
+      goal: 'lower',
+      valueSeries: burnRate,
+      dataSourceLabel: actualOutflows.some((value) => value > 0)
+        ? 'Movimientos bancarios reales.'
+        : 'Pronóstico del escenario activo.',
+      note: 'Mide la velocidad a la que el negocio consume efectivo cuando las salidas superan a las entradas.',
+      formula: actualOutflows.some((value) => value > 0)
+        ? 'max(egresos_reales - ingresos_reales, 0)'
+        : 'max(egresos - ingresos, 0)',
+      defaults: {
+        targetValue: 0,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: avgMonthlyExpenses * 0.2,
+        notes: 'La meta recomendada es cero consumo neto o un nivel marginal de quema.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_liquidity_available',
+      label: 'Liquidez disponible',
+      description: 'Caja disponible y recursos líquidos de corto plazo.',
+      category: 'Liquidez',
+      unit: 'currency',
+      accentColor: hex.primary,
+      goal: 'higher',
+      valueSeries: liquiditySeries,
+      dataSourceLabel: operations?.latestLiquidity !== null && operations?.latestLiquidity !== undefined
+        ? 'Saldos finales bancarios más recientes.'
+        : 'Caja final proyectada del escenario activo.',
+      note: 'Cuando existen estados de cuenta, usa el último saldo bancario consolidado; si no, cae al saldo proyectado.',
+      formula: operations?.latestLiquidity !== null && operations?.latestLiquidity !== undefined
+        ? 'liquidez_disponible'
+        : 'caja_final',
+      defaults: {
+        targetValue: minimumSafetySeries[activeMonth] ?? minimumSafetyDefault,
+        targetSource: 'auto',
+        targetSourceVariable: 'caja_seguridad_minima',
+        targetOwner: 'system',
+        warningThreshold: defaultWarningThreshold(minimumSafetySeries[activeMonth] ?? minimumSafetyDefault, 'higher'),
+        notes: 'La liquidez debería mantenerse por encima de la caja de seguridad mínima.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_projected_ending_balance',
+      label: 'Saldo final de caja proyectado',
+      description: 'Saldo de caja esperado al final de cada periodo.',
+      category: 'Liquidez',
+      unit: 'currency',
+      accentColor: '#af52de',
+      goal: 'higher',
+      valueSeries: forecast.activeMetrics.cajaFinal,
+      dataSourceLabel: 'Saldo final del escenario proyectado.',
+      note: 'Resume cuánto efectivo quedará al cierre del periodo proyectado.',
+      formula: 'caja_final',
+      defaults: {
+        targetValue: minimumSafetySeries[activeMonth] ?? minimumSafetyDefault,
+        targetSource: 'auto',
+        targetSourceVariable: 'caja_seguridad_minima',
+        targetOwner: 'system',
+        warningThreshold: defaultWarningThreshold(minimumSafetySeries[activeMonth] ?? minimumSafetyDefault, 'higher'),
+        notes: 'La proyección debería terminar por encima del mínimo de caja.',
+      },
+    }),
+    makeEntry({
+      id: 'cash_deficit_risk',
+      label: 'Riesgo de déficit de caja',
+      description: 'Número de meses futuros donde la caja proyectada cae por debajo del mínimo requerido.',
+      category: 'Riesgo',
+      unit: 'count',
+      accentColor: hex.danger,
+      goal: 'lower',
+      valueSeries: deficitRisk,
+      dataSourceLabel: 'Saldo de caja proyectado contra la caja de seguridad mínima.',
+      note: 'Un valor mayor que cero anticipa meses con riesgo de déficit de caja.',
+      formula: 'riesgo_deficit_caja',
+      defaults: {
+        targetValue: 0,
+        targetSource: 'manual',
+        targetOwner: 'system',
+        warningThreshold: 1,
+        notes: 'La meta recomendada es no tener meses futuros por debajo del mínimo de caja.',
+      },
+    }),
+  ];
+}
+
 function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
   const customKpis = input.customKpis ?? [];
   if (customKpis.length === 0) return [];
@@ -1309,6 +2138,24 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
   ]));
 
   return customKpis.map((definition) => {
+    const targetOwner = definition.targetOwner ?? 'user';
+    const targetConfig = resolveManagedTargetConfig(
+      definition.id,
+      {
+        targetValue: definition.targetValue,
+        targetSource: definition.targetSource,
+        targetSourceVariable: definition.targetSourceVariable,
+        targetOwner,
+        warningThreshold: definition.warningThreshold,
+        notes: definition.notes,
+      },
+      input.kpiConfigs ?? [],
+    );
+    const targetHistory = [
+      ...(definition.targetHistory ?? []),
+      ...targetConfig.history,
+    ];
+    const description = targetConfig.notes || definition.notes || `Fórmula: ${definition.formula}`;
     const forecastPeriod = forecastData?.[definition.period];
     const collectionPeriod = collectionData?.[definition.period];
     const periodData = forecastPeriod || collectionPeriod
@@ -1323,13 +2170,13 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
 
     const formulaError = validateFormula(definition.formula, allowedVariables);
 
-    const autoVariable = definition.targetSource === 'auto' ? definition.targetSourceVariable : undefined;
+    const autoVariable = targetConfig.targetSource === 'auto' ? targetConfig.targetSourceVariable : undefined;
 
     if (!periodData || periodData.labels.length === 0) {
       return {
         id: definition.id,
         label: definition.name,
-        description: definition.notes || `Fórmula: ${definition.formula}`,
+        description,
         category: definition.category || 'KPIs personalizados',
         unit: definition.unit,
         accentColor: hex.primary,
@@ -1342,20 +2189,24 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         periodLabel: null,
         periodKey: definition.period,
         value: null,
-        comparisonValue: definition.targetValue,
+        comparisonValue: targetConfig.targetValue,
         comparisonLabel: 'Meta',
         diffValue: null,
         status: 'na',
         points: [],
         chartValueLabel: 'Resultado',
         chartComparisonLabel: 'Meta',
-        note: definition.notes,
+        note: targetConfig.notes || definition.notes,
         formula: definition.formula,
-        targetValue: definition.targetValue,
-        targetSource: definition.targetSource,
+        sourceDataLabel: 'Fórmula personalizada con variables de cobranza, pronóstico y escenario.',
+        targetValue: targetConfig.targetValue,
+        targetSource: targetConfig.targetSource,
         targetSourceVariable: autoVariable ?? null,
-        targetUpdatedAt: definition.updatedAt,
-        warningThreshold: definition.warningThreshold,
+        targetOwner: targetConfig.targetOwner,
+        targetUpdatedAt: targetConfig.updatedAt ?? definition.updatedAt,
+        warningThreshold: targetConfig.warningThreshold,
+        manualNotes: targetConfig.notes || definition.notes,
+        targetHistory,
         customUnitLabel: definition.customUnitLabel ?? null,
       };
     }
@@ -1364,7 +2215,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
       return {
         id: definition.id,
         label: definition.name,
-        description: definition.notes || `Fórmula: ${definition.formula}`,
+        description,
         category: definition.category || 'KPIs personalizados',
         unit: definition.unit,
         accentColor: hex.primary,
@@ -1377,20 +2228,24 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
         periodLabel: null,
         periodKey: definition.period,
         value: null,
-        comparisonValue: definition.targetValue,
+        comparisonValue: targetConfig.targetValue,
         comparisonLabel: 'Meta',
         diffValue: null,
         status: 'na',
         points: [],
         chartValueLabel: 'Resultado',
         chartComparisonLabel: 'Meta',
-        note: definition.notes,
+        note: targetConfig.notes || definition.notes,
         formula: definition.formula,
-        targetValue: definition.targetValue,
-        targetSource: definition.targetSource,
+        sourceDataLabel: 'Fórmula personalizada con variables de cobranza, pronóstico y escenario.',
+        targetValue: targetConfig.targetValue,
+        targetSource: targetConfig.targetSource,
         targetSourceVariable: autoVariable ?? null,
-        targetUpdatedAt: definition.updatedAt,
-        warningThreshold: definition.warningThreshold,
+        targetOwner: targetConfig.targetOwner,
+        targetUpdatedAt: targetConfig.updatedAt ?? definition.updatedAt,
+        warningThreshold: targetConfig.warningThreshold,
+        manualNotes: targetConfig.notes || definition.notes,
+        targetHistory,
         customUnitLabel: definition.customUnitLabel ?? null,
       };
     }
@@ -1405,21 +2260,21 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
     const autoSeries = autoVariable ? periodData.variables[autoVariable] : undefined;
     const autoIsValid = autoVariable ? Array.isArray(autoSeries) : false;
     const targetSeries = autoIsValid
-      ? periodData.labels.map((_, index) => autoSeries?.[index] ?? definition.targetValue)
-      : periodData.labels.map(() => definition.targetValue);
+      ? periodData.labels.map((_, index) => autoSeries?.[index] ?? targetConfig.targetValue)
+      : periodData.labels.map(() => targetConfig.targetValue);
 
-    const currentIndex = currentIndexForPeriod(definition.period, input.activeMonth, values, targetSeries[0] ?? definition.targetValue);
+    const currentIndex = currentIndexForPeriod(definition.period, input.activeMonth, values, targetSeries[0] ?? targetConfig.targetValue);
     const points = periodData.labels.map((label, index) => {
-      const targetValueForPoint = targetSeries[index] ?? definition.targetValue;
+      const targetValueForPoint = targetSeries[index] ?? targetConfig.targetValue;
       return {
         label,
         value: values[index] ?? 0,
         comparison: targetValueForPoint,
-        status: customStatusForValue(values[index] ?? 0, targetValueForPoint, definition.warningThreshold, definition.goal),
+        status: customStatusForValue(values[index] ?? 0, targetValueForPoint, targetConfig.warningThreshold, definition.goal),
       };
     });
     const currentValue = values[currentIndex] ?? 0;
-    const currentTarget = targetSeries[currentIndex] ?? definition.targetValue;
+    const currentTarget = targetSeries[currentIndex] ?? targetConfig.targetValue;
 
     const availabilityReason = autoVariable && !autoIsValid
       ? `La meta automática referencia "${autoVariable}" pero no está disponible en este contexto.`
@@ -1428,7 +2283,7 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
     return {
       id: definition.id,
       label: definition.name,
-      description: definition.notes || `Fórmula: ${definition.formula}`,
+      description,
       category: definition.category || 'KPIs personalizados',
       unit: definition.unit,
       accentColor: hex.primary,
@@ -1444,17 +2299,21 @@ function buildCustomKpiEntries(input: KpiCatalogInput): KpiCatalogEntry[] {
       comparisonValue: currentTarget,
       comparisonLabel: 'Meta',
       diffValue: currentValue - currentTarget,
-      status: customStatusForValue(currentValue, currentTarget, definition.warningThreshold, definition.goal),
+      status: customStatusForValue(currentValue, currentTarget, targetConfig.warningThreshold, definition.goal),
       points,
       chartValueLabel: 'Resultado',
       chartComparisonLabel: 'Meta',
-      note: definition.notes,
+      note: targetConfig.notes || definition.notes,
       formula: definition.formula,
-      targetValue: definition.targetValue,
-      targetSource: definition.targetSource,
+      sourceDataLabel: 'Fórmula personalizada con variables de cobranza, pronóstico y escenario.',
+      targetValue: targetConfig.targetValue,
+      targetSource: targetConfig.targetSource,
       targetSourceVariable: autoVariable ?? null,
-      targetUpdatedAt: definition.updatedAt,
-      warningThreshold: definition.warningThreshold,
+      targetOwner: targetConfig.targetOwner,
+      targetUpdatedAt: targetConfig.updatedAt ?? definition.updatedAt,
+      warningThreshold: targetConfig.warningThreshold,
+      manualNotes: targetConfig.notes || definition.notes,
+      targetHistory,
       customUnitLabel: definition.customUnitLabel ?? null,
     };
   });
@@ -1465,6 +2324,7 @@ export function buildKpiCatalog(input: KpiCatalogInput): KpiCatalogEntry[] {
     activeMonth: input.activeMonth,
     collection: buildCollectionSnapshot(input.clients, input.assumptions, input.confirmedPayments),
     forecast: buildForecastSnapshot(input),
+    operations: buildOperationsSnapshot(input),
   };
   const builtIns: KpiCatalogEntry[] = KPI_DEFINITIONS.map((definition): KpiCatalogEntry => {
     const needsCollection = definition.category === 'Cobranza';
@@ -1487,12 +2347,13 @@ export function buildKpiCatalog(input: KpiCatalogInput): KpiCatalogEntry[] {
       goal: definition.goal,
       source: 'template',
       isCustom: false,
-      targetSource: null,
-      targetSourceVariable: null,
-      targetUpdatedAt: null,
       ...definition.build(context),
     };
   });
 
-  return [...builtIns, ...buildCustomKpiEntries(input)];
+  return [
+    ...buildCashFlowKpiEntries(input, context),
+    ...builtIns,
+    ...buildCustomKpiEntries(input),
+  ];
 }

@@ -20,7 +20,14 @@ import {
 } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 import { buildSimulationEffects, ensureBaseScenario } from './simulationCompiler';
-import { DEFAULT_ACTIVE_KPI_IDS, type CustomKpiDefinition } from './kpiCatalog';
+import {
+  DEFAULT_ACTIVE_KPI_IDS,
+  type CustomKpiDefinition,
+  type KpiConfigOverride,
+  type KpiTargetHistoryEntry,
+  type KpiTargetOwner,
+  type KpiTargetSource,
+} from './kpiCatalog';
 
 export interface CXPRecord {
   cia: string;
@@ -60,6 +67,7 @@ export interface FlowSenseStore {
   simulations: Simulation[];
   activeKpiIds: string[];
   customKpis: CustomKpiDefinition[];
+  kpiConfigs: KpiConfigOverride[];
   scenarioCellOverrides: ScenarioCellOverride[];
   activeProposalId: string | null;
   activeScenarioId: string | null;
@@ -290,6 +298,7 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
     simulations,
     activeKpiIds: [...DEFAULT_ACTIVE_KPI_IDS],
     customKpis: [],
+    kpiConfigs: [],
     scenarioCellOverrides,
     activeProposalId: null,
     activeScenarioId: BASE_SCENARIO_ID,
@@ -312,6 +321,7 @@ export function getDefaultStore(): FlowSenseStore {
     simulations: [],
     activeKpiIds: [...DEFAULT_ACTIVE_KPI_IDS],
     customKpis: [],
+    kpiConfigs: [],
     scenarioCellOverrides: [],
     activeProposalId: null,
     activeScenarioId: BASE_SCENARIO_ID,
@@ -381,6 +391,7 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
       ? data.activeKpiIds.filter((value): value is string => typeof value === 'string')
       : [...DEFAULT_ACTIVE_KPI_IDS],
     customKpis: validateArray<CustomKpiDefinition>(data.customKpis, 'customKpis').map(normalizeCustomKpi),
+    kpiConfigs: validateArray<KpiConfigOverride>(data.kpiConfigs, 'kpiConfigs').map(normalizeKpiConfig),
     scenarioCellOverrides: validateArray<ScenarioCellOverride>(
       data.scenarioCellOverrides,
       'scenarioCellOverrides',
@@ -571,16 +582,71 @@ function validateArray<T>(value: unknown, fieldName: string): T[] {
 }
 
 function normalizeCustomKpi(value: CustomKpiDefinition): CustomKpiDefinition {
-  const anyValue = value as CustomKpiDefinition & { targetSource?: unknown; targetSourceVariable?: unknown };
+  const anyValue = value as CustomKpiDefinition & {
+    targetSource?: unknown;
+    targetSourceVariable?: unknown;
+    targetOwner?: unknown;
+    targetHistory?: unknown;
+  };
   const rawSource = anyValue.targetSource;
-  const targetSource: CustomKpiDefinition['targetSource'] = rawSource === 'auto' ? 'auto' : 'manual';
+  const targetSource: KpiTargetSource = rawSource === 'auto' ? 'auto' : 'manual';
   const targetSourceVariable = typeof anyValue.targetSourceVariable === 'string' && anyValue.targetSourceVariable.length > 0
     ? anyValue.targetSourceVariable
     : undefined;
+  const targetOwner = normalizeTargetOwner(anyValue.targetOwner);
   return {
     ...value,
     targetSource,
     targetSourceVariable: targetSource === 'auto' ? targetSourceVariable : undefined,
+    targetOwner,
+    targetHistory: normalizeTargetHistory(anyValue.targetHistory),
+  };
+}
+
+function normalizeTargetOwner(value: unknown): KpiTargetOwner {
+  if (value === 'system' || value === 'historical' || value === 'user') return value;
+  return 'user';
+}
+
+function normalizeTargetSource(value: unknown): KpiTargetSource {
+  return value === 'auto' ? 'auto' : 'manual';
+}
+
+function normalizeNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeTargetHistory(value: unknown): KpiTargetHistoryEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Partial<KpiTargetHistoryEntry> => typeof item === 'object' && item !== null)
+    .map((item) => ({
+      value: normalizeNumber(item.value, 0),
+      warningThreshold: normalizeNumber(item.warningThreshold, 0),
+      targetSource: normalizeTargetSource(item.targetSource),
+      targetSourceVariable: typeof item.targetSourceVariable === 'string' ? item.targetSourceVariable : undefined,
+      targetOwner: normalizeTargetOwner(item.targetOwner),
+      note: typeof item.note === 'string' ? item.note : undefined,
+      changedAt: validateISODate(item.changedAt, 'kpiTargetHistory.changedAt'),
+    }));
+}
+
+function normalizeKpiConfig(value: KpiConfigOverride): KpiConfigOverride {
+  const anyValue = value as KpiConfigOverride & Record<string, unknown>;
+  const targetSource = normalizeTargetSource(anyValue.targetSource);
+  const targetSourceVariable = typeof anyValue.targetSourceVariable === 'string' && anyValue.targetSourceVariable.length > 0
+    ? anyValue.targetSourceVariable
+    : undefined;
+  return {
+    kpiId: typeof anyValue.kpiId === 'string' ? anyValue.kpiId : `kpi-${Date.now()}`,
+    targetValue: normalizeNumber(anyValue.targetValue, 0),
+    targetSource,
+    targetSourceVariable: targetSource === 'auto' ? targetSourceVariable : undefined,
+    targetOwner: normalizeTargetOwner(anyValue.targetOwner),
+    warningThreshold: normalizeNumber(anyValue.warningThreshold, 0),
+    notes: typeof anyValue.notes === 'string' ? anyValue.notes : '',
+    updatedAt: validateISODate(anyValue.updatedAt, 'kpiConfig.updatedAt'),
+    history: normalizeTargetHistory(anyValue.history),
   };
 }
 
