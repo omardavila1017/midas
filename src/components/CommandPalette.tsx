@@ -40,7 +40,7 @@ interface CommandPaletteProps {
   onNavigate: (tabId: string) => void;
   clients?: { id: string; name: string }[];
   providers?: { id: string; name: string }[];
-  proposals?: { id: string; name: string }[];
+  simulations?: { id: string; name: string }[];
 }
 
 interface NavigationItem {
@@ -82,7 +82,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   onNavigate,
   clients = [],
   providers = [],
-  proposals = [],
+  simulations = [],
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -123,7 +123,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         tabId: 'providers',
       }));
 
-    const proposalResults: ResultItem[] = proposals
+    const simulationResults: ResultItem[] = simulations
       .filter((pr) => fuzzyMatch(query, pr.name))
       .slice(0, 8)
       .map((pr) => ({
@@ -141,9 +141,9 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       ...navResults.slice(0, 8),
       ...clientResults,
       ...providerResults,
-      ...proposalResults,
+      ...simulationResults,
     ];
-  }, [query, clients, providers, proposals]);
+  }, [query, clients, providers, simulations]);
 
   // Group results by category
   const groupedResults = useMemo(() => {

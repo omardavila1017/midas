@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BASE_SCENARIO_ID, FlowPlan, ForecastConfidenceOverride, ForecastGranularity, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId, ForecastView } from './types';
+import { BASE_SCENARIO_ID, FlowPlan, ForecastConfidenceOverride, ForecastGranularity, Simulation, Scenario, ScenarioCellOverride, Proposal, TabId, ForecastView } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
@@ -114,10 +114,10 @@ function containsDemoBankData(statements: BankAccountStatement[] | undefined | n
 
 export default function App() {
   const [plan, setPlan] = useState<FlowPlan | null>(null);
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [simulations, setSimulations] = useState<Simulation[]>([]);
-  const [activeProposalId, setActiveProposalId] = useState<string | null>(null);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [activeSimulationId, setActiveSimulationId] = useState<string | null>(null);
   const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -200,10 +200,10 @@ export default function App() {
     const stored = loadStore();
     if (stored) {
       if (stored.plan) setPlan(stored.plan);
-      if (stored.proposals.length) setProposals(stored.proposals);
-      if (stored.scenarios.length) setScenarios(stored.scenarios);
       if (stored.simulations.length) setSimulations(stored.simulations);
-      setActiveProposalId(stored.activeProposalId ?? null);
+      if (stored.scenarios.length) setScenarios(stored.scenarios);
+      if (stored.proposals.length) setProposals(stored.proposals);
+      setActiveSimulationId(stored.activeSimulationId ?? null);
       setActiveScenarioId(stored.activeScenarioId ?? null);
       if (stored.providers.length) setProviders(stored.providers);
       if (stored.clients.length) setClients(stored.clients);
@@ -244,49 +244,49 @@ export default function App() {
   }, [providers.length]);
 
   useEffect(() => {
-    if (proposals.length === 0) {
-      if (activeProposalId !== null) setActiveProposalId(null);
+    if (simulations.length === 0) {
+      if (activeSimulationId !== null) setActiveSimulationId(null);
       return;
     }
 
     if (activeScenarioId === BASE_SCENARIO_ID) {
-      if (activeProposalId !== null) setActiveProposalId(null);
+      if (activeSimulationId !== null) setActiveSimulationId(null);
       return;
     }
 
-    if (!activeProposalId || !proposals.some((proposal) => proposal.id === activeProposalId)) {
-      setActiveProposalId(proposals[0].id);
+    if (!activeSimulationId || !simulations.some((simulation) => simulation.id === activeSimulationId)) {
+      setActiveSimulationId(simulations[0].id);
     }
-  }, [activeProposalId, activeScenarioId, proposals]);
+  }, [activeSimulationId, activeScenarioId, simulations]);
 
   useEffect(() => {
-    if (!activeProposalId) {
+    if (!activeSimulationId) {
       if (activeScenarioId !== null && scenarios.length > 0) {
         setActiveScenarioId(scenarios[0].id);
       }
       return;
     }
 
-    const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === activeProposalId);
-    if (proposalScenarios.length === 0) {
+    const simulationScenarios = scenarios.filter((scenario) => scenario.simulationId === activeSimulationId);
+    if (simulationScenarios.length === 0) {
       if (activeScenarioId !== null) setActiveScenarioId(null);
       return;
     }
 
-    if (!activeScenarioId || !proposalScenarios.some((scenario) => scenario.id === activeScenarioId)) {
+    if (!activeScenarioId || !simulationScenarios.some((scenario) => scenario.id === activeScenarioId)) {
       setActiveScenarioId(
-        proposals.find((proposal) => proposal.id === activeProposalId)?.activeScenarioId
-          ?? proposalScenarios[0].id,
+        simulations.find((simulation) => simulation.id === activeSimulationId)?.activeScenarioId
+          ?? simulationScenarios[0].id,
       );
     }
-  }, [activeProposalId, activeScenarioId, proposals, scenarios]);
+  }, [activeSimulationId, activeScenarioId, simulations, scenarios]);
 
   // Save to localStorage after changes (debounced by 500ms)
   useEffect(() => {
     const timer = setTimeout(() => {
       const store: FlowSenseStore = {
-        plan, proposals, scenarios, providers, clients,
-        simulations, activeProposalId, activeScenarioId,
+        plan, simulations, scenarios, providers, clients,
+        proposals, activeSimulationId, activeScenarioId,
         activeKpiIds,
         customKpis,
         kpiConfigs,
@@ -300,10 +300,10 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [
     plan,
-    proposals,
-    scenarios,
     simulations,
-    activeProposalId,
+    scenarios,
+    proposals,
+    activeSimulationId,
     activeScenarioId,
     activeKpiIds,
     customKpis,
@@ -488,18 +488,18 @@ export default function App() {
     if (prevTab.current !== activeTab) { setPageKey(k => k + 1); prevTab.current = activeTab; }
   }, [activeTab]);
 
-  const addProposal = (p: Proposal) => {
-    setProposals(prev => [...prev, p]);
-    setActiveProposalId(p.id);
+  const addSimulation = (p: Simulation) => {
+    setSimulations(prev => [...prev, p]);
+    setActiveSimulationId(p.id);
   };
-  const updateProposal = (p: Proposal) => setProposals(prev => prev.map(x => x.id === p.id ? p : x));
-  const deleteProposal = (id: string) => {
-    const nextProposals = proposals.filter(x => x.id !== id);
-    const nextScenarios = scenarios.filter(x => x.proposalId !== id);
+  const updateSimulation = (p: Simulation) => setSimulations(prev => prev.map(x => x.id === p.id ? p : x));
+  const deleteSimulation = (id: string) => {
+    const nextSimulations = simulations.filter(x => x.id !== id);
+    const nextScenarios = scenarios.filter(x => x.simulationId !== id);
     const nextScenarioIds = new Set(nextScenarios.map((scenario) => scenario.id));
-    setProposals(nextProposals);
+    setSimulations(nextSimulations);
     setScenarios(nextScenarios);
-    setActiveProposalId(current => current === id ? (nextProposals[0]?.id ?? null) : current);
+    setActiveSimulationId(current => current === id ? (nextSimulations[0]?.id ?? null) : current);
     setActiveScenarioId(current => {
       if (!current) return nextScenarios[0]?.id ?? null;
       return nextScenarioIds.has(current) ? current : (nextScenarios[0]?.id ?? null);
@@ -508,21 +508,21 @@ export default function App() {
   };
   const saveScenario = (s: Scenario) => {
     setScenarios(prev => [...prev, s]);
-    setActiveProposalId(s.proposalId);
+    setActiveSimulationId(s.simulationId);
     setActiveScenarioId(s.id);
-    setProposals(prev => prev.map((proposal) => (
-      proposal.id === s.proposalId
-        ? { ...proposal, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
-        : proposal
+    setSimulations(prev => prev.map((simulation) => (
+      simulation.id === s.simulationId
+        ? { ...simulation, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
+        : simulation
     )));
   };
   const updateScenario = (s: Scenario) => {
     if (s.id === BASE_SCENARIO_ID) return;
     setScenarios(prev => prev.map(x => x.id === s.id ? s : x));
-    setProposals(prev => prev.map((proposal) => (
-      proposal.id === s.proposalId && proposal.activeScenarioId === s.id
-        ? { ...proposal, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
-        : proposal
+    setSimulations(prev => prev.map((simulation) => (
+      simulation.id === s.simulationId && simulation.activeScenarioId === s.id
+        ? { ...simulation, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
+        : simulation
     )));
   };
   const deleteScenario = (id: string) => {
@@ -531,38 +531,38 @@ export default function App() {
     setScenarios(nextScenarios);
     setActiveScenarioId(current => current === id ? (nextScenarios[0]?.id ?? null) : current);
     setScenarioCellOverrides(prev => prev.filter(override => override.scenarioId !== id));
-    setProposals(prev => prev.map((proposal) => (
-      proposal.activeScenarioId === id
-        ? { ...proposal, activeScenarioId: nextScenarios.find((scenario) => scenario.proposalId === proposal.id)?.id }
-        : proposal
+    setSimulations(prev => prev.map((simulation) => (
+      simulation.activeScenarioId === id
+        ? { ...simulation, activeScenarioId: nextScenarios.find((scenario) => scenario.simulationId === simulation.id)?.id }
+        : simulation
     )));
   };
-  const addSimulation = (simulation: Simulation) => setSimulations(prev => [...prev, simulation]);
-  const updateSimulation = (simulation: Simulation) => setSimulations(prev => prev.map(item => item.id === simulation.id ? simulation : item));
-  const deleteSimulation = (id: string) => {
-    setSimulations(prev => prev.filter(item => item.id !== id));
+  const addProposal = (proposal: Proposal) => setProposals(prev => [...prev, proposal]);
+  const updateProposal = (proposal: Proposal) => setProposals(prev => prev.map(item => item.id === proposal.id ? proposal : item));
+  const deleteProposal = (id: string) => {
+    setProposals(prev => prev.filter(item => item.id !== id));
     setScenarios(prev => prev.map((scenario) => ({
       ...scenario,
-      simulationIds: scenario.simulationIds.filter(simulationId => simulationId !== id),
+      proposalIds: scenario.proposalIds.filter(proposalId => proposalId !== id),
     })));
   };
-  const selectProposal = (proposalId: string) => {
-    setActiveProposalId(proposalId);
-    const proposal = proposals.find((item) => item.id === proposalId);
-    const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === proposalId);
-    setActiveScenarioId(proposal?.activeScenarioId ?? proposalScenarios[0]?.id ?? null);
+  const selectSimulation = (simulationId: string) => {
+    setActiveSimulationId(simulationId);
+    const simulation = simulations.find((item) => item.id === simulationId);
+    const simulationScenarios = scenarios.filter((scenario) => scenario.simulationId === simulationId);
+    setActiveScenarioId(simulation?.activeScenarioId ?? simulationScenarios[0]?.id ?? null);
   };
   const selectScenario = (scenarioId: string | null) => {
     setActiveScenarioId(scenarioId);
     if (!scenarioId) return;
     const scenario = scenarios.find((item) => item.id === scenarioId);
     if (!scenario) return;
-    setActiveProposalId(scenario.proposalId ?? null);
+    setActiveSimulationId(scenario.simulationId ?? null);
     if (scenario.id === BASE_SCENARIO_ID) return;
-    setProposals(prev => prev.map((proposal) => (
-      proposal.id === scenario.proposalId
-        ? { ...proposal, activeScenarioId: scenarioId, updatedAt: new Date().toISOString() }
-        : proposal
+    setSimulations(prev => prev.map((simulation) => (
+      simulation.id === scenario.simulationId
+        ? { ...simulation, activeScenarioId: scenarioId, updatedAt: new Date().toISOString() }
+        : simulation
     )));
   };
 
@@ -700,8 +700,8 @@ export default function App() {
             <button
               onClick={() => {
                 const json = exportStore({
-                  plan, proposals, scenarios, providers, clients,
-                  simulations, activeProposalId, activeScenarioId,
+                  plan, simulations, scenarios, providers, clients,
+                  proposals, activeSimulationId, activeScenarioId,
                   activeKpiIds,
                   customKpis,
                   kpiConfigs,
@@ -784,7 +784,7 @@ export default function App() {
             {activeTab === 'dashboard' && (
               plan
                 ? <>
-                    <Dashboard plan={plan} proposals={proposals} />
+                    <Dashboard plan={plan} simulations={simulations} />
                     <div className="mt-8 rounded-2xl border border-[var(--gray-200)] bg-white p-5 shadow-sm">
                       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>
@@ -815,11 +815,11 @@ export default function App() {
                 cxpRecords={cxpRecords}
                 bankStatements={bankStatements}
                 plan={plan}
-                proposals={proposals}
-                scenarios={scenarios}
                 simulations={simulations}
+                scenarios={scenarios}
+                proposals={proposals}
                 overrides={scenarioCellOverrides}
-                activeProposalId={activeProposalId}
+                activeSimulationId={activeSimulationId}
                 activeScenarioId={activeScenarioId}
                 activeKpiIds={activeKpiIds}
                 onActiveKpiIdsChange={setActiveKpiIds}
@@ -865,23 +865,23 @@ export default function App() {
               plan
                 ? <ScenarioWorkbench
                     plan={plan}
-                    proposals={proposals}
-                    scenarios={scenarios}
                     simulations={simulations}
+                    scenarios={scenarios}
+                    proposals={proposals}
                     overrides={scenarioCellOverrides}
-                    activeProposalId={activeProposalId}
+                    activeSimulationId={activeSimulationId}
                     activeScenarioId={activeScenarioId}
-                    onSelectProposal={selectProposal}
+                    onSelectSimulation={selectSimulation}
                     onSelectScenario={selectScenario}
-                    onAdd={addProposal}
-                    onUpdate={updateProposal}
-                    onDelete={deleteProposal}
+                    onAdd={addSimulation}
+                    onUpdate={updateSimulation}
+                    onDelete={deleteSimulation}
                     onAddScenario={saveScenario}
                     onUpdateScenario={updateScenario}
                     onDeleteScenario={deleteScenario}
-                    onAddSimulation={addSimulation}
-                    onUpdateSimulation={updateSimulation}
-                    onDeleteSimulation={deleteSimulation}
+                    onAddProposal={addProposal}
+                    onUpdateProposal={updateProposal}
+                    onDeleteProposal={deleteProposal}
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Propuestas" />
             )}
@@ -889,10 +889,10 @@ export default function App() {
               plan
                 ? <Forecast
                     plan={plan}
-                    proposals={proposals}
-                    scenarios={scenarios}
                     simulations={simulations}
-                    activeProposalId={activeProposalId}
+                    scenarios={scenarios}
+                    proposals={proposals}
+                    activeSimulationId={activeSimulationId}
                     activeScenarioId={activeScenarioId}
                     overrides={scenarioCellOverrides}
                     confidenceOverrides={forecastConfidenceOverrides}
@@ -954,7 +954,7 @@ export default function App() {
         onNavigate={(tabId) => { setActiveTab(tabId as TabId); setCmdOpen(false); }}
         clients={clients.map(c => ({ id: c.id, name: c.name }))}
         providers={providers.map(p => ({ id: p.id, name: p.name }))}
-        proposals={proposals.map(p => ({ id: p.id, name: p.name }))}
+        simulations={simulations.map(p => ({ id: p.id, name: p.name }))}
       />
       <ActivityFeedPanel
         open={activityOpen}

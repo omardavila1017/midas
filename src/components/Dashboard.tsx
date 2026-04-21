@@ -21,13 +21,13 @@ import {
   AlertTriangle,
   ChevronRight,
 } from 'lucide-react';
-import { FlowPlan, FlowConcept, Proposal, MONTHS } from '../types';
+import { FlowPlan, FlowConcept, Simulation, MONTHS } from '../types';
 import { hex } from '../theme';
 import { fmtCompact, fmtCurrency, fmtPct } from '../formatters';
 
 interface DashboardProps {
   plan: FlowPlan;
-  proposals: Proposal[];
+  simulations: Simulation[];
 }
 
 interface DrillPathItem {
@@ -36,7 +36,7 @@ interface DrillPathItem {
   month: number | null;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
+const Dashboard: React.FC<DashboardProps> = ({ plan, simulations }) => {
   const [drillPath, setDrillPath] = useState<DrillPathItem[]>([]);
 
 

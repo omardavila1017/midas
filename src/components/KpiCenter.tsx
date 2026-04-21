@@ -45,7 +45,7 @@ import {
 } from '../domain/kpiCatalog';
 import type { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement } from '../services/jdeTypes';
-import type { FlowPlan, Proposal, Scenario, ScenarioCellOverride, Simulation } from '../types';
+import type { FlowPlan, Simulation, Scenario, ScenarioCellOverride, Proposal } from '../types';
 import { MONTHS_FULL } from '../types';
 import { hex } from '../theme';
 import { fmtCompact, fmtCurrency, fmtInt, fmtNum, fmtPct } from '../formatters';
@@ -57,11 +57,11 @@ interface Props {
   cxpRecords: CXPRecord[];
   bankStatements: BankAccountStatement[];
   plan: FlowPlan | null;
-  proposals: Proposal[];
-  scenarios: Scenario[];
   simulations: Simulation[];
+  scenarios: Scenario[];
+  proposals: Proposal[];
   overrides: ScenarioCellOverride[];
-  activeProposalId: string | null;
+  activeSimulationId: string | null;
   activeScenarioId: string | null;
   activeKpiIds: string[];
   onActiveKpiIdsChange: (ids: string[]) => void;
@@ -369,11 +369,11 @@ export default function KpiCenter({
   cxpRecords,
   bankStatements,
   plan,
-  proposals,
-  scenarios,
   simulations,
+  scenarios,
+  proposals,
   overrides,
-  activeProposalId,
+  activeSimulationId,
   activeScenarioId,
   activeKpiIds,
   onActiveKpiIdsChange,
@@ -407,11 +407,11 @@ export default function KpiCenter({
       cxpRecords,
       bankStatements,
       plan,
-      proposals,
-      scenarios,
       simulations,
+      scenarios,
+      proposals,
       overrides,
-      activeProposalId,
+      activeSimulationId,
       activeScenarioId,
       activeMonth,
       customKpis,
@@ -424,11 +424,11 @@ export default function KpiCenter({
       cxpRecords,
       bankStatements,
       plan,
-      proposals,
-      scenarios,
       simulations,
+      scenarios,
+      proposals,
       overrides,
-      activeProposalId,
+      activeSimulationId,
       activeScenarioId,
       activeMonth,
       customKpis,

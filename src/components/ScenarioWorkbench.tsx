@@ -14,23 +14,23 @@ import {
   CATEGORY_COLORS,
   FlowPlan,
   MONTHS,
-  Proposal,
+  Simulation,
   ROLE_TARGET_COLLECTIONS,
   ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
   ROLE_TARGET_PROVIDER_PAYMENTS,
   Scenario,
   ScenarioCellOverride,
-  Simulation,
-  SimulationCategory,
-  SimulationFrequency,
-  SimulationOperation,
-  SimulationType,
+  Proposal,
+  ProposalCategory,
+  ProposalFrequency,
+  ProposalOperation,
+  ProposalType,
 } from '../types';
 import {
-  buildSimulationEffects,
+  buildProposalEffects,
   isBaseScenario,
-} from '../domain/simulationCompiler';
+} from '../domain/proposalCompiler';
 import {
   resolveConceptLabel,
 } from '../domain/scenarioEngine';
@@ -39,35 +39,35 @@ import {
 
 interface Props {
   plan: FlowPlan;
-  proposals: Proposal[];
-  scenarios: Scenario[];
   simulations: Simulation[];
+  scenarios: Scenario[];
+  proposals: Proposal[];
   overrides: ScenarioCellOverride[];
-  activeProposalId: string | null;
+  activeSimulationId: string | null;
   activeScenarioId: string | null;
-  onSelectProposal: (proposalId: string) => void;
+  onSelectSimulation: (simulationId: string) => void;
   onSelectScenario: (scenarioId: string | null) => void;
-  onAdd: (proposal: Proposal) => void;
-  onUpdate: (proposal: Proposal) => void;
-  onDelete: (proposalId: string) => void;
+  onAdd: (simulation: Simulation) => void;
+  onUpdate: (simulation: Simulation) => void;
+  onDelete: (simulationId: string) => void;
   onAddScenario: (scenario: Scenario) => void;
   onUpdateScenario: (scenario: Scenario) => void;
   onDeleteScenario: (scenarioId: string) => void;
-  onAddSimulation: (simulation: Simulation) => void;
-  onUpdateSimulation: (simulation: Simulation) => void;
-  onDeleteSimulation: (simulationId: string) => void;
+  onAddProposal: (proposal: Proposal) => void;
+  onUpdateProposal: (proposal: Proposal) => void;
+  onDeleteProposal: (proposalId: string) => void;
 }
 
 /* ─── Constants ─── */
 
-const SIMULATION_CATEGORIES: SimulationCategory[] = [
+const SIMULATION_CATEGORIES: ProposalCategory[] = [
   'Incremento de Ingresos',
   'Reducción de Costos',
   'Diferimiento',
   'Renegociación',
 ];
 
-const FREQUENCIES: { value: SimulationFrequency; label: string }[] = [
+const FREQUENCIES: { value: ProposalFrequency; label: string }[] = [
   { value: 'once', label: 'Única vez' },
   { value: 'monthly', label: 'Mensual' },
   { value: 'bimonthly', label: 'Bimestral' },
@@ -76,7 +76,7 @@ const FREQUENCIES: { value: SimulationFrequency; label: string }[] = [
   { value: 'annual', label: 'Anual' },
 ];
 
-const SIMULATION_TYPES: { value: SimulationType; label: string; description: string }[] = [
+const SIMULATION_TYPES: { value: ProposalType; label: string; description: string }[] = [
   { value: 'percent_adjustment', label: 'Ajuste porcentual', description: 'Aumenta o reduce por un porcentaje.' },
   { value: 'amount_adjustment', label: 'Ajuste por monto', description: 'Agrega o quita un monto puntual o repetido.' },
   { value: 'recurring_series', label: 'Ingreso / gasto recurrente', description: 'Crea flujos recurrentes durante un periodo.' },
@@ -88,10 +88,10 @@ const SIMULATION_TYPES: { value: SimulationType; label: string; description: str
 interface AiScenarioAdjustment {
   name: string;
   description: string;
-  category: SimulationCategory;
-  type: SimulationType;
+  category: ProposalCategory;
+  type: ProposalType;
   targetIds: string[];
-  operation: SimulationOperation;
+  operation: ProposalOperation;
   percent?: number;
   shiftMonths?: number;
   shiftRatio?: number;
@@ -310,18 +310,18 @@ function snapToMonday(date: string): string {
   return current.toISOString().slice(0, 10);
 }
 
-function inferStartPrecision(simulation: Simulation): 'day' | 'week' | 'month' {
-  const startDate = simulation.startDate ?? `${simulation.startYearMonth ?? `${new Date().getFullYear()}-01`}-01`;
+function inferStartPrecision(proposal: Proposal): 'day' | 'week' | 'month' {
+  const startDate = proposal.startDate ?? `${proposal.startYearMonth ?? `${new Date().getFullYear()}-01`}-01`;
   if (startDate.endsWith('-01')) return 'month';
   if (snapToMonday(startDate) === startDate) return 'week';
   return 'day';
 }
 
-function formatSimulationWindow(simulation: Simulation): string {
-  const startYearMonth = simulation.startYearMonth ?? yearMonthFromDate(simulation.startDate ?? `${new Date().getFullYear()}-01-01`);
-  const endYearMonth = simulation.endYearMonth ?? startYearMonth;
-  const startDate = simulation.startDate ?? `${startYearMonth}-01`;
-  const endDate = simulation.endDate ?? endOfMonthFromDate(`${endYearMonth}-01`);
+function formatProposalWindow(proposal: Proposal): string {
+  const startYearMonth = proposal.startYearMonth ?? yearMonthFromDate(proposal.startDate ?? `${new Date().getFullYear()}-01-01`);
+  const endYearMonth = proposal.endYearMonth ?? startYearMonth;
+  const startDate = proposal.startDate ?? `${startYearMonth}-01`;
+  const endDate = proposal.endDate ?? endOfMonthFromDate(`${endYearMonth}-01`);
 
   if (startDate.endsWith('-01') && endOfMonthFromDate(endDate) === endDate) {
     if (startYearMonth === endYearMonth) return formatYearMonthLabel(startYearMonth);
@@ -347,7 +347,7 @@ function buildLeafConceptOptions(plan: FlowPlan, type: 'ingreso' | 'egreso'): Dy
     .map(c => ({ id: c.id, label: c.name }));
 }
 
-function getTargetOptions(plan: FlowPlan, category: SimulationCategory, type: SimulationType) {
+function getTargetOptions(plan: FlowPlan, category: ProposalCategory, type: ProposalType) {
   const incomeOpts: DynamicTargetOption[] = [{ id: ROLE_TARGET_INCOME, label: 'Todos los ingresos' }, ...buildLeafConceptOptions(plan, 'ingreso')];
   const expenseOpts: DynamicTargetOption[] = [{ id: ROLE_TARGET_EXPENSE, label: 'Todos los gastos' }, ...buildLeafConceptOptions(plan, 'egreso')];
   const collectionOpts: DynamicTargetOption[] = [{ id: ROLE_TARGET_COLLECTIONS, label: 'Toda la cobranza' }, ...buildLeafConceptOptions(plan, 'ingreso')];
@@ -373,15 +373,15 @@ function getTargetOptions(plan: FlowPlan, category: SimulationCategory, type: Si
 interface AdjustmentForm {
   name: string;
   description: string;
-  category: SimulationCategory;
-  type: SimulationType;
-  operation: SimulationOperation;
+  category: ProposalCategory;
+  type: ProposalType;
+  operation: ProposalOperation;
   targetIds: string[];
   startDate: string;
   endDate: string;
   startPrecision: 'day' | 'week' | 'month';
   assignedScenarioIds: string[];
-  frequency: SimulationFrequency;
+  frequency: ProposalFrequency;
   amount: number;
   percent: number;
   installments: number;
@@ -393,20 +393,20 @@ interface AdjustmentForm {
 }
 
 interface ScenarioDraft {
-  proposalId: string | null;
+  simulationId: string | null;
   scenarioId: string | null;
   name: string;
   description: string;
-  simulationIds: string[];
+  proposalIds: string[];
 }
 
-function makeScenarioDraft(proposal?: Proposal | null, scenario?: Scenario | null): ScenarioDraft {
+function makeScenarioDraft(simulation?: Simulation | null, scenario?: Scenario | null): ScenarioDraft {
   return {
-    proposalId: proposal?.id ?? scenario?.proposalId ?? null,
+    simulationId: simulation?.id ?? scenario?.simulationId ?? null,
     scenarioId: scenario?.id ?? null,
-    name: scenario?.name ?? proposal?.name ?? '',
-    description: scenario?.description ?? proposal?.description ?? '',
-    simulationIds: scenario?.simulationIds ?? [],
+    name: scenario?.name ?? simulation?.name ?? '',
+    description: scenario?.description ?? simulation?.description ?? '',
+    proposalIds: scenario?.proposalIds ?? [],
   };
 }
 
@@ -428,12 +428,12 @@ function defaultAdjustmentForm(plan: FlowPlan, assignedScenarioIds: string[] = [
   };
 }
 
-function buildSimulationFromForm(plan: FlowPlan, form: AdjustmentForm, existing?: Simulation): Simulation {
+function buildProposalFromForm(plan: FlowPlan, form: AdjustmentForm, existing?: Proposal): Proposal {
   const ts = now();
   const startDate = form.startDate;
   const safeEndDate = form.endDate < startDate ? startDate : form.endDate;
-  const sim: Simulation = {
-    id: existing?.id ?? `simulation-${Date.now()}`,
+  const sim: Proposal = {
+    id: existing?.id ?? `proposal-${Date.now()}`,
     name: form.name.trim(),
     description: form.description.trim(),
     category: form.category,
@@ -457,20 +457,20 @@ function buildSimulationFromForm(plan: FlowPlan, form: AdjustmentForm, existing?
     createdAt: existing?.createdAt ?? ts,
     updatedAt: ts,
   };
-  sim.effects = buildSimulationEffects(plan, sim);
+  sim.effects = buildProposalEffects(plan, sim);
   return sim;
 }
 
-function buildSimulationFromAiTemplate(
+function buildProposalFromAiTemplate(
   plan: FlowPlan,
   templateId: string,
   adjustment: AiScenarioAdjustment,
   index: number,
   timestamp: number,
-): Simulation {
+): Proposal {
   const ts = new Date(timestamp + index).toISOString();
-  const sim: Simulation = {
-    id: `simulation-ai-${templateId}-${timestamp}-${index}`,
+  const sim: Proposal = {
+    id: `proposal-ai-${templateId}-${timestamp}-${index}`,
     name: adjustment.name,
     description: adjustment.description,
     category: adjustment.category,
@@ -490,7 +490,7 @@ function buildSimulationFromAiTemplate(
     createdAt: ts,
     updatedAt: ts,
   };
-  sim.effects = buildSimulationEffects(plan, sim);
+  sim.effects = buildProposalEffects(plan, sim);
   return sim;
 }
 
@@ -514,27 +514,27 @@ function summarizeTargets(plan: FlowPlan, targetIds: string[]): string {
   return labels.join(', ');
 }
 
-function summarizeSimulationImpact(plan: FlowPlan, simulation: Simulation): string {
-  const targetsLabel = summarizeTargets(plan, simulation.targetIds ?? []);
-  const direction = simulation.operation === 'decrease' ? 'Reduce' : 'Incrementa';
+function summarizeProposalImpact(plan: FlowPlan, proposal: Proposal): string {
+  const targetsLabel = summarizeTargets(plan, proposal.targetIds ?? []);
+  const direction = proposal.operation === 'decrease' ? 'Reduce' : 'Incrementa';
 
-  switch (simulation.type) {
+  switch (proposal.type) {
     case 'percent_adjustment':
-      return `${direction} ${Math.round(Math.abs(simulation.percent ?? 0) * 100)}% en ${targetsLabel}`;
+      return `${direction} ${Math.round(Math.abs(proposal.percent ?? 0) * 100)}% en ${targetsLabel}`;
     case 'amount_adjustment':
-      return `${direction} ${formatCurrencyShort(Math.abs(simulation.amount ?? 0))} en ${targetsLabel}`;
+      return `${direction} ${formatCurrencyShort(Math.abs(proposal.amount ?? 0))} en ${targetsLabel}`;
     case 'recurring_series':
-      return `${direction} ${formatCurrencyShort(Math.abs(simulation.amount ?? 0))} de forma recurrente en ${targetsLabel}`;
+      return `${direction} ${formatCurrencyShort(Math.abs(proposal.amount ?? 0))} de forma recurrente en ${targetsLabel}`;
     case 'installment_plan':
-      return `${direction} ${formatCurrencyShort(Math.abs(simulation.amount ?? 0))} en ${simulation.installments ?? 0} parcialidades sobre ${targetsLabel}`;
+      return `${direction} ${formatCurrencyShort(Math.abs(proposal.amount ?? 0))} en ${proposal.installments ?? 0} parcialidades sobre ${targetsLabel}`;
     case 'timing_shift': {
-      const ratio = Math.round((simulation.shiftRatio ?? 1) * 100);
-      const months = simulation.shiftMonths ?? 0;
+      const ratio = Math.round((proposal.shiftRatio ?? 1) * 100);
+      const months = proposal.shiftMonths ?? 0;
       const directionLabel = months >= 0 ? `+${months}` : `${months}`;
       return `Mueve ${ratio}% de ${targetsLabel} ${directionLabel} mes${Math.abs(months) === 1 ? '' : 'es'}`;
     }
     case 'pause_expense':
-      return `Pausa ${targetsLabel} durante ${formatSimulationWindow(simulation)}`;
+      return `Pausa ${targetsLabel} durante ${formatProposalWindow(proposal)}`;
     default:
       return `${direction} ${targetsLabel}`;
   }
@@ -545,20 +545,20 @@ function summarizeSimulationImpact(plan: FlowPlan, simulation: Simulation): stri
    ═══════════════════════════════════════════════════════════════ */
 
 export default function ScenarioWorkbench({
-  plan, proposals, scenarios, simulations, overrides,
-  activeProposalId, activeScenarioId,
-  onSelectProposal, onSelectScenario,
+  plan, simulations, scenarios, proposals, overrides,
+  activeSimulationId, activeScenarioId,
+  onSelectSimulation, onSelectScenario,
   onAdd, onUpdate, onDelete,
   onAddScenario, onUpdateScenario, onDeleteScenario,
-  onAddSimulation, onUpdateSimulation, onDeleteSimulation,
+  onAddProposal, onUpdateProposal, onDeleteProposal,
 }: Props) {
   /* ── Resolved selections ── */
   const baseScenario = scenarios.find(s => isBaseScenario(s)) ?? null;
-  const activeProposal = proposals.find(p => p.id === activeProposalId) ?? null;
+  const activeSimulation = simulations.find(p => p.id === activeSimulationId) ?? null;
   const activeScenario = scenarios.find(s => s.id === activeScenarioId) ?? baseScenario ?? null;
-  const proposalsById = useMemo(
-    () => new Map(proposals.map((proposal) => [proposal.id, proposal])),
-    [proposals],
+  const simulationsById = useMemo(
+    () => new Map(simulations.map((simulation) => [simulation.id, simulation])),
+    [simulations],
   );
   const editableScenarios = useMemo(
     () => scenarios.filter((scenario) => !isBaseScenario(scenario)),
@@ -566,37 +566,37 @@ export default function ScenarioWorkbench({
   );
   const resolveScenarioName = (scenario: Scenario) => (
     scenario.name.trim()
-    || proposalsById.get(scenario.proposalId ?? '')?.name?.trim()
+    || simulationsById.get(scenario.simulationId ?? '')?.name?.trim()
     || 'Escenario sin nombre'
   );
   const resolveScenarioDescription = (scenario: Scenario) => (
     scenario.description.trim()
-    || proposalsById.get(scenario.proposalId ?? '')?.description?.trim()
+    || simulationsById.get(scenario.simulationId ?? '')?.description?.trim()
     || 'Sin descripción todavía. Agrega un contexto breve para que el equipo entienda este escenario.'
   );
-  const resolveAssignedScenarioIds = (simulationId: string): string[] => (
+  const resolveAssignedScenarioIds = (proposalId: string): string[] => (
     editableScenarios
-      .filter((scenario) => scenario.simulationIds.includes(simulationId))
+      .filter((scenario) => scenario.proposalIds.includes(proposalId))
       .map((scenario) => scenario.id)
   );
   const scenarioCards = useMemo(() => (
     editableScenarios.map((scenario) => {
-      const proposal = proposalsById.get(scenario.proposalId ?? '') ?? null;
-      const sharedCount = scenario.simulationIds.filter(
-        (simulationId) => resolveAssignedScenarioIds(simulationId).length > 1,
+      const simulation = simulationsById.get(scenario.simulationId ?? '') ?? null;
+      const sharedCount = scenario.proposalIds.filter(
+        (proposalId) => resolveAssignedScenarioIds(proposalId).length > 1,
       ).length;
 
       return {
         scenario,
-        proposal,
+        simulation,
         name: resolveScenarioName(scenario),
         description: resolveScenarioDescription(scenario),
-        adjustmentCount: scenario.simulationIds.length,
+        adjustmentCount: scenario.proposalIds.length,
         sharedCount,
         isSelected: activeScenario?.id === scenario.id,
       };
     })
-  ), [activeScenario?.id, editableScenarios, proposalsById]);
+  ), [activeScenario?.id, editableScenarios, simulationsById]);
   const scenarioLabelsById = useMemo(() => new Map(
     editableScenarios.map((scenario) => {
       const label = resolveScenarioName(scenario);
@@ -614,45 +614,45 @@ export default function ScenarioWorkbench({
   const [scenarioAdjustmentQuery, setScenarioAdjustmentQuery] = useState('');
 
   const assignedIds = useMemo(
-    () => new Set(activeScenario?.simulationIds ?? []),
-    [activeScenario?.simulationIds],
+    () => new Set(activeScenario?.proposalIds ?? []),
+    [activeScenario?.proposalIds],
   );
-  const assignedSimulations = useMemo(
-    () => simulations
-      .filter((simulation) => assignedIds.has(simulation.id))
+  const assignedProposals = useMemo(
+    () => proposals
+      .filter((proposal) => assignedIds.has(proposal.id))
       .sort((left, right) => left.name.localeCompare(right.name, 'es')),
-    [assignedIds, simulations],
+    [assignedIds, proposals],
   );
   const adjustmentCatalog = useMemo(() => (
-    simulations
-      .map((simulation) => {
-        const assignedScenarioIds = resolveAssignedScenarioIds(simulation.id);
+    proposals
+      .map((proposal) => {
+        const assignedScenarioIds = resolveAssignedScenarioIds(proposal.id);
         const assignedScenarioLabels = assignedScenarioIds
           .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
         return {
-          simulation,
+          proposal,
           assignedScenarioIds,
           assignedScenarioLabels,
-          impactSummary: summarizeSimulationImpact(plan, simulation),
-          targetSummary: summarizeTargets(plan, simulation.targetIds ?? []),
-          inActiveScenario: assignedIds.has(simulation.id),
+          impactSummary: summarizeProposalImpact(plan, proposal),
+          targetSummary: summarizeTargets(plan, proposal.targetIds ?? []),
+          inActiveScenario: assignedIds.has(proposal.id),
         };
       })
       .sort((left, right) => {
         if (right.assignedScenarioIds.length !== left.assignedScenarioIds.length) {
           return right.assignedScenarioIds.length - left.assignedScenarioIds.length;
         }
-        return left.simulation.name.localeCompare(right.simulation.name, 'es');
+        return left.proposal.name.localeCompare(right.proposal.name, 'es');
       })
-  ), [assignedIds, editableScenarios, plan, scenarioLabelsById, simulations]);
+  ), [assignedIds, editableScenarios, plan, scenarioLabelsById, proposals]);
   const filteredAdjustmentCatalog = useMemo(() => {
     const query = catalogQuery.trim().toLowerCase();
     if (!query) return adjustmentCatalog;
-    return adjustmentCatalog.filter(({ simulation, assignedScenarioLabels, impactSummary, targetSummary }) => {
+    return adjustmentCatalog.filter(({ proposal, assignedScenarioLabels, impactSummary, targetSummary }) => {
       const haystack = [
-        simulation.name,
-        simulation.description,
-        simulation.comments,
+        proposal.name,
+        proposal.description,
+        proposal.comments,
         impactSummary,
         targetSummary,
         ...assignedScenarioLabels,
@@ -666,10 +666,10 @@ export default function ScenarioWorkbench({
   const filteredScenarioDraftAdjustments = useMemo(() => {
     const query = scenarioAdjustmentQuery.trim().toLowerCase();
     if (!query) return adjustmentCatalog;
-    return adjustmentCatalog.filter(({ simulation, assignedScenarioLabels, impactSummary, targetSummary }) => {
+    return adjustmentCatalog.filter(({ proposal, assignedScenarioLabels, impactSummary, targetSummary }) => {
       const haystack = [
-        simulation.name,
-        simulation.description,
+        proposal.name,
+        proposal.description,
         impactSummary,
         targetSummary,
         ...assignedScenarioLabels,
@@ -705,19 +705,19 @@ export default function ScenarioWorkbench({
     });
   }, [targetConfig]);
 
-  const syncSimulationAssignments = (simulationId: string, nextScenarioIds: string[]) => {
+  const syncProposalAssignments = (proposalId: string, nextScenarioIds: string[]) => {
     const selectedIds = new Set(nextScenarioIds);
 
     editableScenarios.forEach((scenario) => {
-      const exists = scenario.simulationIds.includes(simulationId);
+      const exists = scenario.proposalIds.includes(proposalId);
       const shouldExist = selectedIds.has(scenario.id);
       if (exists === shouldExist) return;
 
       onUpdateScenario({
         ...scenario,
-        simulationIds: shouldExist
-          ? [...new Set([...scenario.simulationIds, simulationId])]
-          : scenario.simulationIds.filter((id) => id !== simulationId),
+        proposalIds: shouldExist
+          ? [...new Set([...scenario.proposalIds, proposalId])]
+          : scenario.proposalIds.filter((id) => id !== proposalId),
         updatedAt: now(),
       });
     });
@@ -732,8 +732,8 @@ export default function ScenarioWorkbench({
   };
 
   const openEditScenario = (scenario: Scenario) => {
-    const proposal = proposals.find((item) => item.id === scenario.proposalId) ?? null;
-    setScenarioDraft(makeScenarioDraft(proposal, scenario));
+    const simulation = simulations.find((item) => item.id === scenario.simulationId) ?? null;
+    setScenarioDraft(makeScenarioDraft(simulation, scenario));
     setScenarioAdjustmentQuery('');
     setScenarioEditorOpen(true);
   };
@@ -760,13 +760,13 @@ export default function ScenarioWorkbench({
     if (!name) return;
     const ts = now();
 
-    if (scenarioDraft.proposalId && scenarioDraft.scenarioId) {
-      const proposal = proposals.find((item) => item.id === scenarioDraft.proposalId) ?? null;
+    if (scenarioDraft.simulationId && scenarioDraft.scenarioId) {
+      const simulation = simulations.find((item) => item.id === scenarioDraft.simulationId) ?? null;
       const scenario = scenarios.find((item) => item.id === scenarioDraft.scenarioId) ?? null;
-      if (!proposal || !scenario) return;
+      if (!simulation || !scenario) return;
 
       onUpdate({
-        ...proposal,
+        ...simulation,
         name,
         description,
         updatedAt: ts,
@@ -775,10 +775,10 @@ export default function ScenarioWorkbench({
         ...scenario,
         name,
         description,
-        simulationIds: scenarioDraft.simulationIds,
+        proposalIds: scenarioDraft.proposalIds,
         updatedAt: ts,
       });
-      onSelectProposal(proposal.id);
+      onSelectSimulation(simulation.id);
       onSelectScenario(scenario.id);
       if (openAdjustmentAfterSave) {
         openNewAdjustmentForScenario(scenario.id);
@@ -788,20 +788,20 @@ export default function ScenarioWorkbench({
       return;
     }
 
-    const proposalId = `proposal-${Date.now()}`;
+    const simulationId = `simulation-${Date.now()}`;
     const scenarioId = `scenario-${Date.now()}`;
 
     onAdd({
-      id: proposalId, name, description,
+      id: simulationId, name, description,
       status: 'Pendiente', createdAt: ts, updatedAt: ts,
     });
     onAddScenario({
-      id: scenarioId, proposalId, kind: 'proposal',
+      id: scenarioId, simulationId, kind: 'simulation',
       name, description, probability: 1,
       startYearMonth: `${plan.year}-01`, horizonMonths: 12,
-      simulationIds: scenarioDraft.simulationIds, createdAt: ts, updatedAt: ts,
+      proposalIds: scenarioDraft.proposalIds, createdAt: ts, updatedAt: ts,
     });
-    onSelectProposal(proposalId);
+    onSelectSimulation(simulationId);
     onSelectScenario(scenarioId);
     if (openAdjustmentAfterSave) {
       openNewAdjustmentForScenario(scenarioId);
@@ -811,9 +811,9 @@ export default function ScenarioWorkbench({
   };
 
   const deleteScenarioFull = (scenario: Scenario) => {
-    const proposal = proposalsById.get(scenario.proposalId ?? '') ?? null;
-    if (proposal) {
-      onDelete(proposal.id);
+    const simulation = simulationsById.get(scenario.simulationId ?? '') ?? null;
+    if (simulation) {
+      onDelete(simulation.id);
       return;
     }
     onDeleteScenario(scenario.id);
@@ -823,7 +823,7 @@ export default function ScenarioWorkbench({
     openNewAdjustmentForScenario(activeScenario && !isBaseScenario(activeScenario) ? activeScenario.id : null);
   };
 
-  const openEditAdjustment = (sim: Simulation) => {
+  const openEditAdjustment = (sim: Proposal) => {
     setEditingId(sim.id);
     setForm({
       name: sim.name, description: sim.description,
@@ -850,15 +850,15 @@ export default function ScenarioWorkbench({
 
   const saveAdjustment = () => {
     if (!form.name.trim() || form.targetIds.length === 0 || form.assignedScenarioIds.length === 0) return;
-    const existing = editingId ? simulations.find(s => s.id === editingId) : undefined;
-    const sim = buildSimulationFromForm(plan, form, existing);
+    const existing = editingId ? proposals.find(s => s.id === editingId) : undefined;
+    const sim = buildProposalFromForm(plan, form, existing);
 
     if (existing) {
-      onUpdateSimulation(sim);
+      onUpdateProposal(sim);
     } else {
-      onAddSimulation(sim);
+      onAddProposal(sim);
     }
-    syncSimulationAssignments(sim.id, form.assignedScenarioIds);
+    syncProposalAssignments(sim.id, form.assignedScenarioIds);
     setPanelOpen(false);
     setEditingId(null);
   };
@@ -867,41 +867,41 @@ export default function ScenarioWorkbench({
     if (!activeScenario || isBaseScenario(activeScenario)) return;
     onUpdateScenario({
       ...activeScenario,
-      simulationIds: activeScenario.simulationIds.filter(id => id !== simId),
+      proposalIds: activeScenario.proposalIds.filter(id => id !== simId),
       updatedAt: now(),
     });
   };
 
   const deleteAdjustment = (simId: string) => {
-    onDeleteSimulation(simId);
+    onDeleteProposal(simId);
   };
 
-  const toggleScenarioDraftSimulation = (simulationId: string) => {
+  const toggleScenarioDraftProposal = (proposalId: string) => {
     setScenarioDraft((current) => ({
       ...current,
-      simulationIds: current.simulationIds.includes(simulationId)
-        ? current.simulationIds.filter((id) => id !== simulationId)
-        : [...current.simulationIds, simulationId],
+      proposalIds: current.proposalIds.includes(proposalId)
+        ? current.proposalIds.filter((id) => id !== proposalId)
+        : [...current.proposalIds, proposalId],
     }));
   };
 
-  const toggleAdjustmentInScenario = (scenarioId: string, simulationId: string) => {
+  const toggleAdjustmentInScenario = (scenarioId: string, proposalId: string) => {
     const scenario = editableScenarios.find((item) => item.id === scenarioId);
     if (!scenario) return;
 
-    const exists = scenario.simulationIds.includes(simulationId);
+    const exists = scenario.proposalIds.includes(proposalId);
     onUpdateScenario({
       ...scenario,
-      simulationIds: exists
-        ? scenario.simulationIds.filter((id) => id !== simulationId)
-        : [...scenario.simulationIds, simulationId],
+      proposalIds: exists
+        ? scenario.proposalIds.filter((id) => id !== proposalId)
+        : [...scenario.proposalIds, proposalId],
       updatedAt: now(),
     });
   };
 
-  const toggleAdjustmentInActiveScenario = (simulationId: string) => {
+  const toggleAdjustmentInActiveScenario = (proposalId: string) => {
     if (!activeScenario || isBaseScenario(activeScenario)) return;
-    toggleAdjustmentInScenario(activeScenario.id, simulationId);
+    toggleAdjustmentInScenario(activeScenario.id, proposalId);
   };
 
   const toggleTarget = (id: string) => {
@@ -925,35 +925,35 @@ export default function ScenarioWorkbench({
   const createAiScenario = (template: AiScenarioTemplate) => {
     const timestamp = Date.now();
     const ts = new Date(timestamp).toISOString();
-    const proposalId = `proposal-ai-${template.id}-${timestamp}`;
+    const simulationId = `simulation-ai-${template.id}-${timestamp}`;
     const scenarioId = `scenario-ai-${template.id}-${timestamp}`;
-    const generatedSimulations = template.adjustments.map((adjustment, index) =>
-      buildSimulationFromAiTemplate(plan, template.id, adjustment, index, timestamp),
+    const generatedProposals = template.adjustments.map((adjustment, index) =>
+      buildProposalFromAiTemplate(plan, template.id, adjustment, index, timestamp),
     );
 
     onAdd({
-      id: proposalId,
+      id: simulationId,
       name: template.name,
       description: `${template.description} Supuestos: ${template.assumptions.join('; ')}. Impacto esperado: ${template.impact}`,
       status: 'Pendiente',
       createdAt: ts,
       updatedAt: ts,
     });
-    generatedSimulations.forEach(onAddSimulation);
+    generatedProposals.forEach(onAddProposal);
     onAddScenario({
       id: scenarioId,
-      proposalId,
-      kind: 'proposal',
+      simulationId,
+      kind: 'simulation',
       name: template.name,
       description: template.description,
       probability: 1,
       startYearMonth: `${plan.year}-01`,
       horizonMonths: 12,
-      simulationIds: generatedSimulations.map((simulation) => simulation.id),
+      proposalIds: generatedProposals.map((proposal) => proposal.id),
       createdAt: ts,
       updatedAt: ts,
     });
-    onSelectProposal(proposalId);
+    onSelectSimulation(simulationId);
     onSelectScenario(scenarioId);
   };
 
@@ -1040,7 +1040,7 @@ export default function ScenarioWorkbench({
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Badge>{scenarioDraft.simulationIds.length} {scenarioDraft.simulationIds.length === 1 ? 'ajuste seleccionado' : 'ajustes seleccionados'}</Badge>
+                <Badge>{scenarioDraft.proposalIds.length} {scenarioDraft.proposalIds.length === 1 ? 'ajuste seleccionado' : 'ajustes seleccionados'}</Badge>
                 <Badge>{filteredScenarioDraftAdjustments.length} visibles</Badge>
               </div>
             </div>
@@ -1111,13 +1111,13 @@ export default function ScenarioWorkbench({
                   </div>
                 ) : (
                   <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
-                    {filteredScenarioDraftAdjustments.map(({ simulation, assignedScenarioLabels, impactSummary }) => {
-                      const selected = scenarioDraft.simulationIds.includes(simulation.id);
+                    {filteredScenarioDraftAdjustments.map(({ proposal, assignedScenarioLabels, impactSummary }) => {
+                      const selected = scenarioDraft.proposalIds.includes(proposal.id);
                       return (
                         <button
-                          key={simulation.id}
+                          key={proposal.id}
                           type="button"
-                          onClick={() => toggleScenarioDraftSimulation(simulation.id)}
+                          onClick={() => toggleScenarioDraftProposal(proposal.id)}
                           className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
                             selected
                               ? 'border-[var(--primary)] bg-[var(--primary-muted)]/50 shadow-[0_8px_18px_rgba(10,132,255,0.06)]'
@@ -1127,15 +1127,15 @@ export default function ScenarioWorkbench({
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <div className="flex items-center gap-2">
-                                <span className="inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }} />
-                                <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{simulation.name}</p>
+                                <span className="inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[proposal.category] }} />
+                                <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{proposal.name}</p>
                               </div>
                               <p className="mt-2 text-[12px] leading-6 text-[var(--gray-500)]">{impactSummary}</p>
                               <div className="mt-2 flex flex-wrap gap-2">
-                                <Badge>{formatSimulationWindow(simulation)}</Badge>
+                                <Badge>{formatProposalWindow(proposal)}</Badge>
                                 <Badge>{assignedScenarioLabels.length === 0 ? 'Sin escenario' : `${assignedScenarioLabels.length} escenario${assignedScenarioLabels.length === 1 ? '' : 's'}`}</Badge>
                                 {assignedScenarioLabels.slice(0, 2).map((label) => (
-                                  <Badge key={`${simulation.id}-${label}`}>{label}</Badge>
+                                  <Badge key={`${proposal.id}-${label}`}>{label}</Badge>
                                 ))}
                               </div>
                             </div>
@@ -1219,7 +1219,7 @@ export default function ScenarioWorkbench({
               </div>
             ) : (
               <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                {scenarioCards.map(({ scenario, proposal, name, description, adjustmentCount, sharedCount, isSelected }) => (
+                {scenarioCards.map(({ scenario, simulation, name, description, adjustmentCount, sharedCount, isSelected }) => (
                   <article
                     key={scenario.id}
                     className={`rounded-2xl border p-4 transition ${
@@ -1250,7 +1250,7 @@ export default function ScenarioWorkbench({
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
-                        {proposal && (
+                        {simulation && (
                           <button
                             onClick={() => deleteScenarioFull(scenario)}
                             className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[var(--danger)]"
@@ -1266,7 +1266,7 @@ export default function ScenarioWorkbench({
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge>{adjustmentCount} {adjustmentCount === 1 ? 'ajuste' : 'ajustes'}</Badge>
                         {sharedCount > 0 && <Badge>{sharedCount} compartido{sharedCount === 1 ? '' : 's'}</Badge>}
-                        {proposal?.status && <Badge>{proposal.status}</Badge>}
+                        {simulation?.status && <Badge>{simulation.status}</Badge>}
                       </div>
                       <button
                         onClick={() => onSelectScenario(scenario.id)}
@@ -1310,15 +1310,15 @@ export default function ScenarioWorkbench({
               <div>
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--gray-400)]">Escenario seleccionado</div>
                 <h2 className="mt-2 text-[22px] font-semibold tracking-tight text-[var(--gray-950)]">
-                  {activeScenario ? resolveScenarioName(activeScenario) : activeProposal?.name ?? 'Escenario'}
+                  {activeScenario ? resolveScenarioName(activeScenario) : activeSimulation?.name ?? 'Escenario'}
                 </h2>
                 <p className="mt-2 max-w-3xl text-[13px] leading-6 text-[var(--gray-500)]">
-                  {activeScenario ? resolveScenarioDescription(activeScenario) : activeProposal?.description?.trim()
+                  {activeScenario ? resolveScenarioDescription(activeScenario) : activeSimulation?.description?.trim()
                     || 'Sin descripción todavía. Agrega un resumen corto para que el equipo entienda cuándo usar este escenario.'}
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Badge>{assignedSimulations.length} {assignedSimulations.length === 1 ? 'ajuste' : 'ajustes'}</Badge>
-                  {activeProposal?.status && <Badge>{activeProposal.status}</Badge>}
+                  <Badge>{assignedProposals.length} {assignedProposals.length === 1 ? 'ajuste' : 'ajustes'}</Badge>
+                  {activeSimulation?.status && <Badge>{activeSimulation.status}</Badge>}
                 </div>
               </div>
 
@@ -1349,7 +1349,7 @@ export default function ScenarioWorkbench({
               </p>
             </div>
 
-            {assignedSimulations.length === 0 ? (
+            {assignedProposals.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
                 <FlaskConical className="w-6 h-6 mx-auto mb-3 text-[var(--gray-400)]" />
                 <p className="text-[13px] font-medium text-[var(--gray-950)]">Sin ajustes todavía</p>
@@ -1359,7 +1359,7 @@ export default function ScenarioWorkbench({
               </div>
             ) : (
               <div className="space-y-2">
-                {assignedSimulations.map((sim) => {
+                {assignedProposals.map((sim) => {
                   const assignedScenarioLabels = resolveAssignedScenarioIds(sim.id)
                     .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
 
@@ -1368,9 +1368,9 @@ export default function ScenarioWorkbench({
                       <div className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[sim.category] }} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{sim.name}</p>
-                        <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">{summarizeSimulationImpact(plan, sim)}</p>
+                        <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">{summarizeProposalImpact(plan, sim)}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <Badge>{formatSimulationWindow(sim)}</Badge>
+                          <Badge>{formatProposalWindow(sim)}</Badge>
                           {assignedScenarioLabels.length > 1 && (
                             <Badge>{`Compartido en ${assignedScenarioLabels.length} escenarios`}</Badge>
                           )}
@@ -1454,16 +1454,16 @@ export default function ScenarioWorkbench({
               </div>
             ) : (
               <div className="space-y-3">
-                {filteredAdjustmentCatalog.map(({ simulation, assignedScenarioIds, assignedScenarioLabels, impactSummary, inActiveScenario }) => (
+                {filteredAdjustmentCatalog.map(({ proposal, assignedScenarioIds, assignedScenarioLabels, impactSummary, inActiveScenario }) => (
                   <article
-                    key={simulation.id}
+                    key={proposal.id}
                     className="rounded-2xl border border-[var(--gray-200)]/60 bg-white p-4"
                   >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="inline-flex h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }} />
-                          <h3 className="truncate text-[14px] font-semibold text-[var(--gray-950)]">{simulation.name}</h3>
+                          <span className="inline-flex h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[proposal.category] }} />
+                          <h3 className="truncate text-[14px] font-semibold text-[var(--gray-950)]">{proposal.name}</h3>
                           {assignedScenarioIds.length > 1 && (
                             <span className="rounded-full bg-[var(--primary-muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--primary)]">
                               Reutilizable
@@ -1472,10 +1472,10 @@ export default function ScenarioWorkbench({
                         </div>
                         <p className="mt-2 text-[12px] leading-6 text-[var(--gray-500)]">{impactSummary}</p>
                         <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <Badge>{formatSimulationWindow(simulation)}</Badge>
+                          <Badge>{formatProposalWindow(proposal)}</Badge>
                           <Badge>{assignedScenarioIds.length === 0 ? 'Sin escenario asignado' : `${assignedScenarioIds.length} escenario${assignedScenarioIds.length === 1 ? '' : 's'}`}</Badge>
                           {assignedScenarioLabels.map((label) => (
-                            <Badge key={`${simulation.id}-${label}`}>{label}</Badge>
+                            <Badge key={`${proposal.id}-${label}`}>{label}</Badge>
                           ))}
                         </div>
                       </div>
@@ -1483,7 +1483,7 @@ export default function ScenarioWorkbench({
                       <div className="flex flex-wrap items-center gap-2">
                         {!isBase && activeScenario && (
                           <button
-                            onClick={() => toggleAdjustmentInActiveScenario(simulation.id)}
+                            onClick={() => toggleAdjustmentInActiveScenario(proposal.id)}
                             className={`inline-flex h-9 items-center rounded-xl px-3 text-[12px] font-medium transition ${
                               inActiveScenario
                                 ? 'border border-[var(--primary)]/20 bg-white text-[var(--primary)]'
@@ -1494,13 +1494,13 @@ export default function ScenarioWorkbench({
                           </button>
                         )}
                         <button
-                          onClick={() => openEditAdjustment(simulation)}
+                          onClick={() => openEditAdjustment(proposal)}
                           className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-[var(--surface-alt)] hover:text-[var(--gray-950)]"
                         >
                           Editar
                         </button>
                         <button
-                          onClick={() => deleteAdjustment(simulation.id)}
+                          onClick={() => deleteAdjustment(proposal.id)}
                           className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-white hover:text-[var(--danger)]"
                         >
                           Eliminar
@@ -1549,7 +1549,7 @@ export default function ScenarioWorkbench({
                 <Field label="Tipo de ajuste">
                   <select
                     value={form.type}
-                    onChange={e => setForm(p => ({ ...p, type: e.target.value as SimulationType }))}
+                    onChange={e => setForm(p => ({ ...p, type: e.target.value as ProposalType }))}
                     className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                   >
                     {SIMULATION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -1558,7 +1558,7 @@ export default function ScenarioWorkbench({
                 <Field label="Categoría">
                   <select
                     value={form.category}
-                    onChange={e => setForm(p => ({ ...p, category: e.target.value as SimulationCategory }))}
+                    onChange={e => setForm(p => ({ ...p, category: e.target.value as ProposalCategory }))}
                     className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                   >
                     {SIMULATION_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1582,7 +1582,7 @@ export default function ScenarioWorkbench({
                   <Field label="Operación">
                     <select
                       value={form.operation}
-                      onChange={e => setForm(p => ({ ...p, operation: e.target.value as SimulationOperation }))}
+                      onChange={e => setForm(p => ({ ...p, operation: e.target.value as ProposalOperation }))}
                       className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
                     >
                       <option value="increase">Incrementar</option>
@@ -1727,7 +1727,7 @@ export default function ScenarioWorkbench({
                     <select
                       value={form.frequency}
                       disabled={form.type === 'timing_shift' || form.type === 'pause_expense'}
-                      onChange={(event) => setForm((current) => ({ ...current, frequency: event.target.value as SimulationFrequency }))}
+                      onChange={(event) => setForm((current) => ({ ...current, frequency: event.target.value as ProposalFrequency }))}
                       className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] disabled:bg-[var(--surface-alt)] disabled:text-[var(--gray-400)]"
                     >
                       {FREQUENCIES.map((frequency) => <option key={frequency.value} value={frequency.value}>{frequency.label}</option>)}

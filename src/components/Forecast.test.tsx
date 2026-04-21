@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import Forecast from './Forecast';
-import { FlowPlan, Proposal, Scenario } from '../types';
+import { FlowPlan, Simulation, Scenario } from '../types';
 
 function createLeafOnlyPlan(): FlowPlan {
   return {
@@ -36,9 +36,9 @@ function createLeafOnlyPlan(): FlowPlan {
   };
 }
 
-function createProposal(): Proposal {
+function createSimulation(): Simulation {
   return {
-    id: 'proposal-smoke',
+    id: 'simulation-smoke',
     name: 'Propuesta Smoke',
     description: '',
     status: 'Pendiente',
@@ -51,14 +51,14 @@ function createProposal(): Proposal {
 function createScenario(): Scenario {
   return {
     id: 'scenario-smoke',
-    proposalId: 'proposal-smoke',
-    kind: 'proposal',
+    simulationId: 'simulation-smoke',
+    kind: 'simulation',
     name: 'Escenario Smoke',
     description: '',
     probability: 1,
     startYearMonth: '2026-01',
     horizonMonths: 12,
-    simulationIds: [],
+    proposalIds: [],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   };
@@ -67,15 +67,15 @@ function createScenario(): Scenario {
 describe('Forecast', () => {
   it('emits a scenario-scoped override when an editable cell is changed', async () => {
     const onOverridesChange = vi.fn();
-    const proposal = createProposal();
+    const simulation = createSimulation();
     const scenario = createScenario();
     const { container } = render(
       <Forecast
         plan={createLeafOnlyPlan()}
-        proposals={[proposal]}
+        simulations={[simulation]}
         scenarios={[scenario]}
-        simulations={[]}
-        activeProposalId={proposal.id}
+        proposals={[]}
+        activeSimulationId={simulation.id}
         activeScenarioId={scenario.id}
         overrides={[]}
         onSelectScenario={() => undefined}

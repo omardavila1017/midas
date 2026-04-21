@@ -19,7 +19,7 @@ export interface FlowConcept {
   children?: FlowConcept[];
 }
 
-export type ProposalStatus =
+export type SimulationStatus =
   | 'Pendiente'
   | 'En proceso'
   | 'Aprobada'
@@ -28,15 +28,15 @@ export type ProposalStatus =
 export const BASE_SCENARIO_ID = 'scenario-base';
 export const BASE_SCENARIO_NAME = 'Escenario Base';
 
-export type ScenarioKind = 'base' | 'proposal';
+export type ScenarioKind = 'base' | 'simulation';
 
-export type SimulationCategory =
+export type ProposalCategory =
   | 'Reducción de Costos'
   | 'Incremento de Ingresos'
   | 'Diferimiento'
   | 'Renegociación';
 
-export type SimulationType =
+export type ProposalType =
   | 'percent_adjustment'
   | 'amount_adjustment'
   | 'recurring_series'
@@ -44,7 +44,7 @@ export type SimulationType =
   | 'timing_shift'
   | 'pause_expense';
 
-export type SimulationFrequency =
+export type ProposalFrequency =
   | 'once'
   | 'monthly'
   | 'bimonthly'
@@ -52,9 +52,9 @@ export type SimulationFrequency =
   | 'semiannual'
   | 'annual';
 
-export type SimulationOperation = 'increase' | 'decrease';
+export type ProposalOperation = 'increase' | 'decrease';
 
-export type SimulationEffectMode = 'absolute' | 'percent';
+export type ProposalEffectMode = 'absolute' | 'percent';
 export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 
 export const ROLE_TARGET_INCOME = '__role__:income';
@@ -77,25 +77,25 @@ export interface ConceptDeltaEffect {
   yearMonths?: string[];
   startDate?: string;
   endDate?: string;
-  mode: SimulationEffectMode;
+  mode: ProposalEffectMode;
   value: number;
 }
 
-export type SimulationEffect = ConceptDeltaEffect;
+export type ProposalEffect = ConceptDeltaEffect;
 
-export interface Simulation {
+export interface Proposal {
   id: string;
   name: string;
   description: string;
-  category: SimulationCategory;
-  type: SimulationType;
+  category: ProposalCategory;
+  type: ProposalType;
   targetIds: string[];
   startYearMonth: string;
   endYearMonth?: string;
   startDate?: string;
   endDate?: string;
-  frequency?: SimulationFrequency;
-  operation?: SimulationOperation;
+  frequency?: ProposalFrequency;
+  operation?: ProposalOperation;
   amount?: number;
   percent?: number;
   installments?: number;
@@ -104,16 +104,16 @@ export interface Simulation {
   shiftRatio?: number;
   paymentLabel?: string;
   comments?: string;
-  effects: SimulationEffect[];
+  effects: ProposalEffect[];
   createdAt: string;
   updatedAt: string;
 }
 
-export interface Proposal {
+export interface Simulation {
   id: string;
   name: string;
   description: string;
-  status: ProposalStatus;
+  status: SimulationStatus;
   activeScenarioId?: string;
   createdAt: string;
   updatedAt: string;
@@ -121,14 +121,14 @@ export interface Proposal {
 
 export interface Scenario {
   id: string;
-  proposalId: string | null;
+  simulationId: string | null;
   kind: ScenarioKind;
   name: string;
   description: string;
   probability: number;
   startYearMonth: string;
   horizonMonths: number;
-  simulationIds: string[];
+  proposalIds: string[];
   locked?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -198,9 +198,9 @@ export interface ScenarioMonth {
   endDate: string;
 }
 
-export interface SimulationContribution {
-  simulationId: string;
-  simulationName: string;
+export interface ProposalContribution {
+  proposalId: string;
+  proposalName: string;
   delta: number;
 }
 
@@ -219,8 +219,8 @@ export interface EvaluatedCell {
   manualDelta: number;
   override?: ScenarioCellOverride;
   comment?: string;
-  simulationContributions: SimulationContribution[];
-  hasSimulationDelta: boolean;
+  proposalContributions: ProposalContribution[];
+  hasProposalDelta: boolean;
   hasManualDelta: boolean;
   isOverridden: boolean;
   isEditable: boolean;
@@ -248,13 +248,13 @@ export interface ScenarioKpis {
 
 export interface ScenarioComparisonSnapshot {
   scenarioId: string;
-  proposalId: string;
+  simulationId: string;
   diffByCellKey: Map<string, number>;
   kpiDiff: Partial<Record<keyof ScenarioKpis, number>>;
 }
 
 export interface EvaluatedScenario {
-  proposalId: string;
+  simulationId: string;
   scenarioId: string;
   granularity: ForecastGranularity;
   months: ScenarioMonth[];
@@ -299,7 +299,7 @@ export const MONTHS_FULL = [
   'Diciembre',
 ];
 
-export const CATEGORY_COLORS: Record<SimulationCategory, string> = {
+export const CATEGORY_COLORS: Record<ProposalCategory, string> = {
   'Reducción de Costos': 'var(--primary)',
   'Incremento de Ingresos': 'var(--success)',
   'Diferimiento': 'var(--warning)',

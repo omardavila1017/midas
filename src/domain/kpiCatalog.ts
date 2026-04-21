@@ -1,6 +1,6 @@
 import { projectYear } from './collectionEngine';
 import { evaluateScenario } from './scenarioEngine';
-import { isBaseScenario } from './simulationCompiler';
+import { isBaseScenario } from './proposalCompiler';
 import type { CashFlowAssumptions, Client, ConfirmedPayment } from './types';
 import type { BankAccountStatement } from '../services/jdeTypes';
 import {
@@ -8,10 +8,10 @@ import {
   FlowPlan,
   MONTHS,
   MONTHS_FULL,
-  Proposal,
+  Simulation,
   Scenario,
   ScenarioCellOverride,
-  Simulation,
+  Proposal,
 } from '../types';
 import { hex } from '../theme';
 
@@ -137,11 +137,11 @@ export interface KpiCatalogInput {
   }>;
   bankStatements: BankAccountStatement[];
   plan: FlowPlan | null;
-  proposals: Proposal[];
-  scenarios: Scenario[];
   simulations: Simulation[];
+  scenarios: Scenario[];
+  proposals: Proposal[];
   overrides: ScenarioCellOverride[];
-  activeProposalId: string | null;
+  activeSimulationId: string | null;
   activeScenarioId: string | null;
   activeMonth: number;
   customKpis?: CustomKpiDefinition[];
@@ -419,20 +419,20 @@ function buildCollectionSnapshot(
 }
 
 function buildForecastSnapshot(input: KpiCatalogInput): ForecastSnapshot | null {
-  const { plan, proposals, scenarios, simulations, overrides, activeProposalId, activeScenarioId } = input;
+  const { plan, simulations, scenarios, proposals, overrides, activeSimulationId, activeScenarioId } = input;
   if (!plan || scenarios.length === 0) return null;
 
   const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
-  const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
+  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? simulations[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? scenarios.find((scenario) => scenario.simulationId === activeSimulation?.id)
     ?? baseScenario
     ?? null;
 
   if (!activeScenario) return null;
 
-  const effectiveProposal = activeProposal ?? {
-    id: 'proposal-base',
+  const effectiveSimulation = activeSimulation ?? {
+    id: 'simulation-base',
     name: BASE_SCENARIO_NAME,
     description: 'Pronóstico original',
     status: 'Pendiente' as const,
@@ -442,15 +442,15 @@ function buildForecastSnapshot(input: KpiCatalogInput): ForecastSnapshot | null 
 
   const activeEvaluation = evaluateScenario(
     plan,
-    effectiveProposal,
+    effectiveSimulation,
     activeScenario,
-    isBaseScenario(activeScenario) ? [] : simulations,
+    isBaseScenario(activeScenario) ? [] : proposals,
     isBaseScenario(activeScenario) ? [] : overrides,
     { granularity: 'monthly' },
   );
   const baseEvaluation = evaluateScenario(
     plan,
-    effectiveProposal,
+    effectiveSimulation,
     activeScenario,
     [],
     [],
@@ -1275,20 +1275,20 @@ function labelFromPeriodMonthSlice(period: 'quarterly' | 'annual', year: number)
 }
 
 function buildForecastFormulaData(input: KpiCatalogInput): Record<KpiPeriod, FormulaPeriodData> | null {
-  const { plan, proposals, scenarios, simulations, overrides, activeProposalId, activeScenarioId } = input;
+  const { plan, simulations, scenarios, proposals, overrides, activeSimulationId, activeScenarioId } = input;
   if (!plan || scenarios.length === 0) return null;
 
   const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
-  const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
+  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? simulations[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? scenarios.find((scenario) => scenario.simulationId === activeSimulation?.id)
     ?? baseScenario
     ?? null;
 
   if (!activeScenario) return null;
 
-  const effectiveProposal = activeProposal ?? {
-    id: 'proposal-base',
+  const effectiveSimulation = activeSimulation ?? {
+    id: 'simulation-base',
     name: BASE_SCENARIO_NAME,
     description: 'Pronóstico original',
     status: 'Pendiente' as const,
@@ -1302,15 +1302,15 @@ function buildForecastFormulaData(input: KpiCatalogInput): Record<KpiPeriod, For
   const populateFromEvaluation = (period: Extract<KpiPeriod, 'daily' | 'weekly' | 'monthly'>, granularity: 'daily' | 'weekly' | 'monthly') => {
     const activeEvaluation = evaluateScenario(
       plan,
-      effectiveProposal,
+      effectiveSimulation,
       activeScenario,
-      isBaseScenario(activeScenario) ? [] : simulations,
+      isBaseScenario(activeScenario) ? [] : proposals,
       isBaseScenario(activeScenario) ? [] : overrides,
       { granularity },
     );
     const baseEvaluation = evaluateScenario(
       plan,
-      effectiveProposal,
+      effectiveSimulation,
       activeScenario,
       [],
       [],
