@@ -1,13 +1,13 @@
 import { useMemo, useState, Fragment } from 'react';
-import { Client, CashFlowAssumptions, ConfirmedPayment, CollectionEvent } from '../domain/types';
-import { CXPRecord } from '../domain/persistence';
-import { projectYear } from '../domain/collectionEngine';
+import { CashFlowAssumptions } from '../domain/types';
 import {
-  extractPaymentEvents,
-  computeDailyFlow,
   aggregateWeekly,
   aggregateMonthly,
-  PaymentEvent,
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+  computeBankOnlyCashFlow,
+  EnrichedBankMovement,
 } from '../domain/netCashFlowEngine';
 import type { BankAccountStatement } from '../services/jde';
 import {
@@ -20,28 +20,24 @@ import {
   Landmark,
   RefreshCw,
   AlertTriangle,
-  Check,
-  Circle,
-  Users,
-  FileText,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { fmtCompact, fmtCurrency } from '../formatters';
 
 /**
- * Flujo de efectivo detallado — vista unificada CXC + CXP.
+ * Flujo de efectivo detallado — vista BANK-ONLY.
  *
+ * Fuente única de verdad: estados de cuenta del API de JDE.
  * Tres granularidades: Diario, Semanal (default), Mensual.
- * Cada fila expandible muestra eventos individuales (clientes que cobran,
- * proveedores que pagan) con montos, IVA y saldo acumulado día a día.
+ * Cada fila expandible muestra los movimientos bancarios reales del día
+ * (ABONO / CARGO), filtrando traspasos internos entre cuentas propias.
+ *
+ * Sin proyecciones CXC, sin pendientes CXP — solo movimiento bancario real.
  */
 
 interface Props {
-  clients: Client[];
-  cxpRecords: CXPRecord[];
   assumptions: CashFlowAssumptions;
-  confirmedPayments: ConfirmedPayment[];
   bankStatements?: BankAccountStatement[];
   companies?: { cia: string; nombre: string }[];
   /** Current status of the JDE bank range fetch (driven from App). */
@@ -50,6 +46,14 @@ interface Props {
   bankFetchProgress?: { done: number; total: number } | null;
   /** Manual refresh trigger — re-runs the year-to-date range fetch. */
   onRefreshBanks?: () => void;
+  /**
+   * Legacy / compatibility props — ya no se usan en el cómputo del flujo
+   * (la vista es bank-only), pero se aceptan para no romper call sites
+   * existentes (App.tsx) que todavía los pasan.
+   */
+  clients?: unknown;
+  cxpRecords?: unknown;
+  confirmedPayments?: unknown;
 }
 
 /** Flatten bank statements into daily inflow/outflow totals + saldo snapshot */
@@ -79,10 +83,7 @@ const T = {
 } as const;
 
 export default function CashFlowDetail({
-  clients,
-  cxpRecords,
   assumptions,
-  confirmedPayments,
   bankStatements = [],
   companies = [],
   bankFetchStatus = 'idle',
@@ -104,8 +105,13 @@ export default function CashFlowDetail({
   // ── Flatten bank statements into day summaries ──
   const bankByDate = useMemo(() => {
     const map = new Map<string, BankDaySummary>();
+    // Precompute own-account detector una sola vez para todo el batch.
+    const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
     for (const acc of bankStatements) {
       for (const mov of acc.movimientos) {
+        // Skip traspasos internos — son transacciones entre cuentas propias
+        // y se compensan entre sí; no deben aparecer en el flujo de efectivo.
+        if (isInternalTransfer(mov, ownAccountDetector)) continue;
         const date = mov.fechaOperacion;
         if (!date) continue;
         let entry = map.get(date);
@@ -146,17 +152,17 @@ export default function CashFlowDetail({
     return total;
   }, [bankByDate]);
 
-  // Project cash flow events
-  const collections = useMemo(() => projectYear(clients, assumptions), [clients, assumptions]);
-  const payments = useMemo(
-    () => extractPaymentEvents(cxpRecords, bankStatements),
-    [cxpRecords, bankStatements],
+  // ──────────────────────────────────────────────────────────────
+  // Fuente única de verdad: estados de cuenta del API de JDE.
+  // Sin proyecciones CXC, sin pendientes CXP, sin doble contabilidad.
+  // Transferencias internas (TRASPASO/TRANSFERENCIA REF, RFCs propios,
+  // beneficiarios propios, cuenta destino propia) se filtran antes de sumar.
+  // ──────────────────────────────────────────────────────────────
+  const { daily, abonosByDate, cargosByDate } = useMemo(
+    () => computeBankOnlyCashFlow(bankStatements, assumptions.year, startingBalance),
+    [bankStatements, assumptions.year, startingBalance],
   );
 
-  const daily = useMemo(
-    () => computeDailyFlow(collections, payments, confirmedPayments, assumptions.year, startingBalance),
-    [collections, payments, confirmedPayments, assumptions.year, startingBalance],
-  );
   const weekly = useMemo(() => aggregateWeekly(daily), [daily]);
   const monthly = useMemo(() => aggregateMonthly(daily, startingBalance), [daily, startingBalance]);
 
@@ -171,8 +177,6 @@ export default function CashFlowDetail({
     return weekly.filter(w => Number(w.weekStart.slice(5, 7)) - 1 === monthFilter);
   }, [weekly, monthFilter]);
 
-  const clientById = useMemo(() => new Map(clients.map(c => [c.id, c])), [clients]);
-
   // KPIs
   const totalInflows = daily.reduce((s, d) => s + d.inflows, 0);
   const totalOutflows = daily.reduce((s, d) => s + d.outflows, 0);
@@ -181,56 +185,17 @@ export default function CashFlowDetail({
   const minBalance = daily.reduce((m, d) => Math.min(m, d.cumulative), startingBalance);
   const minBalanceDate = daily.find(d => d.cumulative === minBalance)?.date;
 
-  const totalIvaInflows = useMemo(() => {
-    return collections
-      .filter(e => e.realDate.startsWith(assumptions.year.toString()))
-      .reduce((sum, e) => {
-        const c = clientById.get(e.clientId);
-        const rate = (c?.ivaRate ?? 16) / 100;
-        return sum + e.amount * rate;
-      }, 0);
-  }, [collections, clientById, assumptions.year]);
-
-  const collectionsByDate = useMemo(() => {
-    const map = new Map<string, CollectionEvent[]>();
-    for (const e of collections) {
-      if (!e.realDate.startsWith(assumptions.year.toString())) continue;
-      if (!map.has(e.realDate)) map.set(e.realDate, []);
-      map.get(e.realDate)!.push(e);
-    }
-    return map;
-  }, [collections, assumptions.year]);
-
-  const paymentsByDate = useMemo(() => {
-    const map = new Map<string, PaymentEvent[]>();
-    for (const p of payments) {
-      if (!p.date.startsWith(assumptions.year.toString())) continue;
-      if (!map.has(p.date)) map.set(p.date, []);
-      map.get(p.date)!.push(p);
-    }
-    return map;
-  }, [payments, assumptions.year]);
-
-  // ── Empty state — no clients, no CXP ──
-  if (clients.length === 0 && cxpRecords.length === 0) {
+  // ── Empty state — sin datos bancarios todavía ──
+  if (bankStatements.length === 0) {
     return (
       <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-6">
         <PageHeader />
 
-        {bankStatements.length > 0 && (
-          <BankSummaryCard
-            bankStatements={bankStatements}
-            totalBankSaldo={totalBankSaldo}
-            totalBankAbonos={totalBankAbonos}
-            totalBankCargos={totalBankCargos}
-            ciaNameMap={ciaNameMap}
-            bankFetchStatus={bankFetchStatus}
-            bankFetchProgress={bankFetchProgress}
-            onRefreshBanks={onRefreshBanks}
-          />
+        {bankFetchStatus !== 'idle' ? (
+          <BankSkeleton />
+        ) : (
+          <EmptyDataCard onRefreshBanks={onRefreshBanks} />
         )}
-
-        <EmptyDataCard clientsOk={clients.length > 0} cxpOk={cxpRecords.length > 0} />
       </div>
     );
   }
@@ -238,14 +203,12 @@ export default function CashFlowDetail({
   const handleExport = () => {
     const rows = daily.map(d => ({
       Fecha: d.date,
-      Cobros: d.inflows,
-      'Cobros confirmados': d.confirmedIn,
-      'Cobros proyectados': d.projectedIn,
-      Pagos: d.outflows,
+      Abonos: d.inflows,
+      Cargos: d.outflows,
       Neto: d.net,
       'Saldo acumulado': d.cumulative,
     }));
-    downloadFile(toCSV(rows), `flujo-diario-${assumptions.year}.csv`);
+    downloadFile(toCSV(rows), `flujo-bancos-${assumptions.year}.csv`);
   };
 
   return (
@@ -254,7 +217,7 @@ export default function CashFlowDetail({
       <header className="flex items-end justify-between gap-4">
         <div>
           <h1 className={`text-2xl font-bold tracking-tight ${T.text}`}>Flujo de efectivo</h1>
-          <p className={`text-sm mt-1 ${T.textMuted}`}>Cobros y pagos proyectados por día, semana y mes.</p>
+          <p className={`text-sm mt-1 ${T.textMuted}`}>Movimientos bancarios reales por día, semana y mes — traspasos internos filtrados.</p>
         </div>
         <button
           onClick={handleExport}
@@ -266,15 +229,15 @@ export default function CashFlowDetail({
       </header>
 
       {/* KPI grid */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KpiCard
-          label="Cobros"
+          label="Abonos"
           value={totalInflows}
           icon={TrendingUp}
           tone="success"
         />
         <KpiCard
-          label="Pagos"
+          label="Cargos"
           value={totalOutflows}
           icon={TrendingDown}
           tone="danger"
@@ -290,12 +253,6 @@ export default function CashFlowDetail({
           value={finalBalance}
           icon={Wallet}
           tone={finalBalance >= 0 ? 'primary' : 'danger'}
-        />
-        <KpiCard
-          label="IVA cobrado"
-          value={totalIvaInflows}
-          icon={TrendingUp}
-          tone="neutral"
         />
       </div>
 
@@ -354,9 +311,8 @@ export default function CashFlowDetail({
           daily={filteredDaily}
           expandedKey={expandedKey}
           onToggle={setExpandedKey}
-          collectionsByDate={collectionsByDate}
-          paymentsByDate={paymentsByDate}
-          clientById={clientById}
+          abonosByDate={abonosByDate}
+          cargosByDate={cargosByDate}
         />
       )}
       {granularity === 'weekly' && (
@@ -365,9 +321,8 @@ export default function CashFlowDetail({
           daily={filteredDaily}
           expandedKey={expandedKey}
           onToggle={setExpandedKey}
-          collectionsByDate={collectionsByDate}
-          paymentsByDate={paymentsByDate}
-          clientById={clientById}
+          abonosByDate={abonosByDate}
+          cargosByDate={cargosByDate}
         />
       )}
       {granularity === 'monthly' && (
@@ -390,62 +345,32 @@ function PageHeader() {
   return (
     <header>
       <h1 className={`text-2xl font-bold tracking-tight ${T.text}`}>Flujo de efectivo</h1>
-      <p className={`text-sm mt-1 ${T.textMuted}`}>Cobros y pagos proyectados por día, semana y mes.</p>
+      <p className={`text-sm mt-1 ${T.textMuted}`}>Movimientos bancarios reales por día, semana y mes — traspasos internos filtrados.</p>
     </header>
   );
 }
 
-function EmptyDataCard({ clientsOk, cxpOk }: { clientsOk: boolean; cxpOk: boolean }) {
+function EmptyDataCard({ onRefreshBanks }: { onRefreshBanks?: () => void }) {
   return (
     <div className={`${T.surface} border ${T.border} rounded-xl p-8 max-w-lg mx-auto`}>
       <div className="flex flex-col items-center text-center">
         <div className="w-12 h-12 rounded-xl bg-[#F9FAFB] flex items-center justify-center mb-4">
-          <CalendarIcon size={22} strokeWidth={1.5} className={T.textSubtle} />
+          <Landmark size={22} strokeWidth={1.5} className={T.textSubtle} />
         </div>
-        <h2 className={`text-base font-semibold ${T.text}`}>Sin datos para proyectar</h2>
+        <h2 className={`text-base font-semibold ${T.text}`}>Sin movimientos bancarios</h2>
         <p className={`text-sm mt-2 max-w-sm ${T.textMuted}`}>
-          Esta vista combina cobros de clientes y pagos de CXP. Carga al menos uno para generar la proyección.
+          Esta vista usa únicamente los estados de cuenta del API de JDE como
+          fuente de verdad. Refresca para traer los últimos movimientos del año.
         </p>
-        <div className="flex gap-3 mt-6">
-          <RequirementPill ok={clientsOk} icon={Users} label="Clientes" hint="Catálogos → Clientes" />
-          <RequirementPill ok={cxpOk} icon={FileText} label="CXP" hint="Operación → CXP" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RequirementPill({
-  ok, icon: Icon, label, hint,
-}: {
-  ok: boolean;
-  icon: LucideIcon;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <div
-      className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${
-        ok ? 'border-[var(--success)]/30 bg-[var(--success)]/5' : 'border-[#E5E7EB] bg-[#F9FAFB]'
-      }`}
-    >
-      <div
-        className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-          ok ? 'bg-[var(--success)]/10' : 'bg-white border border-[#E5E7EB]'
-        }`}
-      >
-        {ok ? (
-          <Check size={16} strokeWidth={2} className="text-[var(--success)]" />
-        ) : (
-          <Circle size={16} strokeWidth={1.5} className="text-[#9CA3AF]" />
+        {onRefreshBanks && (
+          <button
+            onClick={onRefreshBanks}
+            className={`mt-6 inline-flex items-center gap-2 h-9 px-4 rounded-lg border ${T.border} text-sm font-medium ${T.text} ${T.rowHover} transition-colors duration-150`}
+          >
+            <RefreshCw size={14} strokeWidth={1.5} />
+            Traer datos de bancos
+          </button>
         )}
-      </div>
-      <div className="text-left">
-        <div className={`flex items-center gap-2 text-sm font-medium ${ok ? 'text-[var(--success)]' : T.text}`}>
-          <Icon size={14} strokeWidth={1.5} className={ok ? 'text-[var(--success)]' : T.textSubtle} />
-          {label}
-        </div>
-        <div className={`text-xs ${T.textMuted}`}>{hint}</div>
       </div>
     </div>
   );
@@ -552,22 +477,48 @@ function BankSummaryCard({
         <BankMetric label="Saldo total"    value={totalBankSaldo}  tone="primary" />
         <BankMetric label="Abonos (real)"  value={totalBankAbonos} tone="success" />
         <BankMetric label="Cargos (real)"  value={totalBankCargos} tone="danger" />
-        <div className="bg-white p-4">
-          <div className={`text-xs font-medium uppercase tracking-wide ${T.textMuted} mb-2`}>Empresas</div>
-          <div className="flex flex-wrap gap-1.5">
-            {empresas.length === 0 ? (
-              <span className={`text-xs ${T.textSubtle}`}>—</span>
-            ) : (
-              empresas.map(cia => (
-                <span key={cia} className={`inline-block px-2 py-0.5 rounded-full bg-[#F3F4F6] text-xs font-medium ${T.textMuted}`}>
+        <BankEmpresasMetric
+          count={empresas.length}
+          label="Empresas"
+        />
+      </div>
+
+      {/* Lista de empresas — fila dedicada con scroll horizontal para no
+          romper el grid cuando son muchas. */}
+      {empresas.length > 0 && (
+        <div className={`px-5 py-3 border-t ${T.border} bg-[#FAFAFA]`}>
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin">
+            <span className={`text-[11px] font-medium uppercase tracking-wide ${T.textMuted} flex-shrink-0`}>
+              Activas
+            </span>
+            <div className="flex items-center gap-1.5 flex-nowrap">
+              {empresas.map(cia => (
+                <span
+                  key={cia}
+                  className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-md bg-white border ${T.border} text-[11px] font-medium ${T.textMuted} whitespace-nowrap`}
+                >
                   {ciaNameMap.get(cia) ?? `Cia ${cia}`}
                 </span>
-              ))
-            )}
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </section>
+  );
+}
+
+function BankEmpresasMetric({ count, label }: { count: number; label: string }) {
+  return (
+    <div className="bg-white p-4">
+      <div className={`text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>{label}</div>
+      <div className={`text-xl font-bold tabular-nums mt-1 ${T.text}`}>
+        {count > 0 ? count : <span className={T.textSubtle}>—</span>}
+      </div>
+      {count > 0 && (
+        <div className={`text-[11px] ${T.textMuted} mt-1`}>con movimientos en el periodo</div>
+      )}
+    </div>
   );
 }
 
@@ -664,14 +615,13 @@ function GranularityTabs({
 // Daily table — one row per day with activity
 // ---------------------------------------------------------------------------
 function DailyTable({
-  daily, expandedKey, onToggle, collectionsByDate, paymentsByDate, clientById,
+  daily, expandedKey, onToggle, abonosByDate, cargosByDate,
 }: {
-  daily: ReturnType<typeof computeDailyFlow>;
+  daily: DailyFlowRow[];
   expandedKey: string | null;
   onToggle: (k: string | null) => void;
-  collectionsByDate: Map<string, CollectionEvent[]>;
-  paymentsByDate: Map<string, PaymentEvent[]>;
-  clientById: Map<string, Client>;
+  abonosByDate: Map<string, EnrichedBankMovement[]>;
+  cargosByDate: Map<string, EnrichedBankMovement[]>;
 }) {
   if (daily.length === 0) return <EmptyTable msg="Sin actividad en el periodo" />;
 
@@ -682,20 +632,20 @@ function DailyTable({
           <tr>
             <th className="px-4 py-3 w-10"></th>
             <th className="px-4 py-3 text-left">Fecha</th>
-            <th className="px-4 py-3 text-right">Cobros</th>
-            <th className="px-4 py-3 text-right">Pagos</th>
+            <th className="px-4 py-3 text-right">Abonos</th>
+            <th className="px-4 py-3 text-right">Cargos</th>
             <th className="px-4 py-3 text-right">Neto</th>
             <th className="px-4 py-3 text-right">Saldo</th>
-            <th className="px-4 py-3 text-right w-24">Eventos</th>
+            <th className="px-4 py-3 text-right w-24">Mov.</th>
           </tr>
         </thead>
         <tbody className={`divide-y ${T.divider}`}>
           {daily.map(d => {
             const key = `d-${d.date}`;
             const isOpen = expandedKey === key;
-            const cobroEvents = collectionsByDate.get(d.date) ?? [];
-            const pagoEvents = paymentsByDate.get(d.date) ?? [];
-            const eventCount = cobroEvents.length + pagoEvents.length;
+            const abonos = abonosByDate.get(d.date) ?? [];
+            const cargos = cargosByDate.get(d.date) ?? [];
+            const eventCount = abonos.length + cargos.length;
             const weekday = DOW_SHORT[new Date(d.date + 'T12:00:00').getDay()];
             return (
               <Fragment key={key}>
@@ -714,18 +664,11 @@ function DailyTable({
                     <div className={`text-sm font-medium ${T.text}`}>{formatDate(d.date)}</div>
                     <div className={`text-xs ${T.textMuted}`}>{weekday}</div>
                   </td>
-                  <td className="px-4 py-3 text-right tabular-nums">
-                    <div className="font-medium text-[var(--success)]">
-                      {d.inflows > 0 ? fmtCurrency(d.inflows) : <span className={T.textSubtle}>—</span>}
-                    </div>
-                    {d.confirmedIn > 0 && (
-                      <div className={`text-xs ${T.textMuted}`}>{fmtCurrency(d.confirmedIn)} confirmado</div>
-                    )}
+                  <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--success)]">
+                    {d.inflows > 0 ? fmtCurrency(d.inflows) : <span className={T.textSubtle}>—</span>}
                   </td>
-                  <td className="px-4 py-3 text-right tabular-nums">
-                    <span className="text-[var(--danger)]">
-                      {d.outflows > 0 ? fmtCurrency(d.outflows) : <span className={T.textSubtle}>—</span>}
-                    </span>
+                  <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">
+                    {d.outflows > 0 ? fmtCurrency(d.outflows) : <span className={T.textSubtle}>—</span>}
                   </td>
                   <td className={`px-4 py-3 text-right tabular-nums font-semibold ${d.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
                     {fmtCurrency(d.net)}
@@ -738,7 +681,7 @@ function DailyTable({
                 {isOpen && (
                   <tr>
                     <td colSpan={7} className={`${T.surfaceAlt} px-4 py-4`}>
-                      <DayDetail cobroEvents={cobroEvents} pagoEvents={pagoEvents} clientById={clientById} />
+                      <DayDetail abonos={abonos} cargos={cargos} />
                     </td>
                   </tr>
                 )}
@@ -751,19 +694,28 @@ function DailyTable({
   );
 }
 
+type DailyFlowRow = {
+  date: string;
+  inflows: number;
+  outflows: number;
+  net: number;
+  cumulative: number;
+  confirmedIn: number;
+  projectedIn: number;
+};
+
 // ---------------------------------------------------------------------------
 // Weekly table — one row per ISO week, expands to show daily rows
 // ---------------------------------------------------------------------------
 function WeeklyTable({
-  weekly, daily, expandedKey, onToggle, collectionsByDate, paymentsByDate, clientById,
+  weekly, daily, expandedKey, onToggle, abonosByDate, cargosByDate,
 }: {
   weekly: ReturnType<typeof aggregateWeekly>;
-  daily: ReturnType<typeof computeDailyFlow>;
+  daily: DailyFlowRow[];
   expandedKey: string | null;
   onToggle: (k: string | null) => void;
-  collectionsByDate: Map<string, CollectionEvent[]>;
-  paymentsByDate: Map<string, PaymentEvent[]>;
-  clientById: Map<string, Client>;
+  abonosByDate: Map<string, EnrichedBankMovement[]>;
+  cargosByDate: Map<string, EnrichedBankMovement[]>;
 }) {
   const dailyByWeek = useMemo(() => {
     const map = new Map<string, typeof daily>();
@@ -788,8 +740,8 @@ function WeeklyTable({
           <tr>
             <th className="px-4 py-3 w-10"></th>
             <th className="px-4 py-3 text-left">Semana</th>
-            <th className="px-4 py-3 text-right">Cobros</th>
-            <th className="px-4 py-3 text-right">Pagos</th>
+            <th className="px-4 py-3 text-right">Abonos</th>
+            <th className="px-4 py-3 text-right">Cargos</th>
             <th className="px-4 py-3 text-right">Neto</th>
             <th className="px-4 py-3 text-right">Saldo al cierre</th>
             <th className="px-4 py-3 text-right w-24">Días activos</th>
@@ -836,9 +788,8 @@ function WeeklyTable({
                     <td colSpan={7} className={`${T.surfaceAlt} px-4 py-4`}>
                       <WeekDetail
                         weekDays={weekDays}
-                        collectionsByDate={collectionsByDate}
-                        paymentsByDate={paymentsByDate}
-                        clientById={clientById}
+                        abonosByDate={abonosByDate}
+                        cargosByDate={cargosByDate}
                       />
                     </td>
                   </tr>
@@ -859,7 +810,7 @@ function MonthlyTable({
   monthly, daily, expandedKey, onToggle,
 }: {
   monthly: ReturnType<typeof aggregateMonthly>;
-  daily: ReturnType<typeof computeDailyFlow>;
+  daily: DailyFlowRow[];
   expandedKey: string | null;
   onToggle: (k: string | null) => void;
 }) {
@@ -875,8 +826,8 @@ function MonthlyTable({
             <th className="px-4 py-3 w-10"></th>
             <th className="px-4 py-3 text-left">Mes</th>
             <th className="px-4 py-3 text-left">Flujo</th>
-            <th className="px-4 py-3 text-right">Cobros</th>
-            <th className="px-4 py-3 text-right">Pagos</th>
+            <th className="px-4 py-3 text-right">Abonos</th>
+            <th className="px-4 py-3 text-right">Cargos</th>
             <th className="px-4 py-3 text-right">Neto</th>
             <th className="px-4 py-3 text-right">Saldo</th>
           </tr>
@@ -949,85 +900,122 @@ function MonthlyTable({
 }
 
 // ---------------------------------------------------------------------------
-// Day detail — cobros + pagos para un día
+// Day detail — abonos + cargos reales del banco para un día
 // ---------------------------------------------------------------------------
 function DayDetail({
-  cobroEvents, pagoEvents, clientById,
+  abonos, cargos,
 }: {
-  cobroEvents: CollectionEvent[];
-  pagoEvents: PaymentEvent[];
-  clientById: Map<string, Client>;
+  abonos: EnrichedBankMovement[];
+  cargos: EnrichedBankMovement[];
 }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* Cobros */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <h4 className={`text-xs font-medium uppercase tracking-wide text-[var(--success)]`}>Cobros</h4>
-          <span className={`text-xs ${T.textMuted}`}>{cobroEvents.length}</span>
-        </div>
-        {cobroEvents.length === 0 ? (
-          <div className={`text-sm ${T.textSubtle} py-4 text-center border border-dashed ${T.border} rounded-lg`}>Sin cobros</div>
-        ) : (
-          <div className="space-y-1.5">
-            {cobroEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
-              const c = clientById.get(e.clientId);
-              const ivaRate = (c?.ivaRate ?? 16) / 100;
-              const iva = e.amount * ivaRate;
-              return (
-                <div key={i} className={`flex items-center justify-between gap-3 ${T.surface} px-3 py-2.5 rounded-lg border ${T.border}`}>
-                  <div className="min-w-0 flex-1">
-                    <div className={`text-sm font-medium ${T.text} truncate`}>{c?.name ?? e.clientId}</div>
-                    <div className={`text-xs ${T.textMuted}`}>
-                      Fact {e.invoiceDate.slice(5)} · {c?.frequency} · IVA {c?.ivaRate ?? 16}%
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(e.amount)}</div>
-                    <div className={`text-xs ${T.textMuted}`}>+IVA {fmtCurrency(iva)}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <MovementColumn
+        title="Abonos"
+        tone="success"
+        movements={abonos}
+        emptyMsg="Sin abonos"
+      />
+      <MovementColumn
+        title="Cargos"
+        tone="danger"
+        movements={cargos}
+        emptyMsg="Sin cargos"
+      />
+    </div>
+  );
+}
 
-      {/* Pagos */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <h4 className={`text-xs font-medium uppercase tracking-wide text-[var(--danger)]`}>Pagos</h4>
-          <span className={`text-xs ${T.textMuted}`}>{pagoEvents.length}</span>
-        </div>
-        {pagoEvents.length === 0 ? (
-          <div className={`text-sm ${T.textSubtle} py-4 text-center border border-dashed ${T.border} rounded-lg`}>Sin pagos</div>
-        ) : (
-          <div className="space-y-1.5">
-            {pagoEvents.sort((a, b) => b.amount - a.amount).map((p, i) => (
-              <div key={i} className={`flex items-center justify-between gap-3 ${T.surface} px-3 py-2.5 rounded-lg border ${T.border}`}>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className={`text-sm font-medium ${T.text} truncate`}>{p.supplier}</span>
-                    <Badge tone={p.kind === 'paid' ? 'neutral' : 'warning'}>
-                      {p.kind === 'paid' ? 'Pagado' : 'Pendiente'}
-                    </Badge>
-                    {p.flexibility === 'inamovible' && <Badge tone="danger">Inamovible</Badge>}
-                    {p.flexibility === 'flexible'   && <Badge tone="success">Flexible</Badge>}
-                    {p.flexibility === 'revisar'    && <Badge tone="info">Revisar</Badge>}
-                    {p.criticidad && (
-                      <Badge tone={p.criticidad === 'Alta' ? 'danger' : p.criticidad === 'Media' ? 'warning' : 'neutral'}>
-                        DTI {p.criticidad}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className={`text-xs ${T.textMuted} mt-0.5`}>{p.classification}</div>
-                </div>
-                <div className="text-sm font-semibold tabular-nums text-[var(--danger)]">{fmtCurrency(p.amount)}</div>
-              </div>
-            ))}
-          </div>
-        )}
+function MovementColumn({
+  title, tone, movements, emptyMsg,
+}: {
+  title: string;
+  tone: 'success' | 'danger';
+  movements: EnrichedBankMovement[];
+  emptyMsg: string;
+}) {
+  const colorClass = tone === 'success' ? 'text-[var(--success)]' : 'text-[var(--danger)]';
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className={`text-xs font-medium uppercase tracking-wide ${colorClass}`}>{title}</h4>
+        <span className={`text-xs ${T.textMuted}`}>{movements.length}</span>
       </div>
+      {movements.length === 0 ? (
+        <div className={`text-sm ${T.textSubtle} py-4 text-center border border-dashed ${T.border} rounded-lg`}>{emptyMsg}</div>
+      ) : (
+        <div className="space-y-1.5">
+          {[...movements].sort((a, b) => b.amount - a.amount).map((m, i) => (
+            <MovementRow key={i} m={m} tone={tone} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Movimiento individual — clickable para drill-down al detalle bancario
+// ---------------------------------------------------------------------------
+function MovementRow({ m, tone }: { m: EnrichedBankMovement; tone: 'success' | 'danger' }) {
+  const [open, setOpen] = useState(false);
+  const colorClass = tone === 'success' ? 'text-[var(--success)]' : 'text-[var(--danger)]';
+
+  return (
+    <div className={`${T.surface} rounded-lg border ${T.border} overflow-hidden`}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left ${T.rowHover} cursor-pointer`}
+        aria-expanded={open}
+      >
+        <div className="min-w-0 flex-1">
+          <div className={`text-sm font-medium ${T.text} truncate`}>{m.concepto}</div>
+          <div className={`text-xs ${T.textMuted} mt-0.5 truncate`}>
+            {(m.bankName || `Banco ${m.banco}`)} · {m.cuenta}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <div className={`text-sm font-semibold tabular-nums ${colorClass}`}>{fmtCurrency(m.amount)}</div>
+          <ChevronDown
+            className={`w-4 h-4 ${T.textMuted} transition-transform ${open ? 'rotate-180' : ''}`}
+          />
+        </div>
+      </button>
+
+      {open && (
+        <div className={`border-t ${T.divider} ${T.surfaceAlt} px-3 py-2.5`}>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+            <DetailField label="Banco" value={m.bankName || `Banco ${m.banco}`} />
+            <DetailField label="Cuenta" value={m.cuenta} mono />
+            <DetailField label="Compañía" value={m.cia} mono />
+            <DetailField label="Moneda" value={m.moneda} />
+            {m.referencia && <DetailField label="Referencia" value={m.referencia} mono colSpan />}
+            {m.fechaValor && m.fechaValor !== m.date && (
+              <DetailField label="Fecha valor" value={m.fechaValor} />
+            )}
+            {m.conceptoFull && m.conceptoFull !== m.concepto && (
+              <DetailField label="Concepto completo" value={m.conceptoFull} colSpan />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailField({
+  label, value, mono, colSpan,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  colSpan?: boolean;
+}) {
+  return (
+    <div className={colSpan ? 'col-span-2' : ''}>
+      <div className={`${T.textMuted} uppercase tracking-wide text-[10px]`}>{label}</div>
+      <div className={`${T.text} ${mono ? 'font-mono tabular-nums' : ''} break-words`}>{value}</div>
     </div>
   );
 }
@@ -1036,12 +1024,11 @@ function DayDetail({
 // Week detail — tabla día-por-día dentro de una semana
 // ---------------------------------------------------------------------------
 function WeekDetail({
-  weekDays, collectionsByDate, paymentsByDate, clientById,
+  weekDays, abonosByDate, cargosByDate,
 }: {
-  weekDays: ReturnType<typeof computeDailyFlow>;
-  collectionsByDate: Map<string, CollectionEvent[]>;
-  paymentsByDate: Map<string, PaymentEvent[]>;
-  clientById: Map<string, Client>;
+  weekDays: DailyFlowRow[];
+  abonosByDate: Map<string, EnrichedBankMovement[]>;
+  cargosByDate: Map<string, EnrichedBankMovement[]>;
 }) {
   const [dayOpen, setDayOpen] = useState<string | null>(null);
   return (
@@ -1050,18 +1037,18 @@ function WeekDetail({
         <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
             <th className="px-3 py-2.5 text-left">Día</th>
-            <th className="px-3 py-2.5 text-right">Cobros</th>
-            <th className="px-3 py-2.5 text-right">Pagos</th>
+            <th className="px-3 py-2.5 text-right">Abonos</th>
+            <th className="px-3 py-2.5 text-right">Cargos</th>
             <th className="px-3 py-2.5 text-right">Neto</th>
             <th className="px-3 py-2.5 text-right">Saldo</th>
-            <th className="px-3 py-2.5 text-right w-16">Eventos</th>
+            <th className="px-3 py-2.5 text-right w-16">Mov.</th>
           </tr>
         </thead>
         <tbody className={`divide-y ${T.divider}`}>
           {weekDays.map(d => {
             const isOpen = dayOpen === d.date;
-            const cobroEvents = collectionsByDate.get(d.date) ?? [];
-            const pagoEvents = paymentsByDate.get(d.date) ?? [];
+            const abonos = abonosByDate.get(d.date) ?? [];
+            const cargos = cargosByDate.get(d.date) ?? [];
             const weekday = DOW_SHORT[new Date(d.date + 'T12:00:00').getDay()];
             return (
               <Fragment key={d.date}>
@@ -1085,12 +1072,12 @@ function WeekDetail({
                   <td className={`px-3 py-2 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)]' : T.text}`}>
                     {fmtCurrency(d.cumulative)}
                   </td>
-                  <td className={`px-3 py-2 text-right text-xs tabular-nums ${T.textMuted}`}>{cobroEvents.length + pagoEvents.length}</td>
+                  <td className={`px-3 py-2 text-right text-xs tabular-nums ${T.textMuted}`}>{abonos.length + cargos.length}</td>
                 </tr>
                 {isOpen && (
                   <tr>
                     <td colSpan={6} className={`${T.surfaceAlt} px-3 py-3`}>
-                      <DayDetail cobroEvents={cobroEvents} pagoEvents={pagoEvents} clientById={clientById} />
+                      <DayDetail abonos={abonos} cargos={cargos} />
                     </td>
                   </tr>
                 )}

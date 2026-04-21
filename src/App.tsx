@@ -3,6 +3,7 @@ import { BASE_SCENARIO_ID, FlowPlan, ForecastGranularity, Proposal, Scenario, Sc
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { loadClientsCatalog } from './domain/loadClientsCatalog';
+import { loadProvidersCatalog } from './domain/loadProvidersCatalog';
 import { fetchCompanies, type Company, JdeApiError, type BankAccountStatement, type BankStatementFormat } from './services/jde';
 import Upload from './components/Upload';
 import Dashboard from './components/Dashboard';
@@ -37,12 +38,12 @@ import {
 import { hex } from './theme';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
 
-type SectionId = 'catalogos' | 'operacion' | 'planeacion';
+type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
 const SECTIONS: { id: SectionId; label: string; icon: any; description: string }[] = [
   { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes y proveedores' },
-  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo diario, cobranza, CXP y bancos' },
-  { id: 'planeacion', label: 'Planeación',  icon: TrendingUp,      description: 'Dashboard, pronóstico y escenarios' },
+  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo diario y bancos' },
+  { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, cobranza, CXP, pronóstico y escenarios' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPlan?: boolean }[]> = {
@@ -52,29 +53,69 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
   ],
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
-    { id: 'collections', label: 'Cobranza',    icon: HandCoins },
-    { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'bancos',      label: 'Bancos',      icon: Landmark },
   ],
-  planeacion: [
-    { id: 'dashboard',  label: 'Dashboard',   icon: LayoutDashboard, needsPlan: true },
-    { id: 'kpis',       label: 'KPIs',        icon: Sliders },
-    { id: 'forecast',   label: 'Pronóstico',  icon: LineChart, needsPlan: true },
-    { id: 'scenarios',  label: 'Escenarios',  icon: FlaskConical, needsPlan: true },
+  proyeccion: [
+    { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard, needsPlan: true },
+    { id: 'kpis',        label: 'KPIs',        icon: Sliders },
+    { id: 'collections', label: 'Cobranza',    icon: HandCoins },
+    { id: 'cxp',         label: 'CXP',         icon: Receipt },
+    { id: 'forecast',    label: 'Pronóstico',  icon: LineChart, needsPlan: true },
+    { id: 'scenarios',   label: 'Escenarios',  icon: FlaskConical, needsPlan: true },
   ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos',
-  netflow: 'operacion', collections: 'operacion', cxp: 'operacion', bancos: 'operacion',
-  dashboard: 'planeacion', kpis: 'planeacion', forecast: 'planeacion', scenarios: 'planeacion',
+  netflow: 'operacion', bancos: 'operacion',
+  dashboard: 'proyeccion', kpis: 'proyeccion',
+  collections: 'proyeccion', cxp: 'proyeccion',
+  forecast: 'proyeccion', scenarios: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
   catalogos: 'clients',
   operacion: 'netflow',
-  planeacion: 'dashboard',
+  proyeccion: 'dashboard',
 };
+
+/**
+ * Identifica si el cache de bankStatements contiene registros demo/ficticios
+ * que se hayan quedado de versiones anteriores del app. Los demo statements
+ * legacy usaban referencias y conceptos muy específicos (TRF-001, PAG-055,
+ * "PAGO PROVEEDORES DIESEL", etc.) que nunca aparecen en JDE real — basta con
+ * detectar uno para descartar el cache completo y no mezclar ficticio con
+ * real en el flujo.
+ */
+const DEMO_BANK_REFS = new Set([
+  'TRF-001', 'TRF-002', 'TRF-003',
+  'DEP-100', 'PAG-055',
+  'COB-220', 'PAG-120',
+  'WIRE-01', 'WIRE-02',
+]);
+const DEMO_BANK_CONCEPTS = [
+  'PAGO CLIENTES NORTE',
+  'PAGO NOMINA QUINCENAL',
+  'COBRO FACTURA 2024-1150',
+  'DEPOSITO COBRANZA SUR',
+  'PAGO PROVEEDORES DIESEL',
+  'COBRANZA CLIENTES CITI',
+  'PAGO REFACCIONES',
+  'COBRO CROSS-BORDER LAREDO',
+  'PAGO SEGURO INTERNACIONAL',
+];
+function containsDemoBankData(statements: BankAccountStatement[] | undefined | null): boolean {
+  if (!statements || statements.length === 0) return false;
+  for (const acc of statements) {
+    for (const mov of acc.movimientos ?? []) {
+      const ref = (mov.referencia ?? '').trim();
+      if (ref && DEMO_BANK_REFS.has(ref)) return true;
+      const concepto = (mov.concepto ?? '').trim().toUpperCase();
+      if (concepto && DEMO_BANK_CONCEPTS.includes(concepto)) return true;
+    }
+  }
+  return false;
+}
 
 export default function App() {
   const [plan, setPlan] = useState<FlowPlan | null>(null);
@@ -116,7 +157,17 @@ export default function App() {
   const [bankStatements, setBankStatements] = useState<BankAccountStatement[]>(() => {
     try {
       const raw = localStorage.getItem('flowsense.bankStatements.v2');
-      return raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
+      const parsed = raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
+      // Descartar demo data ficticia que pudo haber quedado cacheada de
+      // versiones previas. Si detectamos CUALQUIER referencia demo dentro
+      // del cache, lo tiramos entero — no vale la pena mezclar ficticio con
+      // real en el flujo.
+      if (containsDemoBankData(parsed)) {
+        localStorage.removeItem('flowsense.bankStatements.v2');
+        localStorage.removeItem('flowsense.bankLastQuery.v2');
+        return [];
+      }
+      return parsed;
     } catch { return []; }
   });
   const [bankLastQuery, setBankLastQuery] = useState<{
@@ -144,7 +195,7 @@ export default function App() {
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
 
-  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'collections', 'cxp', 'bancos', 'dashboard', 'kpis', 'forecast', 'scenarios'];
+  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'kpis', 'collections', 'cxp', 'forecast', 'scenarios'];
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
@@ -183,6 +234,17 @@ export default function App() {
       }
     });
   }, [catalogLoaded, clients.length]);
+
+  // Auto-load providers from the bundled catalog if none are loaded yet.
+  // El catálogo vive en src/assets/providerCatalog.json y trae ~470
+  // proveedores con su flexibilidad (inamovible/flexible/revisar) para
+  // planeación. Se evita si el usuario ya tiene proveedores (subidos o
+  // persistidos) para no pisar su edición.
+  useEffect(() => {
+    if (providers.length > 0) return;
+    const loaded = loadProvidersCatalog();
+    if (loaded.length > 0) setProviders(loaded);
+  }, [providers.length]);
 
   useEffect(() => {
     if (proposals.length === 0) {
@@ -420,55 +482,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const today = new Date().toISOString().slice(0, 10);
-
     (async () => {
-      const { primed, ranged } = await refreshBankStatementsRange(false);
-
-      // Si algo funcionó (cache, prime o rango), listo.
-      if (primed || ranged) return;
-      // JDE unreachable — load demo data for development
-      const demoStatements: BankAccountStatement[] = [
-        {
-          cia: '00011', banco: 'BANAMEX', nombreBanco: 'BANAMEX · Concentradora',
-          cuenta: '877732401', moneda: 'MXN', fechaEstadoCuenta: today,
-          saldoInicial: 15_432_100.50, saldoFinal: 18_765_230.75,
-          movimientos: [
-            { cia: '00011', banco: 'BANAMEX', cuenta: '877732401', moneda: 'MXN', fechaOperacion: today, referencia: 'TRF-001', concepto: 'PAGO CLIENTES NORTE', tipoMovimiento: 'ABONO', importe: 4_250_000.00 },
-            { cia: '00011', banco: 'BANAMEX', cuenta: '877732401', moneda: 'MXN', fechaOperacion: today, referencia: 'TRF-002', concepto: 'PAGO NOMINA QUINCENAL', tipoMovimiento: 'CARGO', importe: 1_890_500.00 },
-            { cia: '00011', banco: 'BANAMEX', cuenta: '877732401', moneda: 'MXN', fechaOperacion: today, referencia: 'TRF-003', concepto: 'COBRO FACTURA 2024-1150', tipoMovimiento: 'ABONO', importe: 973_630.25 },
-          ],
-        },
-        {
-          cia: '00011', banco: 'BANORTE', nombreBanco: 'BANORTE · Operativa',
-          cuenta: '0123456789', moneda: 'MXN', fechaEstadoCuenta: today,
-          saldoInicial: 8_100_000.00, saldoFinal: 9_456_800.00,
-          movimientos: [
-            { cia: '00011', banco: 'BANORTE', cuenta: '0123456789', moneda: 'MXN', fechaOperacion: today, referencia: 'DEP-100', concepto: 'DEPOSITO COBRANZA SUR', tipoMovimiento: 'ABONO', importe: 2_150_000.00 },
-            { cia: '00011', banco: 'BANORTE', cuenta: '0123456789', moneda: 'MXN', fechaOperacion: today, referencia: 'PAG-055', concepto: 'PAGO PROVEEDORES DIESEL', tipoMovimiento: 'CARGO', importe: 793_200.00 },
-          ],
-        },
-        {
-          cia: '00038', banco: 'BANAMEX', nombreBanco: 'BANAMEX · Citi MXN',
-          cuenta: '7013870885', moneda: 'MXN', fechaEstadoCuenta: today,
-          saldoInicial: 5_200_000.00, saldoFinal: 6_830_450.00,
-          movimientos: [
-            { cia: '00038', banco: 'BANAMEX', cuenta: '7013870885', moneda: 'MXN', fechaOperacion: today, referencia: 'COB-220', concepto: 'COBRANZA CLIENTES CITI', tipoMovimiento: 'ABONO', importe: 1_980_450.00 },
-            { cia: '00038', banco: 'BANAMEX', cuenta: '7013870885', moneda: 'MXN', fechaOperacion: today, referencia: 'PAG-120', concepto: 'PAGO REFACCIONES', tipoMovimiento: 'CARGO', importe: 350_000.00 },
-          ],
-        },
-        {
-          cia: '00038', banco: 'BBVA', nombreBanco: 'BBVA · USD',
-          cuenta: '0118900234', moneda: 'USD', fechaEstadoCuenta: today,
-          saldoInicial: 245_000.00, saldoFinal: 312_500.00,
-          movimientos: [
-            { cia: '00038', banco: 'BBVA', cuenta: '0118900234', moneda: 'USD', fechaOperacion: today, referencia: 'WIRE-01', concepto: 'COBRO CROSS-BORDER LAREDO', tipoMovimiento: 'ABONO', importe: 85_000.00 },
-            { cia: '00038', banco: 'BBVA', cuenta: '0118900234', moneda: 'USD', fechaOperacion: today, referencia: 'WIRE-02', concepto: 'PAGO SEGURO INTERNACIONAL', tipoMovimiento: 'CARGO', importe: 17_500.00 },
-          ],
-        },
-      ];
-      setBankStatements(demoStatements);
-      setBankLastQuery({ fechaEstadoCuenta: today, formatoElectronico: 'SWIFT' });
+      // Sólo intentamos el refresh real de JDE. Si falla, la app se queda
+      // sin datos de bancos — preferimos vacío antes que inyectar demo data
+      // ficticia que ensucia los meses previos del flujo.
+      await refreshBankStatementsRange(false);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -623,14 +641,14 @@ export default function App() {
               const isActive = activeSection === s.id;
               // Status badge logic
               const catalogCount = clients.length + providers.length;
-              const badge = s.id === 'planeacion' && !plan
+              const badge = s.id === 'proyeccion' && !plan
                 ? 'Sin plan'
                 : s.id === 'catalogos' && catalogCount > 0
                   ? `${catalogCount}`
                   : s.id === 'operacion' && (cxpRecords.length > 0 || bankStatements.length > 0)
                     ? 'Activo'
                     : null;
-              const badgeColor = s.id === 'planeacion' && !plan ? 'var(--warning)' : 'var(--gray-400)';
+              const badgeColor = s.id === 'proyeccion' && !plan ? 'var(--warning)' : 'var(--gray-400)';
               return (
                 <button
                   key={s.id}
@@ -658,7 +676,7 @@ export default function App() {
                       <span
                         className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
                         style={{
-                          background: s.id === 'planeacion' && !plan ? 'var(--warning-muted)' : 'var(--gray-100)',
+                          background: s.id === 'proyeccion' && !plan ? 'var(--warning-muted)' : 'var(--gray-100)',
                           color: badgeColor,
                         }}
                       >

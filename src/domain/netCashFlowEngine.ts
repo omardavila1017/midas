@@ -13,7 +13,326 @@
 import { CollectionEvent, ConfirmedPayment, CashFlowAssumptions, eventKey } from './types';
 import { CXPRecord } from './persistence';
 import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
-import type { BankAccountStatement } from '../services/jdeTypes';
+import type { BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Internal transfer detection
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Detect bank movements that represent *internal* transfers (traspasos/
+ * transferencias entre cuentas propias), not real inflows/outflows of cash
+ * from the business.
+ *
+ * En el estado de cuenta JDE estos movimientos vienen marcados de tres formas:
+ *
+ *   1. Leyenda de tipo de operación en concepto/referencia, p.ej.
+ *      "TRASPASO REF", "TRANSFERENCIA REF", "TRANSFER REF" y abreviaturas.
+ *
+ *   2. RFC de una de las empresas propias del grupo en el concepto, p.ej.
+ *      "TRCC AL R.F.C. TTA4906038F4" — cuando aparece uno de nuestros RFC
+ *      como destinatario/origen es un movimiento entre empresas del grupo.
+ *
+ *   3. Nombre de una empresa propia como beneficiario, p.ej.
+ *      "BCO 002 BENEF TRANSPORTES TAMAULIP" — el estado de cuenta trunca
+ *      el nombre comercial pero la razón social es clara.
+ *
+ * Como el ABONO en una cuenta se compensa con el CARGO en otra, sumarlos al
+ * flujo infla tanto los cobros como los pagos sin aportar información
+ * económica. Por eso cualquier código que construya el "Flujo de efectivo"
+ * debe filtrar estos movimientos — la vista de Bancos, en cambio, los sigue
+ * mostrando porque ahí sí son relevantes para la conciliación.
+ *
+ * Detección: permisiva a propósito (case-insensitive, tolera variaciones de
+ * espaciado/separadores). Se evalúa tanto `concepto` como `referencia`
+ * porque distintos formatos (SWIFT/BAI2/MT940) colocan la leyenda en
+ * campos diferentes.
+ *
+ * Coincide (no exhaustivo) con:
+ *   "TRASPASO REF", "TRASPASO REFERENCIA", "TRASPASO-REF", "TRASP REF"
+ *   "TRANSPASO REF"
+ *   "TRANSFERENCIA REF", "TRANSFER REF", "TRANSF REF", "TRANSF. REF"
+ *   Cualquier texto que contenga un RFC en INTERNAL_RFCS.
+ *   Cualquier texto que contenga un nombre en INTERNAL_BENEFICIARIES.
+ *
+ * NO coincide con descripciones legítimas como "TRANSFERENCIA BANCARIA",
+ * "TRANSFERENCIA A PROVEEDOR", "PAGO A TERCEROS", etc.
+ */
+const INTERNAL_TRANSFER_PATTERN = /\bTRA(?:N?S(?:P(?:ASO)?|F(?:ER(?:ENCIA)?)?)?)?[\s._/\-]*REF/i;
+
+/**
+ * RFCs de empresas propias del grupo. Cuando aparece uno de estos en el
+ * concepto o referencia de un movimiento, se trata como transferencia
+ * interna aunque la leyenda de tipo de operación no lo diga.
+ *
+ * Agregar aquí nuevos RFCs conforme se identifiquen (p.ej. al aparecer una
+ * nueva razón social en JDE). No hace falta tocar el regex ni la función.
+ */
+const INTERNAL_RFCS: readonly string[] = [
+  // Lista autoritativa de RFCs de las empresas del grupo (2026-04).
+  // Aparecen en leyendas tipo "TRCC AL R.F.C. <RFC>" o embebidos en
+  // el concepto/referencia de movimientos entre cuentas propias.
+  'TTA4906038F4',
+  'SIR870615345',
+  'TIC0510111G4',
+  'MUL9707108M3',
+  'SIP990527FA0',
+];
+
+/**
+ * Nombres (o fragmentos de nombres) de empresas propias del grupo tal como
+ * los escriben los bancos en el campo beneficiario. Los estados de cuenta
+ * suelen truncar estos campos a ~20-30 chars, así que guardamos el prefijo
+ * más largo que sigue siendo único para evitar colisiones con clientes o
+ * proveedores externos.
+ *
+ * Reglas para agregar:
+ *   - Usar mayúsculas (el matcheo es case-insensitive, pero así se lee mejor).
+ *   - Usar la forma truncada si es como aparece en el estado de cuenta
+ *     (ej. "TRANSPORTES TAMAULIP" captura tanto la versión truncada como la
+ *     completa "TRANSPORTES TAMAULIPAS").
+ *   - Mantener al menos 10-12 caracteres distintivos para evitar falsos
+ *     positivos (ej. NO poner "SENDA" a secas — atraparía clientes
+ *     comerciales con "Senda" en su razón social).
+ */
+const INTERNAL_BENEFICIARIES: readonly string[] = [
+  'TRANSPORTES TAMAULIP', // "TRANSPORTES TAMAULIPAS" — aparece como "BCO 002 BENEF TRANSPORTES TAMAULIP"
+];
+
+/**
+ * Helper: construye un regex que matchee cualquiera de los strings dados
+ * como substring, escapando caracteres especiales. Case-insensitive.
+ * Retorna null si la lista está vacía (para evitar hacer .test() en balde).
+ */
+function buildSubstringPattern(items: readonly string[]): RegExp | null {
+  if (items.length === 0) return null;
+  const escaped = items.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(escaped.join('|'), 'i');
+}
+
+const INTERNAL_RFC_PATTERN = buildSubstringPattern(INTERNAL_RFCS);
+const INTERNAL_BENEFICIARY_PATTERN = buildSubstringPattern(INTERNAL_BENEFICIARIES);
+
+/**
+ * Longitud mínima que debe tener un número de cuenta para considerarse en el
+ * detector de "cuenta destino interna". Evita falsos positivos con códigos
+ * cortos (p.ej. "1" o "0001") que podrían aparecer por casualidad en
+ * referencias bancarias legítimas.
+ */
+const MIN_ACCOUNT_LENGTH = 6;
+
+/**
+ * Construye un Set con todas las cuentas que pertenecen al grupo, extraídas
+ * de los estados de cuenta que ya estamos consumiendo del API de JDE.
+ *
+ * Si el concepto o la referencia de un movimiento menciona cualquiera de
+ * estos números (p.ej. "TRASPASO REF 123 CTA DESTINO 0190047839"), se trata
+ * como transferencia interna aunque no tenga la leyenda TRASPASO/TRANSFERENCIA
+ * ni un RFC/beneficiario del grupo.
+ *
+ * Se descartan cuentas demasiado cortas para evitar colisiones accidentales.
+ */
+export function buildOwnAccountsIndex(
+  statements: readonly BankAccountStatement[] | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!statements) return out;
+  for (const s of statements) {
+    const c = (s.cuenta ?? '').trim();
+    if (c.length >= MIN_ACCOUNT_LENGTH) out.add(c);
+  }
+  return out;
+}
+
+/**
+ * Precomputa un detector de cuenta-destino-interna para reusar en un
+ * batch grande de movimientos. Evita reconstruir el regex por llamada.
+ *
+ * El detector excluye la cuenta origen de cada movimiento: si un banco
+ * repite el número de cuenta origen en el concepto (p.ej. "COMISION CTA
+ * 0190..."), esa referencia apunta a la misma cuenta y no indica traspaso
+ * interno. Solo marcamos como interno cuando aparece OTRA cuenta del grupo.
+ */
+export function buildOwnAccountDetector(
+  ownAccounts: Set<string> | undefined,
+): (mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean {
+  if (!ownAccounts || ownAccounts.size === 0) return () => false;
+  const allAccounts = Array.from(ownAccounts);
+  // Pre-built pattern cuando cuenta origen NO está en el set (usa todas).
+  const fullPattern = buildSubstringPattern(allAccounts);
+  // Cache por cuenta origen — el set "todas menos ésta".
+  const patternCache = new Map<string, RegExp | null>();
+
+  return (mov) => {
+    const concepto = mov.concepto ?? '';
+    const referencia = mov.referencia ?? '';
+    if (!concepto && !referencia) return false;
+
+    const ownCuenta = (mov.cuenta ?? '').trim();
+    let pattern: RegExp | null;
+    if (!ownCuenta || !ownAccounts.has(ownCuenta)) {
+      pattern = fullPattern;
+    } else if (patternCache.has(ownCuenta)) {
+      pattern = patternCache.get(ownCuenta)!;
+    } else {
+      const rest = allAccounts.filter(a => a !== ownCuenta);
+      pattern = buildSubstringPattern(rest);
+      patternCache.set(ownCuenta, pattern);
+    }
+    if (!pattern) return false;
+    if (concepto && pattern.test(concepto)) return true;
+    if (referencia && pattern.test(referencia)) return true;
+    return false;
+  };
+}
+
+export function isInternalTransfer(
+  mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>,
+  ownAccountDetector?: (m: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean,
+): boolean {
+  const concepto = mov.concepto ?? '';
+  const referencia = mov.referencia ?? '';
+
+  // 1. Leyenda de tipo de operación (TRASPASO/TRANSFERENCIA REF...)
+  if (concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) return true;
+  if (referencia && INTERNAL_TRANSFER_PATTERN.test(referencia)) return true;
+
+  // 2. RFC de empresa propia en cualquier parte del texto.
+  if (INTERNAL_RFC_PATTERN) {
+    if (concepto && INTERNAL_RFC_PATTERN.test(concepto)) return true;
+    if (referencia && INTERNAL_RFC_PATTERN.test(referencia)) return true;
+  }
+
+  // 3. Nombre de empresa propia como beneficiario.
+  if (INTERNAL_BENEFICIARY_PATTERN) {
+    if (concepto && INTERNAL_BENEFICIARY_PATTERN.test(concepto)) return true;
+    if (referencia && INTERNAL_BENEFICIARY_PATTERN.test(referencia)) return true;
+  }
+
+  // 4. Cuenta destino es otra cuenta nuestra del grupo.
+  if (ownAccountDetector && ownAccountDetector(mov)) return true;
+
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Bank-only cash flow
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Movimiento bancario enriquecido con la cuenta/banco/cia de origen para
+ * renderizarlo en el detalle diario del Flujo de efectivo sin volver a
+ * cruzar estructuras. `line` es el registro crudo del API de JDE.
+ */
+export interface EnrichedBankMovement {
+  date: string;         // ISO fechaOperacion
+  amount: number;       // siempre positivo
+  tipo: 'ABONO' | 'CARGO';
+  concepto: string;
+  cia: string;
+  banco: string;
+  bankName?: string;
+  cuenta: string;
+  moneda: string;
+  referencia: string;
+  fechaValor?: string;
+  conceptoFull: string;
+}
+
+/**
+ * Construye el Flujo de efectivo puramente desde los estados de cuenta
+ * bancarios — sin proyecciones CXC ni pendientes CXP.
+ *
+ * Filtra automáticamente transferencias internas (TRASPASO/TRANSFERENCIA REF,
+ * RFCs propios, beneficiarios propios, cuenta destino propia) para que los
+ * totales reflejen únicamente los flujos reales del grupo hacia fuera y
+ * desde fuera.
+ *
+ * @param bankStatements   Estados de cuenta año a la fecha (merge del range).
+ * @param year             Año a filtrar (YYYY).
+ * @param startingBalance  Saldo inicial para el cálculo acumulado.
+ */
+export function computeBankOnlyCashFlow(
+  bankStatements: readonly BankAccountStatement[] | undefined,
+  year: number,
+  startingBalance: number = 0,
+): {
+  daily: DailyFlow[];
+  abonosByDate: Map<string, EnrichedBankMovement[]>;
+  cargosByDate: Map<string, EnrichedBankMovement[]>;
+} {
+  const abonosByDate = new Map<string, EnrichedBankMovement[]>();
+  const cargosByDate = new Map<string, EnrichedBankMovement[]>();
+
+  if (!bankStatements || bankStatements.length === 0) {
+    return { daily: [], abonosByDate, cargosByDate };
+  }
+
+  const yearStr = String(year);
+  const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
+
+  for (const acc of bankStatements) {
+    for (const mov of acc.movimientos) {
+      const date = parseDate(mov.fechaOperacion);
+      if (!date) continue;
+      if (!date.startsWith(yearStr)) continue;
+
+      // Filtrar internos en ambos sentidos.
+      if (isInternalTransfer(mov, detector)) continue;
+
+      const amount = Math.abs(mov.importe || 0);
+      if (amount <= 0) continue;
+
+      const enriched: EnrichedBankMovement = {
+        date,
+        amount,
+        tipo: mov.tipoMovimiento === 'ABONO' ? 'ABONO' : 'CARGO',
+        concepto: (mov.concepto || '').trim() || `${acc.nombreBanco ?? 'Banco'} · ${acc.cuenta}`,
+        cia: acc.cia,
+        banco: acc.banco,
+        bankName: acc.nombreBanco,
+        cuenta: acc.cuenta,
+        moneda: acc.moneda ?? mov.moneda ?? 'MXN',
+        referencia: mov.referencia ?? '',
+        fechaValor: mov.fechaValor,
+        conceptoFull: mov.concepto ?? '',
+      };
+
+      const bucket = enriched.tipo === 'ABONO' ? abonosByDate : cargosByDate;
+      if (!bucket.has(date)) bucket.set(date, []);
+      bucket.get(date)!.push(enriched);
+    }
+  }
+
+  // Construir DailyFlow[] ordenado por fecha.
+  const activeDates = new Set<string>();
+  abonosByDate.forEach((_, d) => activeDates.add(d));
+  cargosByDate.forEach((_, d) => activeDates.add(d));
+  const sortedDates = Array.from(activeDates).sort();
+
+  const daily: DailyFlow[] = [];
+  let cumulative = startingBalance;
+  for (const date of sortedDates) {
+    const ab = abonosByDate.get(date) ?? [];
+    const ca = cargosByDate.get(date) ?? [];
+    const inflows = ab.reduce((s, m) => s + m.amount, 0);
+    const outflows = ca.reduce((s, m) => s + m.amount, 0);
+    const net = inflows - outflows;
+    cumulative += net;
+    daily.push({
+      date,
+      inflows,
+      outflows,
+      net,
+      cumulative,
+      // En modo banco no hay distinción proyectado/confirmado — todo es real.
+      confirmedIn: inflows,
+      projectedIn: 0,
+    });
+  }
+
+  return { daily, abonosByDate, cargosByDate };
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Domain Types
@@ -134,6 +453,34 @@ export interface PaymentEvent {
   flexibility: Flexibility;
   /** DTI criticality (Alta/Media/Baja) if provider is in the DTI catalog. */
   criticidad: Criticidad | null;
+  /**
+   * Optional traceability to the originating source. Populated when the event
+   * comes from a real bank CARGO (estado de cuenta JDE) so that the UI can
+   * drill down from an aggregated list to the exact movement: qué cuenta,
+   * qué banco, qué referencia, en qué empresa del grupo.
+   *
+   * For CXP-derived events (pending projections) these fields are undefined.
+   */
+  source?: {
+    /** 'bank' → came from a bank statement CARGO; 'cxp' → came from CXPRecord */
+    origin: 'bank' | 'cxp';
+    /** Company code JDE (p.ej. "00011"). */
+    cia?: string;
+    /** Bank code JDE. */
+    banco?: string;
+    /** Human-readable bank name (BBVA, Santander, ...). */
+    bankName?: string;
+    /** Bank account number. */
+    cuenta?: string;
+    /** Bank reference / folio. */
+    referencia?: string;
+    /** Full, untrimmed concept as returned by JDE. */
+    conceptoFull?: string;
+    /** ISO date of fechaValor (if reported) — useful to flag T+1 settlements. */
+    fechaValor?: string;
+    /** Currency of the movement (MXN / USD). */
+    moneda?: string;
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -380,6 +727,10 @@ export function extractPaymentEvents(
 
   // Fold real bank CARGOs (actual egresos) as "paid" events on fechaOperacion.
   if (hasBankData) {
+    // Precompute own-account detector una sola vez para todo el batch.
+    const ownAccounts = buildOwnAccountsIndex(bankStatements);
+    const ownAccountDetector = buildOwnAccountDetector(ownAccounts);
+
     for (const acc of bankStatements!) {
       const bankLabel =
         acc.nombreBanco?.trim() ||
@@ -387,6 +738,9 @@ export function extractPaymentEvents(
 
       for (const mov of acc.movimientos) {
         if (mov.tipoMovimiento !== 'CARGO') continue;
+        // Skip traspasos internos — se compensan entre cuentas propias y no
+        // representan egresos reales del negocio.
+        if (isInternalTransfer(mov, ownAccountDetector)) continue;
         const date = parseDate(mov.fechaOperacion);
         if (!date) continue;
         const amount = Math.abs(mov.importe || 0);
@@ -404,6 +758,17 @@ export function extractPaymentEvents(
           kind: 'paid',
           flexibility: 'unknown',
           criticidad: null,
+          source: {
+            origin: 'bank',
+            cia: acc.cia,
+            banco: acc.banco,
+            bankName: acc.nombreBanco,
+            cuenta: acc.cuenta,
+            referencia: mov.referencia,
+            conceptoFull: mov.concepto,
+            fechaValor: mov.fechaValor,
+            moneda: mov.moneda,
+          },
         });
       }
     }
