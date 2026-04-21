@@ -66,6 +66,58 @@ function riskFromFlexibility(flex: Flexibility): ProviderRisk {
   }
 }
 
+function riskCommentFromFlexibility(flex: Flexibility, dti: DtiEntry | undefined): string {
+  if (dti?.criticidad === 'Alta') return `Proveedor critico DTI (${dti.area}); interrupcion con impacto operativo alto.`;
+  switch (flex) {
+    case 'inamovible':
+      return 'Clasificado como inamovible: se recomienda pagar en fecha para evitar impacto operativo.';
+    case 'revisar':
+      return 'Requiere validacion del area responsable antes de modificar condiciones o fecha de pago.';
+    case 'flexible':
+      return 'Catalogado como negociable: menor riesgo de continuidad ante diferimiento controlado.';
+    default:
+      return 'Sin evidencia suficiente en catalogo; se asigna riesgo medio de forma conservadora.';
+  }
+}
+
+function flexibilityCommentFromFlexibility(flex: Flexibility): string {
+  switch (flex) {
+    case 'inamovible':
+      return 'Condiciones poco negociables; priorizar pago segun credito pactado.';
+    case 'revisar':
+      return 'Negociable solo con autorizacion del area responsable.';
+    case 'flexible':
+      return 'Puede evaluarse reprogramacion de pagos, plazos o condiciones.';
+    default:
+      return 'Flexibilidad no clasificada; validar con compras/tesoreria antes de negociar.';
+  }
+}
+
+function estimateCreditLimit(last: LastPaymentEntry | undefined, flex: Flexibility): number | undefined {
+  if (!last?.ultimoMonto || last.ultimoMonto <= 0) return undefined;
+  const multiplier = flex === 'inamovible' ? 2 : flex === 'revisar' ? 1.5 : 1.25;
+  return Math.round((last.ultimoMonto * multiplier) / 1000) * 1000;
+}
+
+function normalizeDateLike(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}T00:00:00.000Z`;
+  }
+  const slash = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const month = Number(slash[1]);
+    const day = Number(slash[2]);
+    const year = Number(slash[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00.000Z`;
+    }
+  }
+  return undefined;
+}
+
 /** Parse `condPago` string ("15", "30", "C", etc.) → ProviderPaymentPeriod. */
 function paymentPeriodFromCondPago(condPago: string | undefined): ProviderPaymentPeriod {
   if (!condPago) return '30 días';
@@ -122,8 +174,12 @@ export function loadProvidersCatalog(): Provider[] {
       name,
       type: typeFromDti(dti),
       risk: riskFromFlexibility(flex),
+      riskComment: riskCommentFromFlexibility(flex, dti),
       paymentPeriod: paymentPeriodFromCondPago(last?.condPago),
       flexibility: flex,
+      flexibilityComment: flexibilityCommentFromFlexibility(flex),
+      creditLimit: estimateCreditLimit(last, flex),
+      lastUpdatedAt: normalizeDateLike(last?.ultimaFecha),
       dtiArea: dti?.area,
       dtiCriticidad: dti?.criticidad,
     });

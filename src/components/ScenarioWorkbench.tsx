@@ -4,6 +4,7 @@ import {
   FlaskConical,
   Pencil,
   Plus,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
@@ -82,6 +83,188 @@ const SIMULATION_TYPES: { value: SimulationType; label: string; description: str
   { value: 'installment_plan', label: 'Cobro / pago en parcialidades', description: 'Distribuye un monto en parcialidades.' },
   { value: 'timing_shift', label: 'Atrasar / adelantar', description: 'Mueve cobros o pagos en el calendario.' },
   { value: 'pause_expense', label: 'Pausar gasto', description: 'Reduce al 100% un gasto durante el periodo.' },
+];
+
+interface AiScenarioAdjustment {
+  name: string;
+  description: string;
+  category: SimulationCategory;
+  type: SimulationType;
+  targetIds: string[];
+  operation: SimulationOperation;
+  percent?: number;
+  shiftMonths?: number;
+  shiftRatio?: number;
+  comments: string;
+}
+
+interface AiScenarioTemplate {
+  id: string;
+  name: string;
+  description: string;
+  assumptions: string[];
+  impact: string;
+  adjustments: AiScenarioAdjustment[];
+}
+
+const AI_SCENARIO_TEMPLATES: AiScenarioTemplate[] = [
+  {
+    id: 'conservador',
+    name: 'Escenario conservador',
+    description: 'Menor cobranza esperada y control parcial de egresos.',
+    assumptions: ['Cobranza -8%', 'Egresos +4%', 'Horizonte anual'],
+    impact: 'Reduce la caja esperada y muestra meses con menor holgura operativa.',
+    adjustments: [
+      {
+        name: 'Cobranza conservadora',
+        description: 'Reduce la cobranza esperada para modelar menor cumplimiento.',
+        category: 'Incremento de Ingresos',
+        type: 'percent_adjustment',
+        targetIds: [ROLE_TARGET_COLLECTIONS],
+        operation: 'decrease',
+        percent: 0.08,
+        comments: 'Supuesto IA: menor recuperacion de cobranza frente al escenario base.',
+      },
+      {
+        name: 'Presion moderada en egresos',
+        description: 'Incrementa egresos para contemplar presion operativa.',
+        category: 'Reducción de Costos',
+        type: 'percent_adjustment',
+        targetIds: [ROLE_TARGET_EXPENSE],
+        operation: 'increase',
+        percent: 0.04,
+        comments: 'Supuesto IA: inflacion o gastos operativos no presupuestados.',
+      },
+    ],
+  },
+  {
+    id: 'agresivo',
+    name: 'Escenario agresivo',
+    description: 'Mayor cobranza e ingresos con gasto comercial adicional.',
+    assumptions: ['Ingresos +10%', 'Egresos +3%', 'Cobranza sin atraso'],
+    impact: 'Estima caja con crecimiento y el costo necesario para capturarlo.',
+    adjustments: [
+      {
+        name: 'Crecimiento agresivo de ingresos',
+        description: 'Aumenta ingresos esperados durante todo el horizonte.',
+        category: 'Incremento de Ingresos',
+        type: 'percent_adjustment',
+        targetIds: [ROLE_TARGET_INCOME],
+        operation: 'increase',
+        percent: 0.10,
+        comments: 'Supuesto IA: mayor volumen comercial y cobranza estable.',
+      },
+      {
+        name: 'Gasto comercial incremental',
+        description: 'Agrega presion de egresos asociada al crecimiento.',
+        category: 'Reducción de Costos',
+        type: 'percent_adjustment',
+        targetIds: [ROLE_TARGET_EXPENSE],
+        operation: 'increase',
+        percent: 0.03,
+        comments: 'Supuesto IA: gasto adicional para sostener crecimiento.',
+      },
+    ],
+  },
+  {
+    id: 'liquidez',
+    name: 'Escenario falta de liquidez',
+    description: 'Cobranza desplazada y egresos al alza para probar caja minima.',
+    assumptions: ['35% cobranza +1 mes', 'Egresos +8%', 'Estres de caja'],
+    impact: 'Resalta riesgo de liquidez y meses con caja final negativa.',
+    adjustments: [
+      {
+        name: 'Retraso fuerte de cobranza',
+        description: 'Mueve parte de la cobranza al mes siguiente.',
+        category: 'Diferimiento',
+        type: 'timing_shift',
+        targetIds: [ROLE_TARGET_COLLECTIONS],
+        operation: 'decrease',
+        shiftMonths: 1,
+        shiftRatio: 0.35,
+        comments: 'Supuesto IA: deterioro temporal del ciclo de cobranza.',
+      },
+      {
+        name: 'Aumento de egresos bajo estres',
+        description: 'Incrementa egresos para modelar presion de liquidez.',
+        category: 'Reducción de Costos',
+        type: 'percent_adjustment',
+        targetIds: [ROLE_TARGET_EXPENSE],
+        operation: 'increase',
+        percent: 0.08,
+        comments: 'Supuesto IA: gastos extraordinarios o alza en costos.',
+      },
+    ],
+  },
+  {
+    id: 'retraso-cobranza',
+    name: 'Escenario retraso de cobranza',
+    description: 'Cobranza parcial diferida un mes.',
+    assumptions: ['35% cobranza +1 mes', 'Sin cambio en egresos'],
+    impact: 'Mide cuanto efectivo falta cuando la cobranza no llega a tiempo.',
+    adjustments: [
+      {
+        name: 'Cobranza diferida',
+        description: 'Desplaza una parte de la cobranza al mes siguiente.',
+        category: 'Diferimiento',
+        type: 'timing_shift',
+        targetIds: [ROLE_TARGET_COLLECTIONS],
+        operation: 'decrease',
+        shiftMonths: 1,
+        shiftRatio: 0.35,
+        comments: 'Supuesto IA: retraso de clientes sin perdida definitiva de ingreso.',
+      },
+    ],
+  },
+  {
+    id: 'aumento-egresos',
+    name: 'Escenario aumento de egresos',
+    description: 'Presion general de gastos y pagos operativos.',
+    assumptions: ['Egresos +12%', 'Horizonte anual'],
+    impact: 'Calcula cuanto se reduce el flujo disponible ante mayor gasto.',
+    adjustments: [
+      {
+        name: 'Incremento general de egresos',
+        description: 'Aumenta gastos operativos para modelar presion de costos.',
+        category: 'Reducción de Costos',
+        type: 'percent_adjustment',
+        targetIds: [ROLE_TARGET_EXPENSE],
+        operation: 'increase',
+        percent: 0.12,
+        comments: 'Supuesto IA: alza de costos, servicios o pagos extraordinarios.',
+      },
+    ],
+  },
+  {
+    id: 'negociacion-proveedores',
+    name: 'Escenario negociacion de proveedores',
+    description: 'Diferimiento de pagos y ahorro por negociacion.',
+    assumptions: ['35% pagos +1 mes', 'Egresos -4%', 'Enfocado en proveedores'],
+    impact: 'Estima la caja liberada por renegociar plazos o condiciones.',
+    adjustments: [
+      {
+        name: 'Diferimiento de pagos a proveedores',
+        description: 'Mueve una parte de pagos de proveedor al mes siguiente.',
+        category: 'Renegociación',
+        type: 'timing_shift',
+        targetIds: [ROLE_TARGET_PROVIDER_PAYMENTS],
+        operation: 'decrease',
+        shiftMonths: 1,
+        shiftRatio: 0.35,
+        comments: 'Supuesto IA: proveedores flexibles aceptan extender plazo.',
+      },
+      {
+        name: 'Ahorro por renegociacion',
+        description: 'Reduce egresos por mejores condiciones comerciales.',
+        category: 'Renegociación',
+        type: 'percent_adjustment',
+        targetIds: [ROLE_TARGET_PROVIDER_PAYMENTS],
+        operation: 'decrease',
+        percent: 0.04,
+        comments: 'Supuesto IA: descuento o mejora de condiciones con proveedores negociables.',
+      },
+    ],
+  },
 ];
 
 /* ─── Helpers ─── */
@@ -272,6 +455,39 @@ function buildSimulationFromForm(plan: FlowPlan, form: AdjustmentForm, existing?
     comments: form.comments.trim() || undefined,
     effects: [],
     createdAt: existing?.createdAt ?? ts,
+    updatedAt: ts,
+  };
+  sim.effects = buildSimulationEffects(plan, sim);
+  return sim;
+}
+
+function buildSimulationFromAiTemplate(
+  plan: FlowPlan,
+  templateId: string,
+  adjustment: AiScenarioAdjustment,
+  index: number,
+  timestamp: number,
+): Simulation {
+  const ts = new Date(timestamp + index).toISOString();
+  const sim: Simulation = {
+    id: `simulation-ai-${templateId}-${timestamp}-${index}`,
+    name: adjustment.name,
+    description: adjustment.description,
+    category: adjustment.category,
+    type: adjustment.type,
+    targetIds: adjustment.targetIds,
+    startYearMonth: `${plan.year}-01`,
+    endYearMonth: `${plan.year}-12`,
+    startDate: `${plan.year}-01-01`,
+    endDate: `${plan.year}-12-31`,
+    frequency: 'monthly',
+    operation: adjustment.operation,
+    percent: adjustment.percent,
+    shiftMonths: adjustment.shiftMonths,
+    shiftRatio: adjustment.shiftRatio,
+    comments: adjustment.comments,
+    effects: [],
+    createdAt: ts,
     updatedAt: ts,
   };
   sim.effects = buildSimulationEffects(plan, sim);
@@ -706,6 +922,41 @@ export default function ScenarioWorkbench({
     }));
   };
 
+  const createAiScenario = (template: AiScenarioTemplate) => {
+    const timestamp = Date.now();
+    const ts = new Date(timestamp).toISOString();
+    const proposalId = `proposal-ai-${template.id}-${timestamp}`;
+    const scenarioId = `scenario-ai-${template.id}-${timestamp}`;
+    const generatedSimulations = template.adjustments.map((adjustment, index) =>
+      buildSimulationFromAiTemplate(plan, template.id, adjustment, index, timestamp),
+    );
+
+    onAdd({
+      id: proposalId,
+      name: template.name,
+      description: `${template.description} Supuestos: ${template.assumptions.join('; ')}. Impacto esperado: ${template.impact}`,
+      status: 'Pendiente',
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    generatedSimulations.forEach(onAddSimulation);
+    onAddScenario({
+      id: scenarioId,
+      proposalId,
+      kind: 'proposal',
+      name: template.name,
+      description: template.description,
+      probability: 1,
+      startYearMonth: `${plan.year}-01`,
+      horizonMonths: 12,
+      simulationIds: generatedSimulations.map((simulation) => simulation.id),
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    onSelectProposal(proposalId);
+    onSelectScenario(scenarioId);
+  };
+
   const isBase = isBaseScenario(activeScenario);
 
   /* ═══ RENDER ═══ */
@@ -727,6 +978,54 @@ export default function ScenarioWorkbench({
             <Plus className="w-4 h-4" />
             Nuevo escenario
           </button>
+        </div>
+
+        <div className="mt-5 rounded-2xl border border-[var(--primary)]/15 bg-[var(--primary-muted)]/35 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--primary)]">
+                <Sparkles className="h-3.5 w-3.5" />
+                IA de escenarios
+              </div>
+              <h2 className="mt-3 text-[18px] font-semibold text-[var(--gray-950)]">Propuestas automaticas de planeacion</h2>
+              <p className="mt-1 max-w-3xl text-[12px] leading-6 text-[var(--gray-500)]">
+                Cada tarjeta crea un escenario con ajustes reales, supuestos explicitos e impacto esperado contra el flujo base.
+              </p>
+            </div>
+            <Badge>{AI_SCENARIO_TEMPLATES.length} plantillas</Badge>
+          </div>
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+            {AI_SCENARIO_TEMPLATES.map((template) => (
+              <article key={template.id} className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">{template.name}</h3>
+                    <p className="mt-1 text-[12px] leading-5 text-[var(--gray-500)]">{template.description}</p>
+                  </div>
+                  <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[10px] font-medium text-[var(--gray-500)]">
+                    {template.adjustments.length} ajuste{template.adjustments.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {template.assumptions.map((assumption) => (
+                    <span key={`${template.id}-${assumption}`} className="rounded-full bg-[var(--gray-50)] px-2 py-0.5 text-[10px] text-[var(--gray-500)]">
+                      {assumption}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-3 text-[11px] leading-5 text-[var(--gray-500)]">
+                  {template.impact}
+                </p>
+                <button
+                  onClick={() => createAiScenario(template)}
+                  className="mt-4 inline-flex h-9 w-full items-center justify-center rounded-xl bg-[var(--card-foreground)] px-3 text-[12px] font-medium text-white transition hover:bg-black"
+                >
+                  Generar escenario
+                </button>
+              </article>
+            ))}
+          </div>
         </div>
 
         {scenarioEditorOpen && (

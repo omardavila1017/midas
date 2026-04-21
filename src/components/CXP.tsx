@@ -37,6 +37,8 @@ import {
 } from 'recharts';
 import { hex, color } from '../theme';
 import { fmtCompact, fmtCurrency, fmtSmart } from '../formatters';
+import type { Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
+import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -73,6 +75,25 @@ interface CXPRecord {
   mas180: number;
 }
 
+type PaymentPriority = 'critical' | 'negotiable' | 'highImpact' | 'normal';
+
+interface PaymentReference {
+  kind: 'Factura' | 'Proveedor' | 'OC' | 'Contrato' | 'Concepto';
+  label: string;
+}
+
+interface EnrichedCXPRecord extends CXPRecord {
+  providerType: string;
+  providerRisk: ProviderRisk;
+  providerRiskComment?: string;
+  providerFlexibility: ProviderFlexibility;
+  providerFlexibilityComment?: string;
+  providerCreditLimit?: number;
+  providerDaysWithoutUpdate: number | null;
+  paymentPriority: PaymentPriority;
+  referenceLinks: PaymentReference[];
+}
+
 interface AgingBucket {
   name: string;
   key: keyof CXPRecord;
@@ -82,9 +103,14 @@ interface AgingBucket {
 }
 
 type CXPView = 'upload' | 'dashboard';
-type DashboardTab = 'resumen' | 'proveedores' | 'antiguedad';
+type DashboardTab = 'resumen' | 'proveedores' | 'antiguedad' | 'impuestos';
 type SortKey = 'nombre' | 'total' | 'count' | 'maxDias';
 type SortDir = 'asc' | 'desc';
+type RiskFilter = 'all' | ProviderRisk;
+type FlexFilter = 'all' | ProviderFlexibility;
+type DueFilter = 'all' | 'current' | 'overdue' | 'over90';
+type AmountFilter = 'all' | 'under100k' | '100kTo1m' | 'over1m';
+type PriorityFilter = 'all' | PaymentPriority;
 
 /* ═══════════════════════════════════════════════════════════════════════
    Constants
@@ -95,6 +121,10 @@ const BUCKET_LABELS = ['Por Vencer','1-30','31-60','61-90','91-120','121-150','1
 const BUCKET_KEYS: (keyof CXPRecord)[] = ['porVencer','v1_30','v31_60','v61_90','v91_120','v121_150','v151_180','mas180'];
 const PIE_COLORS = [hex.primary, hex.success, hex.warning, 'var(--chart-4)', hex.danger, hex.info, 'var(--chart-5)', 'var(--chart-5)', 'var(--chart-3)', 'var(--chart-5)'];
 const PAGE_SIZE = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HIGH_IMPACT_AMOUNT = 1_000_000;
+const RISKS: ProviderRisk[] = ['Alto', 'Medio', 'Bajo'];
+const FLEX_VALUES: ProviderFlexibility[] = ['inamovible', 'flexible', 'revisar', 'unknown'];
 
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
@@ -113,6 +143,130 @@ const fmtFull = fmtCurrency;
 
 const pct = (part: number, whole: number): string =>
   whole > 0 ? `${((part / whole) * 100).toFixed(1)}%` : '0%';
+
+const normName = (value: string | undefined | null): string =>
+  (value ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+
+function riskFromFlexibility(flexibility: ProviderFlexibility): ProviderRisk {
+  if (flexibility === 'inamovible') return 'Alto';
+  if (flexibility === 'flexible') return 'Bajo';
+  return 'Medio';
+}
+
+function daysSince(value: string | undefined): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Math.floor((Date.now() - time) / DAY_MS));
+}
+
+function parseDateToIso(value: string | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
+  const slash = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const month = Number(slash[1]);
+    const day = Number(slash[2]);
+    const year = Number(slash[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  return null;
+}
+
+function inferReferences(record: CXPRecord): PaymentReference[] {
+  const refs: PaymentReference[] = [];
+  if (record.noFactura) refs.push({ kind: 'Factura', label: record.noFactura });
+  if (record.noProveedor || record.nombre) {
+    refs.push({ kind: 'Proveedor', label: record.noProveedor || record.nombre });
+  }
+
+  const text = [
+    record.noFactura,
+    record.clasifica,
+    record.clasificacionProveedor,
+    record.edoPago,
+  ].join(' ');
+  const oc = text.match(/\b(?:OC|PO|ORDEN(?:\s+DE\s+COMPRA)?)\s*[:#-]?\s*([A-Z0-9-]{3,})/i);
+  if (oc?.[1]) refs.push({ kind: 'OC', label: oc[1] });
+  const contract = text.match(/\b(?:CONTRATO|CONTR|CTO)\s*[:#-]?\s*([A-Z0-9-]{3,})/i);
+  if (contract?.[1]) refs.push({ kind: 'Contrato', label: contract[1] });
+  if (record.clasifica || record.clasificacionProveedor) {
+    refs.push({ kind: 'Concepto', label: record.clasifica || record.clasificacionProveedor });
+  }
+  return refs;
+}
+
+function isCritical(record: Pick<EnrichedCXPRecord, 'providerRisk' | 'providerFlexibility' | 'diasVencida'>): boolean {
+  return record.providerRisk === 'Alto' || record.providerFlexibility === 'inamovible' || record.diasVencida > 30;
+}
+
+function isNegotiable(record: Pick<EnrichedCXPRecord, 'providerFlexibility' | 'diasVencida'>): boolean {
+  return record.providerFlexibility === 'flexible' && record.diasVencida <= 30;
+}
+
+function isHighImpact(record: Pick<EnrichedCXPRecord, 'importePendientePesos'>): boolean {
+  return record.importePendientePesos >= HIGH_IMPACT_AMOUNT;
+}
+
+function paymentPriority(record: EnrichedCXPRecord): PaymentPriority {
+  if (isCritical(record)) return 'critical';
+  if (isNegotiable(record)) return 'negotiable';
+  if (isHighImpact(record)) return 'highImpact';
+  return 'normal';
+}
+
+function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provider>): EnrichedCXPRecord {
+  const provider = providersByName.get(normName(record.nombre));
+  const catalog = enrichFromCatalog({
+    supplier: record.nombre,
+    classification: record.clasificacionProveedor,
+  });
+  const providerFlexibility = provider?.flexibility ?? catalog.flexibility;
+  const providerRisk = provider?.risk ?? riskFromFlexibility(providerFlexibility);
+  const providerType = provider?.type || record.clasificacionProveedor?.trim() || 'Sin clasificar';
+  const enriched: EnrichedCXPRecord = {
+    ...record,
+    providerType,
+    providerRisk,
+    providerRiskComment: provider?.riskComment,
+    providerFlexibility,
+    providerFlexibilityComment: provider?.flexibilityComment,
+    providerCreditLimit: provider?.creditLimit,
+    providerDaysWithoutUpdate: daysSince(provider?.lastUpdatedAt),
+    paymentPriority: 'normal',
+    referenceLinks: inferReferences(record),
+  };
+  enriched.paymentPriority = paymentPriority(enriched);
+  return enriched;
+}
+
+function priorityLabel(priority: PaymentPriority): string {
+  switch (priority) {
+    case 'critical': return 'Critico';
+    case 'negotiable': return 'Negociable';
+    case 'highImpact': return 'Impacto alto';
+    default: return 'Normal';
+  }
+}
+
+function priorityTone(priority: PaymentPriority): string {
+  switch (priority) {
+    case 'critical': return 'bg-[var(--danger-muted)] text-[var(--danger)]';
+    case 'negotiable': return 'bg-[var(--success-muted)] text-[var(--success)]';
+    case 'highImpact': return 'bg-[var(--warning-muted)] text-[var(--warning)]';
+    default: return 'bg-[var(--gray-100)] text-[var(--gray-500)]';
+  }
+}
+
+function isTaxPaid(record: CXPRecord): boolean {
+  const status = record.edoPago.toUpperCase();
+  return record.importePendientePesos <= 0 || status.includes('PAG') || status.includes('LIQ');
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    CSV Parser — handles quoted fields, commas-in-numbers, \r\n
@@ -386,7 +540,17 @@ const ChartTooltip = ({ active, payload }: any) => {
    Dashboard
    ═══════════════════════════════════════════════════════════════════════ */
 
-const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: CXPRecord[]; onReset: () => void; companies?: Company[] }) => {
+const CXPDashboard = ({
+  records,
+  onReset,
+  companies: compCatalog,
+  providers,
+}: {
+  records: CXPRecord[];
+  onReset: () => void;
+  companies?: Company[];
+  providers: Provider[];
+}) => {
   /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
   const ciaName = useCallback((code: string): string => {
     if (!compCatalog) return code;
@@ -404,6 +568,11 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
   const [sortKey, setSortKey] = useState<SortKey>('total');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [provPage, setProvPage] = useState(0);
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
+  const [flexFilter, setFlexFilter] = useState<FlexFilter>('all');
+  const [dueFilter, setDueFilter] = useState<DueFilter>('all');
+  const [amountFilter, setAmountFilter] = useState<AmountFilter>('all');
+  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
 
   // Drilldown state
   const [activeBucket, setActiveBucket] = useState<string | null>(null);
@@ -411,12 +580,27 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
   const [activeKpi, setActiveKpi] = useState<string | null>(null);
 
   const clearDrill = () => { setActiveBucket(null); setActiveClassification(null); setActiveKpi(null); setProvPage(0); };
-  const hasDrill = activeBucket || activeClassification || activeKpi;
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setRiskFilter('all');
+    setFlexFilter('all');
+    setDueFilter('all');
+    setAmountFilter('all');
+    setPriorityFilter('all');
+    clearDrill();
+  };
+  const hasDrill = searchTerm || activeBucket || activeClassification || activeKpi || riskFilter !== 'all' || flexFilter !== 'all' || dueFilter !== 'all' || amountFilter !== 'all' || priorityFilter !== 'all';
   const drillLabel = activeBucket ? `Bucket "${activeBucket}"` :
-    activeClassification ? `Clasificación "${activeClassification}"` :
+    activeClassification ? `Tipo "${activeClassification}"` :
     activeKpi === 'porVencer' ? 'Por Vencer' :
     activeKpi === 'vencido' ? 'Total Vencido' :
-    activeKpi === 'mas90' ? 'Vencido > 90 días' : '';
+    activeKpi === 'mas90' ? 'Vencido > 90 días' :
+    priorityFilter !== 'all' ? `Prioridad "${priorityLabel(priorityFilter)}"` :
+    riskFilter !== 'all' ? `Riesgo "${riskFilter}"` :
+    flexFilter !== 'all' ? `Flexibilidad "${flexibilityLabel(flexFilter)}"` :
+    dueFilter !== 'all' ? `Vencimiento "${dueFilter}"` :
+    amountFilter !== 'all' ? `Monto "${amountFilter}"` :
+    searchTerm ? `Busqueda "${searchTerm}"` : '';
 
   // Reset local filters when parent switches company (records no longer include the selected cia)
   useEffect(() => {
@@ -430,24 +614,57 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
     }
   }, [records, selectedCia]);
 
+  const providersByName = useMemo(
+    () => new Map(providers.map((provider) => [normName(provider.name), provider])),
+    [providers],
+  );
+
+  const enrichedRecords = useMemo(
+    () => records.map((record) => enrichCxpRecord(record, providersByName)),
+    [providersByName, records],
+  );
+
   // ── Filtered Records ──
   const filtered = useMemo(() => {
-    let f = records;
+    let f = enrichedRecords;
     if (selectedCia !== 'all') f = f.filter(r => r.cia === selectedCia);
     if (searchTerm) {
       const t = searchTerm.toLowerCase();
-      f = f.filter(r => r.nombre.toLowerCase().includes(t) || r.noFactura.toLowerCase().includes(t) || r.noProveedor.includes(t));
+      f = f.filter(r => {
+        const haystack = [
+          r.nombre,
+          r.noFactura,
+          r.noProveedor,
+          r.providerType,
+          r.providerRisk,
+          flexibilityLabel(r.providerFlexibility),
+          r.referenceLinks.map(ref => `${ref.kind} ${ref.label}`).join(' '),
+        ].join(' ').toLowerCase();
+        return haystack.includes(t);
+      });
     }
     if (activeBucket) {
       const bi = BUCKET_LABELS.indexOf(activeBucket);
       if (bi >= 0) { const k = BUCKET_KEYS[bi]; f = f.filter(r => (r[k] as number) > 0); }
     }
-    if (activeClassification) f = f.filter(r => (r.clasificacionProveedor?.trim() || 'Sin Clasificar') === activeClassification);
+    if (activeClassification) f = f.filter(r => r.providerType === activeClassification);
     if (activeKpi === 'porVencer') f = f.filter(r => r.porVencer > 0);
     else if (activeKpi === 'vencido') f = f.filter(r => (r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
     else if (activeKpi === 'mas90') f = f.filter(r => (r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
+    if (riskFilter !== 'all') f = f.filter(r => r.providerRisk === riskFilter);
+    if (flexFilter !== 'all') f = f.filter(r => r.providerFlexibility === flexFilter);
+    if (dueFilter === 'current') f = f.filter(r => r.porVencer > 0 && r.diasVencida <= 0);
+    else if (dueFilter === 'overdue') f = f.filter(r => r.diasVencida > 0);
+    else if (dueFilter === 'over90') f = f.filter(r => r.diasVencida > 90);
+    if (amountFilter === 'under100k') f = f.filter(r => r.importePendientePesos < 100_000);
+    else if (amountFilter === '100kTo1m') f = f.filter(r => r.importePendientePesos >= 100_000 && r.importePendientePesos < HIGH_IMPACT_AMOUNT);
+    else if (amountFilter === 'over1m') f = f.filter(r => r.importePendientePesos >= HIGH_IMPACT_AMOUNT);
+    if (priorityFilter === 'critical') f = f.filter(isCritical);
+    else if (priorityFilter === 'negotiable') f = f.filter(isNegotiable);
+    else if (priorityFilter === 'highImpact') f = f.filter(isHighImpact);
+    else if (priorityFilter === 'normal') f = f.filter(r => !isCritical(r) && !isNegotiable(r) && !isHighImpact(r));
     return f;
-  }, [records, selectedCia, searchTerm, activeBucket, activeClassification, activeKpi]);
+  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeClassification, activeKpi, riskFilter, flexFilter, dueFilter, amountFilter, priorityFilter]);
 
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
@@ -463,13 +680,75 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
   const totalVencido = useMemo(() => agingBuckets.slice(1).reduce((s, b) => s + b.total, 0), [agingBuckets]);
   const totalPorVencer = agingBuckets[0]?.total || 0;
   const totalMas90 = useMemo(() => agingBuckets.slice(4).reduce((s, b) => s + b.total, 0), [agingBuckets]);
+  const criticalPayments = useMemo(() => filtered.filter(isCritical), [filtered]);
+  const negotiablePayments = useMemo(() => filtered.filter(isNegotiable), [filtered]);
+  const highImpactPayments = useMemo(() => filtered.filter(isHighImpact), [filtered]);
+  const criticalTotal = criticalPayments.reduce((sum, r) => sum + r.importePendientePesos, 0);
+  const negotiableTotal = negotiablePayments.reduce((sum, r) => sum + r.importePendientePesos, 0);
+  const highImpactTotal = highImpactPayments.reduce((sum, r) => sum + r.importePendientePesos, 0);
+
+  const taxRows = useMemo(() => (
+    filtered
+      .filter((record) => record.importeImpuestosPesos > 0)
+      .map((record) => {
+        const dueDate = parseDateToIso(record.fechaProgramacionPago) ?? parseDateToIso(record.fechaVence) ?? parseDateToIso(record.fechaFactura) ?? '';
+        const paid = isTaxPaid(record);
+        return {
+          record,
+          dueDate,
+          estimated: record.importeImpuestosPesos,
+          real: paid ? record.importeImpuestosPesos : 0,
+          pending: paid ? 0 : record.importeImpuestosPesos,
+        };
+      })
+      .sort((a, b) => (a.dueDate || '9999-99-99').localeCompare(b.dueDate || '9999-99-99'))
+  ), [filtered]);
+  const taxPending = taxRows.reduce((sum, row) => sum + row.pending, 0);
+  const taxEstimated = taxRows.reduce((sum, row) => sum + row.estimated, 0);
+  const taxReal = taxRows.reduce((sum, row) => sum + row.real, 0);
+  const nextTaxDate = taxRows.find((row) => row.pending > 0 && row.dueDate)?.dueDate ?? null;
+  const taxByMonth = useMemo(() => {
+    const map = new Map<string, { ym: string; count: number; estimated: number; real: number; pending: number }>();
+    taxRows.forEach((row) => {
+      const ym = row.dueDate ? row.dueDate.slice(0, 7) : 'Sin fecha';
+      const item = map.get(ym) ?? { ym, count: 0, estimated: 0, real: 0, pending: 0 };
+      item.count++;
+      item.estimated += row.estimated;
+      item.real += row.real;
+      item.pending += row.pending;
+      map.set(ym, item);
+    });
+    return Array.from(map.values()).sort((a, b) => a.ym.localeCompare(b.ym));
+  }, [taxRows]);
 
   // Supplier aggregation
   const supplierData = useMemo(() => {
-    const map = new Map<string, { nombre: string; total: number; count: number; maxDias: number; records: CXPRecord[] }>();
+    const map = new Map<string, {
+      nombre: string;
+      total: number;
+      count: number;
+      maxDias: number;
+      providerType: string;
+      providerRisk: ProviderRisk;
+      providerFlexibility: ProviderFlexibility;
+      creditLimit?: number;
+      records: EnrichedCXPRecord[];
+    }>();
     filtered.forEach(r => {
       const k = r.nombre || 'SIN NOMBRE';
-      if (!map.has(k)) map.set(k, { nombre: k, total: 0, count: 0, maxDias: 0, records: [] });
+      if (!map.has(k)) {
+        map.set(k, {
+          nombre: k,
+          total: 0,
+          count: 0,
+          maxDias: 0,
+          providerType: r.providerType,
+          providerRisk: r.providerRisk,
+          providerFlexibility: r.providerFlexibility,
+          creditLimit: r.providerCreditLimit,
+          records: [],
+        });
+      }
       const e = map.get(k)!;
       e.total += r.importePendientePesos;
       e.count++;
@@ -485,11 +764,11 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
     return arr;
   }, [filtered, sortKey, sortDir]);
 
-  // Classification — top 8 + "Otros"
+  // Provider type — top 8 + "Otros"
   const classData = useMemo(() => {
     const map = new Map<string, number>();
     filtered.forEach(r => {
-      const k = r.clasificacionProveedor?.trim() || 'Sin Clasificar';
+      const k = r.providerType || 'Sin clasificar';
       map.set(k, (map.get(k) || 0) + r.importePendientePesos);
     });
     const all = Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
@@ -522,6 +801,7 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
     { id: 'resumen', label: 'Resumen' },
     { id: 'proveedores', label: 'Proveedores', count: supplierData.length },
     { id: 'antiguedad', label: 'Antigüedad' },
+    { id: 'impuestos', label: 'Impuestos', count: taxRows.length },
   ];
 
   /* ── Render ── */
@@ -543,10 +823,44 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
           {companies.map(c => <option key={c} value={c}>{ciaName(c)}</option>)}
         </select>
 
+        <select value={riskFilter} onChange={e => { setRiskFilter(e.target.value as RiskFilter); setProvPage(0); }}
+          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
+          <option value="all">Todo riesgo</option>
+          {RISKS.map(r => <option key={r} value={r}>Riesgo {r}</option>)}
+        </select>
+
+        <select value={flexFilter} onChange={e => { setFlexFilter(e.target.value as FlexFilter); setProvPage(0); }}
+          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
+          <option value="all">Toda flexibilidad</option>
+          {FLEX_VALUES.map(f => <option key={f} value={f}>{flexibilityLabel(f)}</option>)}
+        </select>
+
+        <select value={dueFilter} onChange={e => { setDueFilter(e.target.value as DueFilter); setProvPage(0); }}
+          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
+          <option value="all">Todo vencimiento</option>
+          <option value="current">Por vencer</option>
+          <option value="overdue">Vencido</option>
+          <option value="over90">Vencido &gt; 90d</option>
+        </select>
+
+        <select value={amountFilter} onChange={e => { setAmountFilter(e.target.value as AmountFilter); setProvPage(0); }}
+          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
+          <option value="all">Todo monto</option>
+          <option value="under100k">&lt; $100k</option>
+          <option value="100kTo1m">$100k-$1M</option>
+          <option value="over1m">&gt; $1M</option>
+        </select>
+
         <div className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] rounded-full px-3 py-1.5">
           <Receipt className="w-3.5 h-3.5" />
           {filtered.length.toLocaleString()} facturas
         </div>
+
+        {hasDrill && (
+          <button onClick={clearAllFilters} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition">
+            <X className="w-3 h-3" /> Limpiar filtros
+          </button>
+        )}
 
         {/* Sub-tabs — right aligned */}
         <div className="ml-auto flex items-center bg-[var(--gray-50)]/80 rounded-full p-[3px] gap-[2px]">
@@ -581,7 +895,7 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
             <Filter className="w-3.5 h-3.5" />
             Filtrando: {drillLabel} — {filtered.length.toLocaleString()} registros
           </div>
-          <button onClick={clearDrill} className="text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] flex items-center gap-1 hover-press">
+          <button onClick={clearAllFilters} className="text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] flex items-center gap-1 hover-press">
             <X className="w-3.5 h-3.5" /> Limpiar
           </button>
         </div>
@@ -621,6 +935,36 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
             </div>
           );
         })}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <PlanningCard
+          title="Pagos criticos"
+          amount={criticalTotal}
+          count={criticalPayments.length}
+          detail="Riesgo alto, inamovibles o vencidos relevantes."
+          tone="danger"
+          active={priorityFilter === 'critical'}
+          onClick={() => { setPriorityFilter(priorityFilter === 'critical' ? 'all' : 'critical'); setTab('proveedores'); setProvPage(0); }}
+        />
+        <PlanningCard
+          title="Pagos negociables"
+          amount={negotiableTotal}
+          count={negotiablePayments.length}
+          detail="Flexibles y sin atraso severo; candidatos a reprogramar."
+          tone="success"
+          active={priorityFilter === 'negotiable'}
+          onClick={() => { setPriorityFilter(priorityFilter === 'negotiable' ? 'all' : 'negotiable'); setTab('proveedores'); setProvPage(0); }}
+        />
+        <PlanningCard
+          title="Mayor impacto en flujo"
+          amount={highImpactTotal}
+          count={highImpactPayments.length}
+          detail={`Facturas de ${fmt(HIGH_IMPACT_AMOUNT)} o mas.`}
+          tone="warning"
+          active={priorityFilter === 'highImpact'}
+          onClick={() => { setPriorityFilter(priorityFilter === 'highImpact' ? 'all' : 'highImpact'); setTab('proveedores'); setProvPage(0); }}
+        />
       </div>
 
       {/* ════════════════════════════════════════════════════════════════
@@ -663,12 +1007,12 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
             </div>
           </div>
 
-          {/* Two columns: Clasificación + Top Proveedores */}
+          {/* Two columns: Tipo proveedor + Top Proveedores */}
           <div className="grid grid-cols-2 gap-4 animate-card-in stagger-7">
-            {/* Classification Donut */}
+            {/* Provider Type Donut */}
             <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Por Clasificación</h2>
+                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Por tipo de proveedor</h2>
                 <p className="text-[12px] text-[var(--gray-400)]">Click para filtrar</p>
               </div>
               <ResponsiveContainer width="100%" height={200}>
@@ -794,6 +1138,11 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
                       <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">{s.nombre}</p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[11px] text-[var(--gray-400)]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-100)] text-[var(--gray-500)]">{s.providerType}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.providerRisk === 'Alto' ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : s.providerRisk === 'Medio' ? 'bg-[var(--warning-muted)] text-[var(--warning)]' : 'bg-[var(--success-muted)] text-[var(--success)]'}`}>
+                          Riesgo {s.providerRisk}
+                        </span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-[var(--gray-200)] text-[var(--gray-500)]">{flexibilityLabel(s.providerFlexibility)}</span>
                         {s.maxDias > 0 && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ backgroundColor: severity + '14', color: severity }}>
                             máx {s.maxDias}d
@@ -814,6 +1163,11 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
                     <div className="text-right w-28">
                       <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</p>
                       {vencido > 0 && <p className="text-[10px] font-mono text-[var(--danger)]">{fmt(vencido)} vencido</p>}
+                      {s.creditLimit !== undefined && s.creditLimit > 0 && (
+                        <p className={`text-[10px] font-mono ${s.total > s.creditLimit ? 'text-[var(--warning)]' : 'text-[var(--gray-400)]'}`}>
+                          lim {fmt(s.creditLimit)}
+                        </p>
+                      )}
                     </div>
                   </button>
 
@@ -846,6 +1200,8 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
                               <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Pendiente</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold pl-3">Mon.</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Cond. Pago</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Prioridad</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Referencias</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -862,6 +1218,20 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
                                 <td className="py-1.5 text-right font-mono font-medium text-[var(--gray-950)]">{fmtFull(r.importePendientePesos)}</td>
                                 <td className="py-1.5 pl-3 text-[var(--gray-400)]">{r.moneda}</td>
                                 <td className="py-1.5 text-[var(--gray-400)]">{r.condPago}</td>
+                                <td className="py-1.5">
+                                  <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(r.paymentPriority)}`}>
+                                    {priorityLabel(r.paymentPriority)}
+                                  </span>
+                                </td>
+                                <td className="py-1.5">
+                                  <div className="flex max-w-[260px] flex-wrap gap-1">
+                                    {r.referenceLinks.slice(0, 4).map((ref, refIndex) => (
+                                      <span key={`${r.noFactura}-${ref.kind}-${refIndex}`} className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
+                                        {ref.kind}: {ref.label}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -962,9 +1332,170 @@ const CXPDashboard = ({ records, onReset, companies: compCatalog }: { records: C
           </div>
         </div>
       )}
+
+      {tab === 'impuestos' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <TaxMetric label="Impuestos pendientes" value={taxPending} sub={`${taxRows.filter(row => row.pending > 0).length} facturas`} tone="danger" />
+            <TaxMetric label="Monto estimado" value={taxEstimated} sub={`${taxRows.length} facturas con impuesto`} tone="neutral" />
+            <TaxMetric label="Monto real" value={taxReal} sub="Segun estatus pagado/liquidado" tone="success" />
+            <TaxMetric label="Efecto en flujo" value={-taxPending} sub={nextTaxDate ? `Siguiente: ${nextTaxDate}` : 'Sin fecha pendiente'} tone="warning" />
+          </div>
+
+          <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
+              <div>
+                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Calendario fiscal desde CXP</h2>
+                <p className="text-[12px] text-[var(--gray-400)] mt-1">
+                  Fechas, estimado, real y efecto neto para integrarlo al pronostico de efectivo.
+                </p>
+              </div>
+              <span className="rounded-full bg-[var(--warning-muted)] px-3 py-1 text-[11px] font-medium text-[var(--warning)]">
+                Impacto pendiente {fmt(taxPending)}
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)]">
+                  <tr>
+                    <th className="text-left py-2.5 px-4 font-semibold">Periodo</th>
+                    <th className="text-right py-2.5 px-3 font-semibold">Facturas</th>
+                    <th className="text-right py-2.5 px-3 font-semibold">Estimado</th>
+                    <th className="text-right py-2.5 px-3 font-semibold">Real</th>
+                    <th className="text-right py-2.5 px-3 font-semibold">Pendiente</th>
+                    <th className="text-right py-2.5 px-4 font-semibold">Efecto flujo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {taxByMonth.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-10 text-center text-[var(--gray-400)]">
+                        No hay impuestos detectados en las CXP filtradas.
+                      </td>
+                    </tr>
+                  ) : taxByMonth.map((row) => (
+                    <tr key={row.ym} className="border-t border-[var(--gray-100)]">
+                      <td className="py-2.5 px-4 font-medium text-[var(--gray-950)]">{row.ym}</td>
+                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--gray-500)]">{row.count}</td>
+                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--gray-950)]">{fmtFull(row.estimated)}</td>
+                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--success)]">{fmtFull(row.real)}</td>
+                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--warning)]">{fmtFull(row.pending)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-[var(--danger)]">{fmtFull(-row.pending)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-[var(--gray-100)]">
+              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Detalle de impuestos por factura</h2>
+            </div>
+            <div className="overflow-x-auto max-h-[420px]">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 bg-white z-10 text-[var(--gray-400)]">
+                  <tr className="border-b border-[var(--gray-100)]">
+                    <th className="text-left py-2.5 px-4 font-semibold">Proveedor</th>
+                    <th className="text-left py-2.5 px-3 font-semibold">Factura</th>
+                    <th className="text-left py-2.5 px-3 font-semibold">Fecha pago</th>
+                    <th className="text-right py-2.5 px-3 font-semibold">Estimado</th>
+                    <th className="text-right py-2.5 px-3 font-semibold">Real</th>
+                    <th className="text-right py-2.5 px-4 font-semibold">Efecto flujo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {taxRows.map((row) => (
+                    <tr key={`${row.record.noProveedor}-${row.record.noFactura}-${row.dueDate}`} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)]">
+                      <td className="py-2 px-4 font-medium text-[var(--gray-950)]">{row.record.nombre}</td>
+                      <td className="py-2 px-3 font-mono text-[var(--gray-500)]">{row.record.noFactura || '-'}</td>
+                      <td className="py-2 px-3 text-[var(--gray-500)]">{row.dueDate || 'Sin fecha'}</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-[var(--gray-950)]">{fmtFull(row.estimated)}</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-[var(--success)]">{row.real > 0 ? fmtFull(row.real) : '-'}</td>
+                      <td className="py-2 px-4 text-right tabular-nums font-semibold text-[var(--danger)]">{fmtFull(-row.pending)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+function PlanningCard({
+  title,
+  amount,
+  count,
+  detail,
+  tone,
+  active,
+  onClick,
+}: {
+  title: string;
+  amount: number;
+  count: number;
+  detail: string;
+  tone: 'danger' | 'success' | 'warning';
+  active: boolean;
+  onClick: () => void;
+}) {
+  const toneClass =
+    tone === 'danger'
+      ? 'text-[var(--danger)] bg-[var(--danger-muted)] border-red-100'
+      : tone === 'success'
+        ? 'text-[var(--success)] bg-[var(--success-muted)] border-green-100'
+        : 'text-[var(--warning)] bg-[var(--warning-muted)] border-yellow-100';
+
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+        active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/15' : 'border-[var(--gray-200)]'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[12px] font-semibold text-[var(--gray-950)]">{title}</p>
+          <p className="mt-2 text-[22px] font-bold font-mono text-[var(--gray-950)]">{fmt(amount)}</p>
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
+          {count} fact.
+        </span>
+      </div>
+      <p className="mt-2 text-[11px] leading-5 text-[var(--gray-400)]">{detail}</p>
+    </button>
+  );
+}
+
+function TaxMetric({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: number;
+  sub: string;
+  tone: 'danger' | 'success' | 'warning' | 'neutral';
+}) {
+  const colorClass =
+    tone === 'danger' ? 'text-[var(--danger)]' :
+    tone === 'success' ? 'text-[var(--success)]' :
+    tone === 'warning' ? 'text-[var(--warning)]' :
+    'text-[var(--gray-950)]';
+
+  return (
+    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</p>
+      <p className={`mt-2 text-[22px] font-bold font-mono ${colorClass}`}>{fmt(value)}</p>
+      <p className="mt-1 text-[11px] text-[var(--gray-400)]">{sub}</p>
+    </div>
+  );
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    Main CXP Component — per-cia cache + background fetch
@@ -975,6 +1506,7 @@ interface CXPProps {
   loadedCias: Record<string, string>;
   companies: Company[];
   selectedCia: string;
+  providers: Provider[];
   onMergeCia: (cia: string, records: CXPRecord[]) => void;
   onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
   onReset: () => void;
@@ -985,6 +1517,7 @@ const CXP = ({
   loadedCias,
   companies,
   selectedCia,
+  providers,
   onMergeCia,
   onReplaceAll,
   onReset,
@@ -1290,7 +1823,7 @@ const CXP = ({
         </div>
       )}
 
-      <CXPDashboard records={visibleRecords} onReset={onReset} companies={companies} />
+      <CXPDashboard records={visibleRecords} onReset={onReset} companies={companies} providers={providers} />
     </div>
   );
 };

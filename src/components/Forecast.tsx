@@ -28,6 +28,7 @@ import {
 import { evaluateScenario } from '../domain/scenarioEngine';
 import { isBaseScenario } from '../domain/simulationCompiler';
 import { formatCompactNumber, formatCurrency } from '../utils/calculations';
+import type { CXPRecord } from '../domain/persistence';
 
 interface Props {
   plan: FlowPlan;
@@ -38,6 +39,8 @@ interface Props {
   activeScenarioId: string | null;
   overrides: ScenarioCellOverride[];
   granularity?: ForecastGranularity;
+  cxpRecords?: CXPRecord[];
+  cxpLoadedCias?: Record<string, string>;
   onGranularityChange?: (granularity: ForecastGranularity) => void;
   onSelectScenario: (scenarioId: string | null) => void;
   onOverridesChange: (next: ScenarioCellOverride[]) => void;
@@ -70,6 +73,143 @@ function displayValue(cell: EvaluatedCell, mode: ForecastLayerMode): number {
   }
 }
 
+function parseCxpDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
+  const slash = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!slash) return null;
+  const month = Number(slash[1]);
+  const day = Number(slash[2]);
+  const year = Number(slash[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function coefficientOfVariation(values: number[]): number {
+  const positives = values.filter((value) => Math.abs(value) > 0);
+  if (positives.length < 2) return 0;
+  const avg = positives.reduce((sum, value) => sum + Math.abs(value), 0) / positives.length;
+  if (avg === 0) return 0;
+  const variance = positives.reduce((sum, value) => sum + Math.pow(Math.abs(value) - avg, 2), 0) / positives.length;
+  return Math.sqrt(variance) / avg;
+}
+
+function daysSinceIso(value: string | undefined): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Math.floor((Date.now() - time) / (24 * 60 * 60 * 1000)));
+}
+
+function buildTaxProjection(cxpRecords: CXPRecord[], months: { ym: string }[]): number[] {
+  const byYm = new Map<string, number>();
+  cxpRecords.forEach((record) => {
+    if (record.importeImpuestosPesos <= 0) return;
+    const status = record.edoPago.toUpperCase();
+    const paid = record.importePendientePesos <= 0 || status.includes('PAG') || status.includes('LIQ');
+    if (paid) return;
+    const date = parseCxpDate(record.fechaProgramacionPago) ?? parseCxpDate(record.fechaVence) ?? parseCxpDate(record.fechaFactura);
+    if (!date) return;
+    const ym = date.slice(0, 7);
+    byYm.set(ym, (byYm.get(ym) ?? 0) + record.importeImpuestosPesos);
+  });
+  return months.map((month) => byYm.get(month.ym) ?? 0);
+}
+
+function buildCxpMonthlySeries(cxpRecords: CXPRecord[]): number[] {
+  const values = Array(12).fill(0) as number[];
+  cxpRecords.forEach((record) => {
+    const date = parseCxpDate(record.fechaProgramacionPago) ?? parseCxpDate(record.fechaVence) ?? parseCxpDate(record.fechaFactura);
+    if (!date) return;
+    const monthIndex = Number(date.slice(5, 7)) - 1;
+    if (monthIndex >= 0 && monthIndex < 12) values[monthIndex] += record.importePendientePesos;
+  });
+  return values;
+}
+
+function confidenceTone(level: 'Alto' | 'Medio' | 'Bajo'): string {
+  if (level === 'Alto') return 'text-[var(--success)] bg-[var(--success-muted)]';
+  if (level === 'Medio') return 'text-[var(--warning)] bg-[var(--warning-muted)]';
+  return 'text-[var(--danger)] bg-[var(--danger-muted)]';
+}
+
+function computeForecastConfidence({
+  plan,
+  evaluation,
+  cxpRecords,
+  cxpLoadedCias,
+  overrides,
+  scenarioId,
+}: {
+  plan: FlowPlan;
+  evaluation: ReturnType<typeof evaluateScenario>;
+  cxpRecords: CXPRecord[];
+  cxpLoadedCias: Record<string, string>;
+  overrides: ScenarioCellOverride[];
+  scenarioId: string;
+}): { level: 'Alto' | 'Medio' | 'Bajo'; score: number; reasons: string[] } {
+  let score = 100;
+  const reasons: string[] = [];
+
+  const nonZeroMonths = plan.concepts.reduce((count, concept) => (
+    count + concept.monthlyData.filter((value) => Math.abs(value) > 0).length
+  ), 0);
+  if (nonZeroMonths < plan.concepts.length * 4) {
+    score -= 18;
+    reasons.push('Hay pocos datos historicos mensuales en el plan.');
+  } else {
+    reasons.push('El plan tiene suficiente distribucion mensual para proyectar.');
+  }
+
+  const syncAges = Object.values(cxpLoadedCias).map(daysSinceIso).filter((value): value is number => value !== null);
+  const maxSyncAge = syncAges.length > 0 ? Math.max(...syncAges) : null;
+  if (maxSyncAge === null) {
+    score -= 14;
+    reasons.push('CXP no tiene una sincronizacion fechada; aumenta dependencia manual.');
+  } else if (maxSyncAge > 30) {
+    score -= 18;
+    reasons.push(`CXP tiene hasta ${maxSyncAge} dias sin actualizarse.`);
+  } else if (maxSyncAge > 7) {
+    score -= 8;
+    reasons.push(`CXP tiene ${maxSyncAge} dias desde la ultima actualizacion.`);
+  }
+
+  const collectionVariation = coefficientOfVariation(evaluation.metrics.cobranza);
+  if (collectionVariation > 0.65) {
+    score -= 14;
+    reasons.push('La cobranza proyectada es muy variable entre periodos.');
+  }
+
+  const paymentVariation = coefficientOfVariation(buildCxpMonthlySeries(cxpRecords));
+  if (paymentVariation > 0.75) {
+    score -= 12;
+    reasons.push('El comportamiento de pagos CXP es variable por vencimiento/monto.');
+  }
+
+  const scenarioOverrides = overrides.filter((override) => override.scenarioId === scenarioId);
+  if (scenarioOverrides.length > 10) {
+    score -= 10;
+    reasons.push('El escenario depende de varios ajustes manuales.');
+  }
+
+  if (cxpRecords.length === 0) {
+    score -= 12;
+    reasons.push('No hay CXP cargadas para validar egresos e impuestos.');
+  }
+
+  score -= 5;
+  reasons.push('No se detecta historico de exactitud de pronosticos anteriores.');
+
+  const boundedScore = Math.max(0, Math.min(100, Math.round(score)));
+  return {
+    score: boundedScore,
+    level: boundedScore >= 75 ? 'Alto' : boundedScore >= 50 ? 'Medio' : 'Bajo',
+    reasons: reasons.slice(0, 4),
+  };
+}
+
 const VIEW_OPTIONS: { value: ForecastView; label: string }[] = [
   { value: 'pnl', label: 'P&L' },
   { value: 'cashflow', label: 'Flujo de Caja' },
@@ -90,6 +230,8 @@ export default function Forecast({
   activeScenarioId,
   overrides,
   granularity = 'monthly',
+  cxpRecords = [],
+  cxpLoadedCias = {},
   onGranularityChange,
   onSelectScenario,
   onOverridesChange,
@@ -194,6 +336,21 @@ export default function Forecast({
   const directOverrides = overrides.filter((override) => override.scenarioId === activeScenario.id);
   const directOverrideCount = directOverrides.length;
   const commentCount = directOverrides.filter((override) => override.comment).length;
+  const taxProjection = buildTaxProjection(cxpRecords, months);
+  const totalProjectedTaxes = taxProjection.reduce((sum, value) => sum + value, 0);
+  const flowAfterTaxes = metrics.flujoNeto.map((value, index) => value - (taxProjection[index] ?? 0));
+  const cashAfterTaxes = metrics.cajaFinal.map((value, index) => {
+    const cumulativeTax = taxProjection.slice(0, index + 1).reduce((sum, tax) => sum + tax, 0);
+    return value - cumulativeTax;
+  });
+  const confidence = computeForecastConfidence({
+    plan,
+    evaluation: finalEvaluation,
+    cxpRecords,
+    cxpLoadedCias,
+    overrides,
+    scenarioId: activeScenario.id,
+  });
 
   const roleRows = [
     { id: ROLE_TARGET_INCOME, label: ROLE_TARGET_LABELS[ROLE_TARGET_INCOME], category: 'ingreso' as const },
@@ -302,15 +459,20 @@ export default function Forecast({
               ))}
             </div>
           </div>
-          {directOverrideCount > 0 && (
-            <button
-              onClick={handleClearScenarioOverrides}
-              className="inline-flex items-center gap-2 rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-[12px] font-medium text-[var(--warning)]"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Restaurar {directOverrideCount}
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            <div className={`rounded-full px-3 py-2 text-[12px] font-medium ${confidenceTone(confidence.level)}`}>
+              Confianza {confidence.level} · {confidence.score}%
+            </div>
+            {directOverrideCount > 0 && (
+              <button
+                onClick={handleClearScenarioOverrides}
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-[12px] font-medium text-[var(--warning)]"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Restaurar {directOverrideCount}
+              </button>
+            )}
+          </div>
         </div>
         <p className="mt-2 text-[13px] text-[var(--gray-400)]">
           Pronóstico unificado por escenario y ajustes activos. Doble clic en celdas hoja para editar manualmente.
@@ -392,6 +554,13 @@ export default function Forecast({
             </span>
           )}
         </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {confidence.reasons.map((reason) => (
+            <span key={reason} className="rounded-full bg-[var(--gray-50)] px-2.5 py-1 text-[11px] text-[var(--gray-500)]">
+              {reason}
+            </span>
+          ))}
+        </div>
       </header>
 
       <div className="grid grid-cols-6 gap-4">
@@ -402,6 +571,23 @@ export default function Forecast({
         <KpiCard label="Cobranza" value={metrics.cobranza.reduce((sum, value) => sum + value, 0)} tone="pos" />
         <KpiCard label="Pagos Prov." value={metrics.pagosProveedores.reduce((sum, value) => sum + value, 0)} tone="neg" />
       </div>
+
+      {totalProjectedTaxes > 0 && (
+        <div className="rounded-2xl border border-[var(--warning)]/20 bg-[var(--warning-muted)]/45 p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[12px] font-semibold uppercase tracking-wide text-[var(--warning)]">Impuestos integrados desde CXP</p>
+              <p className="mt-1 text-[13px] text-[var(--gray-500)]">
+                Se agregan como salida fiscal pendiente para leer el flujo despues de impuestos.
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[22px] font-semibold text-[var(--danger)]">{formatCurrency(-totalProjectedTaxes)}</p>
+              <p className="text-[11px] text-[var(--gray-500)]">Efecto acumulado en efectivo</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
@@ -527,6 +713,20 @@ export default function Forecast({
                     values={metrics.flujoNeto}
                     tone="neutral"
                   />
+                  {view === 'cashflow' && totalProjectedTaxes > 0 && (
+                    <>
+                      <MetricTotalRow
+                        label="Impuestos programados CXP"
+                        values={taxProjection.map((value) => -value)}
+                        tone="neg"
+                      />
+                      <MetricTotalRow
+                        label="Flujo despues de impuestos"
+                        values={flowAfterTaxes}
+                        tone="neutral"
+                      />
+                    </>
+                  )}
                 </>
               )}
             </tbody>
@@ -557,6 +757,19 @@ export default function Forecast({
                     {formatCompactNumber(metrics.cajaFinal[metrics.cajaFinal.length - 1] ?? 0)}
                   </td>
                 </tr>
+                {totalProjectedTaxes > 0 && (
+                  <tr>
+                    <td className={`${STICKY_CONCEPT_CELL} bg-[var(--surface-alt)] px-4 py-2.5 font-semibold text-[var(--warning)]`}>Caja cierre despues de impuestos</td>
+                    {cashAfterTaxes.map((value, index) => (
+                      <td key={`${months[index]?.ym ?? index}-cash-tax`} className={`px-3 py-2.5 text-right tabular-nums font-semibold ${value < 0 ? 'text-[var(--danger)]' : 'text-[var(--warning)]'}`}>
+                        {formatCompactNumber(value)}
+                      </td>
+                    ))}
+                    <td className={`bg-[var(--gray-50)] px-4 py-2.5 text-right tabular-nums font-semibold ${(cashAfterTaxes[cashAfterTaxes.length - 1] ?? 0) < 0 ? 'text-[var(--danger)]' : 'text-[var(--warning)]'}`}>
+                      {formatCompactNumber(cashAfterTaxes[cashAfterTaxes.length - 1] ?? 0)}
+                    </td>
+                  </tr>
+                )}
               </tfoot>
             )}
           </table>

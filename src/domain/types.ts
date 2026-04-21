@@ -76,7 +76,7 @@ export interface Client {
 }
 
 // ---------------------------------------------------------------------------
-// Provider catalog — exactly three fields, as requested
+// Provider catalog
 // ---------------------------------------------------------------------------
 /** Free-form to fit real catalogs (DIESEL, Filiales, Servicios, Bancario…).
  *  UI suggests common values but the user can type anything. */
@@ -106,9 +106,17 @@ export interface Provider {
   name: string;
   type: ProviderType;
   risk: ProviderRisk;
+  /** Business explanation for the assigned risk level. */
+  riskComment?: string;
   paymentPeriod: ProviderPaymentPeriod;
   /** Flexibilidad de pago heredada del catálogo (Proveedores_2026_conciliado). */
   flexibility?: ProviderFlexibility;
+  /** Business explanation for payment/terms negotiability. */
+  flexibilityComment?: string;
+  /** Maximum credit exposure approved for this provider. 0/undefined = not configured. */
+  creditLimit?: number;
+  /** ISO date/time of the last provider data update. */
+  lastUpdatedAt?: string;
   /** Área DTI si aplica (catálogo Proveedores Críticos TI). */
   dtiArea?: string;
   /** Criticidad DTI si aplica. */

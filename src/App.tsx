@@ -801,6 +801,8 @@ export default function App() {
                         activeScenarioId={activeScenarioId}
                         overrides={scenarioCellOverrides}
                         granularity={forecastGranularity}
+                        cxpRecords={cxpRecords}
+                        cxpLoadedCias={cxpLoadedCias}
                         onGranularityChange={setForecastGranularity}
                         onSelectScenario={selectScenario}
                         onOverridesChange={setScenarioCellOverrides}
@@ -898,6 +900,8 @@ export default function App() {
                     activeScenarioId={activeScenarioId}
                     overrides={scenarioCellOverrides}
                     granularity={forecastGranularity}
+                    cxpRecords={cxpRecords}
+                    cxpLoadedCias={cxpLoadedCias}
                     onGranularityChange={setForecastGranularity}
                     onSelectScenario={selectScenario}
                     onOverridesChange={setScenarioCellOverrides}
@@ -911,6 +915,7 @@ export default function App() {
                 loadedCias={cxpLoadedCias}
                 companies={companies}
                 selectedCia={selectedCia}
+                providers={providers}
                 onMergeCia={mergeCxpForCia}
                 onReplaceAll={replaceAllCxp}
                 onReset={resetCxp}

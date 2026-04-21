@@ -31,6 +31,7 @@ const TYPE_SUGGESTIONS = [
 const RISKS: ProviderRisk[] = ['Alto', 'Medio', 'Bajo'];
 const PERIODS: ProviderPaymentPeriod[] = ['Contado', '15 días', '30 días', '45 días', '60 días', '90 días'];
 const FLEX_VALUES: ProviderFlexibility[] = ['inamovible', 'flexible', 'revisar', 'unknown'];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type ChipStyle = { bg: string; text: string; border: string; dot: string };
 
@@ -83,8 +84,12 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
     name: '',
     type: 'Servicios',
     risk: 'Medio',
+    riskComment: '',
     paymentPeriod: '30 días',
     flexibility: 'unknown',
+    flexibilityComment: '',
+    creditLimit: undefined,
+    lastUpdatedAt: new Date().toISOString(),
   });
 
   // ─── Aggregates for header chips ────────────────────────────────────────
@@ -107,7 +112,16 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
     return providers.filter(p => {
       if (riskFilter !== 'all' && p.risk !== riskFilter) return false;
       if (flexFilter !== 'all' && (p.flexibility ?? 'unknown') !== flexFilter) return false;
-      if (q && !p.name.toLowerCase().includes(q) && !p.type.toLowerCase().includes(q)) return false;
+      if (q) {
+        const haystack = [
+          p.name,
+          p.type,
+          p.riskComment,
+          p.flexibilityComment,
+          p.paymentPeriod,
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
       return true;
     });
   }, [providers, query, riskFilter, flexFilter]);
@@ -118,14 +132,22 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
   const canAdd = draft.name.trim().length > 0;
   const addNow = () => {
     if (!canAdd) return;
-    onAdd({ ...draft, name: draft.name.trim(), id: crypto.randomUUID() });
+    onAdd({ ...draft, name: draft.name.trim(), lastUpdatedAt: new Date().toISOString(), id: crypto.randomUUID() });
     setDraft({
       name: '',
       type: draft.type,
       risk: draft.risk,
+      riskComment: '',
       paymentPeriod: draft.paymentPeriod,
       flexibility: draft.flexibility,
+      flexibilityComment: '',
+      creditLimit: undefined,
+      lastUpdatedAt: new Date().toISOString(),
     });
+  };
+
+  const updateProvider = (provider: Provider) => {
+    onUpdate({ ...provider, lastUpdatedAt: new Date().toISOString() });
   };
 
   const handleSyncCatalog = async () => {
@@ -245,6 +267,15 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
               <option key={f} value={f}>{FLEX_STYLES[f].label}</option>
             ))}
           </select>
+          <input
+            type="number"
+            min={0}
+            step={1000}
+            value={draft.creditLimit ?? ''}
+            onChange={e => setDraft({ ...draft, creditLimit: e.target.value === '' ? undefined : Number(e.target.value) })}
+            placeholder="Limite credito"
+            className="input w-36"
+          />
           <button
             onClick={addNow}
             disabled={!canAdd}
@@ -262,6 +293,20 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
             Escribe un nombre para habilitar el botón.
           </div>
         )}
+        <div className="grid gap-2 md:grid-cols-2 mt-3">
+          <input
+            value={draft.riskComment ?? ''}
+            onChange={e => setDraft({ ...draft, riskComment: e.target.value })}
+            placeholder="Comentario de riesgo"
+            className="input w-full"
+          />
+          <input
+            value={draft.flexibilityComment ?? ''}
+            onChange={e => setDraft({ ...draft, flexibilityComment: e.target.value })}
+            placeholder="Comentario de flexibilidad"
+            className="input w-full"
+          />
+        </div>
       </div>
 
       {/* ─── Toolbar: search + active filters ───────────────────────────── */}
@@ -295,7 +340,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
       {/* ─── Table ──────────────────────────────────────────────────────── */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in">
         <div className="overflow-x-auto">
-          <table className="w-full text-[13px]">
+          <table className="w-full min-w-[1180px] text-[13px]">
             <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0 z-10">
               <tr>
                 <Th className="pl-5">Proveedor</Th>
@@ -303,13 +348,16 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                 <Th>Riesgo</Th>
                 <Th>Periodo de pago</Th>
                 <Th>Flexibilidad</Th>
+                <Th>Credito</Th>
+                <Th>Actualizacion</Th>
+                <Th>Comentarios</Th>
                 <Th className="w-10 pr-3" />
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="text-center text-[var(--gray-400)] py-12">
+                  <td colSpan={9} className="text-center text-[var(--gray-400)] py-12">
                     {providers.length === 0 ? (
                       <div className="flex flex-col items-center gap-2">
                         <RefreshCw className="w-5 h-5 text-[var(--gray-300)]" />
@@ -342,7 +390,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                   <Td className="pl-5">
                     <input
                       value={p.name}
-                      onChange={e => onUpdate({ ...p, name: e.target.value })}
+                      onChange={e => updateProvider({ ...p, name: e.target.value })}
                       className="w-full bg-transparent focus:outline-none font-medium text-[var(--gray-950)]"
                     />
                   </Td>
@@ -350,7 +398,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                     <input
                       list="type-suggestions"
                       value={p.type}
-                      onChange={e => onUpdate({ ...p, type: e.target.value })}
+                      onChange={e => updateProvider({ ...p, type: e.target.value })}
                       className="w-full bg-transparent focus:outline-none text-[var(--gray-700)]"
                     />
                   </Td>
@@ -358,7 +406,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                     <Chip style={RISK_STYLES[p.risk]} withDot>
                       <select
                         value={p.risk}
-                        onChange={e => onUpdate({ ...p, risk: e.target.value as ProviderRisk })}
+                        onChange={e => updateProvider({ ...p, risk: e.target.value as ProviderRisk })}
                         className="bg-transparent outline-none font-medium cursor-pointer"
                         style={{ color: RISK_STYLES[p.risk].text }}
                       >
@@ -369,7 +417,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                   <Td>
                     <select
                       value={p.paymentPeriod}
-                      onChange={e => onUpdate({ ...p, paymentPeriod: e.target.value as ProviderPaymentPeriod })}
+                      onChange={e => updateProvider({ ...p, paymentPeriod: e.target.value as ProviderPaymentPeriod })}
                       className="bg-transparent tabular-nums text-[var(--gray-700)] cursor-pointer focus:outline-none"
                     >
                       {PERIODS.map(pr => <option key={pr} value={pr}>{pr}</option>)}
@@ -384,7 +432,7 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                           <fs.Icon className="w-3 h-3" style={{ color: fs.text }} />
                           <select
                             value={fv}
-                            onChange={e => onUpdate({ ...p, flexibility: e.target.value as ProviderFlexibility })}
+                            onChange={e => updateProvider({ ...p, flexibility: e.target.value as ProviderFlexibility })}
                             className="bg-transparent outline-none font-medium cursor-pointer ml-1"
                             style={{ color: fs.text }}
                           >
@@ -395,6 +443,47 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
                         </Chip>
                       );
                     })()}
+                  </Td>
+                  <Td>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1000}
+                      value={p.creditLimit ?? ''}
+                      onChange={e => updateProvider({ ...p, creditLimit: e.target.value === '' ? undefined : Number(e.target.value) })}
+                      className="w-28 bg-transparent tabular-nums text-right focus:outline-none text-[var(--gray-700)]"
+                      placeholder="Sin limite"
+                      title="Limite de credito por proveedor"
+                    />
+                  </Td>
+                  <Td>
+                    <div className="space-y-1">
+                      <input
+                        type="date"
+                        value={(p.lastUpdatedAt ?? '').slice(0, 10)}
+                        onChange={e => onUpdate({ ...p, lastUpdatedAt: e.target.value ? `${e.target.value}T00:00:00.000Z` : undefined })}
+                        className="w-32 bg-transparent text-[12px] text-[var(--gray-700)] focus:outline-none"
+                      />
+                      <span className={`block text-[10px] ${staleTone(p.lastUpdatedAt)}`}>
+                        {daysWithoutUpdateLabel(p.lastUpdatedAt)}
+                      </span>
+                    </div>
+                  </Td>
+                  <Td>
+                    <div className="space-y-1 min-w-[240px]">
+                      <input
+                        value={p.riskComment ?? ''}
+                        onChange={e => updateProvider({ ...p, riskComment: e.target.value })}
+                        placeholder="Justificacion de riesgo"
+                        className="w-full bg-transparent focus:outline-none text-[11px] text-[var(--gray-500)]"
+                      />
+                      <input
+                        value={p.flexibilityComment ?? ''}
+                        onChange={e => updateProvider({ ...p, flexibilityComment: e.target.value })}
+                        placeholder="Justificacion de flexibilidad"
+                        className="w-full bg-transparent focus:outline-none text-[11px] text-[var(--gray-400)]"
+                      />
+                    </div>
                   </Td>
                   <Td className="pr-3">
                     <button
@@ -423,6 +512,27 @@ function Th({ children, className = '' }: { children?: React.ReactNode; classNam
 
 function Td({ children, className = '' }: { children?: React.ReactNode; className?: string }) {
   return <td className={`px-4 py-2.5 text-[var(--gray-950)] align-middle ${className}`}>{children}</td>;
+}
+
+function daysWithoutUpdate(value: string | undefined): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Math.floor((Date.now() - time) / DAY_MS));
+}
+
+function daysWithoutUpdateLabel(value: string | undefined): string {
+  const days = daysWithoutUpdate(value);
+  if (days === null) return 'Sin fecha';
+  if (days === 0) return 'Actualizado hoy';
+  return `${days}d sin actualizar`;
+}
+
+function staleTone(value: string | undefined): string {
+  const days = daysWithoutUpdate(value);
+  if (days === null || days > 90) return 'text-[var(--danger)]';
+  if (days > 30) return 'text-[var(--warning)]';
+  return 'text-[var(--success)]';
 }
 
 function Chip({
