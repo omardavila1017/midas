@@ -154,6 +154,20 @@ export type TabId =
 
 export type ForecastView = 'pnl' | 'cashflow' | 'drivers';
 
+export type ForecastConfidenceBasis =
+  | 'system_calculation'
+  | 'manual_calculation'
+  | 'human_criteria'
+  | 'mixed';
+
+export interface ForecastConfidenceOverride {
+  scenarioId: string;
+  score: number;
+  basis: ForecastConfidenceBasis;
+  comment?: string;
+  editedAt: string;
+}
+
 export interface ScenarioCellOverride {
   key: string;
   scenarioId: string;

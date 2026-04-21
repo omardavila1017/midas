@@ -9,6 +9,7 @@
 import {
   BASE_SCENARIO_ID,
   FlowPlan,
+  ForecastConfidenceOverride,
   Proposal,
   ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
@@ -70,6 +71,7 @@ export interface FlowSenseStore {
   customKpis: CustomKpiDefinition[];
   kpiConfigs: KpiConfigOverride[];
   scenarioCellOverrides: ScenarioCellOverride[];
+  forecastConfidenceOverrides: ForecastConfidenceOverride[];
   activeProposalId: string | null;
   activeScenarioId: string | null;
   providers: Provider[];
@@ -301,6 +303,7 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
     customKpis: [],
     kpiConfigs: [],
     scenarioCellOverrides,
+    forecastConfidenceOverrides: [],
     activeProposalId: null,
     activeScenarioId: BASE_SCENARIO_ID,
     providers: Array.isArray(legacy.providers) ? legacy.providers : [],
@@ -324,6 +327,7 @@ export function getDefaultStore(): FlowSenseStore {
     customKpis: [],
     kpiConfigs: [],
     scenarioCellOverrides: [],
+    forecastConfidenceOverrides: [],
     activeProposalId: null,
     activeScenarioId: BASE_SCENARIO_ID,
     providers: [],
@@ -396,6 +400,10 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
       data.scenarioCellOverrides,
       'scenarioCellOverrides',
     ),
+    forecastConfidenceOverrides: validateArray<ForecastConfidenceOverride>(
+      data.forecastConfidenceOverrides,
+      'forecastConfidenceOverrides',
+    ).map(normalizeForecastConfidenceOverride),
     activeProposalId: data.activeScenarioId === BASE_SCENARIO_ID
       ? null
       : (data.activeProposalId ?? proposals[0]?.id ?? null),
@@ -410,6 +418,31 @@ function normalizeV2Store(data: Partial<FlowSenseStore>): FlowSenseStore {
     cxpRecords: validateArray<CXPRecord>(data.cxpRecords, 'cxpRecords'),
     cxpLoadedCias: validateStringMap(data.cxpLoadedCias),
     lastSaved: validateISODate(data.lastSaved, 'lastSaved'),
+  };
+}
+
+function normalizeForecastConfidenceOverride(
+  value: ForecastConfidenceOverride,
+): ForecastConfidenceOverride {
+  const anyValue = value as ForecastConfidenceOverride & Record<string, unknown>;
+  const score = normalizeNumber(anyValue.score, 0);
+  const basis = anyValue.basis === 'manual_calculation'
+    || anyValue.basis === 'human_criteria'
+    || anyValue.basis === 'mixed'
+    || anyValue.basis === 'system_calculation'
+    ? anyValue.basis
+    : 'mixed';
+
+  return {
+    scenarioId: typeof anyValue.scenarioId === 'string' && anyValue.scenarioId.length > 0
+      ? anyValue.scenarioId
+      : BASE_SCENARIO_ID,
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    basis,
+    comment: typeof anyValue.comment === 'string' && anyValue.comment.trim()
+      ? anyValue.comment.trim()
+      : undefined,
+    editedAt: validateISODate(anyValue.editedAt, 'forecastConfidenceOverride.editedAt'),
   };
 }
 

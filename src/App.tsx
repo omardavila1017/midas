@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BASE_SCENARIO_ID, FlowPlan, ForecastGranularity, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId, ForecastView } from './types';
+import { BASE_SCENARIO_ID, FlowPlan, ForecastConfidenceOverride, ForecastGranularity, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId, ForecastView } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
@@ -130,6 +130,7 @@ export default function App() {
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
+  const [forecastConfidenceOverrides, setForecastConfidenceOverrides] = useState<ForecastConfidenceOverride[]>([]);
   const [forecastGranularity, setForecastGranularity] = useState<ForecastGranularity>('monthly');
   const [activeKpiIds, setActiveKpiIds] = useState<string[]>([...DEFAULT_ACTIVE_KPI_IDS]);
   const [customKpis, setCustomKpis] = useState<CustomKpiDefinition[]>([]);
@@ -210,6 +211,7 @@ export default function App() {
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
       if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
       if (stored.scenarioCellOverrides?.length) setScenarioCellOverrides(stored.scenarioCellOverrides);
+      if (stored.forecastConfidenceOverrides?.length) setForecastConfidenceOverrides(stored.forecastConfidenceOverrides);
       if (stored.activeKpiIds) setActiveKpiIds(stored.activeKpiIds);
       if (stored.customKpis) setCustomKpis(stored.customKpis);
       if (stored.kpiConfigs) setKpiConfigs(stored.kpiConfigs);
@@ -290,6 +292,7 @@ export default function App() {
         kpiConfigs,
         assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
         scenarioCellOverrides,
+        forecastConfidenceOverrides,
         lastSaved: new Date().toISOString(),
       };
       saveStore(store);
@@ -312,6 +315,7 @@ export default function App() {
     cxpRecords,
     cxpLoadedCias,
     scenarioCellOverrides,
+    forecastConfidenceOverrides,
   ]);
 
   // ── JDE: load companies on mount (demo fallback if unreachable) ──
@@ -703,6 +707,7 @@ export default function App() {
                   kpiConfigs,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
                   scenarioCellOverrides,
+                  forecastConfidenceOverrides,
                   lastSaved: new Date().toISOString(),
                 });
                 const blob = new Blob([json], { type: 'application/json' });
@@ -780,33 +785,24 @@ export default function App() {
               plan
                 ? <>
                     <Dashboard plan={plan} proposals={proposals} />
-                    {/* Forecast fused below Dashboard */}
-                    <div className="mt-8 pt-8 border-t" style={{ borderColor: 'var(--gray-200)' }}>
-                      <div className="flex items-center justify-between mb-5">
+                    <div className="mt-8 rounded-2xl border border-[var(--gray-200)] bg-white p-5 shadow-sm">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>
                           <h2 className="text-[18px] font-semibold text-[var(--gray-950)] tracking-tight">
                             Pronóstico con Escenarios
                           </h2>
                           <p className="text-[13px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-                            Vista detallada con capas de simulación sobre el plan base
+                            La vista detallada se abre en su propia pestaña para mantener el Dashboard ligero.
                           </p>
                         </div>
+                        <button
+                          onClick={() => setActiveTab('forecast')}
+                          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
+                        >
+                          <LineChart className="h-4 w-4" />
+                          Abrir pronóstico
+                        </button>
                       </div>
-                      <Forecast
-                        plan={plan}
-                        proposals={proposals}
-                        scenarios={scenarios}
-                        simulations={simulations}
-                        activeProposalId={activeProposalId}
-                        activeScenarioId={activeScenarioId}
-                        overrides={scenarioCellOverrides}
-                        granularity={forecastGranularity}
-                        cxpRecords={cxpRecords}
-                        cxpLoadedCias={cxpLoadedCias}
-                        onGranularityChange={setForecastGranularity}
-                        onSelectScenario={selectScenario}
-                        onOverridesChange={setScenarioCellOverrides}
-                      />
                     </div>
                   </>
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Dashboard" />
@@ -899,12 +895,14 @@ export default function App() {
                     activeProposalId={activeProposalId}
                     activeScenarioId={activeScenarioId}
                     overrides={scenarioCellOverrides}
+                    confidenceOverrides={forecastConfidenceOverrides}
                     granularity={forecastGranularity}
                     cxpRecords={cxpRecords}
                     cxpLoadedCias={cxpLoadedCias}
                     onGranularityChange={setForecastGranularity}
                     onSelectScenario={selectScenario}
                     onOverridesChange={setScenarioCellOverrides}
+                    onConfidenceOverridesChange={setForecastConfidenceOverrides}
                   />
                 : <PlanRequired onUpload={() => setShowUpload(true)} feature="Pronóstico" />
             )}

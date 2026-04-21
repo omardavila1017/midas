@@ -669,23 +669,54 @@ const CXPDashboard = ({
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
 
-  const agingBuckets: AgingBucket[] = useMemo(() =>
-    BUCKET_KEYS.map((key, i) => ({
-      name: BUCKET_LABELS[i], key, color: AGING_COLORS[i],
-      total: filtered.reduce((s, r) => s + (r[key] as number), 0),
-      count: filtered.filter(r => (r[key] as number) > 0).length,
-    })), [filtered]);
+  const agingBuckets: AgingBucket[] = useMemo(() => {
+    const buckets = BUCKET_KEYS.map((key, i) => ({
+      name: BUCKET_LABELS[i],
+      key,
+      color: AGING_COLORS[i],
+      total: 0,
+      count: 0,
+    }));
+    filtered.forEach((record) => {
+      BUCKET_KEYS.forEach((key, index) => {
+        const value = record[key] as number;
+        if (value <= 0) return;
+        buckets[index].total += value;
+        buckets[index].count += 1;
+      });
+    });
+    return buckets;
+  }, [filtered]);
 
   const totalPendiente = useMemo(() => filtered.reduce((s, r) => s + r.importePendientePesos, 0), [filtered]);
   const totalVencido = useMemo(() => agingBuckets.slice(1).reduce((s, b) => s + b.total, 0), [agingBuckets]);
   const totalPorVencer = agingBuckets[0]?.total || 0;
   const totalMas90 = useMemo(() => agingBuckets.slice(4).reduce((s, b) => s + b.total, 0), [agingBuckets]);
-  const criticalPayments = useMemo(() => filtered.filter(isCritical), [filtered]);
-  const negotiablePayments = useMemo(() => filtered.filter(isNegotiable), [filtered]);
-  const highImpactPayments = useMemo(() => filtered.filter(isHighImpact), [filtered]);
-  const criticalTotal = criticalPayments.reduce((sum, r) => sum + r.importePendientePesos, 0);
-  const negotiableTotal = negotiablePayments.reduce((sum, r) => sum + r.importePendientePesos, 0);
-  const highImpactTotal = highImpactPayments.reduce((sum, r) => sum + r.importePendientePesos, 0);
+  const paymentPlanningSummary = useMemo(() => {
+    const out = {
+      criticalCount: 0,
+      criticalTotal: 0,
+      negotiableCount: 0,
+      negotiableTotal: 0,
+      highImpactCount: 0,
+      highImpactTotal: 0,
+    };
+    filtered.forEach((record) => {
+      if (isCritical(record)) {
+        out.criticalCount += 1;
+        out.criticalTotal += record.importePendientePesos;
+      }
+      if (isNegotiable(record)) {
+        out.negotiableCount += 1;
+        out.negotiableTotal += record.importePendientePesos;
+      }
+      if (isHighImpact(record)) {
+        out.highImpactCount += 1;
+        out.highImpactTotal += record.importePendientePesos;
+      }
+    });
+    return out;
+  }, [filtered]);
 
   const taxRows = useMemo(() => (
     filtered
@@ -940,8 +971,8 @@ const CXPDashboard = ({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <PlanningCard
           title="Pagos criticos"
-          amount={criticalTotal}
-          count={criticalPayments.length}
+          amount={paymentPlanningSummary.criticalTotal}
+          count={paymentPlanningSummary.criticalCount}
           detail="Riesgo alto, inamovibles o vencidos relevantes."
           tone="danger"
           active={priorityFilter === 'critical'}
@@ -949,8 +980,8 @@ const CXPDashboard = ({
         />
         <PlanningCard
           title="Pagos negociables"
-          amount={negotiableTotal}
-          count={negotiablePayments.length}
+          amount={paymentPlanningSummary.negotiableTotal}
+          count={paymentPlanningSummary.negotiableCount}
           detail="Flexibles y sin atraso severo; candidatos a reprogramar."
           tone="success"
           active={priorityFilter === 'negotiable'}
@@ -958,8 +989,8 @@ const CXPDashboard = ({
         />
         <PlanningCard
           title="Mayor impacto en flujo"
-          amount={highImpactTotal}
-          count={highImpactPayments.length}
+          amount={paymentPlanningSummary.highImpactTotal}
+          count={paymentPlanningSummary.highImpactCount}
           detail={`Facturas de ${fmt(HIGH_IMPACT_AMOUNT)} o mas.`}
           tone="warning"
           active={priorityFilter === 'highImpact'}

@@ -12,6 +12,8 @@ import {
   BASE_SCENARIO_NAME,
   EvaluatedCell,
   FlowConcept,
+  ForecastConfidenceBasis,
+  ForecastConfidenceOverride,
   FlowPlan,
   ForecastGranularity,
   ForecastLayerMode,
@@ -38,12 +40,14 @@ interface Props {
   activeProposalId: string | null;
   activeScenarioId: string | null;
   overrides: ScenarioCellOverride[];
+  confidenceOverrides?: ForecastConfidenceOverride[];
   granularity?: ForecastGranularity;
   cxpRecords?: CXPRecord[];
   cxpLoadedCias?: Record<string, string>;
   onGranularityChange?: (granularity: ForecastGranularity) => void;
   onSelectScenario: (scenarioId: string | null) => void;
   onOverridesChange: (next: ScenarioCellOverride[]) => void;
+  onConfidenceOverridesChange?: (next: ForecastConfidenceOverride[]) => void;
 }
 
 function buildChildrenIndex(plan: FlowPlan): Map<string, FlowConcept[]> {
@@ -129,7 +133,31 @@ function buildCxpMonthlySeries(cxpRecords: CXPRecord[]): number[] {
   return values;
 }
 
-function confidenceTone(level: 'Alto' | 'Medio' | 'Bajo'): string {
+type ForecastConfidenceLevel = 'Alto' | 'Medio' | 'Bajo';
+
+const CONFIDENCE_BASIS_LABELS: Record<ForecastConfidenceBasis, string> = {
+  system_calculation: 'Cálculo del sistema',
+  manual_calculation: 'Cálculo manual',
+  human_criteria: 'Criterio humano',
+  mixed: 'Cálculo + criterio',
+};
+
+const EDITABLE_CONFIDENCE_BASIS: ForecastConfidenceBasis[] = [
+  'manual_calculation',
+  'human_criteria',
+  'mixed',
+];
+
+function clampConfidenceScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function confidenceLevelFromScore(score: number): ForecastConfidenceLevel {
+  return score >= 75 ? 'Alto' : score >= 50 ? 'Medio' : 'Bajo';
+}
+
+function confidenceTone(level: ForecastConfidenceLevel): string {
   if (level === 'Alto') return 'text-[var(--success)] bg-[var(--success-muted)]';
   if (level === 'Medio') return 'text-[var(--warning)] bg-[var(--warning-muted)]';
   return 'text-[var(--danger)] bg-[var(--danger-muted)]';
@@ -149,9 +177,12 @@ function computeForecastConfidence({
   cxpLoadedCias: Record<string, string>;
   overrides: ScenarioCellOverride[];
   scenarioId: string;
-}): { level: 'Alto' | 'Medio' | 'Bajo'; score: number; reasons: string[] } {
+}): { level: ForecastConfidenceLevel; score: number; reasons: string[] } {
   let score = 100;
   const reasons: string[] = [];
+  const hasForecastAccuracyHistory = false;
+
+  reasons.push('Estimacion heuristica local; no es backtesting estadistico.');
 
   const nonZeroMonths = plan.concepts.reduce((count, concept) => (
     count + concept.monthlyData.filter((value) => Math.abs(value) > 0).length
@@ -199,13 +230,15 @@ function computeForecastConfidence({
     reasons.push('No hay CXP cargadas para validar egresos e impuestos.');
   }
 
-  score -= 5;
-  reasons.push('No se detecta historico de exactitud de pronosticos anteriores.');
+  if (!hasForecastAccuracyHistory) {
+    score = Math.min(score - 20, 70);
+    reasons.push('Sin historico de exactitud, el nivel se limita a Medio.');
+  }
 
-  const boundedScore = Math.max(0, Math.min(100, Math.round(score)));
+  const boundedScore = clampConfidenceScore(score);
   return {
     score: boundedScore,
-    level: boundedScore >= 75 ? 'Alto' : boundedScore >= 50 ? 'Medio' : 'Bajo',
+    level: confidenceLevelFromScore(boundedScore),
     reasons: reasons.slice(0, 4),
   };
 }
@@ -229,12 +262,14 @@ export default function Forecast({
   activeProposalId,
   activeScenarioId,
   overrides,
+  confidenceOverrides = [],
   granularity = 'monthly',
   cxpRecords = [],
   cxpLoadedCias = {},
   onGranularityChange,
   onSelectScenario,
   onOverridesChange,
+  onConfidenceOverridesChange,
 }: Props) {
   const [view, setView] = useState<ForecastView>('pnl');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -261,11 +296,13 @@ export default function Forecast({
   const editingAllowed = !isBaseScenario(activeScenario) && granularity === 'monthly';
 
   const baseEvaluation = useMemo(() => {
+    if (layerMode !== 'base' && layerMode !== 'diff') return null;
     if (!activeScenario) return null;
     return evaluateScenario(plan, effectiveProposal, activeScenario, [], [], { granularity });
-  }, [activeScenario, effectiveProposal, granularity, plan]);
+  }, [activeScenario, effectiveProposal, granularity, layerMode, plan]);
 
   const simulatedEvaluation = useMemo(() => {
+    if (layerMode !== 'simulated') return null;
     if (!activeScenario) return null;
     return evaluateScenario(
       plan,
@@ -275,7 +312,7 @@ export default function Forecast({
       [],
       { granularity },
     );
-  }, [activeScenario, effectiveProposal, granularity, plan, simulations]);
+  }, [activeScenario, effectiveProposal, granularity, layerMode, plan, simulations]);
 
   const finalEvaluation = useMemo(() => {
     if (!activeScenario) return null;
@@ -304,8 +341,43 @@ export default function Forecast({
   }, [activeScenarioId, activeProposalId, granularity, layerMode, view]);
 
   const viewTitle = view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers';
+  const taxProjection = useMemo(
+    () => buildTaxProjection(cxpRecords, months),
+    [cxpRecords, months],
+  );
+  const confidence = useMemo(() => {
+    if (!activeScenario || !finalEvaluation) return null;
+    return computeForecastConfidence({
+      plan,
+      evaluation: finalEvaluation,
+      cxpRecords,
+      cxpLoadedCias,
+      overrides,
+      scenarioId: activeScenario.id,
+    });
+  }, [activeScenario, cxpLoadedCias, cxpRecords, finalEvaluation, overrides, plan]);
+  const confidenceOverride = useMemo(
+    () => activeScenario
+      ? confidenceOverrides.find((override) => override.scenarioId === activeScenario.id) ?? null
+      : null,
+    [activeScenario, confidenceOverrides],
+  );
+  const effectiveConfidence = useMemo(() => {
+    if (!confidence) return null;
+    const score = confidenceOverride
+      ? clampConfidenceScore(confidenceOverride.score)
+      : confidence.score;
+    return {
+      ...confidence,
+      score,
+      level: confidenceLevelFromScore(score),
+      basis: confidenceOverride?.basis ?? 'system_calculation',
+      comment: confidenceOverride?.comment,
+      isManual: Boolean(confidenceOverride),
+    };
+  }, [confidence, confidenceOverride]);
 
-  if (!activeScenario || !baseEvaluation || !simulatedEvaluation || !finalEvaluation) {
+  if (!activeScenario || !finalEvaluation) {
     return (
       <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-white px-6 py-20 text-center">
         <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">No hay escenario activo</h2>
@@ -317,13 +389,12 @@ export default function Forecast({
   }
 
   const metrics =
-    layerMode === 'base'
+    layerMode === 'base' && baseEvaluation
       ? baseEvaluation.metrics
-      : layerMode === 'simulated'
+      : layerMode === 'simulated' && simulatedEvaluation
         ? simulatedEvaluation.metrics
-        : layerMode === 'manual'
-          ? finalEvaluation.metrics
-          : {
+        : layerMode === 'diff' && baseEvaluation
+          ? {
               ingresos: finalEvaluation.metrics.ingresos.map((value, index) => value - (baseEvaluation.metrics.ingresos[index] ?? 0)),
               egresos: finalEvaluation.metrics.egresos.map((value, index) => value - (baseEvaluation.metrics.egresos[index] ?? 0)),
               flujoNeto: finalEvaluation.metrics.flujoNeto.map((value, index) => value - (baseEvaluation.metrics.flujoNeto[index] ?? 0)),
@@ -331,25 +402,18 @@ export default function Forecast({
               cobranza: finalEvaluation.metrics.cobranza.map((value, index) => value - (baseEvaluation.metrics.cobranza[index] ?? 0)),
               pagosProveedores: finalEvaluation.metrics.pagosProveedores.map((value, index) => value - (baseEvaluation.metrics.pagosProveedores[index] ?? 0)),
               saldosFinales: finalEvaluation.metrics.saldosFinales.map((value, index) => value - (baseEvaluation.metrics.saldosFinales[index] ?? 0)),
-            };
+            }
+          : finalEvaluation.metrics;
 
   const directOverrides = overrides.filter((override) => override.scenarioId === activeScenario.id);
   const directOverrideCount = directOverrides.length;
   const commentCount = directOverrides.filter((override) => override.comment).length;
-  const taxProjection = buildTaxProjection(cxpRecords, months);
   const totalProjectedTaxes = taxProjection.reduce((sum, value) => sum + value, 0);
   const flowAfterTaxes = metrics.flujoNeto.map((value, index) => value - (taxProjection[index] ?? 0));
+  let cumulativeTax = 0;
   const cashAfterTaxes = metrics.cajaFinal.map((value, index) => {
-    const cumulativeTax = taxProjection.slice(0, index + 1).reduce((sum, tax) => sum + tax, 0);
+    cumulativeTax += taxProjection[index] ?? 0;
     return value - cumulativeTax;
-  });
-  const confidence = computeForecastConfidence({
-    plan,
-    evaluation: finalEvaluation,
-    cxpRecords,
-    cxpLoadedCias,
-    overrides,
-    scenarioId: activeScenario.id,
   });
 
   const roleRows = [
@@ -365,6 +429,38 @@ export default function Forecast({
   const handleClearScenarioOverrides = () => {
     if (!editingAllowed) return;
     onOverridesChange(overrides.filter((override) => override.scenarioId !== activeScenario.id));
+  };
+
+  const updateConfidenceOverride = (patch: Partial<ForecastConfidenceOverride>) => {
+    if (!confidence || !onConfidenceOverridesChange) return;
+    const nextScore = clampConfidenceScore(patch.score ?? confidenceOverride?.score ?? confidence.score);
+    const nextBasis = patch.basis ?? (
+      confidenceOverride?.basis && confidenceOverride.basis !== 'system_calculation'
+        ? confidenceOverride.basis
+        : 'mixed'
+    );
+    const nextComment = patch.comment !== undefined
+      ? patch.comment
+      : confidenceOverride?.comment;
+    const nextOverride: ForecastConfidenceOverride = {
+      scenarioId: activeScenario.id,
+      score: nextScore,
+      basis: nextBasis,
+      comment: nextComment && nextComment.trim().length > 0 ? nextComment : undefined,
+      editedAt: new Date().toISOString(),
+    };
+
+    onConfidenceOverridesChange([
+      ...confidenceOverrides.filter((override) => override.scenarioId !== activeScenario.id),
+      nextOverride,
+    ]);
+  };
+
+  const restoreConfidenceCalculation = () => {
+    if (!onConfidenceOverridesChange) return;
+    onConfidenceOverridesChange(
+      confidenceOverrides.filter((override) => override.scenarioId !== activeScenario.id),
+    );
   };
 
   const applyOverride = (conceptId: string, yearMonth: string, manualValue: number) => {
@@ -460,9 +556,17 @@ export default function Forecast({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className={`rounded-full px-3 py-2 text-[12px] font-medium ${confidenceTone(confidence.level)}`}>
-              Confianza {confidence.level} · {confidence.score}%
-            </div>
+            {effectiveConfidence && (
+              <div
+                className={`rounded-full px-3 py-2 text-[12px] font-medium ${confidenceTone(effectiveConfidence.level)}`}
+                title={`${CONFIDENCE_BASIS_LABELS[effectiveConfidence.basis]}. Base calculada: ${confidence?.score ?? 0}%.`}
+              >
+                Confianza {effectiveConfidence.level} · {effectiveConfidence.score}%
+                <span className="ml-1 opacity-75">
+                  {effectiveConfidence.isManual ? 'Manual' : 'Auto'}
+                </span>
+              </div>
+            )}
             {directOverrideCount > 0 && (
               <button
                 onClick={handleClearScenarioOverrides}
@@ -535,6 +639,62 @@ export default function Forecast({
           </div>
         </div>
 
+        {confidence && effectiveConfidence && (
+          <div className="mt-4 rounded-xl border border-[var(--gray-100)] bg-[var(--surface-alt)] p-3">
+            <div className="grid grid-cols-[minmax(0,1fr),120px,180px,auto] items-end gap-3">
+              <div className="min-w-0">
+                <p className="text-[12px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">Confianza</p>
+                <p className="mt-1 truncate text-[13px] text-[var(--gray-600)]">
+                  Automático: {confidence.score}% · {confidence.level}
+                </p>
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-[var(--gray-400)]">Porcentaje</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={effectiveConfidence.score}
+                  disabled={!onConfidenceOverridesChange}
+                  onChange={(event) => updateConfidenceOverride({ score: Number(event.target.value) })}
+                  className="h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-right text-[13px] font-semibold text-[var(--gray-950)] disabled:opacity-60"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium text-[var(--gray-400)]">Base</span>
+                <select
+                  value={confidenceOverride?.basis && confidenceOverride.basis !== 'system_calculation'
+                    ? confidenceOverride.basis
+                    : 'mixed'}
+                  disabled={!onConfidenceOverridesChange}
+                  onChange={(event) => updateConfidenceOverride({ basis: event.target.value as ForecastConfidenceBasis })}
+                  className="h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] disabled:opacity-60"
+                >
+                  {EDITABLE_CONFIDENCE_BASIS.map((basis) => (
+                    <option key={basis} value={basis}>{CONFIDENCE_BASIS_LABELS[basis]}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={!confidenceOverride || !onConfidenceOverridesChange}
+                onClick={restoreConfidenceCalculation}
+                className="h-10 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-500)] transition enabled:hover:text-[var(--gray-950)] disabled:opacity-45"
+              >
+                Usar cálculo
+              </button>
+            </div>
+            <textarea
+              value={effectiveConfidence.comment ?? ''}
+              disabled={!onConfidenceOverridesChange}
+              onChange={(event) => updateConfidenceOverride({ comment: event.target.value })}
+              placeholder="Motivo del porcentaje de confianza"
+              rows={2}
+              className="mt-3 w-full resize-none rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2 text-[13px] text-[var(--gray-950)] placeholder:text-[var(--gray-300)] disabled:opacity-60"
+            />
+          </div>
+        )}
+
         <div className="mt-4 flex flex-wrap items-center gap-4 text-[12px] text-[var(--gray-400)]">
           <LegendDot color="bg-[var(--gray-200)]" label="Base" />
           <LegendDot color="bg-[var(--primary)]" label="Impactada por ajuste" />
@@ -555,7 +715,10 @@ export default function Forecast({
           )}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          {confidence.reasons.map((reason) => (
+          {(confidenceOverride
+            ? [`Editado: ${CONFIDENCE_BASIS_LABELS[confidenceOverride.basis]}`, ...(confidence?.reasons ?? [])]
+            : confidence?.reasons ?? []
+          ).map((reason) => (
             <span key={reason} className="rounded-full bg-[var(--gray-50)] px-2.5 py-1 text-[11px] text-[var(--gray-500)]">
               {reason}
             </span>
