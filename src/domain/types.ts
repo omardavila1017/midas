@@ -92,12 +92,27 @@ export type ProviderPaymentPeriod =
   | '60 días'
   | '90 días';
 
+/**
+ * Payment flexibility of a provider — usada para planeación de flujo.
+ *   - inamovible: debe pagarse en tiempo, no se puede reprogramar.
+ *   - flexible:   se puede posponer / renegociar la fecha de pago.
+ *   - revisar:    requiere sign-off del área responsable antes de decidir.
+ *   - unknown:    no clasificado (no está en el catálogo de flexibilidad).
+ */
+export type ProviderFlexibility = 'inamovible' | 'flexible' | 'revisar' | 'unknown';
+
 export interface Provider {
   id: string;
   name: string;
   type: ProviderType;
   risk: ProviderRisk;
   paymentPeriod: ProviderPaymentPeriod;
+  /** Flexibilidad de pago heredada del catálogo (Proveedores_2026_conciliado). */
+  flexibility?: ProviderFlexibility;
+  /** Área DTI si aplica (catálogo Proveedores Críticos TI). */
+  dtiArea?: string;
+  /** Criticidad DTI si aplica. */
+  dtiCriticidad?: 'Alta' | 'Media' | 'Baja';
 }
 
 // ---------------------------------------------------------------------------
