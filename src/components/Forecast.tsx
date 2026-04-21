@@ -18,26 +18,26 @@ import {
   ForecastGranularity,
   ForecastLayerMode,
   ForecastView,
-  Proposal,
+  Simulation,
   ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
   ROLE_TARGET_LABELS,
   Scenario,
   ScenarioCellOverride,
-  Simulation,
+  Proposal,
   scenarioCellKey,
 } from '../types';
 import { evaluateScenario } from '../domain/scenarioEngine';
-import { isBaseScenario } from '../domain/simulationCompiler';
+import { isBaseScenario } from '../domain/proposalCompiler';
 import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 import type { CXPRecord } from '../domain/persistence';
 
 interface Props {
   plan: FlowPlan;
-  proposals: Proposal[];
-  scenarios: Scenario[];
   simulations: Simulation[];
-  activeProposalId: string | null;
+  scenarios: Scenario[];
+  proposals: Proposal[];
+  activeSimulationId: string | null;
   activeScenarioId: string | null;
   overrides: ScenarioCellOverride[];
   confidenceOverrides?: ForecastConfidenceOverride[];
@@ -256,10 +256,10 @@ const STICKY_CONCEPT_CELL = `sticky left-0 z-10 overflow-hidden ${STICKY_CONCEPT
 
 export default function Forecast({
   plan,
-  proposals,
-  scenarios,
   simulations,
-  activeProposalId,
+  scenarios,
+  proposals,
+  activeSimulationId,
   activeScenarioId,
   overrides,
   confidenceOverrides = [],
@@ -280,13 +280,13 @@ export default function Forecast({
   const childrenById = useMemo(() => buildChildrenIndex(plan), [plan]);
   const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
   const editableScenarios = scenarios.filter((scenario) => !isBaseScenario(scenario));
-  const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
+  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? simulations[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? scenarios.find((scenario) => scenario.simulationId === activeSimulation?.id)
     ?? baseScenario
     ?? null;
-  const effectiveProposal = activeProposal ?? {
-    id: 'proposal-base',
+  const effectiveSimulation = activeSimulation ?? {
+    id: 'simulation-base',
     name: BASE_SCENARIO_NAME,
     description: 'Pronóstico original',
     status: 'Pendiente' as const,
@@ -298,33 +298,33 @@ export default function Forecast({
   const baseEvaluation = useMemo(() => {
     if (layerMode !== 'base' && layerMode !== 'diff') return null;
     if (!activeScenario) return null;
-    return evaluateScenario(plan, effectiveProposal, activeScenario, [], [], { granularity });
-  }, [activeScenario, effectiveProposal, granularity, layerMode, plan]);
+    return evaluateScenario(plan, effectiveSimulation, activeScenario, [], [], { granularity });
+  }, [activeScenario, effectiveSimulation, granularity, layerMode, plan]);
 
   const simulatedEvaluation = useMemo(() => {
     if (layerMode !== 'simulated') return null;
     if (!activeScenario) return null;
     return evaluateScenario(
       plan,
-      effectiveProposal,
+      effectiveSimulation,
       activeScenario,
-      isBaseScenario(activeScenario) ? [] : simulations,
+      isBaseScenario(activeScenario) ? [] : proposals,
       [],
       { granularity },
     );
-  }, [activeScenario, effectiveProposal, granularity, layerMode, plan, simulations]);
+  }, [activeScenario, effectiveSimulation, granularity, layerMode, plan, proposals]);
 
   const finalEvaluation = useMemo(() => {
     if (!activeScenario) return null;
     return evaluateScenario(
       plan,
-      effectiveProposal,
+      effectiveSimulation,
       activeScenario,
-      isBaseScenario(activeScenario) ? [] : simulations,
+      isBaseScenario(activeScenario) ? [] : proposals,
       isBaseScenario(activeScenario) ? [] : overrides,
       { granularity },
     );
-  }, [activeScenario, effectiveProposal, granularity, overrides, plan, simulations]);
+  }, [activeScenario, effectiveSimulation, granularity, overrides, plan, proposals]);
 
   const months = finalEvaluation?.months ?? [];
   const roots = useMemo(
@@ -338,7 +338,7 @@ export default function Forecast({
   useEffect(() => {
     setEditing(null);
     setPopover(null);
-  }, [activeScenarioId, activeProposalId, granularity, layerMode, view]);
+  }, [activeScenarioId, activeSimulationId, granularity, layerMode, view]);
 
   const viewTitle = view === 'pnl' ? 'Estado de Resultados' : view === 'cashflow' ? 'Flujo de Caja' : 'Drivers';
   const taxProjection = useMemo(
@@ -1159,7 +1159,7 @@ function EditableCell({
   const value = displayValue(cell, layerMode);
   const colorClass = cell.hasManualDelta
     ? 'bg-[var(--warning)]/10 text-[var(--warning)]'
-    : cell.hasSimulationDelta
+    : cell.hasProposalDelta
       ? 'bg-[var(--primary)]/8 text-[var(--primary)]'
       : 'text-[var(--gray-950)]';
 
@@ -1200,7 +1200,7 @@ function EditableCell({
       ) : (
         <>
           <span className="inline-flex items-center justify-end gap-1">
-            {(cell.hasManualDelta || cell.hasSimulationDelta) && (
+            {(cell.hasManualDelta || cell.hasProposalDelta) && (
               <span className={`h-1.5 w-1.5 rounded-full ${cell.hasManualDelta ? 'bg-[var(--warning)]' : 'bg-[var(--primary)]'}`} />
             )}
             {cell.comment && <MessageSquare className="w-3 h-3 text-[var(--primary)]" />}
@@ -1244,7 +1244,7 @@ function CellPopover({
   onSetComment: (comment: string) => void;
 }) {
   const [commentDraft, setCommentDraft] = useState(cell.comment ?? '');
-  const totalProposalDelta = cell.simulationContributions.reduce((sum, contribution) => sum + contribution.delta, 0);
+  const totalSimulationDelta = cell.proposalContributions.reduce((sum, contribution) => sum + contribution.delta, 0);
   const finalDelta = cell.finalValue - cell.baseValue;
 
   return (
@@ -1269,20 +1269,20 @@ function CellPopover({
 
       <div className="space-y-1.5 text-[12px]">
         <PopoverRow label="Valor base" value={cell.baseValue} />
-        <PopoverRow label="Delta propuestas" value={totalProposalDelta} accent="sim" />
+        <PopoverRow label="Delta propuestas" value={totalSimulationDelta} accent="sim" />
         <PopoverRow label="Valor simulado" value={cell.simulatedValue} />
         <PopoverRow label="Delta manual" value={cell.manualDelta} accent="manual" />
         <PopoverRow label="Valor final" value={cell.finalValue} accent="final" />
         <PopoverRow label="Δ vs base" value={finalDelta} accent="delta" />
       </div>
 
-      {cell.simulationContributions.length > 0 && (
+      {cell.proposalContributions.length > 0 && (
         <div className="mt-3 rounded-lg bg-[var(--gray-50)] p-2">
           <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Propuestas aplicadas</p>
           <div className="mt-2 space-y-1 text-[11px]">
-            {cell.simulationContributions.map((contribution) => (
-              <div key={contribution.simulationId} className="flex items-center justify-between gap-3">
-                <span className="text-[var(--gray-500)]">{contribution.simulationName}</span>
+            {cell.proposalContributions.map((contribution) => (
+              <div key={contribution.proposalId} className="flex items-center justify-between gap-3">
+                <span className="text-[var(--gray-500)]">{contribution.proposalName}</span>
                 <span className={contribution.delta >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}>
                   {contribution.delta > 0 ? '+' : ''}{formatCompactNumber(contribution.delta)}
                 </span>

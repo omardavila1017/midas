@@ -1,9 +1,9 @@
 import {
   FlowPlan,
-  Proposal,
+  Simulation,
   Scenario,
   ScenarioCellOverride,
-  Simulation,
+  Proposal,
 } from '../types';
 
 export function createTestPlan(): FlowPlan {
@@ -61,9 +61,9 @@ export function createTestPlan(): FlowPlan {
   };
 }
 
-export function createTestProposal(): Proposal {
+export function createTestSimulation(): Simulation {
   return {
-    id: 'proposal-1',
+    id: 'simulation-1',
     name: 'Propuesta Test',
     description: 'Propuesta para pruebas',
     status: 'Pendiente',
@@ -76,24 +76,24 @@ export function createTestProposal(): Proposal {
 export function createTestScenario(overrides?: Partial<Scenario>): Scenario {
   return {
     id: 'scenario-1',
-    proposalId: 'proposal-1',
-    kind: 'proposal',
+    simulationId: 'simulation-1',
+    kind: 'simulation',
     name: 'Escenario Base',
     description: 'Escenario para pruebas',
     probability: 1,
     startYearMonth: '2026-01',
     horizonMonths: 12,
-    simulationIds: ['simulation-percent', 'simulation-absolute'],
+    proposalIds: ['proposal-percent', 'proposal-absolute'],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
 }
 
-export function createTestSimulations(): Simulation[] {
+export function createTestProposals(): Proposal[] {
   return [
     {
-      id: 'simulation-percent',
+      id: 'proposal-percent',
       name: 'Incremento 10%',
       description: 'Aumenta ingresos un 10%',
       category: 'Incremento de Ingresos',
@@ -118,7 +118,7 @@ export function createTestSimulations(): Simulation[] {
       updatedAt: '2026-01-01T00:00:00.000Z',
     },
     {
-      id: 'simulation-absolute',
+      id: 'proposal-absolute',
       name: 'Incremento $5',
       description: 'Suma 5 al mismo concepto',
       category: 'Incremento de Ingresos',

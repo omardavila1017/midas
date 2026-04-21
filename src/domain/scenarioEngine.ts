@@ -5,7 +5,7 @@ import {
   FlowPlan,
   ForecastGranularity,
   MONTHS,
-  Proposal,
+  Simulation,
   ROLE_TARGET_COLLECTIONS,
   ROLE_TARGET_EXPENSE,
   ROLE_TARGET_INCOME,
@@ -16,7 +16,7 @@ import {
   ScenarioComparisonSnapshot,
   ScenarioKpis,
   ScenarioMonth,
-  Simulation,
+  Proposal,
   scenarioCellKey,
 } from '../types';
 
@@ -326,18 +326,18 @@ function buildConceptIndexes(plan: FlowPlan): ConceptIndexes {
 }
 
 function appendContribution(
-  map: Map<string, { simulationId: string; simulationName: string; delta: number }[]>,
+  map: Map<string, { proposalId: string; proposalName: string; delta: number }[]>,
   cellKey: string,
-  simulationId: string,
-  simulationName: string,
+  proposalId: string,
+  proposalName: string,
   delta: number,
 ) {
   const existing = map.get(cellKey) ?? [];
-  const current = existing.find((item) => item.simulationId === simulationId);
+  const current = existing.find((item) => item.proposalId === proposalId);
   if (current) {
     current.delta += delta;
   } else {
-    existing.push({ simulationId, simulationName, delta });
+    existing.push({ proposalId, proposalName, delta });
   }
   map.set(cellKey, existing);
 }
@@ -396,7 +396,7 @@ export function resolveConceptLabel(plan: FlowPlan, conceptId: string): string {
   return plan.concepts.find((concept) => concept.id === conceptId)?.name ?? conceptId;
 }
 
-export function getSimulationTargetOptions(plan: FlowPlan): TargetOption[] {
+export function getProposalTargetOptions(plan: FlowPlan): TargetOption[] {
   const indexes = buildConceptIndexes(plan);
   const conceptOptions = plan.concepts
     .filter((concept) => indexes.editableConceptIds.has(concept.id))
@@ -482,7 +482,7 @@ function resolveLegacyYearMonthForOffset(
 }
 
 function normalizeEffectDateWindow(
-  effect: Simulation['effects'][number],
+  effect: Proposal['effects'][number],
   scenario: Scenario,
 ): { startDate: string; endDate: string } | null {
   if (effect.startDate && effect.endDate) {
@@ -513,7 +513,7 @@ function normalizeEffectDateWindow(
 
 function resolvePeriodIndexesForEffect(
   periods: ScenarioMonth[],
-  effect: Simulation['effects'][number],
+  effect: Proposal['effects'][number],
   scenario: Scenario,
 ): Array<{ periodIndex: number; weight: number }> {
   const explicitWindow = normalizeEffectDateWindow(effect, scenario);
@@ -560,9 +560,9 @@ function resolvePeriodIndexesForEffect(
 
 export function evaluateScenario(
   plan: FlowPlan,
-  proposal: Proposal,
+  simulation: Simulation,
   scenario: Scenario,
-  simulations: Simulation[],
+  proposals: Proposal[],
   overrides: ScenarioCellOverride[],
   options?: ScenarioEvaluationOptions,
 ): EvaluatedScenario {
@@ -620,9 +620,9 @@ export function evaluateScenario(
 
   const simulatedValuesByConceptId = cloneSeriesMap(baseValuesByConceptId);
   const finalValuesByConceptId = cloneSeriesMap(baseValuesByConceptId);
-  const simulationContributionMap = new Map<
+  const proposalContributionMap = new Map<
     string,
-    { simulationId: string; simulationName: string; delta: number }[]
+    { proposalId: string; proposalName: string; delta: number }[]
   >();
   const manualDeltaByConceptId = new Map<string, number[]>(
     trackedConceptIds.map((conceptId) => [conceptId, Array(months.length).fill(0)]),
@@ -633,7 +633,7 @@ export function evaluateScenario(
     targetId: string,
     monthOffset: number,
     delta: number,
-    optionsWithSimulation?: { simulationId: string; simulationName: string; yearMonth: string },
+    optionsWithProposal?: { proposalId: string; proposalName: string; yearMonth: string },
   ) => {
     if (delta === 0) return;
 
@@ -641,12 +641,12 @@ export function evaluateScenario(
       const series = valuesByConceptId.get(conceptId);
       if (!series) return;
       series[monthOffset] = (series[monthOffset] ?? 0) + delta;
-      if (optionsWithSimulation) {
+      if (optionsWithProposal) {
         appendContribution(
-          simulationContributionMap,
-          `${conceptId}::${optionsWithSimulation.yearMonth}`,
-          optionsWithSimulation.simulationId,
-          optionsWithSimulation.simulationName,
+          proposalContributionMap,
+          `${conceptId}::${optionsWithProposal.yearMonth}`,
+          optionsWithProposal.proposalId,
+          optionsWithProposal.proposalName,
           delta,
         );
       }
@@ -670,11 +670,11 @@ export function evaluateScenario(
     }
   };
 
-  const activeSimulationIds = new Set(scenario.simulationIds);
-  const activeSimulations = simulations.filter((simulation) => activeSimulationIds.has(simulation.id));
+  const activeProposalIds = new Set(scenario.proposalIds);
+  const activeProposals = proposals.filter((proposal) => activeProposalIds.has(proposal.id));
 
-  for (const simulation of activeSimulations) {
-    for (const effect of simulation.effects) {
+  for (const proposal of activeProposals) {
+    for (const effect of proposal.effects) {
       if (effect.type !== 'concept_delta') continue;
 
       const targetPeriods = resolvePeriodIndexesForEffect(months, effect, scenario);
@@ -690,8 +690,8 @@ export function evaluateScenario(
 
         applyDelta(simulatedValuesByConceptId, effect.conceptId, periodIndex, delta);
         applyDelta(finalValuesByConceptId, effect.conceptId, periodIndex, delta, {
-          simulationId: simulation.id,
-          simulationName: simulation.name,
+          proposalId: proposal.id,
+          proposalName: proposal.name,
           yearMonth: periodKey,
         });
       }
@@ -756,7 +756,7 @@ export function evaluateScenario(
     for (const [monthOffset, month] of months.entries()) {
       const key = scenarioCellKey(scenario.id, conceptId, month.ym);
       const diff = (finalSeries[monthOffset] ?? 0) - (baseSeries[monthOffset] ?? 0);
-      const contributions = simulationContributionMap.get(`${conceptId}::${month.ym}`) ?? [];
+      const contributions = proposalContributionMap.get(`${conceptId}::${month.ym}`) ?? [];
       const override = overrideMap.get(key);
       const cell: EvaluatedCell = {
         key,
@@ -773,8 +773,8 @@ export function evaluateScenario(
         manualDelta: manualSeries[monthOffset] ?? 0,
         override,
         comment: override?.comment,
-        simulationContributions: contributions,
-        hasSimulationDelta: contributions.some((item) => item.delta !== 0),
+        proposalContributions: contributions,
+        hasProposalDelta: contributions.some((item) => item.delta !== 0),
         hasManualDelta: (manualSeries[monthOffset] ?? 0) !== 0 || Boolean(override?.comment),
         isOverridden: Boolean(override),
         isEditable: granularity === 'monthly' && indexes.editableConceptIds.has(conceptId),
@@ -824,7 +824,7 @@ export function evaluateScenario(
   };
 
   return {
-    proposalId: proposal.id,
+    simulationId: simulation.id,
     scenarioId: scenario.id,
     granularity,
     months,
@@ -862,7 +862,7 @@ export function compareScenarioEvaluations(
 
   return {
     scenarioId: left.scenarioId,
-    proposalId: left.proposalId,
+    simulationId: left.simulationId,
     diffByCellKey,
     kpiDiff,
   };

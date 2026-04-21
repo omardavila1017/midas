@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateScenario } from './scenarioEngine';
-import { buildSimulationEffects } from './simulationCompiler';
+import { buildProposalEffects } from './proposalCompiler';
 import {
   createScenarioOverride,
   createTestPlan,
-  createTestProposal,
+  createTestSimulation,
   createTestScenario,
-  createTestSimulations,
+  createTestProposals,
 } from '../test/fixtures';
-import { FlowPlan, ROLE_TARGET_INCOME, Simulation, scenarioCellKey } from '../types';
+import { FlowPlan, ROLE_TARGET_INCOME, Proposal, scenarioCellKey } from '../types';
 
 function createGranularPlan(monthlyIncome = 310): FlowPlan {
   return {
@@ -114,11 +114,11 @@ function createCitiPlan(): FlowPlan {
 }
 
 describe('scenarioEngine', () => {
-  it('stacks percent and absolute simulations deterministically on the same cell', () => {
+  it('stacks percent and absolute proposals deterministically on the same cell', () => {
     const plan = createTestPlan();
-    const proposal = createTestProposal();
+    const simulation = createTestSimulation();
     const scenario = createTestScenario();
-    const evaluation = evaluateScenario(plan, proposal, scenario, createTestSimulations(), []);
+    const evaluation = evaluateScenario(plan, simulation, scenario, createTestProposals(), []);
 
     const leafCell = evaluation.cells.get(
       scenarioCellKey('scenario-1', 'concept-income-leaf', '2026-01'),
@@ -131,32 +131,32 @@ describe('scenarioEngine', () => {
     expect(leafCell?.simulatedValue).toBe(115);
     expect(leafCell?.finalValue).toBe(115);
     expect(rootCell?.finalValue).toBe(115);
-    expect(leafCell?.simulationContributions).toHaveLength(2);
+    expect(leafCell?.proposalContributions).toHaveLength(2);
   });
 
   it('keeps overrides isolated per scenario', () => {
     const plan = createTestPlan();
-    const proposal = createTestProposal();
+    const simulation = createTestSimulation();
     const scenarioA = createTestScenario({ id: 'scenario-1' });
     const scenarioB = createTestScenario({
       id: 'scenario-2',
-      proposalId: 'proposal-1',
+      simulationId: 'simulation-1',
       name: 'Escenario Alterno',
-      simulationIds: ['simulation-percent', 'simulation-absolute'],
+      proposalIds: ['proposal-percent', 'proposal-absolute'],
     });
 
     const evaluationA = evaluateScenario(
       plan,
-      proposal,
+      simulation,
       scenarioA,
-      createTestSimulations(),
+      createTestProposals(),
       [createScenarioOverride(120)],
     );
     const evaluationB = evaluateScenario(
       plan,
-      proposal,
+      simulation,
       scenarioB,
-      createTestSimulations(),
+      createTestProposals(),
       [createScenarioOverride(120)],
     );
 
@@ -175,21 +175,21 @@ describe('scenarioEngine', () => {
 
   it('returns to the simulated value when the manual override disappears', () => {
     const plan = createTestPlan();
-    const proposal = createTestProposal();
+    const simulation = createTestSimulation();
     const scenario = createTestScenario();
 
     const withOverride = evaluateScenario(
       plan,
-      proposal,
+      simulation,
       scenario,
-      createTestSimulations(),
+      createTestProposals(),
       [createScenarioOverride(120)],
     );
     const restored = evaluateScenario(
       plan,
-      proposal,
+      simulation,
       scenario,
-      createTestSimulations(),
+      createTestProposals(),
       [],
     );
 
@@ -207,14 +207,14 @@ describe('scenarioEngine', () => {
 
   it('applies percent adjustments correctly on aggregate role targets', () => {
     const plan = createTestPlan();
-    const proposal = createTestProposal();
+    const simulation = createTestSimulation();
     const scenario = createTestScenario({
-      simulationIds: ['simulation-role-percent'],
+      proposalIds: ['proposal-role-percent'],
     });
 
-    const evaluation = evaluateScenario(plan, proposal, scenario, [
+    const evaluation = evaluateScenario(plan, simulation, scenario, [
       {
-        id: 'simulation-role-percent',
+        id: 'proposal-role-percent',
         name: 'Ingresos +10%',
         description: 'Aumenta ingresos generales 10%',
         category: 'Incremento de Ingresos',
@@ -252,15 +252,15 @@ describe('scenarioEngine', () => {
 
   it('supports weekly and daily forecast views from the same scenario', () => {
     const plan = createGranularPlan(310);
-    const proposal = createTestProposal();
+    const simulation = createTestSimulation();
     const scenario = createTestScenario({
       startYearMonth: '2026-01',
       horizonMonths: 1,
-      simulationIds: [],
+      proposalIds: [],
     });
 
-    const weeklyEvaluation = evaluateScenario(plan, proposal, scenario, [], [], { granularity: 'weekly' });
-    const dailyEvaluation = evaluateScenario(plan, proposal, scenario, [], [], { granularity: 'daily' });
+    const weeklyEvaluation = evaluateScenario(plan, simulation, scenario, [], [], { granularity: 'weekly' });
+    const dailyEvaluation = evaluateScenario(plan, simulation, scenario, [], [], { granularity: 'daily' });
 
     const weeklyCell = weeklyEvaluation.cells.get(
       scenarioCellKey('scenario-1', 'income-leaf', 'week:2026-01-01'),
@@ -275,17 +275,17 @@ describe('scenarioEngine', () => {
     expect(dailyCell?.finalValue).toBe(10);
   });
 
-  it('prorates percent adjustments from the exact proposal start date', () => {
+  it('prorates percent adjustments from the exact simulation start date', () => {
     const plan = createGranularPlan(310);
-    const proposal = createTestProposal();
+    const simulation = createTestSimulation();
     const scenario = createTestScenario({
       startYearMonth: '2026-01',
       horizonMonths: 1,
-      simulationIds: ['simulation-mid-month-percent'],
+      proposalIds: ['proposal-mid-month-percent'],
     });
 
-    const simulation = {
-      id: 'simulation-mid-month-percent',
+    const proposal = {
+      id: 'proposal-mid-month-percent',
       name: 'Ingresos +10% desde mitad de mes',
       description: 'Empieza el 16 de enero',
       category: 'Incremento de Ingresos' as const,
@@ -314,8 +314,8 @@ describe('scenarioEngine', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
 
-    const monthlyEvaluation = evaluateScenario(plan, proposal, scenario, [simulation], []);
-    const dailyEvaluation = evaluateScenario(plan, proposal, scenario, [simulation], [], { granularity: 'daily' });
+    const monthlyEvaluation = evaluateScenario(plan, simulation, scenario, [proposal], []);
+    const dailyEvaluation = evaluateScenario(plan, simulation, scenario, [proposal], [], { granularity: 'daily' });
 
     const monthlyCell = monthlyEvaluation.cells.get(
       scenarioCellKey('scenario-1', 'income-leaf', '2026-01'),
@@ -334,15 +334,15 @@ describe('scenarioEngine', () => {
 
   it('keeps a one-time amount in March and applies 10% to Citi only from April 21, 2026', () => {
     const plan = createCitiPlan();
-    const proposal = createTestProposal();
+    const simulation = createTestSimulation();
     const scenario = createTestScenario({
       startYearMonth: '2026-01',
       horizonMonths: 12,
-      simulationIds: ['simulation-citi-percent', 'simulation-asset-sale'],
+      proposalIds: ['proposal-citi-percent', 'proposal-asset-sale'],
     });
 
-    const percentSimulation: Simulation = {
-      id: 'simulation-citi-percent',
+    const percentProposal: Proposal = {
+      id: 'proposal-citi-percent',
       name: 'Citi +10%',
       description: 'Incrementa Citi desde el 21 de abril',
       category: 'Incremento de Ingresos' as const,
@@ -360,8 +360,8 @@ describe('scenarioEngine', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
 
-    const amountSimulation: Simulation = {
-      id: 'simulation-asset-sale',
+    const amountProposal: Proposal = {
+      id: 'proposal-asset-sale',
       name: 'Venta de activo',
       description: 'Pago único en marzo',
       category: 'Incremento de Ingresos' as const,
@@ -379,10 +379,10 @@ describe('scenarioEngine', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
 
-    percentSimulation.effects = buildSimulationEffects(plan, percentSimulation);
-    amountSimulation.effects = buildSimulationEffects(plan, amountSimulation);
+    percentProposal.effects = buildProposalEffects(plan, percentProposal);
+    amountProposal.effects = buildProposalEffects(plan, amountProposal);
 
-    const evaluation = evaluateScenario(plan, proposal, scenario, [percentSimulation, amountSimulation], []);
+    const evaluation = evaluateScenario(plan, simulation, scenario, [percentProposal, amountProposal], []);
 
     const marchCiti = evaluation.cells.get(scenarioCellKey('scenario-1', 'citi', '2026-03'));
     const aprilCiti = evaluation.cells.get(scenarioCellKey('scenario-1', 'citi', '2026-04'));
@@ -394,10 +394,10 @@ describe('scenarioEngine', () => {
     expect(marchCiti?.finalValue! - marchCiti?.baseValue!).toBeCloseTo(21, 5);
     expect(aprilCiti?.finalValue! - aprilCiti?.baseValue!).toBeCloseTo(7.61, 2);
     expect(mayCiti?.finalValue! - mayCiti?.baseValue!).toBeCloseTo(22.76, 2);
-    expect(juneCiti?.simulationContributions).toEqual([
+    expect(juneCiti?.proposalContributions).toEqual([
       {
-        simulationId: 'simulation-citi-percent',
-        simulationName: 'Citi +10%',
+        proposalId: 'proposal-citi-percent',
+        proposalName: 'Citi +10%',
         delta: 23.01,
       },
     ]);

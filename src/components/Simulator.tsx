@@ -31,30 +31,30 @@ import {
   CATEGORY_COLORS,
   FlowPlan,
   ForecastGranularity,
-  Proposal,
+  Simulation,
   Scenario,
   ScenarioCellOverride,
-  Simulation,
+  Proposal,
 } from '../types';
 import {
   compareScenarioEvaluations,
   evaluateScenario,
   resolveConceptLabel,
 } from '../domain/scenarioEngine';
-import { isBaseScenario } from '../domain/simulationCompiler';
+import { isBaseScenario } from '../domain/proposalCompiler';
 import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 
 interface SimulatorProps {
   plan: FlowPlan;
-  proposals: Proposal[];
-  scenarios: Scenario[];
   simulations: Simulation[];
+  scenarios: Scenario[];
+  proposals: Proposal[];
   overrides: ScenarioCellOverride[];
-  activeProposalId: string | null;
+  activeSimulationId: string | null;
   activeScenarioId: string | null;
   granularity?: ForecastGranularity;
   onGranularityChange?: (granularity: ForecastGranularity) => void;
-  onSelectProposal: (proposalId: string) => void;
+  onSelectSimulation: (simulationId: string) => void;
   onSelectScenario: (scenarioId: string | null) => void;
   onUpdateScenario: (scenario: Scenario) => void;
 }
@@ -76,8 +76,8 @@ const DELTA_KPIS = [
   { key: 'egresos12m', label: 'Egresos 12m', betterIs: 'lower' as const },
 ] as const;
 
-const VIRTUAL_BASE_PROPOSAL: Proposal = {
-  id: 'proposal-base',
+const VIRTUAL_BASE_PROPOSAL: Simulation = {
+  id: 'simulation-base',
   name: BASE_SCENARIO_NAME,
   description: 'Pronóstico original',
   status: 'Pendiente',
@@ -87,57 +87,57 @@ const VIRTUAL_BASE_PROPOSAL: Proposal = {
 
 export default function Simulator({
   plan,
-  proposals,
-  scenarios,
   simulations,
+  scenarios,
+  proposals,
   overrides,
-  activeProposalId,
+  activeSimulationId,
   activeScenarioId,
   granularity = 'monthly',
   onGranularityChange,
-  onSelectProposal,
+  onSelectSimulation,
   onSelectScenario,
   onUpdateScenario,
 }: SimulatorProps) {
-  const [simulationSearch, setSimulationSearch] = useState('');
+  const [proposalSearch, setProposalSearch] = useState('');
   const [compareScenarioIds, setCompareScenarioIds] = useState<string[]>([]);
-  const [treeOpen, setTreeOpen] = useState<Set<string>>(() => new Set(proposals.map((proposal) => proposal.id)));
+  const [treeOpen, setTreeOpen] = useState<Set<string>>(() => new Set(simulations.map((simulation) => simulation.id)));
   const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
 
-  const activeProposal = proposals.find((proposal) => proposal.id === activeProposalId) ?? proposals[0] ?? null;
+  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? simulations[0] ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? scenarios.find((scenario) => scenario.proposalId === activeProposal?.id)
+    ?? scenarios.find((scenario) => scenario.simulationId === activeSimulation?.id)
     ?? baseScenario
     ?? null;
-  const effectiveProposal = isBaseScenario(activeScenario) ? VIRTUAL_BASE_PROPOSAL : (activeProposal ?? VIRTUAL_BASE_PROPOSAL);
+  const effectiveSimulation = isBaseScenario(activeScenario) ? VIRTUAL_BASE_PROPOSAL : (activeSimulation ?? VIRTUAL_BASE_PROPOSAL);
 
   const activeEvaluation = useMemo(() => {
     if (!activeScenario) return null;
     return evaluateScenario(
       plan,
-      effectiveProposal,
+      effectiveSimulation,
       activeScenario,
-      isBaseScenario(activeScenario) ? [] : simulations,
+      isBaseScenario(activeScenario) ? [] : proposals,
       isBaseScenario(activeScenario) ? [] : overrides,
       { granularity },
     );
-  }, [activeScenario, effectiveProposal, granularity, overrides, plan, simulations]);
+  }, [activeScenario, effectiveSimulation, granularity, overrides, plan, proposals]);
 
   const baseEvaluation = useMemo(() => {
     if (!activeScenario) return null;
-    return evaluateScenario(plan, effectiveProposal, activeScenario, [], [], { granularity });
-  }, [activeScenario, effectiveProposal, granularity, plan]);
+    return evaluateScenario(plan, effectiveSimulation, activeScenario, [], [], { granularity });
+  }, [activeScenario, effectiveSimulation, granularity, plan]);
 
-  const filteredSimulations = useMemo(() => {
-    const query = simulationSearch.trim().toLowerCase();
-    if (!query) return simulations;
-    return simulations.filter((simulation) =>
-      simulation.name.toLowerCase().includes(query) ||
-      simulation.description.toLowerCase().includes(query),
+  const filteredProposals = useMemo(() => {
+    const query = proposalSearch.trim().toLowerCase();
+    if (!query) return proposals;
+    return proposals.filter((proposal) =>
+      proposal.name.toLowerCase().includes(query) ||
+      proposal.description.toLowerCase().includes(query),
     );
-  }, [simulationSearch, simulations]);
+  }, [proposalSearch, proposals]);
 
-  const assignedSimulationIds = new Set(activeScenario?.simulationIds ?? []);
+  const assignedProposalIds = new Set(activeScenario?.proposalIds ?? []);
   const chartData = useMemo(() => {
     if (!activeEvaluation || !baseEvaluation) return [];
     return activeEvaluation.months.map((month, index) => {
@@ -178,28 +178,28 @@ export default function Simulator({
       .map((scenarioId) => {
         const scenario = scenarios.find((candidate) => candidate.id === scenarioId);
         if (!scenario) return null;
-        const proposal = proposals.find((candidate) => candidate.id === scenario.proposalId)
+        const simulation = simulations.find((candidate) => candidate.id === scenario.simulationId)
           ?? VIRTUAL_BASE_PROPOSAL;
-        const evaluation = evaluateScenario(plan, proposal, scenario, simulations, overrides, { granularity });
+        const evaluation = evaluateScenario(plan, simulation, scenario, proposals, overrides, { granularity });
         const diff = compareScenarioEvaluations(evaluation, activeEvaluation);
-        return { proposal, scenario, evaluation, diff };
+        return { simulation, scenario, evaluation, diff };
       })
       .filter(Boolean) as Array<{
-        proposal: Proposal;
+        simulation: Simulation;
         scenario: Scenario;
         evaluation: NonNullable<typeof activeEvaluation>;
         diff: ReturnType<typeof compareScenarioEvaluations>;
       }>;
-  }, [activeEvaluation, compareScenarioIds, granularity, overrides, plan, proposals, scenarios, simulations]);
+  }, [activeEvaluation, compareScenarioIds, granularity, overrides, plan, simulations, scenarios, proposals]);
 
-  const toggleSimulationAssignment = (simulationId: string) => {
+  const toggleProposalAssignment = (proposalId: string) => {
     if (!activeScenario || isBaseScenario(activeScenario)) return;
-    const exists = assignedSimulationIds.has(simulationId);
+    const exists = assignedProposalIds.has(proposalId);
     onUpdateScenario({
       ...activeScenario,
-      simulationIds: exists
-        ? activeScenario.simulationIds.filter((id) => id !== simulationId)
-        : [...activeScenario.simulationIds, simulationId],
+      proposalIds: exists
+        ? activeScenario.proposalIds.filter((id) => id !== proposalId)
+        : [...activeScenario.proposalIds, proposalId],
       updatedAt: new Date().toISOString(),
     });
   };
@@ -214,11 +214,11 @@ export default function Simulator({
     });
   };
 
-  const toggleTree = (proposalId: string) => {
+  const toggleTree = (simulationId: string) => {
     setTreeOpen((current) => {
       const next = new Set(current);
-      if (next.has(proposalId)) next.delete(proposalId);
-      else next.add(proposalId);
+      if (next.has(simulationId)) next.delete(simulationId);
+      else next.add(simulationId);
       return next;
     });
   };
@@ -260,21 +260,21 @@ export default function Simulator({
               </p>
             </button>
           )}
-          {proposals.map((proposal) => {
-            const isOpen = treeOpen.has(proposal.id);
-            const proposalScenarios = scenarios.filter((scenario) => scenario.proposalId === proposal.id);
+          {simulations.map((simulation) => {
+            const isOpen = treeOpen.has(simulation.id);
+            const simulationScenarios = scenarios.filter((scenario) => scenario.simulationId === simulation.id);
             return (
-              <div key={proposal.id} className="rounded-xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)]">
+              <div key={simulation.id} className="rounded-xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)]">
                 <button
                   onClick={() => {
-                    toggleTree(proposal.id);
-                    onSelectProposal(proposal.id);
+                    toggleTree(simulation.id);
+                    onSelectSimulation(simulation.id);
                   }}
                   className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
                 >
                   <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)] truncate">{proposal.name}</p>
-                    <p className="text-[11px] text-[var(--gray-400)]">{proposalScenarios.length} escenarios</p>
+                    <p className="text-[13px] font-semibold text-[var(--gray-950)] truncate">{simulation.name}</p>
+                    <p className="text-[11px] text-[var(--gray-400)]">{simulationScenarios.length} escenarios</p>
                   </div>
                   {isOpen ? (
                     <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" />
@@ -284,13 +284,13 @@ export default function Simulator({
                 </button>
                 {isOpen && (
                   <div className="border-t border-[var(--gray-200)]/40 px-2 py-2 space-y-1">
-                    {proposalScenarios.map((scenario) => {
+                    {simulationScenarios.map((scenario) => {
                       const isActive = scenario.id === activeScenario.id;
                       return (
                         <button
                           key={scenario.id}
                           onClick={() => {
-                            onSelectProposal(proposal.id);
+                            onSelectSimulation(simulation.id);
                             onSelectScenario(scenario.id);
                           }}
                           className={`w-full rounded-lg px-3 py-2 text-left transition ${
@@ -300,7 +300,7 @@ export default function Simulator({
                           }`}
                         >
                           <p className="text-[12px] font-medium">{scenario.name}</p>
-                          <p className="text-[10px]">{scenario.simulationIds.length} propuestas</p>
+                          <p className="text-[10px]">{scenario.proposalIds.length} propuestas</p>
                         </button>
                       );
                     })}
@@ -321,7 +321,7 @@ export default function Simulator({
               <p className="mt-1 text-[13px] text-[var(--gray-400)]">
                 {isBaseScenario(activeScenario)
                   ? 'Pronóstico original sin propuestas aplicadas.'
-                  : `Simulación ${effectiveProposal.name} · ${Math.round(activeScenario.probability * 100)}% probabilidad · ${activeScenario.horizonMonths} meses`}
+                  : `Simulación ${effectiveSimulation.name} · ${Math.round(activeScenario.probability * 100)}% probabilidad · ${activeScenario.horizonMonths} meses`}
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -371,7 +371,7 @@ export default function Simulator({
               </p>
             </div>
             <div className="rounded-full bg-[var(--gray-50)] px-3 py-1 text-[12px] text-[var(--gray-500)]">
-              {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.simulationIds.length} propuestas activas`}
+              {isBaseScenario(activeScenario) ? 'Escenario fijo' : `${activeScenario.proposalIds.length} propuestas activas`}
             </div>
           </div>
 
@@ -578,7 +578,7 @@ export default function Simulator({
             {scenarios
               .filter((scenario) => scenario.id !== activeScenario.id)
               .map((scenario) => {
-                const proposal = proposals.find((item) => item.id === scenario.proposalId);
+                const simulation = simulations.find((item) => item.id === scenario.simulationId);
                 const selected = compareScenarioIds.includes(scenario.id);
                 return (
                   <button
@@ -593,7 +593,7 @@ export default function Simulator({
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-[13px] font-semibold text-[var(--gray-950)]">{scenario.name}</p>
-                        <p className="text-[11px] text-[var(--gray-400)]">{proposal?.name ?? BASE_SCENARIO_NAME}</p>
+                        <p className="text-[11px] text-[var(--gray-400)]">{simulation?.name ?? BASE_SCENARIO_NAME}</p>
                       </div>
                       <span className={`flex h-5 w-5 items-center justify-center rounded-md border ${
                         selected ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--gray-200)]'
@@ -650,19 +650,19 @@ export default function Simulator({
           <h2 className="mt-1 text-[16px] font-semibold text-[var(--gray-950)]">Propuestas activables</h2>
         </div>
         <input
-          value={simulationSearch}
-          onChange={(event) => setSimulationSearch(event.target.value)}
+          value={proposalSearch}
+          onChange={(event) => setProposalSearch(event.target.value)}
           placeholder="Buscar propuesta..."
           className="w-full rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2.5 text-[13px]"
         />
         <div className="space-y-2 max-h-[calc(100vh-260px)] overflow-y-auto pr-1">
-          {filteredSimulations.map((simulation) => {
-            const assigned = assignedSimulationIds.has(simulation.id);
-            const effect = simulation.effects[0];
+          {filteredProposals.map((proposal) => {
+            const assigned = assignedProposalIds.has(proposal.id);
+            const effect = proposal.effects[0];
             return (
               <button
-                key={simulation.id}
-                onClick={() => toggleSimulationAssignment(simulation.id)}
+                key={proposal.id}
+                onClick={() => toggleProposalAssignment(proposal.id)}
                 className={`w-full rounded-xl border px-3 py-3 text-left transition ${
                   assigned
                     ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
@@ -680,13 +680,13 @@ export default function Simulator({
                     <div className="flex items-center gap-2">
                       <div
                         className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: CATEGORY_COLORS[simulation.category] }}
+                        style={{ backgroundColor: CATEGORY_COLORS[proposal.category] }}
                       />
-                      <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{simulation.name}</p>
+                      <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{proposal.name}</p>
                     </div>
-                    <p className="mt-1 text-[11px] text-[var(--gray-400)] line-clamp-2">{simulation.description || 'Sin descripción'}</p>
+                    <p className="mt-1 text-[11px] text-[var(--gray-400)] line-clamp-2">{proposal.description || 'Sin descripción'}</p>
                     <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[var(--gray-500)]">
-                      <span className="rounded-full border border-[var(--gray-200)]/60 bg-white px-2 py-0.5">{simulation.category}</span>
+                      <span className="rounded-full border border-[var(--gray-200)]/60 bg-white px-2 py-0.5">{proposal.category}</span>
                       {effect && (
                         <>
                           <span className="rounded-full border border-[var(--gray-200)]/60 bg-white px-2 py-0.5">

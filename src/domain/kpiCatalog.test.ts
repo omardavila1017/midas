@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { buildKpiCatalog, type KpiConfigOverride } from './kpiCatalog';
-import { createTestPlan, createTestProposal, createTestScenario } from '../test/fixtures';
+import { createTestPlan, createTestSimulation, createTestScenario } from '../test/fixtures';
 
 function buildInput(overrides: Partial<Parameters<typeof buildKpiCatalog>[0]> = {}): Parameters<typeof buildKpiCatalog>[0] {
-  const proposal = createTestProposal();
-  const scenario = createTestScenario({ simulationIds: [] });
+  const simulation = createTestSimulation();
+  const scenario = createTestScenario({ proposalIds: [] });
   return {
     clients: [],
     assumptions: {
@@ -16,11 +16,11 @@ function buildInput(overrides: Partial<Parameters<typeof buildKpiCatalog>[0]> = 
     cxpRecords: [],
     bankStatements: [],
     plan: createTestPlan(),
-    proposals: [proposal],
+    simulations: [simulation],
     scenarios: [scenario],
-    simulations: [],
+    proposals: [],
     overrides: [],
-    activeProposalId: proposal.id,
+    activeSimulationId: simulation.id,
     activeScenarioId: scenario.id,
     activeMonth: 0,
     customKpis: [],

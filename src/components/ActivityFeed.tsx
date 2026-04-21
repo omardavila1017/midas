@@ -18,9 +18,9 @@ export type ActivityAction = 'create' | 'update' | 'delete' | 'import' | 'export
 export type ActivityEntity =
   | 'client'
   | 'provider'
-  | 'proposal'
-  | 'scenario'
   | 'simulation'
+  | 'scenario'
+  | 'proposal'
   | 'kpi'
   | 'cxp'
   | 'plan'
@@ -61,9 +61,9 @@ const ACTION_ICONS: Record<ActivityAction, React.ComponentType<any>> = {
 const ENTITY_COLOR_MAP: Record<ActivityEntity, string> = {
   client: 'var(--primary)',
   provider: 'var(--chart-4)',          // purple
-  proposal: 'var(--success)',
+  simulation: 'var(--success)',
   scenario: 'var(--warning)',
-  simulation: 'var(--info)',         // cyan
+  proposal: 'var(--info)',         // cyan
   kpi: 'var(--chart-5)',               // orange
   cxp: 'var(--danger)',               // red
   plan: 'var(--primary)',              // blue
@@ -73,9 +73,9 @@ const ENTITY_COLOR_MAP: Record<ActivityEntity, string> = {
 const ENTITY_LABEL_MAP: Record<ActivityEntity, string> = {
   client: 'Cliente',
   provider: 'Proveedor',
-  proposal: 'Propuesta',
+  simulation: 'Propuesta',
   scenario: 'Escenario',
-  simulation: 'Simulación',
+  proposal: 'Simulación',
   kpi: 'KPI',
   cxp: 'CXP',
   plan: 'Plan',
