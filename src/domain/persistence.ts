@@ -349,7 +349,6 @@ export function saveStore(store: FlowSenseStore): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch (error) {
-    console.error('Failed to save store to localStorage:', error);
     throw new Error(
       `Failed to save app state: ${error instanceof Error ? error.message : 'Unknown error'}`,
     );
@@ -526,8 +525,8 @@ export function clearStore(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(LEGACY_STORAGE_KEY);
-  } catch (error) {
-    console.error('Failed to clear store from localStorage:', error);
+  } catch {
+    // Ignore storage failures during reset.
   }
 }
 
@@ -576,7 +575,6 @@ export function importStore(json: string): FlowSenseStore {
 
 function validateArray<T>(value: unknown, fieldName: string): T[] {
   if (!Array.isArray(value)) {
-    console.warn(`Field "${fieldName}" is not an array; using default empty array`);
     return [];
   }
   return value;
@@ -700,6 +698,5 @@ function validateISODate(value: unknown, fieldName: string): string {
     if (!Number.isNaN(date.getTime())) return value;
   }
 
-  console.warn(`Field "${fieldName}" is not a valid ISO date; using current time`);
   return isoNow();
 }

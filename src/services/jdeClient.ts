@@ -2,8 +2,8 @@
  * Cliente HTTP para los APIs de JD Edwards.
  *
  * Configuración:
- *   VITE_JDE_BASE_URL   — base URL (default: "/api/jde" → proxy Vite)
- *   VITE_JDE_TOKEN      — Bearer token de autenticación
+ *   VITE_JDE_BASE_URL   — base URL (default: "/api/jde" via apiConfig)
+ *   VITE_JDE_TOKEN      — Bearer credential
  *
  * En desarrollo el `base` default ("/api/jde") es reescrito por el proxy
  * configurado en vite.config.ts hacia https://api.gruposenda.com/v1/erp/tesoreria.
@@ -11,12 +11,13 @@
  */
 
 import { JdeApiError } from './jdeTypes';
+import { apiConfig } from '../config/api.config';
 
 export interface JdeClientConfig {
   /** Base URL sin trailing slash. Default: import.meta.env.VITE_JDE_BASE_URL || "/api/jde". */
   baseUrl?: string;
-  /** Bearer token. Default: import.meta.env.VITE_JDE_TOKEN. */
-  token?: string;
+  /** Bearer credential override. Default: import.meta.env.VITE_JDE_TOKEN. */
+  authValue?: string;
   /** Timeout por request en ms. Default: 30_000. */
   timeoutMs?: number;
 }
@@ -27,13 +28,12 @@ export interface JdeClientConfig {
 const DEFAULT_TIMEOUT_MS = 180_000;
 
 function resolveBaseUrl(override?: string): string {
-  const fromEnv = import.meta.env.VITE_JDE_BASE_URL as string | undefined;
-  const raw = override ?? fromEnv ?? '/api/jde';
+  const raw = override ?? apiConfig.jde.baseUrl ?? '/api/jde';
   return raw.replace(/\/+$/, '');
 }
 
-function resolveToken(override?: string): string | undefined {
-  return override ?? (import.meta.env.VITE_JDE_TOKEN as string | undefined);
+function resolveAuthValue(override?: string): string | undefined {
+  return override ?? apiConfig.jde.authValue;
 }
 
 async function request<T>(
@@ -43,12 +43,12 @@ async function request<T>(
   config: JdeClientConfig,
 ): Promise<T> {
   const baseUrl = resolveBaseUrl(config.baseUrl);
-  const token = resolveToken(config.token);
+  const authValue = resolveAuthValue(config.authValue);
   const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 
-  if (!token) {
+  if (!authValue) {
     throw new JdeApiError(
-      'Falta VITE_JDE_TOKEN — configura el Bearer token en .env.local',
+      'Falta VITE_JDE_TOKEN — configura la credencial Bearer en .env.local',
       401,
       path,
     );
@@ -62,7 +62,7 @@ async function request<T>(
     res = await fetch(url, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${authValue}`,
         Accept: 'application/json',
         ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
       },

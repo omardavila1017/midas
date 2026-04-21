@@ -105,7 +105,7 @@ const BancosForm = ({
   return (
     <div className="w-full max-w-lg mx-auto">
       <div className="text-center mb-8">
-        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--info)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
+        <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
           <Landmark className="text-white" size={26} />
         </div>
         <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Bancos</h1>
@@ -372,7 +372,7 @@ const BancosDashboard = ({
           { label: 'Saldo Total', value: fmtCurrency(saldoTotal), sub: `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`, icon: Wallet, color: hex.primary },
           { label: 'Abonos', value: fmtCurrency(totalAbonos), sub: 'Entradas', icon: ArrowDownCircle, color: hex.success },
           { label: 'Cargos', value: fmtCurrency(totalCargos), sub: 'Salidas', icon: ArrowUpCircle, color: hex.danger },
-          { label: 'Movimientos', value: totalMovs.toLocaleString(), sub: `Al ${query.fechaEstadoCuenta}`, icon: Receipt, color: '#af52de' },
+          { label: 'Movimientos', value: totalMovs.toLocaleString(), sub: `Al ${query.fechaEstadoCuenta}`, icon: Receipt, color: 'var(--chart-4)' },
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           return (
@@ -565,7 +565,7 @@ const Bancos = ({
     [onStatementsChange, onLastQueryChange],
   );
 
-  // ── Auto-switch to dashboard when data arrives from App-level fetch ──
+  // ── Switch to dashboard when data arrives from App-level fetch ──
   useEffect(() => {
     if (statements.length > 0 && lastQuery && view === 'form') {
       setView('dashboard');

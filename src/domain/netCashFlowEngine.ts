@@ -6,7 +6,7 @@
  *
  * Integrates:
  *   - CollectionEvent[] from collectionEngine.ts (CXC)
- *   - CXPRecord[] from CSV upload (CXP)
+ *   - CXPRecord[] from CXP service or manual fallback
  *   - ConfirmedPayment[] for real vs projected tracking
  */
 
@@ -488,7 +488,7 @@ export interface PaymentEvent {
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Parse a date string coming from JDE / Excel exports into ISO 8601 (YYYY-MM-DD).
+ * Parse a date string coming from operational systems into ISO 8601 (YYYY-MM-DD).
  *
  * Accepted formats (JDE CXP exports mix several):
  *   - "YYYY-MM-DD"                 → ISO date
@@ -498,7 +498,7 @@ export interface PaymentEvent {
  *   - "D/M/YYYY" or "DD/MM/YYYY"   → Mexican format (used as fallback when
  *                                    the first part is > 12 and cannot be a month)
  *
- * The /-separated branch auto-detects American vs. Mexican order:
+ * The slash-separated branch detects American vs. Mexican order:
  *   - If the first part is > 12, it must be a day → DD/MM/YYYY
  *   - Otherwise assume MM/DD/YYYY (JDE default for these exports)
  *
@@ -663,7 +663,7 @@ function isDateInPastOrToday(dateStr: string): boolean {
  *
  * If no bank data is provided, the legacy behaviour (CXP paid + pending) is used.
  *
- * @param cxpRecords Array of CXP records from CSV upload
+ * @param cxpRecords Array of CXP records from the service layer
  * @param bankStatements Optional real bank statements (JDE). When provided,
  *                       CARGOs become the authoritative source for "paid" events.
  * @returns Array of payment events, sorted by date

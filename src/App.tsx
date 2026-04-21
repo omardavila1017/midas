@@ -2,8 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { BASE_SCENARIO_ID, FlowPlan, ForecastGranularity, Proposal, Scenario, ScenarioCellOverride, Simulation, TabId, ForecastView } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
-import { loadClientsCatalog } from './domain/loadClientsCatalog';
-import { loadProvidersCatalog } from './domain/loadProvidersCatalog';
+import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import { fetchCompanies, type Company, JdeApiError, type BankAccountStatement, type BankStatementFormat } from './services/jde';
 import Upload from './components/Upload';
 import Dashboard from './components/Dashboard';
@@ -17,23 +16,19 @@ import CashFlowDetail from './components/CashFlowDetail';
 import Forecast from './components/Forecast';
 import KpiCenter from './components/KpiCenter';
 import { DEFAULT_ACTIVE_KPI_IDS, type CustomKpiDefinition, type KpiConfigOverride } from './domain/kpiCatalog';
-// NetCashFlowDashboard disabled — needs real JDE data to be useful
-// import NetCashFlowDashboard from './components/NetCashFlowDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/Toast';
 import { ActivityFeedProvider, useActivityFeed, ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette from './components/CommandPalette';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
-import { useDarkMode } from './hooks/useDarkMode';
-import './styles/dark.css';
 import {
-  LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine, Zap,
+  LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine,
   Users, UserSquare, FileSpreadsheet, Download, LineChart, DollarSign, Sliders,
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
   HandCoins, CreditCard, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
-  Bell, Moon, Sun, Keyboard,
+  Bell, Keyboard,
 } from 'lucide-react';
 import { hex } from './theme';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
@@ -191,7 +186,6 @@ export default function App() {
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
 
   // ── New UI features state ──
-  const { dark, toggle: toggleDark } = useDarkMode();
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
 
@@ -224,10 +218,10 @@ export default function App() {
     }
   }, []);
 
-  // Auto-load clients from catalog if no clients exist yet
+  // Load clients from catalog if no clients exist yet
   useEffect(() => {
     if (catalogLoaded || clients.length > 0) return;
-    loadClientsCatalog().then(loaded => {
+    fetchClientCatalog().then(loaded => {
       if (loaded.length > 0) {
         setClients(loaded);
         setCatalogLoaded(true);
@@ -235,15 +229,16 @@ export default function App() {
     });
   }, [catalogLoaded, clients.length]);
 
-  // Auto-load providers from the bundled catalog if none are loaded yet.
+  // Load providers from the bundled catalog if none are loaded yet.
   // El catálogo vive en src/assets/providerCatalog.json y trae ~470
   // proveedores con su flexibilidad (inamovible/flexible/revisar) para
   // planeación. Se evita si el usuario ya tiene proveedores (subidos o
   // persistidos) para no pisar su edición.
   useEffect(() => {
     if (providers.length > 0) return;
-    const loaded = loadProvidersCatalog();
-    if (loaded.length > 0) setProviders(loaded);
+    fetchProviderCatalog().then((loaded) => {
+      if (loaded.length > 0) setProviders(loaded);
+    });
   }, [providers.length]);
 
   useEffect(() => {
@@ -284,7 +279,7 @@ export default function App() {
     }
   }, [activeProposalId, activeScenarioId, proposals, scenarios]);
 
-  // Auto-save to localStorage (debounced by 500ms)
+  // Save to localStorage after changes (debounced by 500ms)
   useEffect(() => {
     const timer = setTimeout(() => {
       const store: FlowSenseStore = {
@@ -371,7 +366,7 @@ export default function App() {
     } catch { /* ignore */ }
   }, [bankLastQuery]);
 
-  // ── JDE: auto-fetch bank statements on mount ──
+  // ── JDE: fetch bank statements on mount ──
   // Estrategia:
   //   1. Si NO hay nada cacheado, hacer un "prime" rápido de 1 día para
   //      poblar la UI al instante (hoy o últimos 5 días hábiles).
@@ -383,7 +378,7 @@ export default function App() {
   //   3. Único escape: si el cache YA cubre >= 30 días distintos y la última
   //      query fue de hoy, consideramos que ya está fresco y nos saltamos.
   //   4. Si JDE está inalcanzable y no hay cache, cargamos demo data.
-  // Refresh helper — extracted so the auto-fetch effect and any manual
+  // Refresh helper — extracted so the fetch effect and any manual
   // refresh button can share the same code path.
   const refreshBankStatementsRange = useCallback(async (force: boolean = false) => {
     const today = new Date().toISOString().slice(0, 10);
@@ -400,7 +395,6 @@ export default function App() {
         bankLastQuery?.fechaEstadoCuenta === today &&
         distinctDates.size >= 30;
       if (cacheIsFresh) {
-        console.info('[FlowSense] Bancos: cache fresco, skip refetch.');
         return { primed: true, ranged: true };
       }
     }
@@ -430,11 +424,10 @@ export default function App() {
             setBankStatements(res);
             setBankLastQuery({ fechaEstadoCuenta: fecha, formatoElectronico: defaultFormat });
             primed = true;
-            console.info('[FlowSense] Bancos: prime OK para', fecha, '—', res.length, 'cuentas');
             break;
           }
-        } catch (e) {
-          console.warn('[FlowSense] Bancos: prime falló para', fecha, e);
+        } catch {
+          // Try the next recent business date.
         }
       }
     }
@@ -452,26 +445,19 @@ export default function App() {
           concurrency: 6,
           onProgress: (done, total) => {
             setBankFetchProgress({ done, total });
-            if (done === total || done % 20 === 0) {
-              console.info(`[FlowSense] Bancos range fetch: ${done}/${total}`);
-            }
           },
         },
       );
       if (full.length > 0) {
-        const totalMovs = full.reduce((n, a) => n + a.movimientos.length, 0);
-        console.info(`[FlowSense] Bancos: range OK — ${full.length} cuentas, ${totalMovs} movimientos (${yearStart} → ${today})`);
         setBankStatements(full);
         setBankLastQuery({
           fechaEstadoCuenta: today,
           formatoElectronico: defaultFormat,
         });
         ranged = true;
-      } else {
-        console.warn('[FlowSense] Bancos: range fetch regresó 0 cuentas');
       }
-    } catch (e) {
-      console.error('[FlowSense] Bancos: range fetch error', e);
+    } catch {
+      // Keep the last known state visible when the range refresh fails.
     }
 
     setBankFetchStatus('idle');
@@ -615,20 +601,14 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen" style={{ background: '#ffffff' }}>
+    <div className="min-h-screen" style={{ background: 'var(--card)' }}>
       {/* ─── HEADER ─── */}
-      <header className="border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)', background: '#ffffff' }}>
+      <header className="border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)', background: 'var(--card)' }}>
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-2.5 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
-            <div
-              className="w-8 h-8 rounded-[10px] flex items-center justify-center"
-              style={{
-                background: 'linear-gradient(135deg, var(--primary), var(--info))',
-                boxShadow: '0 2px 8px oklch(55% 0.22 255 / 0.2)',
-              }}
-            >
-              <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
+            <div className="h-9 rounded-lg bg-white px-3 flex items-center justify-center border border-[var(--gray-200)]">
+              <img src="/logos/senda-corporativo.svg" alt="Senda" className="h-7 w-auto object-contain" />
             </div>
             <span className="text-[15px] font-semibold tracking-[-0.02em]" style={{ color: 'var(--gray-950)' }}>
               FlowSense
@@ -701,18 +681,6 @@ export default function App() {
               groups={companyGroups}
               onGroupsChange={setCompanyGroups}
             />
-            {/* Dark mode toggle */}
-            <button
-              onClick={toggleDark}
-              title={dark ? 'Modo claro' : 'Modo oscuro'}
-              aria-label={dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-              className="flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
-              style={{ color: 'var(--gray-400)' }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
-            >
-              {dark ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
-            </button>
             {/* Activity feed bell */}
             <button
               onClick={() => setActivityOpen(true)}
@@ -1293,7 +1261,7 @@ function CompanySelector({
                         <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition ${
                           checked ? 'bg-[var(--primary)] border-[var(--primary)]' : 'border-[var(--gray-300)]'
                         }`}>
-                          {checked && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+                          {checked && <Check className="w-3 h-3 text-white" strokeWidth={1.5} />}
                         </div>
                         <span className={checked ? 'text-[var(--primary)] font-medium' : 'text-[var(--gray-700)]'}>
                           {c.cia} — {c.nombre}
@@ -1340,7 +1308,7 @@ function PlanRequired({ onUpload, feature }: { onUpload: () => void; feature: st
     <div className="flex flex-col items-center justify-center py-28 text-center">
       <div
         className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5 animate-card-in"
-        style={{ background: 'linear-gradient(to bottom, var(--gray-50), var(--gray-100))', boxShadow: 'var(--shadow-xs)' }}
+        style={{ background: 'var(--gray-50)', boxShadow: 'var(--shadow-xs)' }}
       >
         <FileSpreadsheet className="w-7 h-7" style={{ color: 'var(--gray-400)' }} />
       </div>
@@ -1348,7 +1316,7 @@ function PlanRequired({ onUpload, feature }: { onUpload: () => void; feature: st
         {feature} requiere un Plan de Flujo
       </h2>
       <p className="text-[13.5px] mt-2 max-w-[420px] leading-relaxed animate-card-in stagger-2" style={{ color: 'var(--gray-400)' }}>
-        {tips[feature] || ''} Carga tu Excel de necesidad de flujo para comenzar.
+        {tips[feature] || ''} Carga el flujo consolidado para comenzar.
         Mientras tanto puedes trabajar en Clientes, Cobranza y Proveedores.
       </p>
       <button

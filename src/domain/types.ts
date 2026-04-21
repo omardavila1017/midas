@@ -14,7 +14,7 @@
 // ---------------------------------------------------------------------------
 // Payment-day pattern
 // ---------------------------------------------------------------------------
-// Column C in the source Excel is free text ("Viernes", "dia 16",
+// The source payment-day field is free text ("Viernes", "dia 16",
 // "Primer Viernes de mes", "Miercoles y Jueves", "Factoraje-Viernes").
 // We normalize it into a structured pattern so the engine can compute
 // deterministic dates.

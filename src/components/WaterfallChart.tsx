@@ -23,8 +23,8 @@ export interface WaterfallChartProps {
 
 /**
  * Waterfall chart component using Recharts BarChart with stacked bars.
- * Positive values (income) render green, negative (expense) red, balance blue.
- * Uses invisible connector bars to position each bar at the correct height.
+ * Positive values render success, negative values danger, and balance primary.
+ * Uses invisible connector bars to position each bar on the running total.
  */
 export default function WaterfallChart({
   data,
@@ -65,7 +65,7 @@ export default function WaterfallChart({
     });
   }, [data]);
 
-  // Format currency for Y-axis (compact: 1M, 1.2M, etc.)
+  // Format currency for compact chart axes.
   const formatCurrency = (value: number): string => {
     if (value === 0) return '0';
     const absValue = Math.abs(value);
@@ -92,13 +92,13 @@ export default function WaterfallChart({
     return (
       <div
         className="rounded-lg border border-gray-300 bg-white p-2 shadow-md"
-        style={{ borderColor: hex.gray200, backgroundColor: '#ffffff' }}
+        style={{ borderColor: hex.gray200, backgroundColor: 'var(--card)' }}
       >
         <p className="text-sm font-medium" style={{ color: hex.gray950 }}>
           {item.label}
         </p>
         <p className="text-xs" style={{ color: hex.gray700 }}>
-          Value: {formatCurrency(item.value)}
+          Valor: {formatCurrency(item.value)}
         </p>
         <p className="text-xs" style={{ color: hex.gray700 }}>
           Total: {formatCurrency(item.runningTotal)}
@@ -111,24 +111,28 @@ export default function WaterfallChart({
     <div className={className}>
       <ResponsiveContainer width="100%" height={height}>
         <BarChart
+          layout="vertical"
           data={chartData}
-          margin={{ top: 16, right: 32, left: 32, bottom: 16 }}
+          margin={{ top: 16, right: 32, left: 16, bottom: 16 }}
         >
           <CartesianGrid
             strokeDasharray="3 3"
             stroke={hex.gray200}
-            vertical={false}
+            horizontal={false}
           />
 
           <XAxis
-            dataKey="label"
+            type="number"
+            tickFormatter={formatCurrency}
             tick={{ fill: hex.gray700, fontSize: 12 }}
             axisLine={{ stroke: hex.gray200 }}
             tickLine={false}
           />
 
           <YAxis
-            tickFormatter={formatCurrency}
+            type="category"
+            dataKey="label"
+            width={128}
             tick={{ fill: hex.gray700, fontSize: 12 }}
             axisLine={{ stroke: hex.gray200 }}
             tickLine={false}
@@ -150,14 +154,14 @@ export default function WaterfallChart({
             stackId="waterfall"
             fill={hex.success}
             isAnimationActive={false}
-            radius={[4, 4, 0, 0]}
+            radius={[0, 4, 4, 0]}
           >
             {chartData.map((entry, index) => {
-              let fillColor: string = hex.success; // default: income (green)
+              let fillColor: string = hex.success;
               if (entry.isBalance) {
-                fillColor = hex.primary; // balance (blue)
+                fillColor = hex.primary;
               } else if (entry.isExpense) {
-                fillColor = hex.danger; // expense (red)
+                fillColor = hex.danger;
               }
               return <Cell key={`cell-${index}`} fill={fillColor} />;
             })}

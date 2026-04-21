@@ -2,13 +2,13 @@
  * Load providers from the bundled provider catalog (src/assets/providerCatalog.json).
  *
  * Fuentes compiladas en providerCatalog.json:
- *   - Proveedores_2026_conciliado.xlsx — flexibilityByName (~470 proveedores)
- *   - Proveedores Criticos TI 2026.xlsx — dtiCatalog (criticidad + área)
- *   - Proveedores_2026_conciliado.xlsx sheet "bdd" — lastPayment (condPago)
+ *   - Catálogo conciliado de proveedores — flexibilityByName (~470 proveedores)
+ *   - Catálogo de proveedores críticos TI — dtiCatalog (criticidad + área)
+ *   - Historial de último pago — lastPayment (condPago)
  *
  * Convierte cada entrada en un `Provider` listo para la pestaña Catálogos →
  * Proveedores. La idea es que el catálogo aparezca pre-poblado sin que el
- * usuario tenga que subir un Excel, y que cada proveedor traiga su
+ * usuario tenga que cargar archivos, y que cada proveedor traiga su
  * flexibilidad para planeación.
  *
  * Mapping:

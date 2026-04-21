@@ -26,17 +26,17 @@ interface ChartDataPoint {
 /**
  * Sparkline — A minimal inline chart for displaying small data series
  *
- * Displays a single-line chart with optional gradient fill and last-point indicator.
+ * Displays a single-line chart with optional last-point indicator.
  * Handles edge cases: empty data, single point, and uniform values.
  *
  * @example
- * <Sparkline data={[10, 12, 11, 15, 14]} width={60} height={20} color="#0071e3" />
+ * <Sparkline data={[10, 12, 11, 15, 14]} width={60} height={20} color="var(--chart-2)" />
  */
 const Sparkline = ({
   data,
   width = 60,
   height = 20,
-  color = '#0071e3',
+  color = 'var(--primary)',
   showDot = false,
   areaFill = false,
   className = '',
@@ -48,9 +48,6 @@ const Sparkline = ({
       index,
     }));
   }, [data]);
-
-  // Generate unique ID for gradient definition
-  const gradientId = useMemo(() => `sparkline-gradient-${Math.random().toString(36).slice(2, 9)}`, []);
 
   // Early return for empty data
   if (data.length === 0) {
@@ -93,14 +90,7 @@ const Sparkline = ({
           data={chartData}
           margin={{ top: 2, right: 2, bottom: 2, left: 2 }}
         >
-          <defs>
-            {areaFill && (
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity={0.1} />
-                <stop offset="100%" stopColor={color} stopOpacity={0} />
-              </linearGradient>
-            )}
-          </defs>
+          <defs />
 
           {/* Invisible axes for proper scaling */}
           <XAxis dataKey="index" hide />
@@ -116,7 +106,7 @@ const Sparkline = ({
             stroke={color}
             strokeWidth={1.5}
             dot={false}
-            fill={areaFill ? `url(#${gradientId})` : 'none'}
+            fill={areaFill ? color : 'none'}
             isAnimationActive={false}
           />
 
@@ -126,7 +116,7 @@ const Sparkline = ({
               type="monotone"
               dataKey="value"
               stroke="none"
-              strokeWidth={0}
+              strokeWidth={1.5}
               dot={{
                 fill: color,
                 r: 1.5,

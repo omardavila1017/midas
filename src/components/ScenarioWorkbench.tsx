@@ -858,7 +858,7 @@ export default function ScenarioWorkbench({
               <button
                 onClick={() => saveScenarioDraft()}
                 disabled={!scenarioDraft.name.trim()}
-                className="rounded-xl bg-[#1d1d1f] px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40"
+                className="rounded-xl bg-[var(--card-foreground)] px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40"
               >
                 {scenarioDraft.scenarioId ? 'Guardar escenario' : 'Crear escenario'}
               </button>
@@ -875,7 +875,7 @@ export default function ScenarioWorkbench({
         <div className="mt-6 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
           <aside className={`rounded-2xl border p-4 ${
             isBase
-              ? 'border-[#1d1d1f] bg-[#1d1d1f] text-white'
+              ? 'border-[var(--card-foreground)] bg-[var(--card-foreground)] text-white'
               : 'border-[var(--gray-200)]/60 bg-[var(--surface-alt)]'
           }`}>
             <div className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">
@@ -889,8 +889,8 @@ export default function ScenarioWorkbench({
               onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
               className={`mt-5 inline-flex h-10 items-center rounded-xl px-4 text-[13px] font-medium transition ${
                 isBase
-                  ? 'bg-white text-[#1d1d1f]'
-                  : 'bg-[#1d1d1f] text-white hover:bg-black'
+                  ? 'bg-white text-[var(--card-foreground)]'
+                  : 'bg-[var(--card-foreground)] text-white hover:bg-black'
               }`}
             >
               {isBase ? 'Base seleccionado' : 'Ver escenario base'}
@@ -954,7 +954,7 @@ export default function ScenarioWorkbench({
                         {proposal && (
                           <button
                             onClick={() => deleteScenarioFull(scenario)}
-                            className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[#ff3b30]"
+                            className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[var(--danger)]"
                             title="Eliminar escenario"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -974,7 +974,7 @@ export default function ScenarioWorkbench({
                         className={`inline-flex h-9 items-center rounded-xl px-3 text-[12px] font-medium transition ${
                           isSelected
                             ? 'bg-white text-[var(--primary)] border border-[var(--primary)]/20'
-                            : 'bg-[#1d1d1f] text-white hover:bg-black'
+                            : 'bg-[var(--card-foreground)] text-white hover:bg-black'
                         }`}
                       >
                         {isSelected ? 'Seleccionado' : 'Abrir'}
@@ -1081,10 +1081,10 @@ export default function ScenarioWorkbench({
                         <button onClick={() => openEditAdjustment(sim)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]" title="Editar">
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
-                        <button onClick={() => removeAdjustmentFromScenario(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Quitar del escenario">
+                        <button onClick={() => removeAdjustmentFromScenario(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]" title="Quitar del escenario">
                           <X className="w-3.5 h-3.5" />
                         </button>
-                        <button onClick={() => deleteAdjustment(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[#ff3b30]" title="Eliminar permanentemente de todos los escenarios">
+                        <button onClick={() => deleteAdjustment(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]" title="Eliminar permanentemente de todos los escenarios">
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -1139,7 +1139,7 @@ export default function ScenarioWorkbench({
             <button
               onClick={openNewAdjustment}
               disabled={editableScenarios.length === 0}
-              className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-xl bg-[#1d1d1f] px-4 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-40"
+              className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-xl bg-[var(--card-foreground)] px-4 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-40"
             >
               Nuevo ajuste
             </button>
@@ -1202,7 +1202,7 @@ export default function ScenarioWorkbench({
                         </button>
                         <button
                           onClick={() => deleteAdjustment(simulation.id)}
-                          className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-white hover:text-[#ff3b30]"
+                          className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-white hover:text-[var(--danger)]"
                         >
                           Eliminar
                         </button>
@@ -1525,7 +1525,7 @@ export default function ScenarioWorkbench({
               <button
                 onClick={saveAdjustment}
                 disabled={!form.name.trim() || form.targetIds.length === 0 || form.assignedScenarioIds.length === 0}
-                className="rounded-xl bg-[#1d1d1f] px-5 py-2.5 text-[13px] font-medium text-white disabled:opacity-40"
+                className="rounded-xl bg-[var(--card-foreground)] px-5 py-2.5 text-[13px] font-medium text-white disabled:opacity-40"
               >
                 {editingId ? 'Guardar cambios' : 'Agregar ajuste'}
               </button>

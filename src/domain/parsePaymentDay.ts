@@ -1,5 +1,5 @@
 /**
- * Parse the free-text "Día de pago" column (Column C of the source Excel)
+ * Parse the free-text "Día de pago" source field
  * into a structured PaymentDayPattern.
  *
  * Recognized forms (Spanish, case-insensitive, accent-insensitive):
@@ -154,8 +154,8 @@ function extractWeekdays(s: string): DayOfWeek[] {
 
 function extractOrdinals(s: string): NthOfMonth[] {
   const hits = ORDINAL_KEYS
-    .filter(token => new RegExp(`\\b${escapeRegExp(token)}\\b`).test(s))
-    .map(token => NTH_MAP[token]);
+    .filter(word => new RegExp(`\\b${escapeRegExp(word)}\\b`).test(s))
+    .map(word => NTH_MAP[word]);
   return uniquePatternNumbers(hits) as NthOfMonth[];
 }
 

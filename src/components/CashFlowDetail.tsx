@@ -44,7 +44,7 @@ interface Props {
   bankFetchStatus?: 'idle' | 'priming' | 'ranging';
   /** Progress counter while ranging (done/total days queried). */
   bankFetchProgress?: { done: number; total: number } | null;
-  /** Manual refresh trigger — re-runs the year-to-date range fetch. */
+  /** Manual refresh trigger — re-runs the YTD range fetch. */
   onRefreshBanks?: () => void;
   /**
    * Legacy / compatibility props — ya no se usan en el cómputo del flujo
@@ -72,14 +72,14 @@ const DOW_SHORT = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
 // Design tokens — Grupo Senda
 const T = {
-  text:        'text-[#1A1A1A]',
-  textMuted:   'text-[#6B7280]',
-  textSubtle:  'text-[#9CA3AF]',
-  border:      'border-[#E5E7EB]',
-  rowHover:    'hover:bg-[#F9FAFB]',
+  text:        'text-[var(--card-foreground)]',
+  textMuted:   'text-[var(--muted-foreground)]',
+  textSubtle:  'text-[var(--gray-300)]',
+  border:      'border-[var(--border)]',
+  rowHover:    'hover:bg-[var(--surface-alt)]',
   surface:     'bg-white',
-  surfaceAlt:  'bg-[#F9FAFB]',
-  divider:     'divide-[#F0F0F0]',
+  surfaceAlt:  'bg-[var(--surface-alt)]',
+  divider:     'divide-[var(--gray-100)]',
 } as const;
 
 export default function CashFlowDetail({
@@ -221,7 +221,7 @@ export default function CashFlowDetail({
         </div>
         <button
           onClick={handleExport}
-          className={`inline-flex items-center gap-2 h-9 px-3 rounded-lg border ${T.border} text-sm font-medium ${T.textMuted} ${T.rowHover} hover:text-[#111827] transition-colors duration-150`}
+          className={`inline-flex items-center gap-2 h-9 px-3 rounded-lg border ${T.border} text-sm font-medium ${T.textMuted} ${T.rowHover} hover:text-[var(--card-foreground)] transition-colors duration-150`}
         >
           <Download size={16} strokeWidth={1.5} />
           Exportar
@@ -354,7 +354,7 @@ function EmptyDataCard({ onRefreshBanks }: { onRefreshBanks?: () => void }) {
   return (
     <div className={`${T.surface} border ${T.border} rounded-xl p-8 max-w-lg mx-auto`}>
       <div className="flex flex-col items-center text-center">
-        <div className="w-12 h-12 rounded-xl bg-[#F9FAFB] flex items-center justify-center mb-4">
+        <div className="w-12 h-12 rounded-xl bg-[var(--surface-alt)] flex items-center justify-center mb-4">
           <Landmark size={22} strokeWidth={1.5} className={T.textSubtle} />
         </div>
         <h2 className={`text-base font-semibold ${T.text}`}>Sin movimientos bancarios</h2>
@@ -388,7 +388,7 @@ function KpiCard({
     success: { chip: 'bg-[var(--success)]/10',  icon: 'text-[var(--success)]', value: 'text-[var(--success)]' },
     danger:  { chip: 'bg-[var(--danger)]/10',   icon: 'text-[var(--danger)]',  value: 'text-[var(--danger)]' },
     primary: { chip: 'bg-[var(--primary)]/10',  icon: 'text-[var(--primary)]', value: 'text-[var(--primary)]' },
-    neutral: { chip: 'bg-[#F3F4F6]',            icon: 'text-[#6B7280]',        value: T.text },
+    neutral: { chip: 'bg-[var(--muted)]',            icon: 'text-[var(--muted-foreground)]',        value: T.text },
   }[tone];
 
   return (
@@ -463,7 +463,7 @@ function BankSummaryCard({
               type="button"
               onClick={onRefreshBanks}
               disabled={isLoading}
-              className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md border ${T.border} text-xs font-medium ${T.textMuted} ${T.rowHover} hover:text-[#111827] transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md border ${T.border} text-xs font-medium ${T.textMuted} ${T.rowHover} hover:text-[var(--card-foreground)] transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <RefreshCw size={12} strokeWidth={1.5} className={isLoading ? 'animate-spin' : ''} />
               Actualizar
@@ -473,7 +473,7 @@ function BankSummaryCard({
       </div>
 
       {/* Métricas */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[#F0F0F0]">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[var(--gray-100)]">
         <BankMetric label="Saldo total"    value={totalBankSaldo}  tone="primary" />
         <BankMetric label="Abonos (real)"  value={totalBankAbonos} tone="success" />
         <BankMetric label="Cargos (real)"  value={totalBankCargos} tone="danger" />
@@ -486,7 +486,7 @@ function BankSummaryCard({
       {/* Lista de empresas — fila dedicada con scroll horizontal para no
           romper el grid cuando son muchas. */}
       {empresas.length > 0 && (
-        <div className={`px-5 py-3 border-t ${T.border} bg-[#FAFAFA]`}>
+        <div className={`px-5 py-3 border-t ${T.border} bg-[var(--surface-alt)]`}>
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin">
             <span className={`text-[11px] font-medium uppercase tracking-wide ${T.textMuted} flex-shrink-0`}>
               Activas
@@ -546,14 +546,14 @@ function BankSkeleton() {
   return (
     <div className={`${T.surface} border ${T.border} rounded-xl animate-pulse`}>
       <div className={`px-5 py-4 border-b ${T.border} flex items-center gap-3`}>
-        <div className="w-8 h-8 rounded-lg bg-[#F3F4F6]" />
-        <div className="h-4 bg-[#F3F4F6] rounded w-48" />
+        <div className="w-8 h-8 rounded-lg bg-[var(--muted)]" />
+        <div className="h-4 bg-[var(--muted)] rounded w-48" />
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[#F0F0F0]">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[var(--gray-100)]">
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="bg-white p-4">
-            <div className="h-3 bg-[#F3F4F6] rounded w-20 mb-3" />
-            <div className="h-6 bg-[#F3F4F6] rounded w-32" />
+            <div className="h-3 bg-[var(--muted)] rounded w-20 mb-3" />
+            <div className="h-6 bg-[var(--muted)] rounded w-32" />
           </div>
         ))}
       </div>
@@ -588,7 +588,7 @@ function GranularityTabs({
     { id: 'monthly', label: 'Mensual' },
   ];
   return (
-    <div className="inline-flex p-0.5 rounded-lg bg-[#F3F4F6]" role="tablist">
+    <div className="inline-flex p-0.5 rounded-lg bg-[var(--muted)]" role="tablist">
       {items.map(it => {
         const active = value === it.id;
         return (
@@ -599,8 +599,8 @@ function GranularityTabs({
             onClick={() => onChange(it.id)}
             className={`px-4 h-8 rounded-md text-sm font-medium transition-colors duration-150 ${
               active
-                ? 'bg-white text-[#1A1A1A] shadow-sm'
-                : 'text-[#6B7280] hover:text-[#1A1A1A]'
+                ? 'bg-white text-[var(--card-foreground)] shadow-sm'
+                : 'text-[var(--muted-foreground)] hover:text-[var(--card-foreground)]'
             }`}
           >
             {it.label}
@@ -855,10 +855,10 @@ function MonthlyTable({
                   <td className={`px-4 py-3 text-sm font-medium ${T.text}`}>{m.monthName}</td>
                   <td className="px-4 py-3 min-w-[180px]">
                     <div className="flex flex-col gap-1">
-                      <div className="h-1.5 rounded-full bg-[#F3F4F6] overflow-hidden">
+                      <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden">
                         <div className="h-full bg-[var(--success)] rounded-full transition-all duration-150" style={{ width: `${inflowPct}%` }} />
                       </div>
-                      <div className="h-1.5 rounded-full bg-[#F3F4F6] overflow-hidden">
+                      <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden">
                         <div className="h-full bg-[var(--danger)] rounded-full transition-all duration-150" style={{ width: `${outflowPct}%` }} />
                       </div>
                     </div>
@@ -1102,7 +1102,7 @@ function Badge({ tone, children }: {
     warning: 'bg-[var(--warning)]/10 text-[var(--warning)]',
     danger:  'bg-[var(--danger)]/10 text-[var(--danger)]',
     info:    'bg-[var(--info)]/10 text-[var(--info)]',
-    neutral: 'bg-[#F3F4F6] text-[#6B7280]',
+    neutral: 'bg-[var(--muted)] text-[var(--muted-foreground)]',
   }[tone];
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${map}`}>

@@ -1,7 +1,7 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { FlowPlan } from '../types';
-import { parseFlowExcel } from '../utils/excelParser';
-import { Upload as UploadIcon, FileSpreadsheet, Zap, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import { fetchCashFlowPlan } from '../services/cashFlow.service';
+import { Database, Zap, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 
 interface UploadProps {
   onPlanLoaded: (plan: FlowPlan) => void;
@@ -11,60 +11,23 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = useCallback(async (file: File) => {
-    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-      setError('Solo se aceptan archivos .xlsx o .xls');
-      return;
-    }
-
+  const handleLoad = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const plan = await parseFlowExcel(file);
+      const plan = await fetchCashFlowPlan();
       setSuccess(true);
       setTimeout(() => {
         onPlanLoaded(plan);
       }, 800);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Error al procesar el archivo';
+      const errorMessage = err instanceof Error ? err.message : 'Error al consultar los datos';
       setError(errorMessage);
       setLoading(false);
     }
   }, [onPlanLoaded]);
-
-  const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      handleFile(files[0]);
-    }
-  }, [handleFile]);
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFile(e.target.files[0]);
-    }
-  };
-
-  const triggerFileInput = () => {
-    fileInputRef.current?.click();
-  };
 
   return (
     <div className="min-h-screen bg-[var(--gray-50)] flex items-center justify-center p-6">
@@ -72,8 +35,8 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
         {/* Logo and Header */}
         <div className="text-center mb-10">
           <div className="flex items-center justify-center gap-3 mb-4 animate-scale-in">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[var(--info)] flex items-center justify-center shadow-lg shadow-blue-200/40">
-              <Zap className="text-white" size={24} />
+            <div className="w-12 h-12 rounded-2xl bg-[var(--primary)] flex items-center justify-center shadow-lg shadow-[var(--primary)]/15">
+              <Zap className="text-white" size={24} strokeWidth={1.5} />
             </div>
           </div>
           <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-[-0.02em] mb-1 animate-card-in stagger-1">FlowSense</h1>
@@ -84,43 +47,30 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
         <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)]/40 p-8 animate-card-in stagger-3 hover-lift">
           {!loading && !success && !error && (
             <>
-              {/* Drag & Drop Zone */}
               <div
-                onDragEnter={handleDrag}
-                onDragLeave={handleDrag}
-                onDragOver={handleDrag}
-                onDrop={handleDrop}
-                onClick={triggerFileInput}
-                className={`border-2 border-dashed rounded-2xl p-14 text-center cursor-pointer transition-all ${
-                  dragActive
-                    ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
-                    : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--surface-alt)]'
-                }`}
+                className="border-2 border-dashed rounded-2xl p-14 text-center transition-all border-[var(--gray-200)] bg-[var(--surface-alt)]"
               >
                 <div className="w-14 h-14 rounded-2xl bg-[var(--gray-50)] flex items-center justify-center mx-auto mb-4">
-                  <UploadIcon className="text-[var(--gray-400)]" size={28} />
+                  <Database className="text-[var(--gray-400)]" size={28} />
                 </div>
                 <p className="text-[15px] font-semibold text-[var(--gray-950)] mb-1">
-                  Arrastra tu Excel aquí
+                  Cargar flujo consolidado
                 </p>
                 <p className="text-[13px] text-[var(--gray-400)]">
-                  o haz clic para seleccionar — .xlsx, .xls
+                  Se consultará el servicio configurado para Atlas.
                 </p>
+                <button
+                  onClick={handleLoad}
+                  className="mt-5 inline-flex items-center gap-2 px-4 h-10 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
+                >
+                  <Database size={16} /> Cargar datos
+                </button>
               </div>
 
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleInputChange}
-                className="hidden"
-              />
-
-              {/* Footer Note */}
               <div className="mt-6 flex items-center gap-3 px-1">
-                <FileSpreadsheet size={16} className="text-[var(--gray-400)] flex-shrink-0" />
+                <Database size={16} className="text-[var(--gray-400)] flex-shrink-0" />
                 <p className="text-[12px] text-[var(--gray-400)]">
-                  Formato esperado: Plan de Flujo Ajustado con datos semanales
+                  Si Atlas aún no tiene credenciales, se usa un plan de respaldo para validación.
                 </p>
               </div>
             </>
@@ -130,8 +80,8 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
           {loading && !success && (
             <div className="text-center py-14">
               <Loader2 className="text-[var(--primary)] animate-spin mx-auto mb-4" size={40} />
-              <p className="text-[15px] font-semibold text-[var(--gray-950)] mb-1">Procesando Excel...</p>
-              <p className="text-[13px] text-[var(--gray-400)]">Analizando estructura y datos</p>
+              <p className="text-[15px] font-semibold text-[var(--gray-950)] mb-1">Consultando datos...</p>
+              <p className="text-[13px] text-[var(--gray-400)]">Preparando flujo consolidado</p>
               <div className="mt-6 h-1 bg-[var(--gray-50)] rounded-full overflow-hidden max-w-xs mx-auto">
                 <div className="h-full bg-[var(--primary)] rounded-full animate-pulse" style={{ width: '60%' }} />
               </div>
@@ -144,7 +94,7 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
               <div className="w-14 h-14 rounded-full bg-[var(--success-muted)] flex items-center justify-center mx-auto mb-4">
                 <CheckCircle className="text-[var(--success)]" size={28} />
               </div>
-              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Archivo procesado</p>
+              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Datos cargados</p>
               <p className="text-[13px] text-[var(--gray-400)] mt-1">Cargando dashboard...</p>
             </div>
           )}
@@ -157,10 +107,10 @@ const Upload = ({ onPlanLoaded }: UploadProps) => {
                   <AlertCircle className="text-[var(--danger)]" size={16} />
                 </div>
                 <div>
-                  <p className="text-[14px] font-semibold text-[var(--gray-950)]">Error al procesar</p>
+                  <p className="text-[14px] font-semibold text-[var(--gray-950)]">Error al consultar</p>
                   <p className="text-[13px] text-[var(--gray-500)] mt-1">{error}</p>
                   <button
-                    onClick={() => { setError(null); triggerFileInput(); }}
+                    onClick={() => { setError(null); handleLoad(); }}
                     className="mt-3 text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]"
                   >
                     Intentar de nuevo

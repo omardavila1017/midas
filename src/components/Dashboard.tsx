@@ -275,7 +275,7 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
                 <span style={{ color: hex.gray500, fontSize: 12, fontWeight: 500 }}>{value}</span>
               )}
             />
-            <ReferenceLine y={0} stroke={hex.danger} strokeDasharray="5 5" strokeWidth={1} strokeOpacity={0.5} />
+            <ReferenceLine y={0} stroke={hex.danger} strokeDasharray="5 5" strokeWidth={1.5} strokeOpacity={0.5} />
             <Bar
               dataKey="Ingresos"
               fill={hex.primary}
@@ -296,9 +296,9 @@ const Dashboard: React.FC<DashboardProps> = ({ plan, proposals }) => {
               type="monotone"
               dataKey="Caja Final"
               stroke={hex.warning}
-              strokeWidth={2.5}
-              dot={{ fill: hex.warning, r: 4, strokeWidth: 2, stroke: '#fff' }}
-              activeDot={{ r: 6, stroke: hex.warning, strokeWidth: 2 }}
+              strokeWidth={1.5}
+              dot={{ fill: hex.warning, r: 4, strokeWidth: 1.5, stroke: 'var(--card)' }}
+              activeDot={{ r: 6, stroke: hex.warning, strokeWidth: 1.5 }}
             />
           </ComposedChart>
         </ResponsiveContainer>

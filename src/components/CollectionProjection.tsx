@@ -601,7 +601,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
       {/* Calendar header */}
       <div className="flex items-center justify-between">
         <button onClick={prevMonth} className="p-2 rounded-lg hover:bg-[var(--gray-50)] transition-colors hover-press">
-          <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+          <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 19l-7-7 7-7" /></svg>
         </button>
         <h2 className="text-lg font-semibold text-[var(--gray-950)]">{MONTH_NAMES[month]} {year}</h2>
         <div className="flex items-center gap-1.5">
@@ -613,7 +613,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             <Download className="w-3.5 h-3.5" />
           </button>
           <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-[var(--gray-50)] transition-colors hover-press">
-            <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+            <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5l7 7-7 7" /></svg>
           </button>
         </div>
       </div>
@@ -823,7 +823,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                             : 'border-2 border-[var(--gray-200)] text-[var(--gray-200)] hover:border-[var(--primary)] hover:text-[var(--primary)]'
                     }`}
                   >
-                    {isConfirmed ? <Check className="w-3.5 h-3.5" strokeWidth={3} /> : isReconciled ? <CheckCircle2 className="w-3.5 h-3.5" /> : <span className="w-2 h-2" />}
+                    {isConfirmed ? <Check className="w-3.5 h-3.5" strokeWidth={1.5} /> : isReconciled ? <CheckCircle2 className="w-3.5 h-3.5" /> : <span className="w-2 h-2" />}
                   </button>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
@@ -893,7 +893,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                   </span>
                   <div className="h-5 bg-[var(--gray-50)] rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-[var(--primary)] to-[var(--info)] rounded-full transition-all"
+                      className="h-full bg-[var(--primary)] rounded-full transition-all"
                       style={{ width: `${Math.min(100, pct)}%` }}
                     />
                   </div>
@@ -932,7 +932,7 @@ function MonthView({ events, total }: { events: CollectionEvent[]; total: number
               <span className="text-[var(--gray-400)] font-medium">{m}</span>
               <div className="h-7 bg-[var(--gray-50)] rounded-md relative overflow-hidden">
                 <div
-                  className="absolute inset-y-0 left-0 bg-gradient-to-r from-[var(--primary)] to-[var(--info)] rounded-md"
+                  className="absolute inset-y-0 left-0 bg-[var(--primary)] rounded-md"
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -1014,7 +1014,7 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
                   <div className="flex items-center gap-2">
                     <div className="h-2 bg-[var(--gray-50)] rounded-full flex-1 min-w-[80px] overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-[var(--primary)] to-[var(--info)] rounded-full"
+                        className="h-full bg-[var(--primary)] rounded-full"
                         style={{ width: `${pct}%` }}
                       />
                     </div>
