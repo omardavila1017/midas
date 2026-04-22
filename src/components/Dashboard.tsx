@@ -22,6 +22,7 @@ import {
   projectFutureIncome,
   buildExpenseProjector,
   projectMonthlyExpense,
+  filterCompleteHistorical,
   toYearMonth,
   addMonths,
   compareYearMonth,
@@ -216,15 +217,22 @@ function computeBaseCashFlow(
 
   const historical = buildHistoricalMonths(filtered);
   const futureExpenses = buildFutureExpenses(agedBalances);
-  const avgIncome = projectFutureIncome(historical, 6);
-  const expenseProjector = buildExpenseProjector(historical);
 
   const today = new Date().toISOString().slice(0, 10);
   const todayYm = toYearMonth(today);
+  // Excluimos el mes en curso (parcial) del input de proyección para no sesgar
+  // los promedios hacia abajo.
+  const completeHistorical = filterCompleteHistorical(historical, today);
+  const avgIncome = projectFutureIncome(completeHistorical, 6);
+  const expenseProjector = buildExpenseProjector(completeHistorical);
+
   const horizonMonths = 12;
   const lastHistoricalYm = historical.length > 0
     ? historical[historical.length - 1].yearMonth
     : todayYm;
+  const projectionAnchorYm = completeHistorical.length > 0
+    ? completeHistorical[completeHistorical.length - 1].yearMonth
+    : lastHistoricalYm;
   const firstFutureYm = addMonths(
     compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
     1,
@@ -235,7 +243,7 @@ function computeBaseCashFlow(
   let running = historical.length > 0 ? historical[historical.length - 1].closingCash : 0;
   let cursor = firstFutureYm;
   while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-    const offset = Math.max(1, monthsBetween(lastHistoricalYm, cursor));
+    const offset = Math.max(1, monthsBetween(projectionAnchorYm, cursor));
     const committed = futureExpenses.get(cursor) ?? 0;
     const expense = projectMonthlyExpense(offset, committed, expenseProjector);
     const income = avgIncome;

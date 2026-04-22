@@ -7,6 +7,7 @@ import {
   projectFutureIncome,
   buildExpenseProjector,
   projectMonthlyExpense,
+  filterCompleteHistorical,
   applyProposalToMonth,
   evaluateCashFlow,
 } from './cashFlowEngine';
@@ -126,28 +127,62 @@ describe('buildExpenseProjector', () => {
     expect(p(5)).toBe(0);
   });
 
-  it('extrapolates the trend via linear regression', () => {
-    // Egresos crecientes 100, 200, 300 → slope 100, intercept 100.
+  it('returns the moving average of the window regardless of offset', () => {
     const hist: CashFlowMonth[] = [
       { yearMonth: '2026-01', isHistorical: true, income: 0, expense: 100, closingCash: 0 },
       { yearMonth: '2026-02', isHistorical: true, income: 0, expense: 200, closingCash: 0 },
       { yearMonth: '2026-03', isHistorical: true, income: 0, expense: 300, closingCash: 0 },
     ];
     const p = buildExpenseProjector(hist);
-    expect(p(1)).toBeCloseTo(400, 2); // mes siguiente al último histórico
-    expect(p(2)).toBeCloseTo(500, 2);
-    expect(p(6)).toBeCloseTo(900, 2);
+    // Promedio = (100+200+300)/3 = 200, constante para cualquier offset.
+    expect(p(1)).toBeCloseTo(200, 2);
+    expect(p(6)).toBeCloseTo(200, 2);
+    expect(p(12)).toBeCloseTo(200, 2);
   });
 
-  it('clamps negative projections to zero', () => {
-    // Tendencia fuertemente descendente — no regresamos egresos negativos.
+  it('does not collapse to zero when recent months trend down', () => {
+    // Antes la regresión lineal devolvía 0 para offsets grandes cuando los
+    // últimos meses bajaban (típicamente porque el mes en curso venía
+    // parcial). Con la media móvil mantenemos un baseline estable.
     const hist: CashFlowMonth[] = [
       { yearMonth: '2026-01', isHistorical: true, income: 0, expense: 300, closingCash: 0 },
       { yearMonth: '2026-02', isHistorical: true, income: 0, expense: 200, closingCash: 0 },
       { yearMonth: '2026-03', isHistorical: true, income: 0, expense: 100, closingCash: 0 },
     ];
     const p = buildExpenseProjector(hist);
-    expect(p(5)).toBe(0);
+    expect(p(1)).toBeCloseTo(200, 2);
+    expect(p(9)).toBeCloseTo(200, 2);
+  });
+
+  it('respects the window size, ignoring older months', () => {
+    const hist: CashFlowMonth[] = [
+      { yearMonth: '2025-10', isHistorical: true, income: 0, expense: 1000, closingCash: 0 },
+      { yearMonth: '2025-11', isHistorical: true, income: 0, expense: 1000, closingCash: 0 },
+      { yearMonth: '2025-12', isHistorical: true, income: 0, expense: 100, closingCash: 0 },
+      { yearMonth: '2026-01', isHistorical: true, income: 0, expense: 100, closingCash: 0 },
+    ];
+    const p = buildExpenseProjector(hist, 2);
+    expect(p(1)).toBeCloseTo(100, 2);
+  });
+});
+
+describe('filterCompleteHistorical', () => {
+  it('drops the current (partial) month and any future-dated rows', () => {
+    const hist: CashFlowMonth[] = [
+      { yearMonth: '2026-01', isHistorical: true, income: 0, expense: 0, closingCash: 0 },
+      { yearMonth: '2026-02', isHistorical: true, income: 0, expense: 0, closingCash: 0 },
+      { yearMonth: '2026-03', isHistorical: true, income: 0, expense: 0, closingCash: 0 },
+      { yearMonth: '2026-04', isHistorical: true, income: 0, expense: 0, closingCash: 0 },
+    ];
+    const complete = filterCompleteHistorical(hist, '2026-04-22');
+    expect(complete.map((m) => m.yearMonth)).toEqual(['2026-01', '2026-02', '2026-03']);
+  });
+
+  it('returns an empty list when no month has closed yet', () => {
+    const hist: CashFlowMonth[] = [
+      { yearMonth: '2026-04', isHistorical: true, income: 0, expense: 0, closingCash: 0 },
+    ];
+    expect(filterCompleteHistorical(hist, '2026-04-01')).toEqual([]);
   });
 });
 
