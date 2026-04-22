@@ -4,7 +4,7 @@ Artifact: flujo-senda
 Audited by: SendaStack audit-agent
 
 ## 1. Observable Purpose
-FlowSense is a treasury and cash-flow workbench for transport companies. It lets users select companies or groups, load or derive clients/providers, review bank movements and accounts payable, project collections, manage simulations/scenarios/proposals, and inspect KPIs and forecasts for cash-flow decisions.
+Midas is a treasury and cash-flow workbench for transport companies. It lets users select companies or groups, load or derive clients/providers, review bank movements and accounts payable, project collections, manage simulations/scenarios/proposals, and inspect KPIs and forecasts for cash-flow decisions.
 
 ## 2. Users
 | ROL | ÁREA | FRECUENCIA ESTIMADA |

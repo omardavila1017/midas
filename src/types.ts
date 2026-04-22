@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────
-// FlowSense types — modelo simplificado post-rewrite.
+// Midas types — modelo simplificado post-rewrite.
 //
 // Principios:
 //   - "Base" no es una entidad. Es el set de propuestas con enabled=false.

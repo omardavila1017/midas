@@ -7,7 +7,7 @@
  *   "Grupo Citi"  → ['00038']           (Senda Citi)
  *   "Todas"       → all companies (built-in, not editable)
  *
- * Persisted in localStorage under key 'flowsense.companyGroups'.
+ * Persisted in localStorage under key 'midas.companyGroups'.
  */
 
 export interface CompanyGroup {
@@ -22,14 +22,24 @@ export interface CompanyGroup {
   createdAt: string;
 }
 
-const STORAGE_KEY = 'flowsense.companyGroups';
+const STORAGE_KEY = 'midas.companyGroups';
+const LEGACY_STORAGE_KEY = 'flowsense.companyGroups';
 
 /**
  * Load company groups from localStorage.
  */
 export function loadCompanyGroups(): CompanyGroup[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (raw) {
+        try {
+          localStorage.setItem(STORAGE_KEY, raw);
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+        } catch { /* ignore */ }
+      }
+    }
     return raw ? JSON.parse(raw) : [];
   } catch {
     return [];

@@ -1,5 +1,5 @@
 /**
- * FlowSense — Unified formatting functions
+ * Midas — Unified formatting functions
  *
  * SINGLE SOURCE OF TRUTH for currency, number, and date display.
  * Every component imports from here — never define local formatters.

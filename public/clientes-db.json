@@ -2,7 +2,7 @@
   "_meta": {
     "version": "1.0",
     "lastUpdated": "2026-04-15",
-    "description": "Base de datos local de clientes FlowSense. El artefacto React lee este archivo automaticamente. Para agregar un cliente nuevo, agrega un objeto al array 'clientes' y el sistema lo detecta.",
+    "description": "Base de datos local de clientes Midas. El artefacto React lee este archivo automaticamente. Para agregar un cliente nuevo, agrega un objeto al array 'clientes' y el sistema lo detecta.",
     "schema": {
       "name": "Razon social del cliente",
       "payDay": "Regla de dia de pago (ej: 'Viernes', 'Jueves-Quincenal', '10 y 25', 'Primer Viernes de mes')",
