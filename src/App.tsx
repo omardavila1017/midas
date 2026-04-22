@@ -517,22 +517,19 @@ export default function App() {
       {/* ─── HEADER ─── */}
       <header className="border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)', background: 'var(--card)' }}>
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
-          {/* Logo */}
-          <div className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
-            <img src="/logos/senda-corporativo.svg" alt="Senda" className="h-7 w-auto object-contain" />
+          {/* Brand lockup — Senda (burgundy) + divider + Midas (gold gradient) */}
+          <div
+            className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer"
+            onClick={() => setActiveTab('netflow')}
+            aria-label="Midas · Senda corporativo"
+          >
+            <span className="senda-lockup">
+              <img src="/logos/senda-corporativo.svg" alt="Senda" />
+            </span>
+            <span className="midas-divider" aria-hidden="true" />
             <span
-              className="h-6 w-px"
-              style={{ background: 'var(--gray-200)' }}
-              aria-hidden
-            />
-            <span
-              className="text-[22px] font-bold tracking-[-0.03em] leading-none"
-              style={{
-                background: 'linear-gradient(135deg, #b08518 0%, #e9b944 40%, #f5c560 55%, #b08518 100%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-              }}
+              className="midas-wordmark"
+              style={{ fontSize: '22px' }}
             >
               Midas
             </span>
