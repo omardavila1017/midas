@@ -322,7 +322,6 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
       </div>
 
       <MonthDrilldown
-        open={selectedMonth !== null}
         yearMonth={selectedMonth}
         bankStatements={bankStatements}
         agedBalances={aged}
@@ -376,7 +375,7 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
           ))}
       </ul>
       <p className="text-[10px] mt-1.5" style={{ color: 'var(--gray-400)' }}>
-        Clic para desglose del mes
+        Clic para ver el detalle abajo
       </p>
     </div>
   );
