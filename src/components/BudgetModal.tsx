@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Upload, Download, AlertTriangle, FileSpreadsheet, Check, Trash2 } from 'lucide-react';
 import type { Budget, BudgetScale } from '../domain/budget';
 import {
@@ -29,6 +29,20 @@ const SCALES: BudgetScale[] = ['millones', 'miles', 'pesos'];
 const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear }) => {
   const [parsed, setParsed] = useState<ParsedState>({ status: 'idle' });
   const [downloadScale, setDownloadScale] = useState<BudgetScale>('millones');
+
+  // Esc cierra el modal; además bloqueamos scroll del body mientras está
+  // abierto para que no se pueda hacer scroll detrás del backdrop.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -93,30 +107,70 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+    <>
+      {/* Backdrop: gris oscuro con blur suave — mantiene la jerarquía visual
+          sin el look de "pantalla negra". El z-index vive por debajo del
+          modal para que el clic fuera cierre sin bloquear la interacción. */}
       <div
-        className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <header className="flex items-center justify-between px-5 py-4 border-b border-[var(--gray-100)]">
-          <div className="flex items-center gap-2.5">
-            <FileSpreadsheet className="w-5 h-5" style={{ color: 'var(--primary)' }} />
-            <h2 className="text-[16px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-              Presupuesto anual
-            </h2>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Cerrar"
-            className="w-8 h-8 flex items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)]"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </header>
+        className="fixed inset-0 z-[300] animate-fade-in"
+        onClick={onClose}
+        aria-hidden="true"
+        style={{
+          background: 'color-mix(in srgb, var(--gray-950) 38%, transparent)',
+          backdropFilter: 'blur(4px)',
+          WebkitBackdropFilter: 'blur(4px)',
+        }}
+      />
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+      {/* Modal container — dialog separado, centrado, con scroll interno
+          y animación spring. */}
+      <div
+        className="fixed inset-0 z-[400] flex items-center justify-center p-4 pointer-events-none"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="budget-modal-title"
+      >
+        <div
+          className="pointer-events-auto w-full max-w-2xl max-h-[calc(100vh-2rem)] rounded-2xl bg-white flex flex-col overflow-hidden animate-scale-in"
+          style={{
+            boxShadow: 'var(--shadow-lg)',
+            border: '1px solid var(--gray-200)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <header className="flex items-center justify-between px-5 py-4 border-b border-[var(--gray-100)] flex-shrink-0">
+            <div className="flex items-center gap-2.5">
+              <span
+                className="w-8 h-8 rounded-lg flex items-center justify-center"
+                style={{ background: 'var(--primary-muted)' }}
+              >
+                <FileSpreadsheet className="w-4 h-4" style={{ color: 'var(--primary)' }} />
+              </span>
+              <div>
+                <h2
+                  id="budget-modal-title"
+                  className="text-[15px] font-semibold tracking-tight"
+                  style={{ color: 'var(--gray-950)' }}
+                >
+                  Presupuesto anual
+                </h2>
+                <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
+                  Importa o descarga el CSV del presupuesto del año.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              aria-label="Cerrar"
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)] transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </header>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {/* Current budget pill */}
           {budget && parsed.status === 'idle' && (
             <div className="rounded-xl border border-[var(--success)]/30 bg-[var(--success)]/5 p-4 flex items-start gap-3">
@@ -228,9 +282,10 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
