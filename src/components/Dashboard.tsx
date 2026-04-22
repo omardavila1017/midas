@@ -22,9 +22,6 @@ import type { Budget } from '../domain/budget';
 import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
 import {
   buildHistoricalMonths,
-  projectFutureIncome,
-  buildExpenseProjector,
-  filterCompleteHistorical,
   toYearMonth,
   addMonths,
   compareYearMonth,
@@ -32,7 +29,6 @@ import {
 } from '../domain/cashFlowEngine';
 import {
   buildMonthlyProjection,
-  applyProjectionOverrides,
   type ProjectionOverrides,
   type MonthlyProjection,
 } from '../domain/projectionEngine';
@@ -92,7 +88,7 @@ function migrateLegacyKey(newKey: string, legacyKey: string): string | null {
   } catch { return null; }
 }
 
-function loadOverrides(): ProjectionOverrides {
+export function loadOverrides(): ProjectionOverrides {
   try {
     const raw = migrateLegacyKey(OVERRIDES_KEY, LEGACY_OVERRIDES_KEY);
     if (!raw) return {};
@@ -196,7 +192,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     const ym = m.yearMonth;
     const cmp = compareYearMonth(ym, currentYm);
     const override = overrides[ym];
-    const projDetail = projectionByMonth.get(ym);
     const budgetIncome = budgetMonthValue(ym, 'income');
     const budgetExpense = budgetMonthValue(ym, 'expense');
 
@@ -237,8 +232,11 @@ const Dashboard: React.FC<DashboardProps> = ({
       };
     }
     // Mes en curso: real parcial + lo que falta para llegar al total proyectado.
-    const projectedIncomeTotal = override?.income ?? projDetail?.income.total ?? baseline.avgIncome;
-    const projectedExpenseTotal = override?.expense ?? projDetail?.expense.total ?? baseline.avgExpense;
+    // El total proyectado sale del presupuesto (o del override si existe).
+    // Antes caía a baseline.avgIncome/avgExpense (regresión sobre el histórico)
+    // cuando no había budget — eso se removió a pedido del usuario.
+    const projectedIncomeTotal = override?.income ?? budgetIncome ?? 0;
+    const projectedExpenseTotal = override?.expense ?? budgetExpense ?? 0;
     const projIncGap = Math.max(0, projectedIncomeTotal - m.baseIncome);
     const projExpGap = Math.max(0, projectedExpenseTotal - m.baseExpense);
     return {
@@ -294,9 +292,9 @@ const Dashboard: React.FC<DashboardProps> = ({
           override,
         };
       }
-      // current
-      const projIncTotal = override?.income ?? projDetail?.income.total ?? baseline.avgIncome;
-      const projExpTotal = override?.expense ?? projDetail?.expense.total ?? baseline.avgExpense;
+      // current — sólo budget o override manual, no baseline.avg*.
+      const projIncTotal = override?.income ?? budgetIncome ?? 0;
+      const projExpTotal = override?.expense ?? budgetExpense ?? 0;
       return {
         yearMonth: ym,
         phase,
@@ -682,7 +680,7 @@ const KpiCard: React.FC<{ label: string; value: number; icon: React.ReactNode; c
   </div>
 );
 
-interface ComputeInputs {
+export interface ComputeInputs {
   bankStatements: BankAccountStatement[];
   aged: AgedBalanceRecord[];
   clients: Client[];
@@ -702,7 +700,7 @@ interface ComputeInputs {
   startingBalance?: number;
 }
 
-interface ComputeOutput {
+export interface ComputeOutput {
   base: CashFlowMonth[];
   baseline: { avgIncome: number; avgExpense: number };
   projection: ReturnType<typeof buildMonthlyProjection>;
@@ -718,7 +716,7 @@ export function computeBankStartingBalance(statements: BankAccountStatement[]): 
   return statements.reduce((s, acc) => s + (acc.saldoInicial ?? 0), 0);
 }
 
-function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
+export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance, budget } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
@@ -736,13 +734,14 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   const historical = buildHistoricalMonths(filtered);
 
   const todayYm = toYearMonth(today);
-  const completeHistorical = filterCompleteHistorical(historical, today);
-  const avgIncome = projectFutureIncome(completeHistorical, 6);
-  const expenseProjector = buildExpenseProjector(completeHistorical);
-  const avgExpense = expenseProjector(1);
-  const baseline = { avgIncome, avgExpense };
 
-  const horizonMonths = 12;
+  // Horizonte: diciembre del año en curso.
+  // El usuario pidió explícitamente que el flujo mensual cubra enero-diciembre
+  // y que las proyecciones salgan únicamente del CSV de presupuesto, sin
+  // regresión lineal ni promedios móviles. Cortamos el horizonte al fin del
+  // año calendario actual en vez de los 12 meses rolling que teníamos antes.
+  const todayYear = Number(todayYm.slice(0, 4));
+  const endOfYearYm = `${todayYear}-12`;
   const lastHistoricalYm = historical.length > 0
     ? historical[historical.length - 1].yearMonth
     : todayYm;
@@ -750,26 +749,31 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
     1,
   );
-  const lastFutureYm = addMonths(todayYm, horizonMonths);
+  // Si el horizonte calendario ya quedó atrás del último histórico, no hay
+  // proyección — sólo rendiremos el histórico.
+  const lastFutureYm = compareYearMonth(endOfYearYm, firstFutureYm) >= 0
+    ? endOfYearYm
+    : null;
 
-  // Proyección "real" combinando clientes + aged + recurrentes bancarios.
-  // Extendemos el rango al mes en curso para tener totales proyectados del
-  // mes parcial (lo que ya entró + lo que falta = total esperado).
+  // La proyección per-cliente / per-proveedor se mantiene para alimentar los
+  // drilldowns mensuales (vista detallada del mes en curso). No se usa ya
+  // para la línea de caja: esa sale del presupuesto.
   const projection = buildMonthlyProjection({
     fromYm: todayYm,
-    toYm: lastFutureYm,
+    toYm: lastFutureYm ?? todayYm,
     clients,
     providers,
     aged: combinedAged,
     bankStatements: filtered,
-    baselineIncome: avgIncome,
-    baselineExpense: avgExpense,
+    baselineIncome: 0,
+    baselineExpense: 0,
     assumptions,
     today,
     budget,
   });
-  const overridden = applyProjectionOverrides(projection.months, overrides);
-  const projectionByYm = new Map(overridden.map((p) => [p.yearMonth, p]));
+
+  // Baseline queda expuesto como 0 — ya no se calcula linear regression.
+  const baseline = { avgIncome: 0, avgExpense: 0 };
 
   // ── Encadenado de caja con fórmula simple y predecible ──────────────
   // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
@@ -792,24 +796,33 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     historicalChained.push({ ...m, closingCash: runningHist });
   }
 
+  // Proyección budget-only para los meses futuros. Si el usuario cargó un
+  // override manual del mes, ese valor manda; si no, toma el valor directo
+  // del presupuesto. Si no hay presupuesto, el mes queda en 0 — la UI debe
+  // mostrar claramente ese estado para que el usuario cargue el CSV.
   const months: CashFlowMonth[] = [...historicalChained];
   let running = historicalChained.length > 0
     ? historicalChained[historicalChained.length - 1].closingCash
     : baseStart;
-  let cursor = firstFutureYm;
-  while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-    const p = projectionByYm.get(cursor);
-    const income = p?.income ?? avgIncome;
-    const expense = p?.expense ?? avgExpense;
-    running = running + income - expense;
-    months.push({
-      yearMonth: cursor,
-      isHistorical: false,
-      income,
-      expense,
-      closingCash: running,
-    });
-    cursor = addMonths(cursor, 1);
+  if (lastFutureYm !== null) {
+    let cursor = firstFutureYm;
+    while (compareYearMonth(cursor, lastFutureYm) <= 0) {
+      const monthIndex = Number(cursor.slice(5, 7)) - 1;
+      const budgetIncome = budget?.incomeTotal?.[monthIndex] ?? 0;
+      const budgetExpense = budget?.expenseTotal?.[monthIndex] ?? 0;
+      const ov = overrides[cursor];
+      const income = ov?.income ?? budgetIncome;
+      const expense = ov?.expense ?? budgetExpense;
+      running = running + income - expense;
+      months.push({
+        yearMonth: cursor,
+        isHistorical: false,
+        income,
+        expense,
+        closingCash: running,
+      });
+      cursor = addMonths(cursor, 1);
+    }
   }
   return { base: months, baseline, projection };
 }

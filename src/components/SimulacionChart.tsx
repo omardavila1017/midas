@@ -10,9 +10,11 @@ import {
   ResponsiveContainer,
   Area,
   ReferenceLine,
+  ReferenceDot,
 } from 'recharts';
 import type { EvaluatedCashFlow } from '../types';
 import { fmtCompact, fmtCurrency } from '../formatters';
+import AnimatedNumber from './ui/AnimatedNumber';
 
 interface Props {
   data: EvaluatedCashFlow;
@@ -29,7 +31,11 @@ const COLOR = {
   tickText: '#64748b',    // var(--gray-400)
   refLine: '#cbd5e1',
   histArea: '#cbd5e1',    // fill histórico (sólido a baja opacidad)
-  danger: '#dc2626',      // var(--danger) — línea de cero cuando caja cae
+  danger: '#dc2626',      // var(--danger)
+  dangerFill: '#fee2e2',  // fondo delta negativo (var(--danger-muted))
+  success: '#16a34a',
+  successFill: '#dcfce7', // fondo delta positivo (var(--success-muted))
+  proposalMark: '#1e293b',
 } as const;
 
 const MONTH_LABELS_SHORT = [
@@ -43,23 +49,105 @@ function formatMonthTick(yearMonth: string): string {
   return `${MONTH_LABELS_SHORT[(m - 1) % 12]} ${String(y).slice(2)}`;
 }
 
-const SimulacionChart: React.FC<Props> = ({ data }) => {
-  const chartData = useMemo(
-    () =>
-      data.months.map((m) => ({
-        yearMonth: m.yearMonth,
-        base: m.baseClosingCash,
-        forecast: m.forecastClosingCash,
-        historicalArea: m.isHistorical ? m.baseClosingCash : null,
-      })),
-    [data],
+// Dot fijo en el último punto de la proyección. Marca "dónde termina" sin
+// pelear con la línea.
+const LastPointDot: React.FC<{ cx?: number; cy?: number }> = ({ cx, cy }) => {
+  if (cx === undefined || cy === undefined) return null;
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={8} fill={COLOR.forecast} fillOpacity={0.08} />
+      <circle cx={cx} cy={cy} r={4} fill={COLOR.forecast} />
+      <circle cx={cx} cy={cy} r={2} fill="white" />
+    </g>
   );
+};
 
+// Marker en el mes donde inicia una propuesta: un pequeño pin sobre la curva
+// simulada. No lleva label largo — el tooltip ya trae el detalle del mes;
+// aquí sólo damos la pista visual de "aquí empezó a actuar la propuesta".
+const ProposalStartDot: React.FC<{ cx?: number; cy?: number }> = ({ cx, cy }) => {
+  if (cx === undefined || cy === undefined) return null;
+  return (
+    <g>
+      {/* Halo apenas perceptible para separar el pin de la línea */}
+      <circle cx={cx} cy={cy} r={7} fill="white" />
+      <circle cx={cx} cy={cy} r={5} fill={COLOR.proposalMark} fillOpacity={0.12} />
+      <circle cx={cx} cy={cy} r={3.5} fill={COLOR.proposalMark} />
+      <circle cx={cx} cy={cy} r={1.5} fill="white" />
+    </g>
+  );
+};
+
+const SimulacionChart: React.FC<Props> = ({ data }) => {
   const firstFutureIndex = data.months.findIndex((m) => !m.isHistorical);
+
+  // chartData genera TODAS las series:
+  // - base / forecast: las dos curvas principales.
+  // - historicalArea: área gris debajo del histórico. Se extiende un mes
+  //   más allá del último histórico para que el relleno toque la línea
+  //   vertical "Proyección" (antes terminaba un mes antes y quedaba un
+  //   hueco visual en el screenshot que reportó el usuario).
+  // - deltaAbove / deltaBelow: rangos [low, high] que Recharts rellena
+  //   como área entre las dos líneas. Verde cuando la simulación está
+  //   arriba de la base, rojo cuando está abajo. Con type="monotone" las
+  //   bandas siguen la forma curva de las líneas.
+  const chartData = useMemo(() => {
+    return data.months.map((m, i) => {
+      const base = m.baseClosingCash;
+      const forecast = m.forecastClosingCash;
+      const extendArea = m.isHistorical || i === firstFutureIndex;
+      return {
+        yearMonth: m.yearMonth,
+        base,
+        forecast,
+        historicalArea: extendArea ? base : null,
+        deltaAbove: forecast > base ? [base, forecast] : null,
+        deltaBelow: forecast < base ? [forecast, base] : null,
+      };
+    });
+  }, [data, firstFutureIndex]);
+
   const crossesZero = useMemo(
     () => chartData.some((d) => d.base < 0 || d.forecast < 0),
     [chartData],
   );
+
+  const lastForecast = chartData.length > 0 ? chartData[chartData.length - 1] : null;
+
+  // Deltas totales para los KPIs de arriba.
+  const deltaClosing = data.totalForecastClosingCash - data.totalBaseClosingCash;
+  const deltaSign = deltaClosing >= 0 ? '+' : '−';
+  const deltaColor = deltaClosing >= 0 ? COLOR.success : COLOR.danger;
+
+  // Meses presentes en el chart — mapa para resolver propuestas cuyo
+  // startYearMonth cae fuera del rango visible (las ignoramos) o antes del
+  // histórico (las clampeamos al primer mes visible).
+  const monthsSet = useMemo(() => new Set(chartData.map((d) => d.yearMonth)), [chartData]);
+  const firstVisibleYm = chartData[0]?.yearMonth;
+  const forecastByYm = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const d of chartData) map.set(d.yearMonth, d.forecast);
+    return map;
+  }, [chartData]);
+
+  // Marker en el mes en que cada propuesta activa empieza a empujar la curva.
+  // Si una propuesta arranca antes del rango, anclamos al primer mes visible;
+  // si arranca después, no se muestra (su impacto aún no está en el horizonte).
+  const proposalMarkers = useMemo(() => {
+    return data.proposals
+      .filter((p) => p.enabled)
+      .map((p) => {
+        let ym = p.startYearMonth;
+        if (!monthsSet.has(ym)) {
+          if (firstVisibleYm && ym < firstVisibleYm) ym = firstVisibleYm;
+          else return null;
+        }
+        const y = forecastByYm.get(ym);
+        if (y === undefined) return null;
+        return { id: p.id, name: p.name, yearMonth: ym, y };
+      })
+      .filter((x): x is { id: string; name: string; yearMonth: string; y: number } => x !== null);
+  }, [data.proposals, monthsSet, firstVisibleYm, forecastByYm]);
 
   if (data.months.length === 0) {
     return (
@@ -79,108 +167,234 @@ const SimulacionChart: React.FC<Props> = ({ data }) => {
   }
 
   return (
-    <div
-      className="w-full"
-      style={{ height: 360 }}
-      role="img"
-      aria-label="Trayectoria de la caja: línea base vs escenario simulado por mes"
-    >
-      <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 8, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
-          <XAxis
-            dataKey="yearMonth"
-            tickFormatter={formatMonthTick}
-            tick={{ fontSize: 11, fill: COLOR.tickText }}
-            tickLine={false}
-            axisLine={{ stroke: COLOR.axis }}
-            minTickGap={16}
+    <div className="w-full animate-fade-in">
+      {/* Strip de KPIs arriba de la gráfica */}
+      <div className="grid grid-cols-3 gap-6 pb-4 mb-2 border-b border-[var(--gray-100)]">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+            Caja base (fin)
+          </p>
+          <AnimatedNumber
+            value={data.totalBaseClosingCash}
+            format={fmtCurrency}
+            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            style={{ color: 'var(--gray-700)' }}
           />
-          <YAxis
-            tickFormatter={(v) => fmtCompact(v)}
-            tick={{ fontSize: 11, fill: COLOR.tickText }}
-            tickLine={false}
-            axisLine={false}
-            width={64}
+        </div>
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+            Caja simulada (fin)
+          </p>
+          <AnimatedNumber
+            value={data.totalForecastClosingCash}
+            format={fmtCurrency}
+            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            style={{ color: 'var(--gray-950)' }}
           />
-          <Tooltip
-            formatter={(v: number | string, name: string) => {
-              const labelMap: Record<string, string> = {
-                base: 'Caja base',
-                forecast: 'Caja simulada',
-                historicalArea: 'Histórico',
-              };
-              const display = labelMap[name] ?? name;
-              return [typeof v === 'number' ? fmtCurrency(v) : v, display];
-            }}
-            labelFormatter={(label: string) => formatMonthTick(label)}
-            labelStyle={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)' }}
-            contentStyle={{
-              borderRadius: 'var(--radius-md)',
-              border: `1px solid ${COLOR.axis}`,
-              boxShadow: 'var(--shadow-sm)',
-              padding: '8px 10px',
-              fontSize: 12,
-            }}
-            itemStyle={{ padding: '2px 0' }}
-            cursor={{ stroke: COLOR.refLine, strokeWidth: 1 }}
-          />
-          <Legend
-            wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
-            iconType="plainline"
-          />
-
-          <Area
-            type="monotone"
-            dataKey="historicalArea"
-            fill={COLOR.histArea}
-            fillOpacity={0.18}
-            stroke="none"
-            isAnimationActive={false}
-            legendType="none"
-            name="historicalArea"
-          />
-
-          {crossesZero && (
-            <ReferenceLine
-              y={0}
-              stroke={COLOR.danger}
-              strokeDasharray="2 4"
-              strokeOpacity={0.5}
-              ifOverflow="extendDomain"
+        </div>
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+            Δ vs base
+          </p>
+          <div className="flex items-baseline gap-1 mt-0.5">
+            <span className="text-[15px] font-semibold tabular-nums" style={{ color: deltaColor }}>
+              {deltaSign}
+            </span>
+            <AnimatedNumber
+              value={Math.abs(deltaClosing)}
+              format={fmtCurrency}
+              className="text-[15px] font-semibold tabular-nums"
+              style={{ color: deltaColor }}
             />
-          )}
+          </div>
+        </div>
+      </div>
 
-          {firstFutureIndex > 0 && (
-            <ReferenceLine
-              x={chartData[firstFutureIndex]?.yearMonth as string}
-              stroke={COLOR.refLine}
-              strokeDasharray="4 4"
-              label={{ value: 'Proyección', position: 'top', fontSize: 10, fill: COLOR.tickText }}
+      <div
+        style={{ height: 360 }}
+        role="img"
+        aria-label="Trayectoria de la caja: línea base vs escenario simulado por mes"
+      >
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartData} margin={{ top: 16, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
+            <XAxis
+              dataKey="yearMonth"
+              tickFormatter={formatMonthTick}
+              tick={{ fontSize: 11, fill: COLOR.tickText }}
+              tickLine={false}
+              axisLine={{ stroke: COLOR.axis }}
+              minTickGap={16}
             />
-          )}
+            <YAxis
+              tickFormatter={(v) => fmtCompact(v)}
+              tick={{ fontSize: 11, fill: COLOR.tickText }}
+              tickLine={false}
+              axisLine={false}
+              width={64}
+            />
+            <Tooltip
+              formatter={(v: number | string | Array<number | string>, name: string) => {
+                const labelMap: Record<string, string> = {
+                  base: 'Caja base',
+                  forecast: 'Caja simulada',
+                  historicalArea: 'Histórico',
+                  deltaAbove: 'Δ positivo',
+                  deltaBelow: 'Δ negativo',
+                };
+                const display = labelMap[name] ?? name;
+                // Los deltas son tuplas [low, high]: mostramos el ancho.
+                if (Array.isArray(v) && v.length === 2) {
+                  const [lo, hi] = v;
+                  if (typeof lo === 'number' && typeof hi === 'number') {
+                    return [fmtCurrency(Math.abs(hi - lo)), display];
+                  }
+                }
+                return [typeof v === 'number' ? fmtCurrency(v) : String(v), display];
+              }}
+              labelFormatter={(label: string) => formatMonthTick(label)}
+              labelStyle={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)' }}
+              contentStyle={{
+                borderRadius: 'var(--radius-md)',
+                border: `1px solid ${COLOR.axis}`,
+                boxShadow: 'var(--shadow-sm)',
+                padding: '8px 10px',
+                fontSize: 12,
+              }}
+              itemStyle={{ padding: '2px 0' }}
+              cursor={{ stroke: COLOR.refLine, strokeWidth: 1 }}
+              isAnimationActive={false}
+            />
+            <Legend
+              wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
+              iconType="plainline"
+            />
 
-          <Line
-            type="monotone"
-            dataKey="base"
-            stroke={COLOR.base}
-            strokeWidth={1.5}
-            dot={false}
-            name="Caja base"
-            isAnimationActive={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="forecast"
-            stroke={COLOR.forecast}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4, strokeWidth: 0 }}
-            name="Caja simulada"
-            isAnimationActive={false}
-          />
-        </ComposedChart>
-      </ResponsiveContainer>
+            {/* Histórico: área gris debajo de la base, extendida al primer
+                mes de proyección para tocar la línea vertical "Proyección". */}
+            <Area
+              type="monotone"
+              dataKey="historicalArea"
+              fill={COLOR.histArea}
+              fillOpacity={0.22}
+              stroke="none"
+              isAnimationActive
+              animationDuration={500}
+              animationEasing="ease-out"
+              legendType="none"
+              name="historicalArea"
+            />
+
+            {/* Banda coloreada entre líneas: verde cuando sim > base, roja
+                cuando sim < base. Se dibuja ANTES de las líneas para que
+                éstas queden por encima y legibles. */}
+            <Area
+              type="monotone"
+              dataKey="deltaAbove"
+              fill={COLOR.successFill}
+              fillOpacity={0.75}
+              stroke="none"
+              isAnimationActive
+              animationDuration={500}
+              animationEasing="ease-out"
+              name="deltaAbove"
+              legendType="none"
+              connectNulls={false}
+            />
+            <Area
+              type="monotone"
+              dataKey="deltaBelow"
+              fill={COLOR.dangerFill}
+              fillOpacity={0.75}
+              stroke="none"
+              isAnimationActive
+              animationDuration={500}
+              animationEasing="ease-out"
+              name="deltaBelow"
+              legendType="none"
+              connectNulls={false}
+            />
+
+            {crossesZero && (
+              <ReferenceLine
+                y={0}
+                stroke={COLOR.danger}
+                strokeDasharray="2 4"
+                strokeOpacity={0.5}
+                ifOverflow="extendDomain"
+              />
+            )}
+
+            {firstFutureIndex > 0 && (
+              <ReferenceLine
+                x={chartData[firstFutureIndex]?.yearMonth as string}
+                stroke={COLOR.refLine}
+                strokeDasharray="4 4"
+                label={{ value: 'Proyección', position: 'top', fontSize: 10, fill: COLOR.tickText }}
+              />
+            )}
+
+            {/* Motion: base primero (400ms), simulada después (begin=200). */}
+            <Line
+              type="monotone"
+              dataKey="base"
+              stroke={COLOR.base}
+              strokeWidth={1.5}
+              dot={false}
+              name="Caja base"
+              isAnimationActive
+              animationDuration={400}
+              animationBegin={0}
+              animationEasing="ease-out"
+            />
+            <Line
+              type="monotone"
+              dataKey="forecast"
+              stroke={COLOR.forecast}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4, strokeWidth: 0 }}
+              name="Caja simulada"
+              isAnimationActive
+              animationDuration={520}
+              animationBegin={200}
+              animationEasing="ease-out"
+            />
+
+            {/* Markers por propuesta activa: pin en la curva simulada justo
+                en el mes donde la propuesta arranca. Ayuda a ver de un
+                vistazo "a partir de aquí empezó a empujar". */}
+            {proposalMarkers.map((m) => (
+              <ReferenceDot
+                key={m.id}
+                x={m.yearMonth}
+                y={m.y}
+                shape={<ProposalStartDot />}
+                ifOverflow="extendDomain"
+                isFront
+                label={{
+                  value: m.name,
+                  position: 'top',
+                  fontSize: 10,
+                  fill: COLOR.proposalMark,
+                  offset: 10,
+                }}
+              />
+            ))}
+
+            {/* Marker fijo en el último punto simulado */}
+            {lastForecast && (
+              <ReferenceDot
+                x={lastForecast.yearMonth}
+                y={lastForecast.forecast}
+                shape={<LastPointDot />}
+                ifOverflow="extendDomain"
+                isFront
+              />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 };

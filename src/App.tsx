@@ -696,6 +696,12 @@ export default function App() {
                 onScenariosChange={setScenarios}
                 activeScenarioId={activeScenarioId}
                 onActiveScenarioChange={setActiveScenarioId}
+                clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
+                assumptions={assumptions}
+                budget={budget}
+                startingBalanceOverride={startingBalanceOverride}
               />
             )}
             {activeTab === 'clients' && (
