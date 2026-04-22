@@ -153,7 +153,6 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const currentYear = new Date().getFullYear();
   const currentYm = toYearMonth(today);
-  const todayDay = new Date(today).getUTCDate();
   const monthsThisYear = evaluated.months.filter((m) => m.yearMonth.startsWith(String(currentYear)));
 
   const ingresosYtd = monthsThisYear

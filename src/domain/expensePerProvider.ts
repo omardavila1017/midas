@@ -23,7 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import type { Provider } from './types';
-import type { AgedBalanceRecord, BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
+import type { AgedBalanceRecord, BankAccountStatement } from '../services/jdeTypes';
 import type { Flexibility } from './providerCatalog';
 import { addMonths, compareYearMonth, toYearMonth } from './cashFlowEngine';
 import {

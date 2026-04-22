@@ -1,4 +1,4 @@
-import { Component, ReactNode } from 'react';
+import { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RotateCcw } from 'lucide-react';
 
 interface Props { children: ReactNode; fallbackLabel?: string; }
@@ -9,6 +9,17 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  // Sin esto los crashes en producción desaparecen sin rastro — al menos dejar
+  // el stack en la consola del navegador para poder diagnosticar.
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[ErrorBoundary] ${this.props.fallbackLabel ?? 'módulo'} crasheó:`,
+      error,
+      info.componentStack,
+    );
   }
 
   render() {

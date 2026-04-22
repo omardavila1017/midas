@@ -3,7 +3,14 @@ import { Proposal, Scenario, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
-import { fetchCompanies, type Company, type BankAccountStatement, type BankStatementFormat } from './services/jde';
+import {
+  fetchCompanies,
+  fetchBankStatements,
+  fetchBankStatementsRange,
+  type Company,
+  type BankAccountStatement,
+  type BankStatementFormat,
+} from './services/jde';
 import Dashboard, { computeBankStartingBalance } from './components/Dashboard';
 import CXP from './components/CXP';
 import Bancos from './components/Bancos';
@@ -13,8 +20,7 @@ import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
 import Simulacion from './components/Simulacion';
 import ErrorBoundary from './components/ErrorBoundary';
-import { ToastProvider, useToast } from './components/Toast';
-import { ActivityFeedProvider, useActivityFeed, ActivityFeedPanel } from './components/ActivityFeed';
+import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette from './components/CommandPalette';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
@@ -362,8 +368,6 @@ export default function App() {
       d.setDate(d.getDate() - 1);
       tryDates.push(d.toISOString().slice(0, 10));
     }
-
-    const { fetchBankStatements, fetchBankStatementsRange } = await import('./services/jde');
 
     setBankFetchStatus('priming');
 

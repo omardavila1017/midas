@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus, AlertTriangle, Sparkles, Lightbulb, TrendingUp, TrendingDown,
-  Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check,
+  Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check, Download,
 } from 'lucide-react';
+import { toCSV, downloadFile } from '../utils/export';
 import type { Proposal, Scenario, EvaluatedCashFlow, CashFlowMonth, ProposalKind } from '../types';
 import { PROPOSAL_FREQUENCY_LABELS } from '../types';
 import { fmtCurrency, fmtCompact } from '../formatters';
@@ -396,19 +397,61 @@ const Simulacion: React.FC<Props> = ({
 
       {/* Tabla mensual */}
       <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
-        <header className="px-6 py-4 border-b border-[var(--gray-100)]">
-          <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-            Detalle mensual
-          </h2>
-          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-            Ingresos, egresos y caja por mes — base vs simulación con propuestas activas.
-          </p>
+        <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-[var(--gray-100)]">
+          <div>
+            <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              Detalle mensual
+            </h2>
+            <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
+              Ingresos, egresos y caja por mes — base vs simulación con propuestas activas.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => exportEvaluatedToCsv(evaluated, companyCode)}
+            disabled={evaluated.months.length === 0}
+            title="Descargar detalle mensual en CSV"
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--gray-200)] text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] hover:border-[var(--gray-300)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Exportar CSV
+          </button>
         </header>
         <MonthlyTable data={evaluated} />
       </section>
     </div>
   );
 };
+
+/**
+ * Construye un CSV con columnas alineadas a lo que la analista lee en pantalla:
+ * base, simulación y delta por mes. Se respeta el formato ISO (YYYY-MM) para
+ * que abra sin sobresaltos en Excel regional MX y en Google Sheets.
+ */
+function exportEvaluatedToCsv(data: EvaluatedCashFlow, companyCode: string): void {
+  if (data.months.length === 0) return;
+  const rows = data.months.map((m) => ({
+    mes: m.yearMonth,
+    tipo: m.isHistorical ? 'historico' : 'proyeccion',
+    ingresos_base: round(m.baseIncome),
+    egresos_base: round(m.baseExpense),
+    neto_base: round(m.baseIncome - m.baseExpense),
+    caja_base: round(m.baseClosingCash),
+    ingresos_sim: round(m.forecastIncome),
+    egresos_sim: round(m.forecastExpense),
+    neto_sim: round(m.forecastIncome - m.forecastExpense),
+    caja_sim: round(m.forecastClosingCash),
+    delta_caja: round(m.forecastClosingCash - m.baseClosingCash),
+  }));
+  const csv = toCSV(rows);
+  const ciaTag = companyCode && companyCode !== 'all' ? `-${companyCode}` : '';
+  const today = new Date().toISOString().slice(0, 10);
+  downloadFile(csv, `midas-simulacion${ciaTag}-${today}.csv`);
+}
+
+function round(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 // ─── Sub-components ─────────────────────────────────────────────────────
 

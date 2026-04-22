@@ -24,3 +24,11 @@ dist-ssr
 *.sw?
 
 vitest.config.ts.timestamp-*.mjs
+vite.config.ts.timestamp-*.mjs
+
+# Stale build artifacts from older configurations (use dist/).
+dist2/
+
+# Legacy / backup copies of the project — retained in git history only.
+_legacy_v1_original/
+_rebuild_backup/

@@ -10,7 +10,7 @@
  *   - ConfirmedPayment[] for real vs projected tracking
  */
 
-import { CollectionEvent, ConfirmedPayment, CashFlowAssumptions, eventKey } from './types';
+import { CollectionEvent, ConfirmedPayment, eventKey } from './types';
 import { CXPRecord } from './persistence';
 import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
 import type { BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
@@ -936,15 +936,15 @@ export function aggregateWeekly(daily: DailyFlow[]): WeeklyFlow[] {
  * Aggregate daily flows into monthly groups.
  *
  * Groups by calendar month and sums all flows within each month,
- * tracking both confirmed and projected inflows.
+ * tracking both confirmed and projected inflows. El saldo inicial ya viene
+ * aplicado en `day.cumulative` (ver generateDailyFlows), así que el último
+ * `cumulative` del mes es la caja al cierre sin ajustes adicionales.
  *
  * @param daily Array of daily flows
- * @param startingBalance Starting cash balance for cumulative calculation (default 0)
  * @returns Array of monthly flows, one per month, sorted by date
  */
 export function aggregateMonthly(
-  daily: DailyFlow[],
-  startingBalance: number = 0
+  daily: DailyFlow[]
 ): MonthlyFlow[] {
   const monthlyMap = new Map<number, MonthlyFlow>();
 
