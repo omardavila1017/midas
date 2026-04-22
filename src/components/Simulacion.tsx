@@ -9,6 +9,7 @@ import { PROPOSAL_FREQUENCY_LABELS } from '../types';
 import { fmtCurrency, fmtCompact } from '../formatters';
 import {
   evaluateCashFlow,
+  analyzeLiquidity,
   buildHistoricalMonths,
   buildFutureExpenses,
   projectFutureIncome,
@@ -19,6 +20,7 @@ import {
   addMonths,
   compareYearMonth,
   monthsBetween,
+  type LiquiditySummary,
 } from '../domain/cashFlowEngine';
 import {
   fetchAgedBalances,
@@ -111,6 +113,11 @@ const Simulacion: React.FC<Props> = ({
     [base, proposals],
   );
 
+  const liquidity: LiquiditySummary = useMemo(
+    () => analyzeLiquidity(evaluated),
+    [evaluated],
+  );
+
   const enabled = proposals.filter((p) => p.enabled);
   const cajaBaseFinal = evaluated.totalBaseClosingCash;
   const cajaForecastFinal = evaluated.totalForecastClosingCash;
@@ -165,9 +172,14 @@ const Simulacion: React.FC<Props> = ({
     const scn = scenarios.find((s) => s.id === scenarioId);
     if (!scn) return;
     const now = new Date().toISOString();
-    // Regla del usuario: "prender las que elegí, apagar las demás".
+    // Aplica el snapshot a las propuestas que ya existían cuando el escenario
+    // fue guardado. Propuestas creadas después del escenario no aparecen en el
+    // snapshot; se respeta su estado actual para no apagarlas sin que el
+    // usuario lo pidiera explícitamente.
     onProposalsChange(
       proposals.map((p) => {
+        const known = Object.prototype.hasOwnProperty.call(scn.proposalStates, p.id);
+        if (!known) return p;
         const next = scn.proposalStates[p.id] === true;
         return p.enabled === next ? p : { ...p, enabled: next, updatedAt: now };
       }),
@@ -195,12 +207,29 @@ const Simulacion: React.FC<Props> = ({
 
   // Si el estado enabled de las propuestas cambia manualmente, el escenario
   // activo deja de reflejar la realidad. Detectarlo evita mostrar "aplicado"
-  // cuando ya no lo está.
+  // cuando ya no lo está. Sólo se consideran las propuestas que existían
+  // cuando el escenario se guardó — las nuevas se ignoran para esta detección
+  // (se reportan aparte vía `proposalsOutsideScenario`).
   const activeScenarioMatches = useMemo(() => {
     if (!activeScenarioId) return false;
     const scn = scenarios.find((s) => s.id === activeScenarioId);
     if (!scn) return false;
-    return proposals.every((p) => (scn.proposalStates[p.id] === true) === p.enabled);
+    return proposals.every((p) => {
+      const known = Object.prototype.hasOwnProperty.call(scn.proposalStates, p.id);
+      if (!known) return true;
+      return (scn.proposalStates[p.id] === true) === p.enabled;
+    });
+  }, [activeScenarioId, scenarios, proposals]);
+
+  // Cuenta de propuestas creadas después del escenario activo. Útil para
+  // explicar en UI que el escenario no las controla.
+  const proposalsOutsideScenario = useMemo(() => {
+    if (!activeScenarioId) return 0;
+    const scn = scenarios.find((s) => s.id === activeScenarioId);
+    if (!scn) return 0;
+    return proposals.filter(
+      (p) => !Object.prototype.hasOwnProperty.call(scn.proposalStates, p.id),
+    ).length;
   }, [activeScenarioId, scenarios, proposals]);
 
   return (
@@ -244,6 +273,9 @@ const Simulacion: React.FC<Props> = ({
           />
         </div>
 
+        {/* Liquidity alert */}
+        <LiquidityAlert summary={liquidity} />
+
         {/* Warnings */}
         {(!companyCode || companyCode === 'all') && (
           <div className="mt-4 flex items-start gap-2 p-3 rounded-xl bg-[var(--warning-muted)]">
@@ -283,6 +315,7 @@ const Simulacion: React.FC<Props> = ({
         activeMatches={activeScenarioMatches}
         proposalsCount={proposals.length}
         enabledCount={enabled.length}
+        proposalsOutsideScenario={proposalsOutsideScenario}
         onSave={handleSaveScenario}
         onApply={handleApplyScenario}
         onUpdateCurrent={handleUpdateScenarioToCurrent}
@@ -616,6 +649,7 @@ interface ScenariosPanelProps {
   activeMatches: boolean;
   proposalsCount: number;
   enabledCount: number;
+  proposalsOutsideScenario: number;
   onSave: (name: string, description?: string) => void;
   onApply: (id: string) => void;
   onUpdateCurrent: (id: string) => void;
@@ -624,7 +658,7 @@ interface ScenariosPanelProps {
 
 const ScenariosPanel: React.FC<ScenariosPanelProps> = ({
   scenarios, activeScenarioId, activeMatches,
-  proposalsCount, enabledCount,
+  proposalsCount, enabledCount, proposalsOutsideScenario,
   onSave, onApply, onUpdateCurrent, onDelete,
 }) => {
   const [showForm, setShowForm] = useState(false);
@@ -671,6 +705,27 @@ const ScenariosPanel: React.FC<ScenariosPanelProps> = ({
           </button>
         )}
       </header>
+
+      {activeScenarioId && proposalsOutsideScenario > 0 && (
+        <div
+          className="px-6 py-2.5 border-b border-[var(--gray-100)] flex items-center gap-2 text-[11px]"
+          style={{ background: 'var(--warning-muted, #fef3c7)', color: 'var(--gray-700)' }}
+          role="status"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--warning)' }} />
+          <span>
+            {proposalsOutsideScenario === 1
+              ? 'Hay 1 propuesta nueva que este escenario no controla — se respeta su estado actual.'
+              : `Hay ${proposalsOutsideScenario} propuestas nuevas que este escenario no controla — se respeta su estado actual.`}
+            <button
+              onClick={() => onUpdateCurrent(activeScenarioId)}
+              className="ml-2 underline font-medium hover:text-[var(--primary)]"
+            >
+              Actualizar escenario al estado actual
+            </button>
+          </span>
+        </div>
+      )}
 
       {showForm && (
         <div className="px-6 py-4 border-b border-[var(--gray-100)] bg-[var(--gray-50)]">
@@ -957,5 +1012,76 @@ function computeBaseCashFlow(
   }
   return months;
 }
+
+// ─── Liquidity alert ─────────────────────────────────────────────────────
+
+const MONTH_LABELS_SHORT = [
+  'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+  'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+];
+
+function formatMonthLabel(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-').map(Number);
+  if (!y || !m) return yearMonth;
+  return `${MONTH_LABELS_SHORT[(m - 1) % 12]} ${y}`;
+}
+
+const LiquidityAlert: React.FC<{ summary: LiquiditySummary }> = ({ summary }) => {
+  const { shortfalls, worstForecastClosingCash, worstForecastMonth, forecastWorsensAnyMonth } = summary;
+  if (shortfalls.length === 0) return null;
+
+  // El mes relevante para el mensaje principal es el primero que entra en
+  // crisis con las propuestas activas — es el que marca el cut-off.
+  const firstCritical = shortfalls.find((s) => s.status !== 'base_only') ?? shortfalls[0];
+  const rescuedCount = shortfalls.filter((s) => s.status === 'base_only').length;
+  const worsenedCount = shortfalls.filter((s) => s.status === 'forecast_only').length;
+  const bothCount = shortfalls.filter((s) => s.status === 'both').length;
+
+  const severe = firstCritical.status !== 'base_only';
+  const bg = severe ? 'rgba(239, 68, 68, 0.08)' : 'rgba(245, 158, 11, 0.10)';
+  const fg = severe ? 'var(--danger)' : 'var(--warning)';
+
+  return (
+    <div
+      className="mt-4 flex items-start gap-2.5 p-3.5 rounded-xl"
+      style={{ background: bg }}
+      role="alert"
+    >
+      <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: fg }} />
+      <div className="flex-1 text-[12px]" style={{ color: 'var(--gray-700)' }}>
+        <p className="font-semibold" style={{ color: 'var(--gray-950)' }}>
+          {severe
+            ? `La caja cae bajo $0 en ${formatMonthLabel(firstCritical.yearMonth)}.`
+            : `El baseline se hunde en ${formatMonthLabel(firstCritical.yearMonth)}, pero las propuestas lo rescatan.`}
+        </p>
+        <p className="mt-1">
+          Peor caja proyectada: <span className="font-semibold tabular-nums">{fmtCurrency(worstForecastClosingCash)}</span>
+          {worstForecastMonth ? ` en ${formatMonthLabel(worstForecastMonth)}` : ''}.
+          {' '}
+          {bothCount > 0 && (
+            <span>
+              {bothCount === 1 ? '1 mes' : `${bothCount} meses`} con crisis en base y forecast.
+            </span>
+          )}
+          {worsenedCount > 0 && (
+            <span className="ml-1" style={{ color: 'var(--danger)' }}>
+              {worsenedCount === 1 ? '1 mes' : `${worsenedCount} meses`} que las propuestas hunden bajo $0.
+            </span>
+          )}
+          {rescuedCount > 0 && (
+            <span className="ml-1" style={{ color: 'var(--success)' }}>
+              {rescuedCount === 1 ? '1 mes' : `${rescuedCount} meses`} que las propuestas rescatan.
+            </span>
+          )}
+          {forecastWorsensAnyMonth && worsenedCount === 0 && bothCount > 0 && (
+            <span className="ml-1">
+              Las propuestas activas empeoran la caja en algún mes.
+            </span>
+          )}
+        </p>
+      </div>
+    </div>
+  );
+};
 
 export default Simulacion;

@@ -216,6 +216,161 @@ export function isInternalTransfer(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Pair-matched detector
+//
+// Algunos traspasos internos no llevan leyenda ni RFC ni nombre de empresa
+// propia: aparecen como un CARGO en una cuenta y un ABONO simétrico en otra
+// cuenta del MISMO grupo (cia) el MISMO día por EL MISMO importe.
+// Esta heurística los detecta cuando la pareja es 1-a-1 (exactamente un
+// CARGO y un ABONO en cuentas distintas con el mismo monto). Si hay más
+// movimientos del mismo monto/día/cia (ambigüedad), no se marca ninguno —
+// preferimos el falso negativo al falso positivo (perder un ingreso real).
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Construye una llave estable para identificar un movimiento dentro del
+ * universo cargado. Incluye todos los campos discriminantes; movimientos
+ * funcionalmente idénticos colisionarán pero eso es aceptable para la
+ * clasificación (cualquier instancia idéntica se considera paireable).
+ */
+export function movementHashKey(
+  cia: string | undefined,
+  cuenta: string | undefined,
+  mov: Pick<BankStatementLine, 'fechaOperacion' | 'tipoMovimiento' | 'importe' | 'referencia' | 'concepto'>,
+): string {
+  return [
+    cia ?? '',
+    cuenta ?? '',
+    mov.fechaOperacion ?? '',
+    mov.tipoMovimiento ?? '',
+    mov.importe ?? 0,
+    mov.referencia ?? '',
+    mov.concepto ?? '',
+  ].join('::');
+}
+
+/**
+ * Recorre todos los movimientos y devuelve el Set de llaves que parecen ser
+ * traspasos internos pareados por monto. Criterio: en (cia, fechaOperacion,
+ * importe) hay exactamente 1 CARGO de cuenta A y 1 ABONO de cuenta B (A!=B)
+ * y nada más en ese bucket. Cualquier otra cardinalidad se descarta.
+ */
+export function buildPairMatchedKeys(
+  statements: readonly BankAccountStatement[] | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!statements || statements.length === 0) return out;
+
+  type Entry = {
+    key: string;
+    cuenta: string;
+    tipo: 'ABONO' | 'CARGO' | string;
+  };
+  const buckets = new Map<string, Entry[]>();
+
+  for (const acc of statements) {
+    const cia = acc.cia ?? '';
+    const cuenta = (acc.cuenta ?? '').trim();
+    if (!cuenta) continue;
+    for (const mov of acc.movimientos ?? []) {
+      if (!mov.fechaOperacion || !mov.tipoMovimiento) continue;
+      const importe = Number(mov.importe);
+      if (!Number.isFinite(importe) || importe <= 0) continue;
+      const bucketKey = `${cia}::${mov.fechaOperacion}::${importe}`;
+      const list = buckets.get(bucketKey);
+      const entry: Entry = {
+        key: movementHashKey(cia, cuenta, mov),
+        cuenta,
+        tipo: mov.tipoMovimiento,
+      };
+      if (list) list.push(entry);
+      else buckets.set(bucketKey, [entry]);
+    }
+  }
+
+  for (const list of buckets.values()) {
+    if (list.length !== 2) continue;
+    const [a, b] = list;
+    if (a.cuenta === b.cuenta) continue;
+    const hasAbono = a.tipo === 'ABONO' || b.tipo === 'ABONO';
+    const hasCargo = a.tipo === 'CARGO' || b.tipo === 'CARGO';
+    if (!(hasAbono && hasCargo)) continue;
+    out.add(a.key);
+    out.add(b.key);
+  }
+
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Classification
+// ─────────────────────────────────────────────────────────────────────────
+
+export type InternalReason =
+  | 'legend'         // "TRASPASO REF", "TRANSFERENCIA REF", etc.
+  | 'rfc'            // RFC de empresa del grupo embebido en concepto/referencia
+  | 'beneficiary'    // nombre de empresa del grupo como beneficiario
+  | 'own-account'    // cuenta destino es otra cuenta del grupo
+  | 'pair-matched';  // CARGO-ABONO simétrico el mismo día en cuentas distintas
+
+export interface MovementClassification {
+  kind: 'real' | 'internal';
+  reason?: InternalReason;
+}
+
+export const INTERNAL_REASON_LABELS: Record<InternalReason, string> = {
+  legend: 'Marcado como traspaso interno por leyenda',
+  rfc: 'RFC de empresa del grupo en el concepto/referencia',
+  beneficiary: 'Beneficiario es una empresa del grupo',
+  'own-account': 'Cuenta destino pertenece al grupo',
+  'pair-matched': 'CARGO y ABONO simétricos el mismo día en otra cuenta del grupo',
+};
+
+export interface ClassificationContext {
+  ownAccountDetector?: (m: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean;
+  pairedKeys?: Set<string>;
+}
+
+/**
+ * Clasifica un movimiento como real o interno y, si es interno, indica la
+ * razón que disparó la detección (en orden de prioridad: legend → rfc →
+ * beneficiary → own-account → pair-matched).
+ *
+ * `accCia` y `accCuenta` se necesitan sólo para el detector pair-matched
+ * (porque las llaves se construyen con esos campos). Si no se pasan, ese
+ * detector se omite y la función se comporta igual que `isInternalTransfer`.
+ */
+export function classifyMovement(
+  mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta' | 'fechaOperacion' | 'tipoMovimiento' | 'importe'>,
+  ctx?: ClassificationContext,
+  accCia?: string,
+  accCuenta?: string,
+): MovementClassification {
+  const concepto = mov.concepto ?? '';
+  const referencia = mov.referencia ?? '';
+
+  if ((concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) || (referencia && INTERNAL_TRANSFER_PATTERN.test(referencia))) {
+    return { kind: 'internal', reason: 'legend' };
+  }
+  if (INTERNAL_RFC_PATTERN && ((concepto && INTERNAL_RFC_PATTERN.test(concepto)) || (referencia && INTERNAL_RFC_PATTERN.test(referencia)))) {
+    return { kind: 'internal', reason: 'rfc' };
+  }
+  if (INTERNAL_BENEFICIARY_PATTERN && ((concepto && INTERNAL_BENEFICIARY_PATTERN.test(concepto)) || (referencia && INTERNAL_BENEFICIARY_PATTERN.test(referencia)))) {
+    return { kind: 'internal', reason: 'beneficiary' };
+  }
+  if (ctx?.ownAccountDetector && ctx.ownAccountDetector(mov)) {
+    return { kind: 'internal', reason: 'own-account' };
+  }
+  if (ctx?.pairedKeys && accCia !== undefined && accCuenta !== undefined) {
+    const key = movementHashKey(accCia, accCuenta, mov);
+    if (ctx.pairedKeys.has(key)) {
+      return { kind: 'internal', reason: 'pair-matched' };
+    }
+  }
+  return { kind: 'real' };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Bank-only cash flow
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -237,6 +392,12 @@ export interface EnrichedBankMovement {
   referencia: string;
   fechaValor?: string;
   conceptoFull: string;
+  /** 'real' = ingreso/egreso económico real; 'internal' = traspaso entre
+   * cuentas del grupo (no aporta al flujo neto). */
+  kind: 'real' | 'internal';
+  /** Sólo presente cuando `kind === 'internal'`. Sirve para mostrar tooltip
+   * explicando por qué se clasificó como interno. */
+  internalReason?: InternalReason;
 }
 
 /**
@@ -260,16 +421,22 @@ export function computeBankOnlyCashFlow(
   daily: DailyFlow[];
   abonosByDate: Map<string, EnrichedBankMovement[]>;
   cargosByDate: Map<string, EnrichedBankMovement[]>;
+  internalAbonosByDate: Map<string, EnrichedBankMovement[]>;
+  internalCargosByDate: Map<string, EnrichedBankMovement[]>;
 } {
   const abonosByDate = new Map<string, EnrichedBankMovement[]>();
   const cargosByDate = new Map<string, EnrichedBankMovement[]>();
+  const internalAbonosByDate = new Map<string, EnrichedBankMovement[]>();
+  const internalCargosByDate = new Map<string, EnrichedBankMovement[]>();
 
   if (!bankStatements || bankStatements.length === 0) {
-    return { daily: [], abonosByDate, cargosByDate };
+    return { daily: [], abonosByDate, cargosByDate, internalAbonosByDate, internalCargosByDate };
   }
 
   const yearStr = String(year);
-  const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
+  const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
+  const pairedKeys = buildPairMatchedKeys(bankStatements);
+  const ctx: ClassificationContext = { ownAccountDetector, pairedKeys };
 
   for (const acc of bankStatements) {
     for (const mov of acc.movimientos) {
@@ -277,12 +444,10 @@ export function computeBankOnlyCashFlow(
       if (!date) continue;
       if (!date.startsWith(yearStr)) continue;
 
-      // Filtrar internos en ambos sentidos.
-      if (isInternalTransfer(mov, detector)) continue;
-
       const amount = Math.abs(mov.importe || 0);
       if (amount <= 0) continue;
 
+      const classification = classifyMovement(mov, ctx, acc.cia, acc.cuenta);
       const enriched: EnrichedBankMovement = {
         date,
         amount,
@@ -296,9 +461,14 @@ export function computeBankOnlyCashFlow(
         referencia: mov.referencia ?? '',
         fechaValor: mov.fechaValor,
         conceptoFull: mov.concepto ?? '',
+        kind: classification.kind,
+        internalReason: classification.reason,
       };
 
-      const bucket = enriched.tipo === 'ABONO' ? abonosByDate : cargosByDate;
+      const isAbono = enriched.tipo === 'ABONO';
+      const bucket = classification.kind === 'internal'
+        ? (isAbono ? internalAbonosByDate : internalCargosByDate)
+        : (isAbono ? abonosByDate : cargosByDate);
       if (!bucket.has(date)) bucket.set(date, []);
       bucket.get(date)!.push(enriched);
     }
@@ -331,7 +501,7 @@ export function computeBankOnlyCashFlow(
     });
   }
 
-  return { daily, abonosByDate, cargosByDate };
+  return { daily, abonosByDate, cargosByDate, internalAbonosByDate, internalCargosByDate };
 }
 
 // ─────────────────────────────────────────────────────────────────────────

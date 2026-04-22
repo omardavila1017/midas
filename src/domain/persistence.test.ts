@@ -98,4 +98,87 @@ describe('persistence v5', () => {
     expect(store.scenarios).toEqual([]);
     expect(store.activeScenarioId).toBe(null);
   });
+
+  it('clamps invalid assumptions back to sane defaults', () => {
+    const payload = {
+      version: 5,
+      data: {
+        ...getDefaultStore(),
+        assumptions: {
+          year: -7,
+          globalCompliance: 42,      // > 1, debe recortarse
+          factorajeDays: 'no number',
+        },
+      },
+    };
+    localStorage.setItem('midas-v5', JSON.stringify(payload));
+    const loaded = loadStore();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.assumptions.year).toBeGreaterThan(1900);
+    expect(loaded!.assumptions.globalCompliance).toBe(1);
+    expect(loaded!.assumptions.factorajeDays).toBe(30);
+  });
+
+  it('drops providers/clients without a string id', () => {
+    const payload = {
+      version: 5,
+      data: {
+        ...getDefaultStore(),
+        providers: [
+          { id: 'ok', name: 'OK' },
+          { name: 'no id' },               // debe caer
+          null,                             // debe caer
+        ],
+        clients: [
+          { id: 'c1', name: 'Cliente' },
+          { id: 123 },                      // id no-string, cae
+        ],
+      },
+    };
+    localStorage.setItem('midas-v5', JSON.stringify(payload));
+    const loaded = loadStore();
+    expect(loaded!.providers).toHaveLength(1);
+    expect(loaded!.clients).toHaveLength(1);
+  });
+
+  it('drops malformed confirmedPayments but keeps the valid ones', () => {
+    const valid = {
+      key: 'c1::2026-05-01::2026-04-01',
+      clientId: 'c1',
+      realDate: '2026-05-01',
+      invoiceDate: '2026-04-01',
+      amount: 1000,
+      confirmedAt: '2026-04-21T00:00:00Z',
+    };
+    const payload = {
+      version: 5,
+      data: {
+        ...getDefaultStore(),
+        confirmedPayments: [
+          valid,
+          { key: 'x' }, // incompleto → cae
+          null,
+        ],
+      },
+    };
+    localStorage.setItem('midas-v5', JSON.stringify(payload));
+    const loaded = loadStore();
+    expect(loaded!.confirmedPayments).toHaveLength(1);
+    expect(loaded!.confirmedPayments[0].key).toBe(valid.key);
+  });
+
+  it('does not let unknown fields leak into the store', () => {
+    const payload = {
+      version: 5,
+      data: {
+        ...getDefaultStore(),
+        maliciousField: { drop: 'me' },
+        __proto__: { polluted: true },
+      },
+    };
+    localStorage.setItem('midas-v5', JSON.stringify(payload));
+    const loaded = loadStore();
+    expect(loaded).not.toBeNull();
+    expect((loaded as unknown as Record<string, unknown>).maliciousField).toBeUndefined();
+  });
 });
