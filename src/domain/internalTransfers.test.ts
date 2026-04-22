@@ -1,12 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   isInternalTransfer,
-  isInternalAccount,
   classifyMovement,
   buildOwnAccountDetector,
   buildOwnAccountsIndex,
   buildPairMatchedKeys,
-  buildInternalAccountsIndex,
   movementHashKey,
   computeBankOnlyCashFlow,
 } from './netCashFlowEngine';
@@ -28,11 +26,10 @@ function mov(partial: Partial<BankStatementLine>): BankStatementLine {
   };
 }
 
-function acc(cia: string, cuenta: string, mvs: BankStatementLine[], nombreBanco?: string): BankAccountStatement {
+function acc(cia: string, cuenta: string, mvs: BankStatementLine[]): BankAccountStatement {
   return {
     cia,
     banco: '002',
-    nombreBanco,
     cuenta,
     moneda: 'MXN',
     fechaEstadoCuenta: '2026-04-22',
@@ -217,148 +214,5 @@ describe('buildOwnAccountsIndex (sanity)', () => {
     ]);
     expect(idx.has('019004780')).toBe(true);
     expect(idx.has('12345')).toBe(false);
-  });
-});
-
-describe('isInternalAccount — cuentas dedicadas a movimientos internos', () => {
-  it('detecta cuentas Concentradora', () => {
-    expect(isInternalAccount({ nombreBanco: 'BANORTE · Concentradora', banco: '' })).toBe(true);
-    expect(isInternalAccount({ nombreBanco: 'BANAMEX · Concentradora', banco: '' })).toBe(true);
-    expect(isInternalAccount({ nombreBanco: 'concentrador', banco: '' })).toBe(true);
-  });
-
-  it('detecta cuentas de Tesorería (con y sin acento)', () => {
-    expect(isInternalAccount({ nombreBanco: 'BANORTE · Tesorería', banco: '' })).toBe(true);
-    expect(isInternalAccount({ nombreBanco: 'BBVA · Tesoreria', banco: '' })).toBe(true);
-  });
-
-  it('detecta cuentas de Traspasos', () => {
-    expect(isInternalAccount({ nombreBanco: 'BANORTE · Traspasos', banco: '' })).toBe(true);
-    expect(isInternalAccount({ nombreBanco: 'SCOTIABANK · Traspaso', banco: '' })).toBe(true);
-  });
-
-  it('NO matchea cuentas operativas normales', () => {
-    expect(isInternalAccount({ nombreBanco: 'BANORTE · Cheques M.N.', banco: '' })).toBe(false);
-    expect(isInternalAccount({ nombreBanco: 'BANAMEX · Productiva', banco: '' })).toBe(false);
-    expect(isInternalAccount({ nombreBanco: 'BBVA', banco: '' })).toBe(false);
-    expect(isInternalAccount({ nombreBanco: '', banco: '' })).toBe(false);
-  });
-
-  it('maneja undefined/null sin romper', () => {
-    expect(isInternalAccount(undefined)).toBe(false);
-    expect(isInternalAccount(null)).toBe(false);
-    expect(isInternalAccount({ nombreBanco: undefined, banco: '' })).toBe(false);
-  });
-});
-
-describe('buildInternalAccountsIndex', () => {
-  it('devuelve keys cia::cuenta solo de cuentas internas', () => {
-    const stmts: BankAccountStatement[] = [
-      acc('00001', '0120027069', [], 'BANORTE · Concentradora'),
-      acc('00001', '0120099999', [], 'BANORTE · Cheques M.N.'),
-      acc('00011', '06787361240', [], 'BANAMEX · Concentradora'),
-    ];
-    const idx = buildInternalAccountsIndex(stmts);
-    expect(idx.size).toBe(2);
-    expect(idx.has('00001::0120027069')).toBe(true);
-    expect(idx.has('00011::06787361240')).toBe(true);
-    expect(idx.has('00001::0120099999')).toBe(false);
-  });
-
-  it('retorna set vacío cuando no hay estados', () => {
-    expect(buildInternalAccountsIndex(undefined).size).toBe(0);
-    expect(buildInternalAccountsIndex([]).size).toBe(0);
-  });
-});
-
-describe('classifyMovement — cuentas internas completas (reason: internal-account)', () => {
-  it('marca cualquier movimiento de una cuenta Concentradora como internal-account', () => {
-    const internalAccountKeys = new Set(['00001::0120027069']);
-    const m = mov({
-      cia: '00001',
-      cuenta: '0120027069',
-      concepto: 'PAGO NOMINA', // concepto totalmente legítimo
-      tipoMovimiento: 'CARGO',
-      importe: 500_000,
-    });
-    const c = classifyMovement(m, { internalAccountKeys }, '00001', '0120027069');
-    expect(c.kind).toBe('internal');
-    expect(c.reason).toBe('internal-account');
-  });
-
-  it('no marca movimientos de cuentas ajenas al índice', () => {
-    const internalAccountKeys = new Set(['00001::0120027069']);
-    const m = mov({
-      cia: '00001',
-      cuenta: '0120099999',
-      concepto: 'PAGO NOMINA',
-      tipoMovimiento: 'CARGO',
-    });
-    const c = classifyMovement(m, { internalAccountKeys }, '00001', '0120099999');
-    expect(c.kind).toBe('real');
-  });
-
-  it('prioridad: internal-account gana sobre legend (la cuenta es el criterio más fuerte)', () => {
-    // Si la cuenta entera es interna, la razón debe ser 'internal-account'
-    // aunque el concepto además matchee otra heurística.
-    const internalAccountKeys = new Set(['00001::0120027069']);
-    const m = mov({
-      cia: '00001',
-      cuenta: '0120027069',
-      concepto: 'TRASPASO REF 999',
-      tipoMovimiento: 'CARGO',
-    });
-    const c = classifyMovement(m, { internalAccountKeys }, '00001', '0120027069');
-    expect(c.kind).toBe('internal');
-    expect(c.reason).toBe('internal-account');
-  });
-});
-
-describe('isInternalTransfer acepta internalAccountKeys', () => {
-  it('devuelve true si el movimiento pertenece a cuenta del índice interno', () => {
-    const keys = new Set(['00001::0120027069']);
-    const m = mov({
-      cia: '00001',
-      cuenta: '0120027069',
-      concepto: 'DEPOSITO POR CUENTA DE',
-    });
-    expect(isInternalTransfer(m, undefined, keys)).toBe(true);
-  });
-
-  it('devuelve false si la cuenta no está en el índice', () => {
-    const keys = new Set(['00001::0120027069']);
-    const m = mov({
-      cia: '00001',
-      cuenta: '0120099999',
-      concepto: 'PAGO PROVEEDOR',
-    });
-    expect(isInternalTransfer(m, undefined, keys)).toBe(false);
-  });
-});
-
-describe('computeBankOnlyCashFlow — cuentas Concentradora quedan en buckets internos', () => {
-  it('todos los movimientos de una cuenta interna se clasifican como internal-account', () => {
-    const stmts: BankAccountStatement[] = [
-      acc('00001', '0120027069', [
-        mov({ tipoMovimiento: 'ABONO', importe: 4_200_000, concepto: 'DEPOSITO DE' }),
-        mov({ tipoMovimiento: 'CARGO', importe: 2_000_000, concepto: 'TRANSFERENCIA' }),
-      ], 'BANORTE · Concentradora'),
-      acc('00001', '0120099999', [
-        mov({ tipoMovimiento: 'ABONO', importe: 500, concepto: 'cobro real' }),
-      ], 'BANORTE · Cheques M.N.'),
-    ];
-    const result = computeBankOnlyCashFlow(stmts, 2026, 0);
-    // Solo la cuenta operativa aporta al flujo real
-    expect(result.daily).toHaveLength(1);
-    expect(result.daily[0].inflows).toBe(500);
-    expect(result.daily[0].outflows).toBe(0);
-
-    // Los movimientos de la Concentradora van a los buckets internos
-    const iAb = result.internalAbonosByDate.get('2026-04-22') ?? [];
-    const iCa = result.internalCargosByDate.get('2026-04-22') ?? [];
-    expect(iAb.length).toBe(1);
-    expect(iCa.length).toBe(1);
-    expect(iAb[0].internalReason).toBe('internal-account');
-    expect(iCa[0].internalReason).toBe('internal-account');
   });
 });

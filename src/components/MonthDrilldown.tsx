@@ -8,7 +8,6 @@ import {
   isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
-  buildInternalAccountsIndex,
 } from '../domain/netCashFlowEngine';
 import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
 
@@ -490,14 +489,12 @@ function buildDrilldownData(args: {
   const ownAccountDetector = buildOwnAccountDetector(
     buildOwnAccountsIndex(bankStatements),
   );
-  const internalAccountKeys = buildInternalAccountsIndex(bankStatements);
   for (const acc of filteredBank) {
     for (const mov of acc.movimientos) {
       if (toYearMonth(mov.fechaOperacion) !== yearMonth) continue;
       // Los traspasos entre cuentas propias no son ingresos ni egresos reales
       // del negocio — se compensan entre sí. No deben aparecer en el drilldown.
-      // También saltamos cuentas Concentradora/Tesorería completas.
-      if (isInternalTransfer(mov, ownAccountDetector, internalAccountKeys)) continue;
+      if (isInternalTransfer(mov, ownAccountDetector)) continue;
       const bucket = mov.tipoMovimiento === 'ABONO' ? incomeByConcept
         : mov.tipoMovimiento === 'CARGO' ? expenseByConcept
         : null;

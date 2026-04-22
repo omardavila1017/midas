@@ -21,7 +21,6 @@ import {
   isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
-  buildInternalAccountsIndex,
 } from './netCashFlowEngine';
 
 // ── Configuration ──
@@ -122,13 +121,12 @@ function extractAbonos(
   // deben entrar al pool de abonos candidatos a cruzarse contra proyecciones
   // de cobranza.
   const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
-  const internalAccountKeys = buildInternalAccountsIndex(bankStatements);
 
   for (const account of bankStatements) {
     for (const mov of account.movimientos) {
       if (mov.tipoMovimiento !== 'ABONO') continue;
       if (!mov.fechaOperacion.startsWith(prefix)) continue;
-      if (isInternalTransfer(mov, detector, internalAccountKeys)) continue;
+      if (isInternalTransfer(mov, detector)) continue;
       abonos.push(mov);
     }
   }
@@ -145,7 +143,7 @@ function extractAbonos(
   for (const account of bankStatements) {
     for (const mov of account.movimientos) {
       if (mov.tipoMovimiento !== 'ABONO') continue;
-      if (isInternalTransfer(mov, detector, internalAccountKeys)) continue;
+      if (isInternalTransfer(mov, detector)) continue;
       const d = mov.fechaOperacion;
       if (d.startsWith(prevPrefix)) {
         const day = Number(d.slice(8, 10));

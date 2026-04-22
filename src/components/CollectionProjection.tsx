@@ -5,10 +5,8 @@ import {
   extractPaymentEvents,
   PaymentEvent,
   isInternalTransfer,
-  isInternalAccount,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
-  buildInternalAccountsIndex,
 } from '../domain/netCashFlowEngine';
 import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
 import { CXPRecord } from '../domain/persistence';
@@ -99,20 +97,16 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   const bankRealAbonos = useMemo(() => {
     // Los traspasos entre cuentas propias (TRASPASO/TRANSFERENCIA REF, RFCs
     // del grupo, etc.) no son cobros reales — se filtran para que el KPI
-    // refleje solo flujos desde terceros. Idem cuentas Concentradora/Tesorería.
+    // refleje solo flujos desde terceros.
     const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
-    const internalAccountKeys = buildInternalAccountsIndex(bankStatements);
     return bankStatements.reduce((sum, acc) =>
       sum + acc.movimientos
-        .filter(m => m.tipoMovimiento === 'ABONO' && !isInternalTransfer(m, detector, internalAccountKeys))
+        .filter(m => m.tipoMovimiento === 'ABONO' && !isInternalTransfer(m, detector))
         .reduce((s, m) => s + m.importe, 0), 0);
   }, [bankStatements]);
 
   const totalBankSaldo = useMemo(() => {
-    // Excluir saldos de cuentas Concentradora/Tesorería — no son caja "propia"
-    // del negocio sino buffers para movimientos internos.
-    return bankStatements.reduce((sum, acc) =>
-      isInternalAccount(acc) ? sum : sum + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0);
+    return bankStatements.reduce((sum, acc) => sum + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0);
   }, [bankStatements]);
 
   // Empty state
