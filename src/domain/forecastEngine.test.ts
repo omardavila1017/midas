@@ -4,7 +4,6 @@ import type { BankAccountStatement, AgedBalanceRecord } from '../services/jde';
 import type { Client, CashFlowAssumptions } from './types';
 
 function bankMonth(ym: string, income: number, expense: number, cuenta = '01900010A1'): BankAccountStatement {
-  const [y, m] = ym.split('-').map(Number);
   const day = (d: number) => `${ym}-${String(d).padStart(2, '0')}`;
   return {
     cia: '00011', banco: 'BANAMEX', cuenta, moneda: 'MXN',
