@@ -31,6 +31,7 @@ import {
   HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
   Bell,
+  type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS } from './domain/companyGroups';
 import type { Budget } from './domain/budget';
@@ -38,13 +39,13 @@ import { loadBudget, saveBudget } from './domain/budgetPersistence';
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
-const SECTIONS: { id: SectionId; label: string; icon: any; description: string }[] = [
+const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: string }[] = [
   { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes y proveedores' },
   { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo diario y bancos' },
   { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, cobranza, CXP, pronóstico y escenarios' },
 ];
 
-const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any }[]> = {
+const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
   catalogos: [
     { id: 'clients',   label: 'Clientes',     icon: UserSquare },
     { id: 'providers', label: 'Proveedores',  icon: Users },

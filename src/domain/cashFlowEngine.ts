@@ -499,6 +499,94 @@ export function evaluateCashFlow(
   };
 }
 
+// ── 6.b Detección de crisis de liquidez ──────────────────────────────────
+
+/**
+ * Representación resumida de un mes en el que la caja cae por debajo del
+ * umbral de liquidez. Se usa para alertar al usuario en la pantalla de
+ * Simulación y explicarle qué cambió entre el baseline y el escenario con
+ * propuestas aplicadas.
+ */
+export interface LiquidityShortfall {
+  /** "YYYY-MM" */
+  yearMonth: string;
+  /** Caja final sin propuestas aplicadas. */
+  baseClosingCash: number;
+  /** Caja final con las propuestas activas aplicadas. */
+  forecastClosingCash: number;
+  /** Cómo clasificamos el mes respecto al escenario:
+   *   - 'both': ambos (base y forecast) están por debajo del umbral.
+   *   - 'base_only': el baseline caía pero las propuestas lo sanean.
+   *   - 'forecast_only': baseline ok, pero las propuestas lo hunden.
+   */
+  status: 'both' | 'base_only' | 'forecast_only';
+}
+
+export interface LiquiditySummary {
+  /** Meses con caja por debajo del umbral, ordenados cronológicamente. */
+  shortfalls: LiquidityShortfall[];
+  /** Peor caja forecast en todo el horizonte (puede ser positivo si nunca
+   * hubo crisis, en cuyo caso `shortfalls` viene vacío). */
+  worstForecastClosingCash: number;
+  /** "YYYY-MM" del peor mes forecast, o null si no hay meses. */
+  worstForecastMonth: string | null;
+  /** Si las propuestas ACTIVAS empeoran el resultado en algún mes respecto
+   * al baseline. Útil para mostrar "estás hundiendo la caja de mayo" */
+  forecastWorsensAnyMonth: boolean;
+}
+
+/**
+ * Analiza una evaluación del flujo y reporta los meses FUTUROS donde la
+ * caja cae por debajo del umbral (por defecto $0: quiebre estricto).
+ *
+ * - Sólo considera meses no-históricos: los pasados ya ocurrieron y no son
+ *   "alertas" accionables.
+ * - `threshold` se puede subir para alertar antes del quiebre estricto
+ *   (p. ej. umbral prudencial = 30 días de OPEX).
+ */
+export function analyzeLiquidity(
+  evaluated: EvaluatedCashFlow,
+  threshold = 0,
+): LiquiditySummary {
+  const shortfalls: LiquidityShortfall[] = [];
+  let worstForecastClosingCash = Number.POSITIVE_INFINITY;
+  let worstForecastMonth: string | null = null;
+  let forecastWorsensAnyMonth = false;
+
+  for (const m of evaluated.months) {
+    if (m.isHistorical) continue;
+    if (m.forecastClosingCash < worstForecastClosingCash) {
+      worstForecastClosingCash = m.forecastClosingCash;
+      worstForecastMonth = m.yearMonth;
+    }
+    if (m.forecastClosingCash < m.baseClosingCash) forecastWorsensAnyMonth = true;
+
+    const baseBelow = m.baseClosingCash < threshold;
+    const foreBelow = m.forecastClosingCash < threshold;
+    if (!baseBelow && !foreBelow) continue;
+    const status: LiquidityShortfall['status'] =
+      baseBelow && foreBelow ? 'both' : baseBelow ? 'base_only' : 'forecast_only';
+    shortfalls.push({
+      yearMonth: m.yearMonth,
+      baseClosingCash: m.baseClosingCash,
+      forecastClosingCash: m.forecastClosingCash,
+      status,
+    });
+  }
+
+  if (!Number.isFinite(worstForecastClosingCash)) {
+    // No había meses futuros — devolvemos un resumen neutro.
+    worstForecastClosingCash = 0;
+  }
+
+  return {
+    shortfalls,
+    worstForecastClosingCash,
+    worstForecastMonth,
+    forecastWorsensAnyMonth,
+  };
+}
+
 // ── 7. Granularidad semanal / diaria ─────────────────────────────────────
 //
 // Se derivan del mensual repartiendo lineal. Se podría mejorar con calendario

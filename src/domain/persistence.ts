@@ -145,6 +145,40 @@ function normalizeScenario(v: unknown): Scenario | null {
   };
 }
 
+function isObjectWithStringId(v: unknown): v is Record<string, unknown> & { id: string } {
+  return !!v && typeof v === 'object' && typeof (v as { id?: unknown }).id === 'string';
+}
+
+function normalizeAssumptions(v: unknown, fallback: CashFlowAssumptions): CashFlowAssumptions {
+  if (!v || typeof v !== 'object') return fallback;
+  const o = v as Record<string, unknown>;
+  const year = typeof o.year === 'number' && Number.isFinite(o.year) && o.year > 1900 && o.year < 3000
+    ? Math.floor(o.year)
+    : fallback.year;
+  // globalCompliance debe estar en [0, 1].
+  const rawCompliance = typeof o.globalCompliance === 'number' && Number.isFinite(o.globalCompliance)
+    ? o.globalCompliance
+    : fallback.globalCompliance;
+  const globalCompliance = Math.min(1, Math.max(0, rawCompliance));
+  const factorajeDays = typeof o.factorajeDays === 'number' && Number.isFinite(o.factorajeDays) && o.factorajeDays >= 0
+    ? Math.floor(o.factorajeDays)
+    : fallback.factorajeDays;
+  return { year, globalCompliance, factorajeDays };
+}
+
+function normalizeConfirmedPayment(v: unknown): ConfirmedPayment | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.key !== 'string' || typeof o.clientId !== 'string') return null;
+  if (typeof o.realDate !== 'string' || typeof o.invoiceDate !== 'string') return null;
+  if (typeof o.amount !== 'number' || !Number.isFinite(o.amount)) return null;
+  if (typeof o.confirmedAt !== 'string') return null;
+  return {
+    key: o.key, clientId: o.clientId, realDate: o.realDate,
+    invoiceDate: o.invoiceDate, amount: o.amount, confirmedAt: o.confirmedAt,
+  };
+}
+
 function normalizeStore(raw: unknown): MidasStore {
   const base = getDefaultStore();
   if (!raw || typeof raw !== 'object') return base;
@@ -162,22 +196,38 @@ function normalizeStore(raw: unknown): MidasStore {
     ? (o.activeScenarioId as string)
     : null;
 
+  // Filtramos por shape mínima: cualquier item que no tenga `id: string` se
+  // descarta. CXPRecords no se modela con id; aceptamos cualquier objeto.
+  const providers = Array.isArray(o.providers)
+    ? (o.providers.filter(isObjectWithStringId) as unknown as Provider[])
+    : [];
+  const clients = Array.isArray(o.clients)
+    ? (o.clients.filter(isObjectWithStringId) as unknown as Client[])
+    : [];
+  const confirmedPayments = Array.isArray(o.confirmedPayments)
+    ? (o.confirmedPayments.map(normalizeConfirmedPayment).filter(Boolean) as ConfirmedPayment[])
+    : [];
+  const cxpRecords = Array.isArray(o.cxpRecords)
+    ? (o.cxpRecords.filter((r) => !!r && typeof r === 'object') as CXPRecord[])
+    : [];
+  const cxpLoadedCias: Record<string, string> = {};
+  if (o.cxpLoadedCias && typeof o.cxpLoadedCias === 'object') {
+    for (const [k, val] of Object.entries(o.cxpLoadedCias as Record<string, unknown>)) {
+      if (typeof val === 'string') cxpLoadedCias[k] = val;
+    }
+  }
+
   return {
-    ...base,
-    ...(o as Partial<MidasStore>),
     proposals,
     scenarios,
     activeScenarioId,
-    providers: Array.isArray(o.providers) ? (o.providers as Provider[]) : [],
-    clients: Array.isArray(o.clients) ? (o.clients as Client[]) : [],
-    confirmedPayments: Array.isArray(o.confirmedPayments) ? (o.confirmedPayments as ConfirmedPayment[]) : [],
-    cxpRecords: Array.isArray(o.cxpRecords) ? (o.cxpRecords as CXPRecord[]) : [],
-    cxpLoadedCias: typeof o.cxpLoadedCias === 'object' && o.cxpLoadedCias !== null
-      ? (o.cxpLoadedCias as Record<string, string>)
-      : {},
-    assumptions: (o.assumptions && typeof o.assumptions === 'object')
-      ? (o.assumptions as CashFlowAssumptions)
-      : base.assumptions,
+    providers,
+    clients,
+    assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
+    confirmedPayments,
+    cxpRecords,
+    cxpLoadedCias,
+    lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,
   };
 }
 
