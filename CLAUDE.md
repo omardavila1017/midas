@@ -2,7 +2,7 @@
 
 ## Propósito
 
-Este archivo resume el contexto operativo real de `flowsense` para cualquier agente que vaya a tocar el proyecto.
+Este archivo resume el contexto operativo real de `midas` (antes `flowsense`) para cualquier agente que vaya a tocar el proyecto.
 
 `README.md` y `ARCHITECTURE.md` ya fueron alineados con el estado actual del repo, pero el código sigue siendo la fuente final de verdad. Los archivos más importantes para validar comportamiento son:
 
@@ -163,7 +163,7 @@ La persistencia vive en `src/domain/persistence.ts`.
 
 Puntos clave:
 
-- El store actual es `flowsense-v2`.
+- El store actual es `midas-v5` (el legacy `flowsense-v5` se migra tal cual; `flowsense-v4..v1` se migran descartando propuestas/escenarios).
 - `normalizeV2Store()` siempre reinyecta el escenario base.
 - `normalizeSimulation()` rellena simulaciones antiguas que no tengan los campos nuevos (`type`, `targetIds`, `startYearMonth`, etc.).
 - Si hay datos legacy, se migran a la estructura actual sin perder overrides.

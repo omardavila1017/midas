@@ -1,4 +1,4 @@
-# FlowSense — UI Improvement Proposals
+# Midas — UI Improvement Proposals
 
 **Date:** April 20, 2026  
 **Scope:** Full-app sweep — navigation, data viz, workflows, interactions  
@@ -10,7 +10,7 @@
 
 **Impact: Very High | Complexity: Medium**
 
-FlowSense has 9 tabs across 3 sections, dozens of clients, providers, proposals, and KPIs — but no way to jump to anything instantly. A `Cmd+K` command palette would let power users (CFOs, treasury managers) navigate by intent rather than by clicking through tabs.
+Midas has 9 tabs across 3 sections, dozens of clients, providers, proposals, and KPIs — but no way to jump to anything instantly. A `Cmd+K` command palette would let power users (CFOs, treasury managers) navigate by intent rather than by clicking through tabs.
 
 What it does: a floating modal triggered by keyboard shortcut that accepts freeform text. Type "Cementos" and it surfaces that client's row, their collection projection, and any scenario that mentions them. Type "CXP vencida" and it jumps to the aged payables dashboard filtered to overdue. Type "escenario optimista" and it opens that proposal's workbench.
 
@@ -24,7 +24,7 @@ This single feature touches navigation, search, and filtering simultaneously. It
 
 **Impact: High | Complexity: Low**
 
-Every major table in FlowSense (Clients, Providers, CXP aging, Collections) shows static numbers. Adding a tiny 60×20px sparkline column next to key metrics would let users spot trends without drilling into charts.
+Every major table in Midas (Clients, Providers, CXP aging, Collections) shows static numbers. Adding a tiny 60×20px sparkline column next to key metrics would let users spot trends without drilling into charts.
 
 For example, in the Clients table, a sparkline showing the 12-month seasonality pattern next to each client name instantly communicates who is seasonal vs. flat. In CXP, a sparkline of aging movement (is this provider getting more or less overdue?) replaces mental arithmetic.
 
@@ -50,7 +50,7 @@ Today the Forecast component shows base/simulated/manual/diff layers, but always
 
 **Impact: High | Complexity: Low**
 
-FlowSense currently has zero feedback for successful actions. You add a client — nothing. You import CXP — it says "Abriendo dashboard..." but doesn't transition. You delete a provider — the row just disappears. This violates a basic UX heuristic (visibility of system status).
+Midas currently has zero feedback for successful actions. You add a client — nothing. You import CXP — it says "Abriendo dashboard..." but doesn't transition. You delete a provider — the row just disappears. This violates a basic UX heuristic (visibility of system status).
 
 A lightweight toast system (bottom-right, auto-dismiss after 4 seconds, with undo action for destructive operations) would cover every CRUD action across the app. The `index.css` already defines z-index 500 for toasts and has entrance animations (`slideUp`, `fadeIn`) ready to use.
 
@@ -86,7 +86,7 @@ Recharts doesn't have a native waterfall, but it can be built with a stacked Bar
 
 **Impact: Medium-High | Complexity: Medium**
 
-FlowSense has zero responsive breakpoints. The CSS uses hardcoded `grid-cols-4` for KPI cards, fixed-width tables, and a `max-w-[1400px]` content container. On a laptop (1366px), content is cramped; on a tablet, it's broken.
+Midas has zero responsive breakpoints. The CSS uses hardcoded `grid-cols-4` for KPI cards, fixed-width tables, and a `max-w-[1400px]` content container. On a laptop (1366px), content is cramped; on a tablet, it's broken.
 
 The proposal: replace the top tab bar with a collapsible left sidebar. Sections (Catálogos, Operación, Planeación) become sidebar groups with icon-only collapsed state. The main content area gets the full viewport width. On screens below 1024px, the sidebar auto-collapses to icons; below 768px, it becomes a hamburger overlay.
 
@@ -148,11 +148,11 @@ For a financial app used all day, dark mode isn't cosmetic — it reduces eye st
 
 **Impact: Medium-Low | Complexity: Medium**
 
-FlowSense stores `editedAt` timestamps on scenario cell overrides but doesn't surface them anywhere. When multiple people touch a cash flow plan (or even one person revisiting after a week), there's no way to see what changed.
+Midas stores `editedAt` timestamps on scenario cell overrides but doesn't surface them anywhere. When multiple people touch a cash flow plan (or even one person revisiting after a week), there's no way to see what changed.
 
 An activity feed panel — accessible from a bell icon in the header — would log every meaningful action: "Simulation 'Recorte Nómina -15%' added to Escenario Optimista", "Client 'Cementos del Norte' billing updated from $2.4M to $2.8M", "CXP data imported (347 records, $14.2M total)". Each entry links back to the relevant tab and record.
 
-Since the app is localStorage-based, the feed would also be localStorage-backed — a simple array of `{ action, entity, detail, timestamp }` objects, capped at 500 entries. This is a stepping stone toward multi-user audit trails if FlowSense ever gets a backend.
+Since the app is localStorage-based, the feed would also be localStorage-backed — a simple array of `{ action, entity, detail, timestamp }` objects, capped at 500 entries. This is a stepping stone toward multi-user audit trails if Midas ever gets a backend.
 
 ---
 
@@ -173,4 +173,4 @@ Since the app is localStorage-based, the feed would also be localStorage-backed 
 | 11 | Dark Mode | Medium | Medium | |
 | 12 | Activity Feed | Medium-Low | Medium | |
 
-**Recommended build order:** Start with the three quick wins (4 → 2 → 8) to immediately improve daily usability. Then tackle the high-impact medium-complexity features (1 → 3 → 6) that differentiate FlowSense. Save the heavy lifts (5, 7) for a dedicated sprint.
+**Recommended build order:** Start with the three quick wins (4 → 2 → 8) to immediately improve daily usability. Then tackle the high-impact medium-complexity features (1 → 3 → 6) that differentiate Midas. Save the heavy lifts (5, 7) for a dedicated sprint.

@@ -1,8 +1,8 @@
-# FlowSense
+# Midas
 
 ## Para que sirve esta herramienta
 
-FlowSense te ayuda a revisar la posicion de efectivo consolidada, ver cobros esperados, pagos pendientes, saldos bancarios y escenarios antes de tomar decisiones que puedan afectar la liquidez.
+Midas te ayuda a revisar la posicion de efectivo consolidada, ver cobros esperados, pagos pendientes, saldos bancarios y escenarios antes de tomar decisiones que puedan afectar la liquidez.
 
 ## Quien debe usar esta herramienta
 
@@ -12,7 +12,7 @@ Debe usarla principalmente Tesoreria. Tambien la pueden consultar Finanzas, Cuen
 
 ### Paso 1: Abrir la herramienta
 
-Entra desde Atlas y abre el artefacto FlowSense. Si no tienes acceso, solicita permiso al equipo de Atlas o a soporte interno.
+Entra desde Atlas y abre el artefacto Midas. Si no tienes acceso, solicita permiso al equipo de Atlas o a soporte interno.
 
 ### Paso 2: Revisar el plan de flujo
 
@@ -64,4 +64,4 @@ Porque el proveedor requiere validacion adicional antes de mover o priorizar el 
 
 ## A quien contacto si tengo problemas
 
-Contacta a la mesa de ayuda interna o al equipo Atlas/SWAT responsable de FlowSense.
+Contacta a la mesa de ayuda interna o al equipo Atlas/SWAT responsable de Midas.

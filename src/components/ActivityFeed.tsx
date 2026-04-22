@@ -46,7 +46,8 @@ interface ActivityContextType {
    Constants
    ───────────────────────────────────────────────── */
 
-const STORAGE_KEY = 'flowsense.activityFeed';
+const STORAGE_KEY = 'midas.activityFeed';
+const LEGACY_STORAGE_KEY = 'flowsense.activityFeed';
 const MAX_ENTRIES = 200;
 
 const ACTION_ICONS: Record<ActivityAction, React.ComponentType<any>> = {
@@ -103,7 +104,16 @@ const ActivityContext = createContext<ActivityContextType | undefined>(undefined
 
 function loadFromStorage(): ActivityEntry[] {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    let stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) {
+      stored = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (stored) {
+        try {
+          localStorage.setItem(STORAGE_KEY, stored);
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+        } catch { /* ignore */ }
+      }
+    }
     if (!stored) return [];
     return JSON.parse(stored) as ActivityEntry[];
   } catch {

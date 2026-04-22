@@ -10,7 +10,7 @@ export const apiConfig = {
     namespace: import.meta.env.VITE_COGNOS_NAMESPACE ?? 'CognosEx',
   },
   atlas: {
-    artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'flowsense',
+    artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'midas',
   },
 } as const;
 

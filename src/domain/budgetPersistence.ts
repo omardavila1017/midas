@@ -7,11 +7,21 @@
 
 import type { Budget } from './budget';
 
-const BUDGET_KEY = 'flowsense.budget.v1';
+const BUDGET_KEY = 'midas.budget.v1';
+const LEGACY_BUDGET_KEY = 'flowsense.budget.v1';
 
 export function loadBudget(): Budget | null {
   try {
-    const raw = localStorage.getItem(BUDGET_KEY);
+    let raw = localStorage.getItem(BUDGET_KEY);
+    if (!raw) {
+      raw = localStorage.getItem(LEGACY_BUDGET_KEY);
+      if (raw) {
+        try {
+          localStorage.setItem(BUDGET_KEY, raw);
+          localStorage.removeItem(LEGACY_BUDGET_KEY);
+        } catch { /* ignore */ }
+      }
+    }
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return isBudget(parsed) ? parsed : null;

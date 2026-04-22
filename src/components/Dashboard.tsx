@@ -69,12 +69,28 @@ const CHART_COLORS = {
   cash: '#1d4ed8',         // blue-700
 };
 
-const OVERRIDES_KEY = 'flowsense.dashboard.projectionOverrides.v1';
-const STARTING_BALANCE_KEY = 'flowsense.dashboard.startingBalance.v1';
+const OVERRIDES_KEY = 'midas.dashboard.projectionOverrides.v1';
+const STARTING_BALANCE_KEY = 'midas.dashboard.startingBalance.v1';
+const LEGACY_OVERRIDES_KEY = 'flowsense.dashboard.projectionOverrides.v1';
+const LEGACY_STARTING_BALANCE_KEY = 'flowsense.dashboard.startingBalance.v1';
+
+function migrateLegacyKey(newKey: string, legacyKey: string): string | null {
+  try {
+    const current = localStorage.getItem(newKey);
+    if (current !== null) return current;
+    const legacy = localStorage.getItem(legacyKey);
+    if (legacy === null) return null;
+    try {
+      localStorage.setItem(newKey, legacy);
+      localStorage.removeItem(legacyKey);
+    } catch { /* ignore */ }
+    return legacy;
+  } catch { return null; }
+}
 
 function loadOverrides(): ProjectionOverrides {
   try {
-    const raw = localStorage.getItem(OVERRIDES_KEY);
+    const raw = migrateLegacyKey(OVERRIDES_KEY, LEGACY_OVERRIDES_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return {};
@@ -84,7 +100,7 @@ function loadOverrides(): ProjectionOverrides {
 
 function loadStartingBalanceOverride(): number | null {
   try {
-    const raw = localStorage.getItem(STARTING_BALANCE_KEY);
+    const raw = migrateLegacyKey(STARTING_BALANCE_KEY, LEGACY_STARTING_BALANCE_KEY);
     if (!raw) return null;
     const n = Number(raw);
     return Number.isFinite(n) ? n : null;

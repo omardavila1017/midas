@@ -22,11 +22,11 @@ async function fetchJson<T>(path: string): Promise<T | null> {
 }
 
 export async function fetchClientCatalog(): Promise<Client[]> {
-  const live = await fetchJson<Client[]>('/reports/flowsense/clientes');
+  const live = await fetchJson<Client[]>('/reports/midas/clientes');
   return live ?? loadClientsCatalog();
 }
 
 export async function fetchProviderCatalog(): Promise<Provider[]> {
-  const live = await fetchJson<Provider[]>('/reports/flowsense/proveedores');
+  const live = await fetchJson<Provider[]>('/reports/midas/proveedores');
   return live ?? loadProvidersCatalog();
 }
