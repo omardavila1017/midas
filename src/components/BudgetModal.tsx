@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { X, Upload, Download, AlertTriangle, FileSpreadsheet, Check, Trash2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { X, Upload, Download, AlertTriangle, FileSpreadsheet, Check, Trash2, Loader2, FileText } from 'lucide-react';
 import type { Budget, BudgetScale } from '../domain/budget';
 import {
   parseBudgetCsv,
@@ -56,6 +56,8 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
   const [parsed, setParsed] = useState<ParsedState>({ status: 'idle' });
   const [downloadScale, setDownloadScale] = useState<BudgetScale>('millones');
   const [dragActive, setDragActive] = useState(false);
+  const [errorShakeKey, setErrorShakeKey] = useState(0);
+  const dragCounter = useRef(0);
 
   // Esc cierra el modal; además bloqueamos scroll del body mientras está
   // abierto para que no se pueda hacer scroll detrás del backdrop.
@@ -73,11 +75,16 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
 
   if (!open) return null;
 
+  const setError = (message: string, warnings: string[] = []) => {
+    setParsed({ status: 'error', message, warnings });
+    setErrorShakeKey((k) => k + 1);
+  };
+
   const handleFile = async (file: File) => {
     // Pre-validación: tamaño / extensión obvia, antes de leer bytes.
     const fileErr = validateFileUpload(file);
     if (fileErr) {
-      setParsed({ status: 'error', message: fileErr, warnings: [] });
+      setError(fileErr);
       return;
     }
     setParsed({ status: 'parsing' });
@@ -85,7 +92,7 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
       const text = await file.text();
       const r = parseBudgetCsv(text, { fileName: file.name });
       if (r.error || !r.budget) {
-        setParsed({ status: 'error', message: r.error ?? 'No se pudo parsear el CSV.', warnings: r.warnings });
+        setError(r.error ?? 'No se pudo parsear el CSV.', r.warnings);
         return;
       }
       setParsed({
@@ -98,27 +105,31 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
         warnings: r.warnings,
       });
     } catch (e) {
-      setParsed({
-        status: 'error',
-        message: e instanceof Error ? e.message : 'Error al leer el archivo.',
-        warnings: [],
-      });
+      setError(e instanceof Error ? e.message : 'Error al leer el archivo.');
     }
   };
 
+  // Usamos un contador para drag enter/leave — evita que la zona parpadee
+  // cuando el cursor pasa sobre elementos hijos anidados.
   const onDrop = (e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
+    dragCounter.current = 0;
     setDragActive(false);
     const f = e.dataTransfer.files?.[0];
     if (f) handleFile(f);
   };
+  const onDragEnter = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    dragCounter.current += 1;
+    if (!dragActive) setDragActive(true);
+  };
   const onDragOver = (e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
-    if (!dragActive) setDragActive(true);
   };
   const onDragLeave = (e: React.DragEvent<HTMLLabelElement>) => {
     e.preventDefault();
-    setDragActive(false);
+    dragCounter.current = Math.max(0, dragCounter.current - 1);
+    if (dragCounter.current === 0) setDragActive(false);
   };
 
   const reparseWithScale = (scale: BudgetScale) => {
@@ -221,8 +232,10 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {/* Current budget pill */}
           {budget && parsed.status === 'idle' && (
-            <div className="rounded-xl border border-[var(--success)]/30 bg-[var(--success)]/5 p-4 flex items-start gap-3">
-              <Check className="w-5 h-5 mt-0.5 flex-shrink-0" style={{ color: 'var(--success)' }} />
+            <div className="rounded-xl border border-[var(--success)]/30 bg-[var(--success)]/5 p-4 flex items-start gap-3 animate-scale-in">
+              <span className="w-8 h-8 rounded-full bg-[var(--success)]/15 flex items-center justify-center flex-shrink-0 animate-success-bounce">
+                <Check className="w-4 h-4" style={{ color: 'var(--success)' }} strokeWidth={2.5} />
+              </span>
               <div className="flex-1 min-w-0">
                 <p className="text-[13px] font-semibold" style={{ color: 'var(--gray-950)' }}>
                   Presupuesto {budget.year} cargado
@@ -234,7 +247,7 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
               </div>
               <button
                 onClick={onClear}
-                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--danger)]/30 text-[12px] text-[var(--danger)] hover:bg-[var(--danger)]/10"
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--danger)]/30 text-[12px] text-[var(--danger)] hover:bg-[var(--danger)]/10 hover-press"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Quitar
@@ -250,25 +263,60 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
               </p>
               <label
                 onDrop={onDrop}
+                onDragEnter={onDragEnter}
                 onDragOver={onDragOver}
                 onDragLeave={onDragLeave}
-                className="flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 cursor-pointer transition-colors"
+                aria-label="Zona de carga de CSV"
+                className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 cursor-pointer transition-all ${dragActive ? 'animate-drag-breathe' : ''} ${parsed.status === 'parsing' ? 'pointer-events-none opacity-80' : ''}`}
                 style={{
-                  borderColor: dragActive ? 'var(--primary)' : 'var(--gray-200)',
-                  background: dragActive ? 'var(--primary-muted)' : 'transparent',
+                  borderColor: dragActive ? 'var(--primary)' : parsed.status === 'parsing' ? 'var(--primary)' : 'var(--gray-200)',
+                  background: dragActive ? 'var(--primary-muted)' : parsed.status === 'parsing' ? 'var(--primary-subtle)' : 'transparent',
+                  transitionTimingFunction: 'var(--spring)',
+                  transitionDuration: '220ms',
                 }}
               >
-                <Upload className="w-6 h-6" style={{ color: dragActive ? 'var(--primary)' : 'var(--gray-400)' }} />
-                <p className="text-[13px] font-medium" style={{ color: 'var(--gray-950)' }}>
-                  {dragActive ? 'Suelta el archivo' : 'Arrastra un CSV o haz clic para seleccionar'}
-                </p>
-                <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
-                  Formato: "Presupuesto &lt;año&gt; — Resumen Mensual" con Concepto y columnas Ene..Dic. Máx. 5 MB.
-                </p>
+                {parsed.status === 'parsing' ? (
+                  <>
+                    <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--primary)' }} />
+                    <p className="text-[13px] font-medium" style={{ color: 'var(--gray-950)' }}>
+                      Parseando CSV…
+                    </p>
+                    <div className="w-48 h-1.5 bg-[var(--gray-200)] rounded-full overflow-hidden mt-1">
+                      <div
+                        className="h-full bg-[var(--primary)] rounded-full"
+                        style={{
+                          width: '60%',
+                          animation: 'progressFill 0.9s var(--spring) infinite alternate',
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span
+                      className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${dragActive ? 'scale-110' : ''}`}
+                      style={{
+                        background: dragActive ? 'var(--primary)' : 'var(--gray-100)',
+                      }}
+                    >
+                      <Upload
+                        className="w-5 h-5"
+                        style={{ color: dragActive ? 'white' : 'var(--gray-400)' }}
+                      />
+                    </span>
+                    <p className="text-[13px] font-medium" style={{ color: 'var(--gray-950)' }}>
+                      {dragActive ? 'Suelta el archivo' : 'Arrastra un CSV o haz clic para seleccionar'}
+                    </p>
+                    <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
+                      Formato: "Presupuesto &lt;año&gt; — Resumen Mensual" con Concepto y columnas Ene..Dic. Máx. 5 MB.
+                    </p>
+                  </>
+                )}
                 <input
                   type="file"
                   accept=".csv,text/csv"
                   className="hidden"
+                  disabled={parsed.status === 'parsing'}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) handleFile(f);
@@ -277,11 +325,12 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
                   }}
                 />
               </label>
-              {parsed.status === 'parsing' && (
-                <p className="text-[12px] mt-2" style={{ color: 'var(--gray-400)' }}>Parseando…</p>
-              )}
               {parsed.status === 'error' && (
-                <div className="mt-3 rounded-lg border border-[var(--danger)]/30 bg-[var(--danger)]/5 p-3 flex items-start gap-2">
+                <div
+                  key={errorShakeKey}
+                  className="mt-3 rounded-lg border border-[var(--danger)]/30 bg-[var(--danger)]/5 p-3 flex items-start gap-2 animate-shake"
+                  role="alert"
+                >
                   <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: 'var(--danger)' }} />
                   <div>
                     <p className="text-[12px] font-medium" style={{ color: 'var(--danger)' }}>
@@ -365,26 +414,31 @@ const BudgetPreview: React.FC<{
   const netFlow = yearIncomeTotal - yearExpenseTotal;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <p className="text-[12px] font-medium uppercase tracking-wider mb-1" style={{ color: 'var(--gray-400)' }}>
-          Vista previa
-        </p>
-        <p className="text-[13px] font-semibold" style={{ color: 'var(--gray-950)' }}>
-          Presupuesto {budget.year} · {fileName}
-        </p>
-        {detectedScale
-          ? (
-            <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
-              Escala detectada en el archivo: <strong>{scaleLabel(detectedScale)}</strong>
-            </p>
-          )
-          : (
-            <p className="text-[11px] mt-0.5" style={{ color: 'var(--warning)' }}>
-              No se detectó la escala en el header. Confirma abajo antes de aplicar.
-            </p>
-          )
-        }
+    <div className="space-y-4 animate-slide-up">
+      <div className="flex items-start gap-3">
+        <span className="w-9 h-9 rounded-lg bg-[var(--success)]/15 flex items-center justify-center flex-shrink-0 animate-success-bounce">
+          <FileText className="w-4 h-4" style={{ color: 'var(--success)' }} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[12px] font-medium uppercase tracking-wider mb-0.5" style={{ color: 'var(--gray-400)' }}>
+            Vista previa
+          </p>
+          <p className="text-[13px] font-semibold truncate" style={{ color: 'var(--gray-950)' }}>
+            Presupuesto {budget.year} · {fileName}
+          </p>
+          {detectedScale
+            ? (
+              <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
+                Escala detectada en el archivo: <strong>{scaleLabel(detectedScale)}</strong>
+              </p>
+            )
+            : (
+              <p className="text-[11px] mt-0.5" style={{ color: 'var(--warning)' }}>
+                No se detectó la escala en el header. Confirma abajo antes de aplicar.
+              </p>
+            )
+          }
+        </div>
       </div>
 
       {/* Scale picker */}
