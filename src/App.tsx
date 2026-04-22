@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Proposal, Scenario, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import { fetchCompanies, type Company, type BankAccountStatement, type BankStatementFormat } from './services/jde';
-import Dashboard from './components/Dashboard';
+import Dashboard, { computeBankStartingBalance } from './components/Dashboard';
 import CXP from './components/CXP';
 import Bancos from './components/Bancos';
 import Providers from './components/Providers';
@@ -170,6 +170,33 @@ export default function App() {
   const [bankFetchProgress, setBankFetchProgress] = useState<
     { done: number; total: number } | null
   >(null);
+
+  // Caja inicial / Saldo inicial — estado compartido entre Dashboard y
+  // CashFlowDetail. Si el usuario lo edita en cualquiera de las dos vistas,
+  // ambas quedan sincronizadas. null = usar la suma de saldoInicial de banco.
+  const [startingBalanceOverride, setStartingBalanceOverride] = useState<number | null>(() => {
+    try {
+      const raw = localStorage.getItem('flowsense.dashboard.startingBalance.v1');
+      if (!raw) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    try {
+      if (startingBalanceOverride === null) localStorage.removeItem('flowsense.dashboard.startingBalance.v1');
+      else localStorage.setItem('flowsense.dashboard.startingBalance.v1', String(startingBalanceOverride));
+    } catch { /* ignore */ }
+  }, [startingBalanceOverride]);
+  const bankStartingBalance = useMemo(
+    () => computeBankStartingBalance(
+      selectedCia === 'all' || !selectedCia
+        ? bankStatements
+        : bankStatements.filter((s) => s.cia === selectedCia),
+    ),
+    [bankStatements, selectedCia],
+  );
+  const effectiveStartingBalance = startingBalanceOverride ?? bankStartingBalance;
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
@@ -603,6 +630,9 @@ export default function App() {
                 budget={budget}
                 onBudgetChange={setBudget}
                 onOpenFlow={() => setActiveTab('flow')}
+                startingBalanceOverride={startingBalanceOverride}
+                bankStartingBalance={bankStartingBalance}
+                onStartingBalanceChange={setStartingBalanceOverride}
               />
             )}
             {activeTab === 'flow' && (
@@ -681,6 +711,8 @@ export default function App() {
                 bankFetchStatus={bankFetchStatus}
                 bankFetchProgress={bankFetchProgress}
                 onRefreshBanks={() => refreshBankStatementsRange(true)}
+                startingBalance={effectiveStartingBalance}
+                onStartingBalanceChange={setStartingBalanceOverride}
               />
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}
