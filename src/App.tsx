@@ -739,6 +739,9 @@ export default function App() {
                 providers={providers}
                 clients={clients}
                 assumptions={assumptions}
+                bankStatements={bankStatements}
+                budget={budget}
+                proposals={proposals}
                 onMergeCia={mergeCxpForCia}
                 onReplaceAll={replaceAllCxp}
                 onReset={resetCxp}

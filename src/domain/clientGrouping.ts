@@ -7,7 +7,6 @@ import {
 import { projectClientMonth, projectYear } from './collectionEngine';
 
 export type ClientGroupSource = 'manual' | 'rfc' | 'domain' | 'address' | 'name' | 'single';
-export type ClientRisk = 'Alto' | 'Medio' | 'Bajo';
 
 export interface ClientAccountNode {
   client: Client;
@@ -18,8 +17,6 @@ export interface ClientAccountNode {
   confirmedInvoices: number;
   avgLagDays: number;
   realCreditDays: number;
-  risk: ClientRisk;
-  riskReason: string;
 }
 
 export interface ClientGroupNode {
@@ -36,8 +33,6 @@ export interface ClientGroupNode {
   confirmedInvoices: number;
   avgLagDays: number;
   realCreditDays: number;
-  risk: ClientRisk;
-  riskReason: string;
 }
 
 interface GroupSignal {
@@ -258,16 +253,6 @@ function annualSales(client: Client): number {
   return client.monthlyBilling.reduce((sum, value) => sum + value, 0);
 }
 
-function riskForMetrics(realCreditDays: number, avgLagDays: number, projectedReceivable: number): { risk: ClientRisk; reason: string } {
-  if (realCreditDays >= 90 || avgLagDays > 20 || projectedReceivable >= 5_000_000) {
-    return { risk: 'Alto', reason: 'crédito real alto, lag relevante o saldo proyectado material' };
-  }
-  if (realCreditDays >= 60 || avgLagDays > 7 || projectedReceivable >= 1_000_000) {
-    return { risk: 'Medio', reason: 'requiere seguimiento por crédito, lag o saldo proyectado' };
-  }
-  return { risk: 'Bajo', reason: 'crédito y saldo proyectado dentro de rango normal' };
-}
-
 function accountNode(
   client: Client,
   assumptions: CashFlowAssumptions,
@@ -283,7 +268,6 @@ function accountNode(
         .reduce((sum, event, _, arr) => sum + event.lagDays / Math.max(arr.length, 1), 0);
   const realCreditDays = client.creditDays + Math.max(0, Math.round(avgLagDays));
   const projectedReceivable = pendingEvents.reduce((sum, event) => sum + event.amount, 0);
-  const risk = riskForMetrics(realCreditDays, avgLagDays, projectedReceivable);
 
   return {
     client,
@@ -294,14 +278,7 @@ function accountNode(
     confirmedInvoices: confirmedEvents.length,
     avgLagDays,
     realCreditDays,
-    risk: risk.risk,
-    riskReason: risk.reason,
   };
-}
-
-function maxRisk(a: ClientRisk, b: ClientRisk): ClientRisk {
-  const order: Record<ClientRisk, number> = { Bajo: 0, Medio: 1, Alto: 2 };
-  return order[b] > order[a] ? b : a;
 }
 
 function finalizeGroup(signal: GroupSignal, accounts: ClientAccountNode[]): ClientGroupNode {
@@ -318,8 +295,6 @@ function finalizeGroup(signal: GroupSignal, accounts: ClientAccountNode[]): Clie
   const realCredit = accounts.length
     ? Math.round(accounts.reduce((sum, account) => sum + account.realCreditDays, 0) / accounts.length)
     : 0;
-  const risk = accounts.reduce<ClientRisk>((current, account) => maxRisk(current, account.risk), 'Bajo');
-  const riskReason = riskForMetrics(realCredit, avgLag, receivable).reason;
 
   return {
     ...signal,
@@ -333,8 +308,6 @@ function finalizeGroup(signal: GroupSignal, accounts: ClientAccountNode[]): Clie
     confirmedInvoices,
     avgLagDays: avgLag,
     realCreditDays: realCredit,
-    risk,
-    riskReason,
   };
 }
 

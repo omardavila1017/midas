@@ -20,7 +20,7 @@ import {
   RefreshCw,
   HelpCircle,
 } from 'lucide-react';
-import { fetchAgedBalances, JdeApiError, type Company } from '../services/jde';
+import { fetchAgedBalances, JdeApiError, type BankAccountStatement, type BankStatementLine, type Company } from '../services/jde';
 import {
   BarChart,
   Bar,
@@ -38,6 +38,8 @@ import { fmtCompact, fmtCurrency } from '../formatters';
 import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
 import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
 import { projectYear } from '../domain/collectionEngine';
+import type { Budget } from '../domain/budget';
+import type { Proposal } from '../types';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -75,6 +77,43 @@ interface CXPRecord {
 }
 
 type PaymentPriority = 'critical' | 'negotiable' | 'highImpact' | 'normal';
+type CxpAlertType =
+  | 'riskHigh'
+  | 'urgentPayment'
+  | 'operationalImpact'
+  | 'cashImpact'
+  | 'criticalProvider'
+  | 'overdue'
+  | 'blocked'
+  | 'incomplete'
+  | 'missingPo'
+  | 'duplicate'
+  | 'creditLimit'
+  | 'staleProvider'
+  | 'strategicProvider';
+type AlertTone = 'danger' | 'warning' | 'info';
+type DrillDimension = 'empresa' | 'tipoProveedor' | 'proveedor' | 'factura';
+
+interface CxpAlert {
+  type: CxpAlertType;
+  label: string;
+  detail: string;
+  tone: AlertTone;
+}
+
+interface DrillStep {
+  dimension: DrillDimension;
+  label: string;
+  value: string;
+}
+
+interface DrillNode {
+  value: string;
+  label: string;
+  total: number;
+  count: number;
+  records: EnrichedCXPRecord[];
+}
 
 interface PaymentReference {
   kind: 'Factura' | 'Proveedor' | 'OC' | 'Contrato' | 'Concepto';
@@ -93,6 +132,7 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerDtiCriticidad?: 'Alta' | 'Media' | 'Baja';
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
+  alerts: CxpAlert[];
 }
 
 interface AgingBucket {
@@ -152,6 +192,52 @@ const PRIORITY_FILTERS: { id: PaymentPriority; label: string }[] = [
   { id: 'negotiable', label: 'Negociable' },
   { id: 'highImpact', label: 'Impacto alto' },
   { id: 'normal', label: 'Normal' },
+];
+const DRILL_SEQUENCE: DrillDimension[] = ['empresa', 'tipoProveedor', 'proveedor', 'factura'];
+const DRILL_LABELS: Record<DrillDimension, string> = {
+  empresa: 'Empresa',
+  tipoProveedor: 'Tipo de proveedor',
+  proveedor: 'Proveedor',
+  factura: 'Factura',
+};
+const ALERT_LABELS: Record<CxpAlertType, string> = {
+  riskHigh: 'Riesgo alto',
+  urgentPayment: 'Urgencia de pago',
+  operationalImpact: 'Impacto operativo',
+  cashImpact: 'Impacto en flujo',
+  criticalProvider: 'Proveedor crítico',
+  overdue: 'Facturas vencidas',
+  blocked: 'Bloqueadas',
+  incomplete: 'Datos incompletos',
+  missingPo: 'Sin OC',
+  duplicate: 'Duplicidad posible',
+  creditLimit: 'Límite comprometido',
+  staleProvider: 'Proveedor sin actualizar',
+  strategicProvider: 'Proveedor estratégico',
+};
+const TRIAGE_ALERT_ORDER: CxpAlertType[] = [
+  'riskHigh',
+  'urgentPayment',
+  'operationalImpact',
+  'cashImpact',
+  'criticalProvider',
+  'overdue',
+  'blocked',
+  'incomplete',
+  'missingPo',
+  'duplicate',
+  'creditLimit',
+  'staleProvider',
+  'strategicProvider',
+];
+const AGING_RANGE_DEFS = [
+  { id: 'current', label: 'Por vencer', min: -Infinity, max: 0 },
+  { id: '0-7', label: '0-7 días', min: 1, max: 7 },
+  { id: '8-15', label: '8-15 días', min: 8, max: 15 },
+  { id: '16-30', label: '16-30 días', min: 16, max: 30 },
+  { id: '31-60', label: '31-60 días', min: 31, max: 60 },
+  { id: '61-90', label: '61-90 días', min: 61, max: 90 },
+  { id: '90+', label: '+90 días', min: 91, max: Infinity },
 ];
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -263,6 +349,59 @@ function inferReferences(record: CXPRecord): PaymentReference[] {
   return refs;
 }
 
+function invoiceKey(record: Pick<CXPRecord, 'cia' | 'noProveedor' | 'nombre' | 'noFactura' | 'fechaFactura' | 'importePendientePesos'>): string {
+  return [
+    record.cia,
+    normName(record.noProveedor || record.nombre),
+    normName(record.noFactura),
+    record.fechaFactura,
+    Math.round(record.importePendientePesos * 100) / 100,
+  ].join('|');
+}
+
+function hasReference(record: EnrichedCXPRecord, kind: PaymentReference['kind']): boolean {
+  return record.referenceLinks.some(ref => ref.kind === kind);
+}
+
+function isBlocked(record: Pick<CXPRecord, 'edoPago' | 'clasifica' | 'clasificacionProveedor'>): boolean {
+  const text = normName(`${record.edoPago} ${record.clasifica} ${record.clasificacionProveedor}`);
+  return /\b(BLOQ|BLOQUE|RETEN|DETEN|APROB|RECHAZ|HOLD)\b/.test(text);
+}
+
+function alertItem(type: CxpAlertType, detail: string, tone: AlertTone): CxpAlert {
+  return { type, label: ALERT_LABELS[type], detail, tone };
+}
+
+function buildCxpAlerts(
+  record: EnrichedCXPRecord,
+  duplicateCount: number,
+  supplierExposure: number,
+): CxpAlert[] {
+  const alerts: CxpAlert[] = [];
+  if (record.providerRisk === 'Alto') alerts.push(alertItem('riskHigh', 'Proveedor con riesgo alto en catálogo.', 'danger'));
+  if (record.paymentPriority === 'critical') alerts.push(alertItem('urgentPayment', priorityReason(record), 'danger'));
+  if (record.providerFlexibility === 'inamovible') alerts.push(alertItem('operationalImpact', 'Proveedor inamovible; mover el pago puede afectar operación.', 'danger'));
+  if (record.importePendientePesos >= HIGH_IMPACT_AMOUNT) alerts.push(alertItem('cashImpact', `Factura de ${fmtFull(record.importePendientePesos)} con impacto material en caja.`, 'warning'));
+  if (record.providerDtiCriticidad === 'Alta') alerts.push(alertItem('criticalProvider', `Proveedor crítico DTI${record.providerDtiArea ? ` (${record.providerDtiArea})` : ''}.`, 'danger'));
+  if (record.diasVencida > 0) alerts.push(alertItem('overdue', agingTooltip(record.diasVencida), record.diasVencida > 90 ? 'danger' : 'warning'));
+  if (isBlocked(record)) alerts.push(alertItem('blocked', `Estatus o clasificación: ${record.edoPago || record.clasifica || record.clasificacionProveedor || 'sin detalle'}.`, 'warning'));
+  if (!record.noFactura || !record.fechaFactura || !dueDateForRecord(record) || record.importePendientePesos <= 0) {
+    alerts.push(alertItem('incomplete', 'Falta factura, fecha, vencimiento o monto pendiente.', 'warning'));
+  }
+  if (!hasReference(record, 'OC')) alerts.push(alertItem('missingPo', 'No se detectó orden de compra en los datos recibidos.', 'info'));
+  if (duplicateCount > 1) alerts.push(alertItem('duplicate', `${duplicateCount} registros con misma factura/proveedor/monto.`, 'warning'));
+  if (record.providerCreditLimit && record.providerCreditLimit > 0 && supplierExposure >= record.providerCreditLimit * 0.9) {
+    alerts.push(alertItem('creditLimit', `Exposición ${fmtFull(supplierExposure)} vs límite ${fmtFull(record.providerCreditLimit)}.`, 'warning'));
+  }
+  if (record.providerDaysWithoutUpdate !== null && record.providerDaysWithoutUpdate > 90) {
+    alerts.push(alertItem('staleProvider', `${record.providerDaysWithoutUpdate} días sin actualización del proveedor.`, 'warning'));
+  }
+  if (record.providerDtiCriticidad || record.providerRisk === 'Alto') {
+    alerts.push(alertItem('strategicProvider', 'Proveedor marcado como crítico o estratégico por catálogo.', 'info'));
+  }
+  return alerts;
+}
+
 function isCritical(record: Pick<EnrichedCXPRecord, 'providerRisk' | 'providerFlexibility' | 'diasVencida'>): boolean {
   return record.providerRisk === 'Alto' || record.providerFlexibility === 'inamovible' || record.diasVencida > 30;
 }
@@ -304,6 +443,7 @@ function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provide
     providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
+    alerts: [],
   };
   enriched.paymentPriority = paymentPriority(enriched);
   return enriched;
@@ -355,6 +495,79 @@ function agingTooltip(days: number): string {
   if (days <= 60) return `${days} dias vencido: tension con proveedor y posible bloqueo de credito.`;
   if (days <= 90) return `${days} dias vencido: riesgo alto de suspension de servicio o condiciones mas estrictas.`;
   return `${days} dias vencido: riesgo legal/comercial; requiere decision prioritaria.`;
+}
+
+function agingRangeForRecord(record: Pick<CXPRecord, 'diasVencida'>): { id: string; label: string } {
+  const days = record.diasVencida;
+  const found = AGING_RANGE_DEFS.find(range => days >= range.min && days <= range.max) ?? AGING_RANGE_DEFS[AGING_RANGE_DEFS.length - 1];
+  return { id: found.id, label: found.label };
+}
+
+function drillValue(record: EnrichedCXPRecord, dimension: DrillDimension): string {
+  switch (dimension) {
+    case 'empresa': return record.cia || 'Sin empresa';
+    case 'tipoProveedor': return record.providerType || 'Sin clasificar';
+    case 'proveedor': return record.nombre || 'Sin proveedor';
+    case 'factura': return invoiceKey(record);
+  }
+}
+
+function drillLabel(record: EnrichedCXPRecord, dimension: DrillDimension, ciaName: (code: string) => string): string {
+  switch (dimension) {
+    case 'empresa': return ciaName(record.cia || 'Sin empresa');
+    case 'tipoProveedor': return record.providerType || 'Sin clasificar';
+    case 'proveedor': return record.nombre || 'Sin proveedor';
+    case 'factura': return record.noFactura || 'Sin factura';
+  }
+}
+
+function applyDrillStack(
+  records: EnrichedCXPRecord[],
+  stack: DrillStep[],
+): EnrichedCXPRecord[] {
+  if (!stack.length) return records;
+  return records.filter(record => stack.every(step => drillValue(record, step.dimension) === step.value));
+}
+
+function groupByDrillDimension(
+  records: EnrichedCXPRecord[],
+  dimension: DrillDimension,
+  ciaName: (code: string) => string,
+): DrillNode[] {
+  const map = new Map<string, DrillNode>();
+  records.forEach(record => {
+    const value = drillValue(record, dimension);
+    const label = drillLabel(record, dimension, ciaName);
+    const item = map.get(value) ?? { value, label, total: 0, count: 0, records: [] };
+    item.total += record.importePendientePesos;
+    item.count += 1;
+    item.records.push(record);
+    map.set(value, item);
+  });
+  return Array.from(map.values()).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, 'es'));
+}
+
+function flattenBankMovements(bankStatements: BankAccountStatement[], cia?: string): BankStatementLine[] {
+  return bankStatements
+    .filter(statement => !cia || cia === 'all' || statement.cia === cia)
+    .flatMap(statement => statement.movimientos);
+}
+
+function findPossibleBankPayments(record: EnrichedCXPRecord, bankStatements: BankAccountStatement[]): BankStatementLine[] {
+  const target = record.importePendientePesos;
+  if (target <= 0 || bankStatements.length === 0) return [];
+  const provider = normName(record.nombre);
+  const invoice = normName(record.noFactura);
+  return flattenBankMovements(bankStatements, record.cia)
+    .filter(movement => movement.tipoMovimiento === 'CARGO')
+    .filter((movement) => {
+      const amountOk = Math.abs(Math.abs(movement.importe) - target) <= Math.max(500, target * 0.05);
+      const text = normName(`${movement.concepto} ${movement.referencia}`);
+      const textOk = (provider && text.includes(provider.slice(0, Math.min(provider.length, 18)))) || (invoice && text.includes(invoice));
+      return amountOk || textOk;
+    })
+    .sort((a, b) => b.fechaOperacion.localeCompare(a.fechaOperacion))
+    .slice(0, 6);
 }
 
 function dueFilterLabel(filter: DueFilter): string {
@@ -489,6 +702,9 @@ const CXPDashboard = ({
   providers,
   clients,
   assumptions,
+  bankStatements,
+  budget,
+  proposals,
 }: {
   records: CXPRecord[];
   onReset: () => void;
@@ -496,6 +712,9 @@ const CXPDashboard = ({
   providers: Provider[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
+  bankStatements: BankAccountStatement[];
+  budget: Budget | null;
+  proposals: Proposal[];
 }) => {
   /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
   const ciaName = useCallback((code: string): string => {
@@ -525,8 +744,19 @@ const CXPDashboard = ({
   // Drilldown state
   const [activeBucket, setActiveBucket] = useState<string | null>(null);
   const [activeKpi, setActiveKpi] = useState<string | null>(null);
+  const [activeAgingRange, setActiveAgingRange] = useState<string | null>(null);
+  const [drillStack, setDrillStack] = useState<DrillStep[]>([]);
+  const [activeTriageAlert, setActiveTriageAlert] = useState<CxpAlertType | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<EnrichedCXPRecord | null>(null);
 
-  const clearDrill = () => { setActiveBucket(null); setActiveKpi(null); setProvPage(0); };
+  const clearDrill = () => {
+    setActiveBucket(null);
+    setActiveKpi(null);
+    setActiveAgingRange(null);
+    setDrillStack([]);
+    setActiveTriageAlert(null);
+    setProvPage(0);
+  };
   const clearAllFilters = () => {
     setSearchTerm('');
     setCategoryFilters([]);
@@ -535,12 +765,16 @@ const CXPDashboard = ({
     setDueFilters([]);
     setAmountFilters([]);
     setPriorityFilters([]);
+    setSelectedRecord(null);
     clearDrill();
   };
   const hasDrill = Boolean(
     searchTerm ||
     activeBucket ||
     activeKpi ||
+    activeAgingRange ||
+    drillStack.length ||
+    activeTriageAlert ||
     categoryFilters.length ||
     riskFilters.length ||
     flexFilters.length ||
@@ -555,6 +789,10 @@ const CXPDashboard = ({
       setSelectedCia('all');
       setActiveBucket(null);
       setActiveKpi(null);
+      setActiveAgingRange(null);
+      setDrillStack([]);
+      setActiveTriageAlert(null);
+      setSelectedRecord(null);
       setExpandedSupplier(null);
       setProvPage(0);
     }
@@ -565,10 +803,24 @@ const CXPDashboard = ({
     [providers],
   );
 
-  const enrichedRecords = useMemo(
-    () => records.map((record) => enrichCxpRecord(record, providersByName)),
-    [providersByName, records],
-  );
+  const enrichedRecords = useMemo(() => {
+    const base = records.map((record) => enrichCxpRecord(record, providersByName));
+    const duplicateCounts = new Map<string, number>();
+    const exposureBySupplier = new Map<string, number>();
+    base.forEach((record) => {
+      const key = invoiceKey(record);
+      duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1);
+      const supplierKey = normName(record.nombre || record.noProveedor);
+      exposureBySupplier.set(supplierKey, (exposureBySupplier.get(supplierKey) ?? 0) + record.importePendientePesos);
+    });
+    return base.map((record) => {
+      const supplierExposure = exposureBySupplier.get(normName(record.nombre || record.noProveedor)) ?? record.importePendientePesos;
+      return {
+        ...record,
+        alerts: buildCxpAlerts(record, duplicateCounts.get(invoiceKey(record)) ?? 0, supplierExposure),
+      };
+    });
+  }, [providersByName, records]);
 
   const recordsForFilterOptions = useMemo(
     () => selectedCia === 'all' ? enrichedRecords : enrichedRecords.filter(record => record.cia === selectedCia),
@@ -610,6 +862,12 @@ const CXPDashboard = ({
       const bi = BUCKET_LABELS.indexOf(activeBucket);
       if (bi >= 0) { const k = BUCKET_KEYS[bi]; f = f.filter(r => (r[k] as number) > 0); }
     }
+    if (activeAgingRange) {
+      f = f.filter(r => agingRangeForRecord(r).id === activeAgingRange);
+    }
+    if (drillStack.length) {
+      f = applyDrillStack(f, drillStack);
+    }
     if (categoryFilters.length) {
       const selected = new Set(categoryFilters);
       f = f.filter(r => selected.has(r.providerType));
@@ -631,8 +889,11 @@ const CXPDashboard = ({
       const selected = new Set(priorityFilters);
       f = f.filter(r => selected.has(r.paymentPriority));
     }
+    if (activeTriageAlert) {
+      f = f.filter(r => r.alerts.some(alert => alert.type === activeTriageAlert));
+    }
     return f;
-  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, categoryFilters, activeKpi, riskFilters, flexFilters, dueFilters, amountFilters, priorityFilters]);
+  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeAgingRange, drillStack, categoryFilters, activeKpi, riskFilters, flexFilters, dueFilters, amountFilters, priorityFilters, activeTriageAlert]);
 
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
@@ -660,6 +921,95 @@ const CXPDashboard = ({
   const totalVencido = useMemo(() => agingBuckets.slice(1).reduce((s, b) => s + b.total, 0), [agingBuckets]);
   const totalPorVencer = agingBuckets[0]?.total || 0;
   const totalMas90 = useMemo(() => agingBuckets.slice(4).reduce((s, b) => s + b.total, 0), [agingBuckets]);
+  const currentMonthIndex = new Date().getMonth();
+  const currentYm = `${assumptions.year}-${String(currentMonthIndex + 1).padStart(2, '0')}`;
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const agingRangeData = useMemo(() => {
+    const map = new Map(AGING_RANGE_DEFS.map(range => [range.id, { ...range, total: 0, count: 0 }]));
+    filtered.forEach((record) => {
+      const range = agingRangeForRecord(record);
+      const item = map.get(range.id);
+      if (!item) return;
+      item.total += record.importePendientePesos;
+      item.count += 1;
+    });
+    return Array.from(map.values());
+  }, [filtered]);
+
+  const nextDrillDimension = DRILL_SEQUENCE[drillStack.length] ?? null;
+  const drillNodes = useMemo(
+    () => nextDrillDimension ? groupByDrillDimension(filtered, nextDrillDimension, ciaName) : [],
+    [ciaName, filtered, nextDrillDimension],
+  );
+
+  const biStats = useMemo(() => {
+    const overdueRecords = filtered.filter(record => record.diasVencida > 0);
+    const overdueTotal = overdueRecords.reduce((sum, record) => sum + record.importePendientePesos, 0);
+    const avgOverdueDays = overdueRecords.length
+      ? overdueRecords.reduce((sum, record) => sum + record.diasVencida, 0) / overdueRecords.length
+      : 0;
+    const bySupplier = new Map<string, number>();
+    filtered.forEach(record => bySupplier.set(record.nombre, (bySupplier.get(record.nombre) ?? 0) + record.importePendientePesos));
+    const topFiveTotal = Array.from(bySupplier.values()).sort((a, b) => b - a).slice(0, 5).reduce((sum, total) => sum + total, 0);
+    const alertTotal = (type: CxpAlertType) => filtered.filter(record => record.alerts.some(alert => alert.type === type)).length;
+    const missingCore = filtered.filter(record => record.alerts.some(alert => alert.type === 'incomplete')).length;
+    const catalogMatched = filtered.filter(record => record.providerType !== 'Sin clasificar' || record.providerRiskComment || record.providerFlexibility !== 'unknown').length;
+    const dataConfidence = filtered.length === 0
+      ? 0
+      : Math.max(0, Math.min(100,
+          60
+          + (catalogMatched / filtered.length) * 20
+          + (bankStatements.length > 0 ? 10 : 0)
+          + (budget ? 5 : 0)
+          + (proposals.length > 0 ? 5 : 0)
+          - (missingCore / filtered.length) * 30
+        ));
+    return {
+      overdueRatio: pct(overdueTotal, totalPendiente),
+      avgOverdueDays,
+      topFiveConcentration: pct(topFiveTotal, totalPendiente),
+      duplicateCount: alertTotal('duplicate'),
+      missingPoCount: alertTotal('missingPo'),
+      blockedCount: alertTotal('blocked'),
+      creditLimitCount: alertTotal('creditLimit'),
+      staleProviderCount: alertTotal('staleProvider'),
+      dataConfidence,
+    };
+  }, [bankStatements.length, budget, filtered, proposals.length, totalPendiente]);
+
+  const connectedSignals = useMemo(() => {
+    const today = new Date(`${todayIso}T12:00:00`);
+    const in30 = new Date(today);
+    in30.setDate(today.getDate() + 30);
+    const next30Cxp = filtered.reduce((sum, record) => {
+      const due = dueDateForRecord(record);
+      if (!due) return sum;
+      const date = new Date(`${due}T12:00:00`);
+      return date >= today && date <= in30 ? sum + record.importePendientePesos : sum;
+    }, 0);
+
+    const scopedStatements = selectedCia === 'all'
+      ? bankStatements
+      : bankStatements.filter(statement => statement.cia === selectedCia);
+    const cashAvailable = scopedStatements.reduce((sum, statement) => sum + (statement.saldoFinal ?? statement.saldoInicial ?? 0), 0);
+    const bankChargesMonth = flattenBankMovements(scopedStatements)
+      .filter(movement => movement.tipoMovimiento === 'CARGO' && movement.fechaOperacion.startsWith(currentYm))
+      .reduce((sum, movement) => sum + Math.abs(movement.importe), 0);
+    const plannedMonth = filtered.reduce((sum, record) => {
+      const due = dueDateForRecord(record);
+      return due?.startsWith(currentYm) ? sum + record.importePendientePesos : sum;
+    }, 0);
+    const budgetExpenseMonth = budget?.year === assumptions.year ? budget.expenseTotal[currentMonthIndex] ?? null : null;
+    return {
+      next30Cxp,
+      cashAvailable,
+      bankChargesMonth,
+      plannedMonth,
+      budgetExpenseMonth,
+      activeProposals: proposals.filter(proposal => proposal.enabled).length,
+    };
+  }, [assumptions.year, bankStatements, budget, currentMonthIndex, currentYm, filtered, proposals, selectedCia, todayIso]);
 
   const triageBuckets = useMemo(() => {
     const buckets = {
@@ -807,6 +1157,21 @@ const CXPDashboard = ({
   const activeFilterChips = [
     ...(searchTerm ? [{ key: 'search', label: `Busqueda: ${searchTerm}`, onRemove: () => setSearchTerm('') }] : []),
     ...(activeBucket ? [{ key: 'bucket', label: `Antiguedad: ${activeBucket}`, onRemove: () => setActiveBucket(null) }] : []),
+    ...(activeAgingRange ? [{
+      key: 'aging-range',
+      label: `Aging: ${AGING_RANGE_DEFS.find(range => range.id === activeAgingRange)?.label ?? activeAgingRange}`,
+      onRemove: () => setActiveAgingRange(null),
+    }] : []),
+    ...drillStack.map((step, index) => ({
+      key: `drill-${index}-${step.value}`,
+      label: `${DRILL_LABELS[step.dimension]}: ${step.label}`,
+      onRemove: () => setDrillStack(prev => prev.slice(0, index)),
+    })),
+    ...(activeTriageAlert ? [{
+      key: 'triage-alert',
+      label: `Triage: ${ALERT_LABELS[activeTriageAlert]}`,
+      onRemove: () => setActiveTriageAlert(null),
+    }] : []),
     ...(activeKpi ? [{
       key: 'kpi',
       label: activeKpi === 'porVencer' ? 'Por vencer' : activeKpi === 'vencido' ? 'Total vencido' : 'Vencido > 90 dias',
@@ -828,6 +1193,47 @@ const CXPDashboard = ({
     });
     setProvPage(0);
   };
+
+  const pushDrill = (node: DrillNode) => {
+    if (!nextDrillDimension) return;
+    if (nextDrillDimension === 'factura') {
+      setSelectedRecord(node.records[0] ?? null);
+      setDrillStack(prev => [...prev, {
+        dimension: nextDrillDimension,
+        value: node.value,
+        label: node.label,
+      }]);
+      return;
+    }
+    setDrillStack(prev => [...prev, {
+      dimension: nextDrillDimension,
+      value: node.value,
+      label: node.label,
+    }]);
+    setTab('proveedores');
+    setProvPage(0);
+  };
+
+  const triageAlertBuckets = useMemo(() => (
+    TRIAGE_ALERT_ORDER
+      .map(type => {
+        const bucketRecords = filtered.filter(record => record.alerts.some(alert => alert.type === type));
+        return {
+          type,
+          label: ALERT_LABELS[type],
+          count: bucketRecords.length,
+          total: bucketRecords.reduce((sum, record) => sum + record.importePendientePesos, 0),
+        };
+      })
+      .filter(bucket => bucket.count > 0)
+  ), [filtered]);
+
+  const triageDetailRecords = useMemo(() => {
+    const base = activeTriageAlert
+      ? filtered.filter(record => record.alerts.some(alert => alert.type === activeTriageAlert))
+      : filtered.filter(record => record.alerts.length > 0 || record.paymentPriority !== 'normal');
+    return base.sort((a, b) => b.importePendientePesos - a.importePendientePesos || b.diasVencida - a.diasVencida);
+  }, [activeTriageAlert, filtered]);
 
   /* ── Render ── */
   return (
@@ -1017,6 +1423,16 @@ const CXPDashboard = ({
         </div>
       )}
 
+      <DrillExplorer
+        stack={drillStack}
+        nextDimension={nextDrillDimension}
+        nodes={drillNodes}
+        total={totalPendiente}
+        onPick={pushDrill}
+        onReset={() => setDrillStack([])}
+        onBackTo={(index) => setDrillStack(prev => prev.slice(0, index + 1))}
+      />
+
       {/* ── KPI Cards ── */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {[
@@ -1083,6 +1499,23 @@ const CXPDashboard = ({
           onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'highImpact')); setTab('triage'); setProvPage(0); }}
         />
       </div>
+
+      <BIInsightGrid
+        stats={biStats}
+        agingRanges={agingRangeData}
+        activeAgingRange={activeAgingRange}
+        onAgingRangeClick={(id) => {
+          setActiveAgingRange(prev => prev === id ? null : id);
+          setProvPage(0);
+        }}
+        onAlertClick={(type) => {
+          setActiveTriageAlert(type);
+          setTab('triage');
+          setProvPage(0);
+        }}
+      />
+
+      <ConnectedIntelligence signals={connectedSignals} hasBanks={bankStatements.length > 0} hasBudget={!!budget} />
 
       {/* ════════════════════════════════════════════════════════════════
          RESUMEN TAB
@@ -1368,7 +1801,11 @@ const CXPDashboard = ({
                           </thead>
                           <tbody>
                             {s.records.sort((a, b) => b.diasVencida - a.diasVencida).map((r, ri) => (
-                              <tr key={ri} className="border-b border-[var(--gray-50)]">
+                              <tr
+                                key={ri}
+                                onClick={() => setSelectedRecord(r)}
+                                className="cursor-pointer border-b border-[var(--gray-50)] hover:bg-white"
+                              >
                                 <td className="py-1.5 font-mono text-[var(--gray-950)]">{r.noFactura}</td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaFactura}</td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaVence}</td>
@@ -1439,26 +1876,50 @@ const CXPDashboard = ({
          TRIAGE TAB
          ════════════════════════════════════════════════════════════════ */}
       {tab === 'triage' && (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-          <TriageColumn
-            title="Criticos"
-            detail="No conviene moverlos sin decision ejecutiva."
-            tone="danger"
-            records={triageBuckets.critical}
+        <div className="space-y-4">
+          <TriageAlertBoard
+            buckets={triageAlertBuckets}
+            active={activeTriageAlert}
+            onSelect={(type) => setActiveTriageAlert(prev => prev === type ? null : type)}
           />
-          <TriageColumn
-            title="Negociables"
-            detail="Candidatos a reprogramar o negociar plazo."
-            tone="success"
-            records={triageBuckets.negotiable}
-          />
-          <TriageColumn
-            title="Mayor impacto"
-            detail={`Montos de ${fmt(HIGH_IMPACT_AMOUNT)} o mas.`}
-            tone="warning"
-            records={triageBuckets.highImpact}
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <TriageColumn
+              title="Críticos"
+              detail="No conviene moverlos sin decisión ejecutiva."
+              tone="danger"
+              records={triageBuckets.critical}
+              onRecordSelect={setSelectedRecord}
+            />
+            <TriageColumn
+              title="Negociables"
+              detail="Candidatos a reprogramar o negociar plazo."
+              tone="success"
+              records={triageBuckets.negotiable}
+              onRecordSelect={setSelectedRecord}
+            />
+            <TriageColumn
+              title="Mayor impacto"
+              detail={`Montos de ${fmt(HIGH_IMPACT_AMOUNT)} o más.`}
+              tone="warning"
+              records={triageBuckets.highImpact}
+              onRecordSelect={setSelectedRecord}
+            />
+          </div>
+          <TriageDetailTable
+            title={activeTriageAlert ? ALERT_LABELS[activeTriageAlert] : 'Todo el triage'}
+            records={triageDetailRecords}
+            onRecordSelect={setSelectedRecord}
           />
         </div>
+      )}
+
+      {selectedRecord && (
+        <InvoiceDetailPanel
+          record={selectedRecord}
+          companyName={ciaName(selectedRecord.cia)}
+          bankMatches={findPossibleBankPayments(selectedRecord, bankStatements)}
+          onClose={() => setSelectedRecord(null)}
+        />
       )}
     </div>
   );
@@ -1499,6 +1960,205 @@ function FilterPill({
       <span className="truncate">{label}</span>
       {meta && <span className="font-mono text-[10px] opacity-70">{meta}</span>}
     </button>
+  );
+}
+
+function alertToneClass(tone: AlertTone): string {
+  if (tone === 'danger') return 'bg-[var(--danger-muted)] text-[var(--danger)]';
+  if (tone === 'warning') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
+  return 'bg-[var(--primary-muted)] text-[var(--primary)]';
+}
+
+function DrillExplorer({
+  stack,
+  nextDimension,
+  nodes,
+  total,
+  onPick,
+  onReset,
+  onBackTo,
+}: {
+  stack: DrillStep[];
+  nextDimension: DrillDimension | null;
+  nodes: DrillNode[];
+  total: number;
+  onPick: (node: DrillNode) => void;
+  onReset: () => void;
+  onBackTo: (index: number) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+            <button onClick={onReset} className="font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]">Total CXP</button>
+            {stack.map((step, index) => (
+              <span key={`${step.dimension}-${step.value}`} className="flex min-w-0 items-center gap-1.5">
+                <ChevronRight className="h-3 w-3 text-[var(--gray-300)]" />
+                <button
+                  onClick={() => onBackTo(index)}
+                  className="max-w-[220px] truncate text-[var(--gray-700)] hover:text-[var(--primary)]"
+                  title={step.label}
+                >
+                  {step.label}
+                </button>
+              </span>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-[var(--gray-400)]">
+            {nextDimension ? `Siguiente nivel: ${DRILL_LABELS[nextDimension]}` : 'Detalle de factura seleccionado'}
+          </p>
+        </div>
+        <p className="font-mono text-[13px] font-semibold text-[var(--gray-950)]">{fmtFull(total)}</p>
+      </div>
+
+      {nextDimension && (
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {nodes.slice(0, 12).map(node => (
+            <button
+              key={node.value}
+              onClick={() => onPick(node)}
+              className="rounded-xl border border-[var(--gray-200)] px-3 py-2 text-left transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+              title={`${node.label}: ${fmtFull(node.total)}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="min-w-0 truncate text-[12px] font-medium text-[var(--gray-950)]">{node.label}</span>
+                <span className="shrink-0 text-[10px] text-[var(--gray-400)]">{node.count}</span>
+              </div>
+              <p className="mt-1 font-mono text-[13px] font-semibold text-[var(--gray-950)]">{fmt(node.total)}</p>
+            </button>
+          ))}
+          {nodes.length === 0 && (
+            <div className="rounded-xl border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
+              Sin datos para bajar de nivel.
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BIInsightGrid({
+  stats,
+  agingRanges,
+  activeAgingRange,
+  onAgingRangeClick,
+  onAlertClick,
+}: {
+  stats: {
+    overdueRatio: string;
+    avgOverdueDays: number;
+    topFiveConcentration: string;
+    duplicateCount: number;
+    missingPoCount: number;
+    blockedCount: number;
+    creditLimitCount: number;
+    staleProviderCount: number;
+    dataConfidence: number;
+  };
+  agingRanges: Array<{ id: string; label: string; total: number; count: number }>;
+  activeAgingRange: string | null;
+  onAgingRangeClick: (id: string) => void;
+  onAlertClick: (type: CxpAlertType) => void;
+}) {
+  const alertStats: Array<{ type: CxpAlertType; count: number }> = [
+    { type: 'duplicate', count: stats.duplicateCount },
+    { type: 'missingPo', count: stats.missingPoCount },
+    { type: 'blocked', count: stats.blockedCount },
+    { type: 'creditLimit', count: stats.creditLimitCount },
+    { type: 'staleProvider', count: stats.staleProviderCount },
+  ];
+
+  return (
+    <section className="grid grid-cols-1 gap-3 xl:grid-cols-[1.2fr_1fr]">
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Aging y concentración</h2>
+          <span className="text-[11px] text-[var(--gray-400)]" title="Rangos calculados con días vencidos por factura">Rangos BI</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <SmallBiStat label="Vencido / total" value={stats.overdueRatio} />
+          <SmallBiStat label="Promedio vencido" value={`${stats.avgOverdueDays.toFixed(0)}d`} />
+          <SmallBiStat label="Top 5 proveedores" value={stats.topFiveConcentration} />
+          <SmallBiStat label="Confianza" value={`${stats.dataConfidence.toFixed(0)}%`} />
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {agingRanges.map(range => (
+            <button
+              key={range.id}
+              onClick={() => onAgingRangeClick(range.id)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                activeAgingRange === range.id
+                  ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
+                  : 'border-[var(--gray-200)] text-[var(--gray-500)] hover:text-[var(--gray-950)]'
+              }`}
+              title={`${range.label}: ${fmtFull(range.total)}`}
+            >
+              {range.label} · {range.count}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Alertas BI</h2>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {alertStats.map(item => (
+            <button
+              key={item.type}
+              onClick={() => onAlertClick(item.type)}
+              className="rounded-xl border border-[var(--gray-200)] px-3 py-2 text-left transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+            >
+              <p className="text-[11px] text-[var(--gray-400)]">{ALERT_LABELS[item.type]}</p>
+              <p className="mt-1 font-mono text-[18px] font-semibold text-[var(--gray-950)]">{item.count}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SmallBiStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-[var(--gray-50)] px-3 py-2">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
+      <p className="mt-1 font-mono text-[16px] font-semibold text-[var(--gray-950)]">{value}</p>
+    </div>
+  );
+}
+
+function ConnectedIntelligence({
+  signals,
+  hasBanks,
+  hasBudget,
+}: {
+  signals: {
+    next30Cxp: number;
+    cashAvailable: number;
+    bankChargesMonth: number;
+    plannedMonth: number;
+    budgetExpenseMonth: number | null;
+    activeProposals: number;
+  };
+  hasBanks: boolean;
+  hasBudget: boolean;
+}) {
+  const coverage = signals.cashAvailable > 0 ? signals.next30Cxp / signals.cashAvailable : null;
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Inteligencia conectada</h2>
+        <span className="text-[11px] text-[var(--gray-400)]">CXP · Flujo · Bancos · Presupuesto</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <SmallBiStat label="CXP próximos 30d" value={fmt(signals.next30Cxp)} />
+        <SmallBiStat label="Cobertura caja" value={coverage === null ? (hasBanks ? '0%' : 'Sin bancos') : `${(coverage * 100).toFixed(0)}%`} />
+        <SmallBiStat label="Planeado vs real" value={hasBanks ? `${fmt(signals.plannedMonth)} / ${fmt(signals.bankChargesMonth)}` : 'Sin bancos'} />
+        <SmallBiStat label="Presupuesto mes" value={hasBudget && signals.budgetExpenseMonth !== null ? fmt(signals.budgetExpenseMonth) : `${signals.activeProposals} prop.`} />
+      </div>
+    </section>
   );
 }
 
@@ -1584,16 +2244,119 @@ function AgingMatrix({
   );
 }
 
+function TriageAlertBoard({
+  buckets,
+  active,
+  onSelect,
+}: {
+  buckets: Array<{ type: CxpAlertType; label: string; count: number; total: number }>;
+  active: CxpAlertType | null;
+  onSelect: (type: CxpAlertType) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Clasificación de triage</h2>
+        <span className="text-[11px] text-[var(--gray-400)]">Click para ver facturas</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+        {buckets.map(bucket => (
+          <button
+            key={bucket.type}
+            onClick={() => onSelect(bucket.type)}
+            className={`rounded-xl border px-3 py-2 text-left transition ${
+              active === bucket.type
+                ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
+                : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
+            }`}
+            title={`${bucket.label}: ${fmtFull(bucket.total)}`}
+          >
+            <p className="truncate text-[11px] text-[var(--gray-500)]">{bucket.label}</p>
+            <div className="mt-1 flex items-end justify-between gap-2">
+              <span className="font-mono text-[18px] font-semibold text-[var(--gray-950)]">{bucket.count}</span>
+              <span className="font-mono text-[11px] text-[var(--gray-500)]">{fmt(bucket.total)}</span>
+            </div>
+          </button>
+        ))}
+        {buckets.length === 0 && (
+          <div className="col-span-full rounded-xl border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
+            No hay alertas con los filtros actuales.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TriageDetailTable({
+  title,
+  records,
+  onRecordSelect,
+}: {
+  title: string;
+  records: EnrichedCXPRecord[];
+  onRecordSelect: (record: EnrichedCXPRecord) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+      <header className="flex items-center justify-between gap-3 border-b border-[var(--gray-100)] px-4 py-3">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">{title}</h2>
+        <span className="text-[11px] text-[var(--gray-400)]">{records.length} facturas</span>
+      </header>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead className="bg-[var(--gray-50)] text-[var(--gray-400)]">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium">Factura</th>
+              <th className="px-4 py-2 text-left font-medium">Proveedor</th>
+              <th className="px-4 py-2 text-left font-medium">Causa</th>
+              <th className="px-4 py-2 text-right font-medium">Días</th>
+              <th className="px-4 py-2 text-right font-medium">Monto</th>
+              <th className="px-4 py-2 text-left font-medium">Vence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {records.slice(0, 150).map((record, index) => (
+              <tr
+                key={`${record.cia}-${record.noProveedor}-${record.noFactura}-${index}`}
+                onClick={() => onRecordSelect(record)}
+                className="cursor-pointer border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]"
+              >
+                <td className="px-4 py-2 font-mono text-[var(--gray-950)]">{record.noFactura || '-'}</td>
+                <td className="px-4 py-2 text-[var(--gray-950)]">{record.nombre || '-'}</td>
+                <td className="px-4 py-2">
+                  <div className="flex max-w-[420px] flex-wrap gap-1">
+                    {record.alerts.slice(0, 3).map(alert => (
+                      <span key={`${record.noFactura}-${alert.type}`} className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${alertToneClass(alert.tone)}`} title={alert.detail}>
+                        {alert.label}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-[var(--gray-950)]">{record.diasVencida}</td>
+                <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmtFull(record.importePendientePesos)}</td>
+                <td className="px-4 py-2 text-[var(--gray-500)]">{dueDateForRecord(record) ?? '-'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function TriageColumn({
   title,
   detail,
   tone,
   records,
+  onRecordSelect,
 }: {
   title: string;
   detail: string;
   tone: 'danger' | 'success' | 'warning';
   records: EnrichedCXPRecord[];
+  onRecordSelect: (record: EnrichedCXPRecord) => void;
 }) {
   const total = records.reduce((sum, record) => sum + record.importePendientePesos, 0);
   const toneClass =
@@ -1623,7 +2386,11 @@ function TriageColumn({
             Sin facturas en este balde.
           </div>
         ) : records.slice(0, 40).map((record) => (
-          <article key={`${record.noProveedor}-${record.noFactura}-${record.fechaVence}`} className="rounded-xl border border-[var(--gray-200)] bg-white p-3 shadow-sm">
+          <button
+            key={`${record.noProveedor}-${record.noFactura}-${record.fechaVence}`}
+            onClick={() => onRecordSelect(record)}
+            className="block w-full rounded-xl border border-[var(--gray-200)] bg-white p-3 text-left shadow-sm transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate text-[12px] font-semibold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
@@ -1649,7 +2416,7 @@ function TriageColumn({
                 vence {dueDateForRecord(record) ?? 'sin fecha'}
               </span>
             </div>
-          </article>
+          </button>
         ))}
         {records.length > 40 && (
           <p className="py-2 text-center text-[11px] text-[var(--gray-400)]">
@@ -1658,6 +2425,153 @@ function TriageColumn({
         )}
       </div>
     </section>
+  );
+}
+
+function InvoiceDetailPanel({
+  record,
+  companyName,
+  bankMatches,
+  onClose,
+}: {
+  record: EnrichedCXPRecord;
+  companyName: string;
+  bankMatches: BankStatementLine[];
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/10" onClick={onClose}>
+      <aside
+        className="h-full w-full max-w-xl overflow-y-auto border-l border-[var(--gray-200)] bg-white shadow-xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <header className="sticky top-0 z-10 border-b border-[var(--gray-100)] bg-white px-5 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Detalle de factura</p>
+              <h2 className="mt-1 truncate text-[18px] font-semibold text-[var(--gray-950)]">{record.noFactura || 'Sin factura'}</h2>
+              <p className="mt-1 truncate text-[12px] text-[var(--gray-500)]">{record.nombre}</p>
+            </div>
+            <button onClick={onClose} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="space-y-5 p-5">
+          <div className="grid grid-cols-2 gap-3">
+            <DetailMetric label="Pendiente" value={fmtFull(record.importePendientePesos)} />
+            <DetailMetric label="Días vencida" value={`${record.diasVencida}d`} />
+            <DetailMetric label="Vence" value={dueDateForRecord(record) ?? '-'} />
+            <DetailMetric label="Moneda" value={record.moneda || '-'} />
+          </div>
+
+          <DetailSection title="Causa de triage">
+            <div className="flex flex-wrap gap-1.5">
+              {record.alerts.length === 0 ? (
+                <span className="text-[12px] text-[var(--gray-400)]">Sin alertas detectadas con los datos actuales.</span>
+              ) : record.alerts.map(alert => (
+                <span key={alert.type} className={`rounded-full px-2 py-1 text-[11px] font-medium ${alertToneClass(alert.tone)}`} title={alert.detail}>
+                  {alert.label}
+                </span>
+              ))}
+            </div>
+            <p className="mt-2 text-[12px] text-[var(--gray-500)]">{priorityReason(record)}</p>
+          </DetailSection>
+
+          <DetailSection title="Proveedor">
+            <DetailGrid rows={[
+              ['Tipo', record.providerType],
+              ['Riesgo', record.providerRisk],
+              ['Flexibilidad', flexibilityLabel(record.providerFlexibility)],
+              ['Límite crédito', record.providerCreditLimit ? fmtFull(record.providerCreditLimit) : 'No configurado'],
+              ['Última actualización', record.providerDaysWithoutUpdate === null ? 'Sin dato' : `${record.providerDaysWithoutUpdate} días`],
+              ['DTI', record.providerDtiCriticidad ? `${record.providerDtiCriticidad}${record.providerDtiArea ? ` · ${record.providerDtiArea}` : ''}` : 'No aplica'],
+            ]} />
+          </DetailSection>
+
+          <DetailSection title="Factura y flujo">
+            <DetailGrid rows={[
+              ['Empresa', companyName],
+              ['Proveedor #', record.noProveedor || '-'],
+              ['Fecha factura', record.fechaFactura || '-'],
+              ['Fecha vencimiento', record.fechaVence || '-'],
+              ['Fecha programada', record.fechaProgramacionPago || '-'],
+              ['Condición de pago', record.condPago || '-'],
+              ['Subtotal', fmtFull(record.importeSubtotalPesos)],
+              ['IVA / impuestos', fmtFull(record.importeImpuestosPesos)],
+              ['Bruto', fmtFull(record.importeBrutoPesos)],
+            ]} />
+          </DetailSection>
+
+          <DetailSection title="Compras, contratos y referencias">
+            <div className="flex flex-wrap gap-1.5">
+              {record.referenceLinks.map((ref, index) => (
+                <span key={`${ref.kind}-${index}`} className="rounded-full border border-[var(--gray-200)] px-2 py-1 text-[11px] text-[var(--gray-600)]">
+                  {ref.kind}: {ref.label}
+                </span>
+              ))}
+            </div>
+            {!hasReference(record, 'OC') && (
+              <p className="mt-2 text-[12px] text-[var(--warning)]">No se detectó OC en el archivo de CXP.</p>
+            )}
+          </DetailSection>
+
+          <DetailSection title="Bancos / pagos posibles">
+            {bankMatches.length === 0 ? (
+              <p className="text-[12px] text-[var(--gray-400)]">Sin pagos bancarios relacionados detectados en el rango cargado.</p>
+            ) : (
+              <div className="space-y-2">
+                {bankMatches.map((movement, index) => (
+                  <div key={`${movement.referencia}-${index}`} className="rounded-lg border border-[var(--gray-200)] px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[12px] font-medium text-[var(--gray-950)]">{movement.fechaOperacion}</span>
+                      <span className="font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmtFull(movement.importe)}</span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-[var(--gray-500)]">{movement.referencia} · {movement.concepto}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DetailSection>
+
+          <DetailSection title="Auditoría">
+            <p className="text-[12px] text-[var(--gray-400)]">El historial de comentarios, responsables y aprobaciones todavía no viene en la fuente de CXP cargada.</p>
+          </DetailSection>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function DetailMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-[var(--gray-50)] px-3 py-2">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
+      <p className="mt-1 truncate font-mono text-[15px] font-semibold text-[var(--gray-950)]" title={value}>{value}</p>
+    </div>
+  );
+}
+
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section>
+      <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">{title}</h3>
+      <div className="rounded-xl border border-[var(--gray-200)] p-3">{children}</div>
+    </section>
+  );
+}
+
+function DetailGrid({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <dl className="grid grid-cols-1 gap-2 text-[12px]">
+      {rows.map(([label, value]) => (
+        <div key={label} className="grid grid-cols-[140px_1fr] gap-3">
+          <dt className="text-[var(--gray-400)]">{label}</dt>
+          <dd className="min-w-0 truncate font-medium text-[var(--gray-950)]" title={value}>{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -1718,6 +2632,9 @@ interface CXPProps {
   providers: Provider[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
+  bankStatements: BankAccountStatement[];
+  budget: Budget | null;
+  proposals: Proposal[];
   onMergeCia: (cia: string, records: CXPRecord[]) => void;
   onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
   onReset: () => void;
@@ -1731,6 +2648,9 @@ const CXP = ({
   providers,
   clients,
   assumptions,
+  bankStatements,
+  budget,
+  proposals,
   onMergeCia,
   onReplaceAll,
   onReset,
@@ -2041,6 +2961,9 @@ const CXP = ({
         providers={providers}
         clients={clients}
         assumptions={assumptions}
+        bankStatements={bankStatements}
+        budget={budget}
+        proposals={proposals}
       />
     </div>
   );

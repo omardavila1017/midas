@@ -8,7 +8,6 @@ import {
   type ClientAccountNode,
   type ClientGroupNode,
   type ClientGroupSource,
-  type ClientRisk,
 } from '../domain/clientGrouping';
 import { MONTHS } from '../types';
 import {
@@ -147,6 +146,11 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     [clients, selectedIds],
   );
 
+  const groupOptions = useMemo(
+    () => hierarchy.map(group => ({ id: group.id, name: group.name })),
+    [hierarchy],
+  );
+
   const addBlank = () => {
     onAdd({
       id: crypto.randomUUID(),
@@ -212,7 +216,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     });
   };
 
-  const mergeSelectedIntoGroup = () => {
+  const createGroupFromSelected = () => {
     const name = groupNameDraft.trim();
     if (!name || selectedIds.size === 0) return;
     const id = commercialGroupId(name);
@@ -223,6 +227,45 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     setGroupNameDraft('');
     setSelectedIds(new Set());
     setExpandedGroups(prev => new Set(prev).add(id));
+  };
+
+  const moveSelectedToGroup = (groupId: string) => {
+    const target = hierarchy.find(group => group.id === groupId);
+    if (!target || selectedIds.size === 0) return;
+    onReplace(clients.map(client => selectedIds.has(client.id)
+      ? { ...client, commercialGroupName: target.name, commercialGroupId: target.id }
+      : client
+    ));
+    setSelectedIds(new Set());
+    setExpandedGroups(prev => new Set(prev).add(target.id));
+  };
+
+  const moveAccountToGroup = (clientId: string, groupId: string) => {
+    if (groupId === '__auto__') {
+      const client = clients.find(c => c.id === clientId);
+      if (client) clearManualGroup(client);
+      return;
+    }
+
+    const target = hierarchy.find(group => group.id === groupId);
+    if (!target) return;
+    onReplace(clients.map(client => client.id === clientId
+      ? { ...client, commercialGroupName: target.name, commercialGroupId: target.id }
+      : client
+    ));
+    setExpandedGroups(prev => new Set(prev).add(target.id));
+  };
+
+  const separateAccount = (clientId: string) => {
+    onReplace(clients.map(client => client.id === clientId
+      ? {
+          ...client,
+          commercialGroupName: client.name,
+          commercialGroupId: `client-single-${client.id}`,
+        }
+      : client
+    ));
+    setExpandedAccountId(null);
   };
 
   const separateSelected = () => {
@@ -323,17 +366,29 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
             <input
               value={groupNameDraft}
               onChange={e => setGroupNameDraft(e.target.value)}
-              placeholder="Nombre del grupo comercial"
+              placeholder="Nuevo grupo"
               className="input h-9 w-64"
             />
             <button
-              onClick={mergeSelectedIntoGroup}
+              onClick={createGroupFromSelected}
               disabled={selectedIds.size === 0 || !groupNameDraft.trim()}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 text-[12px] font-medium text-white transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
-              title="Unir las cuentas seleccionadas en un grupo"
+              title="Crear un grupo con las cuentas seleccionadas"
             >
-              <Link2 className="h-3.5 w-3.5" /> Unir
+              <Link2 className="h-3.5 w-3.5" /> Crear grupo
             </button>
+            <select
+              value=""
+              onChange={e => {
+                if (e.target.value) moveSelectedToGroup(e.target.value);
+              }}
+              disabled={selectedIds.size === 0}
+              className="input h-9 w-48 text-[12px] disabled:cursor-not-allowed disabled:opacity-40"
+              title="Mover las cuentas seleccionadas a un grupo existente"
+            >
+              <option value="">Mover a...</option>
+              {groupOptions.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
+            </select>
             <button
               onClick={separateSelected}
               disabled={selectedIds.size === 0}
@@ -361,24 +416,22 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
       {/* Hierarchy table */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
-        <table className="min-w-[1120px] w-full text-[13px]">
+        <table className="min-w-[980px] w-full text-[13px]">
           <thead className="bg-[var(--gray-50)] text-[var(--gray-400)] text-left text-[12px] uppercase tracking-wide">
             <tr>
               <Th className="w-9" />
               <Th>Grupo / cuenta</Th>
-              <Th>Señal</Th>
-              <Th className="text-right">Cuentas</Th>
+              <Th className="text-right">Cuentas / frecuencia</Th>
               <Th className="text-right">Ventas</Th>
               <Th className="text-right">Por cobrar</Th>
               <Th className="text-right">Facturas</Th>
               <Th className="text-right">Crédito real</Th>
-              <Th>Riesgo</Th>
-              <Th className="w-20" />
+              <Th className="w-64">Acciones</Th>
             </tr>
           </thead>
           <tbody>
             {filteredGroups.length === 0 && (
-              <tr><td colSpan={10} className="text-center text-[var(--gray-400)] py-10">
+              <tr><td colSpan={8} className="text-center text-[var(--gray-400)] py-10">
                 {clients.length === 0
                   ? 'Sin clientes. Sincroniza el catálogo o agrega uno manual.'
                   : 'Sin coincidencias.'}
@@ -412,23 +465,31 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
                             <span className="font-semibold text-[var(--gray-950)]">{group.name}</span>
                             {group.source === 'manual' && <span className="rounded bg-[var(--primary-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--primary)]">Manual</span>}
                           </div>
-                          <p className="text-[11px] text-[var(--gray-400)] truncate">{group.signal}</p>
+                          <p className="text-[11px] text-[var(--gray-400)] truncate">{group.accounts.length} cuenta{group.accounts.length !== 1 ? 's' : ''}</p>
                         </div>
                       </div>
                     </Td>
-                    <Td>{sourceLabel(group.source)} · {(group.confidence * 100).toFixed(0)}%</Td>
                     <Td className="text-right tabular-nums">{group.accounts.length}</Td>
                     <Td className="text-right tabular-nums font-medium">{fmt(group.annualSales)}</Td>
                     <Td className="text-right tabular-nums">{fmt(group.projectedReceivable)}</Td>
                     <Td className="text-right tabular-nums">{group.pendingInvoices}</Td>
                     <Td className="text-right tabular-nums">{group.realCreditDays}d</Td>
-                    <Td><RiskBadge risk={group.risk} title={group.riskReason} /></Td>
-                    <Td />
+                    <Td>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleGroupSelection(group);
+                        }}
+                        className="rounded-lg border border-[var(--gray-200)] px-2.5 py-1 text-[11px] font-medium text-[var(--gray-500)] hover:bg-white"
+                      >
+                        Seleccionar cuentas
+                      </button>
+                    </Td>
                   </tr>
                   {isOpen && (
                     <>
                       <tr className="bg-[var(--surface-alt)] border-t border-[var(--gray-200)]/40">
-                        <td colSpan={10} className="px-4 py-3">
+                        <td colSpan={8} className="px-4 py-3">
                           <div className="flex flex-wrap items-center gap-2">
                             <Pencil className="h-3.5 w-3.5 text-[var(--gray-400)]" />
                             <span className="text-[12px] text-[var(--gray-400)]">Nombre del grupo</span>
@@ -455,9 +516,12 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
                           avgLag={lagMap.get(account.client.id) ?? account.avgLagDays}
                           onToggleSelected={() => toggleSelected(account.client.id)}
                           onToggleOpen={() => setExpandedAccountId(expandedAccountId === account.client.id ? null : account.client.id)}
+                          groupOptions={groupOptions}
+                          currentGroupId={group.id}
+                          onMoveToGroup={(targetGroupId) => moveAccountToGroup(account.client.id, targetGroupId)}
+                          onSeparate={() => separateAccount(account.client.id)}
                           onUpdate={onUpdate}
                           onDelete={onDelete}
-                          onClearManualGroup={clearManualGroup}
                         />
                       ))}
                     </>
@@ -507,21 +571,6 @@ function sourceLabel(source: ClientGroupSource): string {
   }
 }
 
-function RiskBadge({ risk, title }: { risk: ClientRisk; title?: string }) {
-  const classes =
-    risk === 'Alto'
-      ? 'bg-[var(--danger-muted)] text-[var(--danger)]'
-      : risk === 'Medio'
-        ? 'bg-[var(--warning-muted)] text-[var(--warning)]'
-        : 'bg-[var(--success-muted)] text-[var(--success)]';
-
-  return (
-    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${classes}`} title={title}>
-      {risk}
-    </span>
-  );
-}
-
 function AccountRows({
   account,
   isSelected,
@@ -529,9 +578,12 @@ function AccountRows({
   avgLag,
   onToggleSelected,
   onToggleOpen,
+  groupOptions,
+  currentGroupId,
+  onMoveToGroup,
+  onSeparate,
   onUpdate,
   onDelete,
-  onClearManualGroup,
 }: {
   account: ClientAccountNode;
   isSelected: boolean;
@@ -539,9 +591,12 @@ function AccountRows({
   avgLag: number;
   onToggleSelected: () => void;
   onToggleOpen: () => void;
+  groupOptions: Array<{ id: string; name: string }>;
+  currentGroupId: string;
+  onMoveToGroup: (groupId: string) => void;
+  onSeparate: () => void;
   onUpdate: (client: Client) => void;
   onDelete: (id: string) => void;
-  onClearManualGroup: (client: Client) => void;
 }) {
   const c = account.client;
   const annual = c.monthlyBilling.reduce((s, v) => s + v, 0);
@@ -566,16 +621,10 @@ function AccountRows({
               <span className="block truncate font-medium text-[var(--gray-950)]">{c.name}</span>
               <span className="block truncate text-[11px] text-[var(--gray-400)]">
                 {c.rfc ? `RFC ${c.rfc}` : c.emailDomain ? `Dominio ${c.emailDomain}` : c.legalName ?? 'Cuenta individual'}
+                {parsed ? ` · ${renderPattern(parsed)}` : ' · pago no interpretado'}
               </span>
             </span>
           </button>
-        </Td>
-        <Td>
-          {parsed
-            ? <span className="text-[12px] text-[var(--success)]">{renderPattern(parsed)}</span>
-            : <span className="flex items-center gap-1 text-[12px] text-[var(--warning)]">
-                <AlertTriangle className="h-3 w-3" /> no interpretado
-              </span>}
         </Td>
         <Td className="text-right">{c.frequency}</Td>
         <Td className="text-right tabular-nums font-medium">{fmt(annual)}</Td>
@@ -586,18 +635,25 @@ function AccountRows({
             ? <span className="font-semibold text-[var(--danger)]">{account.realCreditDays}d</span>
             : <span className="text-[var(--success)]">{account.realCreditDays}d</span>}
         </Td>
-        <Td><RiskBadge risk={account.risk} title={account.riskReason} /></Td>
         <Td>
-          <div className="flex items-center justify-end gap-1">
-            {c.commercialGroupName && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onClearManualGroup(c); }}
-                className="rounded p-1 text-[var(--gray-400)] hover:bg-white hover:text-[var(--primary)]"
-                title="Volver a agrupación automática"
-              >
-                <Unlink className="h-3.5 w-3.5" />
-              </button>
-            )}
+          <div className="flex items-center justify-end gap-1.5">
+            <select
+              value={currentGroupId}
+              onClick={e => e.stopPropagation()}
+              onChange={e => onMoveToGroup(e.target.value)}
+              className="input h-8 w-40 text-[12px]"
+              title="Mover esta cuenta a otro grupo"
+            >
+              <option value="__auto__">Automático</option>
+              {groupOptions.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
+            </select>
+            <button
+              onClick={(e) => { e.stopPropagation(); onSeparate(); }}
+              className="rounded-lg border border-[var(--gray-200)] px-2 py-1 text-[11px] font-medium text-[var(--gray-500)] hover:bg-white hover:text-[var(--primary)]"
+              title="Separar esta cuenta en su propio grupo"
+            >
+              Separar
+            </button>
             <button
               onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
               className="rounded p-1 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]"
@@ -610,7 +666,7 @@ function AccountRows({
       </tr>
       {isOpen && (
         <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--surface-alt)]">
-          <td colSpan={10} className="px-4 py-4">
+          <td colSpan={8} className="px-4 py-4">
             <div className="mb-3 grid grid-cols-2 gap-3 rounded-lg bg-white px-3 py-2 text-[12px] lg:grid-cols-4">
               <div>
                 <div className="text-[var(--gray-400)]">Lag estimado</div>
