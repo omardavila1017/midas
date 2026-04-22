@@ -28,7 +28,9 @@ import {
   buildOwnAccountDetector,
   buildOwnAccountsIndex,
   buildPairMatchedKeys,
+  buildInternalAccountsIndex,
   classifyMovement,
+  isInternalAccount,
   INTERNAL_REASON_LABELS,
   type ClassificationContext,
   type InternalReason,
@@ -224,6 +226,7 @@ const BancosDashboard = ({
   const classificationCtx: ClassificationContext = useMemo(() => ({
     ownAccountDetector: buildOwnAccountDetector(buildOwnAccountsIndex(statements)),
     pairedKeys: buildPairMatchedKeys(statements),
+    internalAccountKeys: buildInternalAccountsIndex(statements),
   }), [statements]);
 
   const internalReasonOf = useCallback(
@@ -277,11 +280,15 @@ const BancosDashboard = ({
   // ── KPIs ──
   // Calcula 4 totales: bruto (incluye internos) y real (sin internos).
   // Los internos se siguen mostrando en la tabla pero en gris y restados.
+  // Las cuentas marcadas como internas (Concentradora/Tesorería) no suman su
+  // saldo al "Saldo Total" — su dinero es buffer intergrupal, no caja propia.
   const kpis = useMemo(() => {
     let totalCuentas = 0;
     let totalMovs = 0;
     let totalMovsInternal = 0;
     let saldoTotal = 0;
+    let saldoInternoExcluido = 0;
+    let totalCuentasInternas = 0;
     let cargosBruto = 0;
     let cargosReal = 0;
     let abonosBruto = 0;
@@ -289,7 +296,14 @@ const BancosDashboard = ({
     for (const a of accountsView) {
       totalCuentas += 1;
       totalMovs += a.movimientos.length;
-      saldoTotal += a.saldoFinal ?? a.saldoInicial ?? 0;
+      const saldo = a.saldoFinal ?? a.saldoInicial ?? 0;
+      const accInternal = isInternalAccount(a);
+      if (accInternal) {
+        totalCuentasInternas += 1;
+        saldoInternoExcluido += saldo;
+      } else {
+        saldoTotal += saldo;
+      }
       for (const m of a.movimientos) {
         const isInternal = internalReasonOf(a.cia, a.cuenta, m) !== null;
         if (isInternal) totalMovsInternal += 1;
@@ -302,9 +316,9 @@ const BancosDashboard = ({
         }
       }
     }
-    return { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal };
+    return { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, saldoInternoExcluido, totalCuentasInternas, cargosBruto, cargosReal, abonosBruto, abonosReal };
   }, [accountsView, internalReasonOf]);
-  const { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal } = kpis;
+  const { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, saldoInternoExcluido, totalCuentasInternas, cargosBruto, cargosReal, abonosBruto, abonosReal } = kpis;
   const totalCargos = cargosReal;
   const totalAbonos = abonosReal;
 
@@ -423,7 +437,9 @@ const BancosDashboard = ({
           {
             label: 'Saldo Total',
             value: fmtCurrency(saldoTotal),
-            sub: `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`,
+            sub: totalCuentasInternas > 0
+              ? `${totalCuentas - totalCuentasInternas} cuenta${totalCuentas - totalCuentasInternas !== 1 ? 's' : ''} · ${totalCuentasInternas} interna${totalCuentasInternas !== 1 ? 's' : ''} (${fmtCurrency(saldoInternoExcluido)} excluido)`
+              : `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`,
             icon: Wallet,
             color: hex.primary,
           },
@@ -498,18 +514,20 @@ const BancosDashboard = ({
               const isExpanded = expanded === key;
               const saldo = acc.saldoFinal ?? acc.saldoInicial ?? 0;
               const displayName = acc.nombreBanco || acc.banco || 'Cuenta bancaria';
+              const accInternal = isInternalAccount(acc);
               return (
-                <div key={key}>
+                <div key={key} className={accInternal ? 'bg-[var(--gray-50)]/40' : ''}>
                   <button
                     onClick={() => setExpanded(isExpanded ? null : key)}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-alt)] transition text-left"
+                    className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-alt)] transition text-left ${accInternal ? 'opacity-60' : ''}`}
+                    title={accInternal ? 'Cuenta dedicada a movimientos internos — su saldo y movimientos no cuentan en los totales reales' : undefined}
                   >
                     {isExpanded
                       ? <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" />
                       : <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />}
 
                     <div className="w-9 h-9 rounded-xl bg-[var(--gray-50)] flex items-center justify-center flex-shrink-0">
-                      <Landmark className="w-4 h-4 text-[var(--primary)]" />
+                      <Landmark className={`w-4 h-4 ${accInternal ? 'text-[var(--gray-400)]' : 'text-[var(--primary)]'}`} />
                     </div>
 
                     <div className="flex-1 min-w-0">
@@ -519,6 +537,11 @@ const BancosDashboard = ({
                       </p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
+                        {accInternal && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gray-200)] text-[var(--gray-500)] uppercase tracking-wider">
+                            Cuenta interna
+                          </span>
+                        )}
                         {acc.cia && (
                           <span className="text-[11px] text-[var(--gray-400)]">
                             {ciaNameMap.get(acc.cia) ?? `Cia ${acc.cia}`}
@@ -529,9 +552,13 @@ const BancosDashboard = ({
                     </div>
 
                     <div className="text-right w-36">
-                      <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
+                      <p className={`text-[13px] font-mono font-semibold ${accInternal ? 'text-[var(--gray-400)] line-through' : 'text-[var(--gray-950)]'}`}>
+                        {fmtCurrency(saldo, acc.moneda)}
+                      </p>
                       <p className="text-[10px] text-[var(--gray-400)]">
-                        {acc.saldoFinal !== undefined ? 'Saldo final' : acc.saldoInicial !== undefined ? 'Saldo inicial' : 'Sin saldo'}
+                        {accInternal
+                          ? 'No suma al total'
+                          : acc.saldoFinal !== undefined ? 'Saldo final' : acc.saldoInicial !== undefined ? 'Saldo inicial' : 'Sin saldo'}
                       </p>
                     </div>
                   </button>

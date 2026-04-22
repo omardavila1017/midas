@@ -21,6 +21,7 @@ import {
   isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildInternalAccountsIndex,
 } from './netCashFlowEngine';
 import {
   CashFlowMonth,
@@ -87,8 +88,10 @@ export function buildHistoricalMonths(
   // Detector de traspasos entre cuentas propias del grupo. Si un ABONO en una
   // cuenta se compensa con un CARGO en otra del mismo grupo, sumarlos infla
   // ambos lados del flujo sin reflejar un ingreso/egreso económico real.
+  // También excluimos cuentas Concentradora/Tesorería completas.
   const ownAccounts = buildOwnAccountsIndex(statements);
   const ownAccountDetector = buildOwnAccountDetector(ownAccounts);
+  const internalAccountKeys = buildInternalAccountsIndex(statements);
 
   const byMonth = new Map<string, { income: number; expense: number }>();
 
@@ -96,7 +99,7 @@ export function buildHistoricalMonths(
     for (const mov of acc.movimientos) {
       const ym = toYearMonth(mov.fechaOperacion);
       if (!ym) continue;
-      if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      if (isInternalTransfer(mov, ownAccountDetector, internalAccountKeys)) continue;
       const bucket = byMonth.get(ym) ?? { income: 0, expense: 0 };
       if (mov.tipoMovimiento === 'ABONO') bucket.income += mov.importe;
       else if (mov.tipoMovimiento === 'CARGO') bucket.expense += mov.importe;

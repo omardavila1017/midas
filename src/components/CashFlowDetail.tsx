@@ -7,7 +7,9 @@ import {
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
   buildPairMatchedKeys,
+  buildInternalAccountsIndex,
   computeBankOnlyCashFlow,
+  isInternalAccount,
   EnrichedBankMovement,
   INTERNAL_REASON_LABELS,
 } from '../domain/netCashFlowEngine';
@@ -120,8 +122,12 @@ export default function CashFlowDetail({
     const map = new Map<string, BankDaySummary>();
     const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
     const pairedKeys = buildPairMatchedKeys(bankStatements);
-    const ctx = { ownAccountDetector, pairedKeys };
+    const internalAccountKeys = buildInternalAccountsIndex(bankStatements);
+    const ctx = { ownAccountDetector, pairedKeys, internalAccountKeys };
     for (const acc of bankStatements) {
+      // Cuentas Concentradora/Tesorería: sus saldos y movimientos no aportan
+      // al resumen bancario real — se reflejan en el drilldown de internos.
+      if (isInternalAccount(acc)) continue;
       for (const mov of acc.movimientos) {
         const date = mov.fechaOperacion;
         if (!date) continue;

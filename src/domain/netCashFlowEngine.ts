@@ -100,6 +100,59 @@ const INTERNAL_BENEFICIARIES: readonly string[] = [
 ];
 
 /**
+ * Patrón para detectar cuentas bancarias dedicadas a movimientos internos.
+ *
+ * En JDE el tipo de cuenta viaja en `DESC039` y se concatena al nombre del
+ * banco en `nombreBanco` (p.ej. "BANORTE · Concentradora", "BANAMEX ·
+ * Concentradora", "BANORTE · Tesorería"). Esas cuentas existen sólo para
+ * consolidar o distribuir fondos entre empresas del grupo — sus entradas y
+ * salidas NO representan flujo económico real hacia/desde el negocio.
+ *
+ * Cuando una cuenta cae en este patrón:
+ *   - Todos sus movimientos se marcan como internos (reason = 'internal-account')
+ *   - Su saldo se excluye del Saldo Total consolidado
+ *   - En la UI la fila aparece atenuada ("Cuenta interna")
+ *
+ * Matchea (case-insensitive, respetando word boundaries para evitar falsos
+ * positivos):
+ *   "Concentradora", "Concentrador"
+ *   "Tesorería", "Tesoreria"
+ *   "Traspaso", "Traspasos"
+ */
+const INTERNAL_ACCOUNT_PATTERN = /\b(?:concentradora?|tesorer[ií]a|traspasos?)\b/i;
+
+/**
+ * Decide si una cuenta bancaria está dedicada a movimientos internos del
+ * grupo (concentradora/tesorería/traspasos). El criterio actual mira el
+ * nombre del banco y, como fallback, el código del banco.
+ */
+export function isInternalAccount(
+  acc: Pick<BankAccountStatement, 'nombreBanco' | 'banco'> | undefined | null,
+): boolean {
+  if (!acc) return false;
+  const text = `${acc.nombreBanco ?? ''} ${acc.banco ?? ''}`;
+  return INTERNAL_ACCOUNT_PATTERN.test(text);
+}
+
+/**
+ * Construye un Set con las llaves `${cia}::${cuenta}` de todas las cuentas
+ * internas del conjunto de estados de cuenta. Pensado para pasarse al
+ * `ClassificationContext` una sola vez y reusarse en toda la batch.
+ */
+export function buildInternalAccountsIndex(
+  statements: readonly BankAccountStatement[] | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!statements) return out;
+  for (const s of statements) {
+    if (isInternalAccount(s)) {
+      out.add(`${s.cia ?? ''}::${(s.cuenta ?? '').trim()}`);
+    }
+  }
+  return out;
+}
+
+/**
  * Helper: construye un regex que matchee cualquiera de los strings dados
  * como substring, escapando caracteres especiales. Case-insensitive.
  * Retorna null si la lista está vacía (para evitar hacer .test() en balde).
@@ -187,11 +240,20 @@ export function buildOwnAccountDetector(
 }
 
 export function isInternalTransfer(
-  mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>,
+  mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta' | 'cia'>,
   ownAccountDetector?: (m: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean,
+  internalAccountKeys?: Set<string>,
 ): boolean {
   const concepto = mov.concepto ?? '';
   const referencia = mov.referencia ?? '';
+
+  // 0. La cuenta en sí está dedicada a movimientos internos
+  //    (Concentradora/Tesorería/Traspasos). Si lo es, ningún concepto puede
+  //    rescatar el movimiento — el dinero nunca sale del grupo.
+  if (internalAccountKeys && internalAccountKeys.size > 0) {
+    const key = `${mov.cia ?? ''}::${(mov.cuenta ?? '').trim()}`;
+    if (internalAccountKeys.has(key)) return true;
+  }
 
   // 1. Leyenda de tipo de operación (TRASPASO/TRANSFERENCIA REF...)
   if (concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) return true;
@@ -307,11 +369,12 @@ export function buildPairMatchedKeys(
 // ─────────────────────────────────────────────────────────────────────────
 
 export type InternalReason =
-  | 'legend'         // "TRASPASO REF", "TRANSFERENCIA REF", etc.
-  | 'rfc'            // RFC de empresa del grupo embebido en concepto/referencia
-  | 'beneficiary'    // nombre de empresa del grupo como beneficiario
-  | 'own-account'    // cuenta destino es otra cuenta del grupo
-  | 'pair-matched';  // CARGO-ABONO simétrico el mismo día en cuentas distintas
+  | 'legend'            // "TRASPASO REF", "TRANSFERENCIA REF", etc.
+  | 'rfc'               // RFC de empresa del grupo embebido en concepto/referencia
+  | 'beneficiary'       // nombre de empresa del grupo como beneficiario
+  | 'own-account'       // cuenta destino es otra cuenta del grupo
+  | 'pair-matched'      // CARGO-ABONO simétrico el mismo día en cuentas distintas
+  | 'internal-account'; // la cuenta en sí está dedicada a movs internos (Concentradora/Tesorería)
 
 export interface MovementClassification {
   kind: 'real' | 'internal';
@@ -324,11 +387,19 @@ export const INTERNAL_REASON_LABELS: Record<InternalReason, string> = {
   beneficiary: 'Beneficiario es una empresa del grupo',
   'own-account': 'Cuenta destino pertenece al grupo',
   'pair-matched': 'CARGO y ABONO simétricos el mismo día en otra cuenta del grupo',
+  'internal-account': 'Cuenta dedicada a movimientos internos (Concentradora / Tesorería)',
 };
 
 export interface ClassificationContext {
   ownAccountDetector?: (m: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean;
   pairedKeys?: Set<string>;
+  /**
+   * Set de llaves `${cia}::${cuenta}` para cuentas clasificadas como internas
+   * (Concentradora/Tesorería/Traspasos). Si el movimiento pertenece a una de
+   * estas cuentas, se clasifica como interno con máxima prioridad,
+   * independientemente del concepto.
+   */
+  internalAccountKeys?: Set<string>;
 }
 
 /**
@@ -348,6 +419,16 @@ export function classifyMovement(
 ): MovementClassification {
   const concepto = mov.concepto ?? '';
   const referencia = mov.referencia ?? '';
+
+  // 0. Cuenta dedicada a movimientos internos — prioridad máxima. Si la
+  //    cuenta entera es interna, ningún concepto puede "rescatar" el
+  //    movimiento porque el dinero nunca sale del grupo.
+  if (ctx?.internalAccountKeys && ctx.internalAccountKeys.size > 0 && accCia !== undefined && accCuenta !== undefined) {
+    const key = `${accCia}::${(accCuenta ?? '').trim()}`;
+    if (ctx.internalAccountKeys.has(key)) {
+      return { kind: 'internal', reason: 'internal-account' };
+    }
+  }
 
   if ((concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) || (referencia && INTERNAL_TRANSFER_PATTERN.test(referencia))) {
     return { kind: 'internal', reason: 'legend' };
@@ -436,7 +517,8 @@ export function computeBankOnlyCashFlow(
   const yearStr = String(year);
   const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
   const pairedKeys = buildPairMatchedKeys(bankStatements);
-  const ctx: ClassificationContext = { ownAccountDetector, pairedKeys };
+  const internalAccountKeys = buildInternalAccountsIndex(bankStatements);
+  const ctx: ClassificationContext = { ownAccountDetector, pairedKeys, internalAccountKeys };
 
   for (const acc of bankStatements) {
     for (const mov of acc.movimientos) {
@@ -900,8 +982,16 @@ export function extractPaymentEvents(
     // Precompute own-account detector una sola vez para todo el batch.
     const ownAccounts = buildOwnAccountsIndex(bankStatements);
     const ownAccountDetector = buildOwnAccountDetector(ownAccounts);
+    // Precompute qué cuentas son Concentradora/Tesorería — toda la cuenta
+    // se salta, no sólo movimientos individuales.
+    const internalAccountKeys = buildInternalAccountsIndex(bankStatements);
 
     for (const acc of bankStatements!) {
+      // Si la cuenta entera es interna, ninguno de sus CARGOs representa
+      // egreso real — son transferencias entre empresas del grupo.
+      const accKey = `${acc.cia ?? ''}::${(acc.cuenta ?? '').trim()}`;
+      if (internalAccountKeys.has(accKey)) continue;
+
       const bankLabel =
         acc.nombreBanco?.trim() ||
         (acc.banco ? `Banco ${acc.banco}` : 'Banco');

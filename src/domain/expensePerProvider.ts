@@ -30,6 +30,7 @@ import {
   isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildInternalAccountsIndex,
 } from './netCashFlowEngine';
 
 // ── Helpers de normalización ─────────────────────────────────────────────
@@ -128,10 +129,12 @@ export function buildProviderBankPatterns(
 
   // Traspasos internos entre cuentas propias no son pagos a proveedores —
   // excluirlos evita inflar el patrón mensual y que un proveedor con nombre
-  // parecido a una empresa del grupo capture esos cargos por error.
+  // parecido a una empresa del grupo capture esos cargos por error. También
+  // saltamos cuentas Concentradora/Tesorería completas.
   const ownAccountDetector = buildOwnAccountDetector(
     buildOwnAccountsIndex(bankStatements),
   );
+  const internalAccountKeys = buildInternalAccountsIndex(bankStatements);
 
   // provider.id → yearMonth → { amount, days: [dayOfMonth] }
   const perProvider = new Map<string, Map<string, { amount: number; days: number[] }>>();
@@ -139,7 +142,7 @@ export function buildProviderBankPatterns(
   for (const acc of bankStatements) {
     for (const mov of acc.movimientos) {
       if (mov.tipoMovimiento !== 'CARGO') continue;
-      if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      if (isInternalTransfer(mov, ownAccountDetector, internalAccountKeys)) continue;
       const ym = (mov.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;
       if (compareYearMonth(ym, currentYm) >= 0) continue;
