@@ -189,18 +189,10 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
         />
       </div>
 
-      {/* Tabla editable del flujo — contexto de 5 meses alrededor del mes seleccionado. */}
+      {/* Tabla editable del flujo — contexto de ±3 meses alrededor del mes
+          seleccionado. Sin encabezado duplicado: la tabla principal arriba
+          ya explica el propósito. */}
       <div className="border-t border-[var(--gray-100)] px-5 py-4 bg-[var(--gray-50)]/40">
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h4 className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gray-700)' }}>
-              Flujo mensual editable
-            </h4>
-            <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
-              Los ajustes aquí se reflejan de inmediato en el gráfico y la tabla superior.
-            </p>
-          </div>
-        </div>
         <CashFlowTable
           rows={tableRows}
           overrides={overrides}
