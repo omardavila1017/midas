@@ -28,7 +28,7 @@ function bankMonth(ym: string, income: number, expense: number, cuenta = '019000
 function clientMonthly(id: string, name: string, amount: number): Client {
   return {
     id, name,
-    paymentDay: { kind: 'DOM' },
+    paymentDay: { kind: 'ANY' },
     frequency: 'Mensual',
     creditDays: 0,
     monthlyBilling: new Array(12).fill(amount),
