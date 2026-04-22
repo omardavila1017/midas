@@ -57,6 +57,12 @@ interface DashboardProps {
   budget: Budget | null;
   onBudgetChange: (b: Budget | null) => void;
   onOpenFlow: () => void;
+  /** Override manual de la caja inicial. null = usar la suma de saldoInicial del banco. */
+  startingBalanceOverride: number | null;
+  /** Suma de saldoInicial reportada por banco (filtrada por cia). */
+  bankStartingBalance: number;
+  /** Sincroniza "Caja inicial" con "Saldo inicial" de CashFlowDetail. */
+  onStartingBalanceChange: (v: number | null) => void;
 }
 
 const CHART_COLORS = {
@@ -70,9 +76,7 @@ const CHART_COLORS = {
 };
 
 const OVERRIDES_KEY = 'midas.dashboard.projectionOverrides.v1';
-const STARTING_BALANCE_KEY = 'midas.dashboard.startingBalance.v1';
 const LEGACY_OVERRIDES_KEY = 'flowsense.dashboard.projectionOverrides.v1';
-const LEGACY_STARTING_BALANCE_KEY = 'flowsense.dashboard.startingBalance.v1';
 
 function migrateLegacyKey(newKey: string, legacyKey: string): string | null {
   try {
@@ -98,36 +102,21 @@ function loadOverrides(): ProjectionOverrides {
   } catch { return {}; }
 }
 
-function loadStartingBalanceOverride(): number | null {
-  try {
-    const raw = migrateLegacyKey(STARTING_BALANCE_KEY, LEGACY_STARTING_BALANCE_KEY);
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  } catch { return null; }
-}
-
 const Dashboard: React.FC<DashboardProps> = ({
   companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions,
   budget, onBudgetChange, onOpenFlow,
+  startingBalanceOverride, bankStartingBalance, onStartingBalanceChange,
 }) => {
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<ProjectionOverrides>(() => loadOverrides());
-  const [startingBalanceOverride, setStartingBalanceOverride] = useState<number | null>(() => loadStartingBalanceOverride());
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
 
   useEffect(() => {
     try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); } catch { /* ignore */ }
   }, [overrides]);
-  useEffect(() => {
-    try {
-      if (startingBalanceOverride === null) localStorage.removeItem(STARTING_BALANCE_KEY);
-      else localStorage.setItem(STARTING_BALANCE_KEY, String(startingBalanceOverride));
-    } catch { /* ignore */ }
-  }, [startingBalanceOverride]);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,15 +146,8 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   // Caja inicial "auto" desde banco (suma saldoInicial). La UI la muestra como
   // placeholder cuando no hay override; si el usuario la edita, se usa el
-  // valor editado.
-  const bankStartingBalance = useMemo(
-    () => computeBankStartingBalance(
-      companyCode === 'all' || !companyCode
-        ? bankStatements
-        : bankStatements.filter((s) => s.cia === companyCode),
-    ),
-    [bankStatements, companyCode],
-  );
+  // valor editado. `bankStartingBalance` viene de App para compartirse con
+  // "Saldo inicial" en CashFlowDetail.
   const effectiveStartingBalance = startingBalanceOverride ?? bankStartingBalance;
   const evaluated = useMemo(() => evaluateCashFlow(base, proposals), [base, proposals]);
 
@@ -370,7 +352,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             value={effectiveStartingBalance}
             isOverride={startingBalanceOverride !== null}
             bankValue={bankStartingBalance}
-            onChange={setStartingBalanceOverride}
+            onChange={onStartingBalanceChange}
           />
           <button
             onClick={() => setBudgetModalOpen(true)}

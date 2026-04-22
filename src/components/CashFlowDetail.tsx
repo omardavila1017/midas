@@ -47,6 +47,12 @@ interface Props {
   /** Manual refresh trigger — re-runs the YTD range fetch. */
   onRefreshBanks?: () => void;
   /**
+   * "Saldo inicial" — ligado a "Caja inicial" del Dashboard. App.tsx es la
+   * fuente de verdad; edit aquí propaga al override global.
+   */
+  startingBalance: number;
+  onStartingBalanceChange: (v: number | null) => void;
+  /**
    * Legacy / compatibility props — ya no se usan en el cómputo del flujo
    * (la vista es bank-only), pero se aceptan para no romper call sites
    * existentes (App.tsx) que todavía los pasan.
@@ -89,10 +95,11 @@ export default function CashFlowDetail({
   bankFetchStatus = 'idle',
   bankFetchProgress = null,
   onRefreshBanks,
+  startingBalance,
+  onStartingBalanceChange,
 }: Props) {
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const [startingBalance, setStartingBalance] = useState(0);
   const [monthFilter, setMonthFilter] = useState<number | 'all'>('all');
 
   // Build company name lookup
@@ -290,7 +297,12 @@ export default function CashFlowDetail({
             <input
               type="number"
               value={startingBalance}
-              onChange={e => setStartingBalance(Number(e.target.value))}
+              onChange={e => {
+                const raw = e.target.value;
+                if (raw === '') { onStartingBalanceChange(null); return; }
+                const n = Number(raw);
+                if (Number.isFinite(n)) onStartingBalanceChange(n);
+              }}
               className={`h-9 w-36 px-3 rounded-lg border ${T.border} bg-white text-sm text-right tabular-nums ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
             />
           </label>
