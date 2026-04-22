@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Client, CashFlowAssumptions, Frequency, CollectionEvent, ConfirmedPayment, eventKey } from '../domain/types';
 import { projectYear } from '../domain/collectionEngine';
-import { extractPaymentEvents, PaymentEvent } from '../domain/netCashFlowEngine';
+import {
+  extractPaymentEvents,
+  PaymentEvent,
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from '../domain/netCashFlowEngine';
 import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement } from '../services/jde';
@@ -89,9 +95,13 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   }, [companies]);
 
   const bankRealAbonos = useMemo(() => {
+    // Los traspasos entre cuentas propias (TRASPASO/TRANSFERENCIA REF, RFCs
+    // del grupo, etc.) no son cobros reales — se filtran para que el KPI
+    // refleje solo flujos desde terceros.
+    const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
     return bankStatements.reduce((sum, acc) =>
       sum + acc.movimientos
-        .filter(m => m.tipoMovimiento === 'ABONO')
+        .filter(m => m.tipoMovimiento === 'ABONO' && !isInternalTransfer(m, detector))
         .reduce((s, m) => s + m.importe, 0), 0);
   }, [bankStatements]);
 
