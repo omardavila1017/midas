@@ -444,22 +444,23 @@ export default function App() {
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
-            <div className="h-9 rounded-lg bg-white px-3 flex items-center justify-center border border-[var(--gray-200)]">
-              <img src="/logos/senda-corporativo.svg" alt="Senda" className="h-6 w-auto object-contain" />
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span
-                className="text-[20px] font-bold tracking-[-0.03em]"
-                style={{
-                  background: 'linear-gradient(135deg, #d4a437 0%, #f5c560 45%, #b08518 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  backgroundClip: 'text',
-                }}
-              >
-                Midas
-              </span>
-            </div>
+            <img src="/logos/senda-corporativo.svg" alt="Senda" className="h-7 w-auto object-contain" />
+            <span
+              className="h-6 w-px"
+              style={{ background: 'var(--gray-200)' }}
+              aria-hidden
+            />
+            <span
+              className="text-[22px] font-bold tracking-[-0.03em] leading-none"
+              style={{
+                background: 'linear-gradient(135deg, #b08518 0%, #e9b944 40%, #f5c560 55%, #b08518 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              Midas
+            </span>
           </div>
 
           {/* Section nav — prominent, distinctive icons */}
