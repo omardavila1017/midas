@@ -26,9 +26,36 @@ type ParsedState =
 
 const SCALES: BudgetScale[] = ['millones', 'miles', 'pesos'];
 
+// Validaciones a nivel de archivo antes de leer su contenido. El CSV del
+// presupuesto es texto plano pequeño; subir 10 MB o un .xlsx es siempre un
+// error de usuario que podemos diagnosticar sin abrir el archivo.
+const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — el CSV real mide <50 KB
+
+function validateFileUpload(file: File): string | null {
+  if (file.size === 0) return 'El archivo está vacío.';
+  if (file.size > MAX_FILE_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    return `El archivo pesa ${mb} MB; el límite es 5 MB. ¿Seguro que es un CSV de presupuesto?`;
+  }
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+    return 'Este es un archivo de Excel. Ábrelo y exporta como CSV (UTF-8) antes de cargarlo.';
+  }
+  if (name.endsWith('.numbers')) {
+    return 'Este es un archivo de Numbers. Ábrelo y exporta como CSV antes de cargarlo.';
+  }
+  if (name.endsWith('.pdf')) {
+    return 'Este es un PDF, no un CSV.';
+  }
+  // Aceptamos cualquier otra extensión (puede venir sin extensión o con .txt)
+  // — el parser detectará binarios por su contenido.
+  return null;
+}
+
 const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear }) => {
   const [parsed, setParsed] = useState<ParsedState>({ status: 'idle' });
   const [downloadScale, setDownloadScale] = useState<BudgetScale>('millones');
+  const [dragActive, setDragActive] = useState(false);
 
   // Esc cierra el modal; además bloqueamos scroll del body mientras está
   // abierto para que no se pueda hacer scroll detrás del backdrop.
@@ -47,6 +74,12 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
   if (!open) return null;
 
   const handleFile = async (file: File) => {
+    // Pre-validación: tamaño / extensión obvia, antes de leer bytes.
+    const fileErr = validateFileUpload(file);
+    if (fileErr) {
+      setParsed({ status: 'error', message: fileErr, warnings: [] });
+      return;
+    }
     setParsed({ status: 'parsing' });
     try {
       const text = await file.text();
@@ -71,6 +104,21 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
         warnings: [],
       });
     }
+  };
+
+  const onDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setDragActive(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) handleFile(f);
+  };
+  const onDragOver = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    if (!dragActive) setDragActive(true);
+  };
+  const onDragLeave = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setDragActive(false);
   };
 
   const reparseWithScale = (scale: BudgetScale) => {
@@ -200,19 +248,33 @@ const BudgetModal: React.FC<Props> = ({ open, budget, onClose, onApply, onClear 
               <p className="text-[12px] font-medium uppercase tracking-wider mb-2" style={{ color: 'var(--gray-400)' }}>
                 Cargar archivo
               </p>
-              <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-[var(--gray-200)] rounded-xl p-8 cursor-pointer hover:bg-[var(--gray-50)] transition-colors">
-                <Upload className="w-6 h-6" style={{ color: 'var(--gray-400)' }} />
+              <label
+                onDrop={onDrop}
+                onDragOver={onDragOver}
+                onDragLeave={onDragLeave}
+                className="flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 cursor-pointer transition-colors"
+                style={{
+                  borderColor: dragActive ? 'var(--primary)' : 'var(--gray-200)',
+                  background: dragActive ? 'var(--primary-muted)' : 'transparent',
+                }}
+              >
+                <Upload className="w-6 h-6" style={{ color: dragActive ? 'var(--primary)' : 'var(--gray-400)' }} />
                 <p className="text-[13px] font-medium" style={{ color: 'var(--gray-950)' }}>
-                  Selecciona un CSV de presupuesto
+                  {dragActive ? 'Suelta el archivo' : 'Arrastra un CSV o haz clic para seleccionar'}
                 </p>
                 <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
-                  Formato: "Presupuesto &lt;año&gt; — Resumen Mensual" con Concepto y columnas Ene..Dic.
+                  Formato: "Presupuesto &lt;año&gt; — Resumen Mensual" con Concepto y columnas Ene..Dic. Máx. 5 MB.
                 </p>
                 <input
                   type="file"
                   accept=".csv,text/csv"
                   className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleFile(f);
+                    // Permite re-subir el mismo archivo tras corregir un error.
+                    e.target.value = '';
+                  }}
                 />
               </label>
               {parsed.status === 'parsing' && (

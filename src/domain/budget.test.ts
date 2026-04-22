@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseBudgetCsv,
   parseBudgetNumber,
+  parseBudgetNumberStrict,
   detectScaleFromText,
   buildBudgetTemplateCsv,
   scaleFactor,
@@ -106,6 +107,137 @@ describe('parseBudgetCsv', () => {
     const res = parseBudgetCsv(bad);
     expect(res.error).toBeTruthy();
     expect(res.budget).toBeNull();
+  });
+
+  it('returns a clear error on an empty file', () => {
+    const res = parseBudgetCsv('');
+    expect(res.error).toBe('El archivo está vacío.');
+    expect(res.budget).toBeNull();
+  });
+
+  it('returns a clear error when only whitespace', () => {
+    const res = parseBudgetCsv('   \n\n  \n');
+    expect(res.error).toBe('El archivo está vacío.');
+  });
+
+  it('strips UTF-8 BOM so the header still matches', () => {
+    const withBom = '﻿' + SAMPLE_CSV;
+    const res = parseBudgetCsv(withBom);
+    expect(res.error).toBeUndefined();
+    expect(res.budget?.year).toBe(2026);
+  });
+
+  it('rejects semicolon-delimited files with a helpful message', () => {
+    const semi = SAMPLE_CSV.replace(/,/g, ';');
+    const res = parseBudgetCsv(semi);
+    expect(res.error).toMatch(/";"/);
+    expect(res.budget).toBeNull();
+  });
+
+  it('rejects tab-delimited files with a helpful message', () => {
+    const tabbed = SAMPLE_CSV.replace(/,/g, '\t');
+    const res = parseBudgetCsv(tabbed);
+    expect(res.error).toMatch(/tabulaciones/);
+  });
+
+  it('detects xlsx ZIP signature and suggests exporting CSV', () => {
+    const xlsx = 'PK\x03\x04somebinarygarbagehere';
+    const res = parseBudgetCsv(xlsx);
+    expect(res.error).toMatch(/Excel/);
+  });
+
+  it('detects binary content via NUL bytes', () => {
+    const binary = 'Concepto,Ene,Feb\nX\x00Y,1,2\n';
+    const res = parseBudgetCsv(binary);
+    expect(res.error).toMatch(/texto plano/);
+  });
+
+  it('warns on unparseable numeric cells and does not crash', () => {
+    const broken = SAMPLE_CSV.replace('290.7,253.5', 'abc,253.5');
+    const res = parseBudgetCsv(broken);
+    expect(res.error).toBeUndefined();
+    expect(res.warnings.some((w) => /no se pudieron leer/i.test(w))).toBe(true);
+    // Ene se fue a 0 porque no se pudo leer.
+    expect(res.budget!.incomeTotal[0]).toBe(0);
+  });
+
+  it('warns on duplicate concept rows', () => {
+    const dupLine = 'Nómina,1,1,1,1,1,1,1,1,1,1,1,1,12';
+    const withDup = SAMPLE_CSV.replace(
+      /Nómina,82\.3.*\n/,
+      (m) => m + dupLine + '\n',
+    );
+    const res = parseBudgetCsv(withDup);
+    expect(res.warnings.some((w) => /dos veces/i.test(w))).toBe(true);
+    // Ambas filas se conservan.
+    const nomina = res.budget!.expenseByConcept.filter((r) => r.concept === 'Nómina');
+    expect(nomina.length).toBe(2);
+  });
+
+  it('warns when declared total does not reconcile with concept sum', () => {
+    // Forzamos que "Total Egresos" de enero no coincida con la suma.
+    // Original Ene: 297.3 → cambiamos a 999.9.
+    const broken = SAMPLE_CSV.replace(
+      'Total Egresos,297.3,314.5',
+      'Total Egresos,999.9,314.5',
+    );
+    const res = parseBudgetCsv(broken);
+    expect(res.warnings.some((w) => /no coincide con la suma/i.test(w) && /egresos/i.test(w))).toBe(true);
+    // Se respeta el total declarado.
+    expect(res.budget!.expenseTotal[0]).toBeCloseTo(999_900_000, -3);
+  });
+
+  it('warns when scale is not detectable in header', () => {
+    const noScale = SAMPLE_CSV.replace('Cifras en millones de pesos (MXN)', 'Resumen');
+    const res = parseBudgetCsv(noScale);
+    expect(res.warnings.some((w) => /escala/i.test(w))).toBe(true);
+    expect(res.detectedScale).toBeNull();
+  });
+
+  it('warns when year is not detectable', () => {
+    const noYear = SAMPLE_CSV.replace('Presupuesto 2026', 'Presupuesto');
+    const res = parseBudgetCsv(noYear);
+    expect(res.warnings.some((w) => /año/i.test(w))).toBe(true);
+  });
+
+  it('rejects header with fewer than 12 months', () => {
+    const shortHeader = 'Presupuesto 2026 — Resumen\nCifras en millones\n\nConcepto,Ene,Feb,Mar\nNómina,1,2,3\n';
+    const res = parseBudgetCsv(shortHeader);
+    expect(res.error).toMatch(/12/);
+  });
+
+  it('does not warn on rounding-level reconciliation diffs', () => {
+    // Fuerza diferencia diminuta dentro de tolerancia (<0.5% y >1 peso no aplica
+    // porque declaramos 100k y sumamos 100000.3 → bajo 0.5%).
+    const csv = [
+      'Presupuesto 2026 — Resumen',
+      'Cifras en pesos',
+      '',
+      'Concepto,Ene,Feb,Mar,Abr,May,Jun,Jul,Ago,Sep,Oct,Nov,Dic',
+      'EGRESOS,,,,,,,,,,,,',
+      'A,50000,0,0,0,0,0,0,0,0,0,0,0',
+      'B,50000,0,0,0,0,0,0,0,0,0,0,0',
+      'TOTALES,,,,,,,,,,,,',
+      'Total Egresos,100000.3,0,0,0,0,0,0,0,0,0,0,0',
+    ].join('\n');
+    const res = parseBudgetCsv(csv);
+    expect(res.warnings.some((w) => /no coincide/i.test(w))).toBe(false);
+  });
+});
+
+describe('parseBudgetNumberStrict', () => {
+  it('flags non-numeric text as unparseable', () => {
+    expect(parseBudgetNumberStrict('abc')).toEqual({ value: 0, parseable: false });
+    expect(parseBudgetNumberStrict('N/A')).toEqual({ value: 0, parseable: false });
+  });
+  it('treats blank / dash as parseable zero', () => {
+    expect(parseBudgetNumberStrict('')).toEqual({ value: 0, parseable: true });
+    expect(parseBudgetNumberStrict('-')).toEqual({ value: 0, parseable: true });
+    expect(parseBudgetNumberStrict('—')).toEqual({ value: 0, parseable: true });
+  });
+  it('parses normal numeric input as parseable', () => {
+    expect(parseBudgetNumberStrict('1,234.5')).toEqual({ value: 1234.5, parseable: true });
+    expect(parseBudgetNumberStrict('(6.6)')).toEqual({ value: -6.6, parseable: true });
   });
 });
 

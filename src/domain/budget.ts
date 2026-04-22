@@ -63,15 +63,13 @@ export function scaleLabel(scale: BudgetScale): string {
 }
 
 /**
- * Parse numérico tolerante al formato del CSV de presupuesto:
- *   - "-" → 0
- *   - "1,038.7" → 1038.7 (coma como miles)
- *   - "(6.6)" → -6.6 (paréntesis = negativo)
- *   - " "     → 0
+ * Parse numérico estricto: además del valor devuelve si el texto de entrada
+ * era reconocible. Un `parseable: false` significa que había texto (no vacío,
+ * no guion) que no pudo interpretarse como número — la UI lo usa para avisar.
  */
-export function parseBudgetNumber(raw: string): number {
+export function parseBudgetNumberStrict(raw: string): { value: number; parseable: boolean } {
   const s = (raw ?? '').trim();
-  if (!s || s === '-' || s === '—') return 0;
+  if (!s || s === '-' || s === '—') return { value: 0, parseable: true };
   let negative = false;
   let t = s;
   if (t.startsWith('(') && t.endsWith(')')) {
@@ -81,8 +79,22 @@ export function parseBudgetNumber(raw: string): number {
   // Quitamos separadores de miles (coma), espacios, $
   t = t.replace(/[$\s,]/g, '');
   const n = Number(t);
-  if (!Number.isFinite(n)) return 0;
-  return negative ? -n : n;
+  if (!Number.isFinite(n)) return { value: 0, parseable: false };
+  return { value: negative ? -n : n, parseable: true };
+}
+
+/**
+ * Parse numérico tolerante al formato del CSV de presupuesto:
+ *   - "-" → 0
+ *   - "1,038.7" → 1038.7 (coma como miles)
+ *   - "(6.6)" → -6.6 (paréntesis = negativo)
+ *   - " "     → 0
+ *
+ * No distingue entre "espacio intencionado" y "texto raro"; para eso usa
+ * `parseBudgetNumberStrict`.
+ */
+export function parseBudgetNumber(raw: string): number {
+  return parseBudgetNumberStrict(raw).value;
 }
 
 /**
@@ -156,19 +168,42 @@ export interface ParseBudgetResult {
  *   - "Flujo Neto del Mes"    → se ignora (derivado)
  *   - "Caja Final"            → se ignora (derivado)
  */
+// Tolerancia para reconciliar totales declarados vs. suma de conceptos.
+// Usamos relativo (0.5%) con piso absoluto de 1 peso porque a escala millones
+// el redondeo a un decimal ya mete diferencias de ~50k pesos.
+const RECONCILE_REL_TOL = 0.005;
+const RECONCILE_ABS_TOL = 1;
+
 export function parseBudgetCsv(
   raw: string,
   opts: ParseBudgetOptions = {},
 ): ParseBudgetResult {
   const warnings: string[] = [];
-  const lines = raw
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((l) => l)
-    .filter((l) => l.length > 0 || true); // conservamos líneas vacías de momento
-  if (lines.length === 0) {
-    return { budget: null, detectedScale: null, warnings, error: 'CSV vacío.' };
+
+  // Quitar BOM UTF-8 que Excel/Google Sheets suelen anteponer. Sin esto, la
+  // primera celda queda como "﻿Concepto" y el match del header falla.
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+  if (raw.trim().length === 0) {
+    return { budget: null, detectedScale: null, warnings, error: 'El archivo está vacío.' };
   }
+
+  // Detectar archivos binarios (Excel, PDF, imágenes) que el usuario suba por
+  // error renombrados o porque olvidó exportar. Nos fijamos en bytes NUL o
+  // bytes de control raros en la cabecera.
+  const binaryReason = detectBinaryContent(raw);
+  if (binaryReason) {
+    return { budget: null, detectedScale: null, warnings, error: binaryReason };
+  }
+
+  // Detectar separador equivocado antes de intentar parsear — ahorra errores
+  // confusos más abajo.
+  const delimiterIssue = detectDelimiterIssue(raw);
+  if (delimiterIssue) {
+    return { budget: null, detectedScale: null, warnings, error: delimiterIssue };
+  }
+
+  const lines = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 
   // Detectar escala del header (primeras 5 filas suelen ser libre-texto).
   const headerText = lines.slice(0, 5).join(' ');
@@ -176,20 +211,26 @@ export function parseBudgetCsv(
   const scale: BudgetScale = opts.scale ?? detectedScale ?? 'pesos';
   const factor = scaleFactor(scale);
   if (!opts.scale && !detectedScale) {
-    warnings.push('No se detectó la escala en el encabezado; asumiendo pesos.');
+    warnings.push('No se detectó la escala en el encabezado; asumiendo pesos. Confirma la unidad en la vista previa.');
   }
 
-  // Detectar año del primer header (busca 4 dígitos).
+  // Detectar año del primer header (busca 4 dígitos). Si no lo encontramos
+  // avisamos porque típicamente significa que el archivo fue exportado sin el
+  // título — el usuario podría estar pisando presupuestos de años distintos.
   let year = new Date().getFullYear();
   const yearMatch = /\b(20\d{2})\b/.exec(headerText);
   if (yearMatch) year = Number(yearMatch[1]);
+  else warnings.push(`No se detectó el año en el encabezado; usando ${year} por defecto.`);
 
   // Encontrar fila de columnas: empieza con "Concepto" y tiene 12 meses.
+  // Toleramos mayúsculas/minúsculas y espacios extra.
   let headerIdx = -1;
+  let headerCellCount = 0;
   for (let i = 0; i < lines.length; i++) {
     const cells = parseCsvRow(lines[i]).map((c) => c.trim().toLowerCase());
-    if (cells[0] === 'concepto' && cells.length >= 13) {
+    if (cells[0] === 'concepto') {
       headerIdx = i;
+      headerCellCount = cells.length;
       break;
     }
   }
@@ -198,7 +239,16 @@ export function parseBudgetCsv(
       budget: null,
       detectedScale,
       warnings,
-      error: 'No se encontró la fila de encabezado "Concepto,Ene,Feb,…,Dic".',
+      error:
+        'No se encontró la fila de encabezado. Debe haber una línea que empiece con "Concepto" seguido de los 12 meses (Ene..Dic). Descarga la plantilla para ver el formato.',
+    };
+  }
+  if (headerCellCount < 13) {
+    return {
+      budget: null,
+      detectedScale,
+      warnings,
+      error: `La fila "Concepto" (línea ${headerIdx + 1}) tiene ${headerCellCount - 1} columnas de datos; se esperaban al menos 12 (Ene..Dic).`,
     };
   }
 
@@ -206,15 +256,20 @@ export function parseBudgetCsv(
   let section: 'none' | 'income' | 'expense' = 'none';
   const incomeByConcept: BudgetConceptRow[] = [];
   const expenseByConcept: BudgetConceptRow[] = [];
+  const seenConcepts = new Map<string, number>(); // key lowercase → línea
   let openingCash: number[] | undefined;
   let incomeTotal: number[] | null = null;
   let expenseTotal: number[] | null = null;
+  let incomeTotalLine = -1;
+  let expenseTotalLine = -1;
+  const unparseableCells: Array<{ line: number; concept: string; month: string }> = [];
 
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const cells = parseCsvRow(lines[i]);
     const first = (cells[0] ?? '').trim();
     if (!first) continue;
     const firstLower = first.toLowerCase();
+    const lineNo = i + 1;
 
     // Detectar separadores de sección. Un separador es una fila donde
     // (a) la primera celda es un título conocido, y
@@ -228,15 +283,46 @@ export function parseBudgetCsv(
       continue;
     }
 
-    const monthly = monthCells.map((c) => parseBudgetNumber(c) * factor);
+    // Filas con menos de 12 valores mensuales: rellenamos con ceros pero
+    // avisamos para que el usuario sepa que el archivo vino incompleto.
+    if (monthCells.length < 12) {
+      warnings.push(`Línea ${lineNo} ("${first}"): solo trae ${monthCells.length} meses; los faltantes se tomarán como 0.`);
+      while (monthCells.length < 12) monthCells.push('');
+    }
+
+    const monthly: number[] = new Array(12).fill(0);
+    for (let m = 0; m < 12; m++) {
+      const raw = monthCells[m] ?? '';
+      const { value, parseable } = parseBudgetNumberStrict(raw);
+      if (!parseable) {
+        unparseableCells.push({ line: lineNo, concept: first, month: MONTH_HEADERS[m] });
+      }
+      monthly[m] = value * factor;
+    }
 
     // Filas especiales por nombre.
     if (firstLower === 'caja inicial') { openingCash = monthly; continue; }
-    if (firstLower === 'ingresos totales' || firstLower === 'ingreso total') { incomeTotal = monthly; continue; }
+    if (firstLower === 'ingresos totales' || firstLower === 'ingreso total') {
+      incomeTotal = monthly;
+      incomeTotalLine = lineNo;
+      continue;
+    }
     if (firstLower === 'total egresos' || firstLower === 'egreso total' || firstLower === 'total egreso') {
-      expenseTotal = monthly; continue;
+      expenseTotal = monthly;
+      expenseTotalLine = lineNo;
+      continue;
     }
     if (firstLower.includes('flujo neto') || firstLower.includes('caja final')) continue;
+
+    // Detectar concepto duplicado (misma etiqueta dos veces dentro del archivo).
+    // Sólo aplicamos el aviso a conceptos normales — las filas "TOTALES" las
+    // hemos descartado antes.
+    const prevLine = seenConcepts.get(firstLower);
+    if (prevLine !== undefined) {
+      warnings.push(`Concepto "${first}" aparece dos veces (líneas ${prevLine} y ${lineNo}); se mantienen ambas filas.`);
+    } else {
+      seenConcepts.set(firstLower, lineNo);
+    }
 
     const row: BudgetConceptRow = { concept: first, monthly };
     if (section === 'income') incomeByConcept.push(row);
@@ -250,18 +336,31 @@ export function parseBudgetCsv(
     }
   }
 
+  // Resumen compacto de celdas no parseables (en vez de inundar de warnings).
+  if (unparseableCells.length > 0) {
+    const sample = unparseableCells.slice(0, 3)
+      .map((c) => `línea ${c.line} "${c.concept}" (${c.month})`)
+      .join(', ');
+    const extra = unparseableCells.length > 3 ? ` y ${unparseableCells.length - 3} más` : '';
+    warnings.push(`Hay ${unparseableCells.length} celda(s) que no se pudieron leer como número y se usaron como 0: ${sample}${extra}.`);
+  }
+
   // Si no encontramos "Ingresos Totales", sumamos los conceptos.
   if (!incomeTotal) {
     incomeTotal = sumRows(incomeByConcept);
     if (incomeByConcept.length === 0) {
       warnings.push('No se detectaron filas de ingresos.');
     }
+  } else if (incomeByConcept.length > 0) {
+    checkReconciliation('ingresos', incomeTotal, sumRows(incomeByConcept), incomeTotalLine, warnings);
   }
   if (!expenseTotal) {
     expenseTotal = sumRows(expenseByConcept);
     if (expenseByConcept.length === 0) {
       warnings.push('No se detectaron filas de egresos.');
     }
+  } else if (expenseByConcept.length > 0) {
+    checkReconciliation('egresos', expenseTotal, sumRows(expenseByConcept), expenseTotalLine, warnings);
   }
 
   const budget: Budget = {
@@ -277,6 +376,69 @@ export function parseBudgetCsv(
   };
 
   return { budget, detectedScale, warnings };
+}
+
+/**
+ * Aviso suave cuando el total declarado en el CSV no coincide con la suma
+ * de los conceptos desglosados. Lo usa el usuario para detectar errores de
+ * captura sin ser ruidoso con redondeos esperados.
+ */
+function checkReconciliation(
+  label: 'ingresos' | 'egresos',
+  declared: number[],
+  summed: number[],
+  line: number,
+  warnings: string[],
+): void {
+  const mismatched: string[] = [];
+  for (let m = 0; m < 12; m++) {
+    const d = declared[m];
+    const s = summed[m];
+    const diff = Math.abs(d - s);
+    const tol = Math.max(RECONCILE_ABS_TOL, Math.abs(d) * RECONCILE_REL_TOL);
+    if (diff > tol) mismatched.push(MONTH_HEADERS[m]);
+  }
+  if (mismatched.length > 0) {
+    const whereLine = line > 0 ? ` (línea ${line})` : '';
+    warnings.push(
+      `El total declarado de ${label}${whereLine} no coincide con la suma de conceptos en: ${mismatched.join(', ')}. Se respeta el total declarado.`,
+    );
+  }
+}
+
+/** Heurística para detectar contenido binario disfrazado de CSV. */
+function detectBinaryContent(raw: string): string | null {
+  // Firmas conocidas. Los .xlsx modernos son ZIP → empiezan con "PK\x03\x04".
+  if (raw.startsWith('PK')) {
+    return 'Este archivo parece ser un Excel (.xlsx). Ábrelo en Excel/Google Sheets y exporta como CSV antes de cargarlo.';
+  }
+  if (raw.startsWith('ÐÏà')) {
+    return 'Este archivo parece ser un Excel antiguo (.xls). Exporta como CSV antes de cargarlo.';
+  }
+  if (raw.startsWith('%PDF')) {
+    return 'Este archivo es un PDF, no un CSV.';
+  }
+  // Byte NUL en los primeros 1024 caracteres → casi siempre binario.
+  const head = raw.slice(0, 1024);
+  if (head.includes('\x00')) {
+    return 'El archivo no parece ser texto plano (contiene bytes binarios). Exporta como CSV UTF-8.';
+  }
+  return null;
+}
+
+/** Si el archivo claramente no está separado por comas, damos un error concreto. */
+function detectDelimiterIssue(raw: string): string | null {
+  const head = raw.split(/\r?\n/).slice(0, 10).join('\n');
+  const commas = (head.match(/,/g) ?? []).length;
+  const semis = (head.match(/;/g) ?? []).length;
+  const tabs = (head.match(/\t/g) ?? []).length;
+  if (commas < 3 && semis >= 6 && semis >= commas * 3) {
+    return 'El archivo parece estar separado por ";". Exporta el CSV usando coma (",") como separador.';
+  }
+  if (commas < 3 && tabs >= 6 && tabs >= commas * 3) {
+    return 'El archivo parece estar separado por tabulaciones. Exporta como CSV con comas.';
+  }
+  return null;
 }
 
 function sumRows(rows: BudgetConceptRow[]): number[] {
