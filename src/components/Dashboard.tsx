@@ -178,22 +178,50 @@ const Dashboard: React.FC<DashboardProps> = ({
   }, [projection]);
 
   // Datos del chart: cada mes lleva ingresos/egresos partidos en real + proyectado.
-  // - Histórico completo: todo al tramo real.
+  // - Histórico completo: real = lo del banco. Si hay budget y supera lo real,
+  //   la diferencia se muestra como overlay rayado (variación vs presupuesto).
   // - Mes en curso: real = lo capturado; proyectado = lo que falta para llegar
-  //   al total proyectado del mes (clientes/aged).
-  // - Mes futuro: todo al tramo proyectado (engine + override).
+  //   al total proyectado del mes (clientes/aged/budget).
+  // - Mes futuro: todo al tramo proyectado (engine + override + budget).
+  const budgetMonthValue = (
+    ym: string,
+    kind: 'income' | 'expense',
+  ): number | null => {
+    if (!budget) return null;
+    const [y, mo] = ym.split('-').map(Number);
+    if (budget.year !== y) return null;
+    const arr = kind === 'income' ? budget.incomeTotal : budget.expenseTotal;
+    const v = arr[mo - 1];
+    return typeof v === 'number' ? v : null;
+  };
+
   const chartData = useMemo(() => evaluated.months.map((m) => {
     const ym = m.yearMonth;
     const cmp = compareYearMonth(ym, currentYm);
+    const override = overrides[ym];
+    const projDetail = projectionByMonth.get(ym);
+    const budgetIncome = budgetMonthValue(ym, 'income');
+    const budgetExpense = budgetMonthValue(ym, 'expense');
+
     if (cmp < 0) {
+      // Mes pasado: real del banco. Si hay budget, mostramos la variación
+      // contra presupuesto como overlay rayado cuando budget > real.
+      const projectedIncomeTotal = override?.income ?? budgetIncome ?? 0;
+      const projectedExpenseTotal = override?.expense ?? budgetExpense ?? 0;
+      const projIncGap = projectedIncomeTotal > 0
+        ? Math.max(0, projectedIncomeTotal - m.baseIncome)
+        : 0;
+      const projExpGap = projectedExpenseTotal > 0
+        ? Math.max(0, projectedExpenseTotal - m.baseExpense)
+        : 0;
       return {
         yearMonth: ym,
         realIncome: m.baseIncome,
-        projIncomeGap: 0,
-        projIncomeTotal: 0,
+        projIncomeGap: projIncGap,
+        projIncomeTotal: projectedIncomeTotal || m.baseIncome,
         realExpense: m.baseExpense,
-        projExpenseGap: 0,
-        projExpenseTotal: 0,
+        projExpenseGap: projExpGap,
+        projExpenseTotal: projectedExpenseTotal || m.baseExpense,
         cashBase: m.baseClosingCash,
         phase: 'past' as const,
       };
@@ -212,8 +240,6 @@ const Dashboard: React.FC<DashboardProps> = ({
       };
     }
     // Mes en curso: real parcial + lo que falta para llegar al total proyectado.
-    const override = overrides[ym];
-    const projDetail = projectionByMonth.get(ym);
     const projectedIncomeTotal = override?.income ?? projDetail?.income.total ?? baseline.avgIncome;
     const projectedExpenseTotal = override?.expense ?? projDetail?.expense.total ?? baseline.avgExpense;
     const projIncGap = Math.max(0, projectedIncomeTotal - m.baseIncome);
@@ -229,7 +255,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       cashBase: m.baseClosingCash,
       phase: 'current' as const,
     };
-  }), [evaluated.months, currentYm, overrides, projectionByMonth, baseline]);
+  }), [evaluated.months, currentYm, overrides, projectionByMonth, baseline, budget]);
 
   const tableRows: CashFlowTableRow[] = useMemo(
     () => evaluated.months.map((m) => {
@@ -238,14 +264,21 @@ const Dashboard: React.FC<DashboardProps> = ({
       const phase: 'past' | 'current' | 'future' = cmp < 0 ? 'past' : cmp === 0 ? 'current' : 'future';
       const override = overrides[ym];
       const projDetail = projectionByMonth.get(ym);
+      const budgetIncome = budgetMonthValue(ym, 'income');
+      const budgetExpense = budgetMonthValue(ym, 'expense');
+
       if (phase === 'past') {
+        // En pasado mostramos el real; si budget > real, la diferencia va en
+        // la columna "proyectado" para que el usuario vea la variación.
+        const budgetIncomeVal = override?.income ?? budgetIncome ?? 0;
+        const budgetExpenseVal = override?.expense ?? budgetExpense ?? 0;
         return {
           yearMonth: ym,
           phase,
           realIncome: m.baseIncome,
           realExpense: m.baseExpense,
-          projectedIncome: 0,
-          projectedExpense: 0,
+          projectedIncome: budgetIncomeVal > 0 ? Math.max(0, budgetIncomeVal - m.baseIncome) : 0,
+          projectedExpense: budgetExpenseVal > 0 ? Math.max(0, budgetExpenseVal - m.baseExpense) : 0,
           closingCash: m.baseClosingCash,
           projectionDetail: projDetail,
           override,
@@ -279,7 +312,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         override,
       };
     }),
-    [evaluated.months, currentYm, overrides, projectionByMonth, baseline],
+    [evaluated.months, currentYm, overrides, projectionByMonth, baseline, budget],
   );
 
   const hasRealData = bankStatements.length > 0;
@@ -744,29 +777,22 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   // ── Encadenado de caja con fórmula simple y predecible ──────────────
   // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
   //
-  // Esto reemplaza el cálculo antiguo de buildHistoricalMonths (que
-  // reconstruía saldos per-cuenta y acumulaba). Usar la fórmula única
-  // asegura que Dashboard y Flujo de Efectivo coincidan en el cierre
-  // mensual, y que el usuario pueda entender sin ambigüedad de dónde
-  // sale cada número.
+  // Los meses históricos SIEMPRE usan sus ingresos/egresos REALES (del
+  // banco). No sustituimos con el budget — el budget sólo aparece como
+  // overlay visual (barra rayada) cuando excede lo real del mes, para
+  // que el usuario pueda ver la variación vs presupuesto.
   //
-  // Cuando hay presupuesto cargado y su año coincide con el mes que
-  // estamos procesando, SUSTITUIMOS income/expense históricos por los
-  // valores del budget. La lógica de negocio: el presupuesto es el
-  // compromiso del año, y el usuario quiere ver la foto budgetaria
-  // como baseline en la proyección aunque ya haya datos reales.
+  // Para la caja inicial, si el usuario no dio override manual, usamos
+  // la declarada en el budget cuando aplica; si no, la suma de
+  // saldoInicial de las cuentas.
   const baseStart = typeof startingBalance === 'number'
     ? startingBalance
     : (budget?.openingCash?.[0] ?? computeBankStartingBalance(filtered));
   const historicalChained: CashFlowMonth[] = [];
   let runningHist = baseStart;
   for (const m of historical) {
-    const [y, mo] = m.yearMonth.split('-').map(Number);
-    const budgetApplies = budget && budget.year === y;
-    const inc = budgetApplies ? (budget!.incomeTotal[mo - 1] ?? m.income) : m.income;
-    const exp = budgetApplies ? (budget!.expenseTotal[mo - 1] ?? m.expense) : m.expense;
-    runningHist = runningHist + inc - exp;
-    historicalChained.push({ ...m, income: inc, expense: exp, closingCash: runningHist });
+    runningHist = runningHist + m.income - m.expense;
+    historicalChained.push({ ...m, closingCash: runningHist });
   }
 
   const months: CashFlowMonth[] = [...historicalChained];
