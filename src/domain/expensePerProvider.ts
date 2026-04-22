@@ -142,12 +142,15 @@ export function buildProviderBankPatterns(
     }
   }
 
-  // Ventana de `lookbackMonths` meses completos más recientes con actividad.
-  const allMonths = new Set<string>();
-  for (const monthly of perProvider.values()) {
-    for (const ym of monthly.keys()) allMonths.add(ym);
+  // Ventana de `lookbackMonths` meses calendario anteriores al mes en curso.
+  // Usar meses fijos (en vez de meses con actividad) evita que un proveedor
+  // con un solo pago en un mes lejano se vea como "recurrente" por 1/1.
+  const recentMonths: string[] = [];
+  let cursor = addMonths(currentYm, -lookbackMonths);
+  while (compareYearMonth(cursor, currentYm) < 0) {
+    recentMonths.push(cursor);
+    cursor = addMonths(cursor, 1);
   }
-  const recentMonths = Array.from(allMonths).sort().slice(-lookbackMonths);
   const monthsInWindow = recentMonths.length;
 
   const patterns = new Map<string, ProviderBankPattern>();
