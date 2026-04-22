@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BASE_SCENARIO_ID, FlowPlan, ForecastConfidenceOverride, ForecastGranularity, Simulation, Scenario, ScenarioCellOverride, Proposal, TabId, ForecastView } from './types';
+import { FlowPlan, ForecastConfidenceOverride, ForecastGranularity, Simulation, Scenario, ScenarioCellOverride, Proposal, TabId, ForecastView } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
@@ -249,7 +249,9 @@ export default function App() {
       return;
     }
 
-    if (activeScenarioId === BASE_SCENARIO_ID) {
+    // "Sin escenario seleccionado" (activeScenarioId === null) es un modo válido
+    // que reemplaza al viejo Escenario Base: no se fuerza ninguna simulación.
+    if (activeScenarioId === null) {
       if (activeSimulationId !== null) setActiveSimulationId(null);
       return;
     }
@@ -517,7 +519,6 @@ export default function App() {
     )));
   };
   const updateScenario = (s: Scenario) => {
-    if (s.id === BASE_SCENARIO_ID) return;
     setScenarios(prev => prev.map(x => x.id === s.id ? s : x));
     setSimulations(prev => prev.map((simulation) => (
       simulation.id === s.simulationId && simulation.activeScenarioId === s.id
@@ -526,7 +527,6 @@ export default function App() {
     )));
   };
   const deleteScenario = (id: string) => {
-    if (id === BASE_SCENARIO_ID) return;
     const nextScenarios = scenarios.filter(x => x.id !== id);
     setScenarios(nextScenarios);
     setActiveScenarioId(current => current === id ? (nextScenarios[0]?.id ?? null) : current);
@@ -558,7 +558,6 @@ export default function App() {
     const scenario = scenarios.find((item) => item.id === scenarioId);
     if (!scenario) return;
     setActiveSimulationId(scenario.simulationId ?? null);
-    if (scenario.id === BASE_SCENARIO_ID) return;
     setSimulations(prev => prev.map((simulation) => (
       simulation.id === scenario.simulationId
         ? { ...simulation, activeScenarioId: scenarioId, updatedAt: new Date().toISOString() }

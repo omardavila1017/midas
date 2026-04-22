@@ -1,41 +1,49 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
+  Coins,
   FlaskConical,
+  Pause,
   Pencil,
   Plus,
-  Sparkles,
+  TrendingUp,
   Trash2,
+  Clock,
   X,
 } from 'lucide-react';
 import {
-  BASE_SCENARIO_ID,
-  BASE_SCENARIO_NAME,
-  CATEGORY_COLORS,
   FlowPlan,
-  MONTHS,
-  Simulation,
-  ROLE_TARGET_COLLECTIONS,
-  ROLE_TARGET_EXPENSE,
-  ROLE_TARGET_INCOME,
-  ROLE_TARGET_PROVIDER_PAYMENTS,
-  Scenario,
-  ScenarioCellOverride,
+  PROPOSAL_CATEGORY_DESCRIPTIONS,
+  PROPOSAL_CATEGORY_LABELS,
+  PROPOSAL_FREQUENCY_LABELS,
   Proposal,
   ProposalCategory,
   ProposalFrequency,
-  ProposalOperation,
-  ProposalType,
+  Scenario,
+  ScenarioCellOverride,
+  Simulation,
+  SimulationStatus,
 } from '../types';
-import {
-  buildProposalEffects,
-  isBaseScenario,
-} from '../domain/proposalCompiler';
-import {
-  resolveConceptLabel,
-} from '../domain/scenarioEngine';
+import { buildProposalEffects } from '../domain/proposalCompiler';
+import { formatCurrency } from '../utils/calculations';
 
-/* ─── Props ─── */
+/**
+ * ScenarioWorkbench — UI principal de Simulaciones → Escenarios → Propuestas.
+ *
+ * Terminología del usuario:
+ *   Simulación  = contenedor de análisis  (interno: Simulation)
+ *   Escenario   = grupo de propuestas     (interno: Scenario)
+ *   Propuesta   = ajuste financiero       (interno: Proposal)
+ *
+ * Esta vista está construida sobre el modelo v4:
+ *   - No existe un "Escenario Base" persistido; cuando el usuario no ha
+ *     seleccionado nada, se muestra el pronóstico original.
+ *   - Las propuestas tienen solo 4 categorías y un set mínimo de campos.
+ *   - El formulario de creación/edición de Propuesta es un panel inline
+ *     que se expande debajo del botón "Nueva propuesta".
+ */
 
 interface Props {
   plan: FlowPlan;
@@ -58,1809 +66,1060 @@ interface Props {
   onDeleteProposal: (proposalId: string) => void;
 }
 
-/* ─── Constants ─── */
+/* ═══════════════════════════════════════════════════════════════
+   UTILIDADES
+   ═══════════════════════════════════════════════════════════════ */
 
-const SIMULATION_CATEGORIES: ProposalCategory[] = [
-  'Incremento de Ingresos',
-  'Reducción de Costos',
-  'Diferimiento',
-  'Renegociación',
+const SIMULATION_STATUSES: SimulationStatus[] = ['Pendiente', 'En proceso', 'Aprobada', 'Descartada'];
+
+const FREQUENCIES: ProposalFrequency[] = [
+  'once',
+  'monthly',
+  'bimonthly',
+  'quarterly',
+  'semiannual',
+  'annual',
 ];
 
-const FREQUENCIES: { value: ProposalFrequency; label: string }[] = [
-  { value: 'once', label: 'Única vez' },
-  { value: 'monthly', label: 'Mensual' },
-  { value: 'bimonthly', label: 'Bimestral' },
-  { value: 'quarterly', label: 'Trimestral' },
-  { value: 'semiannual', label: 'Semestral' },
-  { value: 'annual', label: 'Anual' },
-];
+const CATEGORY_META: Record<ProposalCategory, { icon: typeof Coins; color: string }> = {
+  ahorro: { icon: Coins, color: 'var(--primary)' },
+  aumento_ingresos: { icon: TrendingUp, color: 'var(--success)' },
+  pausar_gasto: { icon: Pause, color: 'var(--warning)' },
+  timing_shift: { icon: Clock, color: 'var(--chart-4)' },
+};
 
-const SIMULATION_TYPES: { value: ProposalType; label: string; description: string }[] = [
-  { value: 'percent_adjustment', label: 'Ajuste porcentual', description: 'Aumenta o reduce por un porcentaje.' },
-  { value: 'amount_adjustment', label: 'Ajuste por monto', description: 'Agrega o quita un monto puntual o repetido.' },
-  { value: 'recurring_series', label: 'Ingreso / gasto recurrente', description: 'Crea flujos recurrentes durante un periodo.' },
-  { value: 'installment_plan', label: 'Cobro / pago en parcialidades', description: 'Distribuye un monto en parcialidades.' },
-  { value: 'timing_shift', label: 'Atrasar / adelantar', description: 'Mueve cobros o pagos en el calendario.' },
-  { value: 'pause_expense', label: 'Pausar gasto', description: 'Reduce al 100% un gasto durante el periodo.' },
-];
-
-interface AiScenarioAdjustment {
-  name: string;
-  description: string;
-  category: ProposalCategory;
-  type: ProposalType;
-  targetIds: string[];
-  operation: ProposalOperation;
-  percent?: number;
-  shiftMonths?: number;
-  shiftRatio?: number;
-  comments: string;
+function nowIso(): string {
+  return new Date().toISOString();
 }
 
-interface AiScenarioTemplate {
-  id: string;
-  name: string;
-  description: string;
-  assumptions: string[];
-  impact: string;
-  adjustments: AiScenarioAdjustment[];
+function generateId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const AI_SCENARIO_TEMPLATES: AiScenarioTemplate[] = [
-  {
-    id: 'conservador',
-    name: 'Escenario conservador',
-    description: 'Menor cobranza esperada y control parcial de egresos.',
-    assumptions: ['Cobranza -8%', 'Egresos +4%', 'Horizonte anual'],
-    impact: 'Reduce la caja esperada y muestra meses con menor holgura operativa.',
-    adjustments: [
-      {
-        name: 'Cobranza conservadora',
-        description: 'Reduce la cobranza esperada para modelar menor cumplimiento.',
-        category: 'Incremento de Ingresos',
-        type: 'percent_adjustment',
-        targetIds: [ROLE_TARGET_COLLECTIONS],
-        operation: 'decrease',
-        percent: 0.08,
-        comments: 'Supuesto IA: menor recuperacion de cobranza frente al escenario base.',
-      },
-      {
-        name: 'Presion moderada en egresos',
-        description: 'Incrementa egresos para contemplar presion operativa.',
-        category: 'Reducción de Costos',
-        type: 'percent_adjustment',
-        targetIds: [ROLE_TARGET_EXPENSE],
-        operation: 'increase',
-        percent: 0.04,
-        comments: 'Supuesto IA: inflacion o gastos operativos no presupuestados.',
-      },
-    ],
-  },
-  {
-    id: 'agresivo',
-    name: 'Escenario agresivo',
-    description: 'Mayor cobranza e ingresos con gasto comercial adicional.',
-    assumptions: ['Ingresos +10%', 'Egresos +3%', 'Cobranza sin atraso'],
-    impact: 'Estima caja con crecimiento y el costo necesario para capturarlo.',
-    adjustments: [
-      {
-        name: 'Crecimiento agresivo de ingresos',
-        description: 'Aumenta ingresos esperados durante todo el horizonte.',
-        category: 'Incremento de Ingresos',
-        type: 'percent_adjustment',
-        targetIds: [ROLE_TARGET_INCOME],
-        operation: 'increase',
-        percent: 0.10,
-        comments: 'Supuesto IA: mayor volumen comercial y cobranza estable.',
-      },
-      {
-        name: 'Gasto comercial incremental',
-        description: 'Agrega presion de egresos asociada al crecimiento.',
-        category: 'Reducción de Costos',
-        type: 'percent_adjustment',
-        targetIds: [ROLE_TARGET_EXPENSE],
-        operation: 'increase',
-        percent: 0.03,
-        comments: 'Supuesto IA: gasto adicional para sostener crecimiento.',
-      },
-    ],
-  },
-  {
-    id: 'liquidez',
-    name: 'Escenario falta de liquidez',
-    description: 'Cobranza desplazada y egresos al alza para probar caja minima.',
-    assumptions: ['35% cobranza +1 mes', 'Egresos +8%', 'Estres de caja'],
-    impact: 'Resalta riesgo de liquidez y meses con caja final negativa.',
-    adjustments: [
-      {
-        name: 'Retraso fuerte de cobranza',
-        description: 'Mueve parte de la cobranza al mes siguiente.',
-        category: 'Diferimiento',
-        type: 'timing_shift',
-        targetIds: [ROLE_TARGET_COLLECTIONS],
-        operation: 'decrease',
-        shiftMonths: 1,
-        shiftRatio: 0.35,
-        comments: 'Supuesto IA: deterioro temporal del ciclo de cobranza.',
-      },
-      {
-        name: 'Aumento de egresos bajo estres',
-        description: 'Incrementa egresos para modelar presion de liquidez.',
-        category: 'Reducción de Costos',
-        type: 'percent_adjustment',
-        targetIds: [ROLE_TARGET_EXPENSE],
-        operation: 'increase',
-        percent: 0.08,
-        comments: 'Supuesto IA: gastos extraordinarios o alza en costos.',
-      },
-    ],
-  },
-  {
-    id: 'retraso-cobranza',
-    name: 'Escenario retraso de cobranza',
-    description: 'Cobranza parcial diferida un mes.',
-    assumptions: ['35% cobranza +1 mes', 'Sin cambio en egresos'],
-    impact: 'Mide cuanto efectivo falta cuando la cobranza no llega a tiempo.',
-    adjustments: [
-      {
-        name: 'Cobranza diferida',
-        description: 'Desplaza una parte de la cobranza al mes siguiente.',
-        category: 'Diferimiento',
-        type: 'timing_shift',
-        targetIds: [ROLE_TARGET_COLLECTIONS],
-        operation: 'decrease',
-        shiftMonths: 1,
-        shiftRatio: 0.35,
-        comments: 'Supuesto IA: retraso de clientes sin perdida definitiva de ingreso.',
-      },
-    ],
-  },
-  {
-    id: 'aumento-egresos',
-    name: 'Escenario aumento de egresos',
-    description: 'Presion general de gastos y pagos operativos.',
-    assumptions: ['Egresos +12%', 'Horizonte anual'],
-    impact: 'Calcula cuanto se reduce el flujo disponible ante mayor gasto.',
-    adjustments: [
-      {
-        name: 'Incremento general de egresos',
-        description: 'Aumenta gastos operativos para modelar presion de costos.',
-        category: 'Reducción de Costos',
-        type: 'percent_adjustment',
-        targetIds: [ROLE_TARGET_EXPENSE],
-        operation: 'increase',
-        percent: 0.12,
-        comments: 'Supuesto IA: alza de costos, servicios o pagos extraordinarios.',
-      },
-    ],
-  },
-  {
-    id: 'negociacion-proveedores',
-    name: 'Escenario negociacion de proveedores',
-    description: 'Diferimiento de pagos y ahorro por negociacion.',
-    assumptions: ['35% pagos +1 mes', 'Egresos -4%', 'Enfocado en proveedores'],
-    impact: 'Estima la caja liberada por renegociar plazos o condiciones.',
-    adjustments: [
-      {
-        name: 'Diferimiento de pagos a proveedores',
-        description: 'Mueve una parte de pagos de proveedor al mes siguiente.',
-        category: 'Renegociación',
-        type: 'timing_shift',
-        targetIds: [ROLE_TARGET_PROVIDER_PAYMENTS],
-        operation: 'decrease',
-        shiftMonths: 1,
-        shiftRatio: 0.35,
-        comments: 'Supuesto IA: proveedores flexibles aceptan extender plazo.',
-      },
-      {
-        name: 'Ahorro por renegociacion',
-        description: 'Reduce egresos por mejores condiciones comerciales.',
-        category: 'Renegociación',
-        type: 'percent_adjustment',
-        targetIds: [ROLE_TARGET_PROVIDER_PAYMENTS],
-        operation: 'decrease',
-        percent: 0.04,
-        comments: 'Supuesto IA: descuento o mejora de condiciones con proveedores negociables.',
-      },
-    ],
-  },
-];
-
-/* ─── Helpers ─── */
-
-function now(): string { return new Date().toISOString(); }
-
-function formatYearMonthLabel(ym: string): string {
-  const [y, m] = ym.split('-');
-  return `${MONTHS[Math.max(0, Math.min(11, (Number(m) || 1) - 1))]} ${String(y).slice(2)}`;
+function firstDayOfYear(plan: FlowPlan): string {
+  return `${plan.year}-01-01`;
 }
 
-function formatDateLabel(date: string): string {
-  if (!date) return 'sin fecha';
-  const [yearRaw, monthRaw, dayRaw] = date.split('-');
-  const year = Number(yearRaw);
-  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
-  const day = Number(dayRaw) || 1;
-  return `${day} ${MONTHS[monthIndex]} ${String(year).slice(2)}`;
-}
-
-function yearMonthFromDate(date: string): string {
-  return date.slice(0, 7);
-}
-
-function endOfMonthFromDate(date: string): string {
-  const yearMonth = yearMonthFromDate(date);
-  const [yearRaw, monthRaw] = yearMonth.split('-');
-  const year = Number(yearRaw);
-  const monthIndex = Math.max(0, Math.min(11, (Number(monthRaw) || 1) - 1));
-  const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
-  return `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
-}
-
-function firstOfMonth(date: string): string {
-  return `${yearMonthFromDate(date)}-01`;
-}
-
-function snapToMonday(date: string): string {
-  const current = new Date(`${date}T12:00:00Z`);
-  const weekday = current.getUTCDay();
-  const offset = weekday === 0 ? -6 : 1 - weekday;
-  current.setUTCDate(current.getUTCDate() + offset);
-  return current.toISOString().slice(0, 10);
-}
-
-function inferStartPrecision(proposal: Proposal): 'day' | 'week' | 'month' {
-  const startDate = proposal.startDate ?? `${proposal.startYearMonth ?? `${new Date().getFullYear()}-01`}-01`;
-  if (startDate.endsWith('-01')) return 'month';
-  if (snapToMonday(startDate) === startDate) return 'week';
-  return 'day';
-}
-
-function formatProposalWindow(proposal: Proposal): string {
-  const startYearMonth = proposal.startYearMonth ?? yearMonthFromDate(proposal.startDate ?? `${new Date().getFullYear()}-01-01`);
-  const endYearMonth = proposal.endYearMonth ?? startYearMonth;
-  const startDate = proposal.startDate ?? `${startYearMonth}-01`;
-  const endDate = proposal.endDate ?? endOfMonthFromDate(`${endYearMonth}-01`);
-
-  if (startDate.endsWith('-01') && endOfMonthFromDate(endDate) === endDate) {
-    if (startYearMonth === endYearMonth) return formatYearMonthLabel(startYearMonth);
-    return `${formatYearMonthLabel(startYearMonth)} → ${formatYearMonthLabel(endYearMonth)}`;
-  }
-
-  if (startDate === endDate) return formatDateLabel(startDate);
-  return `${formatDateLabel(startDate)} → ${formatDateLabel(endDate)}`;
-}
-
-function parseCustomAllocation(input: string): number[] | undefined {
-  const values = input.split(',').map(c => Number(c.trim())).filter(v => !isNaN(v) && v > 0);
-  return values.length > 0 ? values : undefined;
-}
-
-interface DynamicTargetOption { id: string; label: string }
-
-function buildLeafConceptOptions(plan: FlowPlan, type: 'ingreso' | 'egreso'): DynamicTargetOption[] {
-  const parentIds = new Set(plan.concepts.map(c => c.parentId).filter(Boolean) as string[]);
-  return plan.concepts
-    .filter(c => c.conceptType === type && !parentIds.has(c.id))
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(c => ({ id: c.id, label: c.name }));
-}
-
-function getTargetOptions(plan: FlowPlan, category: ProposalCategory, type: ProposalType) {
-  const incomeOpts: DynamicTargetOption[] = [{ id: ROLE_TARGET_INCOME, label: 'Todos los ingresos' }, ...buildLeafConceptOptions(plan, 'ingreso')];
-  const expenseOpts: DynamicTargetOption[] = [{ id: ROLE_TARGET_EXPENSE, label: 'Todos los gastos' }, ...buildLeafConceptOptions(plan, 'egreso')];
-  const collectionOpts: DynamicTargetOption[] = [{ id: ROLE_TARGET_COLLECTIONS, label: 'Toda la cobranza' }, ...buildLeafConceptOptions(plan, 'ingreso')];
-  const paymentOpts: DynamicTargetOption[] = [{ id: ROLE_TARGET_PROVIDER_PAYMENTS, label: 'Todos los pagos' }, ...buildLeafConceptOptions(plan, 'egreso')];
-
-  if (type === 'pause_expense') return { options: expenseOpts, defaults: [ROLE_TARGET_EXPENSE] };
-  if (type === 'timing_shift') {
-    if (category === 'Incremento de Ingresos') return { options: collectionOpts, defaults: [ROLE_TARGET_COLLECTIONS] };
-    if (category === 'Reducción de Costos') return { options: paymentOpts, defaults: [ROLE_TARGET_PROVIDER_PAYMENTS] };
-    return { options: [...collectionOpts, ...paymentOpts], defaults: [ROLE_TARGET_COLLECTIONS] };
-  }
-  if (type === 'installment_plan') {
-    if (category === 'Incremento de Ingresos') return { options: incomeOpts, defaults: [ROLE_TARGET_INCOME] };
-    return { options: expenseOpts, defaults: [ROLE_TARGET_EXPENSE] };
-  }
-  if (category === 'Incremento de Ingresos') return { options: incomeOpts, defaults: [ROLE_TARGET_INCOME] };
-  if (category === 'Reducción de Costos') return { options: expenseOpts, defaults: [ROLE_TARGET_EXPENSE] };
-  return { options: [...incomeOpts, ...expenseOpts], defaults: [ROLE_TARGET_INCOME] };
-}
-
-/* ─── Form state ─── */
-
-interface AdjustmentForm {
-  name: string;
-  description: string;
-  category: ProposalCategory;
-  type: ProposalType;
-  operation: ProposalOperation;
-  targetIds: string[];
-  startDate: string;
-  endDate: string;
-  startPrecision: 'day' | 'week' | 'month';
-  assignedScenarioIds: string[];
-  frequency: ProposalFrequency;
-  amount: number;
-  percent: number;
-  installments: number;
-  customAllocationText: string;
-  shiftMonths: number;
-  shiftRatio: number;
-  paymentLabel: string;
-  comments: string;
-}
-
-interface ScenarioDraft {
-  simulationId: string | null;
-  scenarioId: string | null;
-  name: string;
-  description: string;
-  proposalIds: string[];
-}
-
-function makeScenarioDraft(simulation?: Simulation | null, scenario?: Scenario | null): ScenarioDraft {
-  return {
-    simulationId: simulation?.id ?? scenario?.simulationId ?? null,
-    scenarioId: scenario?.id ?? null,
-    name: scenario?.name ?? simulation?.name ?? '',
-    description: scenario?.description ?? simulation?.description ?? '',
-    proposalIds: scenario?.proposalIds ?? [],
-  };
-}
-
-function defaultAdjustmentForm(plan: FlowPlan, assignedScenarioIds: string[] = []): AdjustmentForm {
-  return {
-    name: '', description: '',
-    category: 'Incremento de Ingresos',
-    type: 'percent_adjustment',
-    operation: 'increase',
-    targetIds: [ROLE_TARGET_INCOME],
-    startDate: `${plan.year}-01-01`,
-    endDate: `${plan.year}-12-31`,
-    startPrecision: 'month',
-    assignedScenarioIds,
-    frequency: 'monthly',
-    amount: 0, percent: 10, installments: 4,
-    customAllocationText: '', shiftMonths: 1, shiftRatio: 100,
-    paymentLabel: '', comments: '',
-  };
-}
-
-function buildProposalFromForm(plan: FlowPlan, form: AdjustmentForm, existing?: Proposal): Proposal {
-  const ts = now();
-  const startDate = form.startDate;
-  const safeEndDate = form.endDate < startDate ? startDate : form.endDate;
-  const sim: Proposal = {
-    id: existing?.id ?? `proposal-${Date.now()}`,
-    name: form.name.trim(),
-    description: form.description.trim(),
-    category: form.category,
-    type: form.type,
-    targetIds: form.targetIds,
-    startYearMonth: yearMonthFromDate(startDate),
-    endYearMonth: yearMonthFromDate(safeEndDate),
-    startDate,
-    endDate: safeEndDate,
-    frequency: form.type === 'timing_shift' || form.type === 'pause_expense' ? 'monthly' : form.frequency,
-    operation: form.type === 'pause_expense' ? 'decrease' : form.operation,
-    amount: form.type === 'percent_adjustment' || form.type === 'pause_expense' || form.type === 'timing_shift' ? undefined : form.amount,
-    percent: form.type === 'percent_adjustment' ? form.percent / 100 : undefined,
-    installments: form.type === 'installment_plan' ? form.installments : undefined,
-    customAllocation: form.type === 'installment_plan' ? parseCustomAllocation(form.customAllocationText) : undefined,
-    shiftMonths: form.type === 'timing_shift' ? form.shiftMonths : undefined,
-    shiftRatio: form.type === 'timing_shift' ? form.shiftRatio / 100 : undefined,
-    paymentLabel: form.paymentLabel.trim() || undefined,
-    comments: form.comments.trim() || undefined,
-    effects: [],
-    createdAt: existing?.createdAt ?? ts,
-    updatedAt: ts,
-  };
-  sim.effects = buildProposalEffects(plan, sim);
-  return sim;
-}
-
-function buildProposalFromAiTemplate(
-  plan: FlowPlan,
-  templateId: string,
-  adjustment: AiScenarioAdjustment,
-  index: number,
-  timestamp: number,
-): Proposal {
-  const ts = new Date(timestamp + index).toISOString();
-  const sim: Proposal = {
-    id: `proposal-ai-${templateId}-${timestamp}-${index}`,
-    name: adjustment.name,
-    description: adjustment.description,
-    category: adjustment.category,
-    type: adjustment.type,
-    targetIds: adjustment.targetIds,
-    startYearMonth: `${plan.year}-01`,
-    endYearMonth: `${plan.year}-12`,
-    startDate: `${plan.year}-01-01`,
-    endDate: `${plan.year}-12-31`,
-    frequency: 'monthly',
-    operation: adjustment.operation,
-    percent: adjustment.percent,
-    shiftMonths: adjustment.shiftMonths,
-    shiftRatio: adjustment.shiftRatio,
-    comments: adjustment.comments,
-    effects: [],
-    createdAt: ts,
-    updatedAt: ts,
-  };
-  sim.effects = buildProposalEffects(plan, sim);
-  return sim;
-}
-
-function formatCurrencyShort(value: number): string {
-  return new Intl.NumberFormat('es-MX', {
-    style: 'currency',
-    currency: 'MXN',
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(value);
-}
-
-function summarizeTargets(plan: FlowPlan, targetIds: string[]): string {
-  const labels = targetIds
-    .slice(0, 2)
-    .map((targetId) => resolveConceptLabel(plan, targetId))
-    .filter(Boolean);
-
-  if (labels.length === 0) return 'sin objetivo';
-  if (targetIds.length > 2) return `${labels.join(', ')} +${targetIds.length - 2}`;
-  return labels.join(', ');
-}
-
-function summarizeProposalImpact(plan: FlowPlan, proposal: Proposal): string {
-  const targetsLabel = summarizeTargets(plan, proposal.targetIds ?? []);
-  const direction = proposal.operation === 'decrease' ? 'Reduce' : 'Incrementa';
-
-  switch (proposal.type) {
-    case 'percent_adjustment':
-      return `${direction} ${Math.round(Math.abs(proposal.percent ?? 0) * 100)}% en ${targetsLabel}`;
-    case 'amount_adjustment':
-      return `${direction} ${formatCurrencyShort(Math.abs(proposal.amount ?? 0))} en ${targetsLabel}`;
-    case 'recurring_series':
-      return `${direction} ${formatCurrencyShort(Math.abs(proposal.amount ?? 0))} de forma recurrente en ${targetsLabel}`;
-    case 'installment_plan':
-      return `${direction} ${formatCurrencyShort(Math.abs(proposal.amount ?? 0))} en ${proposal.installments ?? 0} parcialidades sobre ${targetsLabel}`;
-    case 'timing_shift': {
-      const ratio = Math.round((proposal.shiftRatio ?? 1) * 100);
-      const months = proposal.shiftMonths ?? 0;
-      const directionLabel = months >= 0 ? `+${months}` : `${months}`;
-      return `Mueve ${ratio}% de ${targetsLabel} ${directionLabel} mes${Math.abs(months) === 1 ? '' : 'es'}`;
-    }
-    case 'pause_expense':
-      return `Pausa ${targetsLabel} durante ${formatProposalWindow(proposal)}`;
-    default:
-      return `${direction} ${targetsLabel}`;
-  }
+function lastDayOfYear(plan: FlowPlan): string {
+  return `${plan.year}-12-31`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   MAIN COMPONENT
+   FORMULARIO DE PROPUESTA
+   ═══════════════════════════════════════════════════════════════ */
+
+interface ProposalFormState {
+  category: ProposalCategory;
+  name: string;
+  description: string;
+  amount: string;
+  frequency: ProposalFrequency;
+  startDate: string;
+  endDate: string;
+  shiftMonths: string;
+}
+
+function emptyProposalForm(plan: FlowPlan): ProposalFormState {
+  return {
+    category: 'ahorro',
+    name: '',
+    description: '',
+    amount: '',
+    frequency: 'once',
+    startDate: firstDayOfYear(plan),
+    endDate: lastDayOfYear(plan),
+    shiftMonths: '1',
+  };
+}
+
+function proposalToForm(proposal: Proposal, plan: FlowPlan): ProposalFormState {
+  return {
+    category: proposal.category,
+    name: proposal.name,
+    description: proposal.description ?? '',
+    amount: proposal.category === 'pausar_gasto' ? '' : String(proposal.amount ?? 0),
+    frequency: proposal.frequency ?? 'once',
+    startDate: proposal.startDate || firstDayOfYear(plan),
+    endDate: proposal.endDate ?? proposal.startDate ?? lastDayOfYear(plan),
+    shiftMonths: String(proposal.shiftMonths ?? 1),
+  };
+}
+
+function buildProposalFromForm(
+  form: ProposalFormState,
+  plan: FlowPlan,
+  existing?: Proposal,
+): Proposal | { error: string } {
+  const name = form.name.trim();
+  if (!name) return { error: 'Agrega un título para la propuesta.' };
+
+  const startDate = form.startDate || firstDayOfYear(plan);
+  const endDate = form.endDate || startDate;
+  if (endDate < startDate) {
+    return { error: 'La fecha final no puede ser anterior a la inicial.' };
+  }
+
+  const amount = form.category === 'pausar_gasto'
+    ? 0
+    : Math.max(0, Number(form.amount) || 0);
+
+  if (form.category !== 'pausar_gasto' && amount <= 0) {
+    return { error: 'Ingresa un monto positivo.' };
+  }
+
+  const shiftMonths = form.category === 'timing_shift'
+    ? Number(form.shiftMonths) || 1
+    : undefined;
+
+  const base: Proposal = {
+    id: existing?.id ?? generateId('proposal'),
+    name,
+    description: form.description.trim() || undefined,
+    category: form.category,
+    amount,
+    frequency: form.frequency,
+    startDate,
+    endDate: form.frequency === 'once' ? undefined : endDate,
+    shiftMonths,
+    effects: [],
+    createdAt: existing?.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+  };
+
+  base.effects = buildProposalEffects(plan, base);
+  return base;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   COMPONENTE PRINCIPAL
    ═══════════════════════════════════════════════════════════════ */
 
 export default function ScenarioWorkbench({
-  plan, simulations, scenarios, proposals, overrides,
-  activeSimulationId, activeScenarioId,
-  onSelectSimulation, onSelectScenario,
-  onAdd, onUpdate, onDelete,
-  onAddScenario, onUpdateScenario, onDeleteScenario,
-  onAddProposal, onUpdateProposal, onDeleteProposal,
+  plan,
+  simulations,
+  scenarios,
+  proposals,
+  activeSimulationId,
+  activeScenarioId,
+  onSelectSimulation,
+  onSelectScenario,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onAddScenario,
+  onUpdateScenario,
+  onDeleteScenario,
+  onAddProposal,
+  onUpdateProposal,
+  onDeleteProposal,
 }: Props) {
-  /* ── Resolved selections ── */
-  const baseScenario = scenarios.find(s => isBaseScenario(s)) ?? null;
-  const activeSimulation = simulations.find(p => p.id === activeSimulationId) ?? null;
-  const activeScenario = scenarios.find(s => s.id === activeScenarioId) ?? baseScenario ?? null;
-  const simulationsById = useMemo(
-    () => new Map(simulations.map((simulation) => [simulation.id, simulation])),
-    [simulations],
-  );
-  const editableScenarios = useMemo(
-    () => scenarios.filter((scenario) => !isBaseScenario(scenario)),
-    [scenarios],
-  );
-  const resolveScenarioName = (scenario: Scenario) => (
-    scenario.name.trim()
-    || simulationsById.get(scenario.simulationId ?? '')?.name?.trim()
-    || 'Escenario sin nombre'
-  );
-  const resolveScenarioDescription = (scenario: Scenario) => (
-    scenario.description.trim()
-    || simulationsById.get(scenario.simulationId ?? '')?.description?.trim()
-    || 'Sin descripción todavía. Agrega un contexto breve para que el equipo entienda este escenario.'
-  );
-  const resolveAssignedScenarioIds = (proposalId: string): string[] => (
-    editableScenarios
-      .filter((scenario) => scenario.proposalIds.includes(proposalId))
-      .map((scenario) => scenario.id)
-  );
-  const scenarioCards = useMemo(() => (
-    editableScenarios.map((scenario) => {
-      const simulation = simulationsById.get(scenario.simulationId ?? '') ?? null;
-      const sharedCount = scenario.proposalIds.filter(
-        (proposalId) => resolveAssignedScenarioIds(proposalId).length > 1,
-      ).length;
+  /* ── Resolución de selección ── */
+  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? null;
+  const activeScenario = activeScenarioId
+    ? scenarios.find((scenario) => scenario.id === activeScenarioId) ?? null
+    : null;
 
-      return {
-        scenario,
-        simulation,
-        name: resolveScenarioName(scenario),
-        description: resolveScenarioDescription(scenario),
-        adjustmentCount: scenario.proposalIds.length,
-        sharedCount,
-        isSelected: activeScenario?.id === scenario.id,
-      };
-    })
-  ), [activeScenario?.id, editableScenarios, simulationsById]);
-  const scenarioLabelsById = useMemo(() => new Map(
-    editableScenarios.map((scenario) => {
-      const label = resolveScenarioName(scenario);
-      return [scenario.id, label];
-    }),
-  ), [editableScenarios]);
+  /* ── Estado de formularios ── */
+  const [proposalFormOpen, setProposalFormOpen] = useState(false);
+  const [editingProposalId, setEditingProposalId] = useState<string | null>(null);
+  const [proposalForm, setProposalForm] = useState<ProposalFormState>(() => emptyProposalForm(plan));
+  const [proposalFormError, setProposalFormError] = useState<string | null>(null);
 
-  /* ── Adjustment panel state ── */
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<AdjustmentForm>(() => defaultAdjustmentForm(plan));
   const [scenarioEditorOpen, setScenarioEditorOpen] = useState(false);
-  const [scenarioDraft, setScenarioDraft] = useState<ScenarioDraft>(() => makeScenarioDraft());
-  const [catalogQuery, setCatalogQuery] = useState('');
-  const [scenarioAdjustmentQuery, setScenarioAdjustmentQuery] = useState('');
+  const [scenarioDraft, setScenarioDraft] = useState<{ id: string | null; name: string; description: string }>({
+    id: null,
+    name: '',
+    description: '',
+  });
 
-  const assignedIds = useMemo(
-    () => new Set(activeScenario?.proposalIds ?? []),
-    [activeScenario?.proposalIds],
-  );
-  const assignedProposals = useMemo(
-    () => proposals
-      .filter((proposal) => assignedIds.has(proposal.id))
-      .sort((left, right) => left.name.localeCompare(right.name, 'es')),
-    [assignedIds, proposals],
-  );
-  const adjustmentCatalog = useMemo(() => (
-    proposals
-      .map((proposal) => {
-        const assignedScenarioIds = resolveAssignedScenarioIds(proposal.id);
-        const assignedScenarioLabels = assignedScenarioIds
-          .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
-        return {
-          proposal,
-          assignedScenarioIds,
-          assignedScenarioLabels,
-          impactSummary: summarizeProposalImpact(plan, proposal),
-          targetSummary: summarizeTargets(plan, proposal.targetIds ?? []),
-          inActiveScenario: assignedIds.has(proposal.id),
-        };
-      })
-      .sort((left, right) => {
-        if (right.assignedScenarioIds.length !== left.assignedScenarioIds.length) {
-          return right.assignedScenarioIds.length - left.assignedScenarioIds.length;
-        }
-        return left.proposal.name.localeCompare(right.proposal.name, 'es');
-      })
-  ), [assignedIds, editableScenarios, plan, scenarioLabelsById, proposals]);
-  const filteredAdjustmentCatalog = useMemo(() => {
-    const query = catalogQuery.trim().toLowerCase();
-    if (!query) return adjustmentCatalog;
-    return adjustmentCatalog.filter(({ proposal, assignedScenarioLabels, impactSummary, targetSummary }) => {
-      const haystack = [
-        proposal.name,
-        proposal.description,
-        proposal.comments,
-        impactSummary,
-        targetSummary,
-        ...assignedScenarioLabels,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [adjustmentCatalog, catalogQuery]);
-  const filteredScenarioDraftAdjustments = useMemo(() => {
-    const query = scenarioAdjustmentQuery.trim().toLowerCase();
-    if (!query) return adjustmentCatalog;
-    return adjustmentCatalog.filter(({ proposal, assignedScenarioLabels, impactSummary, targetSummary }) => {
-      const haystack = [
-        proposal.name,
-        proposal.description,
-        impactSummary,
-        targetSummary,
-        ...assignedScenarioLabels,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [adjustmentCatalog, scenarioAdjustmentQuery]);
-  const reusableAdjustmentsCount = useMemo(
-    () => adjustmentCatalog.filter((item) => item.assignedScenarioIds.length > 1).length,
-    [adjustmentCatalog],
-  );
-  const orphanAdjustmentsCount = useMemo(
-    () => adjustmentCatalog.filter((item) => item.assignedScenarioIds.length === 0).length,
-    [adjustmentCatalog],
-  );
+  const [simulationEditorOpen, setSimulationEditorOpen] = useState(false);
+  const [simulationDraft, setSimulationDraft] = useState<{
+    id: string | null;
+    name: string;
+    description: string;
+    status: SimulationStatus;
+  }>({ id: null, name: '', description: '', status: 'Pendiente' });
 
-  const targetConfig = useMemo(
-    () => getTargetOptions(plan, form.category, form.type),
-    [plan, form.category, form.type],
-  );
-
-  // Sync target IDs when category/type changes
+  /* Cuando cambia el plan (año distinto), re-inicializamos fechas por defecto */
   useEffect(() => {
-    const allowed = new Set(targetConfig.options.map(o => o.id));
-    setForm(prev => {
-      const next = prev.targetIds.filter(id => allowed.has(id));
-      const resolved = next.length > 0 ? next : targetConfig.defaults;
-      if (resolved.length === prev.targetIds.length && resolved.every((id, i) => id === prev.targetIds[i])) return prev;
-      return { ...prev, targetIds: resolved };
-    });
-  }, [targetConfig]);
+    setProposalForm((current) => ({
+      ...current,
+      startDate: current.startDate || firstDayOfYear(plan),
+      endDate: current.endDate || lastDayOfYear(plan),
+    }));
+  }, [plan.year]);
 
-  const syncProposalAssignments = (proposalId: string, nextScenarioIds: string[]) => {
-    const selectedIds = new Set(nextScenarioIds);
+  /* ── Handlers de propuestas ── */
+  const openNewProposal = () => {
+    setEditingProposalId(null);
+    setProposalForm(emptyProposalForm(plan));
+    setProposalFormError(null);
+    setProposalFormOpen(true);
+  };
 
-    editableScenarios.forEach((scenario) => {
-      const exists = scenario.proposalIds.includes(proposalId);
-      const shouldExist = selectedIds.has(scenario.id);
-      if (exists === shouldExist) return;
+  const openEditProposal = (proposal: Proposal) => {
+    setEditingProposalId(proposal.id);
+    setProposalForm(proposalToForm(proposal, plan));
+    setProposalFormError(null);
+    setProposalFormOpen(true);
+  };
 
-      onUpdateScenario({
-        ...scenario,
-        proposalIds: shouldExist
-          ? [...new Set([...scenario.proposalIds, proposalId])]
-          : scenario.proposalIds.filter((id) => id !== proposalId),
-        updatedAt: now(),
-      });
+  const closeProposalForm = () => {
+    setProposalFormOpen(false);
+    setEditingProposalId(null);
+    setProposalFormError(null);
+  };
+
+  const saveProposal = () => {
+    const existing = editingProposalId ? proposals.find((p) => p.id === editingProposalId) ?? undefined : undefined;
+    const result = buildProposalFromForm(proposalForm, plan, existing);
+    if ('error' in result) {
+      setProposalFormError(result.error);
+      return;
+    }
+
+    if (existing) {
+      onUpdateProposal(result);
+    } else {
+      onAddProposal(result);
+      // Si hay escenario activo, la propuesta se asigna automáticamente.
+      if (activeScenario && !activeScenario.proposalIds.includes(result.id)) {
+        onUpdateScenario({
+          ...activeScenario,
+          proposalIds: [...activeScenario.proposalIds, result.id],
+          updatedAt: nowIso(),
+        });
+      }
+    }
+
+    closeProposalForm();
+  };
+
+  const toggleProposalInScenario = (proposal: Proposal) => {
+    if (!activeScenario) return;
+    const currentIds = activeScenario.proposalIds;
+    const isActive = currentIds.includes(proposal.id);
+    const nextIds = isActive
+      ? currentIds.filter((id) => id !== proposal.id)
+      : [...currentIds, proposal.id];
+    onUpdateScenario({
+      ...activeScenario,
+      proposalIds: nextIds,
+      updatedAt: nowIso(),
     });
   };
 
-  /* ── Handlers ── */
-
-  const openNewScenarioEditor = () => {
-    setScenarioDraft(makeScenarioDraft());
-    setScenarioAdjustmentQuery('');
+  /* ── Handlers de escenarios ── */
+  const openNewScenario = () => {
+    setScenarioDraft({ id: null, name: '', description: '' });
     setScenarioEditorOpen(true);
   };
 
   const openEditScenario = (scenario: Scenario) => {
-    const simulation = simulations.find((item) => item.id === scenario.simulationId) ?? null;
-    setScenarioDraft(makeScenarioDraft(simulation, scenario));
-    setScenarioAdjustmentQuery('');
+    setScenarioDraft({ id: scenario.id, name: scenario.name, description: scenario.description });
     setScenarioEditorOpen(true);
   };
 
-  const closeScenarioEditor = () => {
-    setScenarioEditorOpen(false);
-    setScenarioDraft(makeScenarioDraft());
-    setScenarioAdjustmentQuery('');
-  };
-
-  const openNewAdjustmentForScenario = (scenarioId: string | null) => {
-    setEditingId(null);
-    setForm(defaultAdjustmentForm(plan, scenarioId ? [scenarioId] : []));
-    setScenarioEditorOpen(false);
-    setScenarioDraft(makeScenarioDraft());
-    setScenarioAdjustmentQuery('');
-    setPanelOpen(true);
-  };
-
-  const saveScenarioDraft = (options?: { openAdjustmentAfterSave?: boolean }) => {
-    const openAdjustmentAfterSave = options?.openAdjustmentAfterSave ?? false;
+  const saveScenario = () => {
     const name = scenarioDraft.name.trim();
-    const description = scenarioDraft.description.trim();
     if (!name) return;
-    const ts = now();
-
-    if (scenarioDraft.simulationId && scenarioDraft.scenarioId) {
-      const simulation = simulations.find((item) => item.id === scenarioDraft.simulationId) ?? null;
-      const scenario = scenarios.find((item) => item.id === scenarioDraft.scenarioId) ?? null;
-      if (!simulation || !scenario) return;
-
-      onUpdate({
-        ...simulation,
-        name,
-        description,
-        updatedAt: ts,
-      });
+    if (scenarioDraft.id) {
+      const existing = scenarios.find((s) => s.id === scenarioDraft.id);
+      if (!existing) return;
       onUpdateScenario({
-        ...scenario,
+        ...existing,
         name,
-        description,
-        proposalIds: scenarioDraft.proposalIds,
-        updatedAt: ts,
+        description: scenarioDraft.description.trim(),
+        updatedAt: nowIso(),
       });
-      onSelectSimulation(simulation.id);
-      onSelectScenario(scenario.id);
-      if (openAdjustmentAfterSave) {
-        openNewAdjustmentForScenario(scenario.id);
-        return;
-      }
-      closeScenarioEditor();
-      return;
-    }
-
-    const simulationId = `simulation-${Date.now()}`;
-    const scenarioId = `scenario-${Date.now()}`;
-
-    onAdd({
-      id: simulationId, name, description,
-      status: 'Pendiente', createdAt: ts, updatedAt: ts,
-    });
-    onAddScenario({
-      id: scenarioId, simulationId, kind: 'simulation',
-      name, description, probability: 1,
-      startYearMonth: `${plan.year}-01`, horizonMonths: 12,
-      proposalIds: scenarioDraft.proposalIds, createdAt: ts, updatedAt: ts,
-    });
-    onSelectSimulation(simulationId);
-    onSelectScenario(scenarioId);
-    if (openAdjustmentAfterSave) {
-      openNewAdjustmentForScenario(scenarioId);
-      return;
-    }
-    closeScenarioEditor();
-  };
-
-  const deleteScenarioFull = (scenario: Scenario) => {
-    const simulation = simulationsById.get(scenario.simulationId ?? '') ?? null;
-    if (simulation) {
-      onDelete(simulation.id);
-      return;
-    }
-    onDeleteScenario(scenario.id);
-  };
-
-  const openNewAdjustment = () => {
-    openNewAdjustmentForScenario(activeScenario && !isBaseScenario(activeScenario) ? activeScenario.id : null);
-  };
-
-  const openEditAdjustment = (sim: Proposal) => {
-    setEditingId(sim.id);
-    setForm({
-      name: sim.name, description: sim.description,
-      category: sim.category ?? 'Incremento de Ingresos',
-      type: sim.type ?? 'amount_adjustment',
-      operation: sim.operation ?? 'increase',
-      targetIds: sim.targetIds?.length ? sim.targetIds : [ROLE_TARGET_INCOME],
-      startDate: sim.startDate ?? `${sim.startYearMonth ?? `${plan.year}-01`}-01`,
-      endDate: sim.endDate ?? endOfMonthFromDate(`${sim.endYearMonth ?? sim.startYearMonth ?? `${plan.year}-12`}-01`),
-      startPrecision: inferStartPrecision(sim),
-      assignedScenarioIds: resolveAssignedScenarioIds(sim.id),
-      frequency: sim.frequency ?? 'monthly',
-      amount: sim.amount ?? 0,
-      percent: Math.abs((sim.percent ?? 0) * 100),
-      installments: sim.installments ?? 4,
-      customAllocationText: sim.customAllocation?.join(', ') ?? '',
-      shiftMonths: sim.shiftMonths ?? 1,
-      shiftRatio: Math.round((sim.shiftRatio ?? 1) * 100),
-      paymentLabel: sim.paymentLabel ?? '',
-      comments: sim.comments ?? '',
-    });
-    setPanelOpen(true);
-  };
-
-  const saveAdjustment = () => {
-    if (!form.name.trim() || form.targetIds.length === 0 || form.assignedScenarioIds.length === 0) return;
-    const existing = editingId ? proposals.find(s => s.id === editingId) : undefined;
-    const sim = buildProposalFromForm(plan, form, existing);
-
-    if (existing) {
-      onUpdateProposal(sim);
     } else {
-      onAddProposal(sim);
+      const simulationId = activeSimulationId ?? simulations[0]?.id ?? null;
+      const newScenario: Scenario = {
+        id: generateId('scenario'),
+        simulationId,
+        name,
+        description: scenarioDraft.description.trim(),
+        probability: 1,
+        startYearMonth: `${plan.year}-01`,
+        horizonMonths: 12,
+        proposalIds: [],
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      onAddScenario(newScenario);
+      onSelectScenario(newScenario.id);
     }
-    syncProposalAssignments(sim.id, form.assignedScenarioIds);
-    setPanelOpen(false);
-    setEditingId(null);
+    setScenarioEditorOpen(false);
   };
 
-  const removeAdjustmentFromScenario = (simId: string) => {
-    if (!activeScenario || isBaseScenario(activeScenario)) return;
-    onUpdateScenario({
-      ...activeScenario,
-      proposalIds: activeScenario.proposalIds.filter(id => id !== simId),
-      updatedAt: now(),
+  /* ── Handlers de simulaciones ── */
+  const openNewSimulation = () => {
+    setSimulationDraft({ id: null, name: '', description: '', status: 'Pendiente' });
+    setSimulationEditorOpen(true);
+  };
+
+  const openEditSimulation = (simulation: Simulation) => {
+    setSimulationDraft({
+      id: simulation.id,
+      name: simulation.name,
+      description: simulation.description,
+      status: simulation.status,
     });
+    setSimulationEditorOpen(true);
   };
 
-  const deleteAdjustment = (simId: string) => {
-    onDeleteProposal(simId);
+  const saveSimulation = () => {
+    const name = simulationDraft.name.trim();
+    if (!name) return;
+    if (simulationDraft.id) {
+      const existing = simulations.find((s) => s.id === simulationDraft.id);
+      if (!existing) return;
+      onUpdate({
+        ...existing,
+        name,
+        description: simulationDraft.description.trim(),
+        status: simulationDraft.status,
+        updatedAt: nowIso(),
+      });
+    } else {
+      const newSimulation: Simulation = {
+        id: generateId('simulation'),
+        name,
+        description: simulationDraft.description.trim(),
+        status: simulationDraft.status,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      onAdd(newSimulation);
+      onSelectSimulation(newSimulation.id);
+    }
+    setSimulationEditorOpen(false);
   };
 
-  const toggleScenarioDraftProposal = (proposalId: string) => {
-    setScenarioDraft((current) => ({
-      ...current,
-      proposalIds: current.proposalIds.includes(proposalId)
-        ? current.proposalIds.filter((id) => id !== proposalId)
-        : [...current.proposalIds, proposalId],
-    }));
-  };
+  /* ── Derivados de UI ── */
+  const visibleScenarios = useMemo(() => {
+    if (!activeSimulation) return scenarios;
+    return scenarios.filter((scenario) => scenario.simulationId === activeSimulation.id);
+  }, [scenarios, activeSimulation]);
 
-  const toggleAdjustmentInScenario = (scenarioId: string, proposalId: string) => {
-    const scenario = editableScenarios.find((item) => item.id === scenarioId);
-    if (!scenario) return;
+  const activeProposals = useMemo(() => {
+    if (!activeScenario) return [];
+    return proposals.filter((proposal) => activeScenario.proposalIds.includes(proposal.id));
+  }, [proposals, activeScenario]);
 
-    const exists = scenario.proposalIds.includes(proposalId);
-    onUpdateScenario({
-      ...scenario,
-      proposalIds: exists
-        ? scenario.proposalIds.filter((id) => id !== proposalId)
-        : [...scenario.proposalIds, proposalId],
-      updatedAt: now(),
-    });
-  };
+  const totalImpact = useMemo(() => {
+    let income = 0;
+    let expense = 0;
+    for (const proposal of activeProposals) {
+      if (proposal.category === 'aumento_ingresos') income += proposal.amount;
+      else if (proposal.category === 'ahorro') expense += proposal.amount;
+    }
+    return { income, expense };
+  }, [activeProposals]);
 
-  const toggleAdjustmentInActiveScenario = (proposalId: string) => {
-    if (!activeScenario || isBaseScenario(activeScenario)) return;
-    toggleAdjustmentInScenario(activeScenario.id, proposalId);
-  };
-
-  const toggleTarget = (id: string) => {
-    setForm(prev => ({
-      ...prev,
-      targetIds: prev.targetIds.includes(id)
-        ? prev.targetIds.filter(t => t !== id)
-        : [...prev.targetIds, id],
-    }));
-  };
-
-  const toggleAssignedScenario = (scenarioId: string) => {
-    setForm((prev) => ({
-      ...prev,
-      assignedScenarioIds: prev.assignedScenarioIds.includes(scenarioId)
-        ? prev.assignedScenarioIds.filter((id) => id !== scenarioId)
-        : [...prev.assignedScenarioIds, scenarioId],
-    }));
-  };
-
-  const createAiScenario = (template: AiScenarioTemplate) => {
-    const timestamp = Date.now();
-    const ts = new Date(timestamp).toISOString();
-    const simulationId = `simulation-ai-${template.id}-${timestamp}`;
-    const scenarioId = `scenario-ai-${template.id}-${timestamp}`;
-    const generatedProposals = template.adjustments.map((adjustment, index) =>
-      buildProposalFromAiTemplate(plan, template.id, adjustment, index, timestamp),
-    );
-
-    onAdd({
-      id: simulationId,
-      name: template.name,
-      description: `${template.description} Supuestos: ${template.assumptions.join('; ')}. Impacto esperado: ${template.impact}`,
-      status: 'Pendiente',
-      createdAt: ts,
-      updatedAt: ts,
-    });
-    generatedProposals.forEach(onAddProposal);
-    onAddScenario({
-      id: scenarioId,
-      simulationId,
-      kind: 'simulation',
-      name: template.name,
-      description: template.description,
-      probability: 1,
-      startYearMonth: `${plan.year}-01`,
-      horizonMonths: 12,
-      proposalIds: generatedProposals.map((proposal) => proposal.id),
-      createdAt: ts,
-      updatedAt: ts,
-    });
-    onSelectSimulation(simulationId);
-    onSelectScenario(scenarioId);
-  };
-
-  const isBase = isBaseScenario(activeScenario);
-
-  /* ═══ RENDER ═══ */
+  /* ═══════════════════════════════════════════════════════════════
+     RENDER
+     ═══════════════════════════════════════════════════════════════ */
 
   return (
-    <div className="space-y-5 relative">
-      <section className="rounded-[28px] border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
+    <div className="space-y-6">
+      {/* Encabezado */}
+      <header className="rounded-[28px] border border-[var(--gray-200)]/60 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 className="text-[24px] font-semibold tracking-tight text-[var(--gray-950)]">Escenarios</h1>
-            <p className="mt-1 text-[13px] text-[var(--gray-400)]">
-              Los escenarios son combinaciones de ajustes reutilizables. Crea uno nuevo seleccionando ajustes existentes o agrega ajustes nuevos sobre la marcha.
-            </p>
-          </div>
-          <button
-            onClick={openNewScenarioEditor}
-            className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
-          >
-            <Plus className="w-4 h-4" />
-            Nuevo escenario
-          </button>
-        </div>
-
-        <div className="mt-5 rounded-2xl border border-[var(--primary)]/15 bg-[var(--primary-muted)]/35 p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--primary)]">
-                <Sparkles className="h-3.5 w-3.5" />
-                IA de escenarios
-              </div>
-              <h2 className="mt-3 text-[18px] font-semibold text-[var(--gray-950)]">Propuestas automaticas de planeacion</h2>
-              <p className="mt-1 max-w-3xl text-[12px] leading-6 text-[var(--gray-500)]">
-                Cada tarjeta crea un escenario con ajustes reales, supuestos explicitos e impacto esperado contra el flujo base.
-              </p>
+            <div className="inline-flex items-center gap-2 rounded-full bg-[var(--primary-muted)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--primary)]">
+              <FlaskConical className="h-3.5 w-3.5" />
+              Taller de escenarios
             </div>
-            <Badge>{AI_SCENARIO_TEMPLATES.length} plantillas</Badge>
-          </div>
-
-          <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-            {AI_SCENARIO_TEMPLATES.map((template) => (
-              <article key={template.id} className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">{template.name}</h3>
-                    <p className="mt-1 text-[12px] leading-5 text-[var(--gray-500)]">{template.description}</p>
-                  </div>
-                  <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 text-[10px] font-medium text-[var(--gray-500)]">
-                    {template.adjustments.length} ajuste{template.adjustments.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {template.assumptions.map((assumption) => (
-                    <span key={`${template.id}-${assumption}`} className="rounded-full bg-[var(--gray-50)] px-2 py-0.5 text-[10px] text-[var(--gray-500)]">
-                      {assumption}
-                    </span>
-                  ))}
-                </div>
-                <p className="mt-3 text-[11px] leading-5 text-[var(--gray-500)]">
-                  {template.impact}
-                </p>
-                <button
-                  onClick={() => createAiScenario(template)}
-                  className="mt-4 inline-flex h-9 w-full items-center justify-center rounded-xl bg-[var(--card-foreground)] px-3 text-[12px] font-medium text-white transition hover:bg-black"
-                >
-                  Generar escenario
-                </button>
-              </article>
-            ))}
-          </div>
-        </div>
-
-        {scenarioEditorOpen && (
-          <div className="mt-5 rounded-2xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-4">
-            <div className="flex flex-col gap-3 border-b border-[var(--gray-200)] pb-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <h3 className="text-[16px] font-semibold text-[var(--gray-950)]">
-                  {scenarioDraft.scenarioId ? 'Editar escenario' : 'Nuevo escenario'}
-                </h3>
-                <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">
-                  Define el contexto del escenario y arma su combinación de ajustes. Puedes reutilizar ajustes ya existentes y después sumar nuevos.
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge>{scenarioDraft.proposalIds.length} {scenarioDraft.proposalIds.length === 1 ? 'ajuste seleccionado' : 'ajustes seleccionados'}</Badge>
-                <Badge>{filteredScenarioDraftAdjustments.length} visibles</Badge>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
-              <Field label="Nombre del escenario">
-                <input
-                  value={scenarioDraft.name}
-                  onChange={(event) => setScenarioDraft((current) => ({ ...current, name: event.target.value }))}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') saveScenarioDraft();
-                    if (event.key === 'Escape') closeScenarioEditor();
-                  }}
-                  placeholder="Ej. Conservador Q3"
-                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] outline-none focus:border-[var(--primary)]"
-                  autoFocus
-                />
-              </Field>
-              <Field label="Descripción breve">
-                <textarea
-                  value={scenarioDraft.description}
-                  onChange={(event) => setScenarioDraft((current) => ({ ...current, description: event.target.value }))}
-                  rows={2}
-                  placeholder="Ej. Menor cobranza y control de gastos operativos."
-                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none outline-none focus:border-[var(--primary)]"
-                />
-              </Field>
-            </div>
-
-            <div className="mt-4 grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
-              <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
-                <Field label="Buscar ajustes reutilizables">
-                  <input
-                    value={scenarioAdjustmentQuery}
-                    onChange={(event) => setScenarioAdjustmentQuery(event.target.value)}
-                    placeholder="Ventas, cobranza, diferimiento..."
-                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] outline-none focus:border-[var(--primary)]"
-                  />
-                </Field>
-                <p className="mt-3 text-[12px] leading-6 text-[var(--gray-500)]">
-                  Selecciona ajustes ya existentes aunque estén asignados a otros escenarios. El escenario final será la combinación de los ajustes elegidos aquí.
-                </p>
-                <button
-                  onClick={() => saveScenarioDraft({ openAdjustmentAfterSave: true })}
-                  disabled={!scenarioDraft.name.trim()}
-                  className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-4 text-[12px] font-medium text-[var(--gray-950)] transition hover:bg-white disabled:opacity-40"
-                >
-                  {scenarioDraft.scenarioId ? 'Guardar y crear ajuste nuevo' : 'Crear escenario y agregar ajuste'}
-                </button>
-              </div>
-
-              <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <h4 className="text-[14px] font-semibold text-[var(--gray-950)]">Combinación de ajustes</h4>
-                    <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                      Marca qué ajustes pertenecen a este escenario.
-                    </p>
-                  </div>
-                </div>
-
-                {filteredScenarioDraftAdjustments.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-10 text-center">
-                    <p className="text-[13px] font-medium text-[var(--gray-950)]">No hay ajustes para mostrar</p>
-                    <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                      Ajusta la búsqueda o crea un ajuste nuevo para empezar a construir este escenario.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
-                    {filteredScenarioDraftAdjustments.map(({ proposal, assignedScenarioLabels, impactSummary }) => {
-                      const selected = scenarioDraft.proposalIds.includes(proposal.id);
-                      return (
-                        <button
-                          key={proposal.id}
-                          type="button"
-                          onClick={() => toggleScenarioDraftProposal(proposal.id)}
-                          className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                            selected
-                              ? 'border-[var(--primary)] bg-[var(--primary-muted)]/50 shadow-[0_8px_18px_rgba(10,132,255,0.06)]'
-                              : 'border-[var(--gray-200)] bg-[var(--surface-alt)] hover:border-[var(--gray-300)] hover:bg-white'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="inline-flex h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[proposal.category] }} />
-                                <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{proposal.name}</p>
-                              </div>
-                              <p className="mt-2 text-[12px] leading-6 text-[var(--gray-500)]">{impactSummary}</p>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                <Badge>{formatProposalWindow(proposal)}</Badge>
-                                <Badge>{assignedScenarioLabels.length === 0 ? 'Sin escenario' : `${assignedScenarioLabels.length} escenario${assignedScenarioLabels.length === 1 ? '' : 's'}`}</Badge>
-                                {assignedScenarioLabels.slice(0, 2).map((label) => (
-                                  <Badge key={`${proposal.id}-${label}`}>{label}</Badge>
-                                ))}
-                              </div>
-                            </div>
-                            <span className={`rounded-full px-3 py-1 text-[11px] font-medium ${
-                              selected ? 'bg-[var(--primary)] text-white' : 'bg-white text-[var(--gray-500)] border border-[var(--gray-200)]'
-                            }`}>
-                              {selected ? 'Incluido' : 'Agregar'}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button
-                onClick={() => saveScenarioDraft()}
-                disabled={!scenarioDraft.name.trim()}
-                className="rounded-xl bg-[var(--card-foreground)] px-4 py-2.5 text-[12px] font-medium text-white disabled:opacity-40"
-              >
-                {scenarioDraft.scenarioId ? 'Guardar escenario' : 'Crear escenario'}
-              </button>
-              <button
-                onClick={closeScenarioEditor}
-                className="rounded-xl border border-[var(--gray-200)] px-4 py-2.5 text-[12px] text-[var(--gray-500)]"
-              >
-                Cancelar
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="mt-6 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
-          <aside className={`rounded-2xl border p-4 ${
-            isBase
-              ? 'border-[var(--card-foreground)] bg-[var(--card-foreground)] text-white'
-              : 'border-[var(--gray-200)]/60 bg-[var(--surface-alt)]'
-          }`}>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">
-              Base
-            </div>
-            <h2 className="mt-3 text-[20px] font-semibold tracking-tight">{BASE_SCENARIO_NAME}</h2>
-            <p className={`mt-2 text-[13px] leading-6 ${isBase ? 'text-white/72' : 'text-[var(--gray-500)]'}`}>
-              Pronóstico original sin ajustes. Úsalo como referencia rápida para comparar cualquier escenario creado.
-            </p>
-            <button
-              onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
-              className={`mt-5 inline-flex h-10 items-center rounded-xl px-4 text-[13px] font-medium transition ${
-                isBase
-                  ? 'bg-white text-[var(--card-foreground)]'
-                  : 'bg-[var(--card-foreground)] text-white hover:bg-black'
-              }`}
-            >
-              {isBase ? 'Base seleccionado' : 'Ver escenario base'}
-            </button>
-          </aside>
-
-          <div>
-            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Escenarios creados</h2>
-                <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                  Cada escenario representa una combinación distinta de ajustes reutilizables.
-                </p>
-              </div>
-              <span className="rounded-full bg-[var(--surface-alt)] px-3 py-1 text-[11px] font-medium text-[var(--gray-500)]">
-                {scenarioCards.length} {scenarioCards.length === 1 ? 'escenario' : 'escenarios'}
-              </span>
-            </div>
-
-            {scenarioCards.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
-                <FlaskConical className="mx-auto mb-3 h-6 w-6 text-[var(--gray-400)]" />
-                <p className="text-[13px] font-medium text-[var(--gray-950)]">Todavía no hay escenarios creados</p>
-                <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                  Crea tu primer escenario y arma su combinación con ajustes reutilizables del catálogo.
-                </p>
-              </div>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                {scenarioCards.map(({ scenario, simulation, name, description, adjustmentCount, sharedCount, isSelected }) => (
-                  <article
-                    key={scenario.id}
-                    className={`rounded-2xl border p-4 transition ${
-                      isSelected
-                        ? 'border-[var(--primary)] bg-[var(--primary-muted)]/60 shadow-[0_10px_24px_rgba(10,132,255,0.08)]'
-                        : 'border-[var(--gray-200)]/60 bg-white hover:border-[var(--gray-300)] hover:bg-[var(--surface-alt)]'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="truncate text-[15px] font-semibold text-[var(--gray-950)]">{name}</h3>
-                          {isSelected && (
-                            <span className="rounded-full bg-[var(--primary)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
-                              Activo
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-2 line-clamp-3 text-[12px] leading-6 text-[var(--gray-500)]">
-                          {description}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => openEditScenario(scenario)}
-                          className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[var(--gray-950)]"
-                          title="Editar escenario"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        {simulation && (
-                          <button
-                            onClick={() => deleteScenarioFull(scenario)}
-                            className="rounded-lg p-1.5 text-[var(--gray-400)] transition hover:bg-white hover:text-[var(--danger)]"
-                            title="Eliminar escenario"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge>{adjustmentCount} {adjustmentCount === 1 ? 'ajuste' : 'ajustes'}</Badge>
-                        {sharedCount > 0 && <Badge>{sharedCount} compartido{sharedCount === 1 ? '' : 's'}</Badge>}
-                        {simulation?.status && <Badge>{simulation.status}</Badge>}
-                      </div>
-                      <button
-                        onClick={() => onSelectScenario(scenario.id)}
-                        className={`inline-flex h-9 items-center rounded-xl px-3 text-[12px] font-medium transition ${
-                          isSelected
-                            ? 'bg-white text-[var(--primary)] border border-[var(--primary)]/20'
-                            : 'bg-[var(--card-foreground)] text-white hover:bg-black'
-                        }`}
-                      >
-                        {isSelected ? 'Seleccionado' : 'Abrir'}
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
-        {isBase ? (
-          <div className="flex flex-col gap-4 rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-8 text-center lg:flex-row lg:items-center lg:justify-between lg:text-left">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--gray-400)]">Escenario seleccionado</div>
-              <p className="mt-2 text-[18px] font-semibold text-[var(--gray-950)]">Estás viendo el Escenario Base</p>
-              <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">
-                El Base es solo referencia. Para trabajar ajustes, abre uno de los escenarios creados o crea uno nuevo.
-              </p>
-            </div>
-            <button
-              onClick={openNewScenarioEditor}
-              className="inline-flex h-10 items-center justify-center rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
-            >
-              Crear escenario
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--gray-400)]">Escenario seleccionado</div>
-                <h2 className="mt-2 text-[22px] font-semibold tracking-tight text-[var(--gray-950)]">
-                  {activeScenario ? resolveScenarioName(activeScenario) : activeSimulation?.name ?? 'Escenario'}
-                </h2>
-                <p className="mt-2 max-w-3xl text-[13px] leading-6 text-[var(--gray-500)]">
-                  {activeScenario ? resolveScenarioDescription(activeScenario) : activeSimulation?.description?.trim()
-                    || 'Sin descripción todavía. Agrega un resumen corto para que el equipo entienda cuándo usar este escenario.'}
-                </p>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Badge>{assignedProposals.length} {assignedProposals.length === 1 ? 'ajuste' : 'ajustes'}</Badge>
-                  {activeSimulation?.status && <Badge>{activeSimulation.status}</Badge>}
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {activeScenario && (
-                  <button
-                    onClick={() => openEditScenario(activeScenario)}
-                    className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] px-4 text-[13px] font-medium text-[var(--gray-500)] transition hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]"
-                  >
-                    <Pencil className="w-4 h-4" />
-                    Editar composición
-                  </button>
-                )}
-                <button
-                  onClick={openNewAdjustment}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
-                >
-                  <Plus className="w-4 h-4" />
-                  Nuevo ajuste
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <h3 className="text-[15px] font-semibold text-[var(--gray-950)]">Ajustes del escenario</h3>
-              <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                Este escenario es la suma de los ajustes listados aquí. Puedes reutilizar más ajustes desde el catálogo global o crear uno nuevo.
-              </p>
-            </div>
-
-            {assignedProposals.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
-                <FlaskConical className="w-6 h-6 mx-auto mb-3 text-[var(--gray-400)]" />
-                <p className="text-[13px] font-medium text-[var(--gray-950)]">Sin ajustes todavía</p>
-                <p className="text-[12px] text-[var(--gray-400)] mt-1">
-                  Reutiliza uno desde el catálogo o crea un ajuste nuevo para modelar este escenario.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {assignedProposals.map((sim) => {
-                  const assignedScenarioLabels = resolveAssignedScenarioIds(sim.id)
-                    .map((scenarioId) => scenarioLabelsById.get(scenarioId) ?? scenarioId);
-
-                  return (
-                    <div key={sim.id} className="group flex items-center gap-4 rounded-xl border border-[var(--gray-200)]/50 bg-[var(--surface-alt)] px-4 py-3">
-                      <div className="h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[sim.category] }} />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{sim.name}</p>
-                        <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">{summarizeProposalImpact(plan, sim)}</p>
-                        <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <Badge>{formatProposalWindow(sim)}</Badge>
-                          {assignedScenarioLabels.length > 1 && (
-                            <Badge>{`Compartido en ${assignedScenarioLabels.length} escenarios`}</Badge>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
-                        <button onClick={() => openEditAdjustment(sim)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-950)]" title="Editar">
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => removeAdjustmentFromScenario(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]" title="Quitar del escenario">
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => deleteAdjustment(sim.id)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]" title="Eliminar permanentemente de todos los escenarios">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-2xl border border-[var(--gray-200)]/50 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">Catálogo de ajustes</h2>
-            <p className="mt-1 text-[12px] leading-6 text-[var(--gray-500)]">
-              Consulta todos los ajustes existentes, en qué escenarios están y su impacto resumido. Desde aquí puedes reutilizarlos sin recrearlos.
+            <h1 className="mt-3 text-[26px] font-semibold tracking-tight text-[var(--gray-950)]">
+              Simulaciones, escenarios y propuestas
+            </h1>
+            <p className="mt-1 max-w-2xl text-[13px] leading-6 text-[var(--gray-500)]">
+              Una <strong>Simulación</strong> agrupa análisis. Dentro puedes crear <strong>Escenarios</strong> (combinaciones)
+              y asignarles <strong>Propuestas</strong> (ajustes concretos).
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge>{adjustmentCatalog.length} {adjustmentCatalog.length === 1 ? 'ajuste' : 'ajustes'}</Badge>
-            <Badge>{reusableAdjustmentsCount} reutilizable{reusableAdjustmentsCount === 1 ? '' : 's'}</Badge>
-            {orphanAdjustmentsCount > 0 && (
-              <Badge>{orphanAdjustmentsCount} sin escenario</Badge>
-            )}
+            <button
+              onClick={openNewSimulation}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-4 text-[13px] font-medium text-[var(--gray-950)] transition hover:bg-[var(--gray-50)]"
+            >
+              <Plus className="h-4 w-4" />
+              Nueva simulación
+            </button>
+            <button
+              onClick={openNewScenario}
+              className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
+            >
+              <Plus className="h-4 w-4" />
+              Nuevo escenario
+            </button>
           </div>
         </div>
+      </header>
 
-        <div className="mt-5 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="rounded-2xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-4">
-            <Field label="Buscar ajuste">
-              <input
-                value={catalogQuery}
-                onChange={(event) => setCatalogQuery(event.target.value)}
-                placeholder="Nombre, impacto, escenario..."
-                className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] outline-none focus:border-[var(--primary)]"
-              />
-            </Field>
-            <div className="mt-4 space-y-2 text-[12px] leading-6 text-[var(--gray-500)]">
-              <p>Los ajustes viven en un catálogo común y pueden pertenecer a uno o varios escenarios.</p>
-              <p>{isBase ? 'Selecciona un escenario para reutilizar un ajuste con un clic.' : `Escenario activo: ${resolveScenarioName(activeScenario as Scenario)}`}</p>
-            </div>
-            {!isBase && activeScenario && (
-              <button
-                onClick={() => openEditScenario(activeScenario)}
-                className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-xl border border-[var(--gray-200)] bg-white px-4 text-[12px] font-medium text-[var(--gray-950)] transition hover:bg-[var(--surface-alt)]"
-              >
-                Editar combinación del escenario
-              </button>
+      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+        {/* Columna izquierda: Simulaciones + Escenarios */}
+        <aside className="space-y-4">
+          <section className="rounded-2xl border border-[var(--gray-200)]/60 bg-white p-4 shadow-sm">
+            <header className="flex items-center justify-between">
+              <h2 className="text-[13px] font-semibold uppercase tracking-wider text-[var(--gray-500)]">
+                Simulaciones
+              </h2>
+              <span className="rounded-full bg-[var(--gray-50)] px-2 py-0.5 text-[11px] font-medium text-[var(--gray-500)]">
+                {simulations.length}
+              </span>
+            </header>
+            {simulations.length === 0 ? (
+              <p className="mt-3 text-[12px] leading-5 text-[var(--gray-400)]">
+                Aún no hay simulaciones. Crea una para empezar.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-1">
+                {simulations.map((simulation) => {
+                  const isActive = simulation.id === activeSimulationId;
+                  return (
+                    <li key={simulation.id}>
+                      <div
+                        className={`group flex items-center gap-2 rounded-xl px-3 py-2 transition ${
+                          isActive
+                            ? 'bg-[var(--primary-muted)] text-[var(--primary)]'
+                            : 'hover:bg-[var(--gray-50)] text-[var(--gray-950)]'
+                        }`}
+                      >
+                        <button
+                          onClick={() => onSelectSimulation(simulation.id)}
+                          className="flex-1 min-w-0 text-left"
+                        >
+                          <p className="truncate text-[13px] font-medium">{simulation.name}</p>
+                          <p className="truncate text-[11px] text-[var(--gray-400)]">{simulation.status}</p>
+                        </button>
+                        <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                          <button
+                            onClick={() => openEditSimulation(simulation)}
+                            className="rounded p-1 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-700)]"
+                            title="Editar"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm(`¿Eliminar la simulación "${simulation.name}"?`)) onDelete(simulation.id);
+                            }}
+                            className="rounded p-1 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]"
+                            title="Eliminar"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-            <button
-              onClick={openNewAdjustment}
-              disabled={editableScenarios.length === 0}
-              className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-xl bg-[var(--card-foreground)] px-4 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-40"
-            >
-              Nuevo ajuste
-            </button>
-          </aside>
+          </section>
 
-          <div>
-            {filteredAdjustmentCatalog.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-12 text-center">
-                <p className="text-[13px] font-medium text-[var(--gray-950)]">No hay ajustes que coincidan</p>
-                <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-                  Prueba otra búsqueda o crea un ajuste nuevo para ampliar el catálogo.
+          <section className="rounded-2xl border border-[var(--gray-200)]/60 bg-white p-4 shadow-sm">
+            <header className="flex items-center justify-between">
+              <h2 className="text-[13px] font-semibold uppercase tracking-wider text-[var(--gray-500)]">
+                Escenarios
+              </h2>
+              <span className="rounded-full bg-[var(--gray-50)] px-2 py-0.5 text-[11px] font-medium text-[var(--gray-500)]">
+                {visibleScenarios.length}
+              </span>
+            </header>
+            <button
+              onClick={() => onSelectScenario(null)}
+              className={`mt-3 flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition ${
+                !activeScenario
+                  ? 'border-[var(--card-foreground)] bg-[var(--card-foreground)] text-white'
+                  : 'border-[var(--gray-200)] bg-[var(--surface-alt)] text-[var(--gray-950)] hover:bg-white'
+              }`}
+            >
+              <div>
+                <p className="text-[13px] font-semibold">Pronóstico original</p>
+                <p className={`text-[11px] ${!activeScenario ? 'text-white/70' : 'text-[var(--gray-400)]'}`}>
+                  Plan sin propuestas aplicadas
                 </p>
               </div>
+              {!activeScenario && <Check className="h-4 w-4" />}
+            </button>
+            {visibleScenarios.length === 0 ? (
+              <p className="mt-3 text-[12px] leading-5 text-[var(--gray-400)]">
+                Aún no hay escenarios en esta simulación.
+              </p>
             ) : (
-              <div className="space-y-3">
-                {filteredAdjustmentCatalog.map(({ proposal, assignedScenarioIds, assignedScenarioLabels, impactSummary, inActiveScenario }) => (
-                  <article
-                    key={proposal.id}
-                    className="rounded-2xl border border-[var(--gray-200)]/60 bg-white p-4"
-                  >
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="inline-flex h-3 w-3 rounded-full flex-shrink-0" style={{ backgroundColor: CATEGORY_COLORS[proposal.category] }} />
-                          <h3 className="truncate text-[14px] font-semibold text-[var(--gray-950)]">{proposal.name}</h3>
-                          {assignedScenarioIds.length > 1 && (
-                            <span className="rounded-full bg-[var(--primary-muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--primary)]">
-                              Reutilizable
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-2 text-[12px] leading-6 text-[var(--gray-500)]">{impactSummary}</p>
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <Badge>{formatProposalWindow(proposal)}</Badge>
-                          <Badge>{assignedScenarioIds.length === 0 ? 'Sin escenario asignado' : `${assignedScenarioIds.length} escenario${assignedScenarioIds.length === 1 ? '' : 's'}`}</Badge>
-                          {assignedScenarioLabels.map((label) => (
-                            <Badge key={`${proposal.id}-${label}`}>{label}</Badge>
-                          ))}
+              <ul className="mt-3 space-y-1">
+                {visibleScenarios.map((scenario) => {
+                  const isActive = scenario.id === activeScenarioId;
+                  const proposalCount = scenario.proposalIds.length;
+                  return (
+                    <li key={scenario.id}>
+                      <div
+                        className={`group flex items-center gap-2 rounded-xl px-3 py-2 transition ${
+                          isActive
+                            ? 'bg-[var(--primary)] text-white'
+                            : 'hover:bg-[var(--gray-50)] text-[var(--gray-950)]'
+                        }`}
+                      >
+                        <button
+                          onClick={() => onSelectScenario(scenario.id)}
+                          className="flex-1 min-w-0 text-left"
+                        >
+                          <p className="truncate text-[13px] font-medium">{scenario.name}</p>
+                          <p className={`truncate text-[11px] ${isActive ? 'text-white/70' : 'text-[var(--gray-400)]'}`}>
+                            {proposalCount} propuesta{proposalCount === 1 ? '' : 's'}
+                          </p>
+                        </button>
+                        <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                          <button
+                            onClick={() => openEditScenario(scenario)}
+                            className={`rounded p-1 ${isActive ? 'text-white/80 hover:bg-white/10' : 'text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-700)]'}`}
+                            title="Editar"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm(`¿Eliminar el escenario "${scenario.name}"?`)) onDeleteScenario(scenario.id);
+                            }}
+                            className={`rounded p-1 ${isActive ? 'text-white/80 hover:bg-white/10' : 'text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]'}`}
+                            title="Eliminar"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
                         </div>
                       </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        </aside>
 
-                      <div className="flex flex-wrap items-center gap-2">
-                        {!isBase && activeScenario && (
-                          <button
-                            onClick={() => toggleAdjustmentInActiveScenario(proposal.id)}
-                            className={`inline-flex h-9 items-center rounded-xl px-3 text-[12px] font-medium transition ${
-                              inActiveScenario
-                                ? 'border border-[var(--primary)]/20 bg-white text-[var(--primary)]'
-                                : 'bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)]'
+        {/* Columna derecha: escenario activo y sus propuestas */}
+        <main className="space-y-5">
+          {activeScenario ? (
+            <>
+              <section className="rounded-2xl border border-[var(--gray-200)]/60 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h2 className="text-[20px] font-semibold text-[var(--gray-950)]">{activeScenario.name}</h2>
+                    {activeScenario.description && (
+                      <p className="mt-1 max-w-2xl text-[13px] leading-6 text-[var(--gray-500)]">
+                        {activeScenario.description}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-4 text-right">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-[var(--gray-400)]">Ingresos</p>
+                      <p className="text-[16px] font-semibold text-[var(--success)]">
+                        +{formatCurrency(totalImpact.income)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-[var(--gray-400)]">Ahorro</p>
+                      <p className="text-[16px] font-semibold text-[var(--primary)]">
+                        −{formatCurrency(totalImpact.expense)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Sección de Propuestas + Panel inline */}
+              <section className="rounded-2xl border border-[var(--gray-200)]/60 bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-[16px] font-semibold text-[var(--gray-950)]">Propuestas del escenario</h3>
+                    <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+                      Activa/desactiva propuestas de la biblioteca o crea una nueva.
+                    </p>
+                  </div>
+                  <button
+                    onClick={proposalFormOpen && !editingProposalId ? closeProposalForm : openNewProposal}
+                    className={`inline-flex h-9 items-center gap-2 rounded-xl px-3 text-[12px] font-medium transition ${
+                      proposalFormOpen && !editingProposalId
+                        ? 'border border-[var(--gray-200)] bg-white text-[var(--gray-950)] hover:bg-[var(--gray-50)]'
+                        : 'bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)]'
+                    }`}
+                  >
+                    {proposalFormOpen && !editingProposalId ? (
+                      <>
+                        <X className="h-3.5 w-3.5" />
+                        Cancelar
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="h-3.5 w-3.5" />
+                        Nueva propuesta
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Panel inline expandible del formulario */}
+                {proposalFormOpen && (
+                  <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--primary)]/20 bg-[var(--primary-muted)]/30 transition-all">
+                    <ProposalForm
+                      form={proposalForm}
+                      onChange={setProposalForm}
+                      onCancel={closeProposalForm}
+                      onSave={saveProposal}
+                      error={proposalFormError}
+                      isEditing={Boolean(editingProposalId)}
+                    />
+                  </div>
+                )}
+
+                {/* Lista de propuestas */}
+                <div className="mt-4 space-y-2">
+                  {proposals.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-[var(--surface-alt)] px-6 py-10 text-center">
+                      <p className="text-[13px] font-medium text-[var(--gray-950)]">Sin propuestas todavía</p>
+                      <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+                        Crea tu primera propuesta para empezar a comparar escenarios.
+                      </p>
+                    </div>
+                  ) : (
+                    proposals
+                      .slice()
+                      .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+                      .map((proposal) => {
+                        const isActive = activeScenario.proposalIds.includes(proposal.id);
+                        const meta = CATEGORY_META[proposal.category];
+                        const Icon = meta.icon;
+                        return (
+                          <div
+                            key={proposal.id}
+                            className={`group flex items-start gap-3 rounded-2xl border p-3 transition ${
+                              isActive
+                                ? 'border-[var(--primary)]/30 bg-[var(--primary-muted)]/40'
+                                : 'border-[var(--gray-200)] bg-white hover:bg-[var(--gray-50)]'
                             }`}
                           >
-                            {inActiveScenario ? 'Quitar del escenario' : 'Usar en este escenario'}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => openEditAdjustment(proposal)}
-                          className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-[var(--surface-alt)] hover:text-[var(--gray-950)]"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={() => deleteAdjustment(proposal.id)}
-                          className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:bg-white hover:text-[var(--danger)]"
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* ═══ SLIDE-OVER PANEL: Create / Edit Adjustment ═══ */}
-      {panelOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setPanelOpen(false)}>
-          <div className="absolute inset-0 bg-black/20" />
-          <div
-            className="relative w-full max-w-[540px] bg-white shadow-2xl overflow-y-auto animate-slide-in-right"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="sticky top-0 z-10 bg-white border-b border-[var(--gray-100)] px-6 py-4 flex items-center justify-between">
-              <h2 className="text-[17px] font-semibold text-[var(--gray-950)]">
-                {editingId ? 'Editar ajuste' : 'Nuevo ajuste'}
-              </h2>
-              <button onClick={() => setPanelOpen(false)} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-[var(--gray-100)]">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="px-6 py-5 space-y-5">
-              {/* Name */}
-              <Field label="Nombre">
-                <input
-                  value={form.name}
-                  onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
-                  placeholder="Ej. Incremento ventas Q2"
-                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] outline-none focus:border-[var(--primary)]"
-                  autoFocus
-                />
-              </Field>
-
-              {/* Type + Category */}
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Tipo de ajuste">
-                  <select
-                    value={form.type}
-                    onChange={e => setForm(p => ({ ...p, type: e.target.value as ProposalType }))}
-                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                  >
-                    {SIMULATION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                  </select>
-                </Field>
-                <Field label="Categoría">
-                  <select
-                    value={form.category}
-                    onChange={e => setForm(p => ({ ...p, category: e.target.value as ProposalCategory }))}
-                    className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                  >
-                    {SIMULATION_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </Field>
-              </div>
-
-              {/* Type description */}
-              {(() => {
-                const meta = SIMULATION_TYPES.find(t => t.value === form.type);
-                return meta ? (
-                  <div className="rounded-xl bg-[var(--surface-alt)] p-3 text-[12px] text-[var(--gray-500)]">
-                    {meta.description}
-                  </div>
-                ) : null;
-              })()}
-
-              {/* Operation + Value */}
-              {!['timing_shift', 'pause_expense'].includes(form.type) && (
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Operación">
-                    <select
-                      value={form.operation}
-                      onChange={e => setForm(p => ({ ...p, operation: e.target.value as ProposalOperation }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    >
-                      <option value="increase">Incrementar</option>
-                      <option value="decrease">Reducir</option>
-                    </select>
-                  </Field>
-                  <Field label={form.type === 'percent_adjustment' ? 'Porcentaje' : 'Monto'}>
-                    <input
-                      type="number"
-                      step={form.type === 'percent_adjustment' ? 1 : 0.01}
-                      value={form.type === 'percent_adjustment' ? form.percent : form.amount}
-                      onChange={e => setForm(p =>
-                        form.type === 'percent_adjustment'
-                          ? { ...p, percent: Number(e.target.value) || 0 }
-                          : { ...p, amount: Number(e.target.value) || 0 }
-                      )}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
-                  </Field>
+                            <button
+                              onClick={() => toggleProposalInScenario(proposal)}
+                              className={`mt-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border transition ${
+                                isActive
+                                  ? 'border-[var(--primary)] bg-[var(--primary)]'
+                                  : 'border-[var(--gray-300)] bg-white hover:border-[var(--primary)]'
+                              }`}
+                              title={isActive ? 'Quitar del escenario' : 'Asignar al escenario'}
+                            >
+                              {isActive && <Check className="h-3.5 w-3.5 text-white" strokeWidth={2.5} />}
+                            </button>
+                            <div
+                              className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg"
+                              style={{ background: `${meta.color}15`, color: meta.color }}
+                            >
+                              <Icon className="h-4 w-4" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="truncate text-[13px] font-semibold text-[var(--gray-950)]">
+                                  {proposal.name}
+                                </p>
+                                <span
+                                  className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                                  style={{ background: `${meta.color}15`, color: meta.color }}
+                                >
+                                  {PROPOSAL_CATEGORY_LABELS[proposal.category]}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--gray-500)]">
+                                {proposal.category !== 'pausar_gasto' && (
+                                  <span>{formatCurrency(proposal.amount)}</span>
+                                )}
+                                <span>{PROPOSAL_FREQUENCY_LABELS[proposal.frequency]}</span>
+                                <span>
+                                  {proposal.startDate}
+                                  {proposal.endDate && proposal.endDate !== proposal.startDate
+                                    ? ` → ${proposal.endDate}`
+                                    : ''}
+                                </span>
+                                {proposal.category === 'timing_shift' && proposal.shiftMonths !== undefined && (
+                                  <span>{proposal.shiftMonths > 0 ? `+${proposal.shiftMonths}` : proposal.shiftMonths} mes{Math.abs(proposal.shiftMonths) === 1 ? '' : 'es'}</span>
+                                )}
+                              </div>
+                              {proposal.description && (
+                                <p className="mt-1 line-clamp-2 text-[12px] text-[var(--gray-500)]">
+                                  {proposal.description}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                              <button
+                                onClick={() => openEditProposal(proposal)}
+                                className="rounded p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--gray-700)]"
+                                title="Editar propuesta"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`¿Eliminar la propuesta "${proposal.name}"?`)) onDeleteProposal(proposal.id);
+                                }}
+                                className="rounded p-1.5 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]"
+                                title="Eliminar propuesta"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
                 </div>
-              )}
-
-              {/* Timing shift fields */}
-              {form.type === 'timing_shift' && (
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Mover meses">
-                    <input type="number" min={-12} max={12} value={form.shiftMonths}
-                      onChange={e => setForm(p => ({ ...p, shiftMonths: Number(e.target.value) || 0 }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
-                  </Field>
-                  <Field label="% del flujo a mover">
-                    <input type="number" min={0} max={100} value={form.shiftRatio}
-                      onChange={e => setForm(p => ({ ...p, shiftRatio: Number(e.target.value) || 0 }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
-                  </Field>
-                </div>
-              )}
-
-              {/* Installment fields */}
-              {form.type === 'installment_plan' && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <Field label="Monto total">
-                      <input type="number" step={0.01} value={form.amount}
-                        onChange={e => setForm(p => ({ ...p, amount: Number(e.target.value) || 0 }))}
-                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                      />
-                    </Field>
-                    <Field label="Parcialidades">
-                      <input type="number" min={2} max={24} value={form.installments}
-                        onChange={e => setForm(p => ({ ...p, installments: Number(e.target.value) || 2 }))}
-                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                      />
-                    </Field>
-                  </div>
-                  <Field label="Distribución personalizada (opcional)">
-                    <input value={form.customAllocationText}
-                      onChange={e => setForm(p => ({ ...p, customAllocationText: e.target.value }))}
-                      placeholder="Ej. 25, 25, 25, 25"
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
-                  </Field>
-                </div>
-              )}
-
-              {/* Period + Frequency */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-[12px] font-medium text-[var(--gray-500)]">Precisión de inicio:</span>
-                  <div className="flex items-center rounded-xl bg-[var(--gray-50)] p-0.5 gap-0.5">
-                    {(['day', 'week', 'month'] as const).map((precision) => (
-                      <button
-                        key={precision}
-                        type="button"
-                        onClick={() => setForm((current) => {
-                          let newStart = current.startDate;
-                          if (precision === 'week') newStart = snapToMonday(current.startDate);
-                          if (precision === 'month') newStart = firstOfMonth(current.startDate);
-                          return {
-                            ...current,
-                            startPrecision: precision,
-                            startDate: newStart,
-                            endDate: current.endDate < newStart ? newStart : current.endDate,
-                          };
-                        })}
-                        className={`rounded-lg px-3 py-1 text-[11px] font-medium transition ${
-                          form.startPrecision === precision
-                            ? 'bg-white text-[var(--gray-950)] shadow-sm'
-                            : 'text-[var(--gray-500)]'
-                        }`}
-                      >
-                        {precision === 'day' ? 'Día' : precision === 'week' ? 'Semana' : 'Mes'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-4">
-                  <Field label={form.startPrecision === 'day' ? 'Inicia el día' : form.startPrecision === 'week' ? 'Inicia la semana del' : 'Inicia en el mes'}>
-                    {form.startPrecision === 'month' ? (
-                      <input
-                        type="month"
-                        value={form.startDate.slice(0, 7)}
-                        onChange={(event) => {
-                          const nextStart = firstOfMonth(`${event.target.value}-01`);
-                          setForm((current) => ({
-                            ...current,
-                            startDate: nextStart,
-                            endDate: current.endDate < nextStart ? nextStart : current.endDate,
-                          }));
-                        }}
-                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                      />
-                    ) : (
-                      <input
-                        type="date"
-                        value={form.startDate}
-                        onChange={(event) => {
-                          let nextStart = event.target.value;
-                          if (form.startPrecision === 'week') nextStart = snapToMonday(nextStart);
-                          setForm((current) => ({
-                            ...current,
-                            startDate: nextStart,
-                            endDate: current.endDate < nextStart ? nextStart : current.endDate,
-                          }));
-                        }}
-                        className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                      />
-                    )}
-                  </Field>
-                  <Field label="Termina en">
-                    <input
-                      type="date"
-                      value={form.endDate}
-                      min={form.startDate}
-                      onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px]"
-                    />
-                  </Field>
-                  <Field label="Frecuencia">
-                    <select
-                      value={form.frequency}
-                      disabled={form.type === 'timing_shift' || form.type === 'pause_expense'}
-                      onChange={(event) => setForm((current) => ({ ...current, frequency: event.target.value as ProposalFrequency }))}
-                      className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] disabled:bg-[var(--surface-alt)] disabled:text-[var(--gray-400)]"
-                    >
-                      {FREQUENCIES.map((frequency) => <option key={frequency.value} value={frequency.value}>{frequency.label}</option>)}
-                    </select>
-                  </Field>
-                </div>
-                {form.startPrecision === 'week' && (
-                  <p className="text-[11px] text-[var(--gray-400)]">
-                    El ajuste empieza el lunes {form.startDate}. Si eliges cualquier otro día se ajusta al inicio de esa semana.
-                  </p>
-                )}
-              </div>
-
-              {/* Scenario assignments */}
-              <Field label="¿En qué escenarios aplica?">
-                <div className="space-y-2">
-                  <p className="text-[12px] text-[var(--gray-500)]">
-                    Selecciona uno o varios escenarios para reutilizar este ajuste sin duplicarlo.
-                  </p>
-                  <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-3">
-                    {editableScenarios.map((scenario) => {
-                      const selected = form.assignedScenarioIds.includes(scenario.id);
-                      const label = scenarioLabelsById.get(scenario.id) ?? scenario.name;
-                      return (
-                        <button
-                          key={scenario.id}
-                          type="button"
-                          onClick={() => toggleAssignedScenario(scenario.id)}
-                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
-                            selected
-                              ? 'bg-[var(--primary)] text-white'
-                              : 'bg-white text-[var(--gray-500)] border border-[var(--gray-200)]'
-                          }`}
-                        >
-                          {selected && <Check className="w-3.5 h-3.5" />}
-                          <span>{label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </Field>
-
-              {/* Targets */}
-              <Field label="¿A qué conceptos aplica?">
-                <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] p-3">
-                  {targetConfig.options.map(opt => {
-                    const selected = form.targetIds.includes(opt.id);
-                    return (
-                      <button
-                        key={opt.id}
-                        onClick={() => toggleTarget(opt.id)}
-                        className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
-                          selected
-                            ? 'bg-[var(--primary)] text-white'
-                            : 'bg-white text-[var(--gray-500)] border border-[var(--gray-200)]'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </Field>
-
-              {/* Description */}
-              <Field label="Descripción (opcional)">
-                <textarea
-                  value={form.description}
-                  onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
-                  rows={2}
-                  placeholder="Contexto, riesgos, supuestos..."
-                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
-                />
-              </Field>
-
-              {/* Comments */}
-              <Field label="Comentarios (opcional)">
-                <textarea
-                  value={form.comments}
-                  onChange={e => setForm(p => ({ ...p, comments: e.target.value }))}
-                  rows={2}
-                  placeholder="Notas adicionales..."
-                  className="w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 py-2.5 text-[13px] resize-none"
-                />
-              </Field>
-            </div>
-
-            {/* Sticky save bar */}
-            <div className="sticky bottom-0 bg-white border-t border-[var(--gray-100)] px-6 py-4 flex items-center justify-end gap-3">
-              <button onClick={() => setPanelOpen(false)} className="rounded-xl border border-[var(--gray-200)] px-4 py-2.5 text-[13px] text-[var(--gray-500)]">
-                Cancelar
-              </button>
+              </section>
+            </>
+          ) : (
+            <section className="rounded-2xl border border-dashed border-[var(--gray-200)] bg-white px-6 py-20 text-center">
+              <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">Pronóstico original</h2>
+              <p className="mt-2 max-w-lg mx-auto text-[13px] leading-6 text-[var(--gray-500)]">
+                Este es el plan base sin ninguna propuesta aplicada. Selecciona un escenario de la izquierda para ver
+                sus propuestas y su impacto, o crea uno nuevo.
+              </p>
               <button
-                onClick={saveAdjustment}
-                disabled={!form.name.trim() || form.targetIds.length === 0 || form.assignedScenarioIds.length === 0}
-                className="rounded-xl bg-[var(--card-foreground)] px-5 py-2.5 text-[13px] font-medium text-white disabled:opacity-40"
+                onClick={openNewScenario}
+                className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
               >
-                {editingId ? 'Guardar cambios' : 'Agregar ajuste'}
+                <Plus className="h-4 w-4" />
+                Crear escenario
               </button>
-            </div>
+            </section>
+          )}
+        </main>
+      </div>
+
+      {/* Modal: editor de Escenario (solo nombre + descripción) */}
+      {scenarioEditorOpen && (
+        <Modal onClose={() => setScenarioEditorOpen(false)}>
+          <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">
+            {scenarioDraft.id ? 'Editar escenario' : 'Nuevo escenario'}
+          </h2>
+          <div className="mt-4 space-y-3">
+            <Field label="Nombre">
+              <input
+                autoFocus
+                value={scenarioDraft.name}
+                onChange={(e) => setScenarioDraft((s) => ({ ...s, name: e.target.value }))}
+                placeholder="Ej. Conservador Q3"
+                className="input w-full"
+              />
+            </Field>
+            <Field label="Descripción">
+              <textarea
+                value={scenarioDraft.description}
+                onChange={(e) => setScenarioDraft((s) => ({ ...s, description: e.target.value }))}
+                rows={3}
+                placeholder="Contexto breve del escenario"
+                className="input w-full resize-none"
+              />
+            </Field>
           </div>
-        </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => setScenarioEditorOpen(false)}
+              className="h-10 rounded-xl border border-[var(--gray-200)] bg-white px-4 text-[13px] text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={saveScenario}
+              disabled={!scenarioDraft.name.trim()}
+              className="h-10 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:opacity-40"
+            >
+              Guardar
+            </button>
+          </div>
+        </Modal>
       )}
 
-      <style>{`
-        @keyframes slide-in-right {
-          from { transform: translateX(100%); }
-          to { transform: translateX(0); }
-        }
-        .animate-slide-in-right {
-          animation: slide-in-right 0.25s ease-out;
-        }
-      `}</style>
+      {/* Modal: editor de Simulación */}
+      {simulationEditorOpen && (
+        <Modal onClose={() => setSimulationEditorOpen(false)}>
+          <h2 className="text-[18px] font-semibold text-[var(--gray-950)]">
+            {simulationDraft.id ? 'Editar simulación' : 'Nueva simulación'}
+          </h2>
+          <div className="mt-4 space-y-3">
+            <Field label="Nombre">
+              <input
+                autoFocus
+                value={simulationDraft.name}
+                onChange={(e) => setSimulationDraft((s) => ({ ...s, name: e.target.value }))}
+                placeholder="Ej. Análisis Q3 2026"
+                className="input w-full"
+              />
+            </Field>
+            <Field label="Descripción">
+              <textarea
+                value={simulationDraft.description}
+                onChange={(e) => setSimulationDraft((s) => ({ ...s, description: e.target.value }))}
+                rows={3}
+                placeholder="¿Qué preguntas quieres contestar con esta simulación?"
+                className="input w-full resize-none"
+              />
+            </Field>
+            <Field label="Estado">
+              <select
+                value={simulationDraft.status}
+                onChange={(e) => setSimulationDraft((s) => ({ ...s, status: e.target.value as SimulationStatus }))}
+                className="input w-full"
+              >
+                {SIMULATION_STATUSES.map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => setSimulationEditorOpen(false)}
+              className="h-10 rounded-xl border border-[var(--gray-200)] bg-white px-4 text-[13px] text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={saveSimulation}
+              disabled={!simulationDraft.name.trim()}
+              className="h-10 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:opacity-40"
+            >
+              Guardar
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
-/* ─── Small components ─── */
+/* ═══════════════════════════════════════════════════════════════
+   FORMULARIO INLINE DE PROPUESTA
+   ═══════════════════════════════════════════════════════════════ */
 
-function Badge({ children }: { children: ReactNode }) {
+function ProposalForm({
+  form,
+  onChange,
+  onCancel,
+  onSave,
+  error,
+  isEditing,
+}: {
+  form: ProposalFormState;
+  onChange: (next: ProposalFormState | ((prev: ProposalFormState) => ProposalFormState)) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  error: string | null;
+  isEditing: boolean;
+}) {
+  const categories: ProposalCategory[] = ['ahorro', 'aumento_ingresos', 'pausar_gasto', 'timing_shift'];
+  const showAmount = form.category !== 'pausar_gasto';
+  const showShift = form.category === 'timing_shift';
+  const showDateRange = form.frequency !== 'once' || form.category === 'pausar_gasto';
+
   return (
-    <span className="rounded-full border border-[var(--gray-200)]/60 bg-white px-2 py-0.5 text-[11px] text-[var(--gray-500)]">
-      {children}
-    </span>
+    <div className="p-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h4 className="text-[14px] font-semibold text-[var(--gray-950)]">
+            {isEditing ? 'Editar propuesta' : 'Nueva propuesta'}
+          </h4>
+          <p className="mt-0.5 text-[11px] text-[var(--gray-500)]">
+            Primero elige qué tipo de ajuste quieres hacer.
+          </p>
+        </div>
+      </div>
+
+      {/* Paso 1: Categoría */}
+      <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {categories.map((category) => {
+          const meta = CATEGORY_META[category];
+          const Icon = meta.icon;
+          const selected = form.category === category;
+          return (
+            <button
+              key={category}
+              onClick={() => onChange((prev) => ({ ...prev, category }))}
+              className={`group rounded-xl border p-3 text-left transition ${
+                selected
+                  ? 'border-transparent shadow-sm'
+                  : 'border-[var(--gray-200)] bg-white hover:bg-[var(--gray-50)]'
+              }`}
+              style={selected ? { background: `${meta.color}15`, borderColor: `${meta.color}60` } : undefined}
+            >
+              <div
+                className="flex h-9 w-9 items-center justify-center rounded-lg"
+                style={{ background: `${meta.color}20`, color: meta.color }}
+              >
+                <Icon className="h-5 w-5" />
+              </div>
+              <p className="mt-2 text-[13px] font-semibold text-[var(--gray-950)]">
+                {PROPOSAL_CATEGORY_LABELS[category]}
+              </p>
+              <p className="mt-1 text-[11px] leading-4 text-[var(--gray-500)]">
+                {PROPOSAL_CATEGORY_DESCRIPTIONS[category]}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Paso 2: Datos básicos */}
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <Field label="Título">
+          <input
+            autoFocus
+            value={form.name}
+            onChange={(e) => onChange((prev) => ({ ...prev, name: e.target.value }))}
+            placeholder="Ej. Reducir gasto en combustible"
+            className="input w-full"
+          />
+        </Field>
+        <Field label="Frecuencia">
+          <select
+            value={form.frequency}
+            onChange={(e) => onChange((prev) => ({ ...prev, frequency: e.target.value as ProposalFrequency }))}
+            className="input w-full"
+          >
+            {FREQUENCIES.map((frequency) => (
+              <option key={frequency} value={frequency}>{PROPOSAL_FREQUENCY_LABELS[frequency]}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <Field label="Descripción (opcional)" className="mt-3">
+        <textarea
+          value={form.description}
+          onChange={(e) => onChange((prev) => ({ ...prev, description: e.target.value }))}
+          rows={2}
+          placeholder="Contexto adicional para tu equipo"
+          className="input w-full resize-none"
+        />
+      </Field>
+
+      {/* Paso 3: Monto + timing */}
+      <div className="mt-3 grid gap-3 md:grid-cols-3">
+        {showAmount && (
+          <Field label="Monto">
+            <div className="flex items-center rounded-xl border border-[var(--gray-200)] bg-white">
+              <span className="px-3 text-[13px] text-[var(--gray-400)]">$</span>
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={form.amount}
+                onChange={(e) => onChange((prev) => ({ ...prev, amount: e.target.value }))}
+                placeholder="0"
+                className="h-10 w-full rounded-r-xl border-0 bg-transparent px-0 text-[13px] outline-none"
+              />
+            </div>
+          </Field>
+        )}
+
+        <Field label="Fecha inicial">
+          <input
+            type="date"
+            value={form.startDate}
+            onChange={(e) => onChange((prev) => ({ ...prev, startDate: e.target.value }))}
+            className="input w-full"
+          />
+        </Field>
+
+        {showDateRange && (
+          <Field label="Fecha final">
+            <input
+              type="date"
+              value={form.endDate}
+              min={form.startDate}
+              onChange={(e) => onChange((prev) => ({ ...prev, endDate: e.target.value }))}
+              className="input w-full"
+            />
+          </Field>
+        )}
+
+        {showShift && (
+          <Field label="Meses a mover">
+            <input
+              type="number"
+              step="1"
+              value={form.shiftMonths}
+              onChange={(e) => onChange((prev) => ({ ...prev, shiftMonths: e.target.value }))}
+              className="input w-full"
+            />
+          </Field>
+        )}
+      </div>
+
+      {error && (
+        <p className="mt-3 rounded-xl bg-[var(--danger)]/10 px-3 py-2 text-[12px] text-[var(--danger)]">{error}</p>
+      )}
+
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          onClick={onCancel}
+          className="h-10 rounded-xl border border-[var(--gray-200)] bg-white px-4 text-[13px] text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+        >
+          Cancelar
+        </button>
+        <button
+          onClick={onSave}
+          className="h-10 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white hover:bg-[var(--primary-hover)]"
+        >
+          {isEditing ? 'Guardar cambios' : 'Crear propuesta'}
+        </button>
+      </div>
+    </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+/* ═══════════════════════════════════════════════════════════════
+   HELPERS DE UI
+   ═══════════════════════════════════════════════════════════════ */
+
+function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
   return (
-    <label className="block space-y-1.5">
-      <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</span>
+    <label className={`block ${className ?? ''}`}>
+      <span className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+        {label}
+      </span>
       {children}
     </label>
   );
 }
+
+function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          onClick={onClose}
+          className="float-right rounded-lg p-1 text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)]"
+        >
+          <X className="h-4 w-4" />
+        </button>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* Dummy: ChevronDown / ChevronRight imports no se usan en esta versión, los
+   mantengo exportados por si los necesita otro archivo. */
+void ChevronDown;
+void ChevronRight;

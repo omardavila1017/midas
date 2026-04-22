@@ -8,8 +8,6 @@ import {
 } from 'lucide-react';
 import { hex } from '../theme';
 import {
-  BASE_SCENARIO_ID,
-  BASE_SCENARIO_NAME,
   EvaluatedCell,
   FlowConcept,
   ForecastConfidenceBasis,
@@ -28,7 +26,6 @@ import {
   scenarioCellKey,
 } from '../types';
 import { evaluateScenario } from '../domain/scenarioEngine';
-import { isBaseScenario } from '../domain/proposalCompiler';
 import { formatCompactNumber, formatCurrency } from '../utils/calculations';
 import type { CXPRecord } from '../domain/persistence';
 
@@ -278,22 +275,38 @@ export default function Forecast({
   const [layerMode, setLayerMode] = useState<ForecastLayerMode>('manual');
 
   const childrenById = useMemo(() => buildChildrenIndex(plan), [plan]);
-  const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
-  const editableScenarios = scenarios.filter((scenario) => !isBaseScenario(scenario));
   const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? simulations[0] ?? null;
-  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? scenarios.find((scenario) => scenario.simulationId === activeSimulation?.id)
-    ?? baseScenario
-    ?? null;
+  // activeScenarioId === null → modo "Pronóstico original" (plan sin propuestas).
+  // Ya no existe un Escenario Base persistido; usamos un scenario sintético.
+  const resolvedActiveScenario = activeScenarioId
+    ? scenarios.find((scenario) => scenario.id === activeScenarioId) ?? null
+    : null;
+  const isNoScenarioMode = !resolvedActiveScenario;
+  const syntheticBaseScenario = useMemo<Scenario>(() => {
+    const now = new Date().toISOString();
+    return {
+      id: 'scenario-synthetic-base',
+      simulationId: null,
+      name: 'Pronóstico original',
+      description: 'Plan sin propuestas aplicadas.',
+      probability: 1,
+      startYearMonth: `${plan.year}-01`,
+      horizonMonths: 12,
+      proposalIds: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+  }, [plan.year]);
+  const activeScenario = resolvedActiveScenario ?? syntheticBaseScenario;
   const effectiveSimulation = activeSimulation ?? {
-    id: 'simulation-base',
-    name: BASE_SCENARIO_NAME,
-    description: 'Pronóstico original',
+    id: 'simulation-synthetic',
+    name: 'Pronóstico original',
+    description: 'Sin simulación activa',
     status: 'Pendiente' as const,
     createdAt: '',
     updatedAt: '',
   };
-  const editingAllowed = !isBaseScenario(activeScenario) && granularity === 'monthly';
+  const editingAllowed = !isNoScenarioMode && granularity === 'monthly';
 
   const baseEvaluation = useMemo(() => {
     if (layerMode !== 'base' && layerMode !== 'diff') return null;
@@ -308,11 +321,11 @@ export default function Forecast({
       plan,
       effectiveSimulation,
       activeScenario,
-      isBaseScenario(activeScenario) ? [] : proposals,
+      isNoScenarioMode ? [] : proposals,
       [],
       { granularity },
     );
-  }, [activeScenario, effectiveSimulation, granularity, layerMode, plan, proposals]);
+  }, [activeScenario, effectiveSimulation, granularity, isNoScenarioMode, layerMode, plan, proposals]);
 
   const finalEvaluation = useMemo(() => {
     if (!activeScenario) return null;
@@ -320,11 +333,11 @@ export default function Forecast({
       plan,
       effectiveSimulation,
       activeScenario,
-      isBaseScenario(activeScenario) ? [] : proposals,
-      isBaseScenario(activeScenario) ? [] : overrides,
+      isNoScenarioMode ? [] : proposals,
+      isNoScenarioMode ? [] : overrides,
       { granularity },
     );
-  }, [activeScenario, effectiveSimulation, granularity, overrides, plan, proposals]);
+  }, [activeScenario, effectiveSimulation, granularity, isNoScenarioMode, overrides, plan, proposals]);
 
   const months = finalEvaluation?.months ?? [];
   const roots = useMemo(
@@ -584,24 +597,23 @@ export default function Forecast({
 
         <div className="mt-5 grid grid-cols-[200px,minmax(0,1fr),auto] gap-4">
           <button
-            onClick={() => onSelectScenario(BASE_SCENARIO_ID)}
+            onClick={() => onSelectScenario(null)}
             className={`rounded-xl border px-3 py-2 text-[13px] font-medium transition ${
-              isBaseScenario(activeScenario)
+              isNoScenarioMode
                 ? 'border-[var(--card-foreground)] bg-[var(--card-foreground)] text-white'
                 : 'border-[var(--gray-200)] bg-[var(--surface-alt)] text-[var(--gray-950)]'
             }`}
+            title="Ver el pronóstico original del plan, sin ninguna propuesta aplicada."
           >
-            {BASE_SCENARIO_NAME}
+            Pronóstico original
           </button>
           <select
-            value={activeScenario.id}
-            onChange={(event) => onSelectScenario(event.target.value)}
+            value={isNoScenarioMode ? '' : activeScenario.id}
+            onChange={(event) => onSelectScenario(event.target.value || null)}
             className="rounded-xl border border-[var(--gray-200)] bg-[var(--surface-alt)] px-3 py-2 text-[13px]"
           >
-            {baseScenario && (
-              <option value={baseScenario.id}>{baseScenario.name}</option>
-            )}
-            {editableScenarios.map((scenario) => (
+            <option value="">Sin escenario (pronóstico original)</option>
+            {scenarios.map((scenario) => (
               <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
             ))}
           </select>
@@ -703,9 +715,9 @@ export default function Forecast({
             <MessageSquare className="w-3.5 h-3.5 text-[var(--primary)]" />
             Comentarios{commentCount > 0 ? ` (${commentCount})` : ''}
           </span>
-          {isBaseScenario(activeScenario) && (
+          {isNoScenarioMode && (
             <span className="rounded-full bg-[var(--gray-50)] px-2.5 py-1 text-[11px] text-[var(--gray-500)]">
-              Solo lectura: el Base no admite edición manual
+              Solo lectura: el pronóstico original no admite edición manual
             </span>
           )}
           {granularity !== 'monthly' && (

@@ -52,7 +52,6 @@ function createScenario(): Scenario {
   return {
     id: 'scenario-smoke',
     simulationId: 'simulation-smoke',
-    kind: 'simulation',
     name: 'Escenario Smoke',
     description: '',
     probability: 1,

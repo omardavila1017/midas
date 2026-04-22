@@ -1,10 +1,8 @@
 import { projectYear } from './collectionEngine';
 import { evaluateScenario } from './scenarioEngine';
-import { isBaseScenario } from './proposalCompiler';
 import type { CashFlowAssumptions, Client, ConfirmedPayment } from './types';
 import type { BankAccountStatement } from '../services/jdeTypes';
 import {
-  BASE_SCENARIO_NAME,
   FlowPlan,
   MONTHS,
   MONTHS_FULL,
@@ -418,34 +416,79 @@ function buildCollectionSnapshot(
   };
 }
 
-function buildForecastSnapshot(input: KpiCatalogInput): ForecastSnapshot | null {
-  const { plan, simulations, scenarios, proposals, overrides, activeSimulationId, activeScenarioId } = input;
-  if (!plan || scenarios.length === 0) return null;
+/**
+ * Escenario sintético usado cuando el usuario no ha seleccionado ninguno.
+ * Reemplaza al viejo "Escenario Base" — ya no existe una entidad persistida
+ * especial, pero necesitamos un Scenario válido para llamar a evaluateScenario.
+ */
+function syntheticBaseScenario(plan: FlowPlan): Scenario {
+  const now = new Date().toISOString();
+  return {
+    id: 'scenario-synthetic-base',
+    simulationId: null,
+    name: 'Pronóstico original',
+    description: 'Vista del plan sin propuestas aplicadas.',
+    probability: 1,
+    startYearMonth: `${plan.year}-01`,
+    horizonMonths: 12,
+    proposalIds: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
 
-  const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
-  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? simulations[0] ?? null;
-  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? scenarios.find((scenario) => scenario.simulationId === activeSimulation?.id)
-    ?? baseScenario
-    ?? null;
-
-  if (!activeScenario) return null;
-
-  const effectiveSimulation = activeSimulation ?? {
-    id: 'simulation-base',
-    name: BASE_SCENARIO_NAME,
-    description: 'Pronóstico original',
-    status: 'Pendiente' as const,
+function syntheticSimulation(): Simulation {
+  return {
+    id: 'simulation-synthetic-base',
+    name: 'Pronóstico original',
+    description: 'Sin simulación activa',
+    status: 'Pendiente',
     createdAt: '',
     updatedAt: '',
   };
+}
+
+function buildForecastSnapshot(input: KpiCatalogInput): ForecastSnapshot | null {
+  const { plan, simulations, scenarios, proposals, overrides, activeSimulationId, activeScenarioId } = input;
+  if (!plan) return null;
+
+  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? null;
+  const activeScenario = activeScenarioId
+    ? scenarios.find((scenario) => scenario.id === activeScenarioId) ?? null
+    : null;
+
+  // Modo "sin escenario" → mostramos únicamente el plan base.
+  if (!activeScenario) {
+    const fallbackScenario = syntheticBaseScenario(plan);
+    const fallbackSimulation = activeSimulation ?? syntheticSimulation();
+    const baseEvaluation = evaluateScenario(
+      plan,
+      fallbackSimulation,
+      fallbackScenario,
+      [],
+      [],
+      { granularity: 'monthly' },
+    );
+    return {
+      year: plan.year,
+      activeScenarioName: 'Pronóstico original',
+      baseScenarioName: 'Pronóstico original',
+      monthlyLabels: baseEvaluation.months.map((month) => month.label),
+      activeMetrics: baseEvaluation.metrics,
+      baseMetrics: baseEvaluation.metrics,
+      activeKpis: baseEvaluation.kpis,
+      baseKpis: baseEvaluation.kpis,
+    };
+  }
+
+  const effectiveSimulation = activeSimulation ?? syntheticSimulation();
 
   const activeEvaluation = evaluateScenario(
     plan,
     effectiveSimulation,
     activeScenario,
-    isBaseScenario(activeScenario) ? [] : proposals,
-    isBaseScenario(activeScenario) ? [] : overrides,
+    proposals,
+    overrides,
     { granularity: 'monthly' },
   );
   const baseEvaluation = evaluateScenario(
@@ -460,7 +503,7 @@ function buildForecastSnapshot(input: KpiCatalogInput): ForecastSnapshot | null 
   return {
     year: plan.year,
     activeScenarioName: activeScenario.name,
-    baseScenarioName: BASE_SCENARIO_NAME,
+    baseScenarioName: 'Pronóstico original',
     monthlyLabels: activeEvaluation.months.map((month) => month.label),
     activeMetrics: activeEvaluation.metrics,
     baseMetrics: baseEvaluation.metrics,
@@ -1276,25 +1319,20 @@ function labelFromPeriodMonthSlice(period: 'quarterly' | 'annual', year: number)
 
 function buildForecastFormulaData(input: KpiCatalogInput): Record<KpiPeriod, FormulaPeriodData> | null {
   const { plan, simulations, scenarios, proposals, overrides, activeSimulationId, activeScenarioId } = input;
-  if (!plan || scenarios.length === 0) return null;
+  if (!plan) return null;
 
-  const baseScenario = scenarios.find((scenario) => isBaseScenario(scenario)) ?? null;
-  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? simulations[0] ?? null;
-  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId)
-    ?? scenarios.find((scenario) => scenario.simulationId === activeSimulation?.id)
-    ?? baseScenario
-    ?? null;
+  const activeSimulation = simulations.find((simulation) => simulation.id === activeSimulationId) ?? null;
+  const resolvedActiveScenario = activeScenarioId
+    ? scenarios.find((scenario) => scenario.id === activeScenarioId) ?? null
+    : null;
 
-  if (!activeScenario) return null;
-
-  const effectiveSimulation = activeSimulation ?? {
-    id: 'simulation-base',
-    name: BASE_SCENARIO_NAME,
-    description: 'Pronóstico original',
-    status: 'Pendiente' as const,
-    createdAt: '',
-    updatedAt: '',
-  };
+  // Sin escenario activo usamos un escenario sintético que representa el plan
+  // base (ya no existe un Escenario Base persistido).
+  const isSynthetic = !resolvedActiveScenario;
+  const activeScenario = resolvedActiveScenario ?? syntheticBaseScenario(plan);
+  const effectiveSimulation = activeSimulation ?? syntheticSimulation();
+  const effectiveProposals: Proposal[] = isSynthetic ? [] : proposals;
+  const effectiveOverrides: ScenarioCellOverride[] = isSynthetic ? [] : overrides;
 
   const conceptDefs = buildConceptVariableDefs(plan);
   const periodData = {} as Record<KpiPeriod, FormulaPeriodData>;
@@ -1304,8 +1342,8 @@ function buildForecastFormulaData(input: KpiCatalogInput): Record<KpiPeriod, For
       plan,
       effectiveSimulation,
       activeScenario,
-      isBaseScenario(activeScenario) ? [] : proposals,
-      isBaseScenario(activeScenario) ? [] : overrides,
+      effectiveProposals,
+      effectiveOverrides,
       { granularity },
     );
     const baseEvaluation = evaluateScenario(

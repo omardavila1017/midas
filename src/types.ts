@@ -4,6 +4,12 @@ export interface FlowPlan {
   cajaInicial: number;
   concepts: FlowConcept[];
   weekDates: string[];
+  /**
+   * True when the plan came from the mock fallback (no real Cognos/JDE API
+   * credentials configured). KPI surfaces gate their numbers on this so we
+   * never show "real-looking" KPIs that are actually synthetic.
+   */
+  isMock?: boolean;
 }
 
 export interface FlowConcept {
@@ -25,24 +31,25 @@ export type SimulationStatus =
   | 'Aprobada'
   | 'Descartada';
 
-export const BASE_SCENARIO_ID = 'scenario-base';
-export const BASE_SCENARIO_NAME = 'Escenario Base';
-
-export type ScenarioKind = 'base' | 'simulation';
-
 export type ProposalCategory =
-  | 'Reducción de Costos'
-  | 'Incremento de Ingresos'
-  | 'Diferimiento'
-  | 'Renegociación';
+  | 'ahorro'
+  | 'aumento_ingresos'
+  | 'pausar_gasto'
+  | 'timing_shift';
 
-export type ProposalType =
-  | 'percent_adjustment'
-  | 'amount_adjustment'
-  | 'recurring_series'
-  | 'installment_plan'
-  | 'timing_shift'
-  | 'pause_expense';
+export const PROPOSAL_CATEGORY_LABELS: Record<ProposalCategory, string> = {
+  ahorro: 'Ahorro',
+  aumento_ingresos: 'Aumento de ingresos',
+  pausar_gasto: 'Pausar gasto',
+  timing_shift: 'Adelantar o retrasar',
+};
+
+export const PROPOSAL_CATEGORY_DESCRIPTIONS: Record<ProposalCategory, string> = {
+  ahorro: 'Reduce egresos agregados por el monto indicado.',
+  aumento_ingresos: 'Suma ingresos agregados por el monto indicado.',
+  pausar_gasto: 'Congela egresos agregados durante el rango de fechas.',
+  timing_shift: 'Mueve un monto de un periodo a otro (adelantar o retrasar).',
+};
 
 export type ProposalFrequency =
   | 'once'
@@ -52,7 +59,14 @@ export type ProposalFrequency =
   | 'semiannual'
   | 'annual';
 
-export type ProposalOperation = 'increase' | 'decrease';
+export const PROPOSAL_FREQUENCY_LABELS: Record<ProposalFrequency, string> = {
+  once: 'Una sola vez',
+  monthly: 'Mensual',
+  bimonthly: 'Bimestral',
+  quarterly: 'Trimestral',
+  semiannual: 'Semestral',
+  annual: 'Anual',
+};
 
 export type ProposalEffectMode = 'absolute' | 'percent';
 export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
@@ -86,24 +100,13 @@ export type ProposalEffect = ConceptDeltaEffect;
 export interface Proposal {
   id: string;
   name: string;
-  description: string;
+  description?: string;
   category: ProposalCategory;
-  type: ProposalType;
-  targetIds: string[];
-  startYearMonth: string;
-  endYearMonth?: string;
-  startDate?: string;
+  amount: number;
+  frequency: ProposalFrequency;
+  startDate: string;
   endDate?: string;
-  frequency?: ProposalFrequency;
-  operation?: ProposalOperation;
-  amount?: number;
-  percent?: number;
-  installments?: number;
-  customAllocation?: number[];
   shiftMonths?: number;
-  shiftRatio?: number;
-  paymentLabel?: string;
-  comments?: string;
   effects: ProposalEffect[];
   createdAt: string;
   updatedAt: string;
@@ -122,7 +125,6 @@ export interface Simulation {
 export interface Scenario {
   id: string;
   simulationId: string | null;
-  kind: ScenarioKind;
   name: string;
   description: string;
   probability: number;
@@ -270,38 +272,18 @@ export interface EvaluatedScenario {
 export type ForecastLayerMode = 'base' | 'simulated' | 'manual' | 'diff';
 
 export const MONTHS = [
-  'Ene',
-  'Feb',
-  'Mar',
-  'Abr',
-  'May',
-  'Jun',
-  'Jul',
-  'Ago',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dic',
+  'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+  'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic',
 ];
 
 export const MONTHS_FULL = [
-  'Enero',
-  'Febrero',
-  'Marzo',
-  'Abril',
-  'Mayo',
-  'Junio',
-  'Julio',
-  'Agosto',
-  'Septiembre',
-  'Octubre',
-  'Noviembre',
-  'Diciembre',
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
 ];
 
 export const CATEGORY_COLORS: Record<ProposalCategory, string> = {
-  'Reducción de Costos': 'var(--primary)',
-  'Incremento de Ingresos': 'var(--success)',
-  'Diferimiento': 'var(--warning)',
-  'Renegociación': 'var(--chart-4)',
+  ahorro: 'var(--primary)',
+  aumento_ingresos: 'var(--success)',
+  pausar_gasto: 'var(--warning)',
+  timing_shift: 'var(--chart-4)',
 };

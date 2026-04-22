@@ -1,37 +1,35 @@
 /**
  * Persistence layer for FlowSense.
  *
- * Terminology (UI and code now match):
+ * Terminology (UI and code match):
  *   Simulation: top-level container (UI: "Simulación")
  *   Scenario:   grouping inside a simulation (UI: "Escenario")
  *   Proposal:   reusable financial adjustment applied to scenarios (UI: "Propuesta")
  *
  * Version history:
- *   v1 legacy model (single-file "proposal impact") → migrated on load.
- *   v2 introduced Proposal/Scenario/Simulation triad but with swapped code names
- *       (code Proposal = UI Simulación, code Simulation = UI Propuesta).
- *   v3 (current) swaps the code names to match the UI:
- *       code Simulation = UI Simulación, code Proposal = UI Propuesta.
- *       Field renames: proposals↔simulations arrays; Scenario.proposalId→simulationId;
- *       Scenario.simulationIds→proposalIds; activeProposalId→activeSimulationId;
- *       ScenarioKind 'proposal' → 'simulation'.
+ *   v1 legacy model (single-file "proposal impact") — migrated on load.
+ *   v2 introduced Proposal/Scenario/Simulation triad with swapped code names.
+ *   v3 swapped the code names to match the UI.
+ *   v4 (current) drops the Escenario Base special case (no kind='base' scenarios
+ *       anymore — "sin escenario" is represented by activeScenarioId === null)
+ *       and simplifies the Proposal model to only category/amount/frequency/dates.
+ *       Legacy proposals are converted to the new shape on load.
  */
 
 import {
-  BASE_SCENARIO_ID,
   FlowPlan,
   ForecastConfidenceOverride,
-  Simulation,
-  ROLE_TARGET_EXPENSE,
-  ROLE_TARGET_INCOME,
-  Scenario,
-  ScenarioCellOverride,
+  PROPOSAL_CATEGORY_LABELS,
   Proposal,
   ProposalCategory,
+  ProposalFrequency,
+  Scenario,
+  ScenarioCellOverride,
+  Simulation,
   scenarioCellKey,
 } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
-import { buildProposalEffects, ensureBaseScenario } from './proposalCompiler';
+import { buildProposalEffects } from './proposalCompiler';
 import {
   DEFAULT_ACTIVE_KPI_IDS,
   type CustomKpiDefinition,
@@ -95,9 +93,9 @@ export interface FlowSenseStore {
   lastSaved: string;
 }
 
-interface LegacySimulation {
+interface LegacySimulationV1 {
   id: string;
-  category: ProposalCategory;
+  category: string;
   name: string;
   monthlyAmount: number;
   probability: number;
@@ -111,7 +109,7 @@ interface LegacySimulation {
   createdAt: string;
 }
 
-interface LegacyScenario {
+interface LegacyScenarioV1 {
   id: string;
   name: string;
   description: string;
@@ -119,7 +117,7 @@ interface LegacyScenario {
   createdAt: string;
 }
 
-interface LegacyForecastOverride {
+interface LegacyForecastOverrideV1 {
   key: string;
   conceptId: string;
   yearMonth: string;
@@ -129,21 +127,22 @@ interface LegacyForecastOverride {
   editedAt: string;
 }
 
-interface LegacyFlowSenseStore {
+interface LegacyFlowSenseStoreV1 {
   plan: FlowPlan | null;
-  simulations: LegacySimulation[];
-  scenarios: LegacyScenario[];
+  simulations: LegacySimulationV1[];
+  scenarios: LegacyScenarioV1[];
   providers: Provider[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
   cxpRecords: CXPRecord[];
-  forecastOverrides: LegacyForecastOverride[];
+  forecastOverrides: LegacyForecastOverrideV1[];
   lastSaved: string;
 }
 
-const STORE_VERSION = 3;
-const STORAGE_KEY = 'flowsense-v3';
+const STORE_VERSION = 4;
+const STORAGE_KEY = 'flowsense-v4';
+const V3_STORAGE_KEY = 'flowsense-v3';
 const V2_STORAGE_KEY = 'flowsense-v2';
 const LEGACY_STORAGE_KEY = 'flowsense-v1';
 
@@ -167,12 +166,43 @@ function firstPlanMonth(plan: FlowPlan | null): string {
   return `${plan?.year ?? new Date().getFullYear()}-01`;
 }
 
-function expenseLikeCategory(category: ProposalCategory): boolean {
-  return category !== 'Incremento de Ingresos';
+/**
+ * Convert any legacy category string (from v1/v2/v3 stores) into the new
+ * 4-value ProposalCategory enum.
+ */
+function coerceCategory(value: unknown, typeHint?: unknown, operationHint?: unknown): ProposalCategory {
+  if (value === 'ahorro' || value === 'aumento_ingresos'
+      || value === 'pausar_gasto' || value === 'timing_shift') {
+    return value;
+  }
+
+  // Legacy v1/v2/v3 category strings.
+  if (value === 'Reducción de Costos') return 'ahorro';
+  if (value === 'Incremento de Ingresos') return 'aumento_ingresos';
+  if (value === 'Diferimiento') return 'timing_shift';
+  if (value === 'Renegociación') return 'ahorro';
+
+  // Fallback: derive from type/operation hints.
+  if (typeHint === 'pause_expense') return 'pausar_gasto';
+  if (typeHint === 'timing_shift') return 'timing_shift';
+  if (operationHint === 'increase') return 'aumento_ingresos';
+
+  return 'ahorro';
 }
 
-function migrateLegacySimulationToProposal(
-  legacy: LegacySimulation,
+function coerceFrequency(value: unknown): ProposalFrequency {
+  if (value === 'once' || value === 'monthly' || value === 'bimonthly'
+      || value === 'quarterly' || value === 'semiannual' || value === 'annual') {
+    return value;
+  }
+  if (value === 'Mensual') return 'monthly';
+  if (value === 'Semestral') return 'semiannual';
+  if (value === 'Único') return 'once';
+  return 'monthly';
+}
+
+function migrateLegacyV1Simulation(
+  legacy: LegacySimulationV1,
   plan: FlowPlan | null,
 ): Proposal {
   const baseYear = plan?.year ?? new Date().getFullYear();
@@ -180,57 +210,37 @@ function migrateLegacySimulationToProposal(
     .map((value, monthOffset) => ({ value, monthOffset }))
     .filter((item) => item.value !== 0);
 
-  const effects = legacy.monthlyImpact
-    .map((value, monthOffset) => ({ value, monthOffset }))
-    .filter((item) => item.value !== 0)
-    .map((item, index) => ({
-      id: `${legacy.id}-effect-${index}`,
-      type: 'concept_delta' as const,
-      conceptId: expenseLikeCategory(legacy.category)
-        ? ROLE_TARGET_EXPENSE
-        : ROLE_TARGET_INCOME,
-      monthOffsets: [item.monthOffset],
-      mode: 'absolute' as const,
-      value: expenseLikeCategory(legacy.category) ? -item.value : item.value,
-    }));
+  const category = coerceCategory(legacy.category);
+  const firstMonth = impactedMonths[0]?.monthOffset ?? Math.max(0, legacy.startMonth - 1);
+  const lastMonth = impactedMonths[impactedMonths.length - 1]?.monthOffset ?? firstMonth;
+  const startYm = `${baseYear}-${String(firstMonth + 1).padStart(2, '0')}`;
+  const endYm = `${baseYear}-${String(lastMonth + 1).padStart(2, '0')}`;
 
-  return {
+  const base: Proposal = {
     id: `proposal-${legacy.id}`,
     name: legacy.name,
-    description: legacy.notes || `${legacy.category}${legacy.responsible ? ` · ${legacy.responsible}` : ''}`,
-    category: legacy.category,
-    type: 'amount_adjustment',
-    targetIds: [
-      expenseLikeCategory(legacy.category)
-        ? ROLE_TARGET_EXPENSE
-        : ROLE_TARGET_INCOME,
-    ],
-    startYearMonth: `${baseYear}-${String((impactedMonths[0]?.monthOffset ?? 0) + 1).padStart(2, '0')}`,
-    endYearMonth: impactedMonths.length > 0
-      ? `${baseYear}-${String((impactedMonths[impactedMonths.length - 1]?.monthOffset ?? 0) + 1).padStart(2, '0')}`
-      : `${baseYear}-${String(Math.max(1, legacy.startMonth)).padStart(2, '0')}`,
-    startDate: startOfMonthIso(`${baseYear}-${String((impactedMonths[0]?.monthOffset ?? 0) + 1).padStart(2, '0')}`),
-    endDate: impactedMonths.length > 0
-      ? endOfMonthIso(`${baseYear}-${String((impactedMonths[impactedMonths.length - 1]?.monthOffset ?? 0) + 1).padStart(2, '0')}`)
-      : endOfMonthIso(`${baseYear}-${String(Math.max(1, legacy.startMonth)).padStart(2, '0')}`),
-    frequency: legacy.distribution === 'Mensual'
-      ? 'monthly'
-      : legacy.distribution === 'Semestral'
-        ? 'semiannual'
-        : 'once',
-    operation: expenseLikeCategory(legacy.category) ? 'decrease' : 'increase',
-    amount: legacy.monthlyAmount * legacy.probability,
-    comments: legacy.notes,
-    effects,
+    description: legacy.notes || undefined,
+    category,
+    amount: Math.abs(legacy.monthlyAmount * legacy.probability),
+    frequency: coerceFrequency(legacy.distribution),
+    startDate: startOfMonthIso(startYm),
+    endDate: endOfMonthIso(endYm),
+    effects: [],
     createdAt: legacy.createdAt ?? isoNow(),
     updatedAt: legacy.createdAt ?? isoNow(),
   };
+
+  if (plan) {
+    base.effects = buildProposalEffects(plan, base);
+  }
+
+  return base;
 }
 
-function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseStore {
+function migrateV1Store(legacy: Partial<LegacyFlowSenseStoreV1>): FlowSenseStore {
   const plan = legacy.plan ?? null;
   const now = isoNow();
-  const proposals = (legacy.simulations ?? []).map((simulation) => migrateLegacySimulationToProposal(simulation, plan));
+  const proposals = (legacy.simulations ?? []).map((simulation) => migrateLegacyV1Simulation(simulation, plan));
 
   const needsMigratedContainer =
     proposals.length > 0 ||
@@ -250,10 +260,9 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
       ]
     : [];
 
-  const migratedScenariosFromLegacy = (legacy.scenarios ?? []).map<Scenario>((scenario) => ({
+  const migratedScenarios = (legacy.scenarios ?? []).map<Scenario>((scenario) => ({
     id: scenario.id,
     simulationId: 'simulation-migrated',
-    kind: 'simulation',
     name: scenario.name,
     description: scenario.description,
     probability: 1,
@@ -264,13 +273,12 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
     updatedAt: scenario.createdAt ?? now,
   }));
 
-  const fallbackScenario: Scenario | null = needsMigratedContainer && migratedScenariosFromLegacy.length === 0
-      ? {
+  const fallbackScenario: Scenario | null = needsMigratedContainer && migratedScenarios.length === 0
+    ? {
         id: 'scenario-migrated-default',
         simulationId: 'simulation-migrated',
-        kind: 'simulation',
         name: 'Escenario migrado',
-        description: 'Escenario generado para conservar simulaciones y overrides legacy.',
+        description: 'Escenario generado para conservar propuestas y overrides legacy.',
         probability: 1,
         startYearMonth: firstPlanMonth(plan),
         horizonMonths: 12,
@@ -280,22 +288,15 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
       }
     : null;
 
-  const simulationScenarios = fallbackScenario
-    ? [fallbackScenario]
-    : migratedScenariosFromLegacy;
-  const scenarios = ensureBaseScenario(plan, simulationScenarios);
+  const scenarios = fallbackScenario ? [fallbackScenario] : migratedScenarios;
 
   if (simulations[0] && scenarios[0]) {
     simulations[0].activeScenarioId = scenarios[0].id;
   }
 
-  const defaultScenarioId = simulationScenarios[0]?.id ?? BASE_SCENARIO_ID;
+  const defaultScenarioId = scenarios[0]?.id ?? null;
   const scenarioCellOverrides: ScenarioCellOverride[] = (legacy.forecastOverrides ?? []).map((override) => ({
-    key: scenarioCellKey(
-      defaultScenarioId ?? 'scenario-migrated-default',
-      override.conceptId,
-      override.yearMonth,
-    ),
+    key: scenarioCellKey(defaultScenarioId ?? 'scenario-migrated-default', override.conceptId, override.yearMonth),
     scenarioId: defaultScenarioId ?? 'scenario-migrated-default',
     conceptId: override.conceptId,
     yearMonth: override.yearMonth,
@@ -316,8 +317,8 @@ function migrateLegacyStore(legacy: Partial<LegacyFlowSenseStore>): FlowSenseSto
     kpiConfigs: [],
     scenarioCellOverrides,
     forecastConfidenceOverrides: [],
-    activeSimulationId: null,
-    activeScenarioId: BASE_SCENARIO_ID,
+    activeSimulationId: simulations[0]?.id ?? null,
+    activeScenarioId: defaultScenarioId,
     providers: Array.isArray(legacy.providers) ? legacy.providers : [],
     clients: Array.isArray(legacy.clients) ? legacy.clients : [],
     assumptions: validateAssumptions(legacy.assumptions),
@@ -333,7 +334,7 @@ export function getDefaultStore(): FlowSenseStore {
   return {
     plan: null,
     simulations: [],
-    scenarios: ensureBaseScenario(null, []),
+    scenarios: [],
     proposals: [],
     activeKpiIds: [...DEFAULT_ACTIVE_KPI_IDS],
     customKpis: [],
@@ -341,7 +342,7 @@ export function getDefaultStore(): FlowSenseStore {
     scenarioCellOverrides: [],
     forecastConfidenceOverrides: [],
     activeSimulationId: null,
-    activeScenarioId: BASE_SCENARIO_ID,
+    activeScenarioId: null,
     providers: [],
     clients: [],
     assumptions: {
@@ -381,27 +382,122 @@ function parseStoredPayload(raw: string): { version: number; data: unknown } | n
   }
 }
 
-function normalizeV3Store(data: Partial<FlowSenseStore>): FlowSenseStore {
+function normalizeScenario(value: Partial<Scenario>, plan: FlowPlan | null): Scenario | null {
+  if (!value || typeof value.id !== 'string') return null;
+
+  const startYearMonth = typeof value.startYearMonth === 'string' && value.startYearMonth.includes('-')
+    ? value.startYearMonth
+    : firstPlanMonth(plan);
+
+  return {
+    id: value.id,
+    simulationId: typeof value.simulationId === 'string' ? value.simulationId : null,
+    name: typeof value.name === 'string' && value.name ? value.name : 'Escenario sin nombre',
+    description: typeof value.description === 'string' ? value.description : '',
+    probability: typeof value.probability === 'number' ? value.probability : 1,
+    startYearMonth,
+    horizonMonths: typeof value.horizonMonths === 'number' ? Math.max(1, Math.min(24, value.horizonMonths)) : 12,
+    proposalIds: Array.isArray(value.proposalIds)
+      ? value.proposalIds.filter((id): id is string => typeof id === 'string')
+      : [],
+    locked: typeof value.locked === 'boolean' ? value.locked : undefined,
+    createdAt: validateISODate(value.createdAt, 'scenario.createdAt'),
+    updatedAt: validateISODate(value.updatedAt, 'scenario.updatedAt'),
+  };
+}
+
+/**
+ * Normalize a Proposal entry coming from any version of the persisted store.
+ * Legacy v2/v3 proposals had extra fields (type, targetIds, operation, percent,
+ * installments, customAllocation, shiftRatio, paymentLabel, comments); these
+ * are collapsed into the new simplified shape.
+ */
+function normalizeProposal(
+  proposal: Partial<Proposal> & Record<string, unknown>,
+  plan: FlowPlan | null,
+): Proposal {
+  const category = coerceCategory(proposal.category, proposal.type, proposal.operation);
+
+  // Derive startDate
+  const rawStartDate = typeof proposal.startDate === 'string' && proposal.startDate.length === 10
+    ? proposal.startDate
+    : undefined;
+  const rawStartYm = typeof proposal.startYearMonth === 'string' && proposal.startYearMonth.includes('-')
+    ? proposal.startYearMonth
+    : undefined;
+  const startDate = rawStartDate
+    ?? (rawStartYm ? startOfMonthIso(rawStartYm) : startOfMonthIso(firstPlanMonth(plan)));
+
+  // Derive endDate
+  const rawEndDate = typeof proposal.endDate === 'string' && proposal.endDate.length === 10
+    ? proposal.endDate
+    : undefined;
+  const rawEndYm = typeof proposal.endYearMonth === 'string' && proposal.endYearMonth.includes('-')
+    ? proposal.endYearMonth
+    : undefined;
+  const endDate = rawEndDate
+    ?? (rawEndYm ? endOfMonthIso(rawEndYm) : undefined);
+
+  // Derive amount — legacy proposals might only have `percent`. In that
+  // case we can't recover the absolute value without recomputing against
+  // the plan, so we default to 0 and let the user edit.
+  let amount = 0;
+  if (typeof proposal.amount === 'number' && Number.isFinite(proposal.amount)) {
+    amount = Math.abs(proposal.amount);
+  } else if (typeof (proposal as { monthlyAmount?: number }).monthlyAmount === 'number') {
+    amount = Math.abs((proposal as { monthlyAmount: number }).monthlyAmount);
+  }
+
+  const shiftMonths = typeof proposal.shiftMonths === 'number' ? proposal.shiftMonths : undefined;
+
+  const normalized: Proposal = {
+    id: typeof proposal.id === 'string' ? proposal.id : `proposal-${Date.now()}`,
+    name: typeof proposal.name === 'string' && proposal.name ? proposal.name : 'Propuesta sin nombre',
+    description: typeof proposal.description === 'string' && proposal.description.trim()
+      ? proposal.description.trim()
+      : undefined,
+    category,
+    amount,
+    frequency: coerceFrequency(proposal.frequency),
+    startDate,
+    endDate,
+    shiftMonths,
+    effects: Array.isArray(proposal.effects) ? (proposal.effects as Proposal['effects']) : [],
+    createdAt: validateISODate(proposal.createdAt, 'proposal.createdAt'),
+    updatedAt: validateISODate(proposal.updatedAt, 'proposal.updatedAt'),
+  };
+
+  // Always recompile effects from the current shape if a plan is available;
+  // this keeps legacy effects in sync with the simplified model.
+  if (plan) {
+    normalized.effects = buildProposalEffects(plan, normalized);
+  }
+
+  return normalized;
+}
+
+function normalizeV4Store(data: Partial<FlowSenseStore>): FlowSenseStore {
   const plan = data.plan ?? null;
 
   const simulations = validateArray<Simulation>(data.simulations, 'simulations');
-  const scenarios = ensureBaseScenario(
-    plan,
-    validateArray<Scenario>(data.scenarios, 'scenarios').map((scenario) => ({
-      ...scenario,
-      kind: scenario.kind ?? (scenario.id === BASE_SCENARIO_ID ? 'base' : 'simulation'),
-      simulationId: scenario.id === BASE_SCENARIO_ID ? null : scenario.simulationId,
-      locked: scenario.id === BASE_SCENARIO_ID ? true : scenario.locked,
-    })),
-  );
-  const proposals = validateArray<Proposal>(data.proposals, 'proposals').map((proposal) =>
-    normalizeProposal(proposal, plan),
-  );
+  const scenarios = validateArray<Partial<Scenario>>(data.scenarios, 'scenarios')
+    .map((scenario) => normalizeScenario(scenario, plan))
+    .filter((scenario): scenario is Scenario => scenario !== null);
+
+  const proposals = validateArray<Partial<Proposal> & Record<string, unknown>>(data.proposals, 'proposals')
+    .map((proposal) => normalizeProposal(proposal, plan));
+
+  // Drop any lingering references to the obsolete base scenario ID.
+  const cleanedActiveScenarioId = data.activeScenarioId === 'scenario-base'
+    ? null
+    : (data.activeScenarioId ?? null);
+
+  const cleanedScenarios = scenarios.filter((scenario) => scenario.id !== 'scenario-base');
 
   return {
     plan,
     simulations,
-    scenarios,
+    scenarios: cleanedScenarios,
     proposals,
     activeKpiIds: Array.isArray(data.activeKpiIds)
       ? data.activeKpiIds.filter((value): value is string => typeof value === 'string')
@@ -411,15 +507,15 @@ function normalizeV3Store(data: Partial<FlowSenseStore>): FlowSenseStore {
     scenarioCellOverrides: validateArray<ScenarioCellOverride>(
       data.scenarioCellOverrides,
       'scenarioCellOverrides',
-    ),
+    ).filter((override) => override.scenarioId !== 'scenario-base'),
     forecastConfidenceOverrides: validateArray<ForecastConfidenceOverride>(
       data.forecastConfidenceOverrides,
       'forecastConfidenceOverrides',
-    ).map(normalizeForecastConfidenceOverride),
-    activeSimulationId: data.activeScenarioId === BASE_SCENARIO_ID
-      ? null
-      : (data.activeSimulationId ?? simulations[0]?.id ?? null),
-    activeScenarioId: data.activeScenarioId ?? BASE_SCENARIO_ID,
+    )
+      .filter((override) => override.scenarioId !== 'scenario-base')
+      .map(normalizeForecastConfidenceOverride),
+    activeSimulationId: typeof data.activeSimulationId === 'string' ? data.activeSimulationId : null,
+    activeScenarioId: cleanedActiveScenarioId,
     providers: validateArray<Provider>(data.providers, 'providers'),
     clients: validateArray<Client>(data.clients, 'clients'),
     assumptions: validateAssumptions(data.assumptions),
@@ -448,7 +544,7 @@ function normalizeForecastConfidenceOverride(
   return {
     scenarioId: typeof anyValue.scenarioId === 'string' && anyValue.scenarioId.length > 0
       ? anyValue.scenarioId
-      : BASE_SCENARIO_ID,
+      : '',
     score: Math.max(0, Math.min(100, Math.round(score))),
     basis,
     comment: typeof anyValue.comment === 'string' && anyValue.comment.trim()
@@ -458,106 +554,16 @@ function normalizeForecastConfidenceOverride(
   };
 }
 
-function firstProposalYearMonth(
-  proposal: Partial<Proposal>,
-  plan: FlowPlan | null,
-): string {
-  if (typeof proposal.startYearMonth === 'string' && proposal.startYearMonth.includes('-')) {
-    return proposal.startYearMonth;
-  }
-
-  const effectYearMonths = (proposal.effects ?? [])
-    .flatMap((effect) => effect.yearMonths ?? [])
-    .filter((value): value is string => typeof value === 'string' && value.includes('-'))
-    .sort();
-
-  if (effectYearMonths[0]) return effectYearMonths[0];
-
-  const firstMonthOffset = (proposal.effects ?? [])
-    .flatMap((effect) => effect.monthOffsets ?? [])
-    .find((value): value is number => typeof value === 'number' && value >= 0);
-
-  if (firstMonthOffset !== undefined) {
-    const baseYear = plan?.year ?? new Date().getFullYear();
-    return `${baseYear}-${String(firstMonthOffset + 1).padStart(2, '0')}`;
-  }
-
-  return firstPlanMonth(plan);
-}
-
-function normalizeProposal(
-  proposal: Partial<Proposal>,
-  plan: FlowPlan | null,
-): Proposal {
-  const category = proposal.category ?? 'Incremento de Ingresos';
-  const defaultTargetId = expenseLikeCategory(category)
-    ? ROLE_TARGET_EXPENSE
-    : ROLE_TARGET_INCOME;
-  const startYearMonth = firstProposalYearMonth(proposal, plan);
-  const endYearMonth =
-    typeof proposal.endYearMonth === 'string' && proposal.endYearMonth.includes('-')
-      ? proposal.endYearMonth
-      : startYearMonth;
-  const startDate =
-    typeof proposal.startDate === 'string' && proposal.startDate.length === 10
-      ? proposal.startDate
-      : startOfMonthIso(startYearMonth);
-  const endDate =
-    typeof proposal.endDate === 'string' && proposal.endDate.length === 10
-      ? proposal.endDate
-      : endOfMonthIso(endYearMonth);
-
-  const normalized: Proposal = {
-    id: proposal.id ?? `proposal-${Date.now()}`,
-    name: proposal.name ?? 'Simulación sin nombre',
-    description: proposal.description ?? '',
-    category,
-    type: proposal.type ?? 'amount_adjustment',
-    targetIds: Array.isArray(proposal.targetIds) && proposal.targetIds.length > 0
-      ? proposal.targetIds
-      : [defaultTargetId],
-    startYearMonth,
-    endYearMonth,
-    startDate,
-    endDate,
-    frequency: proposal.frequency ?? 'monthly',
-    operation: proposal.operation ?? (expenseLikeCategory(category) ? 'decrease' : 'increase'),
-    amount: typeof proposal.amount === 'number' ? proposal.amount : undefined,
-    percent: typeof proposal.percent === 'number' ? proposal.percent : undefined,
-    installments: typeof proposal.installments === 'number' ? proposal.installments : undefined,
-    customAllocation: Array.isArray(proposal.customAllocation)
-      ? proposal.customAllocation.filter((value): value is number => typeof value === 'number')
-      : undefined,
-    shiftMonths: typeof proposal.shiftMonths === 'number' ? proposal.shiftMonths : undefined,
-    shiftRatio: typeof proposal.shiftRatio === 'number' ? proposal.shiftRatio : undefined,
-    paymentLabel: typeof proposal.paymentLabel === 'string' ? proposal.paymentLabel : undefined,
-    comments: typeof proposal.comments === 'string' ? proposal.comments : undefined,
-    effects: Array.isArray(proposal.effects) ? proposal.effects : [],
-    createdAt: validateISODate(proposal.createdAt, 'proposal.createdAt'),
-    updatedAt: validateISODate(proposal.updatedAt, 'proposal.updatedAt'),
-  };
-
-  if (normalized.effects.length === 0 && plan) {
-    normalized.effects = buildProposalEffects(plan, normalized);
-  }
-
-  return normalized;
-}
-
 /**
- * Raw shape of a v2 store as persisted in localStorage before the Proposal/Simulation
- * code rename. Field names here reflect the pre-swap terminology:
- *   v2.proposals        -> v3.simulations (top-level container)
- *   v2.simulations      -> v3.proposals (reusable adjustment)
- *   v2.activeProposalId -> v3.activeSimulationId
- *   Scenario.proposalId -> Scenario.simulationId
- *   Scenario.simulationIds -> Scenario.proposalIds
- *   Scenario.kind 'proposal' -> 'simulation'
+ * Raw shape of a v2/v3 store before the Proposal model simplification.
+ * We collapse both into the v4 path: v3 shapes pass through with legacy
+ * Proposals being normalized, v2 additionally has its proposals/simulations
+ * arrays swapped (v2 code names were inverted vs UI).
  */
 interface V2RawScenario {
   id: string;
   proposalId?: string | null;
-  kind?: 'base' | 'proposal' | string;
+  kind?: string;
   simulationIds?: string[];
   [key: string]: unknown;
 }
@@ -571,51 +577,49 @@ interface V2RawStore {
   [key: string]: unknown;
 }
 
-/**
- * Converts a v2 raw payload into a v3 shape by swapping the Proposal/Simulation
- * field names, then normalizes it through the standard v3 path so any missing
- * fields are filled and the base scenario is re-injected.
- */
-function migrateV2ToV3Store(raw: V2RawStore): FlowSenseStore {
+function migrateV2ToV4Store(raw: V2RawStore): FlowSenseStore {
   const v2Proposals = Array.isArray(raw.proposals) ? raw.proposals : [];
   const v2Simulations = Array.isArray(raw.simulations) ? raw.simulations : [];
   const v2Scenarios = Array.isArray(raw.scenarios) ? raw.scenarios : [];
 
-  const v3Scenarios = v2Scenarios.map((scenario) => {
+  const v4Scenarios = v2Scenarios.map((scenario) => {
     const anyScenario = scenario as V2RawScenario & Record<string, unknown>;
     const {
       proposalId,
       simulationIds,
-      kind,
+      kind: _kind, // dropped — no more scenario kinds
       ...rest
     } = anyScenario;
     return {
       ...rest,
-      kind: kind === 'proposal' ? 'simulation' : kind,
       simulationId: proposalId ?? null,
       proposalIds: Array.isArray(simulationIds) ? simulationIds : [],
     };
   });
 
-  const v3Data: Partial<FlowSenseStore> = {
+  const v4Data: Partial<FlowSenseStore> = {
     ...(raw as Partial<FlowSenseStore>),
     simulations: v2Proposals as Simulation[],
     proposals: v2Simulations as Proposal[],
-    scenarios: v3Scenarios as Scenario[],
+    scenarios: v4Scenarios as Scenario[],
     activeSimulationId:
       typeof raw.activeProposalId === 'string' ? raw.activeProposalId : null,
     activeScenarioId:
       typeof raw.activeScenarioId === 'string' ? raw.activeScenarioId : null,
   };
 
-  delete (v3Data as Record<string, unknown>).activeProposalId;
+  delete (v4Data as Record<string, unknown>).activeProposalId;
+  return normalizeV4Store(v4Data);
+}
 
-  return normalizeV3Store(v3Data);
+function migrateV3ToV4Store(raw: Partial<FlowSenseStore>): FlowSenseStore {
+  return normalizeV4Store(raw);
 }
 
 export function loadStore(): FlowSenseStore | null {
   const sources: Array<{ key: string; expectedVersion: number }> = [
-    { key: STORAGE_KEY, expectedVersion: 3 },
+    { key: STORAGE_KEY, expectedVersion: 4 },
+    { key: V3_STORAGE_KEY, expectedVersion: 3 },
     { key: V2_STORAGE_KEY, expectedVersion: 2 },
     { key: LEGACY_STORAGE_KEY, expectedVersion: 1 },
   ];
@@ -627,16 +631,20 @@ export function loadStore(): FlowSenseStore | null {
     const payload = parseStoredPayload(raw);
     if (!payload) continue;
 
+    if (payload.version === 4 && expectedVersion === 4) {
+      return normalizeV4Store(payload.data as Partial<FlowSenseStore>);
+    }
+
     if (payload.version === 3 && expectedVersion === 3) {
-      return normalizeV3Store(payload.data as Partial<FlowSenseStore>);
+      return migrateV3ToV4Store(payload.data as Partial<FlowSenseStore>);
     }
 
     if (payload.version === 2 && expectedVersion === 2) {
-      return migrateV2ToV3Store(payload.data as V2RawStore);
+      return migrateV2ToV4Store(payload.data as V2RawStore);
     }
 
     if (payload.version === 1 && expectedVersion === 1) {
-      return migrateLegacyStore(payload.data as Partial<LegacyFlowSenseStore>);
+      return migrateV1Store(payload.data as Partial<LegacyFlowSenseStoreV1>);
     }
   }
 
@@ -646,6 +654,7 @@ export function loadStore(): FlowSenseStore | null {
 export function clearStore(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(V3_STORAGE_KEY);
     localStorage.removeItem(V2_STORAGE_KEY);
     localStorage.removeItem(LEGACY_STORAGE_KEY);
   } catch {
@@ -685,16 +694,20 @@ export function importStore(json: string): FlowSenseStore {
     throw new Error('Missing or invalid "data" field');
   }
 
+  if (obj.version === 4) {
+    return normalizeV4Store(obj.data as Partial<FlowSenseStore>);
+  }
+
   if (obj.version === 3) {
-    return normalizeV3Store(obj.data as Partial<FlowSenseStore>);
+    return migrateV3ToV4Store(obj.data as Partial<FlowSenseStore>);
   }
 
   if (obj.version === 2) {
-    return migrateV2ToV3Store(obj.data as V2RawStore);
+    return migrateV2ToV4Store(obj.data as V2RawStore);
   }
 
   if (obj.version === 1) {
-    return migrateLegacyStore(obj.data as Partial<LegacyFlowSenseStore>);
+    return migrateV1Store(obj.data as Partial<LegacyFlowSenseStoreV1>);
   }
 
   throw new Error(`Unsupported version: ${obj.version}`);
@@ -827,3 +840,6 @@ function validateISODate(value: unknown, _fieldName: string): string {
 
   return isoNow();
 }
+
+// Re-export helpers for consumers that used to import them indirectly.
+export { PROPOSAL_CATEGORY_LABELS };
