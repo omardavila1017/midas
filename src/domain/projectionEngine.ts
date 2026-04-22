@@ -21,7 +21,7 @@
 // que la UI pueda explicar al usuario de dónde sale cada número.
 // ─────────────────────────────────────────────────────────────────────────
 
-import type { Client, CashFlowAssumptions } from './types';
+import type { Client, Provider, CashFlowAssumptions } from './types';
 import type { AgedBalanceRecord, BankAccountStatement } from '../services/jdeTypes';
 import { projectClientMonth } from './collectionEngine';
 import {
@@ -30,6 +30,7 @@ import {
   toYearMonth,
   monthsBetween,
 } from './cashFlowEngine';
+import { projectExpenseByProvider, type ProviderMonthLine } from './expensePerProvider';
 
 // ── Income ───────────────────────────────────────────────────────────────
 
@@ -124,6 +125,11 @@ export interface ExpenseProjectionBreakdown {
   total: number;
   /** Top providers recurrentes detectados, útil para desglose. */
   topRecurring: Array<{ label: string; monthlyAvg: number; monthsActive: number }>;
+  /**
+   * Desglose per-proveedor para el mes, cuando el catálogo de proveedores
+   * está disponible. Incluye flexibility + paymentPeriod de cada uno.
+   */
+  providerLines: ProviderMonthLine[];
 }
 
 /**
@@ -211,9 +217,10 @@ export function resolveExpenseForMonth(
   recurring: number,
   baseline: number,
   topRecurring: Array<{ label: string; monthlyAvg: number; monthsActive: number }>,
+  providerLines: ProviderMonthLine[] = [],
 ): ExpenseProjectionBreakdown {
   const total = Math.max(scheduled, recurring, baseline);
-  return { scheduled, recurring, baseline, total, topRecurring };
+  return { scheduled, recurring, baseline, total, topRecurring, providerLines };
 }
 
 // ── Orquestación ─────────────────────────────────────────────────────────
@@ -238,6 +245,8 @@ export interface ProjectionInputs {
   toYm: string;
   /** Catálogo de clientes; si está vacío caemos a baseline. */
   clients: Client[];
+  /** Catálogo de proveedores; si está vacío caemos a detección por concepto. */
+  providers?: Provider[];
   /** Antigüedad de saldos ya cargada. */
   aged: AgedBalanceRecord[];
   /** Histórico bancario ya cargado (para recurrentes). */
@@ -265,13 +274,27 @@ export interface ProjectionResult {
  */
 export function buildMonthlyProjection(inputs: ProjectionInputs): ProjectionResult {
   const {
-    fromYm, toYm, clients, aged, bankStatements,
+    fromYm, toYm, clients, providers, aged, bankStatements,
     baselineIncome, baselineExpense, assumptions, today,
   } = inputs;
 
   const incomeByMonth = projectClientIncomeByMonth(clients, assumptions, fromYm, toYm);
+
+  // Path A (con catálogo de proveedores): proyección per-proveedor que
+  // matchea CARGOs + CXP al catálogo, respeta flexibility y paymentPeriod.
+  // Path B (sin catálogo): detección por concepto bancario como antes.
+  const usePerProvider = !!providers && providers.length > 0;
+  const perProviderMonths = usePerProvider
+    ? projectExpenseByProvider({
+        providers: providers!, aged, bankStatements, today, fromYm, toYm,
+      })
+    : [];
+  const perProviderByYm = new Map(perProviderMonths.map((m) => [m.yearMonth, m]));
+
   const scheduledByMonth = buildScheduledExpenseMap(aged);
-  const { base: recurringBase, top: recurringTop } = detectRecurringExpenses(bankStatements, today);
+  const { base: recurringBase, top: recurringTop } = usePerProvider
+    ? { base: 0, top: [] as Array<{ label: string; monthlyAvg: number; monthsActive: number }> }
+    : detectRecurringExpenses(bankStatements, today);
 
   const months: MonthlyProjection[] = [];
   let cursor = fromYm;
@@ -279,8 +302,27 @@ export function buildMonthlyProjection(inputs: ProjectionInputs): ProjectionResu
     const clientIncome = incomeByMonth.get(cursor) ?? 0;
     const income = resolveIncomeForMonth(clientIncome, baselineIncome);
 
-    const scheduled = scheduledByMonth.get(cursor) ?? 0;
-    const expense = resolveExpenseForMonth(scheduled, recurringBase, baselineExpense, recurringTop);
+    let expense: ExpenseProjectionBreakdown;
+    if (usePerProvider) {
+      const perProv = perProviderByYm.get(cursor);
+      const scheduled = perProv?.scheduledTotal ?? 0;
+      const recurring = perProv?.recurringTotal ?? 0;
+      const total = Math.max(perProv?.total ?? 0, baselineExpense);
+      // Si el baseline supera lo per-proveedor, las líneas no llegan a cubrir
+      // el total. Se deja topRecurring vacío porque el "top" real son las
+      // líneas per-proveedor. La UI debe leer providerLines.
+      expense = {
+        scheduled,
+        recurring,
+        baseline: baselineExpense,
+        total,
+        topRecurring: [],
+        providerLines: perProv?.lines ?? [],
+      };
+    } else {
+      const scheduled = scheduledByMonth.get(cursor) ?? 0;
+      expense = resolveExpenseForMonth(scheduled, recurringBase, baselineExpense, recurringTop);
+    }
 
     months.push({ yearMonth: cursor, income, expense });
     cursor = addMonths(cursor, 1);

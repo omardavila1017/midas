@@ -250,5 +250,5 @@ function baseIncome(total: number) {
 }
 
 function baseExpense(total: number) {
-  return { scheduled: 0, recurring: 0, baseline: total, total, topRecurring: [] };
+  return { scheduled: 0, recurring: 0, baseline: total, total, topRecurring: [], providerLines: [] };
 }

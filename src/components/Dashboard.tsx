@@ -107,8 +107,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const { base, baseline, projection } = useMemo(
-    () => computeBaseCashFlow({ bankStatements, aged, clients, assumptions, companyCode, today, overrides }),
-    [bankStatements, aged, clients, assumptions, companyCode, today, overrides],
+    () => computeBaseCashFlow({ bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides }),
+    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides],
   );
   const evaluated = useMemo(() => evaluateCashFlow(base, proposals), [base, proposals]);
 
@@ -524,6 +524,8 @@ interface ComputeInputs {
   bankStatements: BankAccountStatement[];
   aged: AgedBalanceRecord[];
   clients: Client[];
+  providers: Provider[];
+  cxpRecords: CXPRecord[];
   assumptions: CashFlowAssumptions;
   companyCode: string;
   today: string;
@@ -537,10 +539,19 @@ interface ComputeOutput {
 }
 
 function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
-  const { bankStatements, aged, clients, assumptions, companyCode, today, overrides } = inputs;
+  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
+  // CXP ya filtrado por compañía — se suma al aged cuando hay records
+  // cargados para el mismo rango. Nos da granularidad per-factura para la
+  // proyección per-proveedor.
+  const filteredCxp = companyCode === 'all' || !companyCode
+    ? cxpRecords
+    : cxpRecords.filter((r) => r.cia === companyCode);
+  const combinedAged: AgedBalanceRecord[] = aged.length > 0
+    ? aged
+    : filteredCxp as unknown as AgedBalanceRecord[];
 
   const historical = buildHistoricalMonths(filtered);
 
@@ -568,7 +579,8 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     fromYm: todayYm,
     toYm: lastFutureYm,
     clients,
-    aged,
+    providers,
+    aged: combinedAged,
     bankStatements: filtered,
     baselineIncome: avgIncome,
     baselineExpense: avgExpense,
