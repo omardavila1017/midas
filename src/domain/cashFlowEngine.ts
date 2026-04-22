@@ -18,9 +18,11 @@ import {
   type AgedBalanceRecord,
 } from '../services/jde';
 import {
-  isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildPairMatchedKeys,
+  classifyMovement,
+  type ClassificationContext,
 } from './netCashFlowEngine';
 import {
   CashFlowMonth,
@@ -87,8 +89,18 @@ export function buildHistoricalMonths(
   // Detector de traspasos entre cuentas propias del grupo. Si un ABONO en una
   // cuenta se compensa con un CARGO en otra del mismo grupo, sumarlos infla
   // ambos lados del flujo sin reflejar un ingreso/egreso económico real.
-  const ownAccounts = buildOwnAccountsIndex(statements);
-  const ownAccountDetector = buildOwnAccountDetector(ownAccounts);
+  //
+  // Usamos `classifyMovement` (no `isInternalTransfer`) para que la detección
+  // coincida exactamente con la que aplica la pantalla de Bancos: incluye
+  // también el detector pair-matched (CARGO en una cuenta compensado con
+  // ABONO simétrico el mismo día en otra cuenta del mismo grupo, mismo
+  // importe). Antes el Dashboard contaba esos pares como ingresos/egresos
+  // reales mientras Bancos los mostraba en gris — y la gráfica no reflejaba
+  // el filtro de transferencias internas.
+  const ctx: ClassificationContext = {
+    ownAccountDetector: buildOwnAccountDetector(buildOwnAccountsIndex(statements)),
+    pairedKeys: buildPairMatchedKeys(statements),
+  };
 
   const byMonth = new Map<string, { income: number; expense: number }>();
 
@@ -96,7 +108,7 @@ export function buildHistoricalMonths(
     for (const mov of acc.movimientos) {
       const ym = toYearMonth(mov.fechaOperacion);
       if (!ym) continue;
-      if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      if (classifyMovement(mov, ctx, acc.cia, acc.cuenta).kind === 'internal') continue;
       const bucket = byMonth.get(ym) ?? { income: 0, expense: 0 };
       if (mov.tipoMovimiento === 'ABONO') bucket.income += mov.importe;
       else if (mov.tipoMovimiento === 'CARGO') bucket.expense += mov.importe;

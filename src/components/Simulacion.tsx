@@ -4,22 +4,12 @@ import {
   Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check, Download,
 } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
-import type { Proposal, Scenario, EvaluatedCashFlow, CashFlowMonth, ProposalKind } from '../types';
+import type { Proposal, Scenario, EvaluatedCashFlow, ProposalKind } from '../types';
 import { PROPOSAL_FREQUENCY_LABELS } from '../types';
 import { fmtCurrency, fmtCompact } from '../formatters';
 import {
   evaluateCashFlow,
   analyzeLiquidity,
-  buildHistoricalMonths,
-  buildFutureExpenses,
-  projectFutureIncome,
-  buildExpenseProjector,
-  projectMonthlyExpense,
-  filterCompleteHistorical,
-  toYearMonth,
-  addMonths,
-  compareYearMonth,
-  monthsBetween,
   type LiquiditySummary,
 } from '../domain/cashFlowEngine';
 import {
@@ -27,8 +17,12 @@ import {
   type BankAccountStatement,
   type AgedBalanceRecord,
 } from '../services/jde';
+import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
+import type { CXPRecord } from '../domain/persistence';
+import type { Budget } from '../domain/budget';
 import ProposalEditor from './ProposalEditor';
 import SimulacionChart from './SimulacionChart';
+import { computeBaseCashFlow, loadOverrides } from './Dashboard';
 
 interface Props {
   companyCode: string;
@@ -39,6 +33,17 @@ interface Props {
   onScenariosChange: (next: Scenario[]) => void;
   activeScenarioId: string | null;
   onActiveScenarioChange: (id: string | null) => void;
+  // Inputs necesarios para que la línea de caja de Simulación coincida
+  // exactamente con la que se ve en el Dashboard (mismo motor, mismos
+  // insumos: clientes, proveedores, CXP, presupuesto, overrides y caja
+  // inicial). Antes Simulación usaba una proyección "plana" y por eso las
+  // curvas divergían.
+  clients: Client[];
+  providers: Provider[];
+  cxpRecords: CXPRecord[];
+  assumptions: CashFlowAssumptions;
+  budget: Budget | null;
+  startingBalanceOverride: number | null;
 }
 
 interface KindPresentation {
@@ -75,6 +80,12 @@ const Simulacion: React.FC<Props> = ({
   onScenariosChange,
   activeScenarioId,
   onActiveScenarioChange,
+  clients,
+  providers,
+  cxpRecords,
+  assumptions,
+  budget,
+  startingBalanceOverride,
 }) => {
   const [agedBalances, setAgedBalances] = useState<AgedBalanceRecord[]>([]);
   const [agedLoading, setAgedLoading] = useState(false);
@@ -103,10 +114,26 @@ const Simulacion: React.FC<Props> = ({
     return () => { cancelled = true; };
   }, [companyCode]);
 
-  const base = useMemo(
-    () => computeBaseCashFlow(bankStatements, agedBalances, companyCode),
-    [bankStatements, agedBalances, companyCode],
-  );
+  // Mismo pipeline que el Dashboard. Los overrides se releen de localStorage
+  // al montar la pestaña — el usuario los edita desde Dashboard y al volver
+  // a Simulación la curva ya refleja esos ajustes.
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const { base } = useMemo(() => computeBaseCashFlow({
+    bankStatements,
+    aged: agedBalances,
+    clients,
+    providers,
+    cxpRecords,
+    assumptions,
+    companyCode,
+    today,
+    overrides: loadOverrides(),
+    budget,
+    startingBalance: startingBalanceOverride ?? undefined,
+  }), [
+    bankStatements, agedBalances, clients, providers, cxpRecords,
+    assumptions, companyCode, today, budget, startingBalanceOverride,
+  ]);
 
   const evaluated: EvaluatedCashFlow = useMemo(
     () => evaluateCashFlow(base, proposals),
@@ -970,62 +997,6 @@ const Row: React.FC<{
     </tr>
   );
 };
-
-// ─── Cash flow base computation (mismo algoritmo que el resto) ──────────
-
-function computeBaseCashFlow(
-  bankStatements: BankAccountStatement[],
-  agedBalances: AgedBalanceRecord[],
-  companyCode: string,
-): CashFlowMonth[] {
-  const filtered = companyCode === 'all' || !companyCode
-    ? bankStatements
-    : bankStatements.filter((s) => s.cia === companyCode);
-
-  const historical = buildHistoricalMonths(filtered);
-  const futureExpenses = buildFutureExpenses(agedBalances);
-
-  const today = new Date().toISOString().slice(0, 10);
-  const todayYm = toYearMonth(today);
-  // Excluimos el mes en curso (parcial) del input de proyección para no sesgar
-  // los promedios hacia abajo.
-  const completeHistorical = filterCompleteHistorical(historical, today);
-  const avgIncome = projectFutureIncome(completeHistorical, 6);
-  const expenseProjector = buildExpenseProjector(completeHistorical);
-
-  const horizonMonths = 12;
-  const lastHistoricalYm = historical.length > 0
-    ? historical[historical.length - 1].yearMonth
-    : todayYm;
-  const projectionAnchorYm = completeHistorical.length > 0
-    ? completeHistorical[completeHistorical.length - 1].yearMonth
-    : lastHistoricalYm;
-  const firstFutureYm = addMonths(
-    compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
-    1,
-  );
-  const lastFutureYm = addMonths(todayYm, horizonMonths);
-
-  const months: CashFlowMonth[] = [...historical];
-  let running = historical.length > 0 ? historical[historical.length - 1].closingCash : 0;
-  let cursor = firstFutureYm;
-  while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-    const offset = Math.max(1, monthsBetween(projectionAnchorYm, cursor));
-    const committed = futureExpenses.get(cursor) ?? 0;
-    const expense = projectMonthlyExpense(offset, committed, expenseProjector);
-    const income = avgIncome;
-    running = running + income - expense;
-    months.push({
-      yearMonth: cursor,
-      isHistorical: false,
-      income,
-      expense,
-      closingCash: running,
-    });
-    cursor = addMonths(cursor, 1);
-  }
-  return months;
-}
 
 // ─── Liquidity alert ─────────────────────────────────────────────────────
 

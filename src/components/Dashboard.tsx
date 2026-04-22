@@ -92,7 +92,7 @@ function migrateLegacyKey(newKey: string, legacyKey: string): string | null {
   } catch { return null; }
 }
 
-function loadOverrides(): ProjectionOverrides {
+export function loadOverrides(): ProjectionOverrides {
   try {
     const raw = migrateLegacyKey(OVERRIDES_KEY, LEGACY_OVERRIDES_KEY);
     if (!raw) return {};
@@ -682,7 +682,7 @@ const KpiCard: React.FC<{ label: string; value: number; icon: React.ReactNode; c
   </div>
 );
 
-interface ComputeInputs {
+export interface ComputeInputs {
   bankStatements: BankAccountStatement[];
   aged: AgedBalanceRecord[];
   clients: Client[];
@@ -702,7 +702,7 @@ interface ComputeInputs {
   startingBalance?: number;
 }
 
-interface ComputeOutput {
+export interface ComputeOutput {
   base: CashFlowMonth[];
   baseline: { avgIncome: number; avgExpense: number };
   projection: ReturnType<typeof buildMonthlyProjection>;
@@ -718,7 +718,7 @@ export function computeBankStartingBalance(statements: BankAccountStatement[]): 
   return statements.reduce((s, acc) => s + (acc.saldoInicial ?? 0), 0);
 }
 
-function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
+export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance, budget } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements

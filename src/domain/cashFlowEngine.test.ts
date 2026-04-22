@@ -109,6 +109,47 @@ describe('buildHistoricalMonths', () => {
     expect(months[0].income).toBe(100_000);
     expect(months[0].expense).toBe(0);
   });
+
+  it('filtra traspasos pair-matched sin leyenda (paridad con pantalla Bancos)', () => {
+    // Dos cuentas del mismo grupo con un CARGO y un ABONO simétricos el
+    // mismo día, mismo importe. Sin leyenda "TRASPASO". Antes el engine
+    // dejaba pasar estos pares como ingreso/egreso real, mientras la
+    // pantalla de Bancos ya los marcaba como internos — la gráfica de caja
+    // se desviaba del filtro visible en Bancos. Ahora se alinean.
+    const statements: BankAccountStatement[] = [
+      {
+        cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
+        fechaEstadoCuenta: '2026-01-31', saldoInicial: 1_000_000, saldoFinal: 0,
+        movimientos: [
+          { cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
+            fechaOperacion: '2026-01-15', referencia: 'P-777', concepto: 'MOV 777',
+            tipoMovimiento: 'CARGO', importe: 500_000 },
+        ],
+      },
+      {
+        cia: '00011', banco: 'BANAMEX', cuenta: '019004784B', moneda: 'MXN',
+        fechaEstadoCuenta: '2026-01-31', saldoInicial: 0, saldoFinal: 0,
+        movimientos: [
+          { cia: '00011', banco: 'BANAMEX', cuenta: '019004784B', moneda: 'MXN',
+            fechaOperacion: '2026-01-15', referencia: 'P-888', concepto: 'MOV 888',
+            tipoMovimiento: 'ABONO', importe: 500_000 },
+        ],
+      },
+    ];
+    // Si SÓLO hubiera un legítimo pago de cliente además del pair-match,
+    // lo contaríamos sin inflar con el traspaso pair-matched.
+    statements[0].movimientos.push({
+      cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
+      fechaOperacion: '2026-01-20', referencia: 'CLI-1', concepto: 'PAGO CLIENTE',
+      tipoMovimiento: 'ABONO', importe: 250_000,
+    });
+    const months = buildHistoricalMonths(statements);
+    expect(months).toHaveLength(1);
+    // El traspaso pair-matched (CARGO+ABONO 500k mismo día/grupo) no cuenta;
+    // sólo entra el pago de cliente.
+    expect(months[0].income).toBe(250_000);
+    expect(months[0].expense).toBe(0);
+  });
 });
 
 describe('buildFutureExpenses', () => {
