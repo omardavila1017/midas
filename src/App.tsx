@@ -700,6 +700,8 @@ export default function App() {
             {activeTab === 'clients' && (
               <Clients
                 clients={clients}
+                assumptions={assumptions}
+                confirmedPayments={confirmedPayments}
                 onReplace={setClients}
                 onAdd={addClient}
                 onUpdate={updateClient}

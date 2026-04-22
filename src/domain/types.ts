@@ -54,6 +54,18 @@ export type Frequency =
 export interface Client {
   id: string;
   name: string;
+  /** Legal name when it differs from the commercial account label. */
+  legalName?: string;
+  /** Fiscal RFC / tax ID. Used as a strong grouping signal when available. */
+  rfc?: string;
+  /** Parent commercial group when provided by a source system or corrected by a user. */
+  commercialGroupName?: string;
+  /** Stable group ID for manual overrides. Accounts sharing this ID render together. */
+  commercialGroupId?: string;
+  /** Email/web domain used as a grouping signal when available. */
+  emailDomain?: string;
+  /** Fiscal or delivery address used as a weak grouping signal when available. */
+  address?: string;
   /** Raw Column C text as captured from the source file — kept for audit. */
   paymentDayRaw?: string;
   /** Structured, computable version of paymentDayRaw. */

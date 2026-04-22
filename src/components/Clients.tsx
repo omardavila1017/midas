@@ -1,9 +1,32 @@
-import { useMemo, useState } from 'react';
-import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth, CashFlowAssumptions } from '../domain/types';
+import { Fragment, useMemo, useState, type ElementType, type ReactNode } from 'react';
+import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth, CashFlowAssumptions, ConfirmedPayment } from '../domain/types';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { projectClientMonth } from '../domain/collectionEngine';
+import {
+  buildClientHierarchy,
+  commercialGroupId,
+  type ClientAccountNode,
+  type ClientGroupNode,
+  type ClientGroupSource,
+  type ClientRisk,
+} from '../domain/clientGrouping';
 import { MONTHS } from '../types';
-import { Trash2, AlertTriangle, Plus, Search, Download } from 'lucide-react';
+import {
+  Trash2,
+  AlertTriangle,
+  Plus,
+  Search,
+  Download,
+  ChevronDown,
+  ChevronRight,
+  FolderPlus,
+  Link2,
+  Unlink,
+  Pencil,
+  Users,
+  Building2,
+  Check,
+} from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 
 /**
@@ -38,16 +61,28 @@ const WEEK_OPTIONS: Array<{ value: WeekOfMonth; label: string }> = [
 
 interface Props {
   clients: Client[];
+  assumptions: CashFlowAssumptions;
+  confirmedPayments: ConfirmedPayment[];
   onReplace: (clients: Client[]) => void;
   onAdd: (c: Client) => void;
   onUpdate: (c: Client) => void;
   onDelete: (id: string) => void;
 }
 
-export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete }: Props) {
+export default function Clients({ clients, assumptions, confirmedPayments, onReplace, onAdd, onUpdate, onDelete }: Props) {
   const [issues, setIssues] = useState<ImportIssue[]>([]);
   const [query, setQuery] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedAccountId, setExpandedAccountId] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [groupNameDraft, setGroupNameDraft] = useState('');
+  const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const hierarchy = useMemo(
+    () => buildClientHierarchy(clients, { assumptions, confirmedPayments, today }),
+    [clients, assumptions, confirmedPayments, today],
+  );
 
   const totalAnnual = useMemo(
     () => clients.reduce((a, c) => a + c.monthlyBilling.reduce((s, v) => s + v, 0), 0),
@@ -62,26 +97,55 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
     [clients],
   );
 
+  const totalReceivable = useMemo(
+    () => hierarchy.reduce((sum, group) => sum + group.projectedReceivable, 0),
+    [hierarchy],
+  );
+
+  const totalPendingInvoices = useMemo(
+    () => hierarchy.reduce((sum, group) => sum + group.pendingInvoices, 0),
+    [hierarchy],
+  );
+
   // Calculate avg lag per client (credit real vs nominal)
   const lagMap = useMemo(() => {
     const map = new Map<string, number>();
-    const year = new Date().getFullYear();
-    const assumptions: CashFlowAssumptions = { year, globalCompliance: 1, factorajeDays: 30 };
     for (const c of clients) {
-      const events = projectClientMonth(c, year, 3, assumptions); // April sample
+      const events = projectClientMonth(c, assumptions.year, new Date(`${today}T12:00:00`).getMonth(), assumptions);
       if (events.length > 0) {
         const avgLag = events.reduce((s, e) => s + e.lagDays, 0) / events.length;
         map.set(c.id, avgLag);
       }
     }
     return map;
-  }, [clients]);
+  }, [clients, assumptions, today]);
 
-  const filtered = useMemo(() => {
-    if (!query) return clients;
+  const filteredGroups = useMemo(() => {
+    if (!query) return hierarchy;
     const q = query.toLowerCase();
-    return clients.filter(c => c.name.toLowerCase().includes(q));
-  }, [clients, query]);
+    return hierarchy
+      .map(group => {
+        const groupMatches = group.name.toLowerCase().includes(q);
+        const accounts = groupMatches
+          ? group.accounts
+          : group.accounts.filter(account =>
+              [
+                account.client.name,
+                account.client.legalName,
+                account.client.rfc,
+                account.client.emailDomain,
+                account.client.address,
+              ].filter(Boolean).join(' ').toLowerCase().includes(q)
+            );
+        return accounts.length ? { ...group, accounts } : null;
+      })
+      .filter(Boolean) as ClientGroupNode[];
+  }, [hierarchy, query]);
+
+  const selectedClients = useMemo(
+    () => clients.filter(client => selectedIds.has(client.id)),
+    [clients, selectedIds],
+  );
 
   const addBlank = () => {
     onAdd({
@@ -96,24 +160,121 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
   };
 
   const handleExport = () => {
-    const rows = clients.map(c => ({
-      Nombre: c.name,
-      'Día de Pago': c.paymentDayRaw ?? '',
-      Frecuencia: c.frequency,
-      'Días Crédito': c.creditDays,
-      'Venta Mensual': c.monthlyBilling[0],
-      Factoraje: c.factoraje ? 'Sí' : 'No',
-    }));
+    const groupByClientId = new Map<string, ClientGroupNode>();
+    hierarchy.forEach(group => group.accounts.forEach(account => groupByClientId.set(account.client.id, group)));
+    const rows = clients.map(c => {
+      const group = groupByClientId.get(c.id);
+      return {
+        'Grupo comercial': group?.name ?? '',
+        'Fuente agrupación': group ? sourceLabel(group.source) : '',
+        Nombre: c.name,
+        'Razón social': c.legalName ?? '',
+        RFC: c.rfc ?? '',
+        Dominio: c.emailDomain ?? '',
+        Dirección: c.address ?? '',
+        'Día de pago': c.paymentDayRaw ?? '',
+        Frecuencia: c.frequency,
+        'Días crédito': c.creditDays,
+        'Venta mensual': c.monthlyBilling[0],
+        Factoraje: c.factoraje ? 'Sí' : 'No',
+      };
+    });
     downloadFile(toCSV(rows), 'clientes-midas.csv');
   };
 
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
+
+  const toggleSelected = (clientId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(clientId)) next.delete(clientId);
+      else next.add(clientId);
+      return next;
+    });
+  };
+
+  const toggleGroupSelection = (group: ClientGroupNode) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      const allSelected = group.accounts.every(account => next.has(account.client.id));
+      group.accounts.forEach(account => {
+        if (allSelected) next.delete(account.client.id);
+        else next.add(account.client.id);
+      });
+      return next;
+    });
+  };
+
+  const mergeSelectedIntoGroup = () => {
+    const name = groupNameDraft.trim();
+    if (!name || selectedIds.size === 0) return;
+    const id = commercialGroupId(name);
+    onReplace(clients.map(client => selectedIds.has(client.id)
+      ? { ...client, commercialGroupName: name, commercialGroupId: id }
+      : client
+    ));
+    setGroupNameDraft('');
+    setSelectedIds(new Set());
+    setExpandedGroups(prev => new Set(prev).add(id));
+  };
+
+  const separateSelected = () => {
+    if (selectedIds.size === 0) return;
+    onReplace(clients.map(client => selectedIds.has(client.id)
+      ? {
+          ...client,
+          commercialGroupName: client.name,
+          commercialGroupId: `client-single-${client.id}`,
+        }
+      : client
+    ));
+    setSelectedIds(new Set());
+  };
+
+  const renameGroup = (group: ClientGroupNode) => {
+    const name = (renameDrafts[group.id] ?? group.name).trim();
+    if (!name) return;
+    const id = commercialGroupId(name);
+    const accountIds = new Set(group.accounts.map(account => account.client.id));
+    onReplace(clients.map(client => accountIds.has(client.id)
+      ? { ...client, commercialGroupName: name, commercialGroupId: id }
+      : client
+    ));
+    setRenameDrafts(prev => {
+      const next = { ...prev };
+      delete next[group.id];
+      return next;
+    });
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      next.delete(group.id);
+      next.add(id);
+      return next;
+    });
+  };
+
+  const clearManualGroup = (client: Client) => {
+    onUpdate({
+      ...client,
+      commercialGroupName: undefined,
+      commercialGroupId: undefined,
+    });
+  };
+
   return (
-    <div className="space-y-6">
-      <header className="flex items-end justify-between">
+    <div className="space-y-5">
+      <header className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight animate-fade-in">Clientes</h1>
           <p className="text-[13px] text-[var(--gray-400)] mt-1">
-            {clients.length} clientes · facturación anual {fmt(totalAnnual)} · IVA {fmt(totalIva)}
+            {hierarchy.length} grupos · {clients.length} cuentas · facturación anual {fmt(totalAnnual)} · por cobrar proyectado {fmt(totalReceivable)}
             {issues.length > 0 && (
               <span className="ml-2 text-amber-600">· {issues.length} avisos de importación</span>
             )}
@@ -131,7 +292,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
             onClick={addBlank}
             className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
           >
-            <Plus className="w-3.5 h-3.5" /> Nuevo Cliente
+            <Plus className="w-3.5 h-3.5" /> Nuevo cliente
           </button>
         </div>
       </header>
@@ -139,113 +300,340 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
       {/* Issues panel */}
       {issues.length > 0 && <div className="animate-slide-down"><IssuesPanel issues={issues} onDismiss={() => setIssues([])} /></div>}
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Buscar cliente…"
-          className="input pl-9 w-full max-w-sm"
-        />
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+        <SummaryMetric icon={Users} label="Grupos comerciales" value={hierarchy.length} sub={`${clients.length} cuentas`} />
+        <SummaryMetric icon={Building2} label="Ventas anuales" value={fmt(totalAnnual)} sub={`IVA estimado ${fmt(totalIva)}`} />
+        <SummaryMetric icon={AlertTriangle} label="Por cobrar proyectado" value={fmt(totalReceivable)} sub={`${totalPendingInvoices} eventos pendientes`} />
+        <SummaryMetric icon={Check} label="Correcciones manuales" value={clients.filter(c => c.commercialGroupName).length} sub="cuentas con grupo fijo" />
       </div>
 
-      {/* Table */}
+      {/* Search + grouping actions */}
+      <div className="rounded-xl border border-[var(--gray-200)] bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[260px] flex-1">
+            <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Buscar grupo, cuenta, RFC o dominio"
+              className="input pl-9 w-full"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              value={groupNameDraft}
+              onChange={e => setGroupNameDraft(e.target.value)}
+              placeholder="Nombre del grupo comercial"
+              className="input h-9 w-64"
+            />
+            <button
+              onClick={mergeSelectedIntoGroup}
+              disabled={selectedIds.size === 0 || !groupNameDraft.trim()}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 text-[12px] font-medium text-white transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+              title="Unir las cuentas seleccionadas en un grupo"
+            >
+              <Link2 className="h-3.5 w-3.5" /> Unir
+            </button>
+            <button
+              onClick={separateSelected}
+              disabled={selectedIds.size === 0}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40"
+              title="Separar las cuentas seleccionadas de su grupo actual"
+            >
+              <Unlink className="h-3.5 w-3.5" /> Separar
+            </button>
+          </div>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[var(--gray-400)]">
+          <FolderPlus className="h-3.5 w-3.5" />
+          {selectedIds.size > 0
+            ? `${selectedIds.size} cuenta${selectedIds.size !== 1 ? 's' : ''} seleccionada${selectedIds.size !== 1 ? 's' : ''}`
+            : '0 cuentas seleccionadas'}
+          {selectedClients.length > 0 && (
+            <span className="truncate text-[var(--gray-500)]">
+              {selectedClients.slice(0, 3).map(c => c.name).join(' · ')}
+              {selectedClients.length > 3 ? ` · +${selectedClients.length - 3}` : ''}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Hierarchy table */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
-        <table className="w-full text-[13px]">
+        <div className="overflow-x-auto">
+        <table className="min-w-[1120px] w-full text-[13px]">
           <thead className="bg-[var(--gray-50)] text-[var(--gray-400)] text-left text-[12px] uppercase tracking-wide">
             <tr>
-              <Th>Cliente</Th>
-              <Th>Día de pago</Th>
-              <Th>Patrón</Th>
-              <Th>Frecuencia</Th>
-              <Th className="text-right">Crédito</Th>
-              <Th className="text-right">Lag</Th>
-              <Th className="text-right">Crédito Real</Th>
-              <Th className="text-right">Anual</Th>
-              <Th className="text-right">IVA</Th>
-              <Th className="w-10" />
+              <Th className="w-9" />
+              <Th>Grupo / cuenta</Th>
+              <Th>Señal</Th>
+              <Th className="text-right">Cuentas</Th>
+              <Th className="text-right">Ventas</Th>
+              <Th className="text-right">Por cobrar</Th>
+              <Th className="text-right">Facturas</Th>
+              <Th className="text-right">Crédito real</Th>
+              <Th>Riesgo</Th>
+              <Th className="w-20" />
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && (
+            {filteredGroups.length === 0 && (
               <tr><td colSpan={10} className="text-center text-[var(--gray-400)] py-10">
                 {clients.length === 0
                   ? 'Sin clientes. Sincroniza el catálogo o agrega uno manual.'
                   : 'Sin coincidencias.'}
               </td></tr>
             )}
-            {filtered.map((c, idx) => {
-              const annual = c.monthlyBilling.reduce((s, v) => s + v, 0);
-              const ivaRate = c.ivaRate ?? 16;
-              const ivaAmount = annual * ivaRate / 100;
-              const parsed = c.paymentDayRaw ? parsePaymentDay(c.paymentDayRaw) : c.paymentDay;
-              const isOpen = expandedId === c.id;
-              const avgLag = lagMap.get(c.id) ?? 0;
-              const realCredit = c.creditDays + Math.round(avgLag);
+            {filteredGroups.map((group, idx) => {
+              const isOpen = expandedGroups.has(group.id);
+              const groupSelected = group.accounts.every(account => selectedIds.has(account.client.id));
+              const groupPartial = !groupSelected && group.accounts.some(account => selectedIds.has(account.client.id));
+              const renameValue = renameDrafts[group.id] ?? group.name;
               return (
-                <>
+                <Fragment key={group.id}>
                   <tr
-                    key={c.id}
-                    className={`border-t border-[var(--gray-200)]/40 hover:bg-[var(--gray-50)]/40 cursor-pointer hover-row stagger-${Math.min(idx + 1, 10)}`}
-                    onClick={() => setExpandedId(isOpen ? null : c.id)}
+                    className={`border-t border-[var(--gray-200)]/40 hover:bg-[var(--gray-50)]/70 cursor-pointer hover-row stagger-${Math.min(idx + 1, 10)}`}
+                    onClick={() => toggleGroup(group.id)}
                   >
                     <Td>
+                      <input
+                        type="checkbox"
+                        checked={groupSelected}
+                        ref={el => { if (el) el.indeterminate = groupPartial; }}
+                        onClick={e => e.stopPropagation()}
+                        onChange={() => toggleGroupSelection(group)}
+                      />
+                    </Td>
+                    <Td>
                       <div className="flex items-center gap-2">
-                        {c.factoraje && <span className="text-[11px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Factoraje</span>}
-                        <span className="font-medium">{c.name}</span>
-                        <span className={`text-[11px] px-1.5 py-0.5 rounded ${ivaRate === 8 ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
-                          IVA {ivaRate}%
-                        </span>
+                        {isOpen ? <ChevronDown className="h-4 w-4 text-[var(--gray-400)]" /> : <ChevronRight className="h-4 w-4 text-[var(--gray-400)]" />}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-[var(--gray-950)]">{group.name}</span>
+                            {group.source === 'manual' && <span className="rounded bg-[var(--primary-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--primary)]">Manual</span>}
+                          </div>
+                          <p className="text-[11px] text-[var(--gray-400)] truncate">{group.signal}</p>
+                        </div>
                       </div>
                     </Td>
-                    <Td>
-                      <span className="text-[var(--gray-400)]">{c.paymentDayRaw ?? '—'}</span>
-                    </Td>
-                    <Td>
-                      {parsed
-                        ? <span className="text-emerald-700 text-[12px]">{renderPattern(parsed)}</span>
-                        : <span className="text-amber-600 text-[12px] flex items-center gap-1">
-                            <AlertTriangle className="w-3 h-3" /> no interpretado
-                          </span>}
-                    </Td>
-                    <Td>{c.frequency}</Td>
-                    <Td className="text-right tabular-nums">{c.creditDays}d</Td>
-                    <Td className="text-right tabular-nums">
-                      {avgLag > 0
-                        ? <span className="text-[var(--danger)] text-[12px] font-medium">+{avgLag.toFixed(0)}d</span>
-                        : <span className="text-[var(--success)] text-[12px]">0d</span>}
-                    </Td>
-                    <Td className="text-right tabular-nums">
-                      {realCredit > c.creditDays
-                        ? <span className="font-semibold text-[var(--danger)]">{realCredit}d</span>
-                        : <span className="text-[var(--success)]">{realCredit}d</span>}
-                    </Td>
-                    <Td className="text-right tabular-nums font-medium">{fmt(annual)}</Td>
-                    <Td className="text-right tabular-nums text-[var(--gray-400)]">{fmt(ivaAmount)}</Td>
-                    <Td>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
-                        className="text-[var(--gray-400)] hover:text-red-600"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </Td>
+                    <Td>{sourceLabel(group.source)} · {(group.confidence * 100).toFixed(0)}%</Td>
+                    <Td className="text-right tabular-nums">{group.accounts.length}</Td>
+                    <Td className="text-right tabular-nums font-medium">{fmt(group.annualSales)}</Td>
+                    <Td className="text-right tabular-nums">{fmt(group.projectedReceivable)}</Td>
+                    <Td className="text-right tabular-nums">{group.pendingInvoices}</Td>
+                    <Td className="text-right tabular-nums">{group.realCreditDays}d</Td>
+                    <Td><RiskBadge risk={group.risk} title={group.riskReason} /></Td>
+                    <Td />
                   </tr>
                   {isOpen && (
-                    <tr className="border-t border-[var(--gray-200)]/40 bg-[var(--surface-alt)]">
-                      <td colSpan={9} className="px-4 py-4">
-                        <ClientEditor client={c} onChange={onUpdate} />
-                      </td>
-                    </tr>
+                    <>
+                      <tr className="bg-[var(--surface-alt)] border-t border-[var(--gray-200)]/40">
+                        <td colSpan={10} className="px-4 py-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Pencil className="h-3.5 w-3.5 text-[var(--gray-400)]" />
+                            <span className="text-[12px] text-[var(--gray-400)]">Nombre del grupo</span>
+                            <input
+                              value={renameValue}
+                              onChange={e => setRenameDrafts(prev => ({ ...prev, [group.id]: e.target.value }))}
+                              className="input h-8 w-72"
+                            />
+                            <button
+                              onClick={() => renameGroup(group)}
+                              className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
+                            >
+                              Renombrar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {group.accounts.map(account => (
+                        <AccountRows
+                          key={account.client.id}
+                          account={account}
+                          isSelected={selectedIds.has(account.client.id)}
+                          isOpen={expandedAccountId === account.client.id}
+                          avgLag={lagMap.get(account.client.id) ?? account.avgLagDays}
+                          onToggleSelected={() => toggleSelected(account.client.id)}
+                          onToggleOpen={() => setExpandedAccountId(expandedAccountId === account.client.id ? null : account.client.id)}
+                          onUpdate={onUpdate}
+                          onDelete={onDelete}
+                          onClearManualGroup={clearManualGroup}
+                        />
+                      ))}
+                    </>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
+  );
+}
+
+function SummaryMetric({
+  icon: Icon,
+  label,
+  value,
+  sub,
+}: {
+  icon: ElementType;
+  label: string;
+  value: string | number;
+  sub: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
+        <Icon className="h-4 w-4 text-[var(--gray-400)]" />
+      </div>
+      <p className="mt-2 font-mono text-[22px] font-semibold text-[var(--gray-950)]">{value}</p>
+      <p className="mt-1 text-[11px] text-[var(--gray-400)]">{sub}</p>
+    </div>
+  );
+}
+
+function sourceLabel(source: ClientGroupSource): string {
+  switch (source) {
+    case 'manual': return 'Manual';
+    case 'rfc': return 'RFC';
+    case 'domain': return 'Dominio';
+    case 'address': return 'Dirección';
+    case 'name': return 'Nombre';
+    default: return 'Individual';
+  }
+}
+
+function RiskBadge({ risk, title }: { risk: ClientRisk; title?: string }) {
+  const classes =
+    risk === 'Alto'
+      ? 'bg-[var(--danger-muted)] text-[var(--danger)]'
+      : risk === 'Medio'
+        ? 'bg-[var(--warning-muted)] text-[var(--warning)]'
+        : 'bg-[var(--success-muted)] text-[var(--success)]';
+
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${classes}`} title={title}>
+      {risk}
+    </span>
+  );
+}
+
+function AccountRows({
+  account,
+  isSelected,
+  isOpen,
+  avgLag,
+  onToggleSelected,
+  onToggleOpen,
+  onUpdate,
+  onDelete,
+  onClearManualGroup,
+}: {
+  account: ClientAccountNode;
+  isSelected: boolean;
+  isOpen: boolean;
+  avgLag: number;
+  onToggleSelected: () => void;
+  onToggleOpen: () => void;
+  onUpdate: (client: Client) => void;
+  onDelete: (id: string) => void;
+  onClearManualGroup: (client: Client) => void;
+}) {
+  const c = account.client;
+  const annual = c.monthlyBilling.reduce((s, v) => s + v, 0);
+  const ivaRate = c.ivaRate ?? 16;
+  const parsed = c.paymentDayRaw ? parsePaymentDay(c.paymentDayRaw) : c.paymentDay;
+
+  return (
+    <>
+      <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--surface-alt)] hover:bg-[var(--gray-50)]/80">
+        <Td>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={onToggleSelected}
+            onClick={e => e.stopPropagation()}
+          />
+        </Td>
+        <Td>
+          <button onClick={onToggleOpen} className="flex min-w-0 items-center gap-2 text-left">
+            {isOpen ? <ChevronDown className="h-3.5 w-3.5 text-[var(--gray-400)]" /> : <ChevronRight className="h-3.5 w-3.5 text-[var(--gray-400)]" />}
+            <span className="min-w-0">
+              <span className="block truncate font-medium text-[var(--gray-950)]">{c.name}</span>
+              <span className="block truncate text-[11px] text-[var(--gray-400)]">
+                {c.rfc ? `RFC ${c.rfc}` : c.emailDomain ? `Dominio ${c.emailDomain}` : c.legalName ?? 'Cuenta individual'}
+              </span>
+            </span>
+          </button>
+        </Td>
+        <Td>
+          {parsed
+            ? <span className="text-[12px] text-[var(--success)]">{renderPattern(parsed)}</span>
+            : <span className="flex items-center gap-1 text-[12px] text-[var(--warning)]">
+                <AlertTriangle className="h-3 w-3" /> no interpretado
+              </span>}
+        </Td>
+        <Td className="text-right">{c.frequency}</Td>
+        <Td className="text-right tabular-nums font-medium">{fmt(annual)}</Td>
+        <Td className="text-right tabular-nums">{fmt(account.projectedReceivable)}</Td>
+        <Td className="text-right tabular-nums">{account.pendingInvoices}</Td>
+        <Td className="text-right tabular-nums">
+          {account.realCreditDays > c.creditDays
+            ? <span className="font-semibold text-[var(--danger)]">{account.realCreditDays}d</span>
+            : <span className="text-[var(--success)]">{account.realCreditDays}d</span>}
+        </Td>
+        <Td><RiskBadge risk={account.risk} title={account.riskReason} /></Td>
+        <Td>
+          <div className="flex items-center justify-end gap-1">
+            {c.commercialGroupName && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onClearManualGroup(c); }}
+                className="rounded p-1 text-[var(--gray-400)] hover:bg-white hover:text-[var(--primary)]"
+                title="Volver a agrupación automática"
+              >
+                <Unlink className="h-3.5 w-3.5" />
+              </button>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(c.id); }}
+              className="rounded p-1 text-[var(--gray-400)] hover:bg-white hover:text-[var(--danger)]"
+              title="Eliminar cuenta"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </Td>
+      </tr>
+      {isOpen && (
+        <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--surface-alt)]">
+          <td colSpan={10} className="px-4 py-4">
+            <div className="mb-3 grid grid-cols-2 gap-3 rounded-lg bg-white px-3 py-2 text-[12px] lg:grid-cols-4">
+              <div>
+                <div className="text-[var(--gray-400)]">Lag estimado</div>
+                <div className="font-mono font-semibold text-[var(--gray-950)]">{avgLag.toFixed(0)}d</div>
+              </div>
+              <div>
+                <div className="text-[var(--gray-400)]">IVA</div>
+                <div className="font-mono font-semibold text-[var(--gray-950)]">{ivaRate}%</div>
+              </div>
+              <div>
+                <div className="text-[var(--gray-400)]">Cobranza confirmada</div>
+                <div className="font-mono font-semibold text-[var(--gray-950)]">{fmt(account.confirmedCollections)}</div>
+              </div>
+              <div>
+                <div className="text-[var(--gray-400)]">Facturas confirmadas</div>
+                <div className="font-mono font-semibold text-[var(--gray-950)]">{account.confirmedInvoices}</div>
+              </div>
+            </div>
+            <ClientEditor client={c} onChange={onUpdate} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -254,14 +642,61 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
 // ---------------------------------------------------------------------------
 function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Client) => void }) {
   const update = (patch: Partial<Client>) => onChange({ ...client, ...patch });
+  const updateOptionalText = (key: 'legalName' | 'rfc' | 'emailDomain' | 'address', value: string) => {
+    update({ [key]: value.trim() ? value : undefined });
+  };
+  const updateManualGroup = (value: string) => {
+    const name = value.trim();
+    update({
+      commercialGroupName: name || undefined,
+      commercialGroupId: name ? commercialGroupId(name) : undefined,
+    });
+  };
   const ivaRate = (client.ivaRate ?? 16) / 100;
 
   return (
-    <div className="grid grid-cols-[1fr_1fr] gap-6">
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
       {/* Left column — catalog fields */}
       <div className="space-y-3">
         <Field label="Nombre">
           <input value={client.name} onChange={e => update({ name: e.target.value })} className="input w-full" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Razón social">
+            <input
+              value={client.legalName ?? ''}
+              onChange={e => updateOptionalText('legalName', e.target.value)}
+              className="input w-full"
+            />
+          </Field>
+          <Field label="RFC">
+            <input
+              value={client.rfc ?? ''}
+              onChange={e => updateOptionalText('rfc', e.target.value.toUpperCase())}
+              className="input w-full"
+            />
+          </Field>
+          <Field label="Dominio">
+            <input
+              value={client.emailDomain ?? ''}
+              onChange={e => updateOptionalText('emailDomain', e.target.value.toLowerCase())}
+              className="input w-full"
+            />
+          </Field>
+          <Field label="Grupo comercial fijo">
+            <input
+              value={client.commercialGroupName ?? ''}
+              onChange={e => updateManualGroup(e.target.value)}
+              className="input w-full"
+            />
+          </Field>
+        </div>
+        <Field label="Dirección fiscal">
+          <input
+            value={client.address ?? ''}
+            onChange={e => updateOptionalText('address', e.target.value)}
+            className="input w-full"
+          />
         </Field>
         <Field label="Patrón de pago">
           <PatternEditor pattern={client.paymentDay} onChange={p => update({ paymentDay: p })} />
@@ -580,7 +1015,7 @@ function sortPatternNumber(value: number): number {
   return value === -1 ? 99 : value;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex flex-col gap-1 text-[12px] text-[var(--gray-400)]">
       <span>{label}</span>
@@ -588,10 +1023,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </label>
   );
 }
-function Th({ children, className = '' }: { children?: React.ReactNode; className?: string }) {
+function Th({ children, className = '' }: { children?: ReactNode; className?: string }) {
   return <th className={`px-4 py-2.5 font-medium ${className}`}>{children}</th>;
 }
-function Td({ children, className = '' }: { children?: React.ReactNode; className?: string }) {
+function Td({ children, className = '' }: { children?: ReactNode; className?: string }) {
   return <td className={`px-4 py-2.5 text-[var(--gray-950)] ${className}`}>{children}</td>;
 }
 function fmt(n: number): string {
