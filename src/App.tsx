@@ -1,21 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { FlowPlan, ForecastConfidenceOverride, ForecastGranularity, Simulation, Scenario, ScenarioCellOverride, Proposal, TabId, ForecastView } from './types';
+import { Proposal, Scenario, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
-import { fetchCompanies, type Company, JdeApiError, type BankAccountStatement, type BankStatementFormat } from './services/jde';
-import Upload from './components/Upload';
+import { fetchCompanies, type Company, type BankAccountStatement, type BankStatementFormat } from './services/jde';
 import Dashboard from './components/Dashboard';
-import ScenarioWorkbench from './components/ScenarioWorkbench';
 import CXP from './components/CXP';
 import Bancos from './components/Bancos';
 import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
-import Forecast from './components/Forecast';
-import KpiCenter from './components/KpiCenter';
-import { DEFAULT_ACTIVE_KPI_IDS, type CustomKpiDefinition, type KpiConfigOverride } from './domain/kpiCatalog';
+import CashFlowView from './components/CashFlowView';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/Toast';
 import { ActivityFeedProvider, useActivityFeed, ActivityFeedPanel } from './components/ActivityFeed';
@@ -23,15 +19,14 @@ import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette from './components/CommandPalette';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
-  LayoutDashboard, Lightbulb, FlaskConical, ArrowUpFromLine,
-  Users, UserSquare, FileSpreadsheet, Download, LineChart, DollarSign, Sliders,
+  LayoutDashboard,
+  Users, UserSquare, Download, LineChart,
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
-  HandCoins, CreditCard, ChevronRight, BookUser, Activity, TrendingUp,
+  HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
-  Bell, Keyboard,
+  Bell,
 } from 'lucide-react';
-import { hex } from './theme';
-import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
+import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS } from './domain/companyGroups';
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
@@ -41,7 +36,7 @@ const SECTIONS: { id: SectionId; label: string; icon: any; description: string }
   { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, cobranza, CXP, pronóstico y escenarios' },
 ];
 
-const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPlan?: boolean }[]> = {
+const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any }[]> = {
   catalogos: [
     { id: 'clients',   label: 'Clientes',     icon: UserSquare },
     { id: 'providers', label: 'Proveedores',  icon: Users },
@@ -51,21 +46,18 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any; needsPl
     { id: 'bancos',      label: 'Bancos',      icon: Landmark },
   ],
   proyeccion: [
-    { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard, needsPlan: true },
-    { id: 'kpis',        label: 'KPIs',        icon: Sliders },
+    { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
-    { id: 'forecast',    label: 'Pronóstico',  icon: LineChart, needsPlan: true },
-    { id: 'scenarios',   label: 'Escenarios',  icon: FlaskConical, needsPlan: true },
+    { id: 'flow',        label: 'Flujo de Caja', icon: LineChart },
   ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos',
   netflow: 'operacion', bancos: 'operacion',
-  dashboard: 'proyeccion', kpis: 'proyeccion',
-  collections: 'proyeccion', cxp: 'proyeccion',
-  forecast: 'proyeccion', scenarios: 'proyeccion',
+  dashboard: 'proyeccion', collections: 'proyeccion',
+  cxp: 'proyeccion', flow: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -113,11 +105,8 @@ function containsDemoBankData(statements: BankAccountStatement[] | undefined | n
 }
 
 export default function App() {
-  const [plan, setPlan] = useState<FlowPlan | null>(null);
-  const [simulations, setSimulations] = useState<Simulation[]>([]);
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [activeSimulationId, setActiveSimulationId] = useState<string | null>(null);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -129,14 +118,7 @@ export default function App() {
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
-  const [scenarioCellOverrides, setScenarioCellOverrides] = useState<ScenarioCellOverride[]>([]);
-  const [forecastConfidenceOverrides, setForecastConfidenceOverrides] = useState<ForecastConfidenceOverride[]>([]);
-  const [forecastGranularity, setForecastGranularity] = useState<ForecastGranularity>('monthly');
-  const [activeKpiIds, setActiveKpiIds] = useState<string[]>([...DEFAULT_ACTIVE_KPI_IDS]);
-  const [customKpis, setCustomKpis] = useState<CustomKpiDefinition[]>([]);
-  const [kpiConfigs, setKpiConfigs] = useState<KpiConfigOverride[]>([]);
   const [activeTab, setActiveTab] = useState<TabId>('netflow');
-  const [showUpload, setShowUpload] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   // ── JDE integration state ──
@@ -190,7 +172,7 @@ export default function App() {
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
 
-  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'kpis', 'collections', 'cxp', 'forecast', 'scenarios'];
+  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'collections', 'cxp', 'flow'];
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
@@ -199,22 +181,14 @@ export default function App() {
   useEffect(() => {
     const stored = loadStore();
     if (stored) {
-      if (stored.plan) setPlan(stored.plan);
-      if (stored.simulations.length) setSimulations(stored.simulations);
-      if (stored.scenarios.length) setScenarios(stored.scenarios);
       if (stored.proposals.length) setProposals(stored.proposals);
-      setActiveSimulationId(stored.activeSimulationId ?? null);
+      if (stored.scenarios.length) setScenarios(stored.scenarios);
       setActiveScenarioId(stored.activeScenarioId ?? null);
       if (stored.providers.length) setProviders(stored.providers);
       if (stored.clients.length) setClients(stored.clients);
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
       if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
-      if (stored.scenarioCellOverrides?.length) setScenarioCellOverrides(stored.scenarioCellOverrides);
-      if (stored.forecastConfidenceOverrides?.length) setForecastConfidenceOverrides(stored.forecastConfidenceOverrides);
-      if (stored.activeKpiIds) setActiveKpiIds(stored.activeKpiIds);
-      if (stored.customKpis) setCustomKpis(stored.customKpis);
-      if (stored.kpiConfigs) setKpiConfigs(stored.kpiConfigs);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
     }
@@ -243,104 +217,37 @@ export default function App() {
     });
   }, [providers.length]);
 
-  useEffect(() => {
-    if (simulations.length === 0) {
-      if (activeSimulationId !== null) setActiveSimulationId(null);
-      return;
-    }
-
-    // "Sin escenario seleccionado" (activeScenarioId === null) es un modo válido
-    // que reemplaza al viejo Escenario Base: no se fuerza ninguna simulación.
-    if (activeScenarioId === null) {
-      if (activeSimulationId !== null) setActiveSimulationId(null);
-      return;
-    }
-
-    if (!activeSimulationId || !simulations.some((simulation) => simulation.id === activeSimulationId)) {
-      setActiveSimulationId(simulations[0].id);
-    }
-  }, [activeSimulationId, activeScenarioId, simulations]);
-
-  useEffect(() => {
-    if (!activeSimulationId) {
-      if (activeScenarioId !== null && scenarios.length > 0) {
-        setActiveScenarioId(scenarios[0].id);
-      }
-      return;
-    }
-
-    const simulationScenarios = scenarios.filter((scenario) => scenario.simulationId === activeSimulationId);
-    if (simulationScenarios.length === 0) {
-      if (activeScenarioId !== null) setActiveScenarioId(null);
-      return;
-    }
-
-    if (!activeScenarioId || !simulationScenarios.some((scenario) => scenario.id === activeScenarioId)) {
-      setActiveScenarioId(
-        simulations.find((simulation) => simulation.id === activeSimulationId)?.activeScenarioId
-          ?? simulationScenarios[0].id,
-      );
-    }
-  }, [activeSimulationId, activeScenarioId, simulations, scenarios]);
-
   // Save to localStorage after changes (debounced by 500ms)
   useEffect(() => {
     const timer = setTimeout(() => {
       const store: FlowSenseStore = {
-        plan, simulations, scenarios, providers, clients,
-        proposals, activeSimulationId, activeScenarioId,
-        activeKpiIds,
-        customKpis,
-        kpiConfigs,
+        proposals, scenarios, activeScenarioId,
+        providers, clients,
         assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
-        scenarioCellOverrides,
-        forecastConfidenceOverrides,
         lastSaved: new Date().toISOString(),
       };
       saveStore(store);
     }, 500);
     return () => clearTimeout(timer);
   }, [
-    plan,
-    simulations,
-    scenarios,
-    proposals,
-    activeSimulationId,
-    activeScenarioId,
-    activeKpiIds,
-    customKpis,
-    kpiConfigs,
-    providers,
-    clients,
-    assumptions,
-    confirmedPayments,
-    cxpRecords,
-    cxpLoadedCias,
-    scenarioCellOverrides,
-    forecastConfidenceOverrides,
+    proposals, scenarios, activeScenarioId,
+    providers, clients,
+    assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
   ]);
 
-  // ── JDE: load companies on mount (demo fallback if unreachable) ──
+  // ── JDE: load companies on mount (sin fallback demo) ──
   const loadCompanies = useCallback(async () => {
     setCompaniesLoading(true);
     setCompaniesError(null);
     try {
       const list = await fetchCompanies();
-      if (list.length > 0) {
-        setCompanies(list);
-      } else {
-        throw new Error('empty');
+      setCompanies(list);
+      if (list.length === 0) {
+        setCompaniesError('JDE respondió vacío. Revisa conectividad con srv-desarrollo.');
       }
     } catch (e) {
-      // JDE unreachable — load demo companies for development
-      const demoCompanies: Company[] = [
-        { cia: '00011', nombre: 'Transportes del Norte', rfc: 'TNO850101AAA', monedaBase: 'MXN', activa: true },
-        { cia: '00038', nombre: 'Senda Citi', rfc: 'SCI900201BBB', monedaBase: 'MXN', activa: true },
-        { cia: '00050', nombre: 'Turistar Lujo', rfc: 'TLU880301CCC', monedaBase: 'MXN', activa: true },
-        { cia: '00060', nombre: 'Transportes Tamaulipecos', rfc: 'TTA870401DDD', monedaBase: 'MXN', activa: true },
-      ];
-      setCompanies(demoCompanies);
-      // Don't show error if we loaded demo data
+      setCompaniesError(e instanceof Error ? e.message : 'No se pudo contactar JDE.');
+      setCompanies([]);
     } finally {
       setCompaniesLoading(false);
     }
@@ -490,80 +397,8 @@ export default function App() {
     if (prevTab.current !== activeTab) { setPageKey(k => k + 1); prevTab.current = activeTab; }
   }, [activeTab]);
 
-  const addSimulation = (p: Simulation) => {
-    setSimulations(prev => [...prev, p]);
-    setActiveSimulationId(p.id);
-  };
-  const updateSimulation = (p: Simulation) => setSimulations(prev => prev.map(x => x.id === p.id ? p : x));
-  const deleteSimulation = (id: string) => {
-    const nextSimulations = simulations.filter(x => x.id !== id);
-    const nextScenarios = scenarios.filter(x => x.simulationId !== id);
-    const nextScenarioIds = new Set(nextScenarios.map((scenario) => scenario.id));
-    setSimulations(nextSimulations);
-    setScenarios(nextScenarios);
-    setActiveSimulationId(current => current === id ? (nextSimulations[0]?.id ?? null) : current);
-    setActiveScenarioId(current => {
-      if (!current) return nextScenarios[0]?.id ?? null;
-      return nextScenarioIds.has(current) ? current : (nextScenarios[0]?.id ?? null);
-    });
-    setScenarioCellOverrides(prev => prev.filter(override => nextScenarioIds.has(override.scenarioId)));
-  };
-  const saveScenario = (s: Scenario) => {
-    setScenarios(prev => [...prev, s]);
-    setActiveSimulationId(s.simulationId);
-    setActiveScenarioId(s.id);
-    setSimulations(prev => prev.map((simulation) => (
-      simulation.id === s.simulationId
-        ? { ...simulation, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
-        : simulation
-    )));
-  };
-  const updateScenario = (s: Scenario) => {
-    setScenarios(prev => prev.map(x => x.id === s.id ? s : x));
-    setSimulations(prev => prev.map((simulation) => (
-      simulation.id === s.simulationId && simulation.activeScenarioId === s.id
-        ? { ...simulation, activeScenarioId: s.id, updatedAt: new Date().toISOString() }
-        : simulation
-    )));
-  };
-  const deleteScenario = (id: string) => {
-    const nextScenarios = scenarios.filter(x => x.id !== id);
-    setScenarios(nextScenarios);
-    setActiveScenarioId(current => current === id ? (nextScenarios[0]?.id ?? null) : current);
-    setScenarioCellOverrides(prev => prev.filter(override => override.scenarioId !== id));
-    setSimulations(prev => prev.map((simulation) => (
-      simulation.activeScenarioId === id
-        ? { ...simulation, activeScenarioId: nextScenarios.find((scenario) => scenario.simulationId === simulation.id)?.id }
-        : simulation
-    )));
-  };
-  const addProposal = (proposal: Proposal) => setProposals(prev => [...prev, proposal]);
-  const updateProposal = (proposal: Proposal) => setProposals(prev => prev.map(item => item.id === proposal.id ? proposal : item));
-  const deleteProposal = (id: string) => {
-    setProposals(prev => prev.filter(item => item.id !== id));
-    setScenarios(prev => prev.map((scenario) => ({
-      ...scenario,
-      proposalIds: scenario.proposalIds.filter(proposalId => proposalId !== id),
-    })));
-  };
-  const selectSimulation = (simulationId: string) => {
-    setActiveSimulationId(simulationId);
-    const simulation = simulations.find((item) => item.id === simulationId);
-    const simulationScenarios = scenarios.filter((scenario) => scenario.simulationId === simulationId);
-    setActiveScenarioId(simulation?.activeScenarioId ?? simulationScenarios[0]?.id ?? null);
-  };
-  const selectScenario = (scenarioId: string | null) => {
-    setActiveScenarioId(scenarioId);
-    if (!scenarioId) return;
-    const scenario = scenarios.find((item) => item.id === scenarioId);
-    if (!scenario) return;
-    setActiveSimulationId(scenario.simulationId ?? null);
-    setSimulations(prev => prev.map((simulation) => (
-      simulation.id === scenario.simulationId
-        ? { ...simulation, activeScenarioId: scenarioId, updatedAt: new Date().toISOString() }
-        : simulation
-    )));
-  };
+  // Los handlers de propuestas/escenarios ahora viven dentro de CashFlowView;
+  // App sólo expone los setters directos al componente.
 
   // ── CXP per-cia cache management ──
   const mergeCxpForCia = useCallback((cia: string, records: CXPRecord[]) => {
@@ -587,13 +422,6 @@ export default function App() {
   const addClient = (c: Client) => setClients(prev => [...prev, c]);
   const updateClient = (c: Client) => setClients(prev => prev.map(x => x.id === c.id ? c : x));
   const deleteClient = (id: string) => setClients(prev => prev.filter(x => x.id !== id));
-
-  // The Upload screen is opt-in now: the app shell always renders so the user
-  // can jump directly to Clientes / Cobranza / Proveedores without first
-  // loading a FlowPlan.
-  if (showUpload) {
-    return <Upload onPlanLoaded={p => { setPlan(p); setShowUpload(false); setActiveTab('dashboard'); }} />;
-  }
 
   const activeSection = SECTION_FOR_TAB[activeTab] ?? 'operacion';
   const subTabs = SUB_TABS[activeSection];
@@ -622,16 +450,13 @@ export default function App() {
           <nav className="flex items-center rounded-2xl p-1 gap-1" style={{ background: 'var(--gray-50)' }}>
             {SECTIONS.map(s => {
               const isActive = activeSection === s.id;
-              // Status badge logic
               const catalogCount = clients.length + providers.length;
-              const badge = s.id === 'proyeccion' && !plan
-                ? 'Sin plan'
-                : s.id === 'catalogos' && catalogCount > 0
-                  ? `${catalogCount}`
-                  : s.id === 'operacion' && (cxpRecords.length > 0 || bankStatements.length > 0)
-                    ? 'Activo'
-                    : null;
-              const badgeColor = s.id === 'proyeccion' && !plan ? 'var(--warning)' : 'var(--gray-400)';
+              const badge = s.id === 'catalogos' && catalogCount > 0
+                ? `${catalogCount}`
+                : s.id === 'operacion' && (cxpRecords.length > 0 || bankStatements.length > 0)
+                  ? 'Activo'
+                  : null;
+              const badgeColor = 'var(--gray-400)';
               return (
                 <button
                   key={s.id}
@@ -659,7 +484,7 @@ export default function App() {
                       <span
                         className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
                         style={{
-                          background: s.id === 'proyeccion' && !plan ? 'var(--warning-muted)' : 'var(--gray-100)',
+                          background: 'var(--gray-100)',
                           color: badgeColor,
                         }}
                       >
@@ -699,14 +524,9 @@ export default function App() {
             <button
               onClick={() => {
                 const json = exportStore({
-                  plan, simulations, scenarios, providers, clients,
-                  proposals, activeSimulationId, activeScenarioId,
-                  activeKpiIds,
-                  customKpis,
-                  kpiConfigs,
+                  proposals, scenarios, activeScenarioId,
+                  providers, clients,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
-                  scenarioCellOverrides,
-                  forecastConfidenceOverrides,
                   lastSaved: new Date().toISOString(),
                 });
                 const blob = new Blob([json], { type: 'application/json' });
@@ -726,17 +546,6 @@ export default function App() {
             >
               <Download className="w-[18px] h-[18px]" />
             </button>
-            <button
-              onClick={() => setShowUpload(true)}
-              title={plan ? 'Nuevo Plan' : 'Cargar Plan'}
-              aria-label={plan ? 'Cargar nuevo Plan de Flujo' : 'Cargar Plan de Flujo'}
-              className="flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
-              style={{ color: 'var(--gray-400)' }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
-            >
-              <ArrowUpFromLine className="w-[18px] h-[18px]" />
-            </button>
           </div>
         </div>
       </header>
@@ -753,7 +562,6 @@ export default function App() {
               </span>
               {subTabs.map(t => {
                 const isActive = activeTab === t.id;
-                const needsPlan = t.needsPlan && !plan;
                 return (
                   <button
                     key={t.id}
@@ -762,12 +570,9 @@ export default function App() {
                     style={{
                       background: isActive ? 'var(--primary-muted)' : undefined,
                       color: isActive ? 'var(--primary)' : 'var(--gray-500)',
-                      opacity: needsPlan ? 0.5 : 1,
                     }}
-                    title={needsPlan ? 'Requiere cargar un Plan de Flujo' : undefined}
                   >
                     {t.label}
-                    {needsPlan && <span className="ml-1 text-[10px]" style={{ color: 'var(--warning)' }}>*</span>}
                   </button>
                 );
               })}
@@ -781,52 +586,23 @@ export default function App() {
         <div key={pageKey} className="animate-page-in">
           <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
             {activeTab === 'dashboard' && (
-              plan
-                ? <>
-                    <Dashboard plan={plan} simulations={simulations} />
-                    <div className="mt-8 rounded-2xl border border-[var(--gray-200)] bg-white p-5 shadow-sm">
-                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <h2 className="text-[18px] font-semibold text-[var(--gray-950)] tracking-tight">
-                            Pronóstico con Escenarios
-                          </h2>
-                          <p className="text-[13px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-                            La vista detallada se abre en su propia pestaña para mantener el Dashboard ligero.
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => setActiveTab('forecast')}
-                          className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-[13px] font-medium text-white transition hover:bg-[var(--primary-hover)]"
-                        >
-                          <LineChart className="h-4 w-4" />
-                          Abrir pronóstico
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Dashboard" />
-            )}
-            {activeTab === 'kpis' && (
-              <KpiCenter
-                clients={clients}
-                assumptions={assumptions}
-                confirmedPayments={confirmedPayments}
-                cxpRecords={cxpRecords}
+              <Dashboard
+                companyCode={selectedCia}
                 bankStatements={bankStatements}
-                plan={plan}
-                simulations={simulations}
-                scenarios={scenarios}
                 proposals={proposals}
-                overrides={scenarioCellOverrides}
-                activeSimulationId={activeSimulationId}
+                onOpenFlow={() => setActiveTab('flow')}
+              />
+            )}
+            {activeTab === 'flow' && (
+              <CashFlowView
+                companyCode={selectedCia}
+                bankStatements={bankStatements}
+                proposals={proposals}
+                scenarios={scenarios}
                 activeScenarioId={activeScenarioId}
-                activeKpiIds={activeKpiIds}
-                onActiveKpiIdsChange={setActiveKpiIds}
-                defaultKpiIds={DEFAULT_ACTIVE_KPI_IDS}
-                customKpis={customKpis}
-                onCustomKpisChange={setCustomKpis}
-                kpiConfigs={kpiConfigs}
-                onKpiConfigsChange={setKpiConfigs}
+                onProposalsChange={setProposals}
+                onScenariosChange={setScenarios}
+                onActiveScenarioChange={setActiveScenarioId}
               />
             )}
             {activeTab === 'clients' && (
@@ -860,52 +636,6 @@ export default function App() {
                 onDelete={deleteProvider}
               />
             )}
-            {activeTab === 'scenarios' && (
-              plan
-                ? <ScenarioWorkbench
-                    plan={plan}
-                    simulations={simulations}
-                    scenarios={scenarios}
-                    proposals={proposals}
-                    overrides={scenarioCellOverrides}
-                    activeSimulationId={activeSimulationId}
-                    activeScenarioId={activeScenarioId}
-                    onSelectSimulation={selectSimulation}
-                    onSelectScenario={selectScenario}
-                    onAdd={addSimulation}
-                    onUpdate={updateSimulation}
-                    onDelete={deleteSimulation}
-                    onAddScenario={saveScenario}
-                    onUpdateScenario={updateScenario}
-                    onDeleteScenario={deleteScenario}
-                    onAddProposal={addProposal}
-                    onUpdateProposal={updateProposal}
-                    onDeleteProposal={deleteProposal}
-                  />
-                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Propuestas" />
-            )}
-            {activeTab === 'forecast' && (
-              plan
-                ? <Forecast
-                    plan={plan}
-                    simulations={simulations}
-                    scenarios={scenarios}
-                    proposals={proposals}
-                    activeSimulationId={activeSimulationId}
-                    activeScenarioId={activeScenarioId}
-                    overrides={scenarioCellOverrides}
-                    confidenceOverrides={forecastConfidenceOverrides}
-                    granularity={forecastGranularity}
-                    cxpRecords={cxpRecords}
-                    cxpLoadedCias={cxpLoadedCias}
-                    onGranularityChange={setForecastGranularity}
-                    onSelectScenario={selectScenario}
-                    onOverridesChange={setScenarioCellOverrides}
-                    onConfidenceOverridesChange={setForecastConfidenceOverrides}
-                  />
-                : <PlanRequired onUpload={() => setShowUpload(true)} feature="Pronóstico" />
-            )}
-            {/* Simulator tab removed — functionality lives in ScenarioWorkbench */}
             {activeTab === 'cxp' && (
               <CXP
                 records={cxpRecords}
@@ -953,7 +683,7 @@ export default function App() {
         onNavigate={(tabId) => { setActiveTab(tabId as TabId); setCmdOpen(false); }}
         clients={clients.map(c => ({ id: c.id, name: c.name }))}
         providers={providers.map(p => ({ id: p.id, name: p.name }))}
-        simulations={simulations.map(p => ({ id: p.id, name: p.name }))}
+        simulations={[]}
       />
       <ActivityFeedPanel
         open={activityOpen}
@@ -1299,35 +1029,3 @@ function CompanySelector({
   );
 }
 
-function PlanRequired({ onUpload, feature }: { onUpload: () => void; feature: string }) {
-  const tips: Record<string, string> = {
-    Dashboard: 'El Dashboard muestra KPIs anuales, flujo mensual y alertas de liquidez.',
-    'Pronóstico': 'El Pronóstico permite ver proyecciones P&L y flujo de caja con escenarios.',
-    Propuestas: 'Las Propuestas te permiten crear y comparar escenarios what-if.',
-    Simulador: 'El Simulador modela el impacto de cambios en ingresos, costos y timing.',
-  };
-  return (
-    <div className="flex flex-col items-center justify-center py-28 text-center">
-      <div
-        className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5 animate-card-in"
-        style={{ background: 'var(--gray-50)', boxShadow: 'var(--shadow-xs)' }}
-      >
-        <FileSpreadsheet className="w-7 h-7" style={{ color: 'var(--gray-400)' }} />
-      </div>
-      <h2 className="text-[22px] font-semibold tracking-[-0.02em] animate-card-in stagger-1" style={{ color: 'var(--gray-950)' }}>
-        {feature} requiere un Plan de Flujo
-      </h2>
-      <p className="text-[13.5px] mt-2 max-w-[420px] leading-relaxed animate-card-in stagger-2" style={{ color: 'var(--gray-400)' }}>
-        {tips[feature] || ''} Carga el flujo consolidado para comenzar.
-        Mientras tanto puedes trabajar en Clientes, Cobranza y Proveedores.
-      </p>
-      <button
-        onClick={onUpload}
-        className="mt-6 flex items-center gap-2 px-5 h-10 rounded-xl text-white text-[13.5px] font-medium hover-press animate-card-in stagger-3"
-        style={{ background: 'var(--primary)', boxShadow: '0 2px 8px oklch(55% 0.22 255 / 0.2)' }}
-      >
-        <ArrowUpFromLine className="w-4 h-4" /> Cargar Plan
-      </button>
-    </div>
-  );
-}
