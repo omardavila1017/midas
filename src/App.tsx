@@ -267,12 +267,20 @@ export default function App() {
         if (current.length === 0) return loaded;
 
         const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toUpperCase();
-        const byName = new Map(current.map((provider, index) => [normalize(provider.name), { provider, index }]));
-        const merged = [...current];
-        let changed = false;
+
+        // Remove catalog-sourced providers that no longer exist in the updated
+        // catalog (e.g. unclassified providers that were purged from the catalog).
+        const catalogNames = new Set(loaded.map(p => normalize(p.name)));
+        const filtered = current.filter(
+          p => !p.id.startsWith('catalog-prov-') || catalogNames.has(normalize(p.name))
+        );
+
+        const filteredByName = new Map(filtered.map((provider, index) => [normalize(provider.name), { provider, index }]));
+        const merged = [...filtered];
+        let changed = filtered.length !== current.length;
 
         for (const catalogProvider of loaded) {
-          const existing = byName.get(normalize(catalogProvider.name));
+          const existing = filteredByName.get(normalize(catalogProvider.name));
           if (!existing) {
             merged.push(catalogProvider);
             changed = true;
