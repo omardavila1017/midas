@@ -7,6 +7,7 @@
 /* ═══════════════════════════════════════════════
    Midas — Senda Design System
    Corporativo skin · 4pt grid · Roboto
+   (Treasury workbench — canonical token layer)
    ═══════════════════════════════════════════════ */
 
 :root {
@@ -78,6 +79,39 @@
   --max-width: 1400px;
   --header-h: 56px;
   --page-gutter: 32px;
+
+  /* ── Typography scale (Midas canonical) ── */
+  --font-family: 'Roboto', ui-sans-serif, system-ui, -apple-system,
+                 'Segoe UI', sans-serif;
+  --fs-h1:    1.75rem;    /* 28px — page titles, modal titles */
+  --fs-h2:    1.25rem;    /* 20px — section titles inside cards */
+  --fs-h3:    1rem;       /* 16px — subsection, list headers */
+  --fs-body:  0.875rem;   /* 14px — default */
+  --fs-small: 0.8125rem;  /* 13px — tables, forms, data */
+  --fs-meta:  0.6875rem;  /* 11px — eyebrows, column labels */
+
+  --lh-tight: 1.25;
+  --lh-base:  1.5;
+
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-bold:    700;
+
+  --tracking-meta: 0.05em;
+
+  /* ── Midas wordmark gold gradient ──
+     The one sanctioned gradient in the system. Used only
+     on the "Midas" header lockup — never on decorative UI. */
+  --midas-gold:        #e9b944;
+  --midas-gold-deep:   #b08518;
+  --midas-gold-light:  #f5c560;
+  --midas-gold-gradient: linear-gradient(
+    135deg,
+    #b08518 0%,
+    #e9b944 35%,
+    #f5c560 65%,
+    #b08518 100%
+  );
 }
 
 [data-skin="corporativo"] {
@@ -517,3 +551,61 @@ input[type="range"]::-moz-range-thumb {
   transform: translateX(-50%);
   top: 0;
 }
+
+/* ═══════════════════════════════════════════════
+   MIDAS BRAND LOCKUP
+   The only gradient allowed in the system (brand mark).
+   ═══════════════════════════════════════════════ */
+
+.midas-wordmark {
+  font-family: var(--font-family);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  background: var(--midas-gold-gradient);
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+          color: transparent;
+  /* subtle depth — NOT a glow — keeps the mark crisp on white */
+  text-shadow: 0 1px 0 rgba(176, 133, 24, 0.08);
+  user-select: none;
+}
+
+.midas-divider {
+  display: inline-block;
+  width: 1px;
+  height: 22px;
+  background: var(--gray-200);
+  flex-shrink: 0;
+}
+
+/* Senda wordmark container — gives the burgundy logo a stable chip
+   inside a light header so it keeps contrast next to the gold mark. */
+.senda-lockup {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 10px;
+  background: #ffffff;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+}
+
+.senda-lockup img {
+  height: 20px;
+  width: auto;
+  display: block;
+  object-fit: contain;
+}
+
+/* Meta / eyebrow helper (matches Midas spec) */
+.eyebrow,
+.label-meta {
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-meta);
+}
+
