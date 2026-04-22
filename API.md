@@ -38,12 +38,12 @@ Fetches client and provider catalogs from Cognos report endpoints. When Cognos i
 
 To activate live data connections in Atlas:
 
-1. Go to Atlas → FlowSense → Environment Variables
+1. Go to Atlas → Midas → Environment Variables
 2. Configure the following variables:
 
 | VARIABLE | VALUE | WHERE TO GET IT |
 |----------|-------|-----------------|
-| `VITE_ATLAS_ARTIFACT_ID` | `flowsense` | Atlas admin |
+| `VITE_ATLAS_ARTIFACT_ID` | `midas` | Atlas admin |
 | `VITE_JDE_BASE_URL` | Production JDE Orchestrator URL or Atlas proxy path | JDE / Atlas admin |
 | `VITE_JDE_TOKEN` | Bearer credential | JDE admin |
 | `VITE_JDE_ENVIRONMENT` | `PD920` for production | JDE admin |
@@ -55,9 +55,9 @@ To activate live data connections in Atlas:
 3. Redeploy the artifact after setting variables.
 
 ## Pending Items (require Atlas admin)
-- Confirm the Cognos report path for the consolidated cash-flow plan: `/reports/flowsense/cash-flow-plan`.
-- Confirm the Cognos report path for the client catalog: `/reports/flowsense/clientes`.
-- Confirm the Cognos report path for the provider catalog: `/reports/flowsense/proveedores`.
+- Confirm the Cognos report path for the consolidated cash-flow plan: `/reports/midas/cash-flow-plan`.
+- Confirm the Cognos report path for the client catalog: `/reports/midas/clientes`.
+- Confirm the Cognos report path for the provider catalog: `/reports/midas/proveedores`.
 - Confirm whether local catalog snapshots should remain as staging fallback or move to an Atlas-managed mock endpoint.
 
 ## Security Notes

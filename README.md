@@ -1,10 +1,10 @@
-# FlowSense
+# Midas
 
 > This artifact lets a treasury analyst evaluate consolidated cash flow to prioritize collections and payments before committing liquidity.
 
 ## Overview
 
-FlowSense is an Atlas-ready treasury workbench for consolidated cash-flow review, scenario planning, collections, accounts payable, bank movements, KPIs, and forecasts. It is used by treasury and finance users who need to compare expected receipts, scheduled payments, current bank position, and scenario impact before making liquidity decisions. Live data is read from JDE and Cognos-facing service layers, with deterministic mock fallbacks for local development and staging.
+Midas is an Atlas-ready treasury workbench for consolidated cash-flow review, scenario planning, collections, accounts payable, bank movements, KPIs, and forecasts. It is used by treasury and finance users who need to compare expected receipts, scheduled payments, current bank position, and scenario impact before making liquidity decisions. Live data is read from JDE and Cognos-facing service layers, with deterministic mock fallbacks for local development and staging.
 
 ## Architecture
 
@@ -85,12 +85,12 @@ If env vars are not set, Cognos-backed services return mock data automatically. 
 
 To activate live data connections in Atlas:
 
-1. Go to Atlas -> FlowSense -> Environment Variables
+1. Go to Atlas -> Midas -> Environment Variables
 2. Configure the following variables:
 
 | VARIABLE | VALUE | WHERE TO GET IT |
 |----------|-------|-----------------|
-| `VITE_ATLAS_ARTIFACT_ID` | `flowsense` | Atlas admin |
+| `VITE_ATLAS_ARTIFACT_ID` | `midas` | Atlas admin |
 | `VITE_JDE_BASE_URL` | Production JDE Orchestrator URL or Atlas proxy path | JDE / Atlas admin |
 | `VITE_JDE_TOKEN` | Bearer credential | JDE admin |
 | `VITE_JDE_ENVIRONMENT` | `PD920` for production | JDE admin |
@@ -116,9 +116,9 @@ Full detail is documented in `RULES.md`.
 
 - `src/domain/collectionEngine.ts:75`: invoice dates are currently assumed as the first day of the month; per-event invoice dates are a documented follow-up.
 - Cognos report paths must be confirmed by Atlas/Cognos admins:
-  - `/reports/flowsense/cash-flow-plan`
-  - `/reports/flowsense/clientes`
-  - `/reports/flowsense/proveedores`
+  - `/reports/midas/cash-flow-plan`
+  - `/reports/midas/clientes`
+  - `/reports/midas/proveedores`
 - The production bundle still exceeds Vite's 500 kB chunk warning threshold.
 - `src/services/jde.ts` is imported both statically and dynamically, so Vite cannot split it into a separate chunk.
 

@@ -1,5 +1,5 @@
 /**
- * Export utilities for FlowSense.
+ * Export utilities for Midas.
  * Provides CSV generation and clipboard copy for all modules.
  */
 

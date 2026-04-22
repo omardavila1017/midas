@@ -104,7 +104,7 @@ export default function Clients({ clients, onReplace, onAdd, onUpdate, onDelete 
       'Venta Mensual': c.monthlyBilling[0],
       Factoraje: c.factoraje ? 'Sí' : 'No',
     }));
-    downloadFile(toCSV(rows), 'clientes-flowsense.csv');
+    downloadFile(toCSV(rows), 'clientes-midas.csv');
   };
 
   return (

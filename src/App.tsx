@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Proposal, Scenario, TabId } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
+import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import { fetchCompanies, type Company, type BankAccountStatement, type BankStatementFormat } from './services/jde';
 import Dashboard from './components/Dashboard';
@@ -131,7 +131,7 @@ export default function App() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companyGroups, setCompanyGroups] = useState<CompanyGroup[]>(() => loadCompanyGroups());
   const [selectedCia, setSelectedCia] = useState<string>(
-    () => localStorage.getItem('flowsense.selectedCia') ?? 'all'
+    () => localStorage.getItem('midas.selectedCia') ?? 'all'
   );
 
   // Persist company groups
@@ -140,15 +140,15 @@ export default function App() {
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [bankStatements, setBankStatements] = useState<BankAccountStatement[]>(() => {
     try {
-      const raw = localStorage.getItem('flowsense.bankStatements.v2');
+      const raw = localStorage.getItem('midas.bankStatements.v2');
       const parsed = raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
       // Descartar demo data ficticia que pudo haber quedado cacheada de
       // versiones previas. Si detectamos CUALQUIER referencia demo dentro
       // del cache, lo tiramos entero — no vale la pena mezclar ficticio con
       // real en el flujo.
       if (containsDemoBankData(parsed)) {
-        localStorage.removeItem('flowsense.bankStatements.v2');
-        localStorage.removeItem('flowsense.bankLastQuery.v2');
+        localStorage.removeItem('midas.bankStatements.v2');
+        localStorage.removeItem('midas.bankLastQuery.v2');
         return [];
       }
       return parsed;
@@ -159,7 +159,7 @@ export default function App() {
     formatoElectronico: BankStatementFormat;
   } | null>(() => {
     try {
-      const raw = localStorage.getItem('flowsense.bankLastQuery.v2');
+      const raw = localStorage.getItem('midas.bankLastQuery.v2');
       return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   });
@@ -226,7 +226,7 @@ export default function App() {
   // Save to localStorage after changes (debounced by 500ms)
   useEffect(() => {
     const timer = setTimeout(() => {
-      const store: FlowSenseStore = {
+      const store: MidasStore = {
         proposals, scenarios, activeScenarioId,
         providers, clients,
         assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
@@ -263,7 +263,7 @@ export default function App() {
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
-    localStorage.setItem('flowsense.selectedCia', selectedCia);
+    localStorage.setItem('midas.selectedCia', selectedCia);
   }, [selectedCia]);
   useEffect(() => {
     if (companies.length > 0 && selectedCia !== 'all'
@@ -275,13 +275,13 @@ export default function App() {
 
   // Persist bank statements + last query
   useEffect(() => {
-    try { localStorage.setItem('flowsense.bankStatements.v2', JSON.stringify(bankStatements)); }
+    try { localStorage.setItem('midas.bankStatements.v2', JSON.stringify(bankStatements)); }
     catch { /* quota or serialization issue; ignore */ }
   }, [bankStatements]);
   useEffect(() => {
     try {
-      if (bankLastQuery) localStorage.setItem('flowsense.bankLastQuery.v2', JSON.stringify(bankLastQuery));
-      else localStorage.removeItem('flowsense.bankLastQuery.v2');
+      if (bankLastQuery) localStorage.setItem('midas.bankLastQuery.v2', JSON.stringify(bankLastQuery));
+      else localStorage.removeItem('midas.bankLastQuery.v2');
     } catch { /* ignore */ }
   }, [bankLastQuery]);
 
@@ -443,12 +443,23 @@ export default function App() {
       <header className="border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)', background: 'var(--card)' }}>
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
           {/* Logo */}
-          <div className="flex items-center gap-2.5 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
-            <div className="h-9 rounded-lg bg-white px-3 flex items-center justify-center border border-[var(--gray-200)]">
-              <img src="/logos/senda-corporativo.svg" alt="Senda" className="h-7 w-auto object-contain" />
-            </div>
-            <span className="text-[15px] font-semibold tracking-[-0.02em]" style={{ color: 'var(--gray-950)' }}>
-              FlowSense
+          <div className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
+            <img src="/logos/senda-corporativo.svg" alt="Senda" className="h-7 w-auto object-contain" />
+            <span
+              className="h-6 w-px"
+              style={{ background: 'var(--gray-200)' }}
+              aria-hidden
+            />
+            <span
+              className="text-[22px] font-bold tracking-[-0.03em] leading-none"
+              style={{
+                background: 'linear-gradient(135deg, #b08518 0%, #e9b944 40%, #f5c560 55%, #b08518 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              Midas
             </span>
           </div>
 
@@ -539,7 +550,7 @@ export default function App() {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `flowsense-backup-${new Date().toISOString().slice(0,10)}.json`;
+                a.download = `midas-backup-${new Date().toISOString().slice(0,10)}.json`;
                 a.click();
                 URL.revokeObjectURL(url);
               }}
