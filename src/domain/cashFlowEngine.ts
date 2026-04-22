@@ -18,6 +18,11 @@ import {
   type AgedBalanceRecord,
 } from '../services/jde';
 import {
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from './netCashFlowEngine';
+import {
   CashFlowMonth,
   EvaluatedCashFlow,
   EvaluatedMonth,
@@ -79,12 +84,19 @@ export function buildHistoricalMonths(
 ): CashFlowMonth[] {
   if (statements.length === 0) return [];
 
+  // Detector de traspasos entre cuentas propias del grupo. Si un ABONO en una
+  // cuenta se compensa con un CARGO en otra del mismo grupo, sumarlos infla
+  // ambos lados del flujo sin reflejar un ingreso/egreso económico real.
+  const ownAccounts = buildOwnAccountsIndex(statements);
+  const ownAccountDetector = buildOwnAccountDetector(ownAccounts);
+
   const byMonth = new Map<string, { income: number; expense: number }>();
 
   for (const acc of statements) {
     for (const mov of acc.movimientos) {
       const ym = toYearMonth(mov.fechaOperacion);
       if (!ym) continue;
+      if (isInternalTransfer(mov, ownAccountDetector)) continue;
       const bucket = byMonth.get(ym) ?? { income: 0, expense: 0 };
       if (mov.tipoMovimiento === 'ABONO') bucket.income += mov.importe;
       else if (mov.tipoMovimiento === 'CARGO') bucket.expense += mov.importe;
@@ -194,56 +206,33 @@ export function projectFutureIncome(
   return total / recent.length;
 }
 
-// ── 3.b Proyección de egresos futuros (regresión lineal) ─────────────────
+// ── 3.b Proyección de egresos futuros ────────────────────────────────────
 
 /**
- * Regresión lineal simple sobre un arreglo de valores históricos.
- * Devuelve una función que dado un offset >= 1 (meses después del último
- * histórico) regresa el valor proyectado, nunca negativo.
- *
- * Con menos de 2 puntos cae en promedio / constante / cero.
- */
-function buildLinearProjector(values: number[]): (offset: number) => number {
-  if (values.length === 0) return () => 0;
-  if (values.length === 1) {
-    const v = Math.max(0, values[0]);
-    return () => v;
-  }
-  const n = values.length;
-  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-  for (let i = 0; i < n; i++) {
-    sumX += i;
-    sumY += values[i];
-    sumXY += i * values[i];
-    sumX2 += i * i;
-  }
-  const denom = n * sumX2 - sumX * sumX;
-  const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
-  const intercept = (sumY - slope * sumX) / n;
-  return (offset: number) => {
-    const x = (n - 1) + offset; // offset=1 → siguiente punto después del último
-    return Math.max(0, intercept + slope * x);
-  };
-}
-
-/**
- * Proyector de egresos por regresión lineal sobre los últimos N meses
- * históricos. `offset` es la distancia en meses contra el último histórico
- * (1 = primer mes proyectado).
+ * Proyector de egresos basado en el promedio de los últimos N meses
+ * históricos. Antes se usaba regresión lineal, pero producía extrapolaciones
+ * irreales: si el mes en curso venía parcial (menos días = menos egresos) la
+ * pendiente quedaba negativa y los egresos proyectados caían a ~0 para meses
+ * lejanos (p.ej. diciembre), inflando artificialmente la caja final. Con un
+ * promedio móvil el baseline se mantiene estable y los picos comprometidos
+ * desde /AntiguedadSaldos siguen pesando vía `projectMonthlyExpense`.
  */
 export function buildExpenseProjector(
   historical: CashFlowMonth[],
-  windowSize = 12,
+  windowSize = 6,
 ): (offset: number) => number {
   if (historical.length === 0) return () => 0;
   const recent = historical.slice(-windowSize);
-  return buildLinearProjector(recent.map((m) => m.expense));
+  const avg = recent.reduce((s, m) => s + m.expense, 0) / recent.length;
+  const baseline = Math.max(0, avg);
+  return () => baseline;
 }
 
 /**
- * Proyecta egresos para un mes futuro combinando la regresión lineal con los
- * egresos ya comprometidos en /AntiguedadSaldos: toma el máximo para no
- * subestimar pagos ya programados cuando la tendencia histórica es menor.
+ * Proyecta egresos para un mes futuro combinando el baseline histórico con
+ * los egresos ya comprometidos en /AntiguedadSaldos: toma el máximo para no
+ * subestimar pagos ya programados y para asegurar que, aunque un mes lejano
+ * aún no tenga facturas programadas, se preserve el nivel típico de gasto.
  */
 export function projectMonthlyExpense(
   offsetFromLastHistorical: number,
@@ -252,6 +241,19 @@ export function projectMonthlyExpense(
 ): number {
   const projected = expenseProjector(offsetFromLastHistorical);
   return Math.max(committed, projected);
+}
+
+/**
+ * Devuelve los meses históricos estrictamente anteriores al mes de `today`.
+ * El mes en curso suele venir parcial (solo los días transcurridos) y, si se
+ * incluye en promedios o regresiones, sesga los proyectados hacia abajo.
+ */
+export function filterCompleteHistorical(
+  historical: CashFlowMonth[],
+  today: string,
+): CashFlowMonth[] {
+  const currentYm = toYearMonth(today);
+  return historical.filter((m) => compareYearMonth(m.yearMonth, currentYm) < 0);
 }
 
 // ── 4. Orquestación: base cash flow completo ─────────────────────────────
@@ -316,8 +318,11 @@ export async function buildBaseCashFlow(
   // 3) Construir históricos
   const historical = buildHistoricalMonths(filteredStatements);
   const futureExpenses = buildFutureExpenses(aged);
-  const avgIncome = projectFutureIncome(historical, incomeProjectionWindow);
-  const expenseProjector = buildExpenseProjector(historical);
+  // Para los promedios que alimentan la proyección excluimos el mes en curso
+  // (parcial). De otro modo ingresos y egresos proyectados salen subestimados.
+  const completeHistorical = filterCompleteHistorical(historical, today);
+  const avgIncome = projectFutureIncome(completeHistorical, incomeProjectionWindow);
+  const expenseProjector = buildExpenseProjector(completeHistorical);
 
   // 4) Determinar rango final
   const lastHistoricalYm = historical.length > 0
@@ -368,8 +373,10 @@ export async function buildBaseCashFlow(
  *   - quarterly: cada 3 meses desde startYearMonth
  *   - semiannual: cada 6 meses desde startYearMonth
  *
- * Un ahorro (expense_saving) reduce egresos → deltaExpense negativo.
- * Un incremento de ingresos (income_increase) suma ingresos → deltaIncome positivo.
+ *   - income_increase  →  +ingresos
+ *   - revenue_loss     →  -ingresos
+ *   - expense_saving   →  -egresos
+ *   - new_expense      →  +egresos (pago de deuda, nueva nómina, etc.)
  */
 export function applyProposalToMonth(
   proposal: Proposal,
@@ -396,11 +403,18 @@ export function applyProposalToMonth(
   }
   if (!hits) return { deltaIncome: 0, deltaExpense: 0 };
 
-  if (proposal.kind === 'income_increase') {
-    return { deltaIncome: proposal.amount, deltaExpense: 0 };
+  const amount = Math.abs(proposal.amount);
+  switch (proposal.kind) {
+    case 'income_increase':
+      return { deltaIncome: amount, deltaExpense: 0 };
+    case 'revenue_loss':
+      return { deltaIncome: -amount, deltaExpense: 0 };
+    case 'new_expense':
+      return { deltaIncome: 0, deltaExpense: amount };
+    case 'expense_saving':
+    default:
+      return { deltaIncome: 0, deltaExpense: -amount };
   }
-  // expense_saving: ahorro reduce egresos (delta negativo)
-  return { deltaIncome: 0, deltaExpense: -proposal.amount };
 }
 
 // ── 6. Evaluación completa ───────────────────────────────────────────────

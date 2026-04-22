@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, X, TrendingUp, TrendingDown, Repeat, Trash2 } from 'lucide-react';
+import { Check, X, TrendingUp, TrendingDown, Repeat, Trash2, Plus, Minus } from 'lucide-react';
 import type { Proposal, ProposalKind, ProposalFrequency } from '../types';
 import { PROPOSAL_FREQUENCY_LABELS } from '../types';
 import MonthPicker from './ui/MonthPicker';
@@ -75,11 +75,10 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--gray-100)]">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--gray-100)' }}>
-            {kind === 'income_increase' ? (
-              <TrendingUp className="w-4 h-4" style={{ color: 'var(--success)' }} />
-            ) : (
-              <TrendingDown className="w-4 h-4" style={{ color: 'var(--primary)' }} />
-            )}
+            {kind === 'income_increase' && <TrendingUp className="w-4 h-4" style={{ color: 'var(--success)' }} />}
+            {kind === 'expense_saving' && <TrendingDown className="w-4 h-4" style={{ color: 'var(--primary)' }} />}
+            {kind === 'new_expense' && <Plus className="w-4 h-4" style={{ color: 'var(--danger)' }} />}
+            {kind === 'revenue_loss' && <Minus className="w-4 h-4" style={{ color: 'var(--warning)' }} />}
           </div>
           <h3 className="text-[14px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
             {initial ? 'Editar propuesta' : 'Nueva propuesta'}
@@ -103,6 +102,14 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
           </label>
           <div className="grid grid-cols-2 gap-2">
             <KindPill
+              active={kind === 'income_increase'}
+              onClick={() => setKind('income_increase')}
+              icon={<TrendingUp className="w-4 h-4" />}
+              label="Ingreso"
+              description="Suma ingresos (nuevo cliente, venta extra)"
+              accentColor="var(--success)"
+            />
+            <KindPill
               active={kind === 'expense_saving'}
               onClick={() => setKind('expense_saving')}
               icon={<TrendingDown className="w-4 h-4" />}
@@ -111,12 +118,20 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
               accentColor="#2563eb"
             />
             <KindPill
-              active={kind === 'income_increase'}
-              onClick={() => setKind('income_increase')}
-              icon={<TrendingUp className="w-4 h-4" />}
-              label="Ingreso"
-              description="Suma ingresos"
-              accentColor="var(--success)"
+              active={kind === 'new_expense'}
+              onClick={() => setKind('new_expense')}
+              icon={<Plus className="w-4 h-4" />}
+              label="Nuevo egreso / Deuda"
+              description="Suma egresos (pago de deuda, nómina, renta)"
+              accentColor="var(--danger)"
+            />
+            <KindPill
+              active={kind === 'revenue_loss'}
+              onClick={() => setKind('revenue_loss')}
+              icon={<Minus className="w-4 h-4" />}
+              label="Pérdida de ingresos"
+              description="Resta ingresos (baja de cliente)"
+              accentColor="var(--warning)"
             />
           </div>
         </div>
@@ -130,7 +145,12 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={kind === 'income_increase' ? 'Ej: Nuevo cliente retail' : 'Ej: Ahorro en combustible'}
+            placeholder={
+              kind === 'income_increase' ? 'Ej: Nuevo cliente retail'
+              : kind === 'expense_saving' ? 'Ej: Ahorro en combustible'
+              : kind === 'new_expense' ? 'Ej: Pago de deuda banco X'
+              : 'Ej: Salida cliente Y'
+            }
             autoFocus
             className="w-full h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] transition-all hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
             style={{ color: 'var(--gray-950)' }}

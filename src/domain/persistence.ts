@@ -95,7 +95,10 @@ function normalizeProposal(v: unknown): Proposal | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as Record<string, unknown>;
   if (typeof o.id !== 'string') return null;
-  const kind = o.kind === 'income_increase' || o.kind === 'expense_saving' ? o.kind : null;
+  const kind =
+    o.kind === 'income_increase' || o.kind === 'expense_saving'
+      || o.kind === 'new_expense' || o.kind === 'revenue_loss'
+      ? o.kind : null;
   if (!kind) return null;
   const frequency = (o.frequency === 'one_time' || o.frequency === 'monthly'
     || o.frequency === 'quarterly' || o.frequency === 'semiannual')

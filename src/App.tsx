@@ -599,6 +599,10 @@ export default function App() {
                 bankStatements={bankStatements}
                 proposals={proposals}
                 onProposalsChange={setProposals}
+                scenarios={scenarios}
+                onScenariosChange={setScenarios}
+                activeScenarioId={activeScenarioId}
+                onActiveScenarioChange={setActiveScenarioId}
               />
             )}
             {activeTab === 'clients' && (

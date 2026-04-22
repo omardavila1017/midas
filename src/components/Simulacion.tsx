@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus, AlertTriangle, Sparkles, Lightbulb, TrendingUp, TrendingDown,
-  Pencil, Activity, Wallet,
+  Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check,
 } from 'lucide-react';
-import type { Proposal, EvaluatedCashFlow, CashFlowMonth } from '../types';
+import type { Proposal, Scenario, EvaluatedCashFlow, CashFlowMonth, ProposalKind } from '../types';
 import { PROPOSAL_FREQUENCY_LABELS } from '../types';
 import { fmtCurrency, fmtCompact } from '../formatters';
 import {
@@ -13,6 +13,7 @@ import {
   projectFutureIncome,
   buildExpenseProjector,
   projectMonthlyExpense,
+  filterCompleteHistorical,
   toYearMonth,
   addMonths,
   compareYearMonth,
@@ -31,6 +32,30 @@ interface Props {
   bankStatements: BankAccountStatement[];
   proposals: Proposal[];
   onProposalsChange: (next: Proposal[]) => void;
+  scenarios: Scenario[];
+  onScenariosChange: (next: Scenario[]) => void;
+  activeScenarioId: string | null;
+  onActiveScenarioChange: (id: string | null) => void;
+}
+
+interface KindPresentation {
+  label: string;
+  accent: string;
+  icon: React.ReactNode;
+  sign: '+' | '−';
+}
+
+function getKindPresentation(kind: ProposalKind): KindPresentation {
+  switch (kind) {
+    case 'income_increase':
+      return { label: 'Ingreso', accent: 'var(--success)', icon: <TrendingUp className="w-3.5 h-3.5" />, sign: '+' };
+    case 'expense_saving':
+      return { label: 'Ahorro', accent: '#2563eb', icon: <TrendingDown className="w-3.5 h-3.5" />, sign: '+' };
+    case 'new_expense':
+      return { label: 'Deuda / Nuevo egreso', accent: 'var(--danger)', icon: <Plus className="w-3.5 h-3.5" />, sign: '−' };
+    case 'revenue_loss':
+      return { label: 'Pérdida de ingreso', accent: 'var(--warning)', icon: <Minus className="w-3.5 h-3.5" />, sign: '−' };
+  }
 }
 
 type EditorState =
@@ -43,6 +68,10 @@ const Simulacion: React.FC<Props> = ({
   bankStatements,
   proposals,
   onProposalsChange,
+  scenarios,
+  onScenariosChange,
+  activeScenarioId,
+  onActiveScenarioChange,
 }) => {
   const [agedBalances, setAgedBalances] = useState<AgedBalanceRecord[]>([]);
   const [agedLoading, setAgedLoading] = useState(false);
@@ -112,6 +141,66 @@ const Simulacion: React.FC<Props> = ({
     : undefined;
 
   const hasHistorical = base.some((m) => m.isHistorical);
+
+  // ── Escenarios (presets de propuestas activas) ────────────────────────
+  const handleSaveScenario = (name: string, description?: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const now = new Date().toISOString();
+    // Snapshot: enabled ids = true, resto = false (el usuario quiere apagar
+    // explícitamente las que no fueron elegidas).
+    const proposalStates: Record<string, boolean> = {};
+    for (const p of proposals) proposalStates[p.id] = p.enabled;
+    const id = `scn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const scenario: Scenario = {
+      id, name: trimmed, description: description?.trim() || undefined,
+      proposalStates, createdAt: now, updatedAt: now,
+    };
+    onScenariosChange([...scenarios, scenario]);
+    onActiveScenarioChange(id);
+  };
+
+  const handleApplyScenario = (scenarioId: string) => {
+    const scn = scenarios.find((s) => s.id === scenarioId);
+    if (!scn) return;
+    const now = new Date().toISOString();
+    // Regla del usuario: "prender las que elegí, apagar las demás".
+    onProposalsChange(
+      proposals.map((p) => {
+        const next = scn.proposalStates[p.id] === true;
+        return p.enabled === next ? p : { ...p, enabled: next, updatedAt: now };
+      }),
+    );
+    onActiveScenarioChange(scenarioId);
+  };
+
+  const handleUpdateScenarioToCurrent = (scenarioId: string) => {
+    const scn = scenarios.find((s) => s.id === scenarioId);
+    if (!scn) return;
+    const now = new Date().toISOString();
+    const proposalStates: Record<string, boolean> = {};
+    for (const p of proposals) proposalStates[p.id] = p.enabled;
+    onScenariosChange(
+      scenarios.map((s) => (s.id === scenarioId ? { ...s, proposalStates, updatedAt: now } : s)),
+    );
+    onActiveScenarioChange(scenarioId);
+  };
+
+  const handleDeleteScenario = (scenarioId: string) => {
+    if (!confirm('¿Eliminar este escenario?')) return;
+    onScenariosChange(scenarios.filter((s) => s.id !== scenarioId));
+    if (activeScenarioId === scenarioId) onActiveScenarioChange(null);
+  };
+
+  // Si el estado enabled de las propuestas cambia manualmente, el escenario
+  // activo deja de reflejar la realidad. Detectarlo evita mostrar "aplicado"
+  // cuando ya no lo está.
+  const activeScenarioMatches = useMemo(() => {
+    if (!activeScenarioId) return false;
+    const scn = scenarios.find((s) => s.id === activeScenarioId);
+    if (!scn) return false;
+    return proposals.every((p) => (scn.proposalStates[p.id] === true) === p.enabled);
+  }, [activeScenarioId, scenarios, proposals]);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -185,6 +274,19 @@ const Simulacion: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* Escenarios (presets de propuestas activas) */}
+      <ScenariosPanel
+        scenarios={scenarios}
+        activeScenarioId={activeScenarioId}
+        activeMatches={activeScenarioMatches}
+        proposalsCount={proposals.length}
+        enabledCount={enabled.length}
+        onSave={handleSaveScenario}
+        onApply={handleApplyScenario}
+        onUpdateCurrent={handleUpdateScenarioToCurrent}
+        onDelete={handleDeleteScenario}
+      />
 
       {/* Propuestas */}
       <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
@@ -342,8 +444,7 @@ const ProposalCard: React.FC<{
   onToggle: (next: boolean) => void;
   onEdit: () => void;
 }> = ({ proposal, onToggle, onEdit }) => {
-  const isIncome = proposal.kind === 'income_increase';
-  const accent = isIncome ? 'var(--success)' : '#2563eb';
+  const { label, accent, icon, sign } = getKindPresentation(proposal.kind);
   return (
     <div
       className="group rounded-xl border p-4 transition-all hover-lift"
@@ -356,13 +457,9 @@ const ProposalCard: React.FC<{
         <div className="flex items-center gap-2 min-w-0">
           <div
             className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: proposal.enabled ? `${accent}1a` : 'var(--gray-100)' }}
+            style={{ background: proposal.enabled ? `${accent}1a` : 'var(--gray-100)', color: proposal.enabled ? accent : 'var(--gray-400)' }}
           >
-            {isIncome ? (
-              <TrendingUp className="w-3.5 h-3.5" style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }} />
-            ) : (
-              <TrendingDown className="w-3.5 h-3.5" style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }} />
-            )}
+            {icon}
           </div>
           <div className="min-w-0">
             <p
@@ -372,7 +469,7 @@ const ProposalCard: React.FC<{
               {proposal.name}
             </p>
             <p className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
-              {isIncome ? 'Ingreso' : 'Ahorro'} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency]}
+              {label} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency]}
             </p>
           </div>
         </div>
@@ -383,7 +480,7 @@ const ProposalCard: React.FC<{
         className="text-[18px] font-semibold tabular-nums mb-1"
         style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }}
       >
-        {isIncome ? '+' : '−'}{fmtCompact(proposal.amount)}
+        {sign}{fmtCompact(proposal.amount)}
       </p>
       <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
         Desde {proposal.startYearMonth}
@@ -412,8 +509,7 @@ const SwitchRow: React.FC<{
   proposal: Proposal;
   onToggle: (next: boolean) => void;
 }> = ({ proposal, onToggle }) => {
-  const isIncome = proposal.kind === 'income_increase';
-  const accent = isIncome ? 'var(--success)' : '#2563eb';
+  const { accent, sign } = getKindPresentation(proposal.kind);
   return (
     <button
       type="button"
@@ -440,7 +536,7 @@ const SwitchRow: React.FC<{
           className="block text-[10px] tabular-nums"
           style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }}
         >
-          {isIncome ? '+' : '−'}{fmtCompact(proposal.amount)} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency].toLowerCase()}
+          {sign}{fmtCompact(proposal.amount)} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency].toLowerCase()}
         </span>
       </span>
     </button>
@@ -468,6 +564,197 @@ const Switch: React.FC<{ enabled: boolean; onChange: (next: boolean) => void; ac
     />
   </button>
 );
+
+// ─── Scenarios panel ────────────────────────────────────────────────────
+
+interface ScenariosPanelProps {
+  scenarios: Scenario[];
+  activeScenarioId: string | null;
+  activeMatches: boolean;
+  proposalsCount: number;
+  enabledCount: number;
+  onSave: (name: string, description?: string) => void;
+  onApply: (id: string) => void;
+  onUpdateCurrent: (id: string) => void;
+  onDelete: (id: string) => void;
+}
+
+const ScenariosPanel: React.FC<ScenariosPanelProps> = ({
+  scenarios, activeScenarioId, activeMatches,
+  proposalsCount, enabledCount,
+  onSave, onApply, onUpdateCurrent, onDelete,
+}) => {
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+
+  const canSave = name.trim().length > 0 && proposalsCount > 0;
+
+  const handleSubmit = () => {
+    if (!canSave) return;
+    onSave(name, description);
+    setName('');
+    setDescription('');
+    setShowForm(false);
+  };
+
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-[var(--gray-100)]">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--primary-muted)' }}>
+            <Layers className="w-4 h-4" style={{ color: 'var(--primary)' }} />
+          </div>
+          <div>
+            <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              Escenarios
+            </h2>
+            <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
+              {scenarios.length === 0
+                ? 'Guarda combinaciones de propuestas activas como presets'
+                : `${scenarios.length} guardado${scenarios.length === 1 ? '' : 's'} · propuestas activas: ${enabledCount}/${proposalsCount}`}
+            </p>
+          </div>
+        </div>
+        {!showForm && (
+          <button
+            onClick={() => setShowForm(true)}
+            disabled={proposalsCount === 0}
+            className="h-9 px-3.5 rounded-xl text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] border border-[var(--gray-200)] hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ color: 'var(--gray-700)' }}
+          >
+            <Save className="w-3.5 h-3.5" />
+            Guardar escenario
+          </button>
+        )}
+      </header>
+
+      {showForm && (
+        <div className="px-6 py-4 border-b border-[var(--gray-100)] bg-[var(--gray-50)]">
+          <p className="text-[11px] mb-3" style={{ color: 'var(--gray-500)' }}>
+            Se guardará el estado actual: {enabledCount} de {proposalsCount} propuestas activas.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_1.5fr_auto] gap-2">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Nombre (ej. Optimista)"
+              autoFocus
+              className="h-9 px-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] focus:outline-none focus:border-[var(--primary)]"
+            />
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Descripción (opcional)"
+              className="h-9 px-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] focus:outline-none focus:border-[var(--primary)]"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowForm(false); setName(''); setDescription(''); }}
+                className="h-9 px-3 rounded-xl text-[12px] font-medium text-[var(--gray-500)] hover:bg-white hover:text-[var(--gray-950)] border border-transparent hover:border-[var(--gray-200)] transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={!canSave}
+                className="h-9 px-4 rounded-xl bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="p-5">
+        {scenarios.length === 0 ? (
+          <p className="text-[12px] text-center py-4" style={{ color: 'var(--gray-400)' }}>
+            Sin escenarios todavía. Activa las propuestas que quieras y guarda el combo.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {scenarios.map((s) => {
+              const isActive = activeScenarioId === s.id && activeMatches;
+              const isDrifted = activeScenarioId === s.id && !activeMatches;
+              const enabledIds = Object.entries(s.proposalStates).filter(([, v]) => v === true).length;
+              return (
+                <div
+                  key={s.id}
+                  className="rounded-xl border p-4 flex flex-col gap-2"
+                  style={{
+                    borderColor: isActive ? 'var(--primary)' : 'var(--gray-200)',
+                    background: isActive ? 'var(--primary-muted)' : 'white',
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-semibold truncate" style={{ color: 'var(--gray-950)' }}>
+                        {s.name}
+                      </p>
+                      <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
+                        {enabledIds} propuesta{enabledIds === 1 ? '' : 's'} activa{enabledIds === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    {isActive && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ background: 'var(--primary)', color: 'white' }}>
+                        Aplicado
+                      </span>
+                    )}
+                    {isDrifted && (
+                      <span
+                        className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                        style={{ background: 'var(--warning-muted)', color: 'var(--warning)' }}
+                        title="El estado de propuestas cambió desde que se aplicó este escenario."
+                      >
+                        Modificado
+                      </span>
+                    )}
+                  </div>
+                  {s.description && (
+                    <p className="text-[11px] line-clamp-2" style={{ color: 'var(--gray-500)' }}>
+                      {s.description}
+                    </p>
+                  )}
+                  <div className="mt-auto pt-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => onApply(s.id)}
+                        disabled={isActive}
+                        className="h-7 px-2.5 rounded-lg text-[11px] font-medium bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {isActive ? 'Aplicado' : 'Aplicar'}
+                      </button>
+                      {isDrifted && (
+                        <button
+                          onClick={() => onUpdateCurrent(s.id)}
+                          className="h-7 px-2.5 rounded-lg text-[11px] font-medium border border-[var(--gray-200)] text-[var(--gray-700)] hover:bg-[var(--gray-100)]"
+                          title="Actualizar este escenario con el estado actual de propuestas"
+                        >
+                          Actualizar a actual
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => onDelete(s.id)}
+                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--danger)]/10 hover:text-[var(--danger)] transition-colors"
+                      aria-label="Eliminar escenario"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
 
 const EmptyState: React.FC<{ onCreate: () => void }> = ({ onCreate }) => (
   <div className="rounded-xl border border-dashed border-[var(--gray-200)] bg-[var(--gray-50)] py-10 text-center">
@@ -585,15 +872,22 @@ function computeBaseCashFlow(
 
   const historical = buildHistoricalMonths(filtered);
   const futureExpenses = buildFutureExpenses(agedBalances);
-  const avgIncome = projectFutureIncome(historical, 6);
-  const expenseProjector = buildExpenseProjector(historical);
 
   const today = new Date().toISOString().slice(0, 10);
   const todayYm = toYearMonth(today);
+  // Excluimos el mes en curso (parcial) del input de proyección para no sesgar
+  // los promedios hacia abajo.
+  const completeHistorical = filterCompleteHistorical(historical, today);
+  const avgIncome = projectFutureIncome(completeHistorical, 6);
+  const expenseProjector = buildExpenseProjector(completeHistorical);
+
   const horizonMonths = 12;
   const lastHistoricalYm = historical.length > 0
     ? historical[historical.length - 1].yearMonth
     : todayYm;
+  const projectionAnchorYm = completeHistorical.length > 0
+    ? completeHistorical[completeHistorical.length - 1].yearMonth
+    : lastHistoricalYm;
   const firstFutureYm = addMonths(
     compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
     1,
@@ -604,7 +898,7 @@ function computeBaseCashFlow(
   let running = historical.length > 0 ? historical[historical.length - 1].closingCash : 0;
   let cursor = firstFutureYm;
   while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-    const offset = Math.max(1, monthsBetween(lastHistoricalYm, cursor));
+    const offset = Math.max(1, monthsBetween(projectionAnchorYm, cursor));
     const committed = futureExpenses.get(cursor) ?? 0;
     const expense = projectMonthlyExpense(offset, committed, expenseProjector);
     const income = avgIncome;
