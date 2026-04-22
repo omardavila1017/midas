@@ -35,7 +35,10 @@ import {
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS } from './domain/companyGroups';
 import type { Budget } from './domain/budget';
+import { parseBudgetCsv } from './domain/budget';
 import { loadBudget, saveBudget } from './domain/budgetPersistence';
+
+const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
@@ -128,6 +131,24 @@ export default function App() {
   const [budget, setBudget] = useState<Budget | null>(() => loadBudget());
 
   useEffect(() => { saveBudget(budget); }, [budget]);
+
+  // Carga automática del CSV de presupuesto empaquetado en `public/presupuesto.csv`.
+  // Si el archivo existe y parsea bien, sobrescribe el budget cacheado — así el
+  // usuario no tiene que volver a subir el CSV manualmente cada vez. Si falla
+  // (404, parser error, red), dejamos el budget que ya estuviera en localStorage.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(DEFAULT_BUDGET_CSV_URL, { cache: 'no-cache' });
+        if (!res.ok) return;
+        const text = await res.text();
+        const r = parseBudgetCsv(text, { fileName: 'presupuesto.csv' });
+        if (!cancelled && r.budget) setBudget(r.budget);
+      } catch { /* sin red o sin archivo → conservamos lo que hubiera en cache */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
@@ -687,7 +708,6 @@ export default function App() {
                 cxpRecords={cxpRecords}
                 assumptions={assumptions}
                 budget={budget}
-                onBudgetChange={setBudget}
                 onOpenFlow={() => setActiveTab('flow')}
                 startingBalanceOverride={startingBalanceOverride}
                 bankStartingBalance={bankStartingBalance}
