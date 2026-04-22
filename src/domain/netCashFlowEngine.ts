@@ -100,6 +100,30 @@ const INTERNAL_BENEFICIARIES: readonly string[] = [
 ];
 
 /**
+ * Códigos cortos (acrónimos) de empresas propias del grupo tal como aparecen
+ * en el concepto/referencia de movimientos bancarios. A diferencia de los
+ * nombres completos (INTERNAL_BENEFICIARIES), estos son siglas de 3-5 letras
+ * y requieren matching con word boundaries para no capturar substrings
+ * accidentales de palabras legítimas (p.ej. "TRCC" podría estar dentro de
+ * otro token si hiciéramos substring-match a pelo).
+ *
+ * Ejemplos donde aparecen:
+ *   - Como título del concepto: "TRCC"
+ *   - Al inicio de leyendas: "TRCC AL R.F.C. TTA4906038F4"
+ *   - Dentro del concepto: "PAGO TRCC S.A."
+ *
+ * Reglas para agregar:
+ *   - Usar mayúsculas (el matcheo es case-insensitive).
+ *   - Mínimo 3 caracteres — menos = alto riesgo de falso positivo.
+ *   - Verificar que la sigla NO sea prefijo común de razones sociales
+ *     externas (p.ej. "TRA" atraparía "Transportes X" de cualquier cliente).
+ */
+const INTERNAL_COMPANY_CODES: readonly string[] = [
+  'TRCC',
+  'TRTT',
+];
+
+/**
  * Helper: construye un regex que matchee cualquiera de los strings dados
  * como substring, escapando caracteres especiales. Case-insensitive.
  * Retorna null si la lista está vacía (para evitar hacer .test() en balde).
@@ -110,8 +134,19 @@ function buildSubstringPattern(items: readonly string[]): RegExp | null {
   return new RegExp(escaped.join('|'), 'i');
 }
 
+/**
+ * Como `buildSubstringPattern` pero con word boundaries (`\b...\b`). Útil
+ * para siglas cortas donde queremos matchear "TRCC" pero NO "ATTRCCX".
+ */
+function buildWordPattern(items: readonly string[]): RegExp | null {
+  if (items.length === 0) return null;
+  const escaped = items.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`\\b(?:${escaped.join('|')})\\b`, 'i');
+}
+
 const INTERNAL_RFC_PATTERN = buildSubstringPattern(INTERNAL_RFCS);
 const INTERNAL_BENEFICIARY_PATTERN = buildSubstringPattern(INTERNAL_BENEFICIARIES);
+const INTERNAL_COMPANY_CODE_PATTERN = buildWordPattern(INTERNAL_COMPANY_CODES);
 
 /**
  * Longitud mínima que debe tener un número de cuenta para considerarse en el
@@ -207,6 +242,13 @@ export function isInternalTransfer(
   if (INTERNAL_BENEFICIARY_PATTERN) {
     if (concepto && INTERNAL_BENEFICIARY_PATTERN.test(concepto)) return true;
     if (referencia && INTERNAL_BENEFICIARY_PATTERN.test(referencia)) return true;
+  }
+
+  // 3b. Sigla corta de empresa propia (TRCC, TRTT, ...) — con word boundaries
+  //     para no matchear substrings accidentales.
+  if (INTERNAL_COMPANY_CODE_PATTERN) {
+    if (concepto && INTERNAL_COMPANY_CODE_PATTERN.test(concepto)) return true;
+    if (referencia && INTERNAL_COMPANY_CODE_PATTERN.test(referencia)) return true;
   }
 
   // 4. Cuenta destino es otra cuenta nuestra del grupo.
@@ -356,6 +398,9 @@ export function classifyMovement(
     return { kind: 'internal', reason: 'rfc' };
   }
   if (INTERNAL_BENEFICIARY_PATTERN && ((concepto && INTERNAL_BENEFICIARY_PATTERN.test(concepto)) || (referencia && INTERNAL_BENEFICIARY_PATTERN.test(referencia)))) {
+    return { kind: 'internal', reason: 'beneficiary' };
+  }
+  if (INTERNAL_COMPANY_CODE_PATTERN && ((concepto && INTERNAL_COMPANY_CODE_PATTERN.test(concepto)) || (referencia && INTERNAL_COMPANY_CODE_PATTERN.test(referencia)))) {
     return { kind: 'internal', reason: 'beneficiary' };
   }
   if (ctx?.ownAccountDetector && ctx.ownAccountDetector(mov)) {

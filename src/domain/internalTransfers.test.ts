@@ -65,6 +65,51 @@ describe('classifyMovement — backwards compatible with isInternalTransfer', ()
     expect(c.reason).toBe('beneficiary');
   });
 
+  it('detecta sigla corta TRCC como beneficiario interno', () => {
+    // Concepto completo es "TRCC" (código empresa del grupo).
+    const m = mov({ concepto: 'TRCC', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('beneficiary');
+    expect(isInternalTransfer(m)).toBe(true);
+  });
+
+  it('detecta sigla corta TRTT como beneficiario interno', () => {
+    const m = mov({ concepto: 'PAGO TRTT', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('beneficiary');
+    expect(isInternalTransfer(m)).toBe(true);
+  });
+
+  it('word boundary: NO matchea substrings accidentales con TRCC/TRTT', () => {
+    // Si apareciera una palabra que contiene "TRCC" sin ser la sigla, no
+    // debe clasificarse como interno. Ejemplo sintético.
+    const m1 = mov({ concepto: 'SUBATTRCCX SA DE CV', referencia: '' });
+    expect(classifyMovement(m1).kind).toBe('real');
+    expect(isInternalTransfer(m1)).toBe(false);
+
+    const m2 = mov({ concepto: 'ATTRTTX PROVEEDOR', referencia: '' });
+    expect(classifyMovement(m2).kind).toBe('real');
+    expect(isInternalTransfer(m2)).toBe(false);
+  });
+
+  it('NO clasifica ORDEN DE ABONO como interno (cobro legítimo)', () => {
+    // El ejemplo real que antes se nos coló: una cuenta Concentradora no
+    // convierte un cobro legítimo en traspaso interno.
+    const m = mov({ concepto: 'ORDEN DE ABONO', referencia: '', importe: 113123.76 });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('real');
+    expect(isInternalTransfer(m)).toBe(false);
+  });
+
+  it('NO clasifica pagos normales "BANORTE · Pagadora" como internos por sí solos', () => {
+    // Una cuenta Pagadora normal — el concepto sí indicaría si es interno;
+    // en este caso el concepto es genérico, así que debe ser real.
+    const m = mov({ concepto: 'PAGO PROVEEDOR X', referencia: '' });
+    expect(classifyMovement(m).kind).toBe('real');
+  });
+
   it('detects another own-account number in concepto via own-account detector', () => {
     const ownAccounts = new Set(['0190047839', '0190099999']);
     const detector = buildOwnAccountDetector(ownAccounts);
