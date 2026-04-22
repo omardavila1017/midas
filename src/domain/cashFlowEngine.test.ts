@@ -5,6 +5,8 @@ import {
   buildHistoricalMonths,
   buildFutureExpenses,
   projectFutureIncome,
+  buildExpenseProjector,
+  projectMonthlyExpense,
   applyProposalToMonth,
   evaluateCashFlow,
 } from './cashFlowEngine';
@@ -114,6 +116,50 @@ describe('projectFutureIncome', () => {
     expect(projectFutureIncome(hist, 6)).toBe(200);
     expect(projectFutureIncome(hist, 1)).toBe(300);
     expect(projectFutureIncome([])).toBe(0);
+  });
+});
+
+describe('buildExpenseProjector', () => {
+  it('returns 0 when there is no history', () => {
+    const p = buildExpenseProjector([]);
+    expect(p(1)).toBe(0);
+    expect(p(5)).toBe(0);
+  });
+
+  it('extrapolates the trend via linear regression', () => {
+    // Egresos crecientes 100, 200, 300 → slope 100, intercept 100.
+    const hist: CashFlowMonth[] = [
+      { yearMonth: '2026-01', isHistorical: true, income: 0, expense: 100, closingCash: 0 },
+      { yearMonth: '2026-02', isHistorical: true, income: 0, expense: 200, closingCash: 0 },
+      { yearMonth: '2026-03', isHistorical: true, income: 0, expense: 300, closingCash: 0 },
+    ];
+    const p = buildExpenseProjector(hist);
+    expect(p(1)).toBeCloseTo(400, 2); // mes siguiente al último histórico
+    expect(p(2)).toBeCloseTo(500, 2);
+    expect(p(6)).toBeCloseTo(900, 2);
+  });
+
+  it('clamps negative projections to zero', () => {
+    // Tendencia fuertemente descendente — no regresamos egresos negativos.
+    const hist: CashFlowMonth[] = [
+      { yearMonth: '2026-01', isHistorical: true, income: 0, expense: 300, closingCash: 0 },
+      { yearMonth: '2026-02', isHistorical: true, income: 0, expense: 200, closingCash: 0 },
+      { yearMonth: '2026-03', isHistorical: true, income: 0, expense: 100, closingCash: 0 },
+    ];
+    const p = buildExpenseProjector(hist);
+    expect(p(5)).toBe(0);
+  });
+});
+
+describe('projectMonthlyExpense', () => {
+  it('uses the committed aged balance when bigger than the projection', () => {
+    const projector = () => 100;
+    expect(projectMonthlyExpense(1, 500, projector)).toBe(500);
+  });
+
+  it('falls back to the regression when nothing is committed', () => {
+    const projector = (offset: number) => 200 * offset;
+    expect(projectMonthlyExpense(3, 0, projector)).toBe(600);
   });
 });
 
