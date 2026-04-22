@@ -74,6 +74,40 @@ describe('buildHistoricalMonths', () => {
   it('returns empty for empty input', () => {
     expect(buildHistoricalMonths([])).toEqual([]);
   });
+
+  it('filtra traspasos entre cuentas propias (no cuentan como ingreso/egreso real)', () => {
+    // Dos cuentas del grupo (mismo prefijo >= 6 chars para entrar al detector).
+    // Un traspaso aparece como CARGO en una y ABONO en la otra, con la leyenda
+    // "TRASPASO REF ..." — ambas deben quedar fuera del total mensual.
+    const statements: BankAccountStatement[] = [
+      {
+        cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
+        fechaEstadoCuenta: '2026-01-31', saldoInicial: 500_000, saldoFinal: 0,
+        movimientos: [
+          { cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
+            fechaOperacion: '2026-01-10', referencia: 'R1', concepto: 'TRASPASO REF 123 CTA DESTINO',
+            tipoMovimiento: 'CARGO', importe: 300_000 },
+          { cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
+            fechaOperacion: '2026-01-20', referencia: 'R2', concepto: 'PAGO CLIENTE',
+            tipoMovimiento: 'ABONO', importe: 100_000 },
+        ],
+      },
+      {
+        cia: '00011', banco: 'BANAMEX', cuenta: '019004784B', moneda: 'MXN',
+        fechaEstadoCuenta: '2026-01-31', saldoInicial: 0, saldoFinal: 0,
+        movimientos: [
+          { cia: '00011', banco: 'BANAMEX', cuenta: '019004784B', moneda: 'MXN',
+            fechaOperacion: '2026-01-10', referencia: 'R1', concepto: 'TRASPASO REF 123 CTA ORIGEN',
+            tipoMovimiento: 'ABONO', importe: 300_000 },
+        ],
+      },
+    ];
+    const months = buildHistoricalMonths(statements);
+    expect(months).toHaveLength(1);
+    // Sólo debe contar el pago real de cliente, no el traspaso interno.
+    expect(months[0].income).toBe(100_000);
+    expect(months[0].expense).toBe(0);
+  });
 });
 
 describe('buildFutureExpenses', () => {
@@ -234,6 +268,16 @@ describe('applyProposalToMonth', () => {
   it('income_increase delta goes to income', () => {
     const p: Proposal = { ...baseProposal, kind: 'income_increase' };
     expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: 10_000, deltaExpense: 0 });
+  });
+
+  it('new_expense delta adds to expense (pago de deuda, nuevo gasto)', () => {
+    const p: Proposal = { ...baseProposal, kind: 'new_expense' };
+    expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: 0, deltaExpense: 10_000 });
+  });
+
+  it('revenue_loss delta subtracts from income', () => {
+    const p: Proposal = { ...baseProposal, kind: 'revenue_loss' };
+    expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: -10_000, deltaExpense: 0 });
   });
 });
 

@@ -18,6 +18,11 @@ import {
   type AgedBalanceRecord,
 } from '../services/jde';
 import {
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from './netCashFlowEngine';
+import {
   CashFlowMonth,
   EvaluatedCashFlow,
   EvaluatedMonth,
@@ -79,12 +84,19 @@ export function buildHistoricalMonths(
 ): CashFlowMonth[] {
   if (statements.length === 0) return [];
 
+  // Detector de traspasos entre cuentas propias del grupo. Si un ABONO en una
+  // cuenta se compensa con un CARGO en otra del mismo grupo, sumarlos infla
+  // ambos lados del flujo sin reflejar un ingreso/egreso económico real.
+  const ownAccounts = buildOwnAccountsIndex(statements);
+  const ownAccountDetector = buildOwnAccountDetector(ownAccounts);
+
   const byMonth = new Map<string, { income: number; expense: number }>();
 
   for (const acc of statements) {
     for (const mov of acc.movimientos) {
       const ym = toYearMonth(mov.fechaOperacion);
       if (!ym) continue;
+      if (isInternalTransfer(mov, ownAccountDetector)) continue;
       const bucket = byMonth.get(ym) ?? { income: 0, expense: 0 };
       if (mov.tipoMovimiento === 'ABONO') bucket.income += mov.importe;
       else if (mov.tipoMovimiento === 'CARGO') bucket.expense += mov.importe;
@@ -361,8 +373,10 @@ export async function buildBaseCashFlow(
  *   - quarterly: cada 3 meses desde startYearMonth
  *   - semiannual: cada 6 meses desde startYearMonth
  *
- * Un ahorro (expense_saving) reduce egresos → deltaExpense negativo.
- * Un incremento de ingresos (income_increase) suma ingresos → deltaIncome positivo.
+ *   - income_increase  →  +ingresos
+ *   - revenue_loss     →  -ingresos
+ *   - expense_saving   →  -egresos
+ *   - new_expense      →  +egresos (pago de deuda, nueva nómina, etc.)
  */
 export function applyProposalToMonth(
   proposal: Proposal,
@@ -389,11 +403,18 @@ export function applyProposalToMonth(
   }
   if (!hits) return { deltaIncome: 0, deltaExpense: 0 };
 
-  if (proposal.kind === 'income_increase') {
-    return { deltaIncome: proposal.amount, deltaExpense: 0 };
+  const amount = Math.abs(proposal.amount);
+  switch (proposal.kind) {
+    case 'income_increase':
+      return { deltaIncome: amount, deltaExpense: 0 };
+    case 'revenue_loss':
+      return { deltaIncome: -amount, deltaExpense: 0 };
+    case 'new_expense':
+      return { deltaIncome: 0, deltaExpense: amount };
+    case 'expense_saving':
+    default:
+      return { deltaIncome: 0, deltaExpense: -amount };
   }
-  // expense_saving: ahorro reduce egresos (delta negativo)
-  return { deltaIncome: 0, deltaExpense: -proposal.amount };
 }
 
 // ── 6. Evaluación completa ───────────────────────────────────────────────

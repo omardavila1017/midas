@@ -26,7 +26,11 @@ export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 
 // ── Propuestas ───────────────────────────────────────────────────────────
 
-export type ProposalKind = 'income_increase' | 'expense_saving';
+export type ProposalKind =
+  | 'income_increase'   // suma ingresos
+  | 'expense_saving'    // reduce egresos
+  | 'new_expense'       // nuevo egreso recurrente: pago de deuda, nueva nómina, renta
+  | 'revenue_loss';     // pérdida de ingresos: baja de cliente, reducción de facturación
 
 export type ProposalFrequency =
   | 'one_time'
@@ -37,6 +41,15 @@ export type ProposalFrequency =
 export const PROPOSAL_KIND_LABELS: Record<ProposalKind, string> = {
   income_increase: 'Incremento de ingresos',
   expense_saving: 'Ahorro',
+  new_expense: 'Nuevo egreso / Deuda',
+  revenue_loss: 'Pérdida de ingresos',
+};
+
+export const PROPOSAL_KIND_DESCRIPTIONS: Record<ProposalKind, string> = {
+  income_increase: 'Suma ingresos',
+  expense_saving: 'Reduce egresos',
+  new_expense: 'Agrega egresos (pago de deuda, nueva nómina, renta)',
+  revenue_loss: 'Resta ingresos (baja de cliente, caída en ventas)',
 };
 
 export const PROPOSAL_FREQUENCY_LABELS: Record<ProposalFrequency, string> = {
