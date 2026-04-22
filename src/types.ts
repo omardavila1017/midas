@@ -1,152 +1,20 @@
-export interface FlowPlan {
-  name: string;
-  year: number;
-  cajaInicial: number;
-  concepts: FlowConcept[];
-  weekDates: string[];
-  /**
-   * True when the plan came from the mock fallback (no real Cognos/JDE API
-   * credentials configured). KPI surfaces gate their numbers on this so we
-   * never show "real-looking" KPIs that are actually synthetic.
-   */
-  isMock?: boolean;
-}
-
-export interface FlowConcept {
-  id: string;
-  excelRow: number;
-  name: string;
-  parentId: string | null;
-  responsible: string | null;
-  conceptType: 'ingreso' | 'egreso' | 'resumen' | 'reserva';
-  sortOrder: number;
-  weeklyData: number[];
-  monthlyData: number[];
-  children?: FlowConcept[];
-}
-
-export type SimulationStatus =
-  | 'Pendiente'
-  | 'En proceso'
-  | 'Aprobada'
-  | 'Descartada';
-
-export type ProposalCategory =
-  | 'ahorro'
-  | 'aumento_ingresos'
-  | 'pausar_gasto'
-  | 'timing_shift';
-
-export const PROPOSAL_CATEGORY_LABELS: Record<ProposalCategory, string> = {
-  ahorro: 'Ahorro',
-  aumento_ingresos: 'Aumento de ingresos',
-  pausar_gasto: 'Pausar gasto',
-  timing_shift: 'Adelantar o retrasar',
-};
-
-export const PROPOSAL_CATEGORY_DESCRIPTIONS: Record<ProposalCategory, string> = {
-  ahorro: 'Reduce egresos agregados por el monto indicado.',
-  aumento_ingresos: 'Suma ingresos agregados por el monto indicado.',
-  pausar_gasto: 'Congela egresos agregados durante el rango de fechas.',
-  timing_shift: 'Mueve un monto de un periodo a otro (adelantar o retrasar).',
-};
-
-export type ProposalFrequency =
-  | 'once'
-  | 'monthly'
-  | 'bimonthly'
-  | 'quarterly'
-  | 'semiannual'
-  | 'annual';
-
-export const PROPOSAL_FREQUENCY_LABELS: Record<ProposalFrequency, string> = {
-  once: 'Una sola vez',
-  monthly: 'Mensual',
-  bimonthly: 'Bimestral',
-  quarterly: 'Trimestral',
-  semiannual: 'Semestral',
-  annual: 'Anual',
-};
-
-export type ProposalEffectMode = 'absolute' | 'percent';
-export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
-
-export const ROLE_TARGET_INCOME = '__role__:income';
-export const ROLE_TARGET_EXPENSE = '__role__:expense';
-export const ROLE_TARGET_COLLECTIONS = '__role__:collections';
-export const ROLE_TARGET_PROVIDER_PAYMENTS = '__role__:provider-payments';
-
-export const ROLE_TARGET_LABELS: Record<string, string> = {
-  [ROLE_TARGET_INCOME]: 'Ajuste general ingresos',
-  [ROLE_TARGET_EXPENSE]: 'Ajuste general egresos',
-  [ROLE_TARGET_COLLECTIONS]: 'Ajuste general cobranza',
-  [ROLE_TARGET_PROVIDER_PAYMENTS]: 'Ajuste general pagos proveedores',
-};
-
-export interface ConceptDeltaEffect {
-  id: string;
-  type: 'concept_delta';
-  conceptId: string;
-  monthOffsets?: number[];
-  yearMonths?: string[];
-  startDate?: string;
-  endDate?: string;
-  mode: ProposalEffectMode;
-  value: number;
-}
-
-export type ProposalEffect = ConceptDeltaEffect;
-
-export interface Proposal {
-  id: string;
-  name: string;
-  description?: string;
-  category: ProposalCategory;
-  amount: number;
-  frequency: ProposalFrequency;
-  startDate: string;
-  endDate?: string;
-  shiftMonths?: number;
-  effects: ProposalEffect[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Simulation {
-  id: string;
-  name: string;
-  description: string;
-  status: SimulationStatus;
-  activeScenarioId?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Scenario {
-  id: string;
-  simulationId: string | null;
-  name: string;
-  description: string;
-  probability: number;
-  startYearMonth: string;
-  horizonMonths: number;
-  proposalIds: string[];
-  locked?: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DrillDownLevel {
-  label: string;
-  conceptId: string | null;
-  month: number | null;
-}
+// ─────────────────────────────────────────────────────────────────────────
+// FlowSense types — modelo simplificado post-rewrite.
+//
+// Principios:
+//   - "Base" no es una entidad. Es el set de propuestas con enabled=false.
+//   - Una propuesta es sólo un ahorro o un incremento de ingresos, con monto,
+//     mes de inicio y frecuencia. Ya no existen "efectos" ni "target ids" ni
+//     categorías compuestas.
+//   - Un escenario es sólo un snapshot del estado enabled/disabled de las
+//     propuestas actuales — funciona como "hot switch" para alternar combos.
+//   - Los meses del flujo se computan contra JDE real (Bancos + AntiguedadSaldos)
+//     y los futuros usan una proyección simple de ingresos (promedio móvil).
+// ─────────────────────────────────────────────────────────────────────────
 
 export type TabId =
   | 'dashboard'
-  | 'kpis'
-  | 'scenarios'
-  | 'forecast'
+  | 'flow'
   | 'providers'
   | 'collections'
   | 'clients'
@@ -154,122 +22,95 @@ export type TabId =
   | 'bancos'
   | 'netflow';
 
-export type ForecastView = 'pnl' | 'cashflow' | 'drivers';
+export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 
-export type ForecastConfidenceBasis =
-  | 'system_calculation'
-  | 'manual_calculation'
-  | 'human_criteria'
-  | 'mixed';
+// ── Propuestas ───────────────────────────────────────────────────────────
 
-export interface ForecastConfidenceOverride {
-  scenarioId: string;
-  score: number;
-  basis: ForecastConfidenceBasis;
-  comment?: string;
-  editedAt: string;
+export type ProposalKind = 'income_increase' | 'expense_saving';
+
+export type ProposalFrequency =
+  | 'one_time'
+  | 'monthly'
+  | 'quarterly'
+  | 'semiannual';
+
+export const PROPOSAL_KIND_LABELS: Record<ProposalKind, string> = {
+  income_increase: 'Incremento de ingresos',
+  expense_saving: 'Ahorro',
+};
+
+export const PROPOSAL_FREQUENCY_LABELS: Record<ProposalFrequency, string> = {
+  one_time: 'Evento único',
+  monthly: 'Mensual',
+  quarterly: 'Trimestral',
+  semiannual: 'Semestral',
+};
+
+export interface Proposal {
+  id: string;
+  name: string;
+  description?: string;
+  kind: ProposalKind;
+  amount: number;          // pesos, siempre positivo
+  startYearMonth: string;  // "YYYY-MM"
+  frequency: ProposalFrequency;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface ScenarioCellOverride {
-  key: string;
-  scenarioId: string;
-  conceptId: string;
-  yearMonth: string;
-  baseValue: number;
-  simulatedValue: number;
-  manualValue: number;
-  comment?: string;
-  editedAt: string;
+// ── Escenarios ───────────────────────────────────────────────────────────
+//
+// Un escenario es simplemente un snapshot de {proposalId -> enabled}. Cargar
+// un escenario aplica ese snapshot a las propuestas actuales; propuestas que
+// no estén en el snapshot quedan con su estado previo.
+
+export interface Scenario {
+  id: string;
+  name: string;
+  description?: string;
+  proposalStates: Record<string, boolean>;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export function scenarioCellKey(
-  scenarioId: string,
-  conceptId: string,
-  yearMonth: string,
-): string {
-  return `${scenarioId}::${conceptId}::${yearMonth}`;
+// ── Flujo de caja ────────────────────────────────────────────────────────
+
+export interface CashFlowMonth {
+  yearMonth: string;       // "YYYY-MM"
+  isHistorical: boolean;   // true si los datos salen de /Bancos; false si son proyección
+  income: number;          // pesos
+  expense: number;         // pesos, positivo (entrada)
+  closingCash: number;     // caja final base — sin propuestas
 }
 
-export interface ScenarioMonth {
-  monthIndex: number;
-  year: number;
-  label: string;
-  ym: string;
-  granularity: ForecastGranularity;
-  startDate: string;
-  endDate: string;
-}
-
-export interface ProposalContribution {
+export interface ProposalDelta {
   proposalId: string;
   proposalName: string;
-  delta: number;
+  deltaIncome: number;     // aporte del mes (puede ser 0)
+  deltaExpense: number;    // aporte del mes (puede ser 0)
 }
 
-export interface EvaluatedCell {
-  key: string;
-  conceptId: string;
+export interface EvaluatedMonth {
   yearMonth: string;
-  monthIndex: number;
-  granularity: ForecastGranularity;
-  periodLabel: string;
-  periodStartDate: string;
-  periodEndDate: string;
-  baseValue: number;
-  simulatedValue: number;
-  finalValue: number;
-  manualDelta: number;
-  override?: ScenarioCellOverride;
-  comment?: string;
-  proposalContributions: ProposalContribution[];
-  hasProposalDelta: boolean;
-  hasManualDelta: boolean;
-  isOverridden: boolean;
-  isEditable: boolean;
+  isHistorical: boolean;
+  baseIncome: number;
+  baseExpense: number;
+  baseClosingCash: number;
+  forecastIncome: number;
+  forecastExpense: number;
+  forecastClosingCash: number;
+  proposalDeltas: ProposalDelta[];
 }
 
-export interface ScenarioMetrics {
-  ingresos: number[];
-  egresos: number[];
-  flujoNeto: number[];
-  cajaFinal: number[];
-  cobranza: number[];
-  pagosProveedores: number[];
-  saldosFinales: number[];
+export interface EvaluatedCashFlow {
+  months: EvaluatedMonth[];
+  proposals: Proposal[];         // las propuestas usadas en la evaluación
+  totalBaseClosingCash: number;  // último mes
+  totalForecastClosingCash: number;
 }
 
-export interface ScenarioKpis {
-  ingresos12m: number;
-  egresos12m: number;
-  flujoNeto12m: number;
-  cajaFinal: number;
-  cajaMinima: number;
-  cobranza12m: number;
-  pagosProveedores12m: number;
-}
-
-export interface ScenarioComparisonSnapshot {
-  scenarioId: string;
-  simulationId: string;
-  diffByCellKey: Map<string, number>;
-  kpiDiff: Partial<Record<keyof ScenarioKpis, number>>;
-}
-
-export interface EvaluatedScenario {
-  simulationId: string;
-  scenarioId: string;
-  granularity: ForecastGranularity;
-  months: ScenarioMonth[];
-  valuesByConceptId: Map<string, number[]>;
-  baseValuesByConceptId: Map<string, number[]>;
-  cells: Map<string, EvaluatedCell>;
-  diffVsBase: Map<string, number>;
-  changedKeys: Set<string>;
-  metrics: ScenarioMetrics;
-  kpis: ScenarioKpis;
-}
-
-export type ForecastLayerMode = 'base' | 'simulated' | 'manual' | 'diff';
+// ── Constantes UI ────────────────────────────────────────────────────────
 
 export const MONTHS = [
   'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
@@ -280,10 +121,3 @@ export const MONTHS_FULL = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
 ];
-
-export const CATEGORY_COLORS: Record<ProposalCategory, string> = {
-  ahorro: 'var(--primary)',
-  aumento_ingresos: 'var(--success)',
-  pausar_gasto: 'var(--warning)',
-  timing_shift: 'var(--chart-4)',
-};
