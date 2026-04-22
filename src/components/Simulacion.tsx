@@ -393,23 +393,33 @@ const Simulacion: React.FC<Props> = ({
 
       {/* Visualización: switches + chart */}
       <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
-        <header className="px-6 py-4 border-b border-[var(--gray-100)]">
-          <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-            Trayectoria de la caja
-          </h2>
-          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-            Activa o desactiva propuestas para ver el impacto en vivo.
-          </p>
+        <header className="px-6 py-4 border-b border-[var(--gray-100)] flex items-baseline justify-between gap-4">
+          <div>
+            <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              Trayectoria de la caja
+            </h2>
+            <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
+              Base vs escenario simulado. Activa propuestas para ver el impacto.
+            </p>
+          </div>
+          {proposals.length > 0 && (
+            <p className="text-[11px] tabular-nums flex-shrink-0" style={{ color: 'var(--gray-500)' }}>
+              {proposals.filter((p) => p.enabled).length}/{proposals.length} activas
+            </p>
+          )}
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr]">
-          <aside className="border-r border-[var(--gray-100)] p-4 space-y-1.5 max-h-[440px] overflow-y-auto">
+          <aside
+            aria-label="Propuestas activables"
+            className="border-b lg:border-b-0 lg:border-r border-[var(--gray-100)] p-4 space-y-1 max-h-[440px] overflow-y-auto"
+          >
             <p className="text-[10px] font-medium uppercase tracking-wider px-2 mb-2" style={{ color: 'var(--gray-400)' }}>
               Propuestas
             </p>
             {proposals.length === 0 ? (
-              <p className="text-[12px] px-2 py-4 text-center" style={{ color: 'var(--gray-400)' }}>
-                Sin propuestas todavía.
+              <p className="text-[12px] px-2 py-6 text-center" style={{ color: 'var(--gray-400)' }}>
+                No hay propuestas todavía. Créalas arriba para simular su impacto.
               </p>
             ) : (
               proposals.map((p) => (
@@ -589,28 +599,32 @@ const SwitchRow: React.FC<{
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={proposal.enabled}
+      aria-label={`${proposal.enabled ? 'Desactivar' : 'Activar'} propuesta ${proposal.name}`}
       onClick={() => onToggle(!proposal.enabled)}
-      className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-left transition-colors hover:bg-[var(--gray-50)]"
+      className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md text-left transition-colors hover:bg-[var(--gray-50)] focus-visible:bg-[var(--gray-50)]"
     >
       <span
-        className="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition"
+        className="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors"
         style={{ background: proposal.enabled ? accent : 'var(--gray-200)' }}
+        aria-hidden="true"
       >
         <span
-          className="inline-block h-4 w-4 rounded-full bg-white shadow transition-transform"
+          className="inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform"
           style={{ transform: proposal.enabled ? 'translateX(18px)' : 'translateX(2px)' }}
         />
       </span>
       <span className="flex-1 min-w-0">
         <span
           className="block text-[12px] font-medium truncate"
-          style={{ color: proposal.enabled ? 'var(--gray-950)' : 'var(--gray-400)' }}
+          style={{ color: proposal.enabled ? 'var(--gray-950)' : 'var(--gray-500)' }}
         >
           {proposal.name}
         </span>
         <span
-          className="block text-[10px] tabular-nums"
-          style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }}
+          className="block text-[10px] tabular-nums truncate"
+          style={{ color: proposal.enabled ? 'var(--gray-500)' : 'var(--gray-400)' }}
         >
           {sign}{fmtCompact(proposal.amount)} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency].toLowerCase()}
         </span>

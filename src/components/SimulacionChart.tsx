@@ -18,6 +18,31 @@ interface Props {
   data: EvaluatedCashFlow;
 }
 
+// Senda DS tokens — no hardcoded hex, no gradients (BAN 2 in .impeccable.md).
+// Recharts doesn't resolve CSS custom properties at render time, so we mirror
+// the tokens from index.css here. If the skin tokens change, update these too.
+const COLOR = {
+  base: '#94a3b8',        // var(--gray-300) — histórico y línea base
+  forecast: '#1e293b',    // var(--primary) — caja simulada
+  grid: '#f1f5f9',        // var(--gray-100)
+  axis: '#e2e8f0',        // var(--border)
+  tickText: '#64748b',    // var(--gray-400)
+  refLine: '#cbd5e1',
+  histArea: '#cbd5e1',    // fill histórico (sólido a baja opacidad)
+  danger: '#dc2626',      // var(--danger) — línea de cero cuando caja cae
+} as const;
+
+const MONTH_LABELS_SHORT = [
+  'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+  'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+];
+
+function formatMonthTick(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-').map(Number);
+  if (!y || !m) return yearMonth;
+  return `${MONTH_LABELS_SHORT[(m - 1) % 12]} ${String(y).slice(2)}`;
+}
+
 const SimulacionChart: React.FC<Props> = ({ data }) => {
   const chartData = useMemo(
     () =>
@@ -31,92 +56,128 @@ const SimulacionChart: React.FC<Props> = ({ data }) => {
   );
 
   const firstFutureIndex = data.months.findIndex((m) => !m.isHistorical);
+  const crossesZero = useMemo(
+    () => chartData.some((d) => d.base < 0 || d.forecast < 0),
+    [chartData],
+  );
 
   if (data.months.length === 0) {
     return (
-      <div className="h-[360px] flex items-center justify-center text-[12px]" style={{ color: 'var(--gray-400)' }}>
-        Sin datos para graficar.
+      <div
+        role="status"
+        aria-live="polite"
+        className="h-[360px] flex flex-col items-center justify-center gap-1 text-center px-6"
+      >
+        <p className="text-[13px] font-medium" style={{ color: 'var(--gray-700)' }}>
+          Sin datos para graficar
+        </p>
+        <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
+          Carga movimientos o estados de cuenta para ver la trayectoria.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="w-full" style={{ height: 360 }}>
+    <div
+      className="w-full"
+      style={{ height: 360 }}
+      role="img"
+      aria-label="Trayectoria de la caja: línea base vs escenario simulado por mes"
+    >
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 10 }}>
-          <defs>
-            <linearGradient id="simHistFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#cbd5e1" stopOpacity={0.45} />
-              <stop offset="100%" stopColor="#cbd5e1" stopOpacity={0.05} />
-            </linearGradient>
-            <linearGradient id="simForecastFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#2563eb" stopOpacity={0.18} />
-              <stop offset="100%" stopColor="#2563eb" stopOpacity={0.0} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-          <XAxis dataKey="yearMonth" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#e2e8f0' }} />
+        <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 8, bottom: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
+          <XAxis
+            dataKey="yearMonth"
+            tickFormatter={formatMonthTick}
+            tick={{ fontSize: 11, fill: COLOR.tickText }}
+            tickLine={false}
+            axisLine={{ stroke: COLOR.axis }}
+            minTickGap={16}
+          />
           <YAxis
             tickFormatter={(v) => fmtCompact(v)}
-            tick={{ fontSize: 11, fill: '#64748b' }}
+            tick={{ fontSize: 11, fill: COLOR.tickText }}
             tickLine={false}
             axisLine={false}
-            width={70}
+            width={64}
           />
           <Tooltip
             formatter={(v: number | string, name: string) => {
               const labelMap: Record<string, string> = {
-                base: 'Caja Final Base',
-                forecast: 'Caja Simulada',
+                base: 'Caja base',
+                forecast: 'Caja simulada',
                 historicalArea: 'Histórico',
               };
               const display = labelMap[name] ?? name;
               return [typeof v === 'number' ? fmtCurrency(v) : v, display];
             }}
-            labelStyle={{ fontSize: 12, fontWeight: 600 }}
-            contentStyle={{ borderRadius: 12, borderColor: '#e5e7eb', boxShadow: '0 8px 24px -8px rgba(15,23,42,0.18)' }}
+            labelFormatter={(label: string) => formatMonthTick(label)}
+            labelStyle={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)' }}
+            contentStyle={{
+              borderRadius: 'var(--radius-md)',
+              border: `1px solid ${COLOR.axis}`,
+              boxShadow: 'var(--shadow-sm)',
+              padding: '8px 10px',
+              fontSize: 12,
+            }}
+            itemStyle={{ padding: '2px 0' }}
+            cursor={{ stroke: COLOR.refLine, strokeWidth: 1 }}
           />
-          <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+          <Legend
+            wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
+            iconType="plainline"
+          />
 
           <Area
             type="monotone"
             dataKey="historicalArea"
-            fill="url(#simHistFill)"
+            fill={COLOR.histArea}
+            fillOpacity={0.18}
             stroke="none"
             isAnimationActive={false}
             legendType="none"
             name="historicalArea"
           />
 
+          {crossesZero && (
+            <ReferenceLine
+              y={0}
+              stroke={COLOR.danger}
+              strokeDasharray="2 4"
+              strokeOpacity={0.5}
+              ifOverflow="extendDomain"
+            />
+          )}
+
           {firstFutureIndex > 0 && (
             <ReferenceLine
               x={chartData[firstFutureIndex]?.yearMonth as string}
-              stroke="#cbd5e1"
+              stroke={COLOR.refLine}
               strokeDasharray="4 4"
-              label={{ value: 'Proyección →', position: 'top', fontSize: 10, fill: '#94a3b8' }}
+              label={{ value: 'Proyección', position: 'top', fontSize: 10, fill: COLOR.tickText }}
             />
           )}
 
           <Line
             type="monotone"
             dataKey="base"
-            stroke="#94a3b8"
-            strokeWidth={2}
+            stroke={COLOR.base}
+            strokeWidth={1.5}
             dot={false}
-            name="Caja Final Base"
-            isAnimationActive
-            animationDuration={400}
+            name="Caja base"
+            isAnimationActive={false}
           />
           <Line
             type="monotone"
             dataKey="forecast"
-            stroke="#2563eb"
-            strokeWidth={2.5}
-            dot={{ r: 3, fill: '#2563eb' }}
-            activeDot={{ r: 5 }}
-            name="Caja Simulada"
-            isAnimationActive
-            animationDuration={500}
+            stroke={COLOR.forecast}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4, strokeWidth: 0 }}
+            name="Caja simulada"
+            isAnimationActive={false}
           />
         </ComposedChart>
       </ResponsiveContainer>
