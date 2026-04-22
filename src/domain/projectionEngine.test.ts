@@ -48,13 +48,13 @@ describe('projectClientIncomeByMonth', () => {
 
 describe('resolveIncomeForMonth', () => {
   it('uses clients when total >= 60% of baseline', () => {
-    const r = resolveIncomeForMonth(80, 100);
+    const r = resolveIncomeForMonth(80, 100, null);
     expect(r.source).toBe('clients');
     expect(r.total).toBe(80);
   });
 
   it('mixes clients and baseline when below threshold', () => {
-    const r = resolveIncomeForMonth(30, 100);
+    const r = resolveIncomeForMonth(30, 100, null);
     expect(r.source).toBe('mixed');
     expect(r.total).toBe(100);
     expect(r.fromClients).toBe(30);
@@ -62,14 +62,21 @@ describe('resolveIncomeForMonth', () => {
   });
 
   it('falls back to baseline when clients empty', () => {
-    const r = resolveIncomeForMonth(0, 100);
+    const r = resolveIncomeForMonth(0, 100, null);
     expect(r.source).toBe('baseline');
     expect(r.total).toBe(100);
   });
 
   it('handles zero baseline and zero clients', () => {
-    const r = resolveIncomeForMonth(0, 0);
+    const r = resolveIncomeForMonth(0, 0, null);
     expect(r.total).toBe(0);
+  });
+
+  it('budget takes precedence over clients and baseline', () => {
+    const r = resolveIncomeForMonth(80, 100, 250);
+    expect(r.source).toBe('budget');
+    expect(r.total).toBe(250);
+    expect(r.fromBudget).toBe(250);
   });
 });
 
@@ -246,9 +253,13 @@ function mkMov(fecha: string, tipo: 'CARGO' | 'ABONO', importe: number, concepto
 }
 
 function baseIncome(total: number) {
-  return { fromClients: total, fromBaseline: 0, total, source: 'clients' as const };
+  return { fromClients: total, fromBaseline: 0, fromBudget: 0, total, source: 'clients' as const };
 }
 
 function baseExpense(total: number) {
-  return { scheduled: 0, recurring: 0, baseline: total, total, topRecurring: [], providerLines: [] };
+  return {
+    scheduled: 0, recurring: 0, baseline: total, fromBudget: 0,
+    total, source: 'baseline' as const,
+    topRecurring: [], providerLines: [], budgetLines: [],
+  };
 }

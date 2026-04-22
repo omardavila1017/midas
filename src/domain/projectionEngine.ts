@@ -31,6 +31,7 @@ import {
   monthsBetween,
 } from './cashFlowEngine';
 import { projectExpenseByProvider, type ProviderMonthLine } from './expensePerProvider';
+import type { Budget } from './budget';
 
 // ── Income ───────────────────────────────────────────────────────────────
 
@@ -39,10 +40,12 @@ export interface IncomeProjectionBreakdown {
   fromClients: number;
   /** Baseline (MA6) si no hay cobranza de clientes ese mes. */
   fromBaseline: number;
+  /** Total declarado por el presupuesto cargado para ese mes. */
+  fromBudget: number;
   /** Total efectivo usado en el mes. */
   total: number;
-  /** Fuente dominante: clients / baseline / mixed. */
-  source: 'clients' | 'baseline' | 'mixed';
+  /** Fuente dominante: clients / baseline / mixed / budget. */
+  source: 'clients' | 'baseline' | 'mixed' | 'budget';
 }
 
 /**
@@ -91,22 +94,34 @@ export function projectClientIncomeByMonth(
 export function resolveIncomeForMonth(
   clientTotal: number,
   baselineAvg: number,
+  budgetValue: number | null,
   coverageThreshold = 0.6,
 ): IncomeProjectionBreakdown {
+  // Presupuesto cargado → manda. Es el compromiso financiero del año.
+  if (budgetValue !== null) {
+    return {
+      fromClients: clientTotal,
+      fromBaseline: 0,
+      fromBudget: budgetValue,
+      total: budgetValue,
+      source: 'budget',
+    };
+  }
   if (clientTotal === 0 && baselineAvg === 0) {
-    return { fromClients: 0, fromBaseline: 0, total: 0, source: 'baseline' };
+    return { fromClients: 0, fromBaseline: 0, fromBudget: 0, total: 0, source: 'baseline' };
   }
   if (clientTotal === 0) {
-    return { fromClients: 0, fromBaseline: baselineAvg, total: baselineAvg, source: 'baseline' };
+    return { fromClients: 0, fromBaseline: baselineAvg, fromBudget: 0, total: baselineAvg, source: 'baseline' };
   }
   if (baselineAvg === 0 || clientTotal >= baselineAvg * coverageThreshold) {
-    return { fromClients: clientTotal, fromBaseline: 0, total: clientTotal, source: 'clients' };
+    return { fromClients: clientTotal, fromBaseline: 0, fromBudget: 0, total: clientTotal, source: 'clients' };
   }
   // Catálogo insuficiente: completamos con baseline hasta llegar al promedio.
   const gap = Math.max(0, baselineAvg - clientTotal);
   return {
     fromClients: clientTotal,
     fromBaseline: gap,
+    fromBudget: 0,
     total: clientTotal + gap,
     source: 'mixed',
   };
@@ -121,8 +136,12 @@ export interface ExpenseProjectionBreakdown {
   recurring: number;
   /** Baseline (MA6) de egresos históricos. */
   baseline: number;
+  /** Total declarado por el presupuesto cargado para ese mes. */
+  fromBudget: number;
   /** Total efectivo (máximo de las fuentes). */
   total: number;
+  /** Fuente dominante: scheduled / recurring / baseline / budget. */
+  source: 'scheduled' | 'recurring' | 'baseline' | 'budget';
   /** Top providers recurrentes detectados, útil para desglose. */
   topRecurring: Array<{ label: string; monthlyAvg: number; monthsActive: number }>;
   /**
@@ -130,6 +149,11 @@ export interface ExpenseProjectionBreakdown {
    * está disponible. Incluye flexibility + paymentPeriod de cada uno.
    */
   providerLines: ProviderMonthLine[];
+  /**
+   * Desglose por rubro del presupuesto (Nómina, Diésel, etc.) cuando hay
+   * budget cargado. Pesos ya normalizados.
+   */
+  budgetLines: Array<{ concept: string; amount: number }>;
 }
 
 /**
@@ -218,9 +242,29 @@ export function resolveExpenseForMonth(
   baseline: number,
   topRecurring: Array<{ label: string; monthlyAvg: number; monthsActive: number }>,
   providerLines: ProviderMonthLine[] = [],
+  budgetValue: number | null = null,
+  budgetLines: Array<{ concept: string; amount: number }> = [],
 ): ExpenseProjectionBreakdown {
+  if (budgetValue !== null) {
+    return {
+      scheduled, recurring, baseline,
+      fromBudget: budgetValue,
+      total: budgetValue,
+      source: 'budget',
+      topRecurring, providerLines, budgetLines,
+    };
+  }
   const total = Math.max(scheduled, recurring, baseline);
-  return { scheduled, recurring, baseline, total, topRecurring, providerLines };
+  const source = total === scheduled && scheduled > 0 ? 'scheduled'
+    : total === recurring && recurring > 0 ? 'recurring'
+    : 'baseline';
+  return {
+    scheduled, recurring, baseline,
+    fromBudget: 0,
+    total,
+    source,
+    topRecurring, providerLines, budgetLines,
+  };
 }
 
 // ── Orquestación ─────────────────────────────────────────────────────────
@@ -259,6 +303,12 @@ export interface ProjectionInputs {
   assumptions: CashFlowAssumptions;
   /** Fecha de "hoy" para recortar meses parciales. */
   today: string;
+  /**
+   * Presupuesto cargado por el usuario. Si existe y cubre el mes, los
+   * totales de ingreso y egreso vienen de ahí (es el compromiso del año).
+   * Sigue conviviendo con la proyección per-proveedor para el desglose.
+   */
+  budget?: Budget | null;
 }
 
 export interface ProjectionResult {
@@ -275,7 +325,7 @@ export interface ProjectionResult {
 export function buildMonthlyProjection(inputs: ProjectionInputs): ProjectionResult {
   const {
     fromYm, toYm, clients, providers, aged, bankStatements,
-    baselineIncome, baselineExpense, assumptions, today,
+    baselineIncome, baselineExpense, assumptions, today, budget,
   } = inputs;
 
   const incomeByMonth = projectClientIncomeByMonth(clients, assumptions, fromYm, toYm);
@@ -300,28 +350,54 @@ export function buildMonthlyProjection(inputs: ProjectionInputs): ProjectionResu
   let cursor = fromYm;
   while (compareYearMonth(cursor, toYm) <= 0) {
     const clientIncome = incomeByMonth.get(cursor) ?? 0;
-    const income = resolveIncomeForMonth(clientIncome, baselineIncome);
+    const [y, m] = cursor.split('-').map(Number);
+    const monthIdx = m - 1;
+    const budgetApplies = budget && budget.year === y;
+    const budgetIncome = budgetApplies ? (budget!.incomeTotal[monthIdx] ?? null) : null;
+    const budgetExpense = budgetApplies ? (budget!.expenseTotal[monthIdx] ?? null) : null;
+    const budgetExpenseLines = budgetApplies
+      ? budget!.expenseByConcept.map((r) => ({ concept: r.concept, amount: r.monthly[monthIdx] ?? 0 }))
+      : [];
+
+    const income = resolveIncomeForMonth(clientIncome, baselineIncome, budgetIncome);
 
     let expense: ExpenseProjectionBreakdown;
     if (usePerProvider) {
       const perProv = perProviderByYm.get(cursor);
       const scheduled = perProv?.scheduledTotal ?? 0;
       const recurring = perProv?.recurringTotal ?? 0;
-      const total = Math.max(perProv?.total ?? 0, baselineExpense);
-      // Si el baseline supera lo per-proveedor, las líneas no llegan a cubrir
-      // el total. Se deja topRecurring vacío porque el "top" real son las
-      // líneas per-proveedor. La UI debe leer providerLines.
-      expense = {
-        scheduled,
-        recurring,
-        baseline: baselineExpense,
-        total,
-        topRecurring: [],
-        providerLines: perProv?.lines ?? [],
-      };
+      if (budgetExpense !== null) {
+        expense = {
+          scheduled,
+          recurring,
+          baseline: baselineExpense,
+          fromBudget: budgetExpense,
+          total: budgetExpense,
+          source: 'budget',
+          topRecurring: [],
+          providerLines: perProv?.lines ?? [],
+          budgetLines: budgetExpenseLines,
+        };
+      } else {
+        const total = Math.max(perProv?.total ?? 0, baselineExpense);
+        expense = {
+          scheduled,
+          recurring,
+          baseline: baselineExpense,
+          fromBudget: 0,
+          total,
+          source: total === scheduled ? 'scheduled' : total === recurring ? 'recurring' : 'baseline',
+          topRecurring: [],
+          providerLines: perProv?.lines ?? [],
+          budgetLines: [],
+        };
+      }
     } else {
       const scheduled = scheduledByMonth.get(cursor) ?? 0;
-      expense = resolveExpenseForMonth(scheduled, recurringBase, baselineExpense, recurringTop);
+      expense = resolveExpenseForMonth(
+        scheduled, recurringBase, baselineExpense, recurringTop, [],
+        budgetExpense, budgetExpenseLines,
+      );
     }
 
     months.push({ yearMonth: cursor, income, expense });

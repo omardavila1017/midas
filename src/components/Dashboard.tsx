@@ -133,10 +133,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   const { base, baseline, projection } = useMemo(
     () => computeBaseCashFlow({
       bankStatements, aged, clients, providers, cxpRecords, assumptions,
-      companyCode, today, overrides,
+      companyCode, today, overrides, budget,
       startingBalance: startingBalanceOverride ?? undefined,
     }),
-    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalanceOverride],
+    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalanceOverride, budget],
   );
 
   // Caja inicial "auto" desde banco (suma saldoInicial). La UI la muestra como
@@ -662,6 +662,7 @@ interface ComputeInputs {
   companyCode: string;
   today: string;
   overrides: ProjectionOverrides;
+  budget: Budget | null;
   /**
    * Caja inicial (pesos) para el primer mes histórico. Si es undefined se
    * usa la suma de saldoInicial reportado por JDE. Esta es la base del
@@ -688,7 +689,7 @@ export function computeBankStartingBalance(statements: BankAccountStatement[]): 
 }
 
 function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
-  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance } = inputs;
+  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance, budget } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
@@ -735,6 +736,7 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     baselineExpense: avgExpense,
     assumptions,
     today,
+    budget,
   });
   const overridden = applyProjectionOverrides(projection.months, overrides);
   const projectionByYm = new Map(overridden.map((p) => [p.yearMonth, p]));
@@ -747,14 +749,24 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   // asegura que Dashboard y Flujo de Efectivo coincidan en el cierre
   // mensual, y que el usuario pueda entender sin ambigüedad de dónde
   // sale cada número.
+  //
+  // Cuando hay presupuesto cargado y su año coincide con el mes que
+  // estamos procesando, SUSTITUIMOS income/expense históricos por los
+  // valores del budget. La lógica de negocio: el presupuesto es el
+  // compromiso del año, y el usuario quiere ver la foto budgetaria
+  // como baseline en la proyección aunque ya haya datos reales.
   const baseStart = typeof startingBalance === 'number'
     ? startingBalance
-    : computeBankStartingBalance(filtered);
+    : (budget?.openingCash?.[0] ?? computeBankStartingBalance(filtered));
   const historicalChained: CashFlowMonth[] = [];
   let runningHist = baseStart;
   for (const m of historical) {
-    runningHist = runningHist + m.income - m.expense;
-    historicalChained.push({ ...m, closingCash: runningHist });
+    const [y, mo] = m.yearMonth.split('-').map(Number);
+    const budgetApplies = budget && budget.year === y;
+    const inc = budgetApplies ? (budget!.incomeTotal[mo - 1] ?? m.income) : m.income;
+    const exp = budgetApplies ? (budget!.expenseTotal[mo - 1] ?? m.expense) : m.expense;
+    runningHist = runningHist + inc - exp;
+    historicalChained.push({ ...m, income: inc, expense: exp, closingCash: runningHist });
   }
 
   const months: CashFlowMonth[] = [...historicalChained];
