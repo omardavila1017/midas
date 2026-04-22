@@ -10,9 +10,11 @@ import {
   ResponsiveContainer,
   Area,
   ReferenceLine,
+  ReferenceDot,
 } from 'recharts';
 import type { EvaluatedCashFlow } from '../types';
 import { fmtCompact, fmtCurrency } from '../formatters';
+import AnimatedNumber from './ui/AnimatedNumber';
 
 interface Props {
   data: EvaluatedCashFlow;
@@ -30,6 +32,7 @@ const COLOR = {
   refLine: '#cbd5e1',
   histArea: '#cbd5e1',    // fill histórico (sólido a baja opacidad)
   danger: '#dc2626',      // var(--danger) — línea de cero cuando caja cae
+  success: '#16a34a',
 } as const;
 
 const MONTH_LABELS_SHORT = [
@@ -42,6 +45,20 @@ function formatMonthTick(yearMonth: string): string {
   if (!y || !m) return yearMonth;
   return `${MONTH_LABELS_SHORT[(m - 1) % 12]} ${String(y).slice(2)}`;
 }
+
+// Dot fijo en el último punto de la proyección. Marca "dónde termina" sin
+// pelear con la línea; el anillo anima una sola vez al montarse gracias a
+// `animate-pulse-ring` con color custom verde (var(--success)).
+const LastPointDot: React.FC<{ cx?: number; cy?: number }> = ({ cx, cy }) => {
+  if (cx === undefined || cy === undefined) return null;
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={8} fill={COLOR.forecast} fillOpacity={0.08} />
+      <circle cx={cx} cy={cy} r={4} fill={COLOR.forecast} />
+      <circle cx={cx} cy={cy} r={2} fill="white" />
+    </g>
+  );
+};
 
 const SimulacionChart: React.FC<Props> = ({ data }) => {
   const chartData = useMemo(
@@ -61,6 +78,15 @@ const SimulacionChart: React.FC<Props> = ({ data }) => {
     [chartData],
   );
 
+  // Último punto proyectado — lo usamos como ancla para un ReferenceDot fijo.
+  const lastForecast = chartData.length > 0 ? chartData[chartData.length - 1] : null;
+
+  // Delta de fin de año entre caja simulada y caja base — el KPI que la
+  // analista quiere leer de un vistazo. Se anima con AnimatedNumber.
+  const deltaClosing = data.totalForecastClosingCash - data.totalBaseClosingCash;
+  const deltaSign = deltaClosing >= 0 ? '+' : '−';
+  const deltaColor = deltaClosing >= 0 ? COLOR.success : COLOR.danger;
+
   if (data.months.length === 0) {
     return (
       <div
@@ -79,108 +105,178 @@ const SimulacionChart: React.FC<Props> = ({ data }) => {
   }
 
   return (
-    <div
-      className="w-full"
-      style={{ height: 360 }}
-      role="img"
-      aria-label="Trayectoria de la caja: línea base vs escenario simulado por mes"
-    >
-      <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 8, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
-          <XAxis
-            dataKey="yearMonth"
-            tickFormatter={formatMonthTick}
-            tick={{ fontSize: 11, fill: COLOR.tickText }}
-            tickLine={false}
-            axisLine={{ stroke: COLOR.axis }}
-            minTickGap={16}
+    <div className="w-full animate-fade-in">
+      {/* Strip de KPIs arriba de la gráfica — base, simulado, delta.
+          Usa tipografía tabular y AnimatedNumber para comunicar el cambio
+          cuando el usuario activa/desactiva propuestas. */}
+      <div className="grid grid-cols-3 gap-6 pb-4 mb-2 border-b border-[var(--gray-100)]">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+            Caja base (fin)
+          </p>
+          <AnimatedNumber
+            value={data.totalBaseClosingCash}
+            format={fmtCurrency}
+            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            style={{ color: 'var(--gray-700)' }}
           />
-          <YAxis
-            tickFormatter={(v) => fmtCompact(v)}
-            tick={{ fontSize: 11, fill: COLOR.tickText }}
-            tickLine={false}
-            axisLine={false}
-            width={64}
+        </div>
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+            Caja simulada (fin)
+          </p>
+          <AnimatedNumber
+            value={data.totalForecastClosingCash}
+            format={fmtCurrency}
+            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            style={{ color: 'var(--gray-950)' }}
           />
-          <Tooltip
-            formatter={(v: number | string, name: string) => {
-              const labelMap: Record<string, string> = {
-                base: 'Caja base',
-                forecast: 'Caja simulada',
-                historicalArea: 'Histórico',
-              };
-              const display = labelMap[name] ?? name;
-              return [typeof v === 'number' ? fmtCurrency(v) : v, display];
-            }}
-            labelFormatter={(label: string) => formatMonthTick(label)}
-            labelStyle={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)' }}
-            contentStyle={{
-              borderRadius: 'var(--radius-md)',
-              border: `1px solid ${COLOR.axis}`,
-              boxShadow: 'var(--shadow-sm)',
-              padding: '8px 10px',
-              fontSize: 12,
-            }}
-            itemStyle={{ padding: '2px 0' }}
-            cursor={{ stroke: COLOR.refLine, strokeWidth: 1 }}
-          />
-          <Legend
-            wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
-            iconType="plainline"
-          />
-
-          <Area
-            type="monotone"
-            dataKey="historicalArea"
-            fill={COLOR.histArea}
-            fillOpacity={0.18}
-            stroke="none"
-            isAnimationActive={false}
-            legendType="none"
-            name="historicalArea"
-          />
-
-          {crossesZero && (
-            <ReferenceLine
-              y={0}
-              stroke={COLOR.danger}
-              strokeDasharray="2 4"
-              strokeOpacity={0.5}
-              ifOverflow="extendDomain"
+        </div>
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+            Δ vs base
+          </p>
+          <div className="flex items-baseline gap-1 mt-0.5">
+            <span className="text-[15px] font-semibold tabular-nums" style={{ color: deltaColor }}>
+              {deltaSign}
+            </span>
+            <AnimatedNumber
+              value={Math.abs(deltaClosing)}
+              format={fmtCurrency}
+              className="text-[15px] font-semibold tabular-nums"
+              style={{ color: deltaColor }}
             />
-          )}
+          </div>
+        </div>
+      </div>
 
-          {firstFutureIndex > 0 && (
-            <ReferenceLine
-              x={chartData[firstFutureIndex]?.yearMonth as string}
-              stroke={COLOR.refLine}
-              strokeDasharray="4 4"
-              label={{ value: 'Proyección', position: 'top', fontSize: 10, fill: COLOR.tickText }}
+      <div
+        style={{ height: 360 }}
+        role="img"
+        aria-label="Trayectoria de la caja: línea base vs escenario simulado por mes"
+      >
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartData} margin={{ top: 12, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
+            <XAxis
+              dataKey="yearMonth"
+              tickFormatter={formatMonthTick}
+              tick={{ fontSize: 11, fill: COLOR.tickText }}
+              tickLine={false}
+              axisLine={{ stroke: COLOR.axis }}
+              minTickGap={16}
             />
-          )}
+            <YAxis
+              tickFormatter={(v) => fmtCompact(v)}
+              tick={{ fontSize: 11, fill: COLOR.tickText }}
+              tickLine={false}
+              axisLine={false}
+              width={64}
+            />
+            <Tooltip
+              formatter={(v: number | string, name: string) => {
+                const labelMap: Record<string, string> = {
+                  base: 'Caja base',
+                  forecast: 'Caja simulada',
+                  historicalArea: 'Histórico',
+                };
+                const display = labelMap[name] ?? name;
+                return [typeof v === 'number' ? fmtCurrency(v) : v, display];
+              }}
+              labelFormatter={(label: string) => formatMonthTick(label)}
+              labelStyle={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)' }}
+              contentStyle={{
+                borderRadius: 'var(--radius-md)',
+                border: `1px solid ${COLOR.axis}`,
+                boxShadow: 'var(--shadow-sm)',
+                padding: '8px 10px',
+                fontSize: 12,
+              }}
+              itemStyle={{ padding: '2px 0' }}
+              cursor={{ stroke: COLOR.refLine, strokeWidth: 1 }}
+              isAnimationActive={false}
+            />
+            <Legend
+              wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
+              iconType="plainline"
+            />
 
-          <Line
-            type="monotone"
-            dataKey="base"
-            stroke={COLOR.base}
-            strokeWidth={1.5}
-            dot={false}
-            name="Caja base"
-            isAnimationActive={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="forecast"
-            stroke={COLOR.forecast}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4, strokeWidth: 0 }}
-            name="Caja simulada"
-            isAnimationActive={false}
-          />
-        </ComposedChart>
-      </ResponsiveContainer>
+            <Area
+              type="monotone"
+              dataKey="historicalArea"
+              fill={COLOR.histArea}
+              fillOpacity={0.18}
+              stroke="none"
+              isAnimationActive
+              animationDuration={500}
+              animationEasing="ease-out"
+              legendType="none"
+              name="historicalArea"
+            />
+
+            {crossesZero && (
+              <ReferenceLine
+                y={0}
+                stroke={COLOR.danger}
+                strokeDasharray="2 4"
+                strokeOpacity={0.5}
+                ifOverflow="extendDomain"
+              />
+            )}
+
+            {firstFutureIndex > 0 && (
+              <ReferenceLine
+                x={chartData[firstFutureIndex]?.yearMonth as string}
+                stroke={COLOR.refLine}
+                strokeDasharray="4 4"
+                label={{ value: 'Proyección', position: 'top', fontSize: 10, fill: COLOR.tickText }}
+              />
+            )}
+
+            {/* Motion: base primero (calm, 400ms), forecast después (450ms,
+                con begin=200). Es una entrada simple — no "wow", sólo ayuda
+                al usuario a distinguir qué línea es cuál cuando cambia el
+                set de propuestas activas. Respeta .impeccable.md §emil. */}
+            <Line
+              type="monotone"
+              dataKey="base"
+              stroke={COLOR.base}
+              strokeWidth={1.5}
+              dot={false}
+              name="Caja base"
+              isAnimationActive
+              animationDuration={400}
+              animationBegin={0}
+              animationEasing="ease-out"
+            />
+            <Line
+              type="monotone"
+              dataKey="forecast"
+              stroke={COLOR.forecast}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4, strokeWidth: 0 }}
+              name="Caja simulada"
+              isAnimationActive
+              animationDuration={520}
+              animationBegin={200}
+              animationEasing="ease-out"
+            />
+
+            {/* Marker fijo en el último punto proyectado — ancla visual
+                para que el ojo caiga directo al cierre del año. */}
+            {lastForecast && (
+              <ReferenceDot
+                x={lastForecast.yearMonth}
+                y={lastForecast.forecast}
+                shape={<LastPointDot />}
+                ifOverflow="extendDomain"
+                isFront
+              />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 };

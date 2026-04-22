@@ -392,7 +392,7 @@ const Simulacion: React.FC<Props> = ({
       </section>
 
       {/* Visualización: switches + chart */}
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
+      <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden animate-card-in stagger-2">
         <header className="px-6 py-4 border-b border-[var(--gray-100)] flex items-baseline justify-between gap-4">
           <div>
             <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
