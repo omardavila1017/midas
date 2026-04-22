@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Proposal, Scenario, TabId } from './types';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Proposal, Scenario, TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
@@ -152,6 +152,7 @@ export default function App() {
 
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
+  const [cashFlowOverrides, setCashFlowOverrides] = useState<CashFlowOverrides>({});
   const [activeTab, setActiveTab] = useState<TabId>('netflow');
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
@@ -260,6 +261,7 @@ export default function App() {
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
       if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
+      if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
     }
@@ -328,6 +330,7 @@ export default function App() {
         proposals, scenarios, activeScenarioId,
         providers, clients,
         assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+        cashFlowOverrides,
         lastSaved: new Date().toISOString(),
       };
       saveStore(store);
@@ -337,6 +340,7 @@ export default function App() {
     proposals, scenarios, activeScenarioId,
     providers, clients,
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+    cashFlowOverrides,
   ]);
 
   // ── JDE: load companies on mount (sin fallback demo) ──
@@ -637,6 +641,7 @@ export default function App() {
                   proposals, scenarios, activeScenarioId,
                   providers, clients,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+                  cashFlowOverrides,
                   lastSaved: new Date().toISOString(),
                 });
                 const blob = new Blob([json], { type: 'application/json' });
@@ -701,10 +706,9 @@ export default function App() {
                 bankStatements={bankStatements}
                 proposals={proposals}
                 clients={clients}
-                providers={providers}
-                cxpRecords={cxpRecords}
                 assumptions={assumptions}
-                budget={budget}
+                overrides={cashFlowOverrides}
+                onOverridesChange={setCashFlowOverrides}
                 onOpenFlow={() => setActiveTab('flow')}
                 startingBalanceOverride={startingBalanceOverride}
                 bankStartingBalance={bankStartingBalance}

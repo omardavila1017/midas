@@ -97,6 +97,13 @@ export interface CashFlowMonth {
   closingCash: number;     // caja final base — sin propuestas
 }
 
+// ── Overrides editables de flujo (tabla ↔ chart) ─────────────────────────
+//
+// Permite al usuario sobreescribir el ingreso o egreso de un mes futuro desde
+// la tabla de flujo. La clave es el yearMonth; los valores undefined indican
+// que no hay override y el motor debe calcularlo.
+export type CashFlowOverrides = Record<string, { income?: number; expense?: number }>;
+
 export interface ProposalDelta {
   proposalId: string;
   proposalName: string;

@@ -18,7 +18,7 @@
  * a Midas).
  */
 
-import { Proposal, Scenario } from '../types';
+import { Proposal, Scenario, CashFlowOverrides } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 
 export interface CXPRecord {
@@ -62,6 +62,7 @@ export interface MidasStore {
   confirmedPayments: ConfirmedPayment[];
   cxpRecords: CXPRecord[];
   cxpLoadedCias: Record<string, string>;
+  cashFlowOverrides: CashFlowOverrides;
   lastSaved: string;
 }
 
@@ -89,6 +90,7 @@ export function getDefaultStore(): MidasStore {
     confirmedPayments: [],
     cxpRecords: [],
     cxpLoadedCias: {},
+    cashFlowOverrides: {},
     lastSaved: isoNow(),
   };
 }
@@ -221,14 +223,32 @@ function normalizeStore(raw: unknown): MidasStore {
     proposals,
     scenarios,
     activeScenarioId,
-    providers,
-    clients,
-    assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
-    confirmedPayments,
-    cxpRecords,
-    cxpLoadedCias,
-    lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,
+    providers: Array.isArray(o.providers) ? (o.providers as Provider[]) : [],
+    clients: Array.isArray(o.clients) ? (o.clients as Client[]) : [],
+    confirmedPayments: Array.isArray(o.confirmedPayments) ? (o.confirmedPayments as ConfirmedPayment[]) : [],
+    cxpRecords: Array.isArray(o.cxpRecords) ? (o.cxpRecords as CXPRecord[]) : [],
+    cxpLoadedCias: typeof o.cxpLoadedCias === 'object' && o.cxpLoadedCias !== null
+      ? (o.cxpLoadedCias as Record<string, string>)
+      : {},
+    cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
+    assumptions: (o.assumptions && typeof o.assumptions === 'object')
+      ? (o.assumptions as CashFlowAssumptions)
+      : base.assumptions,
   };
+}
+
+function normalizeOverrides(v: unknown): CashFlowOverrides {
+  if (!v || typeof v !== 'object') return {};
+  const out: CashFlowOverrides = {};
+  for (const [ym, val] of Object.entries(v as Record<string, unknown>)) {
+    if (!/^\d{4}-\d{2}$/.test(ym) || !val || typeof val !== 'object') continue;
+    const entry = val as Record<string, unknown>;
+    const income = typeof entry.income === 'number' && isFinite(entry.income) ? entry.income : undefined;
+    const expense = typeof entry.expense === 'number' && isFinite(entry.expense) ? entry.expense : undefined;
+    if (income === undefined && expense === undefined) continue;
+    out[ym] = { ...(income !== undefined ? { income } : {}), ...(expense !== undefined ? { expense } : {}) };
+  }
+  return out;
 }
 
 // ── API pública ──────────────────────────────────────────────────────────
