@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import {
   Bell,
   Plus,
@@ -46,7 +46,8 @@ interface ActivityContextType {
    Constants
    ───────────────────────────────────────────────── */
 
-const STORAGE_KEY = 'flowsense.activityFeed';
+const STORAGE_KEY = 'midas.activityFeed';
+const LEGACY_STORAGE_KEY = 'flowsense.activityFeed';
 const MAX_ENTRIES = 200;
 
 const ACTION_ICONS: Record<ActivityAction, React.ComponentType<any>> = {
@@ -73,9 +74,9 @@ const ENTITY_COLOR_MAP: Record<ActivityEntity, string> = {
 const ENTITY_LABEL_MAP: Record<ActivityEntity, string> = {
   client: 'Cliente',
   provider: 'Proveedor',
-  simulation: 'Propuesta',
+  simulation: 'Simulación',
   scenario: 'Escenario',
-  proposal: 'Simulación',
+  proposal: 'Propuesta',
   kpi: 'KPI',
   cxp: 'CXP',
   plan: 'Plan',
@@ -103,7 +104,16 @@ const ActivityContext = createContext<ActivityContextType | undefined>(undefined
 
 function loadFromStorage(): ActivityEntry[] {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    let stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) {
+      stored = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (stored) {
+        try {
+          localStorage.setItem(STORAGE_KEY, stored);
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+        } catch { /* ignore */ }
+      }
+    }
     if (!stored) return [];
     return JSON.parse(stored) as ActivityEntry[];
   } catch {

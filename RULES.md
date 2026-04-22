@@ -1,6 +1,6 @@
 # REGLAS DE NEGOCIO
 
-Artefacto: FlowSense
+Artefacto: Midas
 Ultima actualizacion: 2026-04-21
 
 > Este documento explica por que la herramienta se comporta como se comporta.

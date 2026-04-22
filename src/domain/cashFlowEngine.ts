@@ -18,9 +18,11 @@ import {
   type AgedBalanceRecord,
 } from '../services/jde';
 import {
-  isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildPairMatchedKeys,
+  classifyMovement,
+  type ClassificationContext,
 } from './netCashFlowEngine';
 import {
   CashFlowMonth,
@@ -87,8 +89,18 @@ export function buildHistoricalMonths(
   // Detector de traspasos entre cuentas propias del grupo. Si un ABONO en una
   // cuenta se compensa con un CARGO en otra del mismo grupo, sumarlos infla
   // ambos lados del flujo sin reflejar un ingreso/egreso económico real.
-  const ownAccounts = buildOwnAccountsIndex(statements);
-  const ownAccountDetector = buildOwnAccountDetector(ownAccounts);
+  //
+  // Usamos `classifyMovement` (no `isInternalTransfer`) para que la detección
+  // coincida exactamente con la que aplica la pantalla de Bancos: incluye
+  // también el detector pair-matched (CARGO en una cuenta compensado con
+  // ABONO simétrico el mismo día en otra cuenta del mismo grupo, mismo
+  // importe). Antes el Dashboard contaba esos pares como ingresos/egresos
+  // reales mientras Bancos los mostraba en gris — y la gráfica no reflejaba
+  // el filtro de transferencias internas.
+  const ctx: ClassificationContext = {
+    ownAccountDetector: buildOwnAccountDetector(buildOwnAccountsIndex(statements)),
+    pairedKeys: buildPairMatchedKeys(statements),
+  };
 
   const byMonth = new Map<string, { income: number; expense: number }>();
 
@@ -96,7 +108,7 @@ export function buildHistoricalMonths(
     for (const mov of acc.movimientos) {
       const ym = toYearMonth(mov.fechaOperacion);
       if (!ym) continue;
-      if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      if (classifyMovement(mov, ctx, acc.cia, acc.cuenta).kind === 'internal') continue;
       const bucket = byMonth.get(ym) ?? { income: 0, expense: 0 };
       if (mov.tipoMovimiento === 'ABONO') bucket.income += mov.importe;
       else if (mov.tipoMovimiento === 'CARGO') bucket.expense += mov.importe;
@@ -496,6 +508,94 @@ export function evaluateCashFlow(
     totalForecastClosingCash: months.length > 0
       ? months[months.length - 1].forecastClosingCash
       : 0,
+  };
+}
+
+// ── 6.b Detección de crisis de liquidez ──────────────────────────────────
+
+/**
+ * Representación resumida de un mes en el que la caja cae por debajo del
+ * umbral de liquidez. Se usa para alertar al usuario en la pantalla de
+ * Simulación y explicarle qué cambió entre el baseline y el escenario con
+ * propuestas aplicadas.
+ */
+export interface LiquidityShortfall {
+  /** "YYYY-MM" */
+  yearMonth: string;
+  /** Caja final sin propuestas aplicadas. */
+  baseClosingCash: number;
+  /** Caja final con las propuestas activas aplicadas. */
+  forecastClosingCash: number;
+  /** Cómo clasificamos el mes respecto al escenario:
+   *   - 'both': ambos (base y forecast) están por debajo del umbral.
+   *   - 'base_only': el baseline caía pero las propuestas lo sanean.
+   *   - 'forecast_only': baseline ok, pero las propuestas lo hunden.
+   */
+  status: 'both' | 'base_only' | 'forecast_only';
+}
+
+export interface LiquiditySummary {
+  /** Meses con caja por debajo del umbral, ordenados cronológicamente. */
+  shortfalls: LiquidityShortfall[];
+  /** Peor caja forecast en todo el horizonte (puede ser positivo si nunca
+   * hubo crisis, en cuyo caso `shortfalls` viene vacío). */
+  worstForecastClosingCash: number;
+  /** "YYYY-MM" del peor mes forecast, o null si no hay meses. */
+  worstForecastMonth: string | null;
+  /** Si las propuestas ACTIVAS empeoran el resultado en algún mes respecto
+   * al baseline. Útil para mostrar "estás hundiendo la caja de mayo" */
+  forecastWorsensAnyMonth: boolean;
+}
+
+/**
+ * Analiza una evaluación del flujo y reporta los meses FUTUROS donde la
+ * caja cae por debajo del umbral (por defecto $0: quiebre estricto).
+ *
+ * - Sólo considera meses no-históricos: los pasados ya ocurrieron y no son
+ *   "alertas" accionables.
+ * - `threshold` se puede subir para alertar antes del quiebre estricto
+ *   (p. ej. umbral prudencial = 30 días de OPEX).
+ */
+export function analyzeLiquidity(
+  evaluated: EvaluatedCashFlow,
+  threshold = 0,
+): LiquiditySummary {
+  const shortfalls: LiquidityShortfall[] = [];
+  let worstForecastClosingCash = Number.POSITIVE_INFINITY;
+  let worstForecastMonth: string | null = null;
+  let forecastWorsensAnyMonth = false;
+
+  for (const m of evaluated.months) {
+    if (m.isHistorical) continue;
+    if (m.forecastClosingCash < worstForecastClosingCash) {
+      worstForecastClosingCash = m.forecastClosingCash;
+      worstForecastMonth = m.yearMonth;
+    }
+    if (m.forecastClosingCash < m.baseClosingCash) forecastWorsensAnyMonth = true;
+
+    const baseBelow = m.baseClosingCash < threshold;
+    const foreBelow = m.forecastClosingCash < threshold;
+    if (!baseBelow && !foreBelow) continue;
+    const status: LiquidityShortfall['status'] =
+      baseBelow && foreBelow ? 'both' : baseBelow ? 'base_only' : 'forecast_only';
+    shortfalls.push({
+      yearMonth: m.yearMonth,
+      baseClosingCash: m.baseClosingCash,
+      forecastClosingCash: m.forecastClosingCash,
+      status,
+    });
+  }
+
+  if (!Number.isFinite(worstForecastClosingCash)) {
+    // No había meses futuros — devolvemos un resumen neutro.
+    worstForecastClosingCash = 0;
+  }
+
+  return {
+    shortfalls,
+    worstForecastClosingCash,
+    worstForecastMonth,
+    forecastWorsensAnyMonth,
   };
 }
 

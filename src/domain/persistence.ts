@@ -1,5 +1,5 @@
 /**
- * Persistence layer for FlowSense — v5 (clean slate).
+ * Persistence layer for Midas — v5 (clean slate).
  *
  * Este archivo reemplaza a la persistencia vieja (v1..v4). El modelo anterior
  * tenía Simulación > Escenario > Propuesta con un compilador de efectos; se
@@ -13,6 +13,9 @@
  * de propuestas/escenarios/simulaciones — el modelo es incompatible. Se
  * conservan los demás campos (clientes, proveedores, confirmedPayments,
  * cxpRecords, assumptions) para no perder trabajo del usuario.
+ *
+ * El store `flowsense-v5` se migra como-está porque comparte esquema (rebrand
+ * a Midas).
  */
 
 import { Proposal, Scenario, CashFlowOverrides } from '../types';
@@ -49,7 +52,7 @@ export interface CXPRecord {
   mas180: number;
 }
 
-export interface FlowSenseStore {
+export interface MidasStore {
   proposals: Proposal[];
   scenarios: Scenario[];
   activeScenarioId: string | null; // null = sin escenario cargado (base)
@@ -64,14 +67,15 @@ export interface FlowSenseStore {
 }
 
 const STORE_VERSION = 5;
-const STORAGE_KEY = 'flowsense-v5';
+const STORAGE_KEY = 'midas-v5';
+const SAME_SCHEMA_LEGACY_KEY = 'flowsense-v5';
 const LEGACY_KEYS = ['flowsense-v4', 'flowsense-v3', 'flowsense-v2', 'flowsense-v1'];
 
 function isoNow(): string {
   return new Date().toISOString();
 }
 
-export function getDefaultStore(): FlowSenseStore {
+export function getDefaultStore(): MidasStore {
   return {
     proposals: [],
     scenarios: [],
@@ -143,7 +147,41 @@ function normalizeScenario(v: unknown): Scenario | null {
   };
 }
 
-function normalizeStore(raw: unknown): FlowSenseStore {
+function isObjectWithStringId(v: unknown): v is Record<string, unknown> & { id: string } {
+  return !!v && typeof v === 'object' && typeof (v as { id?: unknown }).id === 'string';
+}
+
+function normalizeAssumptions(v: unknown, fallback: CashFlowAssumptions): CashFlowAssumptions {
+  if (!v || typeof v !== 'object') return fallback;
+  const o = v as Record<string, unknown>;
+  const year = typeof o.year === 'number' && Number.isFinite(o.year) && o.year > 1900 && o.year < 3000
+    ? Math.floor(o.year)
+    : fallback.year;
+  // globalCompliance debe estar en [0, 1].
+  const rawCompliance = typeof o.globalCompliance === 'number' && Number.isFinite(o.globalCompliance)
+    ? o.globalCompliance
+    : fallback.globalCompliance;
+  const globalCompliance = Math.min(1, Math.max(0, rawCompliance));
+  const factorajeDays = typeof o.factorajeDays === 'number' && Number.isFinite(o.factorajeDays) && o.factorajeDays >= 0
+    ? Math.floor(o.factorajeDays)
+    : fallback.factorajeDays;
+  return { year, globalCompliance, factorajeDays };
+}
+
+function normalizeConfirmedPayment(v: unknown): ConfirmedPayment | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.key !== 'string' || typeof o.clientId !== 'string') return null;
+  if (typeof o.realDate !== 'string' || typeof o.invoiceDate !== 'string') return null;
+  if (typeof o.amount !== 'number' || !Number.isFinite(o.amount)) return null;
+  if (typeof o.confirmedAt !== 'string') return null;
+  return {
+    key: o.key, clientId: o.clientId, realDate: o.realDate,
+    invoiceDate: o.invoiceDate, amount: o.amount, confirmedAt: o.confirmedAt,
+  };
+}
+
+function normalizeStore(raw: unknown): MidasStore {
   const base = getDefaultStore();
   if (!raw || typeof raw !== 'object') return base;
   const o = raw as Record<string, unknown>;
@@ -160,9 +198,28 @@ function normalizeStore(raw: unknown): FlowSenseStore {
     ? (o.activeScenarioId as string)
     : null;
 
+  // Filtramos por shape mínima: cualquier item que no tenga `id: string` se
+  // descarta. CXPRecords no se modela con id; aceptamos cualquier objeto.
+  const providers = Array.isArray(o.providers)
+    ? (o.providers.filter(isObjectWithStringId) as unknown as Provider[])
+    : [];
+  const clients = Array.isArray(o.clients)
+    ? (o.clients.filter(isObjectWithStringId) as unknown as Client[])
+    : [];
+  const confirmedPayments = Array.isArray(o.confirmedPayments)
+    ? (o.confirmedPayments.map(normalizeConfirmedPayment).filter(Boolean) as ConfirmedPayment[])
+    : [];
+  const cxpRecords = Array.isArray(o.cxpRecords)
+    ? (o.cxpRecords.filter((r) => !!r && typeof r === 'object') as CXPRecord[])
+    : [];
+  const cxpLoadedCias: Record<string, string> = {};
+  if (o.cxpLoadedCias && typeof o.cxpLoadedCias === 'object') {
+    for (const [k, val] of Object.entries(o.cxpLoadedCias as Record<string, unknown>)) {
+      if (typeof val === 'string') cxpLoadedCias[k] = val;
+    }
+  }
+
   return {
-    ...base,
-    ...(o as Partial<FlowSenseStore>),
     proposals,
     scenarios,
     activeScenarioId,
@@ -196,7 +253,7 @@ function normalizeOverrides(v: unknown): CashFlowOverrides {
 
 // ── API pública ──────────────────────────────────────────────────────────
 
-export function saveStore(store: FlowSenseStore): void {
+export function saveStore(store: MidasStore): void {
   const payload = { version: STORE_VERSION, data: store };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -207,13 +264,29 @@ export function saveStore(store: FlowSenseStore): void {
   }
 }
 
-export function loadStore(): FlowSenseStore | null {
+export function loadStore(): MidasStore | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const payload = JSON.parse(raw) as { version?: number; data?: unknown };
       if (payload && typeof payload === 'object' && payload.data !== undefined) {
         return normalizeStore(payload.data);
+      }
+    }
+  } catch {
+    // fallthrough
+  }
+
+  // Rebrand: flowsense-v5 comparte esquema con midas-v5, se migra tal cual.
+  try {
+    const raw = localStorage.getItem(SAME_SCHEMA_LEGACY_KEY);
+    if (raw) {
+      const payload = JSON.parse(raw) as { version?: number; data?: unknown };
+      if (payload && typeof payload === 'object' && payload.data !== undefined) {
+        const migrated = normalizeStore(payload.data);
+        saveStore(migrated);
+        try { localStorage.removeItem(SAME_SCHEMA_LEGACY_KEY); } catch { /* ignore */ }
+        return migrated;
       }
     }
   } catch {
@@ -233,7 +306,7 @@ export function loadStore(): FlowSenseStore | null {
         : payload) as Record<string, unknown>;
       // eslint-disable-next-line no-console
       console.info(`[persistence] encontrado store legacy ${legacyKey}; migrando datos independientes y descartando propuestas/escenarios.`);
-      const seed: FlowSenseStore = {
+      const seed: MidasStore = {
         ...getDefaultStore(),
         providers: Array.isArray(legacy.providers) ? (legacy.providers as Provider[]) : [],
         clients: Array.isArray(legacy.clients) ? (legacy.clients as Client[]) : [],
@@ -261,17 +334,18 @@ export function loadStore(): FlowSenseStore | null {
 export function clearStore(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(SAME_SCHEMA_LEGACY_KEY);
     for (const k of LEGACY_KEYS) localStorage.removeItem(k);
   } catch {
     // ignore
   }
 }
 
-export function exportStore(store: FlowSenseStore): string {
+export function exportStore(store: MidasStore): string {
   return JSON.stringify({ version: STORE_VERSION, data: store }, null, 2);
 }
 
-export function importStore(json: string): FlowSenseStore {
+export function importStore(json: string): MidasStore {
   const parsed = JSON.parse(json) as { version?: number; data?: unknown };
   if (!parsed || typeof parsed !== 'object' || parsed.data === undefined) {
     throw new Error('Formato de respaldo inválido.');

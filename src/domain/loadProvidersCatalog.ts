@@ -2,6 +2,7 @@
  * Load providers from the bundled provider catalog (src/assets/providerCatalog.json).
  *
  * Fuentes compiladas en providerCatalog.json:
+ *   - Clasificacion/tipo por proveedor — Excel "Clas. Proveodres"
  *   - Catálogo conciliado de proveedores — flexibilityByName (~470 proveedores)
  *   - Catálogo de proveedores críticos TI — dtiCatalog (criticidad + área)
  *   - Historial de último pago — lastPayment (condPago)
@@ -18,7 +19,7 @@
  *       flexible   → Bajo   (se puede renegociar)
  *       unknown    → Medio  (default conservador)
  *   - paymentPeriod se deriva de condPago del `lastPayment` cuando está disponible.
- *   - type se infiere del `dtiArea` o usa 'Otro' por default.
+ *   - type viene del Excel de clasificacion; si no existe, se infiere del DTI.
  */
 
 import catalogRaw from '../assets/providerCatalog.json';
@@ -48,6 +49,7 @@ interface LastPaymentEntry {
 interface CatalogShape {
   version: string;
   generated: string;
+  providerTypeByName?: Record<string, string>;
   flexibilityByName: Record<string, Flexibility>;
   flexibilityByClass: Record<string, Flexibility>;
   dtiCatalog: Record<string, DtiEntry>;
@@ -130,8 +132,10 @@ function paymentPeriodFromCondPago(condPago: string | undefined): ProviderPaymen
   return '30 días';
 }
 
-/** Pick a human-readable type from DTI area or default. */
-function typeFromDti(dti: DtiEntry | undefined): string {
+/** Pick a human-readable type from the Romo Excel, DTI area, or default. */
+function typeFromCatalog(name: string, dti: DtiEntry | undefined): string {
+  const catalogType = catalog.providerTypeByName?.[name];
+  if (catalogType?.trim()) return catalogType.trim();
   if (!dti) return 'Otro';
   if (dti.area === 'DTI') return 'Servicios TI';
   return dti.area || 'Otro';
@@ -153,7 +157,10 @@ function idFor(name: string, index: number): string {
  * immediately with the full list derived from providerCatalog.json.
  */
 export function loadProvidersCatalog(): Provider[] {
-  const names = Object.keys(catalog.flexibilityByName ?? {});
+  const names = Array.from(new Set([
+    ...Object.keys(catalog.providerTypeByName ?? {}),
+    ...Object.keys(catalog.flexibilityByName ?? {}),
+  ]));
   const providers: Provider[] = [];
 
   names.forEach((rawName, idx) => {
@@ -166,7 +173,7 @@ export function loadProvidersCatalog(): Provider[] {
     providers.push({
       id: idFor(name, idx),
       name,
-      type: typeFromDti(dti),
+      type: typeFromCatalog(name, dti),
       risk: riskFromFlexibility(flex),
       riskComment: riskCommentFromFlexibility(flex, dti),
       paymentPeriod: paymentPeriodFromCondPago(last?.condPago),

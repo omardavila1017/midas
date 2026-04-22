@@ -3,6 +3,13 @@ import { X, TrendingUp, TrendingDown, ChevronRight } from 'lucide-react';
 import type { BankAccountStatement, AgedBalanceRecord } from '../services/jde';
 import { fmtCurrency, fmtYearMonthLong } from '../formatters';
 import { toYearMonth, compareYearMonth } from '../domain/cashFlowEngine';
+import type { MonthlyProjection, ProjectionOverrides } from '../domain/projectionEngine';
+import {
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from '../domain/netCashFlowEngine';
+import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
 
 interface MonthDrilldownProps {
   yearMonth: string | null;
@@ -10,6 +17,10 @@ interface MonthDrilldownProps {
   agedBalances: AgedBalanceRecord[];
   companyCode: string;
   baseline: { avgIncome: number; avgExpense: number };
+  projectionByMonth: Map<string, MonthlyProjection>;
+  overrides: ProjectionOverrides;
+  onOverridesChange: (overrides: ProjectionOverrides) => void;
+  tableRows: CashFlowTableRow[];
   today: string;
   onClose: () => void;
 }
@@ -18,6 +29,12 @@ interface ConceptRow {
   label: string;
   count: number;
   amount: number;
+  /** Etiqueta de flexibilidad cuando el row viene de un proveedor del catálogo. */
+  flexibility?: 'inamovible' | 'flexible' | 'revisar' | 'unknown';
+  /** Día de crédito (paymentPeriod) del proveedor, si está clasificado. */
+  paymentPeriod?: string;
+  /** Fuente del número: scheduled (CXP), recurring (banco), mixed. */
+  source?: 'scheduled' | 'recurring' | 'mixed' | 'real';
 }
 
 interface GroupedRows {
@@ -50,7 +67,9 @@ function topByAmount(rows: ConceptRow[], limit = 6): GroupedRows {
  *     periodo, agrupadas por proveedor.
  */
 const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
-  yearMonth, bankStatements, agedBalances, companyCode, baseline, today, onClose,
+  yearMonth, bankStatements, agedBalances, companyCode, baseline,
+  projectionByMonth, overrides, onOverridesChange, tableRows,
+  today, onClose,
 }) => {
   const ref = useRef<HTMLElement>(null);
 
@@ -71,9 +90,12 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
   const data = useMemo(() => {
     if (!yearMonth) return null;
     return buildDrilldownData({
-      yearMonth, bankStatements, agedBalances, companyCode, baseline, today,
+      yearMonth, bankStatements, agedBalances, companyCode, baseline,
+      projection: projectionByMonth.get(yearMonth) ?? null,
+      override: overrides[yearMonth],
+      today,
     });
-  }, [yearMonth, bankStatements, agedBalances, companyCode, baseline, today]);
+  }, [yearMonth, bankStatements, agedBalances, companyCode, baseline, projectionByMonth, overrides, today]);
 
   if (!yearMonth || !data) return null;
 
@@ -171,9 +193,30 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
           emptyRealHint={phase === 'future' ? 'Aún no hay movimientos — el mes está en el futuro.' : 'No se registraron cargos en el periodo.'}
         />
       </div>
+
+      {/* Tabla editable del flujo — contexto de ±3 meses alrededor del mes
+          seleccionado. Sin encabezado duplicado: la tabla principal arriba
+          ya explica el propósito. */}
+      <div className="border-t border-[var(--gray-100)] px-5 py-4 bg-[var(--gray-50)]/40">
+        <CashFlowTable
+          rows={tableRows}
+          overrides={overrides}
+          onOverridesChange={onOverridesChange}
+          compact
+          filter={(r) => Math.abs(monthsDistance(r.yearMonth, yearMonth)) <= 3}
+          highlightYearMonth={yearMonth}
+        />
+      </div>
     </section>
   );
 };
+
+/** Devuelve la diferencia en meses entre dos "YYYY-MM" (firmada). */
+function monthsDistance(a: string, b: string): number {
+  const [ay, am] = a.split('-').map(Number);
+  const [by, bm] = b.split('-').map(Number);
+  return (ay - by) * 12 + (am - bm);
+}
 
 const SummaryCell: React.FC<{ label: string; value: number; color: string; showSign?: boolean }> = ({
   label, value, color, showSign,
@@ -333,6 +376,41 @@ const SubBlock: React.FC<{
   </div>
 );
 
+const FlexChip: React.FC<{ flexibility?: ConceptRow['flexibility'] }> = ({ flexibility }) => {
+  if (!flexibility || flexibility === 'unknown') return null;
+  const styles: Record<string, { bg: string; fg: string; label: string }> = {
+    inamovible: { bg: 'var(--danger-muted)', fg: 'var(--danger)', label: 'Inamovible' },
+    flexible:   { bg: 'var(--success-muted)', fg: 'var(--success)', label: 'Flexible' },
+    revisar:    { bg: 'var(--warning-muted)', fg: 'var(--warning)', label: 'Revisar' },
+  };
+  const s = styles[flexibility];
+  if (!s) return null;
+  return (
+    <span
+      className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+      style={{ background: s.bg, color: s.fg }}
+    >
+      {s.label}
+    </span>
+  );
+};
+
+const SourceChip: React.FC<{ source?: ConceptRow['source'] }> = ({ source }) => {
+  if (!source) return null;
+  const labels: Record<string, string> = {
+    scheduled: 'CXP',
+    recurring: 'Recurrente',
+    mixed: 'CXP + recurrente',
+  };
+  const l = labels[source];
+  if (!l) return null;
+  return (
+    <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full border border-[var(--gray-200)]" style={{ color: 'var(--gray-500)' }}>
+      {l}
+    </span>
+  );
+};
+
 const RowList: React.FC<{ rows: GroupedRows }> = ({ rows }) => (
   <ul>
     {rows.top.map((r, idx) => (
@@ -344,9 +422,15 @@ const RowList: React.FC<{ rows: GroupedRows }> = ({ rows }) => (
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <ChevronRight className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--gray-300)' }} />
           <div className="min-w-0 flex-1">
-            <p className="truncate" style={{ color: 'var(--gray-900)' }}>{r.label}</p>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <p className="truncate" style={{ color: 'var(--gray-900)' }}>{r.label}</p>
+              <FlexChip flexibility={r.flexibility} />
+              <SourceChip source={r.source} />
+            </div>
             <p className="text-[10px]" style={{ color: 'var(--gray-400)' }}>
-              {r.count} mov.
+              {r.paymentPeriod
+                ? `Crédito ${r.paymentPeriod}${r.count > 1 ? ` · ${r.count} mov.` : ''}`
+                : `${r.count} mov.`}
             </p>
           </div>
         </div>
@@ -377,9 +461,11 @@ function buildDrilldownData(args: {
   agedBalances: AgedBalanceRecord[];
   companyCode: string;
   baseline: { avgIncome: number; avgExpense: number };
+  projection: MonthlyProjection | null;
+  override?: { income?: number; expense?: number };
   today: string;
 }) {
-  const { yearMonth, bankStatements, agedBalances, companyCode, baseline, today } = args;
+  const { yearMonth, bankStatements, agedBalances, companyCode, baseline, projection, override, today } = args;
   const currentYm = toYearMonth(today);
   const cmp = compareYearMonth(yearMonth, currentYm);
   const phase: 'past' | 'current' | 'future' = cmp < 0 ? 'past' : cmp === 0 ? 'current' : 'future';
@@ -397,9 +483,18 @@ function buildDrilldownData(args: {
   const filteredBank = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
+  // El detector se construye sobre TODAS las cuentas, no solo las filtradas
+  // por empresa: un traspaso entre dos cuentas propias debe seguir
+  // detectándose aunque solo estemos viendo una de las dos empresas.
+  const ownAccountDetector = buildOwnAccountDetector(
+    buildOwnAccountsIndex(bankStatements),
+  );
   for (const acc of filteredBank) {
     for (const mov of acc.movimientos) {
       if (toYearMonth(mov.fechaOperacion) !== yearMonth) continue;
+      // Los traspasos entre cuentas propias no son ingresos ni egresos reales
+      // del negocio — se compensan entre sí. No deben aparecer en el drilldown.
+      if (isInternalTransfer(mov, ownAccountDetector)) continue;
       const bucket = mov.tipoMovimiento === 'ABONO' ? incomeByConcept
         : mov.tipoMovimiento === 'CARGO' ? expenseByConcept
         : null;
@@ -442,35 +537,84 @@ function buildDrilldownData(args: {
   let expenseProjectedTotal = 0;
   let expenseProjectedNote: string | undefined;
 
+  // Proyección "total" del mes: override del usuario > engine de proyección >
+  // baseline MA6. El drilldown muestra el total y, si es el mes en curso,
+  // el gap contra lo real.
+  const incomeTotalProjected = override?.income
+    ?? projection?.income.total
+    ?? baseline.avgIncome;
+  const expenseTotalProjected = override?.expense
+    ?? projection?.expense.total
+    ?? baseline.avgExpense;
+
   if (phase === 'past') {
     incomeProjected = 0;
     expenseProjectedTotal = 0;
   } else if (phase === 'current') {
-    incomeProjected = Math.max(0, baseline.avgIncome - incomeReal.total);
-    incomeProjectedNote = `Baseline del mes ≈ ${fmtCurrency(baseline.avgIncome)} (promedio 6 meses). Real al día ${daysElapsed}: ${fmtCurrency(incomeReal.total)} → faltaría ${fmtCurrency(incomeProjected)} para llegar al baseline.`;
+    incomeProjected = Math.max(0, incomeTotalProjected - incomeReal.total);
+    const incomeSource = override?.income !== undefined
+      ? `Ajuste manual: ${fmtCurrency(incomeTotalProjected)}`
+      : projection && projection.income.source === 'clients'
+        ? `Cobranza de clientes: ${fmtCurrency(projection.income.fromClients)}`
+        : projection && projection.income.source === 'mixed'
+          ? `Cobranza ${fmtCurrency(projection.income.fromClients)} + baseline ${fmtCurrency(projection.income.fromBaseline)}`
+          : `Baseline MA6: ${fmtCurrency(baseline.avgIncome)}`;
+    incomeProjectedNote = `Total del mes: ${fmtCurrency(incomeTotalProjected)}. ${incomeSource}. Real al día ${daysElapsed}: ${fmtCurrency(incomeReal.total)} → falta ${fmtCurrency(incomeProjected)} para cerrar.`;
 
-    const baselineRemaining = baseline.avgExpense * (daysRemaining / Math.max(1, daysInMonth));
-    const baselineGapToMonth = Math.max(0, baseline.avgExpense - expenseReal.total);
-    expenseProjectedTotal = Math.max(committedInRemainingDays + baselineRemaining, baselineGapToMonth);
+    expenseProjectedTotal = Math.max(0, expenseTotalProjected - expenseReal.total);
     const pieces: string[] = [];
-    if (committedInRemainingDays > 0) {
-      pieces.push(`programado restante ${fmtCurrency(committedInRemainingDays)}`);
+    if (override?.expense !== undefined) {
+      pieces.push(`ajuste manual total ${fmtCurrency(expenseTotalProjected)}`);
+    } else if (projection) {
+      pieces.push(`programado ${fmtCurrency(projection.expense.scheduled)}`);
+      if (projection.expense.recurring > 0) pieces.push(`recurrente ${fmtCurrency(projection.expense.recurring)}`);
+      pieces.push(`baseline ${fmtCurrency(projection.expense.baseline)}`);
+    } else {
+      pieces.push(`baseline ${fmtCurrency(baseline.avgExpense)}`);
     }
-    if (baselineRemaining > 0) {
-      pieces.push(`baseline prorrateado ${fmtCurrency(baselineRemaining)} (${daysRemaining} días)`);
-    }
-    expenseProjectedNote = pieces.length > 0
-      ? `Resto del mes: ${pieces.join(' + ')}.`
-      : undefined;
+    expenseProjectedNote = `Total del mes: ${fmtCurrency(expenseTotalProjected)} (max de: ${pieces.join(', ')}). Falta pagar ${fmtCurrency(expenseProjectedTotal)} (${daysRemaining} días).`;
   } else {
-    incomeProjected = baseline.avgIncome;
-    incomeProjectedNote = `Promedio móvil 6 meses: ${fmtCurrency(baseline.avgIncome)}.`;
-    expenseProjectedTotal = Math.max(committedTotal, baseline.avgExpense);
+    incomeProjected = incomeTotalProjected;
+    if (override?.income !== undefined) {
+      incomeProjectedNote = `Ajuste manual: ${fmtCurrency(incomeTotalProjected)}.`;
+    } else if (projection && projection.income.source === 'clients') {
+      incomeProjectedNote = `Cobranza proyectada por catálogo de clientes: ${fmtCurrency(projection.income.fromClients)}.`;
+    } else if (projection && projection.income.source === 'mixed') {
+      incomeProjectedNote = `Cobranza clientes ${fmtCurrency(projection.income.fromClients)} + baseline MA6 ${fmtCurrency(projection.income.fromBaseline)} = ${fmtCurrency(incomeTotalProjected)}.`;
+    } else {
+      incomeProjectedNote = `Baseline MA6: ${fmtCurrency(incomeTotalProjected)}.`;
+    }
+    expenseProjectedTotal = expenseTotalProjected;
     const parts: string[] = [];
-    if (committedTotal > 0) parts.push(`programado ${fmtCurrency(committedTotal)}`);
-    parts.push(`baseline ${fmtCurrency(baseline.avgExpense)}`);
-    expenseProjectedNote = `max(${parts.join(', ')}).`;
+    if (override?.expense !== undefined) {
+      parts.push(`ajuste manual ${fmtCurrency(expenseTotalProjected)}`);
+    } else if (projection) {
+      parts.push(`programado ${fmtCurrency(projection.expense.scheduled)}`);
+      if (projection.expense.recurring > 0) parts.push(`recurrente ${fmtCurrency(projection.expense.recurring)}`);
+      parts.push(`baseline ${fmtCurrency(projection.expense.baseline)}`);
+    } else {
+      parts.push(`baseline ${fmtCurrency(baseline.avgExpense)}`);
+    }
+    expenseProjectedNote = `max(${parts.join(', ')}) = ${fmtCurrency(expenseTotalProjected)}.`;
   }
+
+  // Filas del desglose proyectado de egresos:
+  //   - Si el engine trajo providerLines (catálogo de proveedores), las usamos
+  //     con flexibility + paymentPeriod para que el usuario sepa si es un
+  //     proveedor inamovible o flexible.
+  //   - Si no hay providerLines pero sí aged, caemos al grupo por proveedor
+  //     desde aged (committedRows).
+  const providerLines = projection?.expense.providerLines ?? [];
+  const expenseProjectedRows: ConceptRow[] = providerLines.length > 0
+    ? providerLines.map((l) => ({
+        label: l.providerName,
+        count: 1,
+        amount: l.amount,
+        flexibility: l.flexibility,
+        paymentPeriod: l.paymentPeriod,
+        source: l.source,
+      }))
+    : committedRows.rows;
 
   return {
     phase,
@@ -480,7 +624,7 @@ function buildDrilldownData(args: {
     incomeProjected,
     incomeProjectedNote,
     expenseReal,
-    expenseProjected: { total: expenseProjectedTotal, rows: committedRows.rows },
+    expenseProjected: { total: expenseProjectedTotal, rows: expenseProjectedRows },
     expenseProjectedNote,
   };
 

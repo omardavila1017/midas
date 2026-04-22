@@ -1,8 +1,8 @@
-# FlowSense Architecture
+# Midas Architecture
 
 ## Overview
 
-FlowSense es una SPA en React + Vite para analizar flujo de efectivo, proyectar escenarios y comparar decisiones financieras antes de ejecutarlas.
+Midas es una SPA en React + Vite para analizar flujo de efectivo, proyectar escenarios y comparar decisiones financieras antes de ejecutarlas.
 
 El proyecto mezcla tres tipos de capacidad:
 

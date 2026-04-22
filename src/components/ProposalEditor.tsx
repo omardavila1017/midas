@@ -20,6 +20,20 @@ function newId(): string {
   return `prop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Parseo tolerante del campo monto. Soporta separadores de miles mexicanos
+ * ("50,000", "50 000"), símbolo de moneda y espacios. Devuelve NaN si el
+ * texto no contiene un número válido; 0 o negativos se consideran inválidos
+ * río abajo.
+ */
+export function parseAmount(input: string): number {
+  if (typeof input !== 'string') return NaN;
+  const cleaned = input.replace(/[\s,$_]/g, '').trim();
+  if (!cleaned) return NaN;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 const FREQUENCY_OPTIONS: SelectOption<ProposalFrequency>[] = [
   { value: 'one_time', label: PROPOSAL_FREQUENCY_LABELS.one_time, description: 'Aplica solo en el mes de inicio' },
   { value: 'monthly', label: PROPOSAL_FREQUENCY_LABELS.monthly, description: 'Aplica todos los meses' },
@@ -47,7 +61,15 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
     return () => document.removeEventListener('keydown', onKey);
   }, [onCancel]);
 
-  const canSave = name.trim().length > 0 && Number(amount) > 0;
+  const parsedAmount = parseAmount(amount);
+  const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
+  const nameValid = name.trim().length > 0;
+  const canSave = nameValid && amountValid;
+  const validationHint = !nameValid
+    ? 'Dale un nombre a la propuesta para poder guardarla.'
+    : !amountValid
+      ? 'Escribe un monto mayor a $0 (acepta "50,000" o "50000").'
+      : null;
 
   const handleSave = () => {
     if (!canSave) return;
@@ -57,7 +79,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
       name: name.trim(),
       description: description.trim() || undefined,
       kind,
-      amount: Math.abs(Number(amount)),
+      amount: Math.abs(parsedAmount),
       startYearMonth,
       frequency,
       enabled: initial?.enabled ?? true,
@@ -170,14 +192,17 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
               $
             </span>
             <input
-              type="number"
-              min={0}
-              step={1000}
+              type="text"
+              inputMode="decimal"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="50,000"
-              className="w-full h-10 pl-7 pr-14 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] tabular-nums transition-all hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
-              style={{ color: 'var(--gray-950)' }}
+              aria-invalid={amount.length > 0 && !amountValid}
+              className="w-full h-10 pl-7 pr-14 rounded-xl border bg-white text-[13px] tabular-nums transition-all focus:outline-none"
+              style={{
+                color: 'var(--gray-950)',
+                borderColor: amount.length > 0 && !amountValid ? 'var(--danger)' : 'var(--gray-200)',
+              }}
             />
             <span
               className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-medium pointer-events-none"
@@ -223,6 +248,16 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
       </div>
 
       <div className="flex items-center gap-2 px-5 py-3.5 border-t border-[var(--gray-100)] bg-[var(--gray-50)]">
+        {validationHint && (
+          <span
+            className="text-[11px] truncate"
+            style={{ color: 'var(--gray-500)' }}
+            role="status"
+            aria-live="polite"
+          >
+            {validationHint}
+          </span>
+        )}
         {onDelete && (
           <button
             type="button"

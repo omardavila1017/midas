@@ -1,31 +1,28 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus, AlertTriangle, Sparkles, Lightbulb, TrendingUp, TrendingDown,
-  Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check,
+  Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check, Download,
 } from 'lucide-react';
-import type { Proposal, Scenario, EvaluatedCashFlow, CashFlowMonth, ProposalKind } from '../types';
+import { toCSV, downloadFile } from '../utils/export';
+import type { Proposal, Scenario, EvaluatedCashFlow, ProposalKind } from '../types';
 import { PROPOSAL_FREQUENCY_LABELS } from '../types';
 import { fmtCurrency, fmtCompact } from '../formatters';
 import {
   evaluateCashFlow,
-  buildHistoricalMonths,
-  buildFutureExpenses,
-  projectFutureIncome,
-  buildExpenseProjector,
-  projectMonthlyExpense,
-  filterCompleteHistorical,
-  toYearMonth,
-  addMonths,
-  compareYearMonth,
-  monthsBetween,
+  analyzeLiquidity,
+  type LiquiditySummary,
 } from '../domain/cashFlowEngine';
 import {
   fetchAgedBalances,
   type BankAccountStatement,
   type AgedBalanceRecord,
 } from '../services/jde';
+import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
+import type { CXPRecord } from '../domain/persistence';
+import type { Budget } from '../domain/budget';
 import ProposalEditor from './ProposalEditor';
 import SimulacionChart from './SimulacionChart';
+import { computeBaseCashFlow, loadOverrides } from './Dashboard';
 
 interface Props {
   companyCode: string;
@@ -36,6 +33,17 @@ interface Props {
   onScenariosChange: (next: Scenario[]) => void;
   activeScenarioId: string | null;
   onActiveScenarioChange: (id: string | null) => void;
+  // Inputs necesarios para que la línea de caja de Simulación coincida
+  // exactamente con la que se ve en el Dashboard (mismo motor, mismos
+  // insumos: clientes, proveedores, CXP, presupuesto, overrides y caja
+  // inicial). Antes Simulación usaba una proyección "plana" y por eso las
+  // curvas divergían.
+  clients: Client[];
+  providers: Provider[];
+  cxpRecords: CXPRecord[];
+  assumptions: CashFlowAssumptions;
+  budget: Budget | null;
+  startingBalanceOverride: number | null;
 }
 
 interface KindPresentation {
@@ -72,6 +80,12 @@ const Simulacion: React.FC<Props> = ({
   onScenariosChange,
   activeScenarioId,
   onActiveScenarioChange,
+  clients,
+  providers,
+  cxpRecords,
+  assumptions,
+  budget,
+  startingBalanceOverride,
 }) => {
   const [agedBalances, setAgedBalances] = useState<AgedBalanceRecord[]>([]);
   const [agedLoading, setAgedLoading] = useState(false);
@@ -100,14 +114,35 @@ const Simulacion: React.FC<Props> = ({
     return () => { cancelled = true; };
   }, [companyCode]);
 
-  const base = useMemo(
-    () => computeBaseCashFlow(bankStatements, agedBalances, companyCode),
-    [bankStatements, agedBalances, companyCode],
-  );
+  // Mismo pipeline que el Dashboard. Los overrides se releen de localStorage
+  // al montar la pestaña — el usuario los edita desde Dashboard y al volver
+  // a Simulación la curva ya refleja esos ajustes.
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const { base } = useMemo(() => computeBaseCashFlow({
+    bankStatements,
+    aged: agedBalances,
+    clients,
+    providers,
+    cxpRecords,
+    assumptions,
+    companyCode,
+    today,
+    overrides: loadOverrides(),
+    budget,
+    startingBalance: startingBalanceOverride ?? undefined,
+  }), [
+    bankStatements, agedBalances, clients, providers, cxpRecords,
+    assumptions, companyCode, today, budget, startingBalanceOverride,
+  ]);
 
   const evaluated: EvaluatedCashFlow = useMemo(
     () => evaluateCashFlow(base, proposals),
     [base, proposals],
+  );
+
+  const liquidity: LiquiditySummary = useMemo(
+    () => analyzeLiquidity(evaluated),
+    [evaluated],
   );
 
   const enabled = proposals.filter((p) => p.enabled);
@@ -164,9 +199,14 @@ const Simulacion: React.FC<Props> = ({
     const scn = scenarios.find((s) => s.id === scenarioId);
     if (!scn) return;
     const now = new Date().toISOString();
-    // Regla del usuario: "prender las que elegí, apagar las demás".
+    // Aplica el snapshot a las propuestas que ya existían cuando el escenario
+    // fue guardado. Propuestas creadas después del escenario no aparecen en el
+    // snapshot; se respeta su estado actual para no apagarlas sin que el
+    // usuario lo pidiera explícitamente.
     onProposalsChange(
       proposals.map((p) => {
+        const known = Object.prototype.hasOwnProperty.call(scn.proposalStates, p.id);
+        if (!known) return p;
         const next = scn.proposalStates[p.id] === true;
         return p.enabled === next ? p : { ...p, enabled: next, updatedAt: now };
       }),
@@ -194,12 +234,29 @@ const Simulacion: React.FC<Props> = ({
 
   // Si el estado enabled de las propuestas cambia manualmente, el escenario
   // activo deja de reflejar la realidad. Detectarlo evita mostrar "aplicado"
-  // cuando ya no lo está.
+  // cuando ya no lo está. Sólo se consideran las propuestas que existían
+  // cuando el escenario se guardó — las nuevas se ignoran para esta detección
+  // (se reportan aparte vía `proposalsOutsideScenario`).
   const activeScenarioMatches = useMemo(() => {
     if (!activeScenarioId) return false;
     const scn = scenarios.find((s) => s.id === activeScenarioId);
     if (!scn) return false;
-    return proposals.every((p) => (scn.proposalStates[p.id] === true) === p.enabled);
+    return proposals.every((p) => {
+      const known = Object.prototype.hasOwnProperty.call(scn.proposalStates, p.id);
+      if (!known) return true;
+      return (scn.proposalStates[p.id] === true) === p.enabled;
+    });
+  }, [activeScenarioId, scenarios, proposals]);
+
+  // Cuenta de propuestas creadas después del escenario activo. Útil para
+  // explicar en UI que el escenario no las controla.
+  const proposalsOutsideScenario = useMemo(() => {
+    if (!activeScenarioId) return 0;
+    const scn = scenarios.find((s) => s.id === activeScenarioId);
+    if (!scn) return 0;
+    return proposals.filter(
+      (p) => !Object.prototype.hasOwnProperty.call(scn.proposalStates, p.id),
+    ).length;
   }, [activeScenarioId, scenarios, proposals]);
 
   return (
@@ -243,6 +300,9 @@ const Simulacion: React.FC<Props> = ({
           />
         </div>
 
+        {/* Liquidity alert */}
+        <LiquidityAlert summary={liquidity} />
+
         {/* Warnings */}
         {(!companyCode || companyCode === 'all') && (
           <div className="mt-4 flex items-start gap-2 p-3 rounded-xl bg-[var(--warning-muted)]">
@@ -282,6 +342,7 @@ const Simulacion: React.FC<Props> = ({
         activeMatches={activeScenarioMatches}
         proposalsCount={proposals.length}
         enabledCount={enabled.length}
+        proposalsOutsideScenario={proposalsOutsideScenario}
         onSave={handleSaveScenario}
         onApply={handleApplyScenario}
         onUpdateCurrent={handleUpdateScenarioToCurrent}
@@ -358,24 +419,40 @@ const Simulacion: React.FC<Props> = ({
       </section>
 
       {/* Visualización: switches + chart */}
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
-        <header className="px-6 py-4 border-b border-[var(--gray-100)]">
-          <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-            Trayectoria de la caja
-          </h2>
-          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-            Activa o desactiva propuestas para ver el impacto en vivo.
-          </p>
+      <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden animate-card-in stagger-2">
+        <header className="px-6 py-4 border-b border-[var(--gray-100)] flex items-baseline justify-between gap-4">
+          <div>
+            <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              Trayectoria de la caja
+            </h2>
+            <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
+              Base vs escenario simulado. La proyección de enero a diciembre sale del CSV de presupuesto.
+            </p>
+            {!budget && (
+              <p className="text-[11px] mt-1.5 flex items-center gap-1" style={{ color: 'var(--warning)' }}>
+                <AlertTriangle className="w-3 h-3" />
+                Sin presupuesto cargado — los meses futuros se dibujan en cero. Cárgalo desde Dashboard → Presupuesto.
+              </p>
+            )}
+          </div>
+          {proposals.length > 0 && (
+            <p className="text-[11px] tabular-nums flex-shrink-0" style={{ color: 'var(--gray-500)' }}>
+              {proposals.filter((p) => p.enabled).length}/{proposals.length} activas
+            </p>
+          )}
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr]">
-          <aside className="border-r border-[var(--gray-100)] p-4 space-y-1.5 max-h-[440px] overflow-y-auto">
+          <aside
+            aria-label="Propuestas activables"
+            className="border-b lg:border-b-0 lg:border-r border-[var(--gray-100)] p-4 space-y-1 max-h-[440px] overflow-y-auto"
+          >
             <p className="text-[10px] font-medium uppercase tracking-wider px-2 mb-2" style={{ color: 'var(--gray-400)' }}>
               Propuestas
             </p>
             {proposals.length === 0 ? (
-              <p className="text-[12px] px-2 py-4 text-center" style={{ color: 'var(--gray-400)' }}>
-                Sin propuestas todavía.
+              <p className="text-[12px] px-2 py-6 text-center" style={{ color: 'var(--gray-400)' }}>
+                No hay propuestas todavía. Créalas arriba para simular su impacto.
               </p>
             ) : (
               proposals.map((p) => (
@@ -396,19 +473,61 @@ const Simulacion: React.FC<Props> = ({
 
       {/* Tabla mensual */}
       <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
-        <header className="px-6 py-4 border-b border-[var(--gray-100)]">
-          <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-            Detalle mensual
-          </h2>
-          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-            Ingresos, egresos y caja por mes — base vs simulación con propuestas activas.
-          </p>
+        <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-[var(--gray-100)]">
+          <div>
+            <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              Detalle mensual
+            </h2>
+            <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
+              Ingresos, egresos y caja por mes — base vs simulación con propuestas activas.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => exportEvaluatedToCsv(evaluated, companyCode)}
+            disabled={evaluated.months.length === 0}
+            title="Descargar detalle mensual en CSV"
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--gray-200)] text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] hover:border-[var(--gray-300)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Exportar CSV
+          </button>
         </header>
         <MonthlyTable data={evaluated} />
       </section>
     </div>
   );
 };
+
+/**
+ * Construye un CSV con columnas alineadas a lo que la analista lee en pantalla:
+ * base, simulación y delta por mes. Se respeta el formato ISO (YYYY-MM) para
+ * que abra sin sobresaltos en Excel regional MX y en Google Sheets.
+ */
+function exportEvaluatedToCsv(data: EvaluatedCashFlow, companyCode: string): void {
+  if (data.months.length === 0) return;
+  const rows = data.months.map((m) => ({
+    mes: m.yearMonth,
+    tipo: m.isHistorical ? 'historico' : 'proyeccion',
+    ingresos_base: round(m.baseIncome),
+    egresos_base: round(m.baseExpense),
+    neto_base: round(m.baseIncome - m.baseExpense),
+    caja_base: round(m.baseClosingCash),
+    ingresos_sim: round(m.forecastIncome),
+    egresos_sim: round(m.forecastExpense),
+    neto_sim: round(m.forecastIncome - m.forecastExpense),
+    caja_sim: round(m.forecastClosingCash),
+    delta_caja: round(m.forecastClosingCash - m.baseClosingCash),
+  }));
+  const csv = toCSV(rows);
+  const ciaTag = companyCode && companyCode !== 'all' ? `-${companyCode}` : '';
+  const today = new Date().toISOString().slice(0, 10);
+  downloadFile(csv, `midas-simulacion${ciaTag}-${today}.csv`);
+}
+
+function round(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 // ─── Sub-components ─────────────────────────────────────────────────────
 
@@ -513,28 +632,32 @@ const SwitchRow: React.FC<{
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={proposal.enabled}
+      aria-label={`${proposal.enabled ? 'Desactivar' : 'Activar'} propuesta ${proposal.name}`}
       onClick={() => onToggle(!proposal.enabled)}
-      className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-left transition-colors hover:bg-[var(--gray-50)]"
+      className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md text-left transition-colors hover:bg-[var(--gray-50)] focus-visible:bg-[var(--gray-50)]"
     >
       <span
-        className="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition"
+        className="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors"
         style={{ background: proposal.enabled ? accent : 'var(--gray-200)' }}
+        aria-hidden="true"
       >
         <span
-          className="inline-block h-4 w-4 rounded-full bg-white shadow transition-transform"
+          className="inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform"
           style={{ transform: proposal.enabled ? 'translateX(18px)' : 'translateX(2px)' }}
         />
       </span>
       <span className="flex-1 min-w-0">
         <span
           className="block text-[12px] font-medium truncate"
-          style={{ color: proposal.enabled ? 'var(--gray-950)' : 'var(--gray-400)' }}
+          style={{ color: proposal.enabled ? 'var(--gray-950)' : 'var(--gray-500)' }}
         >
           {proposal.name}
         </span>
         <span
-          className="block text-[10px] tabular-nums"
-          style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }}
+          className="block text-[10px] tabular-nums truncate"
+          style={{ color: proposal.enabled ? 'var(--gray-500)' : 'var(--gray-400)' }}
         >
           {sign}{fmtCompact(proposal.amount)} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency].toLowerCase()}
         </span>
@@ -573,6 +696,7 @@ interface ScenariosPanelProps {
   activeMatches: boolean;
   proposalsCount: number;
   enabledCount: number;
+  proposalsOutsideScenario: number;
   onSave: (name: string, description?: string) => void;
   onApply: (id: string) => void;
   onUpdateCurrent: (id: string) => void;
@@ -581,7 +705,7 @@ interface ScenariosPanelProps {
 
 const ScenariosPanel: React.FC<ScenariosPanelProps> = ({
   scenarios, activeScenarioId, activeMatches,
-  proposalsCount, enabledCount,
+  proposalsCount, enabledCount, proposalsOutsideScenario,
   onSave, onApply, onUpdateCurrent, onDelete,
 }) => {
   const [showForm, setShowForm] = useState(false);
@@ -628,6 +752,27 @@ const ScenariosPanel: React.FC<ScenariosPanelProps> = ({
           </button>
         )}
       </header>
+
+      {activeScenarioId && proposalsOutsideScenario > 0 && (
+        <div
+          className="px-6 py-2.5 border-b border-[var(--gray-100)] flex items-center gap-2 text-[11px]"
+          style={{ background: 'var(--warning-muted, #fef3c7)', color: 'var(--gray-700)' }}
+          role="status"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--warning)' }} />
+          <span>
+            {proposalsOutsideScenario === 1
+              ? 'Hay 1 propuesta nueva que este escenario no controla — se respeta su estado actual.'
+              : `Hay ${proposalsOutsideScenario} propuestas nuevas que este escenario no controla — se respeta su estado actual.`}
+            <button
+              onClick={() => onUpdateCurrent(activeScenarioId)}
+              className="ml-2 underline font-medium hover:text-[var(--primary)]"
+            >
+              Actualizar escenario al estado actual
+            </button>
+          </span>
+        </div>
+      )}
 
       {showForm && (
         <div className="px-6 py-4 border-b border-[var(--gray-100)] bg-[var(--gray-50)]">
@@ -859,60 +1004,75 @@ const Row: React.FC<{
   );
 };
 
-// ─── Cash flow base computation (mismo algoritmo que el resto) ──────────
+// ─── Liquidity alert ─────────────────────────────────────────────────────
 
-function computeBaseCashFlow(
-  bankStatements: BankAccountStatement[],
-  agedBalances: AgedBalanceRecord[],
-  companyCode: string,
-): CashFlowMonth[] {
-  const filtered = companyCode === 'all' || !companyCode
-    ? bankStatements
-    : bankStatements.filter((s) => s.cia === companyCode);
+const MONTH_LABELS_SHORT = [
+  'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+  'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+];
 
-  const historical = buildHistoricalMonths(filtered);
-  const futureExpenses = buildFutureExpenses(agedBalances);
-
-  const today = new Date().toISOString().slice(0, 10);
-  const todayYm = toYearMonth(today);
-  // Excluimos el mes en curso (parcial) del input de proyección para no sesgar
-  // los promedios hacia abajo.
-  const completeHistorical = filterCompleteHistorical(historical, today);
-  const avgIncome = projectFutureIncome(completeHistorical, 6);
-  const expenseProjector = buildExpenseProjector(completeHistorical);
-
-  const horizonMonths = 12;
-  const lastHistoricalYm = historical.length > 0
-    ? historical[historical.length - 1].yearMonth
-    : todayYm;
-  const projectionAnchorYm = completeHistorical.length > 0
-    ? completeHistorical[completeHistorical.length - 1].yearMonth
-    : lastHistoricalYm;
-  const firstFutureYm = addMonths(
-    compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
-    1,
-  );
-  const lastFutureYm = addMonths(todayYm, horizonMonths);
-
-  const months: CashFlowMonth[] = [...historical];
-  let running = historical.length > 0 ? historical[historical.length - 1].closingCash : 0;
-  let cursor = firstFutureYm;
-  while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-    const offset = Math.max(1, monthsBetween(projectionAnchorYm, cursor));
-    const committed = futureExpenses.get(cursor) ?? 0;
-    const expense = projectMonthlyExpense(offset, committed, expenseProjector);
-    const income = avgIncome;
-    running = running + income - expense;
-    months.push({
-      yearMonth: cursor,
-      isHistorical: false,
-      income,
-      expense,
-      closingCash: running,
-    });
-    cursor = addMonths(cursor, 1);
-  }
-  return months;
+function formatMonthLabel(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-').map(Number);
+  if (!y || !m) return yearMonth;
+  return `${MONTH_LABELS_SHORT[(m - 1) % 12]} ${y}`;
 }
+
+const LiquidityAlert: React.FC<{ summary: LiquiditySummary }> = ({ summary }) => {
+  const { shortfalls, worstForecastClosingCash, worstForecastMonth, forecastWorsensAnyMonth } = summary;
+  if (shortfalls.length === 0) return null;
+
+  // El mes relevante para el mensaje principal es el primero que entra en
+  // crisis con las propuestas activas — es el que marca el cut-off.
+  const firstCritical = shortfalls.find((s) => s.status !== 'base_only') ?? shortfalls[0];
+  const rescuedCount = shortfalls.filter((s) => s.status === 'base_only').length;
+  const worsenedCount = shortfalls.filter((s) => s.status === 'forecast_only').length;
+  const bothCount = shortfalls.filter((s) => s.status === 'both').length;
+
+  const severe = firstCritical.status !== 'base_only';
+  const bg = severe ? 'rgba(239, 68, 68, 0.08)' : 'rgba(245, 158, 11, 0.10)';
+  const fg = severe ? 'var(--danger)' : 'var(--warning)';
+
+  return (
+    <div
+      className="mt-4 flex items-start gap-2.5 p-3.5 rounded-xl"
+      style={{ background: bg }}
+      role="alert"
+    >
+      <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: fg }} />
+      <div className="flex-1 text-[12px]" style={{ color: 'var(--gray-700)' }}>
+        <p className="font-semibold" style={{ color: 'var(--gray-950)' }}>
+          {severe
+            ? `La caja cae bajo $0 en ${formatMonthLabel(firstCritical.yearMonth)}.`
+            : `El baseline se hunde en ${formatMonthLabel(firstCritical.yearMonth)}, pero las propuestas lo rescatan.`}
+        </p>
+        <p className="mt-1">
+          Peor caja proyectada: <span className="font-semibold tabular-nums">{fmtCurrency(worstForecastClosingCash)}</span>
+          {worstForecastMonth ? ` en ${formatMonthLabel(worstForecastMonth)}` : ''}.
+          {' '}
+          {bothCount > 0 && (
+            <span>
+              {bothCount === 1 ? '1 mes' : `${bothCount} meses`} con crisis en base y forecast.
+            </span>
+          )}
+          {worsenedCount > 0 && (
+            <span className="ml-1" style={{ color: 'var(--danger)' }}>
+              {worsenedCount === 1 ? '1 mes' : `${worsenedCount} meses`} que las propuestas hunden bajo $0.
+            </span>
+          )}
+          {rescuedCount > 0 && (
+            <span className="ml-1" style={{ color: 'var(--success)' }}>
+              {rescuedCount === 1 ? '1 mes' : `${rescuedCount} meses`} que las propuestas rescatan.
+            </span>
+          )}
+          {forecastWorsensAnyMonth && worsenedCount === 0 && bothCount > 0 && (
+            <span className="ml-1">
+              Las propuestas activas empeoran la caja en algún mes.
+            </span>
+          )}
+        </p>
+      </div>
+    </div>
+  );
+};
 
 export default Simulacion;

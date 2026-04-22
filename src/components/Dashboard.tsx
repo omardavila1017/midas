@@ -40,6 +40,12 @@ interface DashboardProps {
   overrides: CashFlowOverrides;
   onOverridesChange: (next: CashFlowOverrides) => void;
   onOpenFlow: () => void;
+  /** Override manual de la caja inicial. null = usar la suma de saldoInicial del banco. */
+  startingBalanceOverride: number | null;
+  /** Suma de saldoInicial reportada por banco (filtrada por cia). */
+  bankStartingBalance: number;
+  /** Sincroniza "Caja inicial" con "Saldo inicial" de CashFlowDetail. */
+  onStartingBalanceChange: (v: number | null) => void;
 }
 
 const CHART_COLORS = {
@@ -62,6 +68,11 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [overrides, setOverrides] = useState<ProjectionOverrides>(() => loadOverrides());
+
+  useEffect(() => {
+    try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); } catch { /* ignore */ }
+  }, [overrides]);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,7 +137,21 @@ const Dashboard: React.FC<DashboardProps> = ({
   const chartData = useMemo(() => evaluated.months.map((m) => {
     const ym = m.yearMonth;
     const cmp = compareYearMonth(ym, currentYm);
+    const override = overrides[ym];
+    const budgetIncome = budgetMonthValue(ym, 'income');
+    const budgetExpense = budgetMonthValue(ym, 'expense');
+
     if (cmp < 0) {
+      // Mes pasado: real del banco. Si hay budget, mostramos la variación
+      // contra presupuesto como overlay rayado cuando budget > real.
+      const projectedIncomeTotal = override?.income ?? budgetIncome ?? 0;
+      const projectedExpenseTotal = override?.expense ?? budgetExpense ?? 0;
+      const projIncGap = projectedIncomeTotal > 0
+        ? Math.max(0, projectedIncomeTotal - m.baseIncome)
+        : 0;
+      const projExpGap = projectedExpenseTotal > 0
+        ? Math.max(0, projectedExpenseTotal - m.baseExpense)
+        : 0;
       return {
         yearMonth: ym, phase: 'past' as const,
         realIncome: m.baseIncome, projIncome: 0,
@@ -202,13 +227,21 @@ const Dashboard: React.FC<DashboardProps> = ({
             Flujo real desde JDE · {companyCode === 'all' ? 'todas las compañías' : `compañía ${companyCode}`}
           </p>
         </div>
-        <button
-          onClick={onOpenFlow}
-          className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
-        >
-          <LineChartIcon className="w-4 h-4" />
-          Abrir Simulación
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <StartingBalanceInput
+            value={effectiveStartingBalance}
+            isOverride={startingBalanceOverride !== null}
+            bankValue={bankStartingBalance}
+            onChange={onStartingBalanceChange}
+          />
+          <button
+            onClick={onOpenFlow}
+            className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
+          >
+            <LineChartIcon className="w-4 h-4" />
+            Abrir Simulación
+          </button>
+        </div>
       </div>
 
       {!hasRealData && (
@@ -287,12 +320,27 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
+      {/* Monthly editable cash flow table */}
+      <CashFlowTable
+        rows={tableRows}
+        overrides={overrides}
+        onOverridesChange={setOverrides}
+        title="Flujo de efectivo mensual"
+        subtitle="Ajusta manualmente el ingreso o egreso proyectado; la caja se recalcula al instante en el gráfico superior."
+        highlightYearMonth={selectedMonth}
+        onRowClick={(ym) => setSelectedMonth(ym)}
+      />
+
       <MonthDrilldown
         yearMonth={selectedMonth}
         bankStatements={bankStatements}
         agedBalances={aged}
         companyCode={companyCode}
         baseline={baseline}
+        projectionByMonth={projectionByMonth}
+        overrides={overrides}
+        onOverridesChange={setOverrides}
+        tableRows={tableRows}
         today={today}
         onClose={() => setSelectedMonth(null)}
       />
@@ -377,9 +425,30 @@ const KpiCard: React.FC<{ label: string; value: number; icon: React.ReactNode; c
   </div>
 );
 
-function daysInMonth(ym: string): number {
-  const [y, m] = ym.split('-').map(Number);
-  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+export interface ComputeInputs {
+  bankStatements: BankAccountStatement[];
+  aged: AgedBalanceRecord[];
+  clients: Client[];
+  providers: Provider[];
+  cxpRecords: CXPRecord[];
+  assumptions: CashFlowAssumptions;
+  companyCode: string;
+  today: string;
+  overrides: ProjectionOverrides;
+  budget: Budget | null;
+  /**
+   * Caja inicial (pesos) para el primer mes histórico. Si es undefined se
+   * usa la suma de saldoInicial reportado por JDE. Esta es la base del
+   * encadenado: todas las cajas finales salen de la fórmula
+   * caja_inicial + ingresos - egresos.
+   */
+  startingBalance?: number;
+}
+
+export interface ComputeOutput {
+  base: CashFlowMonth[];
+  baseline: { avgIncome: number; avgExpense: number };
+  projection: ReturnType<typeof buildMonthlyProjection>;
 }
 
 function toBaseMonth(f: ForecastMonth) {

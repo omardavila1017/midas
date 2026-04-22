@@ -5,7 +5,6 @@ import {
   AlertCircle,
   CheckCircle,
   Wallet,
-  Building2,
   Receipt,
   Calendar,
   ChevronDown,
@@ -25,8 +24,17 @@ import {
   type BankStatementLine,
   type BankStatementFormat,
 } from '../services/jde';
+import {
+  buildOwnAccountDetector,
+  buildOwnAccountsIndex,
+  buildPairMatchedKeys,
+  classifyMovement,
+  INTERNAL_REASON_LABELS,
+  type ClassificationContext,
+  type InternalReason,
+} from '../domain/netCashFlowEngine';
 import { hex } from '../theme';
-import { fmtCurrency as fmtCurrencyUnified, fmtCompact as fmtCompactUnified } from '../formatters';
+import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Props
@@ -54,7 +62,6 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 
 /* Formatters → unified imports from ../formatters */
 const fmtCurrency = (v: number, _moneda = 'MXN'): string => fmtCurrencyUnified(v);
-const fmtCompact = (v: number): string => fmtCompactUnified(v);
 
 const csvEscape = (v: string | number | undefined): string => {
   if (v === undefined || v === null) return '';
@@ -211,6 +218,22 @@ const BancosDashboard = ({
   const [monedaFilter, setMonedaFilter] = useState<string>('all');
   const [tipoFilter, setTipoFilter] = useState<TipoFilter>('all');
 
+  // Construir el contexto de clasificación una sola vez sobre el universo
+  // completo (no sobre el subset filtrado) para que la detección de cuenta
+  // propia y de pares cargo/abono funcione correctamente.
+  const classificationCtx: ClassificationContext = useMemo(() => ({
+    ownAccountDetector: buildOwnAccountDetector(buildOwnAccountsIndex(statements)),
+    pairedKeys: buildPairMatchedKeys(statements),
+  }), [statements]);
+
+  const internalReasonOf = useCallback(
+    (cia: string, cuenta: string, mov: BankStatementLine): InternalReason | null => {
+      const c = classifyMovement(mov, classificationCtx, cia, cuenta);
+      return c.kind === 'internal' ? (c.reason ?? null) : null;
+    },
+    [classificationCtx],
+  );
+
   // ── Filter accounts by cia, banco, moneda (account-level) ──
   // Note: cia may be "" for TMPB format where Cuenta_Contable is null;
   // those accounts show regardless of company filter.
@@ -223,7 +246,10 @@ const BancosDashboard = ({
     });
   }, [statements, selectedCia, bancoFilter, monedaFilter]);
 
-  // Movement-level filter (search + tipo)
+  // Movement-level filter (search + tipo). Los traspasos internos NUNCA se
+  // filtran fuera por sí mismos: aparecen siempre, en gris, restando de los
+  // totales. Sólo se ocultan si el usuario activó un filtro CARGO/ABONO o
+  // un término de búsqueda que no los matchee.
   const accountsView = useMemo(() => {
     const needle = searchTerm.trim().toLowerCase();
     return accountsFiltered.map(acc => {
@@ -249,13 +275,38 @@ const BancosDashboard = ({
   );
 
   // ── KPIs ──
-  const totalCuentas = accountsView.length;
-  const totalMovs = accountsView.reduce((s, a) => s + a.movimientos.length, 0);
-  const saldoTotal = accountsView.reduce((s, a) => s + (a.saldoFinal ?? a.saldoInicial ?? 0), 0);
-  const totalCargos = accountsView.reduce((s, a) =>
-    s + a.movimientos.filter(m => m.tipoMovimiento === 'CARGO').reduce((x, m) => x + m.importe, 0), 0);
-  const totalAbonos = accountsView.reduce((s, a) =>
-    s + a.movimientos.filter(m => m.tipoMovimiento === 'ABONO').reduce((x, m) => x + m.importe, 0), 0);
+  // Calcula 4 totales: bruto (incluye internos) y real (sin internos).
+  // Los internos se siguen mostrando en la tabla pero en gris y restados.
+  const kpis = useMemo(() => {
+    let totalCuentas = 0;
+    let totalMovs = 0;
+    let totalMovsInternal = 0;
+    let saldoTotal = 0;
+    let cargosBruto = 0;
+    let cargosReal = 0;
+    let abonosBruto = 0;
+    let abonosReal = 0;
+    for (const a of accountsView) {
+      totalCuentas += 1;
+      totalMovs += a.movimientos.length;
+      saldoTotal += a.saldoFinal ?? a.saldoInicial ?? 0;
+      for (const m of a.movimientos) {
+        const isInternal = internalReasonOf(a.cia, a.cuenta, m) !== null;
+        if (isInternal) totalMovsInternal += 1;
+        if (m.tipoMovimiento === 'CARGO') {
+          cargosBruto += m.importe;
+          if (!isInternal) cargosReal += m.importe;
+        } else if (m.tipoMovimiento === 'ABONO') {
+          abonosBruto += m.importe;
+          if (!isInternal) abonosReal += m.importe;
+        }
+      }
+    }
+    return { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal };
+  }, [accountsView, internalReasonOf]);
+  const { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal } = kpis;
+  const totalCargos = cargosReal;
+  const totalAbonos = abonosReal;
 
   const hasFilters = bancoFilter !== 'all' || monedaFilter !== 'all' || tipoFilter !== 'all' || searchTerm !== '';
   const clearFilters = () => { setBancoFilter('all'); setMonedaFilter('all'); setTipoFilter('all'); setSearchTerm(''); };
@@ -369,10 +420,40 @@ const BancosDashboard = ({
       {/* ── KPI cards ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Saldo Total', value: fmtCurrency(saldoTotal), sub: `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`, icon: Wallet, color: hex.primary },
-          { label: 'Abonos', value: fmtCurrency(totalAbonos), sub: 'Entradas', icon: ArrowDownCircle, color: hex.success },
-          { label: 'Cargos', value: fmtCurrency(totalCargos), sub: 'Salidas', icon: ArrowUpCircle, color: hex.danger },
-          { label: 'Movimientos', value: totalMovs.toLocaleString(), sub: `Al ${query.fechaEstadoCuenta}`, icon: Receipt, color: 'var(--chart-4)' },
+          {
+            label: 'Saldo Total',
+            value: fmtCurrency(saldoTotal),
+            sub: `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`,
+            icon: Wallet,
+            color: hex.primary,
+          },
+          {
+            label: 'Abonos',
+            value: fmtCurrency(totalAbonos),
+            sub: abonosBruto !== abonosReal
+              ? `Bruto ${fmtCurrency(abonosBruto)} − internos ${fmtCurrency(abonosBruto - abonosReal)}`
+              : 'Entradas',
+            icon: ArrowDownCircle,
+            color: hex.success,
+          },
+          {
+            label: 'Cargos',
+            value: fmtCurrency(totalCargos),
+            sub: cargosBruto !== cargosReal
+              ? `Bruto ${fmtCurrency(cargosBruto)} − internos ${fmtCurrency(cargosBruto - cargosReal)}`
+              : 'Salidas',
+            icon: ArrowUpCircle,
+            color: hex.danger,
+          },
+          {
+            label: 'Movimientos',
+            value: totalMovs.toLocaleString(),
+            sub: totalMovsInternal > 0
+              ? `${totalMovsInternal.toLocaleString()} interno${totalMovsInternal === 1 ? '' : 's'} (excluido${totalMovsInternal === 1 ? '' : 's'})`
+              : `Al ${query.fechaEstadoCuenta}`,
+            icon: Receipt,
+            color: 'var(--chart-4)',
+          },
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           return (
@@ -384,7 +465,7 @@ const BancosDashboard = ({
                 </div>
               </div>
               <p className="text-[22px] font-bold font-mono tracking-tight text-[var(--gray-950)]">{kpi.value}</p>
-              <p className="text-[11px] text-[var(--gray-400)] mt-0.5">{kpi.sub}</p>
+              <p className="text-[11px] text-[var(--gray-400)] mt-0.5 truncate" title={kpi.sub}>{kpi.sub}</p>
             </div>
           );
         })}
@@ -455,7 +536,7 @@ const BancosDashboard = ({
                     </div>
                   </button>
 
-                  {isExpanded && <BancosMovimientos acc={acc} />}
+                  {isExpanded && <BancosMovimientos acc={acc} internalReasonOf={internalReasonOf} />}
                 </div>
               );
             })}
@@ -470,7 +551,13 @@ const BancosDashboard = ({
    Movements table
    ═══════════════════════════════════════════════════════════════════════ */
 
-const BancosMovimientos = ({ acc }: { acc: BankAccountStatement & { movimientos: BankStatementLine[] } }) => {
+const BancosMovimientos = ({
+  acc,
+  internalReasonOf,
+}: {
+  acc: BankAccountStatement & { movimientos: BankStatementLine[] };
+  internalReasonOf: (cia: string, cuenta: string, mov: BankStatementLine) => InternalReason | null;
+}) => {
   if (acc.movimientos.length === 0) {
     return (
       <div className="bg-[var(--surface-alt)] px-4 py-6 text-center text-[12px] text-[var(--gray-400)]">
@@ -479,8 +566,24 @@ const BancosMovimientos = ({ acc }: { acc: BankAccountStatement & { movimientos:
     );
   }
 
-  const totalCargos = acc.movimientos.filter(m => m.tipoMovimiento === 'CARGO').reduce((s, m) => s + m.importe, 0);
-  const totalAbonos = acc.movimientos.filter(m => m.tipoMovimiento === 'ABONO').reduce((s, m) => s + m.importe, 0);
+  // Pre-clasifica para no llamar internalReasonOf dos veces por fila.
+  const classified = acc.movimientos.map(m => ({
+    m,
+    internalReason: internalReasonOf(acc.cia, acc.cuenta, m),
+  }));
+
+  let abonosBruto = 0, abonosReal = 0, cargosBruto = 0, cargosReal = 0, internalCount = 0;
+  for (const { m, internalReason } of classified) {
+    const isInternal = internalReason !== null;
+    if (isInternal) internalCount += 1;
+    if (m.tipoMovimiento === 'CARGO') {
+      cargosBruto += m.importe;
+      if (!isInternal) cargosReal += m.importe;
+    } else if (m.tipoMovimiento === 'ABONO') {
+      abonosBruto += m.importe;
+      if (!isInternal) abonosReal += m.importe;
+    }
+  }
 
   return (
     <div className="bg-[var(--surface-alt)] px-4 pb-3">
@@ -497,21 +600,35 @@ const BancosMovimientos = ({ acc }: { acc: BankAccountStatement & { movimientos:
             </tr>
           </thead>
           <tbody>
-            {acc.movimientos.map((m, i) => {
+            {classified.map(({ m, internalReason }, i) => {
               const isCargo = m.tipoMovimiento === 'CARGO';
+              const isInternal = internalReason !== null;
+              const tooltip = isInternal ? INTERNAL_REASON_LABELS[internalReason] : m.concepto;
+              const rowMuted = isInternal ? 'opacity-50' : '';
+              const tipoColor = isInternal
+                ? 'bg-[var(--gray-100)] text-[var(--gray-400)]'
+                : isCargo ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : 'bg-[var(--success-muted)] text-[var(--success)]';
+              const importColor = isInternal
+                ? 'text-[var(--gray-400)] line-through'
+                : isCargo ? 'text-[var(--danger)]' : 'text-[var(--success)]';
               return (
-                <tr key={i} className="border-b border-[var(--gray-50)]">
+                <tr key={i} className={`border-b border-[var(--gray-50)] ${rowMuted}`} title={isInternal ? tooltip : undefined}>
                   <td className="py-1.5 text-[var(--gray-500)] whitespace-nowrap">{m.fechaOperacion}</td>
                   <td className="py-1.5 font-mono text-[var(--gray-950)]">{m.referencia || '—'}</td>
-                  <td className="py-1.5 text-[var(--gray-500)] max-w-[320px] truncate" title={m.concepto}>{m.concepto || '—'}</td>
+                  <td className="py-1.5 text-[var(--gray-500)] max-w-[320px] truncate" title={tooltip}>
+                    {m.concepto || '—'}
+                    {isInternal && (
+                      <span className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold align-middle">
+                        Interno
+                      </span>
+                    )}
+                  </td>
                   <td className="py-1.5 text-center">
-                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                      isCargo ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : 'bg-[var(--success-muted)] text-[var(--success)]'
-                    }`}>
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${tipoColor}`}>
                       {m.tipoMovimiento}
                     </span>
                   </td>
-                  <td className={`py-1.5 text-right font-mono font-medium ${isCargo ? 'text-[var(--danger)]' : 'text-[var(--success)]'}`}>
+                  <td className={`py-1.5 text-right font-mono font-medium ${importColor}`}>
                     {isCargo ? '-' : '+'}{fmtCurrency(m.importe, acc.moneda)}
                   </td>
                   <td className="py-1.5 text-right font-mono text-[var(--gray-950)]">
@@ -521,12 +638,24 @@ const BancosMovimientos = ({ acc }: { acc: BankAccountStatement & { movimientos:
               );
             })}
             <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold">
-              <td className="py-2" colSpan={3}>Totales visibles</td>
+              <td className="py-2" colSpan={3}>
+                Totales visibles
+                {internalCount > 0 && (
+                  <span className="text-[10px] font-normal text-[var(--gray-400)] ml-2">
+                    ({internalCount} interno{internalCount === 1 ? '' : 's'} excluido{internalCount === 1 ? '' : 's'})
+                  </span>
+                )}
+              </td>
               <td className="py-2 text-center text-[var(--gray-400)] text-[10px]">—</td>
               <td className="py-2 text-right font-mono">
-                <span className="text-[var(--success)]">+{fmtCurrency(totalAbonos, acc.moneda)}</span>
+                <span className="text-[var(--success)]">+{fmtCurrency(abonosReal, acc.moneda)}</span>
                 <span className="text-[var(--gray-300)] mx-1">/</span>
-                <span className="text-[var(--danger)]">-{fmtCurrency(totalCargos, acc.moneda)}</span>
+                <span className="text-[var(--danger)]">-{fmtCurrency(cargosReal, acc.moneda)}</span>
+                {(abonosBruto !== abonosReal || cargosBruto !== cargosReal) && (
+                  <span className="block text-[10px] text-[var(--gray-400)] font-normal mt-0.5">
+                    Bruto: +{fmtCurrency(abonosBruto, acc.moneda)} / -{fmtCurrency(cargosBruto, acc.moneda)}
+                  </span>
+                )}
               </td>
               <td className="py-2 text-right font-mono text-[var(--gray-950)]">
                 {acc.saldoFinal !== undefined ? fmtCurrency(acc.saldoFinal, acc.moneda) : '—'}

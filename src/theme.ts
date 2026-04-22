@@ -1,5 +1,5 @@
 /**
- * FlowSense Design System - Single source of truth
+ * Midas Design System - Single source of truth
  *
  * Follows the Impeccable framework:
  * - OKLCH color space for perceptually uniform palette

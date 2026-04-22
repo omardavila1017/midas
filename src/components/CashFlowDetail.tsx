@@ -3,11 +3,13 @@ import { CashFlowAssumptions } from '../domain/types';
 import {
   aggregateWeekly,
   aggregateMonthly,
-  isInternalTransfer,
+  classifyMovement,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildPairMatchedKeys,
   computeBankOnlyCashFlow,
   EnrichedBankMovement,
+  INTERNAL_REASON_LABELS,
 } from '../domain/netCashFlowEngine';
 import type { BankAccountStatement } from '../services/jde';
 import {
@@ -46,6 +48,12 @@ interface Props {
   bankFetchProgress?: { done: number; total: number } | null;
   /** Manual refresh trigger — re-runs the YTD range fetch. */
   onRefreshBanks?: () => void;
+  /**
+   * "Saldo inicial" — ligado a "Caja inicial" del Dashboard. App.tsx es la
+   * fuente de verdad; edit aquí propaga al override global.
+   */
+  startingBalance: number;
+  onStartingBalanceChange: (v: number | null) => void;
   /**
    * Legacy / compatibility props — ya no se usan en el cómputo del flujo
    * (la vista es bank-only), pero se aceptan para no romper call sites
@@ -89,10 +97,11 @@ export default function CashFlowDetail({
   bankFetchStatus = 'idle',
   bankFetchProgress = null,
   onRefreshBanks,
+  startingBalance,
+  onStartingBalanceChange,
 }: Props) {
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const [startingBalance, setStartingBalance] = useState(0);
   const [monthFilter, setMonthFilter] = useState<number | 'all'>('all');
 
   // Build company name lookup
@@ -103,17 +112,20 @@ export default function CashFlowDetail({
   }, [companies]);
 
   // ── Flatten bank statements into day summaries ──
+  // Mismo principio que `computeBankOnlyCashFlow`: los traspasos internos
+  // (leyenda / RFC propio / beneficiario propio / cuenta propia / par
+  // simétrico) NO entran en `abonos`/`cargos` para que los totales reflejen
+  // sólo flujo real. La sección colapsable del drilldown sí los muestra.
   const bankByDate = useMemo(() => {
     const map = new Map<string, BankDaySummary>();
-    // Precompute own-account detector una sola vez para todo el batch.
     const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
+    const pairedKeys = buildPairMatchedKeys(bankStatements);
+    const ctx = { ownAccountDetector, pairedKeys };
     for (const acc of bankStatements) {
       for (const mov of acc.movimientos) {
-        // Skip traspasos internos — son transacciones entre cuentas propias
-        // y se compensan entre sí; no deben aparecer en el flujo de efectivo.
-        if (isInternalTransfer(mov, ownAccountDetector)) continue;
         const date = mov.fechaOperacion;
         if (!date) continue;
+        if (classifyMovement(mov, ctx, acc.cia, acc.cuenta).kind === 'internal') continue;
         let entry = map.get(date);
         if (!entry) {
           entry = { date, abonos: 0, cargos: 0, saldoFinal: 0, cuentas: 0 };
@@ -158,13 +170,13 @@ export default function CashFlowDetail({
   // Transferencias internas (TRASPASO/TRANSFERENCIA REF, RFCs propios,
   // beneficiarios propios, cuenta destino propia) se filtran antes de sumar.
   // ──────────────────────────────────────────────────────────────
-  const { daily, abonosByDate, cargosByDate } = useMemo(
+  const { daily, abonosByDate, cargosByDate, internalAbonosByDate, internalCargosByDate } = useMemo(
     () => computeBankOnlyCashFlow(bankStatements, assumptions.year, startingBalance),
     [bankStatements, assumptions.year, startingBalance],
   );
 
   const weekly = useMemo(() => aggregateWeekly(daily), [daily]);
-  const monthly = useMemo(() => aggregateMonthly(daily, startingBalance), [daily, startingBalance]);
+  const monthly = useMemo(() => aggregateMonthly(daily), [daily]);
 
   // Filter by month if selected
   const filteredDaily = useMemo(() => {
@@ -290,7 +302,12 @@ export default function CashFlowDetail({
             <input
               type="number"
               value={startingBalance}
-              onChange={e => setStartingBalance(Number(e.target.value))}
+              onChange={e => {
+                const raw = e.target.value;
+                if (raw === '') { onStartingBalanceChange(null); return; }
+                const n = Number(raw);
+                if (Number.isFinite(n)) onStartingBalanceChange(n);
+              }}
               className={`h-9 w-36 px-3 rounded-lg border ${T.border} bg-white text-sm text-right tabular-nums ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
             />
           </label>
@@ -313,6 +330,8 @@ export default function CashFlowDetail({
           onToggle={setExpandedKey}
           abonosByDate={abonosByDate}
           cargosByDate={cargosByDate}
+          internalAbonosByDate={internalAbonosByDate}
+          internalCargosByDate={internalCargosByDate}
         />
       )}
       {granularity === 'weekly' && (
@@ -323,6 +342,8 @@ export default function CashFlowDetail({
           onToggle={setExpandedKey}
           abonosByDate={abonosByDate}
           cargosByDate={cargosByDate}
+          internalAbonosByDate={internalAbonosByDate}
+          internalCargosByDate={internalCargosByDate}
         />
       )}
       {granularity === 'monthly' && (
@@ -616,12 +637,15 @@ function GranularityTabs({
 // ---------------------------------------------------------------------------
 function DailyTable({
   daily, expandedKey, onToggle, abonosByDate, cargosByDate,
+  internalAbonosByDate, internalCargosByDate,
 }: {
   daily: DailyFlowRow[];
   expandedKey: string | null;
   onToggle: (k: string | null) => void;
   abonosByDate: Map<string, EnrichedBankMovement[]>;
   cargosByDate: Map<string, EnrichedBankMovement[]>;
+  internalAbonosByDate: Map<string, EnrichedBankMovement[]>;
+  internalCargosByDate: Map<string, EnrichedBankMovement[]>;
 }) {
   if (daily.length === 0) return <EmptyTable msg="Sin actividad en el periodo" />;
 
@@ -645,7 +669,9 @@ function DailyTable({
             const isOpen = expandedKey === key;
             const abonos = abonosByDate.get(d.date) ?? [];
             const cargos = cargosByDate.get(d.date) ?? [];
-            const eventCount = abonos.length + cargos.length;
+            const internalAbonos = internalAbonosByDate.get(d.date) ?? [];
+            const internalCargos = internalCargosByDate.get(d.date) ?? [];
+            const eventCount = abonos.length + cargos.length + internalAbonos.length + internalCargos.length;
             const weekday = DOW_SHORT[new Date(d.date + 'T12:00:00').getDay()];
             return (
               <Fragment key={key}>
@@ -681,7 +707,12 @@ function DailyTable({
                 {isOpen && (
                   <tr>
                     <td colSpan={7} className={`${T.surfaceAlt} px-4 py-4`}>
-                      <DayDetail abonos={abonos} cargos={cargos} />
+                      <DayDetail
+                        abonos={abonos}
+                        cargos={cargos}
+                        internalAbonos={internalAbonos}
+                        internalCargos={internalCargos}
+                      />
                     </td>
                   </tr>
                 )}
@@ -709,6 +740,7 @@ type DailyFlowRow = {
 // ---------------------------------------------------------------------------
 function WeeklyTable({
   weekly, daily, expandedKey, onToggle, abonosByDate, cargosByDate,
+  internalAbonosByDate, internalCargosByDate,
 }: {
   weekly: ReturnType<typeof aggregateWeekly>;
   daily: DailyFlowRow[];
@@ -716,6 +748,8 @@ function WeeklyTable({
   onToggle: (k: string | null) => void;
   abonosByDate: Map<string, EnrichedBankMovement[]>;
   cargosByDate: Map<string, EnrichedBankMovement[]>;
+  internalAbonosByDate: Map<string, EnrichedBankMovement[]>;
+  internalCargosByDate: Map<string, EnrichedBankMovement[]>;
 }) {
   const dailyByWeek = useMemo(() => {
     const map = new Map<string, typeof daily>();
@@ -790,6 +824,8 @@ function WeeklyTable({
                         weekDays={weekDays}
                         abonosByDate={abonosByDate}
                         cargosByDate={cargosByDate}
+                        internalAbonosByDate={internalAbonosByDate}
+                        internalCargosByDate={internalCargosByDate}
                       />
                     </td>
                   </tr>
@@ -900,28 +936,83 @@ function MonthlyTable({
 }
 
 // ---------------------------------------------------------------------------
-// Day detail — abonos + cargos reales del banco para un día
+// Day detail — abonos + cargos reales del banco para un día.
+// Los traspasos internos se muestran en una sección colapsable aparte, en
+// gris, para que el usuario los vea pero entienda que NO suman al neto.
 // ---------------------------------------------------------------------------
 function DayDetail({
-  abonos, cargos,
+  abonos, cargos, internalAbonos = [], internalCargos = [],
 }: {
   abonos: EnrichedBankMovement[];
   cargos: EnrichedBankMovement[];
+  internalAbonos?: EnrichedBankMovement[];
+  internalCargos?: EnrichedBankMovement[];
 }) {
+  const hasInternal = internalAbonos.length > 0 || internalCargos.length > 0;
+  const internalAbonosSum = internalAbonos.reduce((s, m) => s + m.amount, 0);
+  const internalCargosSum = internalCargos.reduce((s, m) => s + m.amount, 0);
+  const [internalOpen, setInternalOpen] = useState(false);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <MovementColumn
-        title="Abonos"
-        tone="success"
-        movements={abonos}
-        emptyMsg="Sin abonos"
-      />
-      <MovementColumn
-        title="Cargos"
-        tone="danger"
-        movements={cargos}
-        emptyMsg="Sin cargos"
-      />
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <MovementColumn
+          title="Abonos"
+          tone="success"
+          movements={abonos}
+          emptyMsg="Sin abonos"
+        />
+        <MovementColumn
+          title="Cargos"
+          tone="danger"
+          movements={cargos}
+          emptyMsg="Sin cargos"
+        />
+      </div>
+
+      {hasInternal && (
+        <div className={`border ${T.border} rounded-lg overflow-hidden`}>
+          <button
+            type="button"
+            onClick={() => setInternalOpen(o => !o)}
+            className={`w-full flex items-center justify-between gap-2 px-3 py-2 ${T.surfaceAlt} ${T.rowHover}`}
+            aria-expanded={internalOpen}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <ChevronDown
+                className={`w-3.5 h-3.5 ${T.textMuted} transition-transform ${internalOpen ? 'rotate-0' : '-rotate-90'}`}
+              />
+              <span className={`text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
+                Movimientos internos
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold">
+                {internalAbonos.length + internalCargos.length}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-xs tabular-nums text-[var(--gray-400)]">
+              {internalAbonosSum > 0 && <span>+{fmtCurrency(internalAbonosSum)}</span>}
+              {internalCargosSum > 0 && <span>−{fmtCurrency(internalCargosSum)}</span>}
+              <span className="text-[10px] uppercase tracking-wider">excluidos del neto</span>
+            </div>
+          </button>
+          {internalOpen && (
+            <div className="px-3 py-3 grid grid-cols-1 md:grid-cols-2 gap-4 opacity-60">
+              <MovementColumn
+                title="Abonos internos"
+                tone="muted"
+                movements={internalAbonos}
+                emptyMsg="—"
+              />
+              <MovementColumn
+                title="Cargos internos"
+                tone="muted"
+                movements={internalCargos}
+                emptyMsg="—"
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -930,11 +1021,14 @@ function MovementColumn({
   title, tone, movements, emptyMsg,
 }: {
   title: string;
-  tone: 'success' | 'danger';
+  tone: 'success' | 'danger' | 'muted';
   movements: EnrichedBankMovement[];
   emptyMsg: string;
 }) {
-  const colorClass = tone === 'success' ? 'text-[var(--success)]' : 'text-[var(--danger)]';
+  const colorClass =
+    tone === 'success' ? 'text-[var(--success)]' :
+    tone === 'danger' ? 'text-[var(--danger)]' :
+    'text-[var(--gray-400)]';
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
@@ -957,9 +1051,15 @@ function MovementColumn({
 // ---------------------------------------------------------------------------
 // Movimiento individual — clickable para drill-down al detalle bancario
 // ---------------------------------------------------------------------------
-function MovementRow({ m, tone }: { m: EnrichedBankMovement; tone: 'success' | 'danger' }) {
+function MovementRow({ m, tone }: { m: EnrichedBankMovement; tone: 'success' | 'danger' | 'muted' }) {
   const [open, setOpen] = useState(false);
-  const colorClass = tone === 'success' ? 'text-[var(--success)]' : 'text-[var(--danger)]';
+  const isInternal = m.kind === 'internal' || tone === 'muted';
+  const reasonLabel = isInternal && m.internalReason
+    ? INTERNAL_REASON_LABELS[m.internalReason]
+    : null;
+  const colorClass = isInternal
+    ? 'text-[var(--gray-400)] line-through'
+    : tone === 'success' ? 'text-[var(--success)]' : 'text-[var(--danger)]';
 
   return (
     <div className={`${T.surface} rounded-lg border ${T.border} overflow-hidden`}>
@@ -968,9 +1068,17 @@ function MovementRow({ m, tone }: { m: EnrichedBankMovement; tone: 'success' | '
         onClick={() => setOpen(o => !o)}
         className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left ${T.rowHover} cursor-pointer`}
         aria-expanded={open}
+        title={reasonLabel ?? undefined}
       >
         <div className="min-w-0 flex-1">
-          <div className={`text-sm font-medium ${T.text} truncate`}>{m.concepto}</div>
+          <div className={`text-sm font-medium ${T.text} truncate flex items-center gap-1.5`}>
+            <span className="truncate">{m.concepto}</span>
+            {isInternal && (
+              <span className="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold flex-shrink-0">
+                Interno
+              </span>
+            )}
+          </div>
           <div className={`text-xs ${T.textMuted} mt-0.5 truncate`}>
             {(m.bankName || `Banco ${m.banco}`)} · {m.cuenta}
           </div>
@@ -1024,11 +1132,13 @@ function DetailField({
 // Week detail — tabla día-por-día dentro de una semana
 // ---------------------------------------------------------------------------
 function WeekDetail({
-  weekDays, abonosByDate, cargosByDate,
+  weekDays, abonosByDate, cargosByDate, internalAbonosByDate, internalCargosByDate,
 }: {
   weekDays: DailyFlowRow[];
   abonosByDate: Map<string, EnrichedBankMovement[]>;
   cargosByDate: Map<string, EnrichedBankMovement[]>;
+  internalAbonosByDate: Map<string, EnrichedBankMovement[]>;
+  internalCargosByDate: Map<string, EnrichedBankMovement[]>;
 }) {
   const [dayOpen, setDayOpen] = useState<string | null>(null);
   return (
@@ -1049,6 +1159,8 @@ function WeekDetail({
             const isOpen = dayOpen === d.date;
             const abonos = abonosByDate.get(d.date) ?? [];
             const cargos = cargosByDate.get(d.date) ?? [];
+            const internalAbonos = internalAbonosByDate.get(d.date) ?? [];
+            const internalCargos = internalCargosByDate.get(d.date) ?? [];
             const weekday = DOW_SHORT[new Date(d.date + 'T12:00:00').getDay()];
             return (
               <Fragment key={d.date}>
@@ -1072,12 +1184,19 @@ function WeekDetail({
                   <td className={`px-3 py-2 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)]' : T.text}`}>
                     {fmtCurrency(d.cumulative)}
                   </td>
-                  <td className={`px-3 py-2 text-right text-xs tabular-nums ${T.textMuted}`}>{abonos.length + cargos.length}</td>
+                  <td className={`px-3 py-2 text-right text-xs tabular-nums ${T.textMuted}`}>
+                    {abonos.length + cargos.length + internalAbonos.length + internalCargos.length}
+                  </td>
                 </tr>
                 {isOpen && (
                   <tr>
                     <td colSpan={6} className={`${T.surfaceAlt} px-3 py-3`}>
-                      <DayDetail abonos={abonos} cargos={cargos} />
+                      <DayDetail
+                        abonos={abonos}
+                        cargos={cargos}
+                        internalAbonos={internalAbonos}
+                        internalCargos={internalCargos}
+                      />
                     </td>
                   </tr>
                 )}
@@ -1093,24 +1212,6 @@ function WeekDetail({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function Badge({ tone, children }: {
-  tone: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
-  children: React.ReactNode;
-}) {
-  const map = {
-    success: 'bg-[var(--success)]/10 text-[var(--success)]',
-    warning: 'bg-[var(--warning)]/10 text-[var(--warning)]',
-    danger:  'bg-[var(--danger)]/10 text-[var(--danger)]',
-    info:    'bg-[var(--info)]/10 text-[var(--info)]',
-    neutral: 'bg-[var(--muted)] text-[var(--muted-foreground)]',
-  }[tone];
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${map}`}>
-      {children}
-    </span>
-  );
-}
-
 function EmptyTable({ msg }: { msg: string }) {
   return (
     <div className={`${T.surface} border ${T.border} rounded-xl py-16 text-center`}>

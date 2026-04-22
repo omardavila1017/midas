@@ -36,6 +36,7 @@ export interface LastPaymentEntry {
 interface CatalogShape {
   version: string;
   generated: string;
+  providerTypeByName?: Record<string, string>;
   flexibilityByName: Record<string, Flexibility>;
   flexibilityByClass: Record<string, Flexibility>;
   dtiCatalog: Record<string, DtiEntry>;
@@ -64,6 +65,7 @@ export interface EnrichmentInput {
 }
 
 export interface EnrichmentResult {
+  providerType: string | null;
   flexibility: Flexibility;
   criticidad: Criticidad | null;
   dtiArea: string | null;
@@ -91,8 +93,10 @@ export function enrichFromCatalog(input: EnrichmentInput): EnrichmentResult {
 
   const dti = name ? catalog.dtiCatalog[name] ?? null : null;
   const last = name ? catalog.lastPayment[name] ?? null : null;
+  const providerType = name ? catalog.providerTypeByName?.[name] ?? null : null;
 
   return {
+    providerType,
     flexibility: flex,
     criticidad: dti?.criticidad ?? null,
     dtiArea: dti?.area ?? null,
@@ -124,7 +128,10 @@ export function catalogStats(): {
   });
 
   return {
-    totalSuppliers: Object.keys(catalog.flexibilityByName).length,
+    totalSuppliers: new Set([
+      ...Object.keys(catalog.providerTypeByName ?? {}),
+      ...Object.keys(catalog.flexibilityByName),
+    ]).size,
     totalClasses: Object.keys(catalog.flexibilityByClass).length,
     dtiProviders: Object.keys(catalog.dtiCatalog).length,
     byFlexibility: byFlex,

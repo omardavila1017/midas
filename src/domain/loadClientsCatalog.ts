@@ -13,6 +13,12 @@ import { parsePaymentDay, detectsFactoraje } from './parsePaymentDay';
 
 interface RawClient {
   name: string;
+  legalName?: string;
+  rfc?: string;
+  commercialGroupName?: string;
+  commercialGroupId?: string;
+  emailDomain?: string;
+  address?: string;
   payDay: string;
   cycle: string;
   sales: number;
@@ -45,6 +51,12 @@ function rawToClient(raw: RawClient, index: number): Client {
   return {
     id: `catalog-${index}-${raw.name.slice(0, 20).replace(/\s+/g, '-').toLowerCase()}`,
     name: raw.name,
+    legalName: raw.legalName,
+    rfc: raw.rfc,
+    commercialGroupName: raw.commercialGroupName,
+    commercialGroupId: raw.commercialGroupId,
+    emailDomain: raw.emailDomain,
+    address: raw.address,
     paymentDayRaw: raw.payDay || undefined,
     paymentDay: pattern,
     frequency,

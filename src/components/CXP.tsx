@@ -1,10 +1,9 @@
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, type ReactNode } from 'react';
 import {
   Upload as UploadIcon,
   FileSpreadsheet,
   Loader2,
   AlertCircle,
-  CheckCircle,
   Search,
   Building2,
   Clock,
@@ -19,8 +18,9 @@ import {
   RotateCcw,
   Database,
   RefreshCw,
+  HelpCircle,
 } from 'lucide-react';
-import { fetchAgedBalances, JdeApiError, type Company } from '../services/jde';
+import { fetchAgedBalances, JdeApiError, type BankAccountStatement, type BankStatementLine, type Company } from '../services/jde';
 import {
   BarChart,
   Bar,
@@ -32,13 +32,14 @@ import {
   PieChart,
   Pie,
   Cell,
-  Legend,
-  Treemap,
 } from 'recharts';
-import { hex, color } from '../theme';
-import { fmtCompact, fmtCurrency, fmtSmart } from '../formatters';
-import type { Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
+import { hex } from '../theme';
+import { fmtCompact, fmtCurrency } from '../formatters';
+import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
 import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
+import { projectYear } from '../domain/collectionEngine';
+import type { Budget } from '../domain/budget';
+import type { Proposal } from '../types';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -76,6 +77,43 @@ interface CXPRecord {
 }
 
 type PaymentPriority = 'critical' | 'negotiable' | 'highImpact' | 'normal';
+type CxpAlertType =
+  | 'riskHigh'
+  | 'urgentPayment'
+  | 'operationalImpact'
+  | 'cashImpact'
+  | 'criticalProvider'
+  | 'overdue'
+  | 'blocked'
+  | 'incomplete'
+  | 'missingPo'
+  | 'duplicate'
+  | 'creditLimit'
+  | 'staleProvider'
+  | 'strategicProvider';
+type AlertTone = 'danger' | 'warning' | 'info';
+type DrillDimension = 'empresa' | 'tipoProveedor' | 'proveedor' | 'factura';
+
+interface CxpAlert {
+  type: CxpAlertType;
+  label: string;
+  detail: string;
+  tone: AlertTone;
+}
+
+interface DrillStep {
+  dimension: DrillDimension;
+  label: string;
+  value: string;
+}
+
+interface DrillNode {
+  value: string;
+  label: string;
+  total: number;
+  count: number;
+  records: EnrichedCXPRecord[];
+}
 
 interface PaymentReference {
   kind: 'Factura' | 'Proveedor' | 'OC' | 'Contrato' | 'Concepto';
@@ -90,8 +128,11 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerFlexibilityComment?: string;
   providerCreditLimit?: number;
   providerDaysWithoutUpdate: number | null;
+  providerDtiArea?: string;
+  providerDtiCriticidad?: 'Alta' | 'Media' | 'Baja';
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
+  alerts: CxpAlert[];
 }
 
 interface AgingBucket {
@@ -102,15 +143,23 @@ interface AgingBucket {
   count: number;
 }
 
-type CXPView = 'upload' | 'dashboard';
-type DashboardTab = 'resumen' | 'proveedores' | 'antiguedad' | 'impuestos';
+interface SupplierSummary {
+  nombre: string;
+  total: number;
+  count: number;
+  maxDias: number;
+  providerType: string;
+  providerRisk: ProviderRisk;
+  providerFlexibility: ProviderFlexibility;
+  creditLimit?: number;
+  records: EnrichedCXPRecord[];
+}
+
+type DashboardTab = 'resumen' | 'triage' | 'proveedores';
 type SortKey = 'nombre' | 'total' | 'count' | 'maxDias';
 type SortDir = 'asc' | 'desc';
-type RiskFilter = 'all' | ProviderRisk;
-type FlexFilter = 'all' | ProviderFlexibility;
-type DueFilter = 'all' | 'current' | 'overdue' | 'over90';
-type AmountFilter = 'all' | 'under100k' | '100kTo1m' | 'over1m';
-type PriorityFilter = 'all' | PaymentPriority;
+type DueFilter = 'dueThisWeek' | 'current' | 'overdue' | 'over90';
+type AmountFilter = 'under100k' | 'over500k' | '100kTo1m' | 'over1m';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Constants
@@ -123,8 +172,73 @@ const PIE_COLORS = [hex.primary, hex.success, hex.warning, 'var(--chart-4)', hex
 const PAGE_SIZE = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HIGH_IMPACT_AMOUNT = 1_000_000;
+const MID_IMPACT_AMOUNT = 500_000;
 const RISKS: ProviderRisk[] = ['Alto', 'Medio', 'Bajo'];
 const FLEX_VALUES: ProviderFlexibility[] = ['inamovible', 'flexible', 'revisar', 'unknown'];
+const DUE_FILTERS: { id: DueFilter; label: string }[] = [
+  { id: 'dueThisWeek', label: 'Vence esta semana' },
+  { id: 'current', label: 'Por vencer' },
+  { id: 'overdue', label: 'Vencido' },
+  { id: 'over90', label: 'Vencido > 90d' },
+];
+const AMOUNT_FILTERS: { id: AmountFilter; label: string }[] = [
+  { id: 'under100k', label: '< $100k' },
+  { id: 'over500k', label: '> $500k' },
+  { id: '100kTo1m', label: '$100k-$1M' },
+  { id: 'over1m', label: '> $1M' },
+];
+const PRIORITY_FILTERS: { id: PaymentPriority; label: string }[] = [
+  { id: 'critical', label: 'Critico' },
+  { id: 'negotiable', label: 'Negociable' },
+  { id: 'highImpact', label: 'Impacto alto' },
+  { id: 'normal', label: 'Normal' },
+];
+const DRILL_SEQUENCE: DrillDimension[] = ['empresa', 'tipoProveedor', 'proveedor', 'factura'];
+const DRILL_LABELS: Record<DrillDimension, string> = {
+  empresa: 'Empresa',
+  tipoProveedor: 'Tipo de proveedor',
+  proveedor: 'Proveedor',
+  factura: 'Factura',
+};
+const ALERT_LABELS: Record<CxpAlertType, string> = {
+  riskHigh: 'Riesgo alto',
+  urgentPayment: 'Urgencia de pago',
+  operationalImpact: 'Impacto operativo',
+  cashImpact: 'Impacto en flujo',
+  criticalProvider: 'Proveedor crítico',
+  overdue: 'Facturas vencidas',
+  blocked: 'Bloqueadas',
+  incomplete: 'Datos incompletos',
+  missingPo: 'Sin OC',
+  duplicate: 'Duplicidad posible',
+  creditLimit: 'Límite comprometido',
+  staleProvider: 'Proveedor sin actualizar',
+  strategicProvider: 'Proveedor estratégico',
+};
+const TRIAGE_ALERT_ORDER: CxpAlertType[] = [
+  'riskHigh',
+  'urgentPayment',
+  'operationalImpact',
+  'cashImpact',
+  'criticalProvider',
+  'overdue',
+  'blocked',
+  'incomplete',
+  'missingPo',
+  'duplicate',
+  'creditLimit',
+  'staleProvider',
+  'strategicProvider',
+];
+const AGING_RANGE_DEFS = [
+  { id: 'current', label: 'Por vencer', min: -Infinity, max: 0 },
+  { id: '0-7', label: '0-7 días', min: 1, max: 7 },
+  { id: '8-15', label: '8-15 días', min: 8, max: 15 },
+  { id: '16-30', label: '16-30 días', min: 16, max: 30 },
+  { id: '31-60', label: '31-60 días', min: 31, max: 60 },
+  { id: '61-90', label: '61-90 días', min: 61, max: 90 },
+  { id: '90+', label: '+90 días', min: 91, max: Infinity },
+];
 
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
@@ -178,6 +292,40 @@ function parseDateToIso(value: string | undefined): string | null {
   return null;
 }
 
+function dueDateForRecord(record: Pick<CXPRecord, 'fechaProgramacionPago' | 'fechaVence' | 'fechaFactura'>): string | null {
+  return parseDateToIso(record.fechaProgramacionPago) ?? parseDateToIso(record.fechaVence) ?? parseDateToIso(record.fechaFactura);
+}
+
+function isDueThisWeek(record: CXPRecord): boolean {
+  const due = dueDateForRecord(record);
+  if (!due) return false;
+  const dueDate = new Date(`${due}T12:00:00`);
+  if (!Number.isFinite(dueDate.getTime())) return false;
+
+  const today = new Date();
+  const localNoon = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 0, 0);
+  const day = (localNoon.getDay() + 6) % 7;
+  const start = new Date(localNoon);
+  start.setDate(localNoon.getDate() - day);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return dueDate >= start && dueDate <= end;
+}
+
+function matchesDueFilter(record: CXPRecord, filter: DueFilter): boolean {
+  if (filter === 'dueThisWeek') return isDueThisWeek(record);
+  if (filter === 'current') return record.porVencer > 0 && record.diasVencida <= 0;
+  if (filter === 'overdue') return record.diasVencida > 0;
+  return record.diasVencida > 90;
+}
+
+function matchesAmountFilter(record: CXPRecord, filter: AmountFilter): boolean {
+  if (filter === 'under100k') return record.importePendientePesos < 100_000;
+  if (filter === 'over500k') return record.importePendientePesos >= MID_IMPACT_AMOUNT;
+  if (filter === '100kTo1m') return record.importePendientePesos >= 100_000 && record.importePendientePesos < HIGH_IMPACT_AMOUNT;
+  return record.importePendientePesos >= HIGH_IMPACT_AMOUNT;
+}
+
 function inferReferences(record: CXPRecord): PaymentReference[] {
   const refs: PaymentReference[] = [];
   if (record.noFactura) refs.push({ kind: 'Factura', label: record.noFactura });
@@ -201,6 +349,59 @@ function inferReferences(record: CXPRecord): PaymentReference[] {
   return refs;
 }
 
+function invoiceKey(record: Pick<CXPRecord, 'cia' | 'noProveedor' | 'nombre' | 'noFactura' | 'fechaFactura' | 'importePendientePesos'>): string {
+  return [
+    record.cia,
+    normName(record.noProveedor || record.nombre),
+    normName(record.noFactura),
+    record.fechaFactura,
+    Math.round(record.importePendientePesos * 100) / 100,
+  ].join('|');
+}
+
+function hasReference(record: EnrichedCXPRecord, kind: PaymentReference['kind']): boolean {
+  return record.referenceLinks.some(ref => ref.kind === kind);
+}
+
+function isBlocked(record: Pick<CXPRecord, 'edoPago' | 'clasifica' | 'clasificacionProveedor'>): boolean {
+  const text = normName(`${record.edoPago} ${record.clasifica} ${record.clasificacionProveedor}`);
+  return /\b(BLOQ|BLOQUE|RETEN|DETEN|APROB|RECHAZ|HOLD)\b/.test(text);
+}
+
+function alertItem(type: CxpAlertType, detail: string, tone: AlertTone): CxpAlert {
+  return { type, label: ALERT_LABELS[type], detail, tone };
+}
+
+function buildCxpAlerts(
+  record: EnrichedCXPRecord,
+  duplicateCount: number,
+  supplierExposure: number,
+): CxpAlert[] {
+  const alerts: CxpAlert[] = [];
+  if (record.providerRisk === 'Alto') alerts.push(alertItem('riskHigh', 'Proveedor con riesgo alto en catálogo.', 'danger'));
+  if (record.paymentPriority === 'critical') alerts.push(alertItem('urgentPayment', priorityReason(record), 'danger'));
+  if (record.providerFlexibility === 'inamovible') alerts.push(alertItem('operationalImpact', 'Proveedor inamovible; mover el pago puede afectar operación.', 'danger'));
+  if (record.importePendientePesos >= HIGH_IMPACT_AMOUNT) alerts.push(alertItem('cashImpact', `Factura de ${fmtFull(record.importePendientePesos)} con impacto material en caja.`, 'warning'));
+  if (record.providerDtiCriticidad === 'Alta') alerts.push(alertItem('criticalProvider', `Proveedor crítico DTI${record.providerDtiArea ? ` (${record.providerDtiArea})` : ''}.`, 'danger'));
+  if (record.diasVencida > 0) alerts.push(alertItem('overdue', agingTooltip(record.diasVencida), record.diasVencida > 90 ? 'danger' : 'warning'));
+  if (isBlocked(record)) alerts.push(alertItem('blocked', `Estatus o clasificación: ${record.edoPago || record.clasifica || record.clasificacionProveedor || 'sin detalle'}.`, 'warning'));
+  if (!record.noFactura || !record.fechaFactura || !dueDateForRecord(record) || record.importePendientePesos <= 0) {
+    alerts.push(alertItem('incomplete', 'Falta factura, fecha, vencimiento o monto pendiente.', 'warning'));
+  }
+  if (!hasReference(record, 'OC')) alerts.push(alertItem('missingPo', 'No se detectó orden de compra en los datos recibidos.', 'info'));
+  if (duplicateCount > 1) alerts.push(alertItem('duplicate', `${duplicateCount} registros con misma factura/proveedor/monto.`, 'warning'));
+  if (record.providerCreditLimit && record.providerCreditLimit > 0 && supplierExposure >= record.providerCreditLimit * 0.9) {
+    alerts.push(alertItem('creditLimit', `Exposición ${fmtFull(supplierExposure)} vs límite ${fmtFull(record.providerCreditLimit)}.`, 'warning'));
+  }
+  if (record.providerDaysWithoutUpdate !== null && record.providerDaysWithoutUpdate > 90) {
+    alerts.push(alertItem('staleProvider', `${record.providerDaysWithoutUpdate} días sin actualización del proveedor.`, 'warning'));
+  }
+  if (record.providerDtiCriticidad || record.providerRisk === 'Alto') {
+    alerts.push(alertItem('strategicProvider', 'Proveedor marcado como crítico o estratégico por catálogo.', 'info'));
+  }
+  return alerts;
+}
+
 function isCritical(record: Pick<EnrichedCXPRecord, 'providerRisk' | 'providerFlexibility' | 'diasVencida'>): boolean {
   return record.providerRisk === 'Alto' || record.providerFlexibility === 'inamovible' || record.diasVencida > 30;
 }
@@ -215,8 +416,8 @@ function isHighImpact(record: Pick<EnrichedCXPRecord, 'importePendientePesos'>):
 
 function paymentPriority(record: EnrichedCXPRecord): PaymentPriority {
   if (isCritical(record)) return 'critical';
-  if (isNegotiable(record)) return 'negotiable';
   if (isHighImpact(record)) return 'highImpact';
+  if (isNegotiable(record)) return 'negotiable';
   return 'normal';
 }
 
@@ -228,7 +429,7 @@ function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provide
   });
   const providerFlexibility = provider?.flexibility ?? catalog.flexibility;
   const providerRisk = provider?.risk ?? riskFromFlexibility(providerFlexibility);
-  const providerType = provider?.type || record.clasificacionProveedor?.trim() || 'Sin clasificar';
+  const providerType = catalog.providerType || (provider?.type && provider.type !== 'Otro' ? provider.type : '') || record.clasificacionProveedor?.trim() || 'Sin clasificar';
   const enriched: EnrichedCXPRecord = {
     ...record,
     providerType,
@@ -238,8 +439,11 @@ function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provide
     providerFlexibilityComment: provider?.flexibilityComment,
     providerCreditLimit: provider?.creditLimit,
     providerDaysWithoutUpdate: daysSince(provider?.lastUpdatedAt),
+    providerDtiArea: provider?.dtiArea ?? catalog.dtiArea ?? undefined,
+    providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
+    alerts: [],
   };
   enriched.paymentPriority = paymentPriority(enriched);
   return enriched;
@@ -263,9 +467,119 @@ function priorityTone(priority: PaymentPriority): string {
   }
 }
 
-function isTaxPaid(record: CXPRecord): boolean {
-  const status = record.edoPago.toUpperCase();
-  return record.importePendientePesos <= 0 || status.includes('PAG') || status.includes('LIQ');
+function priorityReason(record: EnrichedCXPRecord): string {
+  const reasons: string[] = [];
+  if (record.providerDtiCriticidad) {
+    reasons.push(`DTI = ${record.providerDtiCriticidad}${record.providerDtiArea ? ` (${record.providerDtiArea})` : ''}`);
+  } else {
+    reasons.push(`riesgo = ${record.providerRisk}`);
+  }
+
+  reasons.push(`flexibilidad = ${flexibilityLabel(record.providerFlexibility).toLowerCase()}`);
+
+  if (record.diasVencida > 0) reasons.push(`vence con ${record.diasVencida} dias de atraso`);
+  else if (isDueThisWeek(record)) reasons.push('vence esta semana');
+  else reasons.push('esta por vencer');
+
+  if (record.importePendientePesos >= HIGH_IMPACT_AMOUNT) reasons.push(`monto >= ${fmt(HIGH_IMPACT_AMOUNT)}`);
+
+  if (record.paymentPriority === 'critical') return `Critico porque ${reasons.join(', ')}.`;
+  if (record.paymentPriority === 'highImpact') return `Impacto alto porque ${reasons.join(', ')}.`;
+  if (record.paymentPriority === 'negotiable') return `Negociable porque ${reasons.join(', ')}.`;
+  return `Normal porque ${reasons.join(', ')}.`;
+}
+
+function agingTooltip(days: number): string {
+  if (days <= 0) return 'Por vencer: aun esta dentro del plazo operativo.';
+  if (days <= 30) return `${days} dias vencido: seguimiento operativo; puede afectar la relacion si se acumula.`;
+  if (days <= 60) return `${days} dias vencido: tension con proveedor y posible bloqueo de credito.`;
+  if (days <= 90) return `${days} dias vencido: riesgo alto de suspension de servicio o condiciones mas estrictas.`;
+  return `${days} dias vencido: riesgo legal/comercial; requiere decision prioritaria.`;
+}
+
+function agingRangeForRecord(record: Pick<CXPRecord, 'diasVencida'>): { id: string; label: string } {
+  const days = record.diasVencida;
+  const found = AGING_RANGE_DEFS.find(range => days >= range.min && days <= range.max) ?? AGING_RANGE_DEFS[AGING_RANGE_DEFS.length - 1];
+  return { id: found.id, label: found.label };
+}
+
+function drillValue(record: EnrichedCXPRecord, dimension: DrillDimension): string {
+  switch (dimension) {
+    case 'empresa': return record.cia || 'Sin empresa';
+    case 'tipoProveedor': return record.providerType || 'Sin clasificar';
+    case 'proveedor': return record.nombre || 'Sin proveedor';
+    case 'factura': return invoiceKey(record);
+  }
+}
+
+function drillLabel(record: EnrichedCXPRecord, dimension: DrillDimension, ciaName: (code: string) => string): string {
+  switch (dimension) {
+    case 'empresa': return ciaName(record.cia || 'Sin empresa');
+    case 'tipoProveedor': return record.providerType || 'Sin clasificar';
+    case 'proveedor': return record.nombre || 'Sin proveedor';
+    case 'factura': return record.noFactura || 'Sin factura';
+  }
+}
+
+function applyDrillStack(
+  records: EnrichedCXPRecord[],
+  stack: DrillStep[],
+): EnrichedCXPRecord[] {
+  if (!stack.length) return records;
+  return records.filter(record => stack.every(step => drillValue(record, step.dimension) === step.value));
+}
+
+function groupByDrillDimension(
+  records: EnrichedCXPRecord[],
+  dimension: DrillDimension,
+  ciaName: (code: string) => string,
+): DrillNode[] {
+  const map = new Map<string, DrillNode>();
+  records.forEach(record => {
+    const value = drillValue(record, dimension);
+    const label = drillLabel(record, dimension, ciaName);
+    const item = map.get(value) ?? { value, label, total: 0, count: 0, records: [] };
+    item.total += record.importePendientePesos;
+    item.count += 1;
+    item.records.push(record);
+    map.set(value, item);
+  });
+  return Array.from(map.values()).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, 'es'));
+}
+
+function flattenBankMovements(bankStatements: BankAccountStatement[], cia?: string): BankStatementLine[] {
+  return bankStatements
+    .filter(statement => !cia || cia === 'all' || statement.cia === cia)
+    .flatMap(statement => statement.movimientos);
+}
+
+function findPossibleBankPayments(record: EnrichedCXPRecord, bankStatements: BankAccountStatement[]): BankStatementLine[] {
+  const target = record.importePendientePesos;
+  if (target <= 0 || bankStatements.length === 0) return [];
+  const provider = normName(record.nombre);
+  const invoice = normName(record.noFactura);
+  return flattenBankMovements(bankStatements, record.cia)
+    .filter(movement => movement.tipoMovimiento === 'CARGO')
+    .filter((movement) => {
+      const amountOk = Math.abs(Math.abs(movement.importe) - target) <= Math.max(500, target * 0.05);
+      const text = normName(`${movement.concepto} ${movement.referencia}`);
+      const textOk = (provider && text.includes(provider.slice(0, Math.min(provider.length, 18)))) || (invoice && text.includes(invoice));
+      return amountOk || textOk;
+    })
+    .sort((a, b) => b.fechaOperacion.localeCompare(a.fechaOperacion))
+    .slice(0, 6);
+}
+
+function dueFilterLabel(filter: DueFilter): string {
+  return DUE_FILTERS.find(option => option.id === filter)?.label ?? filter;
+}
+
+function amountFilterLabel(filter: AmountFilter): string {
+  return AMOUNT_FILTERS.find(option => option.id === filter)?.label ?? filter;
+}
+
+function toggleListValue<T extends string>(values: T[], value: T): T[] {
+  return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -358,169 +672,6 @@ function parseCXP(text: string): CXPRecord[] {
   return records;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   Upload Component
-   ═══════════════════════════════════════════════════════════════════════ */
-
-const CXPUpload = ({
-  onDataLoaded,
-  selectedCia,
-}: {
-  onDataLoaded: (r: CXPRecord[]) => void;
-  selectedCia?: string;
-}) => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-  const [count, setCount] = useState(0);
-  const [source, setSource] = useState<'csv' | 'jde' | null>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const ref = useRef<HTMLInputElement>(null);
-
-  const handle = useCallback(async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.csv')) { setError('Solo archivos .csv'); return; }
-    setSource('csv'); setLoading(true); setError(null);
-    try {
-      const text = await file.text();
-      const recs = parseCXP(text);
-      setCount(recs.length);
-      setSuccess(true);
-      onDataLoaded(recs);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error al procesar');
-      setLoading(false);
-    }
-  }, [onDataLoaded]);
-
-  const loadFromJde = useCallback(async () => {
-    if (!selectedCia || selectedCia === 'all') return;
-    setSource('jde'); setLoading(true); setError(null);
-    try {
-      const records = await fetchAgedBalances({ cia: selectedCia });
-      if (records.length === 0) throw new Error(`JDE devolvió 0 registros para la compañía ${selectedCia}`);
-      setCount(records.length);
-      setSuccess(true);
-      onDataLoaded(records as CXPRecord[]);
-    } catch (e) {
-      if (e instanceof JdeApiError) {
-        const hint = e.status === 401 ? ' — error de autenticación con el servidor' : '';
-        setError(`JDE ${e.status}: ${e.message}${hint}`);
-      } else {
-        setError(e instanceof Error ? e.message : 'Error al consultar JDE');
-      }
-      setLoading(false);
-    }
-  }, [selectedCia, onDataLoaded]);
-
-  const jdeDisabled = !selectedCia || selectedCia === 'all';
-
-  const onDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    setDragActive(e.type === 'dragenter' || e.type === 'dragover');
-  }, []);
-
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation(); setDragActive(false);
-    if (e.dataTransfer.files?.length) handle(e.dataTransfer.files[0]);
-  }, [handle]);
-
-  const retry = () => {
-    setError(null);
-    if (source === 'jde') loadFromJde();
-    else ref.current?.click();
-  };
-
-  return (
-    <div className="w-full max-w-3xl mx-auto">
-      <div className="text-center mb-8">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
-          <Clock className="text-white" size={26} />
-        </div>
-        <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Cuentas por Pagar</h1>
-        <p className="text-[15px] text-[var(--gray-400)] mt-1">Análisis de antigüedad de saldos CXP</p>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
-        {!loading && !success && !error && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* ── JDE ── */}
-            <div className={`border-2 rounded-2xl p-10 text-center transition-all ${
-              jdeDisabled ? 'border-[var(--gray-100)] bg-[var(--surface-alt)]' : 'border-[var(--primary)]/30 bg-[var(--primary-subtle)] hover:border-[var(--primary)] hover:bg-[var(--primary-muted)]'
-            }`}>
-              <Database className={`w-10 h-10 mx-auto mb-3 ${jdeDisabled ? 'text-[var(--gray-300)]' : 'text-[var(--primary)]'}`} />
-              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Consultar desde JDE</p>
-              <p className="text-[12px] text-[var(--gray-400)] mt-1">
-                Compañía: <span className="font-medium text-[var(--gray-950)]">
-                  {jdeDisabled ? '— selecciona en el header —' : selectedCia}
-                </span>
-              </p>
-              <button
-                onClick={loadFromJde}
-                disabled={jdeDisabled}
-                title={jdeDisabled ? 'Selecciona una compañía en el header primero' : undefined}
-                className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
-              >
-                <Database className="w-4 h-4" />
-                Consultar Antigüedad
-              </button>
-            </div>
-
-            {/* ── CSV ── */}
-            <div
-              onDragEnter={onDrag} onDragLeave={onDrag} onDragOver={onDrag} onDrop={onDrop}
-              onClick={() => ref.current?.click()}
-              className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
-                dragActive ? 'border-[var(--primary)] bg-[var(--primary-muted)]' : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
-              }`}
-            >
-              <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
-              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Arrastra tu CSV aquí</p>
-              <p className="text-[13px] text-[var(--gray-400)] mt-1">o haz click para seleccionar archivo</p>
-              <input ref={ref} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handle(e.target.files[0])} />
-            </div>
-          </div>
-        )}
-
-        {loading && !success && (
-          <div className="text-center py-16">
-            <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-3" />
-            <p className="text-[15px] font-medium text-[var(--gray-950)]">
-              {source === 'jde' ? `Consultando JDE (compañía ${selectedCia})...` : 'Procesando archivo...'}
-            </p>
-          </div>
-        )}
-
-        {success && (
-          <div className="text-center py-14">
-            <CheckCircle className="w-12 h-12 text-[var(--success)] mx-auto mb-3" />
-            <p className="text-[15px] font-semibold text-[var(--gray-950)]">{count.toLocaleString()} registros cargados</p>
-            <p className="text-[13px] text-[var(--gray-400)] mt-1">
-              {source === 'jde' ? `Desde JDE · compañía ${selectedCia}` : 'Desde archivo CSV'} — abriendo análisis...
-            </p>
-          </div>
-        )}
-
-        {error && (
-          <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl p-5">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
-              <div className="flex-1">
-                <p className="text-[14px] font-semibold text-[var(--gray-950)]">
-                  {source === 'jde' ? 'Error al consultar JDE' : 'Error al procesar'}
-                </p>
-                <p className="text-[13px] text-[var(--gray-500)] mt-1">{error}</p>
-                <button onClick={retry}
-                  className="mt-3 text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]">
-                  Intentar de nuevo
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
 /* ═══════════════════════════════════════════════════════════════════════
    Custom Tooltip
@@ -528,10 +679,14 @@ const CXPUpload = ({
 
 const ChartTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.[0]) return null;
+  const item = payload[0].payload;
   return (
-    <div className="bg-white/95 backdrop-blur-xl border border-[var(--gray-200)]/60 rounded-xl px-3 py-2 shadow-lg">
-      <p className="text-[12px] font-semibold text-[var(--gray-950)]">{payload[0].payload.name || payload[0].name}</p>
+    <div className="bg-white border border-[var(--gray-200)] rounded-xl px-3 py-2 shadow-lg">
+      <p className="text-[12px] font-semibold text-[var(--gray-950)]">{item.name || payload[0].name}</p>
       <p className="text-[12px] font-mono text-[var(--gray-500)]">{fmtFull(payload[0].value)}</p>
+      {typeof item.percent === 'number' && (
+        <p className="text-[11px] text-[var(--gray-400)]">{(item.percent * 100).toFixed(1)}% del total</p>
+      )}
     </div>
   );
 };
@@ -545,11 +700,21 @@ const CXPDashboard = ({
   onReset,
   companies: compCatalog,
   providers,
+  clients,
+  assumptions,
+  bankStatements,
+  budget,
+  proposals,
 }: {
   records: CXPRecord[];
   onReset: () => void;
   companies?: Company[];
   providers: Provider[];
+  clients: Client[];
+  assumptions: CashFlowAssumptions;
+  bankStatements: BankAccountStatement[];
+  budget: Budget | null;
+  proposals: Proposal[];
 }) => {
   /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
   const ciaName = useCallback((code: string): string => {
@@ -568,47 +733,66 @@ const CXPDashboard = ({
   const [sortKey, setSortKey] = useState<SortKey>('total');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [provPage, setProvPage] = useState(0);
-  const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
-  const [flexFilter, setFlexFilter] = useState<FlexFilter>('all');
-  const [dueFilter, setDueFilter] = useState<DueFilter>('all');
-  const [amountFilter, setAmountFilter] = useState<AmountFilter>('all');
-  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
+  const [filterPanelOpen, setFilterPanelOpen] = useState(true);
+  const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
+  const [riskFilters, setRiskFilters] = useState<ProviderRisk[]>([]);
+  const [flexFilters, setFlexFilters] = useState<ProviderFlexibility[]>([]);
+  const [dueFilters, setDueFilters] = useState<DueFilter[]>([]);
+  const [amountFilters, setAmountFilters] = useState<AmountFilter[]>([]);
+  const [priorityFilters, setPriorityFilters] = useState<PaymentPriority[]>([]);
 
   // Drilldown state
   const [activeBucket, setActiveBucket] = useState<string | null>(null);
-  const [activeClassification, setActiveClassification] = useState<string | null>(null);
   const [activeKpi, setActiveKpi] = useState<string | null>(null);
+  const [activeAgingRange, setActiveAgingRange] = useState<string | null>(null);
+  const [drillStack, setDrillStack] = useState<DrillStep[]>([]);
+  const [activeTriageAlert, setActiveTriageAlert] = useState<CxpAlertType | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<EnrichedCXPRecord | null>(null);
 
-  const clearDrill = () => { setActiveBucket(null); setActiveClassification(null); setActiveKpi(null); setProvPage(0); };
+  const clearDrill = () => {
+    setActiveBucket(null);
+    setActiveKpi(null);
+    setActiveAgingRange(null);
+    setDrillStack([]);
+    setActiveTriageAlert(null);
+    setProvPage(0);
+  };
   const clearAllFilters = () => {
     setSearchTerm('');
-    setRiskFilter('all');
-    setFlexFilter('all');
-    setDueFilter('all');
-    setAmountFilter('all');
-    setPriorityFilter('all');
+    setCategoryFilters([]);
+    setRiskFilters([]);
+    setFlexFilters([]);
+    setDueFilters([]);
+    setAmountFilters([]);
+    setPriorityFilters([]);
+    setSelectedRecord(null);
     clearDrill();
   };
-  const hasDrill = searchTerm || activeBucket || activeClassification || activeKpi || riskFilter !== 'all' || flexFilter !== 'all' || dueFilter !== 'all' || amountFilter !== 'all' || priorityFilter !== 'all';
-  const drillLabel = activeBucket ? `Bucket "${activeBucket}"` :
-    activeClassification ? `Tipo "${activeClassification}"` :
-    activeKpi === 'porVencer' ? 'Por Vencer' :
-    activeKpi === 'vencido' ? 'Total Vencido' :
-    activeKpi === 'mas90' ? 'Vencido > 90 días' :
-    priorityFilter !== 'all' ? `Prioridad "${priorityLabel(priorityFilter)}"` :
-    riskFilter !== 'all' ? `Riesgo "${riskFilter}"` :
-    flexFilter !== 'all' ? `Flexibilidad "${flexibilityLabel(flexFilter)}"` :
-    dueFilter !== 'all' ? `Vencimiento "${dueFilter}"` :
-    amountFilter !== 'all' ? `Monto "${amountFilter}"` :
-    searchTerm ? `Busqueda "${searchTerm}"` : '';
+  const hasDrill = Boolean(
+    searchTerm ||
+    activeBucket ||
+    activeKpi ||
+    activeAgingRange ||
+    drillStack.length ||
+    activeTriageAlert ||
+    categoryFilters.length ||
+    riskFilters.length ||
+    flexFilters.length ||
+    dueFilters.length ||
+    amountFilters.length ||
+    priorityFilters.length
+  );
 
   // Reset local filters when parent switches company (records no longer include the selected cia)
   useEffect(() => {
     if (selectedCia !== 'all' && !records.some(r => r.cia === selectedCia)) {
       setSelectedCia('all');
       setActiveBucket(null);
-      setActiveClassification(null);
       setActiveKpi(null);
+      setActiveAgingRange(null);
+      setDrillStack([]);
+      setActiveTriageAlert(null);
+      setSelectedRecord(null);
       setExpandedSupplier(null);
       setProvPage(0);
     }
@@ -619,10 +803,41 @@ const CXPDashboard = ({
     [providers],
   );
 
-  const enrichedRecords = useMemo(
-    () => records.map((record) => enrichCxpRecord(record, providersByName)),
-    [providersByName, records],
+  const enrichedRecords = useMemo(() => {
+    const base = records.map((record) => enrichCxpRecord(record, providersByName));
+    const duplicateCounts = new Map<string, number>();
+    const exposureBySupplier = new Map<string, number>();
+    base.forEach((record) => {
+      const key = invoiceKey(record);
+      duplicateCounts.set(key, (duplicateCounts.get(key) ?? 0) + 1);
+      const supplierKey = normName(record.nombre || record.noProveedor);
+      exposureBySupplier.set(supplierKey, (exposureBySupplier.get(supplierKey) ?? 0) + record.importePendientePesos);
+    });
+    return base.map((record) => {
+      const supplierExposure = exposureBySupplier.get(normName(record.nombre || record.noProveedor)) ?? record.importePendientePesos;
+      return {
+        ...record,
+        alerts: buildCxpAlerts(record, duplicateCounts.get(invoiceKey(record)) ?? 0, supplierExposure),
+      };
+    });
+  }, [providersByName, records]);
+
+  const recordsForFilterOptions = useMemo(
+    () => selectedCia === 'all' ? enrichedRecords : enrichedRecords.filter(record => record.cia === selectedCia),
+    [enrichedRecords, selectedCia],
   );
+
+  const providerTypeOptions = useMemo(() => {
+    const map = new Map<string, { label: string; total: number; count: number }>();
+    recordsForFilterOptions.forEach((record) => {
+      const label = record.providerType || 'Sin clasificar';
+      const item = map.get(label) ?? { label, total: 0, count: 0 };
+      item.total += record.importePendientePesos;
+      item.count += 1;
+      map.set(label, item);
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, 'es'));
+  }, [recordsForFilterOptions]);
 
   // ── Filtered Records ──
   const filtered = useMemo(() => {
@@ -647,24 +862,38 @@ const CXPDashboard = ({
       const bi = BUCKET_LABELS.indexOf(activeBucket);
       if (bi >= 0) { const k = BUCKET_KEYS[bi]; f = f.filter(r => (r[k] as number) > 0); }
     }
-    if (activeClassification) f = f.filter(r => r.providerType === activeClassification);
+    if (activeAgingRange) {
+      f = f.filter(r => agingRangeForRecord(r).id === activeAgingRange);
+    }
+    if (drillStack.length) {
+      f = applyDrillStack(f, drillStack);
+    }
+    if (categoryFilters.length) {
+      const selected = new Set(categoryFilters);
+      f = f.filter(r => selected.has(r.providerType));
+    }
     if (activeKpi === 'porVencer') f = f.filter(r => r.porVencer > 0);
     else if (activeKpi === 'vencido') f = f.filter(r => (r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
     else if (activeKpi === 'mas90') f = f.filter(r => (r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
-    if (riskFilter !== 'all') f = f.filter(r => r.providerRisk === riskFilter);
-    if (flexFilter !== 'all') f = f.filter(r => r.providerFlexibility === flexFilter);
-    if (dueFilter === 'current') f = f.filter(r => r.porVencer > 0 && r.diasVencida <= 0);
-    else if (dueFilter === 'overdue') f = f.filter(r => r.diasVencida > 0);
-    else if (dueFilter === 'over90') f = f.filter(r => r.diasVencida > 90);
-    if (amountFilter === 'under100k') f = f.filter(r => r.importePendientePesos < 100_000);
-    else if (amountFilter === '100kTo1m') f = f.filter(r => r.importePendientePesos >= 100_000 && r.importePendientePesos < HIGH_IMPACT_AMOUNT);
-    else if (amountFilter === 'over1m') f = f.filter(r => r.importePendientePesos >= HIGH_IMPACT_AMOUNT);
-    if (priorityFilter === 'critical') f = f.filter(isCritical);
-    else if (priorityFilter === 'negotiable') f = f.filter(isNegotiable);
-    else if (priorityFilter === 'highImpact') f = f.filter(isHighImpact);
-    else if (priorityFilter === 'normal') f = f.filter(r => !isCritical(r) && !isNegotiable(r) && !isHighImpact(r));
+    if (riskFilters.length) {
+      const selected = new Set(riskFilters);
+      f = f.filter(r => selected.has(r.providerRisk));
+    }
+    if (flexFilters.length) {
+      const selected = new Set(flexFilters);
+      f = f.filter(r => selected.has(r.providerFlexibility));
+    }
+    if (dueFilters.length) f = f.filter(r => dueFilters.some(filter => matchesDueFilter(r, filter)));
+    if (amountFilters.length) f = f.filter(r => amountFilters.some(filter => matchesAmountFilter(r, filter)));
+    if (priorityFilters.length) {
+      const selected = new Set(priorityFilters);
+      f = f.filter(r => selected.has(r.paymentPriority));
+    }
+    if (activeTriageAlert) {
+      f = f.filter(r => r.alerts.some(alert => alert.type === activeTriageAlert));
+    }
     return f;
-  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeClassification, activeKpi, riskFilter, flexFilter, dueFilter, amountFilter, priorityFilter]);
+  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeAgingRange, drillStack, categoryFilters, activeKpi, riskFilters, flexFilters, dueFilters, amountFilters, priorityFilters, activeTriageAlert]);
 
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
@@ -692,79 +921,153 @@ const CXPDashboard = ({
   const totalVencido = useMemo(() => agingBuckets.slice(1).reduce((s, b) => s + b.total, 0), [agingBuckets]);
   const totalPorVencer = agingBuckets[0]?.total || 0;
   const totalMas90 = useMemo(() => agingBuckets.slice(4).reduce((s, b) => s + b.total, 0), [agingBuckets]);
-  const paymentPlanningSummary = useMemo(() => {
-    const out = {
-      criticalCount: 0,
-      criticalTotal: 0,
-      negotiableCount: 0,
-      negotiableTotal: 0,
-      highImpactCount: 0,
-      highImpactTotal: 0,
-    };
+  const currentMonthIndex = new Date().getMonth();
+  const currentYm = `${assumptions.year}-${String(currentMonthIndex + 1).padStart(2, '0')}`;
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const agingRangeData = useMemo(() => {
+    const map = new Map(AGING_RANGE_DEFS.map(range => [range.id, { ...range, total: 0, count: 0 }]));
     filtered.forEach((record) => {
-      if (isCritical(record)) {
-        out.criticalCount += 1;
-        out.criticalTotal += record.importePendientePesos;
-      }
-      if (isNegotiable(record)) {
-        out.negotiableCount += 1;
-        out.negotiableTotal += record.importePendientePesos;
-      }
-      if (isHighImpact(record)) {
-        out.highImpactCount += 1;
-        out.highImpactTotal += record.importePendientePesos;
-      }
+      const range = agingRangeForRecord(record);
+      const item = map.get(range.id);
+      if (!item) return;
+      item.total += record.importePendientePesos;
+      item.count += 1;
     });
-    return out;
+    return Array.from(map.values());
   }, [filtered]);
 
-  const taxRows = useMemo(() => (
-    filtered
-      .filter((record) => record.importeImpuestosPesos > 0)
-      .map((record) => {
-        const dueDate = parseDateToIso(record.fechaProgramacionPago) ?? parseDateToIso(record.fechaVence) ?? parseDateToIso(record.fechaFactura) ?? '';
-        const paid = isTaxPaid(record);
-        return {
-          record,
-          dueDate,
-          estimated: record.importeImpuestosPesos,
-          real: paid ? record.importeImpuestosPesos : 0,
-          pending: paid ? 0 : record.importeImpuestosPesos,
-        };
-      })
-      .sort((a, b) => (a.dueDate || '9999-99-99').localeCompare(b.dueDate || '9999-99-99'))
-  ), [filtered]);
-  const taxPending = taxRows.reduce((sum, row) => sum + row.pending, 0);
-  const taxEstimated = taxRows.reduce((sum, row) => sum + row.estimated, 0);
-  const taxReal = taxRows.reduce((sum, row) => sum + row.real, 0);
-  const nextTaxDate = taxRows.find((row) => row.pending > 0 && row.dueDate)?.dueDate ?? null;
-  const taxByMonth = useMemo(() => {
-    const map = new Map<string, { ym: string; count: number; estimated: number; real: number; pending: number }>();
-    taxRows.forEach((row) => {
-      const ym = row.dueDate ? row.dueDate.slice(0, 7) : 'Sin fecha';
-      const item = map.get(ym) ?? { ym, count: 0, estimated: 0, real: 0, pending: 0 };
-      item.count++;
-      item.estimated += row.estimated;
-      item.real += row.real;
-      item.pending += row.pending;
-      map.set(ym, item);
+  const nextDrillDimension = DRILL_SEQUENCE[drillStack.length] ?? null;
+  const drillNodes = useMemo(
+    () => nextDrillDimension ? groupByDrillDimension(filtered, nextDrillDimension, ciaName) : [],
+    [ciaName, filtered, nextDrillDimension],
+  );
+
+  const biStats = useMemo(() => {
+    const overdueRecords = filtered.filter(record => record.diasVencida > 0);
+    const overdueTotal = overdueRecords.reduce((sum, record) => sum + record.importePendientePesos, 0);
+    const avgOverdueDays = overdueRecords.length
+      ? overdueRecords.reduce((sum, record) => sum + record.diasVencida, 0) / overdueRecords.length
+      : 0;
+    const bySupplier = new Map<string, number>();
+    filtered.forEach(record => bySupplier.set(record.nombre, (bySupplier.get(record.nombre) ?? 0) + record.importePendientePesos));
+    const topFiveTotal = Array.from(bySupplier.values()).sort((a, b) => b - a).slice(0, 5).reduce((sum, total) => sum + total, 0);
+    const alertTotal = (type: CxpAlertType) => filtered.filter(record => record.alerts.some(alert => alert.type === type)).length;
+    const missingCore = filtered.filter(record => record.alerts.some(alert => alert.type === 'incomplete')).length;
+    const catalogMatched = filtered.filter(record => record.providerType !== 'Sin clasificar' || record.providerRiskComment || record.providerFlexibility !== 'unknown').length;
+    const dataConfidence = filtered.length === 0
+      ? 0
+      : Math.max(0, Math.min(100,
+          60
+          + (catalogMatched / filtered.length) * 20
+          + (bankStatements.length > 0 ? 10 : 0)
+          + (budget ? 5 : 0)
+          + (proposals.length > 0 ? 5 : 0)
+          - (missingCore / filtered.length) * 30
+        ));
+    return {
+      overdueRatio: pct(overdueTotal, totalPendiente),
+      avgOverdueDays,
+      topFiveConcentration: pct(topFiveTotal, totalPendiente),
+      duplicateCount: alertTotal('duplicate'),
+      missingPoCount: alertTotal('missingPo'),
+      blockedCount: alertTotal('blocked'),
+      creditLimitCount: alertTotal('creditLimit'),
+      staleProviderCount: alertTotal('staleProvider'),
+      dataConfidence,
+    };
+  }, [bankStatements.length, budget, filtered, proposals.length, totalPendiente]);
+
+  const connectedSignals = useMemo(() => {
+    const today = new Date(`${todayIso}T12:00:00`);
+    const in30 = new Date(today);
+    in30.setDate(today.getDate() + 30);
+    const next30Cxp = filtered.reduce((sum, record) => {
+      const due = dueDateForRecord(record);
+      if (!due) return sum;
+      const date = new Date(`${due}T12:00:00`);
+      return date >= today && date <= in30 ? sum + record.importePendientePesos : sum;
+    }, 0);
+
+    const scopedStatements = selectedCia === 'all'
+      ? bankStatements
+      : bankStatements.filter(statement => statement.cia === selectedCia);
+    const cashAvailable = scopedStatements.reduce((sum, statement) => sum + (statement.saldoFinal ?? statement.saldoInicial ?? 0), 0);
+    const bankChargesMonth = flattenBankMovements(scopedStatements)
+      .filter(movement => movement.tipoMovimiento === 'CARGO' && movement.fechaOperacion.startsWith(currentYm))
+      .reduce((sum, movement) => sum + Math.abs(movement.importe), 0);
+    const plannedMonth = filtered.reduce((sum, record) => {
+      const due = dueDateForRecord(record);
+      return due?.startsWith(currentYm) ? sum + record.importePendientePesos : sum;
+    }, 0);
+    const budgetExpenseMonth = budget?.year === assumptions.year ? budget.expenseTotal[currentMonthIndex] ?? null : null;
+    return {
+      next30Cxp,
+      cashAvailable,
+      bankChargesMonth,
+      plannedMonth,
+      budgetExpenseMonth,
+      activeProposals: proposals.filter(proposal => proposal.enabled).length,
+    };
+  }, [assumptions.year, bankStatements, budget, currentMonthIndex, currentYm, filtered, proposals, selectedCia, todayIso]);
+
+  const triageBuckets = useMemo(() => {
+    const buckets = {
+      critical: [] as EnrichedCXPRecord[],
+      negotiable: [] as EnrichedCXPRecord[],
+      highImpact: [] as EnrichedCXPRecord[],
+    };
+    filtered.forEach((record) => {
+      if (isCritical(record)) buckets.critical.push(record);
+      else if (isHighImpact(record)) buckets.highImpact.push(record);
+      else if (isNegotiable(record)) buckets.negotiable.push(record);
     });
-    return Array.from(map.values()).sort((a, b) => a.ym.localeCompare(b.ym));
-  }, [taxRows]);
+    Object.values(buckets).forEach((bucket) => {
+      bucket.sort((a, b) => b.importePendientePesos - a.importePendientePesos || b.diasVencida - a.diasVencida);
+    });
+    return buckets;
+  }, [filtered]);
+
+  const paymentPlanningSummary = useMemo(() => ({
+    criticalCount: triageBuckets.critical.length,
+    criticalTotal: triageBuckets.critical.reduce((sum, record) => sum + record.importePendientePesos, 0),
+    negotiableCount: triageBuckets.negotiable.length,
+    negotiableTotal: triageBuckets.negotiable.reduce((sum, record) => sum + record.importePendientePesos, 0),
+    highImpactCount: triageBuckets.highImpact.length,
+    highImpactTotal: triageBuckets.highImpact.reduce((sum, record) => sum + record.importePendientePesos, 0),
+  }), [triageBuckets]);
+
+  const ivaMonth = useMemo(() => {
+    const today = new Date();
+    const targetMonth = today.getFullYear() === assumptions.year ? today.getMonth() : 0;
+    const ym = `${assumptions.year}-${String(targetMonth + 1).padStart(2, '0')}`;
+    const byClient = new Map(clients.map(client => [client.id, client]));
+    const cxcEvents = clients.length ? projectYear(clients, assumptions).filter(event => event.realDate.startsWith(ym)) : [];
+    const ivaCollected = cxcEvents.reduce((sum, event) => {
+      const rate = (byClient.get(event.clientId)?.ivaRate ?? 16) / 100;
+      return sum + (event.amount * rate) / (1 + rate);
+    }, 0);
+    let ivaPaid = 0;
+    let cxpCount = 0;
+    filtered.forEach((record) => {
+      const dueDate = dueDateForRecord(record);
+      if (!dueDate?.startsWith(ym)) return;
+      ivaPaid += record.importeImpuestosPesos;
+      cxpCount += 1;
+    });
+    return {
+      ym,
+      ivaCollected,
+      ivaPaid,
+      net: ivaCollected - ivaPaid,
+      cxcCount: cxcEvents.length,
+      cxpCount,
+    };
+  }, [assumptions, clients, filtered]);
 
   // Supplier aggregation
   const supplierData = useMemo(() => {
-    const map = new Map<string, {
-      nombre: string;
-      total: number;
-      count: number;
-      maxDias: number;
-      providerType: string;
-      providerRisk: ProviderRisk;
-      providerFlexibility: ProviderFlexibility;
-      creditLimit?: number;
-      records: EnrichedCXPRecord[];
-    }>();
+    const map = new Map<string, SupplierSummary>();
     filtered.forEach(r => {
       const k = r.nombre || 'SIN NOMBRE';
       if (!map.has(k)) {
@@ -795,18 +1098,35 @@ const CXPDashboard = ({
     return arr;
   }, [filtered, sortKey, sortDir]);
 
-  // Provider type — top 8 + "Otros"
+  // Provider type — top 7 + "Otros" with source categories preserved for filtering.
   const classData = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { name: string; value: number; count: number }>();
     filtered.forEach(r => {
       const k = r.providerType || 'Sin clasificar';
-      map.set(k, (map.get(k) || 0) + r.importePendientePesos);
+      const item = map.get(k) ?? { name: k, value: 0, count: 0 };
+      item.value += r.importePendientePesos;
+      item.count += 1;
+      map.set(k, item);
     });
-    const all = Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    const total = filtered.reduce((sum, record) => sum + record.importePendientePesos, 0);
+    const all = Array.from(map.values())
+      .map(item => ({ ...item, categories: [item.name], percent: total > 0 ? item.value / total : 0 }))
+      .sort((a, b) => b.value - a.value);
     if (all.length <= 8) return all;
     const top = all.slice(0, 7);
-    const otrosVal = all.slice(7).reduce((s, x) => s + x.value, 0);
-    return [...top, { name: `Otros (${all.length - 7})`, value: otrosVal }];
+    const other = all.slice(7);
+    const otrosVal = other.reduce((s, x) => s + x.value, 0);
+    const otrosCount = other.reduce((s, x) => s + x.count, 0);
+    return [
+      ...top,
+      {
+        name: `Otros (${other.length})`,
+        value: otrosVal,
+        count: otrosCount,
+        categories: other.flatMap(item => item.categories),
+        percent: total > 0 ? otrosVal / total : 0,
+      },
+    ];
   }, [filtered]);
 
   // Company breakdown — show names instead of codes
@@ -830,10 +1150,90 @@ const CXPDashboard = ({
 
   const tabs: { id: DashboardTab; label: string; count?: number }[] = [
     { id: 'resumen', label: 'Resumen' },
+    { id: 'triage', label: 'Triage', count: paymentPlanningSummary.criticalCount + paymentPlanningSummary.negotiableCount + paymentPlanningSummary.highImpactCount },
     { id: 'proveedores', label: 'Proveedores', count: supplierData.length },
-    { id: 'antiguedad', label: 'Antigüedad' },
-    { id: 'impuestos', label: 'Impuestos', count: taxRows.length },
   ];
+
+  const activeFilterChips = [
+    ...(searchTerm ? [{ key: 'search', label: `Busqueda: ${searchTerm}`, onRemove: () => setSearchTerm('') }] : []),
+    ...(activeBucket ? [{ key: 'bucket', label: `Antiguedad: ${activeBucket}`, onRemove: () => setActiveBucket(null) }] : []),
+    ...(activeAgingRange ? [{
+      key: 'aging-range',
+      label: `Aging: ${AGING_RANGE_DEFS.find(range => range.id === activeAgingRange)?.label ?? activeAgingRange}`,
+      onRemove: () => setActiveAgingRange(null),
+    }] : []),
+    ...drillStack.map((step, index) => ({
+      key: `drill-${index}-${step.value}`,
+      label: `${DRILL_LABELS[step.dimension]}: ${step.label}`,
+      onRemove: () => setDrillStack(prev => prev.slice(0, index)),
+    })),
+    ...(activeTriageAlert ? [{
+      key: 'triage-alert',
+      label: `Triage: ${ALERT_LABELS[activeTriageAlert]}`,
+      onRemove: () => setActiveTriageAlert(null),
+    }] : []),
+    ...(activeKpi ? [{
+      key: 'kpi',
+      label: activeKpi === 'porVencer' ? 'Por vencer' : activeKpi === 'vencido' ? 'Total vencido' : 'Vencido > 90 dias',
+      onRemove: () => setActiveKpi(null),
+    }] : []),
+    ...categoryFilters.map(value => ({ key: `cat-${value}`, label: `Categoria: ${value}`, onRemove: () => setCategoryFilters(prev => prev.filter(item => item !== value)) })),
+    ...riskFilters.map(value => ({ key: `risk-${value}`, label: `Riesgo: ${value}`, onRemove: () => setRiskFilters(prev => prev.filter(item => item !== value)) })),
+    ...flexFilters.map(value => ({ key: `flex-${value}`, label: `Flexibilidad: ${flexibilityLabel(value)}`, onRemove: () => setFlexFilters(prev => prev.filter(item => item !== value)) })),
+    ...dueFilters.map(value => ({ key: `due-${value}`, label: `Vencimiento: ${dueFilterLabel(value)}`, onRemove: () => setDueFilters(prev => prev.filter(item => item !== value)) })),
+    ...amountFilters.map(value => ({ key: `amount-${value}`, label: `Monto: ${amountFilterLabel(value)}`, onRemove: () => setAmountFilters(prev => prev.filter(item => item !== value)) })),
+    ...priorityFilters.map(value => ({ key: `priority-${value}`, label: `Prioridad: ${priorityLabel(value)}`, onRemove: () => setPriorityFilters(prev => prev.filter(item => item !== value)) })),
+  ];
+
+  const toggleCategoryGroup = (categories: string[]) => {
+    setCategoryFilters(prev => {
+      const allSelected = categories.every(category => prev.includes(category));
+      if (allSelected) return prev.filter(category => !categories.includes(category));
+      return Array.from(new Set([...prev, ...categories]));
+    });
+    setProvPage(0);
+  };
+
+  const pushDrill = (node: DrillNode) => {
+    if (!nextDrillDimension) return;
+    if (nextDrillDimension === 'factura') {
+      setSelectedRecord(node.records[0] ?? null);
+      setDrillStack(prev => [...prev, {
+        dimension: nextDrillDimension,
+        value: node.value,
+        label: node.label,
+      }]);
+      return;
+    }
+    setDrillStack(prev => [...prev, {
+      dimension: nextDrillDimension,
+      value: node.value,
+      label: node.label,
+    }]);
+    setTab('proveedores');
+    setProvPage(0);
+  };
+
+  const triageAlertBuckets = useMemo(() => (
+    TRIAGE_ALERT_ORDER
+      .map(type => {
+        const bucketRecords = filtered.filter(record => record.alerts.some(alert => alert.type === type));
+        return {
+          type,
+          label: ALERT_LABELS[type],
+          count: bucketRecords.length,
+          total: bucketRecords.reduce((sum, record) => sum + record.importePendientePesos, 0),
+        };
+      })
+      .filter(bucket => bucket.count > 0)
+  ), [filtered]);
+
+  const triageDetailRecords = useMemo(() => {
+    const base = activeTriageAlert
+      ? filtered.filter(record => record.alerts.some(alert => alert.type === activeTriageAlert))
+      : filtered.filter(record => record.alerts.length > 0 || record.paymentPriority !== 'normal');
+    return base.sort((a, b) => b.importePendientePesos - a.importePendientePesos || b.diasVencida - a.diasVencida);
+  }, [activeTriageAlert, filtered]);
 
   /* ── Render ── */
   return (
@@ -854,33 +1254,22 @@ const CXPDashboard = ({
           {companies.map(c => <option key={c} value={c}>{ciaName(c)}</option>)}
         </select>
 
-        <select value={riskFilter} onChange={e => { setRiskFilter(e.target.value as RiskFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Todo riesgo</option>
-          {RISKS.map(r => <option key={r} value={r}>Riesgo {r}</option>)}
-        </select>
-
-        <select value={flexFilter} onChange={e => { setFlexFilter(e.target.value as FlexFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Toda flexibilidad</option>
-          {FLEX_VALUES.map(f => <option key={f} value={f}>{flexibilityLabel(f)}</option>)}
-        </select>
-
-        <select value={dueFilter} onChange={e => { setDueFilter(e.target.value as DueFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Todo vencimiento</option>
-          <option value="current">Por vencer</option>
-          <option value="overdue">Vencido</option>
-          <option value="over90">Vencido &gt; 90d</option>
-        </select>
-
-        <select value={amountFilter} onChange={e => { setAmountFilter(e.target.value as AmountFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Todo monto</option>
-          <option value="under100k">&lt; $100k</option>
-          <option value="100kTo1m">$100k-$1M</option>
-          <option value="over1m">&gt; $1M</option>
-        </select>
+        <button
+          onClick={() => setFilterPanelOpen(open => !open)}
+          className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium shadow-sm transition ${
+            filterPanelOpen || activeFilterChips.length > 0
+              ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
+              : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:text-[var(--primary)]'
+          }`}
+        >
+          <Filter className="w-3.5 h-3.5" />
+          Filtros
+          {activeFilterChips.length > 0 && (
+            <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)]">
+              {activeFilterChips.length}
+            </span>
+          )}
+        </button>
 
         <div className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] rounded-full px-3 py-1.5">
           <Receipt className="w-3.5 h-3.5" />
@@ -919,26 +1308,139 @@ const CXPDashboard = ({
         </button>
       </div>
 
-      {/* ── Drilldown Banner ── */}
-      {hasDrill && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center justify-between animate-slide-down">
-          <div className="flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
-            <Filter className="w-3.5 h-3.5" />
-            Filtrando: {drillLabel} — {filtered.length.toLocaleString()} registros
+      {filterPanelOpen && (
+        <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm animate-slide-down">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.6fr_0.8fr_1fr]">
+            <FilterGroup title="Categoria">
+              {providerTypeOptions.map(option => (
+                <FilterPill
+                  key={option.label}
+                  active={categoryFilters.includes(option.label)}
+                  label={option.label}
+                  meta={fmt(option.total)}
+                  onClick={() => {
+                    setCategoryFilters(prev => toggleListValue(prev, option.label));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Riesgo">
+              {RISKS.map(risk => (
+                <FilterPill
+                  key={risk}
+                  active={riskFilters.includes(risk)}
+                  label={risk}
+                  onClick={() => {
+                    setRiskFilters(prev => toggleListValue(prev, risk));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Flexibilidad">
+              {FLEX_VALUES.map(flex => (
+                <FilterPill
+                  key={flex}
+                  active={flexFilters.includes(flex)}
+                  label={flexibilityLabel(flex)}
+                  onClick={() => {
+                    setFlexFilters(prev => toggleListValue(prev, flex));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Vencimiento">
+              {DUE_FILTERS.map(option => (
+                <FilterPill
+                  key={option.id}
+                  active={dueFilters.includes(option.id)}
+                  label={option.label}
+                  onClick={() => {
+                    setDueFilters(prev => toggleListValue(prev, option.id));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Monto">
+              {AMOUNT_FILTERS.map(option => (
+                <FilterPill
+                  key={option.id}
+                  active={amountFilters.includes(option.id)}
+                  label={option.label}
+                  onClick={() => {
+                    setAmountFilters(prev => toggleListValue(prev, option.id));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Prioridad">
+              {PRIORITY_FILTERS.map(option => (
+                <FilterPill
+                  key={option.id}
+                  active={priorityFilters.includes(option.id)}
+                  label={option.label}
+                  onClick={() => {
+                    setPriorityFilters(prev => toggleListValue(prev, option.id));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
           </div>
-          <button onClick={clearAllFilters} className="text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] flex items-center gap-1 hover-press">
+        </div>
+      )}
+
+      {/* ── Active filter chips ── */}
+      {hasDrill && (
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 animate-slide-down">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] text-[var(--primary)] font-medium">
+            <Filter className="w-3.5 h-3.5 flex-shrink-0" />
+            {activeFilterChips.map(chip => (
+              <button
+                key={chip.key}
+                onClick={chip.onRemove}
+                className="inline-flex max-w-[260px] items-center gap-1 rounded-full bg-white px-2 py-1 text-[11px] text-[var(--gray-700)] shadow-sm transition hover:text-[var(--danger)]"
+                title="Quitar filtro"
+              >
+                <span className="truncate">{chip.label}</span>
+                <X className="h-3 w-3 flex-shrink-0" />
+              </button>
+            ))}
+            <span className="ml-1 text-[var(--gray-500)]">{filtered.length.toLocaleString()} registros</span>
+          </div>
+          <button onClick={clearAllFilters} className="flex flex-shrink-0 items-center gap-1 text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] hover-press">
             <X className="w-3.5 h-3.5" /> Limpiar
           </button>
         </div>
       )}
 
+      <DrillExplorer
+        stack={drillStack}
+        nextDimension={nextDrillDimension}
+        nodes={drillNodes}
+        total={totalPendiente}
+        onPick={pushDrill}
+        onReset={() => setDrillStack([])}
+        onBackTo={(index) => setDrillStack(prev => prev.slice(0, index + 1))}
+      />
+
       {/* ── KPI Cards ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {[
           { label: 'Saldo Total CXP', value: totalPendiente, sub: `${supplierData.length} proveedores · ${filtered.length.toLocaleString()} facturas`, icon: Building2, color: hex.primary, kpi: null as string | null },
           { label: 'Por Vencer', value: totalPorVencer, sub: pct(totalPorVencer, totalPendiente) + ' del total', icon: Clock, color: hex.success, kpi: 'porVencer' },
           { label: 'Total Vencido', value: totalVencido, sub: pct(totalVencido, totalPendiente) + ' del total', icon: AlertTriangle, color: hex.warning, kpi: 'vencido' },
           { label: 'Vencido > 90 días', value: totalMas90, sub: pct(totalMas90, totalPendiente) + ' del total', icon: TrendingUp, color: hex.danger, kpi: 'mas90' },
+          { label: 'IVA neto del mes', value: ivaMonth.net, sub: `${fmt(ivaMonth.ivaCollected)} cobrado - ${fmt(ivaMonth.ivaPaid)} pagado`, icon: Receipt, color: ivaMonth.net >= 0 ? hex.warning : hex.success, kpi: null as string | null },
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           const active = activeKpi === kpi.kpi && kpi.kpi !== null;
@@ -975,8 +1477,8 @@ const CXPDashboard = ({
           count={paymentPlanningSummary.criticalCount}
           detail="Riesgo alto, inamovibles o vencidos relevantes."
           tone="danger"
-          active={priorityFilter === 'critical'}
-          onClick={() => { setPriorityFilter(priorityFilter === 'critical' ? 'all' : 'critical'); setTab('proveedores'); setProvPage(0); }}
+          active={priorityFilters.includes('critical')}
+          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'critical')); setTab('triage'); setProvPage(0); }}
         />
         <PlanningCard
           title="Pagos negociables"
@@ -984,8 +1486,8 @@ const CXPDashboard = ({
           count={paymentPlanningSummary.negotiableCount}
           detail="Flexibles y sin atraso severo; candidatos a reprogramar."
           tone="success"
-          active={priorityFilter === 'negotiable'}
-          onClick={() => { setPriorityFilter(priorityFilter === 'negotiable' ? 'all' : 'negotiable'); setTab('proveedores'); setProvPage(0); }}
+          active={priorityFilters.includes('negotiable')}
+          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'negotiable')); setTab('triage'); setProvPage(0); }}
         />
         <PlanningCard
           title="Mayor impacto en flujo"
@@ -993,10 +1495,27 @@ const CXPDashboard = ({
           count={paymentPlanningSummary.highImpactCount}
           detail={`Facturas de ${fmt(HIGH_IMPACT_AMOUNT)} o mas.`}
           tone="warning"
-          active={priorityFilter === 'highImpact'}
-          onClick={() => { setPriorityFilter(priorityFilter === 'highImpact' ? 'all' : 'highImpact'); setTab('proveedores'); setProvPage(0); }}
+          active={priorityFilters.includes('highImpact')}
+          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'highImpact')); setTab('triage'); setProvPage(0); }}
         />
       </div>
+
+      <BIInsightGrid
+        stats={biStats}
+        agingRanges={agingRangeData}
+        activeAgingRange={activeAgingRange}
+        onAgingRangeClick={(id) => {
+          setActiveAgingRange(prev => prev === id ? null : id);
+          setProvPage(0);
+        }}
+        onAlertClick={(type) => {
+          setActiveTriageAlert(type);
+          setTab('triage');
+          setProvPage(0);
+        }}
+      />
+
+      <ConnectedIntelligence signals={connectedSignals} hasBanks={bankStatements.length > 0} hasBudget={!!budget} />
 
       {/* ════════════════════════════════════════════════════════════════
          RESUMEN TAB
@@ -1039,38 +1558,73 @@ const CXPDashboard = ({
           </div>
 
           {/* Two columns: Tipo proveedor + Top Proveedores */}
-          <div className="grid grid-cols-2 gap-4 animate-card-in stagger-7">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-7">
             {/* Provider Type Donut */}
             <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Por tipo de proveedor</h2>
                 <p className="text-[12px] text-[var(--gray-400)]">Click para filtrar</p>
               </div>
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie data={classData} cx="50%" cy="50%" innerRadius={45} outerRadius={85}
-                    paddingAngle={2} dataKey="value" cursor="pointer"
-                    onClick={(data: any) => { clearDrill(); setActiveClassification(activeClassification === data.name ? null : data.name); setTab('proveedores'); }}>
-                    {classData.map((e, i) => (
-                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]}
-                        fillOpacity={activeClassification === e.name ? 1 : activeClassification ? 0.25 : 0.85}
-                        stroke={activeClassification === e.name ? PIE_COLORS[i % PIE_COLORS.length] : 'none'}
-                        strokeWidth={1.5} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<ChartTooltip />} />
-                </PieChart>
-              </ResponsiveContainer>
-              {/* Custom compact legend */}
-              <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
-                {classData.map((e, i) => (
-                  <button key={i} onClick={() => { clearDrill(); setActiveClassification(activeClassification === e.name ? null : e.name); setTab('proveedores'); }}
-                    className="flex items-center gap-1 text-[10px] hover:opacity-70 transition">
-                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                    <span className="text-[var(--gray-500)] truncate max-w-[100px]">{e.name}</span>
-                    <span className="font-mono text-[var(--gray-950)] font-medium">{fmt(e.value)}</span>
-                  </button>
-                ))}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={classData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={58}
+                      outerRadius={92}
+                      paddingAngle={1}
+                      dataKey="value"
+                      cursor="pointer"
+                      onClick={(data: any) => {
+                        clearDrill();
+                        toggleCategoryGroup(data.categories ?? [data.name]);
+                        setTab('proveedores');
+                      }}
+                    >
+                      {classData.map((e, i) => {
+                        const active = e.categories.some(category => categoryFilters.includes(category));
+                        const anyActive = categoryFilters.length > 0;
+                        return (
+                          <Cell
+                            key={i}
+                            fill={PIE_COLORS[i % PIE_COLORS.length]}
+                            fillOpacity={active ? 1 : anyActive ? 0.25 : 0.9}
+                            stroke={active ? 'var(--gray-950)' : 'var(--card)'}
+                            strokeWidth={active ? 1.5 : 1}
+                          />
+                        );
+                      })}
+                    </Pie>
+                    <Tooltip content={<ChartTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="space-y-1.5 self-center">
+                  {classData.map((e, i) => {
+                    const active = e.categories.some(category => categoryFilters.includes(category));
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          clearDrill();
+                          toggleCategoryGroup(e.categories);
+                          setTab('proveedores');
+                        }}
+                        className={`grid w-full grid-cols-[10px_1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-left transition ${
+                          active ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
+                        }`}
+                        title={`${e.name}: ${fmtFull(e.value)} (${pct(e.value, totalPendiente)})`}
+                      >
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+                        <span className="min-w-0 truncate text-[12px] font-medium text-[var(--gray-700)]">{e.name}</span>
+                        <span className="text-right text-[11px] font-mono text-[var(--gray-500)]">
+                          {pct(e.value, totalPendiente)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -1101,6 +1655,13 @@ const CXPDashboard = ({
               </div>
             </div>
           </div>
+
+          <AgingMatrix
+            supplierData={supplierData}
+            agingBuckets={agingBuckets}
+            totalPendiente={totalPendiente}
+            filteredCount={filtered.length}
+          />
 
           {/* Company breakdown (if multiple) */}
           {ciaData.length > 1 && (
@@ -1170,12 +1731,15 @@ const CXPDashboard = ({
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[11px] text-[var(--gray-400)]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-100)] text-[var(--gray-500)]">{s.providerType}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.providerRisk === 'Alto' ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : s.providerRisk === 'Medio' ? 'bg-[var(--warning-muted)] text-[var(--warning)]' : 'bg-[var(--success-muted)] text-[var(--success)]'}`}>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.providerRisk === 'Alto' ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : s.providerRisk === 'Medio' ? 'bg-[var(--warning-muted)] text-[var(--warning)]' : 'bg-[var(--success-muted)] text-[var(--success)]'}`}
+                          title={`Riesgo ${s.providerRisk}`}
+                        >
                           Riesgo {s.providerRisk}
                         </span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-[var(--gray-200)] text-[var(--gray-500)]">{flexibilityLabel(s.providerFlexibility)}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-[var(--gray-200)] text-[var(--gray-500)]" title={`Flexibilidad ${flexibilityLabel(s.providerFlexibility)}`}>{flexibilityLabel(s.providerFlexibility)}</span>
                         {s.maxDias > 0 && (
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ backgroundColor: severity + '14', color: severity }}>
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-[var(--warning-muted)]" style={{ color: severity }} title={agingTooltip(s.maxDias)}>
                             máx {s.maxDias}d
                           </span>
                         )}
@@ -1183,7 +1747,7 @@ const CXPDashboard = ({
                     </div>
 
                     {/* Mini aging bar */}
-                    <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[var(--gray-100)]">
+                    <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[var(--gray-100)]" title={agingTooltip(s.maxDias)}>
                       {BUCKET_KEYS.map((key, bi) => {
                         const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
                         const bpct = s.total > 0 ? (bval / s.total) * 100 : 0;
@@ -1237,12 +1801,19 @@ const CXPDashboard = ({
                           </thead>
                           <tbody>
                             {s.records.sort((a, b) => b.diasVencida - a.diasVencida).map((r, ri) => (
-                              <tr key={ri} className="border-b border-[var(--gray-50)]">
+                              <tr
+                                key={ri}
+                                onClick={() => setSelectedRecord(r)}
+                                className="cursor-pointer border-b border-[var(--gray-50)] hover:bg-white"
+                              >
                                 <td className="py-1.5 font-mono text-[var(--gray-950)]">{r.noFactura}</td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaFactura}</td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaVence}</td>
                                 <td className="py-1.5 text-right font-mono">
-                                  <span className={r.diasVencida > 90 ? 'text-[var(--danger)] font-semibold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}>
+                                  <span
+                                    className={r.diasVencida > 90 ? 'text-[var(--danger)] font-semibold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}
+                                    title={agingTooltip(r.diasVencida)}
+                                  >
                                     {r.diasVencida}
                                   </span>
                                 </td>
@@ -1250,8 +1821,12 @@ const CXPDashboard = ({
                                 <td className="py-1.5 pl-3 text-[var(--gray-400)]">{r.moneda}</td>
                                 <td className="py-1.5 text-[var(--gray-400)]">{r.condPago}</td>
                                 <td className="py-1.5">
-                                  <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(r.paymentPriority)}`}>
+                                  <span
+                                    className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(r.paymentPriority)}`}
+                                    title={priorityReason(r)}
+                                  >
                                     {priorityLabel(r.paymentPriority)}
+                                    <HelpCircle className="h-3 w-3" />
                                   </span>
                                 </td>
                                 <td className="py-1.5">
@@ -1298,164 +1873,707 @@ const CXPDashboard = ({
       )}
 
       {/* ════════════════════════════════════════════════════════════════
-         ANTIGÜEDAD TAB
+         TRIAGE TAB
          ════════════════════════════════════════════════════════════════ */}
-      {tab === 'antiguedad' && (
-        <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
-            <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
+      {tab === 'triage' && (
+        <div className="space-y-4">
+          <TriageAlertBoard
+            buckets={triageAlertBuckets}
+            active={activeTriageAlert}
+            onSelect={(type) => setActiveTriageAlert(prev => prev === type ? null : type)}
+          />
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <TriageColumn
+              title="Críticos"
+              detail="No conviene moverlos sin decisión ejecutiva."
+              tone="danger"
+              records={triageBuckets.critical}
+              onRecordSelect={setSelectedRecord}
+            />
+            <TriageColumn
+              title="Negociables"
+              detail="Candidatos a reprogramar o negociar plazo."
+              tone="success"
+              records={triageBuckets.negotiable}
+              onRecordSelect={setSelectedRecord}
+            />
+            <TriageColumn
+              title="Mayor impacto"
+              detail={`Montos de ${fmt(HIGH_IMPACT_AMOUNT)} o más.`}
+              tone="warning"
+              records={triageBuckets.highImpact}
+              onRecordSelect={setSelectedRecord}
+            />
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-white z-10">
-                <tr className="border-b-2 border-[var(--gray-200)]">
-                  <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
-                  <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-semibold w-[90px]">Total</th>
-                  <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-semibold w-[40px]">#</th>
-                  {BUCKET_LABELS.map((label, i) => (
-                    <th key={i} className="text-right py-2.5 px-2 font-semibold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {supplierData.slice(0, 100).map((s, si) => {
-                  const bucketVals = BUCKET_KEYS.map(key => s.records.reduce((sum, r) => sum + (r[key] as number), 0));
-                  const maxBucket = Math.max(...bucketVals);
-                  return (
-                    <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
-                      <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
-                      <td className="py-2 px-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</td>
-                      <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
-                      {bucketVals.map((val, bi) => {
-                        const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
-                        return (
-                          <td key={bi} className="py-2 px-2 text-right font-mono">
-                            {val > 0 ? (
-                              <span className="inline-block px-1.5 py-0.5 rounded"
-                                style={{
-                                  color: AGING_COLORS[bi],
-                                  backgroundColor: AGING_COLORS[bi] + (intensity > 0.5 ? '20' : '0a'),
-                                  fontWeight: intensity > 0.5 ? 600 : 400,
-                                }}>
-                                {fmt(val)}
-                              </span>
-                            ) : (
-                              <span className="text-[var(--gray-200)]">—</span>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-                {/* Totals */}
-                <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold sticky bottom-0">
-                  <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
-                  <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
-                  <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{filtered.length}</td>
-                  {agingBuckets.map((b, i) => (
-                    <td key={i} className="py-2.5 px-2 text-right font-mono font-bold" style={{ color: b.color }}>{fmt(b.total)}</td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <TriageDetailTable
+            title={activeTriageAlert ? ALERT_LABELS[activeTriageAlert] : 'Todo el triage'}
+            records={triageDetailRecords}
+            onRecordSelect={setSelectedRecord}
+          />
         </div>
       )}
 
-      {tab === 'impuestos' && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <TaxMetric label="Impuestos pendientes" value={taxPending} sub={`${taxRows.filter(row => row.pending > 0).length} facturas`} tone="danger" />
-            <TaxMetric label="Monto estimado" value={taxEstimated} sub={`${taxRows.length} facturas con impuesto`} tone="neutral" />
-            <TaxMetric label="Monto real" value={taxReal} sub="Segun estatus pagado/liquidado" tone="success" />
-            <TaxMetric label="Efecto en flujo" value={-taxPending} sub={nextTaxDate ? `Siguiente: ${nextTaxDate}` : 'Sin fecha pendiente'} tone="warning" />
-          </div>
-
-          <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-              <div>
-                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Calendario fiscal desde CXP</h2>
-                <p className="text-[12px] text-[var(--gray-400)] mt-1">
-                  Fechas, estimado, real y efecto neto para integrarlo al pronostico de efectivo.
-                </p>
-              </div>
-              <span className="rounded-full bg-[var(--warning-muted)] px-3 py-1 text-[11px] font-medium text-[var(--warning)]">
-                Impacto pendiente {fmt(taxPending)}
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-[12px]">
-                <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)]">
-                  <tr>
-                    <th className="text-left py-2.5 px-4 font-semibold">Periodo</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Facturas</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Estimado</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Real</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Pendiente</th>
-                    <th className="text-right py-2.5 px-4 font-semibold">Efecto flujo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {taxByMonth.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-10 text-center text-[var(--gray-400)]">
-                        No hay impuestos detectados en las CXP filtradas.
-                      </td>
-                    </tr>
-                  ) : taxByMonth.map((row) => (
-                    <tr key={row.ym} className="border-t border-[var(--gray-100)]">
-                      <td className="py-2.5 px-4 font-medium text-[var(--gray-950)]">{row.ym}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--gray-500)]">{row.count}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--gray-950)]">{fmtFull(row.estimated)}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--success)]">{fmtFull(row.real)}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--warning)]">{fmtFull(row.pending)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-[var(--danger)]">{fmtFull(-row.pending)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-[var(--gray-100)]">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Detalle de impuestos por factura</h2>
-            </div>
-            <div className="overflow-x-auto max-h-[420px]">
-              <table className="w-full text-[11px]">
-                <thead className="sticky top-0 bg-white z-10 text-[var(--gray-400)]">
-                  <tr className="border-b border-[var(--gray-100)]">
-                    <th className="text-left py-2.5 px-4 font-semibold">Proveedor</th>
-                    <th className="text-left py-2.5 px-3 font-semibold">Factura</th>
-                    <th className="text-left py-2.5 px-3 font-semibold">Fecha pago</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Estimado</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Real</th>
-                    <th className="text-right py-2.5 px-4 font-semibold">Efecto flujo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {taxRows.map((row) => (
-                    <tr key={`${row.record.noProveedor}-${row.record.noFactura}-${row.dueDate}`} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)]">
-                      <td className="py-2 px-4 font-medium text-[var(--gray-950)]">{row.record.nombre}</td>
-                      <td className="py-2 px-3 font-mono text-[var(--gray-500)]">{row.record.noFactura || '-'}</td>
-                      <td className="py-2 px-3 text-[var(--gray-500)]">{row.dueDate || 'Sin fecha'}</td>
-                      <td className="py-2 px-3 text-right tabular-nums text-[var(--gray-950)]">{fmtFull(row.estimated)}</td>
-                      <td className="py-2 px-3 text-right tabular-nums text-[var(--success)]">{row.real > 0 ? fmtFull(row.real) : '-'}</td>
-                      <td className="py-2 px-4 text-right tabular-nums font-semibold text-[var(--danger)]">{fmtFull(-row.pending)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+      {selectedRecord && (
+        <InvoiceDetailPanel
+          record={selectedRecord}
+          companyName={ciaName(selectedRecord.cia)}
+          bankMatches={findPossibleBankPayments(selectedRecord, bankStatements)}
+          onClose={() => setSelectedRecord(null)}
+        />
       )}
     </div>
   );
 };
+
+function FilterGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div>
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">{title}</p>
+      <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto pr-1">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function FilterPill({
+  active,
+  label,
+  meta,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  meta?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+        active
+          ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
+          : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:border-[var(--gray-300)] hover:text-[var(--gray-950)]'
+      }`}
+      title={label}
+    >
+      <span className="truncate">{label}</span>
+      {meta && <span className="font-mono text-[10px] opacity-70">{meta}</span>}
+    </button>
+  );
+}
+
+function alertToneClass(tone: AlertTone): string {
+  if (tone === 'danger') return 'bg-[var(--danger-muted)] text-[var(--danger)]';
+  if (tone === 'warning') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
+  return 'bg-[var(--primary-muted)] text-[var(--primary)]';
+}
+
+function DrillExplorer({
+  stack,
+  nextDimension,
+  nodes,
+  total,
+  onPick,
+  onReset,
+  onBackTo,
+}: {
+  stack: DrillStep[];
+  nextDimension: DrillDimension | null;
+  nodes: DrillNode[];
+  total: number;
+  onPick: (node: DrillNode) => void;
+  onReset: () => void;
+  onBackTo: (index: number) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+            <button onClick={onReset} className="font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]">Total CXP</button>
+            {stack.map((step, index) => (
+              <span key={`${step.dimension}-${step.value}`} className="flex min-w-0 items-center gap-1.5">
+                <ChevronRight className="h-3 w-3 text-[var(--gray-300)]" />
+                <button
+                  onClick={() => onBackTo(index)}
+                  className="max-w-[220px] truncate text-[var(--gray-700)] hover:text-[var(--primary)]"
+                  title={step.label}
+                >
+                  {step.label}
+                </button>
+              </span>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-[var(--gray-400)]">
+            {nextDimension ? `Siguiente nivel: ${DRILL_LABELS[nextDimension]}` : 'Detalle de factura seleccionado'}
+          </p>
+        </div>
+        <p className="font-mono text-[13px] font-semibold text-[var(--gray-950)]">{fmtFull(total)}</p>
+      </div>
+
+      {nextDimension && (
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {nodes.slice(0, 12).map(node => (
+            <button
+              key={node.value}
+              onClick={() => onPick(node)}
+              className="rounded-xl border border-[var(--gray-200)] px-3 py-2 text-left transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+              title={`${node.label}: ${fmtFull(node.total)}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="min-w-0 truncate text-[12px] font-medium text-[var(--gray-950)]">{node.label}</span>
+                <span className="shrink-0 text-[10px] text-[var(--gray-400)]">{node.count}</span>
+              </div>
+              <p className="mt-1 font-mono text-[13px] font-semibold text-[var(--gray-950)]">{fmt(node.total)}</p>
+            </button>
+          ))}
+          {nodes.length === 0 && (
+            <div className="rounded-xl border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
+              Sin datos para bajar de nivel.
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BIInsightGrid({
+  stats,
+  agingRanges,
+  activeAgingRange,
+  onAgingRangeClick,
+  onAlertClick,
+}: {
+  stats: {
+    overdueRatio: string;
+    avgOverdueDays: number;
+    topFiveConcentration: string;
+    duplicateCount: number;
+    missingPoCount: number;
+    blockedCount: number;
+    creditLimitCount: number;
+    staleProviderCount: number;
+    dataConfidence: number;
+  };
+  agingRanges: Array<{ id: string; label: string; total: number; count: number }>;
+  activeAgingRange: string | null;
+  onAgingRangeClick: (id: string) => void;
+  onAlertClick: (type: CxpAlertType) => void;
+}) {
+  const alertStats: Array<{ type: CxpAlertType; count: number }> = [
+    { type: 'duplicate', count: stats.duplicateCount },
+    { type: 'missingPo', count: stats.missingPoCount },
+    { type: 'blocked', count: stats.blockedCount },
+    { type: 'creditLimit', count: stats.creditLimitCount },
+    { type: 'staleProvider', count: stats.staleProviderCount },
+  ];
+
+  return (
+    <section className="grid grid-cols-1 gap-3 xl:grid-cols-[1.2fr_1fr]">
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Aging y concentración</h2>
+          <span className="text-[11px] text-[var(--gray-400)]" title="Rangos calculados con días vencidos por factura">Rangos BI</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <SmallBiStat label="Vencido / total" value={stats.overdueRatio} />
+          <SmallBiStat label="Promedio vencido" value={`${stats.avgOverdueDays.toFixed(0)}d`} />
+          <SmallBiStat label="Top 5 proveedores" value={stats.topFiveConcentration} />
+          <SmallBiStat label="Confianza" value={`${stats.dataConfidence.toFixed(0)}%`} />
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {agingRanges.map(range => (
+            <button
+              key={range.id}
+              onClick={() => onAgingRangeClick(range.id)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                activeAgingRange === range.id
+                  ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
+                  : 'border-[var(--gray-200)] text-[var(--gray-500)] hover:text-[var(--gray-950)]'
+              }`}
+              title={`${range.label}: ${fmtFull(range.total)}`}
+            >
+              {range.label} · {range.count}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Alertas BI</h2>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {alertStats.map(item => (
+            <button
+              key={item.type}
+              onClick={() => onAlertClick(item.type)}
+              className="rounded-xl border border-[var(--gray-200)] px-3 py-2 text-left transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+            >
+              <p className="text-[11px] text-[var(--gray-400)]">{ALERT_LABELS[item.type]}</p>
+              <p className="mt-1 font-mono text-[18px] font-semibold text-[var(--gray-950)]">{item.count}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SmallBiStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-[var(--gray-50)] px-3 py-2">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
+      <p className="mt-1 font-mono text-[16px] font-semibold text-[var(--gray-950)]">{value}</p>
+    </div>
+  );
+}
+
+function ConnectedIntelligence({
+  signals,
+  hasBanks,
+  hasBudget,
+}: {
+  signals: {
+    next30Cxp: number;
+    cashAvailable: number;
+    bankChargesMonth: number;
+    plannedMonth: number;
+    budgetExpenseMonth: number | null;
+    activeProposals: number;
+  };
+  hasBanks: boolean;
+  hasBudget: boolean;
+}) {
+  const coverage = signals.cashAvailable > 0 ? signals.next30Cxp / signals.cashAvailable : null;
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Inteligencia conectada</h2>
+        <span className="text-[11px] text-[var(--gray-400)]">CXP · Flujo · Bancos · Presupuesto</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <SmallBiStat label="CXP próximos 30d" value={fmt(signals.next30Cxp)} />
+        <SmallBiStat label="Cobertura caja" value={coverage === null ? (hasBanks ? '0%' : 'Sin bancos') : `${(coverage * 100).toFixed(0)}%`} />
+        <SmallBiStat label="Planeado vs real" value={hasBanks ? `${fmt(signals.plannedMonth)} / ${fmt(signals.bankChargesMonth)}` : 'Sin bancos'} />
+        <SmallBiStat label="Presupuesto mes" value={hasBudget && signals.budgetExpenseMonth !== null ? fmt(signals.budgetExpenseMonth) : `${signals.activeProposals} prop.`} />
+      </div>
+    </section>
+  );
+}
+
+function AgingMatrix({
+  supplierData,
+  agingBuckets,
+  totalPendiente,
+  filteredCount,
+}: {
+  supplierData: SupplierSummary[];
+  agingBuckets: AgingBucket[];
+  totalPendiente: number;
+  filteredCount: number;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden animate-card-in stagger-8">
+      <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
+        <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
+        <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead className="sticky top-0 bg-white z-10">
+            <tr className="border-b-2 border-[var(--gray-200)]">
+              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
+              <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-semibold w-[90px]">Total</th>
+              <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-semibold w-[40px]">#</th>
+              {BUCKET_LABELS.map((label, i) => (
+                <th key={i} className="text-right py-2.5 px-2 font-semibold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {supplierData.slice(0, 100).map((s, si) => {
+              const bucketVals = BUCKET_KEYS.map(key => s.records.reduce((sum, r) => sum + (r[key] as number), 0));
+              const maxBucket = Math.max(...bucketVals);
+              return (
+                <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
+                  <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
+                  <td className="py-2 px-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</td>
+                  <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
+                  {bucketVals.map((val, bi) => {
+                    const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
+                    return (
+                      <td key={bi} className="py-2 px-2 text-right font-mono">
+                        {val > 0 ? (
+                          <span
+                            className="inline-block px-1.5 py-0.5 rounded"
+                            style={{
+                              color: AGING_COLORS[bi],
+                              backgroundColor: bi === 0
+                                ? 'var(--success-muted)'
+                                : intensity > 0.5
+                                  ? 'var(--warning-muted)'
+                                  : 'var(--gray-50)',
+                              fontWeight: intensity > 0.5 ? 600 : 400,
+                            }}
+                            title={agingTooltip(BUCKET_LABELS[bi] === 'Por Vencer' ? 0 : Number(BUCKET_LABELS[bi].split('-')[0]) || 181)}
+                          >
+                            {fmt(val)}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--gray-200)]">-</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold sticky bottom-0">
+              <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
+              <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
+              <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{filteredCount}</td>
+              {agingBuckets.map((b, i) => (
+                <td key={i} className="py-2.5 px-2 text-right font-mono font-bold" style={{ color: b.color }}>{fmt(b.total)}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function TriageAlertBoard({
+  buckets,
+  active,
+  onSelect,
+}: {
+  buckets: Array<{ type: CxpAlertType; label: string; count: number; total: number }>;
+  active: CxpAlertType | null;
+  onSelect: (type: CxpAlertType) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Clasificación de triage</h2>
+        <span className="text-[11px] text-[var(--gray-400)]">Click para ver facturas</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+        {buckets.map(bucket => (
+          <button
+            key={bucket.type}
+            onClick={() => onSelect(bucket.type)}
+            className={`rounded-xl border px-3 py-2 text-left transition ${
+              active === bucket.type
+                ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
+                : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
+            }`}
+            title={`${bucket.label}: ${fmtFull(bucket.total)}`}
+          >
+            <p className="truncate text-[11px] text-[var(--gray-500)]">{bucket.label}</p>
+            <div className="mt-1 flex items-end justify-between gap-2">
+              <span className="font-mono text-[18px] font-semibold text-[var(--gray-950)]">{bucket.count}</span>
+              <span className="font-mono text-[11px] text-[var(--gray-500)]">{fmt(bucket.total)}</span>
+            </div>
+          </button>
+        ))}
+        {buckets.length === 0 && (
+          <div className="col-span-full rounded-xl border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
+            No hay alertas con los filtros actuales.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TriageDetailTable({
+  title,
+  records,
+  onRecordSelect,
+}: {
+  title: string;
+  records: EnrichedCXPRecord[];
+  onRecordSelect: (record: EnrichedCXPRecord) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+      <header className="flex items-center justify-between gap-3 border-b border-[var(--gray-100)] px-4 py-3">
+        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">{title}</h2>
+        <span className="text-[11px] text-[var(--gray-400)]">{records.length} facturas</span>
+      </header>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead className="bg-[var(--gray-50)] text-[var(--gray-400)]">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium">Factura</th>
+              <th className="px-4 py-2 text-left font-medium">Proveedor</th>
+              <th className="px-4 py-2 text-left font-medium">Causa</th>
+              <th className="px-4 py-2 text-right font-medium">Días</th>
+              <th className="px-4 py-2 text-right font-medium">Monto</th>
+              <th className="px-4 py-2 text-left font-medium">Vence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {records.slice(0, 150).map((record, index) => (
+              <tr
+                key={`${record.cia}-${record.noProveedor}-${record.noFactura}-${index}`}
+                onClick={() => onRecordSelect(record)}
+                className="cursor-pointer border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]"
+              >
+                <td className="px-4 py-2 font-mono text-[var(--gray-950)]">{record.noFactura || '-'}</td>
+                <td className="px-4 py-2 text-[var(--gray-950)]">{record.nombre || '-'}</td>
+                <td className="px-4 py-2">
+                  <div className="flex max-w-[420px] flex-wrap gap-1">
+                    {record.alerts.slice(0, 3).map(alert => (
+                      <span key={`${record.noFactura}-${alert.type}`} className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${alertToneClass(alert.tone)}`} title={alert.detail}>
+                        {alert.label}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-[var(--gray-950)]">{record.diasVencida}</td>
+                <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmtFull(record.importePendientePesos)}</td>
+                <td className="px-4 py-2 text-[var(--gray-500)]">{dueDateForRecord(record) ?? '-'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function TriageColumn({
+  title,
+  detail,
+  tone,
+  records,
+  onRecordSelect,
+}: {
+  title: string;
+  detail: string;
+  tone: 'danger' | 'success' | 'warning';
+  records: EnrichedCXPRecord[];
+  onRecordSelect: (record: EnrichedCXPRecord) => void;
+}) {
+  const total = records.reduce((sum, record) => sum + record.importePendientePesos, 0);
+  const toneClass =
+    tone === 'danger'
+      ? 'bg-[var(--danger-muted)] text-[var(--danger)]'
+      : tone === 'success'
+        ? 'bg-[var(--success-muted)] text-[var(--success)]'
+        : 'bg-[var(--warning-muted)] text-[var(--warning)]';
+
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+      <header className="border-b border-[var(--gray-100)] p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">{title}</h2>
+            <p className="mt-1 text-[11px] leading-4 text-[var(--gray-400)]">{detail}</p>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
+            {records.length} fact.
+          </span>
+        </div>
+        <p className="mt-3 font-mono text-[20px] font-bold text-[var(--gray-950)]">{fmt(total)}</p>
+      </header>
+      <div className="max-h-[620px] space-y-2 overflow-y-auto bg-[var(--surface-alt)] p-3">
+        {records.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-[var(--gray-200)] bg-white p-5 text-center text-[12px] text-[var(--gray-400)]">
+            Sin facturas en este balde.
+          </div>
+        ) : records.slice(0, 40).map((record) => (
+          <button
+            key={`${record.noProveedor}-${record.noFactura}-${record.fechaVence}`}
+            onClick={() => onRecordSelect(record)}
+            className="block w-full rounded-xl border border-[var(--gray-200)] bg-white p-3 text-left shadow-sm transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-[12px] font-semibold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
+                <p className="mt-0.5 text-[10px] text-[var(--gray-400)]">{record.providerType}</p>
+              </div>
+              <p className="shrink-0 font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmt(record.importePendientePesos)}</p>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(record.paymentPriority)}`} title={priorityReason(record)}>
+                {priorityLabel(record.paymentPriority)}
+                <HelpCircle className="h-3 w-3" />
+              </span>
+              <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
+                {flexibilityLabel(record.providerFlexibility)}
+              </span>
+              <span
+                className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]"
+                title={agingTooltip(record.diasVencida)}
+              >
+                {record.diasVencida > 0 ? `${record.diasVencida}d vencido` : 'por vencer'}
+              </span>
+              <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
+                vence {dueDateForRecord(record) ?? 'sin fecha'}
+              </span>
+            </div>
+          </button>
+        ))}
+        {records.length > 40 && (
+          <p className="py-2 text-center text-[11px] text-[var(--gray-400)]">
+            {records.length - 40} facturas mas en este balde.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function InvoiceDetailPanel({
+  record,
+  companyName,
+  bankMatches,
+  onClose,
+}: {
+  record: EnrichedCXPRecord;
+  companyName: string;
+  bankMatches: BankStatementLine[];
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/10" onClick={onClose}>
+      <aside
+        className="h-full w-full max-w-xl overflow-y-auto border-l border-[var(--gray-200)] bg-white shadow-xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <header className="sticky top-0 z-10 border-b border-[var(--gray-100)] bg-white px-5 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Detalle de factura</p>
+              <h2 className="mt-1 truncate text-[18px] font-semibold text-[var(--gray-950)]">{record.noFactura || 'Sin factura'}</h2>
+              <p className="mt-1 truncate text-[12px] text-[var(--gray-500)]">{record.nombre}</p>
+            </div>
+            <button onClick={onClose} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="space-y-5 p-5">
+          <div className="grid grid-cols-2 gap-3">
+            <DetailMetric label="Pendiente" value={fmtFull(record.importePendientePesos)} />
+            <DetailMetric label="Días vencida" value={`${record.diasVencida}d`} />
+            <DetailMetric label="Vence" value={dueDateForRecord(record) ?? '-'} />
+            <DetailMetric label="Moneda" value={record.moneda || '-'} />
+          </div>
+
+          <DetailSection title="Causa de triage">
+            <div className="flex flex-wrap gap-1.5">
+              {record.alerts.length === 0 ? (
+                <span className="text-[12px] text-[var(--gray-400)]">Sin alertas detectadas con los datos actuales.</span>
+              ) : record.alerts.map(alert => (
+                <span key={alert.type} className={`rounded-full px-2 py-1 text-[11px] font-medium ${alertToneClass(alert.tone)}`} title={alert.detail}>
+                  {alert.label}
+                </span>
+              ))}
+            </div>
+            <p className="mt-2 text-[12px] text-[var(--gray-500)]">{priorityReason(record)}</p>
+          </DetailSection>
+
+          <DetailSection title="Proveedor">
+            <DetailGrid rows={[
+              ['Tipo', record.providerType],
+              ['Riesgo', record.providerRisk],
+              ['Flexibilidad', flexibilityLabel(record.providerFlexibility)],
+              ['Límite crédito', record.providerCreditLimit ? fmtFull(record.providerCreditLimit) : 'No configurado'],
+              ['Última actualización', record.providerDaysWithoutUpdate === null ? 'Sin dato' : `${record.providerDaysWithoutUpdate} días`],
+              ['DTI', record.providerDtiCriticidad ? `${record.providerDtiCriticidad}${record.providerDtiArea ? ` · ${record.providerDtiArea}` : ''}` : 'No aplica'],
+            ]} />
+          </DetailSection>
+
+          <DetailSection title="Factura y flujo">
+            <DetailGrid rows={[
+              ['Empresa', companyName],
+              ['Proveedor #', record.noProveedor || '-'],
+              ['Fecha factura', record.fechaFactura || '-'],
+              ['Fecha vencimiento', record.fechaVence || '-'],
+              ['Fecha programada', record.fechaProgramacionPago || '-'],
+              ['Condición de pago', record.condPago || '-'],
+              ['Subtotal', fmtFull(record.importeSubtotalPesos)],
+              ['IVA / impuestos', fmtFull(record.importeImpuestosPesos)],
+              ['Bruto', fmtFull(record.importeBrutoPesos)],
+            ]} />
+          </DetailSection>
+
+          <DetailSection title="Compras, contratos y referencias">
+            <div className="flex flex-wrap gap-1.5">
+              {record.referenceLinks.map((ref, index) => (
+                <span key={`${ref.kind}-${index}`} className="rounded-full border border-[var(--gray-200)] px-2 py-1 text-[11px] text-[var(--gray-600)]">
+                  {ref.kind}: {ref.label}
+                </span>
+              ))}
+            </div>
+            {!hasReference(record, 'OC') && (
+              <p className="mt-2 text-[12px] text-[var(--warning)]">No se detectó OC en el archivo de CXP.</p>
+            )}
+          </DetailSection>
+
+          <DetailSection title="Bancos / pagos posibles">
+            {bankMatches.length === 0 ? (
+              <p className="text-[12px] text-[var(--gray-400)]">Sin pagos bancarios relacionados detectados en el rango cargado.</p>
+            ) : (
+              <div className="space-y-2">
+                {bankMatches.map((movement, index) => (
+                  <div key={`${movement.referencia}-${index}`} className="rounded-lg border border-[var(--gray-200)] px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[12px] font-medium text-[var(--gray-950)]">{movement.fechaOperacion}</span>
+                      <span className="font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmtFull(movement.importe)}</span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-[var(--gray-500)]">{movement.referencia} · {movement.concepto}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DetailSection>
+
+          <DetailSection title="Auditoría">
+            <p className="text-[12px] text-[var(--gray-400)]">El historial de comentarios, responsables y aprobaciones todavía no viene en la fuente de CXP cargada.</p>
+          </DetailSection>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function DetailMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-[var(--gray-50)] px-3 py-2">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
+      <p className="mt-1 truncate font-mono text-[15px] font-semibold text-[var(--gray-950)]" title={value}>{value}</p>
+    </div>
+  );
+}
+
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section>
+      <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">{title}</h3>
+      <div className="rounded-xl border border-[var(--gray-200)] p-3">{children}</div>
+    </section>
+  );
+}
+
+function DetailGrid({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <dl className="grid grid-cols-1 gap-2 text-[12px]">
+      {rows.map(([label, value]) => (
+        <div key={label} className="grid grid-cols-[140px_1fr] gap-3">
+          <dt className="text-[var(--gray-400)]">{label}</dt>
+          <dd className="min-w-0 truncate font-medium text-[var(--gray-950)]" title={value}>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 function PlanningCard({
   title,
@@ -1502,32 +2620,6 @@ function PlanningCard({
   );
 }
 
-function TaxMetric({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: number;
-  sub: string;
-  tone: 'danger' | 'success' | 'warning' | 'neutral';
-}) {
-  const colorClass =
-    tone === 'danger' ? 'text-[var(--danger)]' :
-    tone === 'success' ? 'text-[var(--success)]' :
-    tone === 'warning' ? 'text-[var(--warning)]' :
-    'text-[var(--gray-950)]';
-
-  return (
-    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</p>
-      <p className={`mt-2 text-[22px] font-bold font-mono ${colorClass}`}>{fmt(value)}</p>
-      <p className="mt-1 text-[11px] text-[var(--gray-400)]">{sub}</p>
-    </div>
-  );
-}
-
 /* ═══════════════════════════════════════════════════════════════════════
    Main CXP Component — per-cia cache + background fetch
    ═══════════════════════════════════════════════════════════════════════ */
@@ -1538,6 +2630,11 @@ interface CXPProps {
   companies: Company[];
   selectedCia: string;
   providers: Provider[];
+  clients: Client[];
+  assumptions: CashFlowAssumptions;
+  bankStatements: BankAccountStatement[];
+  budget: Budget | null;
+  proposals: Proposal[];
   onMergeCia: (cia: string, records: CXPRecord[]) => void;
   onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
   onReset: () => void;
@@ -1549,13 +2646,17 @@ const CXP = ({
   companies,
   selectedCia,
   providers,
+  clients,
+  assumptions,
+  bankStatements,
+  budget,
+  proposals,
   onMergeCia,
   onReplaceAll,
   onReset,
 }: CXPProps) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCsv, setShowCsv] = useState(false);
   const csvInput = useRef<HTMLInputElement>(null);
   const autoFetchAttempted = useRef<Set<string>>(new Set());
 
@@ -1684,7 +2785,6 @@ const CXP = ({
       if (ciasInCsv.length > 0) {
         onReplaceAll(recs, ciasInCsv);
       }
-      setShowCsv(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al procesar');
     } finally {
@@ -1854,7 +2954,17 @@ const CXP = ({
         </div>
       )}
 
-      <CXPDashboard records={visibleRecords} onReset={onReset} companies={companies} providers={providers} />
+      <CXPDashboard
+        records={visibleRecords}
+        onReset={onReset}
+        companies={companies}
+        providers={providers}
+        clients={clients}
+        assumptions={assumptions}
+        bankStatements={bankStatements}
+        budget={budget}
+        proposals={proposals}
+      />
     </div>
   );
 };

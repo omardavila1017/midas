@@ -17,6 +17,11 @@
 
 import { CollectionEvent, Client, eventKey } from './types';
 import type { BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
+import {
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from './netCashFlowEngine';
 
 // ── Configuration ──
 const AMOUNT_TOLERANCE = 0.05;  // 5%
@@ -112,11 +117,17 @@ function extractAbonos(
   const prefix = `${year}-${String(month + 1).padStart(2, '0')}`;
   const abonos: BankStatementLine[] = [];
 
+  // Los traspasos entre cuentas propias no son cobros de clientes — nunca
+  // deben entrar al pool de abonos candidatos a cruzarse contra proyecciones
+  // de cobranza.
+  const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
+
   for (const account of bankStatements) {
     for (const mov of account.movimientos) {
-      if (mov.tipoMovimiento === 'ABONO' && mov.fechaOperacion.startsWith(prefix)) {
-        abonos.push(mov);
-      }
+      if (mov.tipoMovimiento !== 'ABONO') continue;
+      if (!mov.fechaOperacion.startsWith(prefix)) continue;
+      if (isInternalTransfer(mov, detector)) continue;
+      abonos.push(mov);
     }
   }
 
@@ -132,6 +143,7 @@ function extractAbonos(
   for (const account of bankStatements) {
     for (const mov of account.movimientos) {
       if (mov.tipoMovimiento !== 'ABONO') continue;
+      if (isInternalTransfer(mov, detector)) continue;
       const d = mov.fechaOperacion;
       if (d.startsWith(prevPrefix)) {
         const day = Number(d.slice(8, 10));

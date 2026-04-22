@@ -1,10 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Proposal, Scenario, TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { FlowSenseStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
+import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
-import { fetchCompanies, type Company, type BankAccountStatement, type BankStatementFormat } from './services/jde';
-import Dashboard from './components/Dashboard';
+import {
+  fetchCompanies,
+  fetchBankStatements,
+  fetchBankStatementsRange,
+  type Company,
+  type BankAccountStatement,
+  type BankStatementFormat,
+} from './services/jde';
+import Dashboard, { computeBankStartingBalance } from './components/Dashboard';
 import CXP from './components/CXP';
 import Bancos from './components/Bancos';
 import Providers from './components/Providers';
@@ -13,8 +20,7 @@ import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
 import Simulacion from './components/Simulacion';
 import ErrorBoundary from './components/ErrorBoundary';
-import { ToastProvider, useToast } from './components/Toast';
-import { ActivityFeedProvider, useActivityFeed, ActivityFeedPanel } from './components/ActivityFeed';
+import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette from './components/CommandPalette';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
@@ -25,18 +31,24 @@ import {
   HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
   Bell,
+  type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS } from './domain/companyGroups';
+import type { Budget } from './domain/budget';
+import { parseBudgetCsv } from './domain/budget';
+import { loadBudget, saveBudget } from './domain/budgetPersistence';
+
+const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
-const SECTIONS: { id: SectionId; label: string; icon: any; description: string }[] = [
+const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: string }[] = [
   { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes y proveedores' },
   { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo diario y bancos' },
   { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, cobranza, CXP, pronóstico y escenarios' },
 ];
 
-const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any }[]> = {
+const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
   catalogos: [
     { id: 'clients',   label: 'Clientes',     icon: UserSquare },
     { id: 'providers', label: 'Proveedores',  icon: Users },
@@ -116,6 +128,28 @@ export default function App() {
     factorajeDays: 30,
   });
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
+  const [budget, setBudget] = useState<Budget | null>(() => loadBudget());
+
+  useEffect(() => { saveBudget(budget); }, [budget]);
+
+  // Carga automática del CSV de presupuesto empaquetado en `public/presupuesto.csv`.
+  // Si el archivo existe y parsea bien, sobrescribe el budget cacheado — así el
+  // usuario no tiene que volver a subir el CSV manualmente cada vez. Si falla
+  // (404, parser error, red), dejamos el budget que ya estuviera en localStorage.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(DEFAULT_BUDGET_CSV_URL, { cache: 'no-cache' });
+        if (!res.ok) return;
+        const text = await res.text();
+        const r = parseBudgetCsv(text, { fileName: 'presupuesto.csv' });
+        if (!cancelled && r.budget) setBudget(r.budget);
+      } catch { /* sin red o sin archivo → conservamos lo que hubiera en cache */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   const [cashFlowOverrides, setCashFlowOverrides] = useState<CashFlowOverrides>({});
@@ -126,7 +160,7 @@ export default function App() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companyGroups, setCompanyGroups] = useState<CompanyGroup[]>(() => loadCompanyGroups());
   const [selectedCia, setSelectedCia] = useState<string>(
-    () => localStorage.getItem('flowsense.selectedCia') ?? 'all'
+    () => localStorage.getItem('midas.selectedCia') ?? 'all'
   );
 
   // Persist company groups
@@ -135,15 +169,15 @@ export default function App() {
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [bankStatements, setBankStatements] = useState<BankAccountStatement[]>(() => {
     try {
-      const raw = localStorage.getItem('flowsense.bankStatements.v2');
+      const raw = localStorage.getItem('midas.bankStatements.v2');
       const parsed = raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
       // Descartar demo data ficticia que pudo haber quedado cacheada de
       // versiones previas. Si detectamos CUALQUIER referencia demo dentro
       // del cache, lo tiramos entero — no vale la pena mezclar ficticio con
       // real en el flujo.
       if (containsDemoBankData(parsed)) {
-        localStorage.removeItem('flowsense.bankStatements.v2');
-        localStorage.removeItem('flowsense.bankLastQuery.v2');
+        localStorage.removeItem('midas.bankStatements.v2');
+        localStorage.removeItem('midas.bankLastQuery.v2');
         return [];
       }
       return parsed;
@@ -154,7 +188,7 @@ export default function App() {
     formatoElectronico: BankStatementFormat;
   } | null>(() => {
     try {
-      const raw = localStorage.getItem('flowsense.bankLastQuery.v2');
+      const raw = localStorage.getItem('midas.bankLastQuery.v2');
       return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   });
@@ -165,6 +199,43 @@ export default function App() {
   const [bankFetchProgress, setBankFetchProgress] = useState<
     { done: number; total: number } | null
   >(null);
+
+  // Caja inicial / Saldo inicial — estado compartido entre Dashboard y
+  // CashFlowDetail. Si el usuario lo edita en cualquiera de las dos vistas,
+  // ambas quedan sincronizadas. null = usar la suma de saldoInicial de banco.
+  const [startingBalanceOverride, setStartingBalanceOverride] = useState<number | null>(() => {
+    try {
+      let raw = localStorage.getItem('midas.dashboard.startingBalance.v1');
+      if (raw === null) {
+        const legacy = localStorage.getItem('flowsense.dashboard.startingBalance.v1');
+        if (legacy !== null) {
+          try {
+            localStorage.setItem('midas.dashboard.startingBalance.v1', legacy);
+            localStorage.removeItem('flowsense.dashboard.startingBalance.v1');
+          } catch { /* ignore */ }
+          raw = legacy;
+        }
+      }
+      if (raw === null) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    try {
+      if (startingBalanceOverride === null) localStorage.removeItem('midas.dashboard.startingBalance.v1');
+      else localStorage.setItem('midas.dashboard.startingBalance.v1', String(startingBalanceOverride));
+    } catch { /* ignore */ }
+  }, [startingBalanceOverride]);
+  const bankStartingBalance = useMemo(
+    () => computeBankStartingBalance(
+      selectedCia === 'all' || !selectedCia
+        ? bankStatements
+        : bankStatements.filter((s) => s.cia === selectedCia),
+    ),
+    [bankStatements, selectedCia],
+  );
+  const effectiveStartingBalance = startingBalanceOverride ?? bankStartingBalance;
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
@@ -207,22 +278,55 @@ export default function App() {
     });
   }, [catalogLoaded, clients.length]);
 
-  // Load providers from the bundled catalog if none are loaded yet.
-  // El catálogo vive en src/assets/providerCatalog.json y trae ~470
-  // proveedores con su flexibilidad (inamovible/flexible/revisar) para
-  // planeación. Se evita si el usuario ya tiene proveedores (subidos o
-  // persistidos) para no pisar su edición.
+  // Load/merge providers from the bundled catalog. The local catalog includes
+  // Romo's provider type classification plus flexibility/DTI metadata.
+  const providerCatalogMerged = useRef(false);
   useEffect(() => {
-    if (providers.length > 0) return;
+    if (providerCatalogMerged.current) return;
+    providerCatalogMerged.current = true;
     fetchProviderCatalog().then((loaded) => {
-      if (loaded.length > 0) setProviders(loaded);
+      if (loaded.length === 0) return;
+      setProviders((current) => {
+        if (current.length === 0) return loaded;
+
+        const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toUpperCase();
+
+        // Remove catalog-sourced providers that no longer exist in the updated
+        // catalog (e.g. unclassified providers that were purged from the catalog).
+        const catalogNames = new Set(loaded.map(p => normalize(p.name)));
+        const filtered = current.filter(
+          p => !p.id.startsWith('catalog-prov-') || catalogNames.has(normalize(p.name))
+        );
+
+        const filteredByName = new Map(filtered.map((provider, index) => [normalize(provider.name), { provider, index }]));
+        const merged = [...filtered];
+        let changed = filtered.length !== current.length;
+
+        for (const catalogProvider of loaded) {
+          const existing = filteredByName.get(normalize(catalogProvider.name));
+          if (!existing) {
+            merged.push(catalogProvider);
+            changed = true;
+            continue;
+          }
+
+          const currentType = existing.provider.type?.trim();
+          const catalogType = catalogProvider.type?.trim();
+          if ((!currentType || currentType === 'Otro' || currentType === 'Sin clasificar') && catalogType && catalogType !== 'Otro') {
+            merged[existing.index] = { ...existing.provider, type: catalogType };
+            changed = true;
+          }
+        }
+
+        return changed ? merged : current;
+      });
     });
-  }, [providers.length]);
+  }, []);
 
   // Save to localStorage after changes (debounced by 500ms)
   useEffect(() => {
     const timer = setTimeout(() => {
-      const store: FlowSenseStore = {
+      const store: MidasStore = {
         proposals, scenarios, activeScenarioId,
         providers, clients,
         assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
@@ -261,7 +365,7 @@ export default function App() {
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
-    localStorage.setItem('flowsense.selectedCia', selectedCia);
+    localStorage.setItem('midas.selectedCia', selectedCia);
   }, [selectedCia]);
   useEffect(() => {
     if (companies.length > 0 && selectedCia !== 'all'
@@ -273,13 +377,13 @@ export default function App() {
 
   // Persist bank statements + last query
   useEffect(() => {
-    try { localStorage.setItem('flowsense.bankStatements.v2', JSON.stringify(bankStatements)); }
+    try { localStorage.setItem('midas.bankStatements.v2', JSON.stringify(bankStatements)); }
     catch { /* quota or serialization issue; ignore */ }
   }, [bankStatements]);
   useEffect(() => {
     try {
-      if (bankLastQuery) localStorage.setItem('flowsense.bankLastQuery.v2', JSON.stringify(bankLastQuery));
-      else localStorage.removeItem('flowsense.bankLastQuery.v2');
+      if (bankLastQuery) localStorage.setItem('midas.bankLastQuery.v2', JSON.stringify(bankLastQuery));
+      else localStorage.removeItem('midas.bankLastQuery.v2');
     } catch { /* ignore */ }
   }, [bankLastQuery]);
 
@@ -323,8 +427,6 @@ export default function App() {
       d.setDate(d.getDate() - 1);
       tryDates.push(d.toISOString().slice(0, 10));
     }
-
-    const { fetchBankStatements, fetchBankStatementsRange } = await import('./services/jde');
 
     setBankFetchStatus('priming');
 
@@ -440,13 +542,21 @@ export default function App() {
       {/* ─── HEADER ─── */}
       <header className="border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)', background: 'var(--card)' }}>
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
-          {/* Logo */}
-          <div className="flex items-center gap-2.5 flex-shrink-0 hover-press cursor-pointer" onClick={() => setActiveTab('netflow')}>
-            <div className="h-9 rounded-lg bg-white px-3 flex items-center justify-center border border-[var(--gray-200)]">
-              <img src="/logos/senda-corporativo.svg" alt="Senda" className="h-7 w-auto object-contain" />
-            </div>
-            <span className="text-[15px] font-semibold tracking-[-0.02em]" style={{ color: 'var(--gray-950)' }}>
-              FlowSense
+          {/* Brand lockup — Senda (burgundy) + divider + Midas (gold gradient) */}
+          <div
+            className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer"
+            onClick={() => setActiveTab('netflow')}
+            aria-label="Midas · Senda corporativo"
+          >
+            <span className="senda-lockup">
+              <img src="/logos/senda-corporativo.svg" alt="Senda" />
+            </span>
+            <span className="midas-divider" aria-hidden="true" />
+            <span
+              className="midas-wordmark"
+              style={{ fontSize: '22px' }}
+            >
+              Midas
             </span>
           </div>
 
@@ -538,7 +648,7 @@ export default function App() {
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `flowsense-backup-${new Date().toISOString().slice(0,10)}.json`;
+                a.download = `midas-backup-${new Date().toISOString().slice(0,10)}.json`;
                 a.click();
                 URL.revokeObjectURL(url);
               }}
@@ -600,6 +710,9 @@ export default function App() {
                 overrides={cashFlowOverrides}
                 onOverridesChange={setCashFlowOverrides}
                 onOpenFlow={() => setActiveTab('flow')}
+                startingBalanceOverride={startingBalanceOverride}
+                bankStartingBalance={bankStartingBalance}
+                onStartingBalanceChange={setStartingBalanceOverride}
               />
             )}
             {activeTab === 'flow' && (
@@ -612,11 +725,19 @@ export default function App() {
                 onScenariosChange={setScenarios}
                 activeScenarioId={activeScenarioId}
                 onActiveScenarioChange={setActiveScenarioId}
+                clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
+                assumptions={assumptions}
+                budget={budget}
+                startingBalanceOverride={startingBalanceOverride}
               />
             )}
             {activeTab === 'clients' && (
               <Clients
                 clients={clients}
+                assumptions={assumptions}
+                confirmedPayments={confirmedPayments}
                 onReplace={setClients}
                 onAdd={addClient}
                 onUpdate={updateClient}
@@ -652,6 +773,11 @@ export default function App() {
                 companies={companies}
                 selectedCia={selectedCia}
                 providers={providers}
+                clients={clients}
+                assumptions={assumptions}
+                bankStatements={bankStatements}
+                budget={budget}
+                proposals={proposals}
                 onMergeCia={mergeCxpForCia}
                 onReplaceAll={replaceAllCxp}
                 onReset={resetCxp}
@@ -678,6 +804,8 @@ export default function App() {
                 bankFetchStatus={bankFetchStatus}
                 bankFetchProgress={bankFetchProgress}
                 onRefreshBanks={() => refreshBankStatementsRange(true)}
+                startingBalance={effectiveStartingBalance}
+                onStartingBalanceChange={setStartingBalanceOverride}
               />
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}
@@ -1037,4 +1165,3 @@ function CompanySelector({
     </div>
   );
 }
-

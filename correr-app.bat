@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  Arranca el servidor de desarrollo de flowsense.
+REM  Arranca el servidor de desarrollo de midas.
 REM  Abre automáticamente http://localhost:5173 en tu navegador.
 REM ============================================================
 
@@ -8,7 +8,7 @@ cd /d "%~dp0"
 
 echo.
 echo ==========================================
-echo   Arrancando flowsense en localhost...
+echo   Arrancando midas en localhost...
 echo ==========================================
 echo.
 
