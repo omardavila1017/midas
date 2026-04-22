@@ -13,7 +13,6 @@ import {
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle, LineChart as LineChartIcon,
-  FileSpreadsheet,
 } from 'lucide-react';
 import type { Proposal } from '../types';
 import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
@@ -40,7 +39,6 @@ import {
 } from '../services/jde';
 import MonthDrilldown from './MonthDrilldown';
 import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
-import BudgetModal from './BudgetModal';
 
 interface DashboardProps {
   companyCode: string;
@@ -51,7 +49,6 @@ interface DashboardProps {
   cxpRecords: CXPRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
-  onBudgetChange: (b: Budget | null) => void;
   onOpenFlow: () => void;
   /** Override manual de la caja inicial. null = usar la suma de saldoInicial del banco. */
   startingBalanceOverride: number | null;
@@ -100,7 +97,7 @@ export function loadOverrides(): ProjectionOverrides {
 
 const Dashboard: React.FC<DashboardProps> = ({
   companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions,
-  budget, onBudgetChange, onOpenFlow,
+  budget, onOpenFlow,
   startingBalanceOverride, bankStartingBalance, onStartingBalanceChange,
 }) => {
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
@@ -108,7 +105,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<ProjectionOverrides>(() => loadOverrides());
-  const [budgetModalOpen, setBudgetModalOpen] = useState(false);
 
   useEffect(() => {
     try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); } catch { /* ignore */ }
@@ -352,14 +348,6 @@ const Dashboard: React.FC<DashboardProps> = ({
             onChange={onStartingBalanceChange}
           />
           <button
-            onClick={() => setBudgetModalOpen(true)}
-            className="flex items-center gap-2 h-10 px-4 rounded-xl border border-[var(--gray-200)] text-[13px] font-medium hover:bg-[var(--gray-50)]"
-            style={{ color: budget ? 'var(--success)' : 'var(--gray-950)' }}
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            {budget ? `Presupuesto ${budget.year}` : 'Cargar presupuesto'}
-          </button>
-          <button
             onClick={onOpenFlow}
             className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
           >
@@ -512,14 +500,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         tableRows={tableRows}
         today={today}
         onClose={() => setSelectedMonth(null)}
-      />
-
-      <BudgetModal
-        open={budgetModalOpen}
-        budget={budget}
-        onClose={() => setBudgetModalOpen(false)}
-        onApply={(b) => onBudgetChange(b)}
-        onClear={() => onBudgetChange(null)}
       />
     </div>
   );
