@@ -223,17 +223,14 @@ function normalizeStore(raw: unknown): MidasStore {
     proposals,
     scenarios,
     activeScenarioId,
-    providers: Array.isArray(o.providers) ? (o.providers as Provider[]) : [],
-    clients: Array.isArray(o.clients) ? (o.clients as Client[]) : [],
-    confirmedPayments: Array.isArray(o.confirmedPayments) ? (o.confirmedPayments as ConfirmedPayment[]) : [],
-    cxpRecords: Array.isArray(o.cxpRecords) ? (o.cxpRecords as CXPRecord[]) : [],
-    cxpLoadedCias: typeof o.cxpLoadedCias === 'object' && o.cxpLoadedCias !== null
-      ? (o.cxpLoadedCias as Record<string, string>)
-      : {},
+    providers,
+    clients,
+    confirmedPayments,
+    cxpRecords,
+    cxpLoadedCias,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
-    assumptions: (o.assumptions && typeof o.assumptions === 'object')
-      ? (o.assumptions as CashFlowAssumptions)
-      : base.assumptions,
+    assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
+    lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,
   };
 }
 

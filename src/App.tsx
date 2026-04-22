@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Proposal, Scenario, TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
@@ -706,9 +706,10 @@ export default function App() {
                 bankStatements={bankStatements}
                 proposals={proposals}
                 clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
                 assumptions={assumptions}
-                overrides={cashFlowOverrides}
-                onOverridesChange={setCashFlowOverrides}
+                budget={budget}
                 onOpenFlow={() => setActiveTab('flow')}
                 startingBalanceOverride={startingBalanceOverride}
                 bankStartingBalance={bankStartingBalance}
