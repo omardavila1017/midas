@@ -27,6 +27,8 @@ import {
   Bell,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS } from './domain/companyGroups';
+import type { Budget } from './domain/budget';
+import { loadBudget, saveBudget } from './domain/budgetPersistence';
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
@@ -116,6 +118,10 @@ export default function App() {
     factorajeDays: 30,
   });
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
+  const [budget, setBudget] = useState<Budget | null>(() => loadBudget());
+
+  useEffect(() => { saveBudget(budget); }, [budget]);
+
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<TabId>('netflow');
@@ -594,6 +600,8 @@ export default function App() {
                 providers={providers}
                 cxpRecords={cxpRecords}
                 assumptions={assumptions}
+                budget={budget}
+                onBudgetChange={setBudget}
                 onOpenFlow={() => setActiveTab('flow')}
               />
             )}

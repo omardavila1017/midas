@@ -17,6 +17,7 @@ import {
 import type { Proposal } from '../types';
 import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
 import type { CXPRecord } from '../domain/persistence';
+import type { Budget } from '../domain/budget';
 import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
 import {
   buildHistoricalMonths,
@@ -51,6 +52,8 @@ interface DashboardProps {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   assumptions: CashFlowAssumptions;
+  budget: Budget | null;
+  onBudgetChange: (b: Budget | null) => void;
   onOpenFlow: () => void;
 }
 
@@ -87,7 +90,8 @@ function loadStartingBalanceOverride(): number | null {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
-  companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions, onOpenFlow,
+  companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions,
+  budget, onBudgetChange, onOpenFlow,
 }) => {
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
