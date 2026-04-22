@@ -26,6 +26,11 @@ import type { Provider } from './types';
 import type { AgedBalanceRecord, BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 import type { Flexibility } from './providerCatalog';
 import { addMonths, compareYearMonth, toYearMonth } from './cashFlowEngine';
+import {
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from './netCashFlowEngine';
 
 // ── Helpers de normalización ─────────────────────────────────────────────
 
@@ -121,12 +126,20 @@ export function buildProviderBankPatterns(
   const index = buildProviderIndex(providers);
   const currentYm = toYearMonth(today);
 
+  // Traspasos internos entre cuentas propias no son pagos a proveedores —
+  // excluirlos evita inflar el patrón mensual y que un proveedor con nombre
+  // parecido a una empresa del grupo capture esos cargos por error.
+  const ownAccountDetector = buildOwnAccountDetector(
+    buildOwnAccountsIndex(bankStatements),
+  );
+
   // provider.id → yearMonth → { amount, days: [dayOfMonth] }
   const perProvider = new Map<string, Map<string, { amount: number; days: number[] }>>();
 
   for (const acc of bankStatements) {
     for (const mov of acc.movimientos) {
       if (mov.tipoMovimiento !== 'CARGO') continue;
+      if (isInternalTransfer(mov, ownAccountDetector)) continue;
       const ym = (mov.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;
       if (compareYearMonth(ym, currentYm) >= 0) continue;

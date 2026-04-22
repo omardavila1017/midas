@@ -4,6 +4,11 @@ import type { BankAccountStatement, AgedBalanceRecord } from '../services/jde';
 import { fmtCurrency, fmtYearMonthLong } from '../formatters';
 import { toYearMonth, compareYearMonth } from '../domain/cashFlowEngine';
 import type { MonthlyProjection, ProjectionOverrides } from '../domain/projectionEngine';
+import {
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from '../domain/netCashFlowEngine';
 import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
 
 interface MonthDrilldownProps {
@@ -478,9 +483,18 @@ function buildDrilldownData(args: {
   const filteredBank = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
+  // El detector se construye sobre TODAS las cuentas, no solo las filtradas
+  // por empresa: un traspaso entre dos cuentas propias debe seguir
+  // detectándose aunque solo estemos viendo una de las dos empresas.
+  const ownAccountDetector = buildOwnAccountDetector(
+    buildOwnAccountsIndex(bankStatements),
+  );
   for (const acc of filteredBank) {
     for (const mov of acc.movimientos) {
       if (toYearMonth(mov.fechaOperacion) !== yearMonth) continue;
+      // Los traspasos entre cuentas propias no son ingresos ni egresos reales
+      // del negocio — se compensan entre sí. No deben aparecer en el drilldown.
+      if (isInternalTransfer(mov, ownAccountDetector)) continue;
       const bucket = mov.tipoMovimiento === 'ABONO' ? incomeByConcept
         : mov.tipoMovimiento === 'CARGO' ? expenseByConcept
         : null;

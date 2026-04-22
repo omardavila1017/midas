@@ -31,6 +31,11 @@ import {
   monthsBetween,
 } from './cashFlowEngine';
 import { projectExpenseByProvider, type ProviderMonthLine } from './expensePerProvider';
+import {
+  isInternalTransfer,
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+} from './netCashFlowEngine';
 import type { Budget } from './budget';
 
 // ── Income ───────────────────────────────────────────────────────────────
@@ -191,11 +196,19 @@ export function detectRecurringExpenses(
   if (bankStatements.length === 0) return { base: 0, top: [] };
   const currentYm = toYearMonth(today);
 
+  // Traspasos internos entre cuentas propias no son egresos reales del
+  // negocio — excluirlos evita que aparezcan como "recurrentes" y luego se
+  // re-proyecten como egresos futuros.
+  const ownAccountDetector = buildOwnAccountDetector(
+    buildOwnAccountsIndex(bankStatements),
+  );
+
   // concepto → yearMonth → total
   const perConcept = new Map<string, Map<string, number>>();
   for (const acc of bankStatements) {
     for (const mov of acc.movimientos) {
       if (mov.tipoMovimiento !== 'CARGO') continue;
+      if (isInternalTransfer(mov, ownAccountDetector)) continue;
       const ym = (mov.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;
       if (compareYearMonth(ym, currentYm) >= 0) continue;
