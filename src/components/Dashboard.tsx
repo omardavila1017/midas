@@ -15,7 +15,8 @@ import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle, LineChart as LineChartIcon,
 } from 'lucide-react';
 import type { Proposal } from '../types';
-import type { Client, CashFlowAssumptions } from '../domain/types';
+import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
+import type { CXPRecord } from '../domain/persistence';
 import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
 import {
   buildHistoricalMonths,
@@ -47,6 +48,8 @@ interface DashboardProps {
   bankStatements: BankAccountStatement[];
   proposals: Proposal[];
   clients: Client[];
+  providers: Provider[];
+  cxpRecords: CXPRecord[];
   assumptions: CashFlowAssumptions;
   onOpenFlow: () => void;
 }
@@ -74,7 +77,7 @@ function loadOverrides(): ProjectionOverrides {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
-  companyCode, bankStatements, proposals, clients, assumptions, onOpenFlow,
+  companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions, onOpenFlow,
 }) => {
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
   const [loading, setLoading] = useState(false);

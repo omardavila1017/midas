@@ -591,6 +591,8 @@ export default function App() {
                 bankStatements={bankStatements}
                 proposals={proposals}
                 clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
                 assumptions={assumptions}
                 onOpenFlow={() => setActiveTab('flow')}
               />
