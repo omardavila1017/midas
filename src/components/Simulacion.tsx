@@ -426,8 +426,14 @@ const Simulacion: React.FC<Props> = ({
               Trayectoria de la caja
             </h2>
             <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-              Base vs escenario simulado. Activa propuestas para ver el impacto.
+              Base vs escenario simulado. La proyección de enero a diciembre sale del CSV de presupuesto.
             </p>
+            {!budget && (
+              <p className="text-[11px] mt-1.5 flex items-center gap-1" style={{ color: 'var(--warning)' }}>
+                <AlertTriangle className="w-3 h-3" />
+                Sin presupuesto cargado — los meses futuros se dibujan en cero. Cárgalo desde Dashboard → Presupuesto.
+              </p>
+            )}
           </div>
           {proposals.length > 0 && (
             <p className="text-[11px] tabular-nums flex-shrink-0" style={{ color: 'var(--gray-500)' }}>
