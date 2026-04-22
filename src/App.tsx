@@ -254,17 +254,42 @@ export default function App() {
     });
   }, [catalogLoaded, clients.length]);
 
-  // Load providers from the bundled catalog if none are loaded yet.
-  // El catálogo vive en src/assets/providerCatalog.json y trae ~470
-  // proveedores con su flexibilidad (inamovible/flexible/revisar) para
-  // planeación. Se evita si el usuario ya tiene proveedores (subidos o
-  // persistidos) para no pisar su edición.
+  // Load/merge providers from the bundled catalog. The local catalog includes
+  // Romo's provider type classification plus flexibility/DTI metadata.
+  const providerCatalogMerged = useRef(false);
   useEffect(() => {
-    if (providers.length > 0) return;
+    if (providerCatalogMerged.current) return;
+    providerCatalogMerged.current = true;
     fetchProviderCatalog().then((loaded) => {
-      if (loaded.length > 0) setProviders(loaded);
+      if (loaded.length === 0) return;
+      setProviders((current) => {
+        if (current.length === 0) return loaded;
+
+        const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toUpperCase();
+        const byName = new Map(current.map((provider, index) => [normalize(provider.name), { provider, index }]));
+        const merged = [...current];
+        let changed = false;
+
+        for (const catalogProvider of loaded) {
+          const existing = byName.get(normalize(catalogProvider.name));
+          if (!existing) {
+            merged.push(catalogProvider);
+            changed = true;
+            continue;
+          }
+
+          const currentType = existing.provider.type?.trim();
+          const catalogType = catalogProvider.type?.trim();
+          if ((!currentType || currentType === 'Otro' || currentType === 'Sin clasificar') && catalogType && catalogType !== 'Otro') {
+            merged[existing.index] = { ...existing.provider, type: catalogType };
+            changed = true;
+          }
+        }
+
+        return changed ? merged : current;
+      });
     });
-  }, [providers.length]);
+  }, []);
 
   // Save to localStorage after changes (debounced by 500ms)
   useEffect(() => {
@@ -710,6 +735,8 @@ export default function App() {
                 companies={companies}
                 selectedCia={selectedCia}
                 providers={providers}
+                clients={clients}
+                assumptions={assumptions}
                 onMergeCia={mergeCxpForCia}
                 onReplaceAll={replaceAllCxp}
                 onReset={resetCxp}
@@ -1097,4 +1124,3 @@ function CompanySelector({
     </div>
   );
 }
-

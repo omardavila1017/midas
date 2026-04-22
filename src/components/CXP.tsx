@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, type ReactNode } from 'react';
 import {
   Upload as UploadIcon,
   FileSpreadsheet,
@@ -18,6 +18,7 @@ import {
   RotateCcw,
   Database,
   RefreshCw,
+  HelpCircle,
 } from 'lucide-react';
 import { fetchAgedBalances, JdeApiError, type Company } from '../services/jde';
 import {
@@ -34,8 +35,9 @@ import {
 } from 'recharts';
 import { hex } from '../theme';
 import { fmtCompact, fmtCurrency } from '../formatters';
-import type { Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
+import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
 import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
+import { projectYear } from '../domain/collectionEngine';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -87,6 +89,8 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerFlexibilityComment?: string;
   providerCreditLimit?: number;
   providerDaysWithoutUpdate: number | null;
+  providerDtiArea?: string;
+  providerDtiCriticidad?: 'Alta' | 'Media' | 'Baja';
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
 }
@@ -99,14 +103,23 @@ interface AgingBucket {
   count: number;
 }
 
-type DashboardTab = 'resumen' | 'proveedores' | 'antiguedad' | 'impuestos';
+interface SupplierSummary {
+  nombre: string;
+  total: number;
+  count: number;
+  maxDias: number;
+  providerType: string;
+  providerRisk: ProviderRisk;
+  providerFlexibility: ProviderFlexibility;
+  creditLimit?: number;
+  records: EnrichedCXPRecord[];
+}
+
+type DashboardTab = 'resumen' | 'triage' | 'proveedores';
 type SortKey = 'nombre' | 'total' | 'count' | 'maxDias';
 type SortDir = 'asc' | 'desc';
-type RiskFilter = 'all' | ProviderRisk;
-type FlexFilter = 'all' | ProviderFlexibility;
-type DueFilter = 'all' | 'current' | 'overdue' | 'over90';
-type AmountFilter = 'all' | 'under100k' | '100kTo1m' | 'over1m';
-type PriorityFilter = 'all' | PaymentPriority;
+type DueFilter = 'dueThisWeek' | 'current' | 'overdue' | 'over90';
+type AmountFilter = 'under100k' | 'over500k' | '100kTo1m' | 'over1m';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Constants
@@ -119,8 +132,27 @@ const PIE_COLORS = [hex.primary, hex.success, hex.warning, 'var(--chart-4)', hex
 const PAGE_SIZE = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HIGH_IMPACT_AMOUNT = 1_000_000;
+const MID_IMPACT_AMOUNT = 500_000;
 const RISKS: ProviderRisk[] = ['Alto', 'Medio', 'Bajo'];
 const FLEX_VALUES: ProviderFlexibility[] = ['inamovible', 'flexible', 'revisar', 'unknown'];
+const DUE_FILTERS: { id: DueFilter; label: string }[] = [
+  { id: 'dueThisWeek', label: 'Vence esta semana' },
+  { id: 'current', label: 'Por vencer' },
+  { id: 'overdue', label: 'Vencido' },
+  { id: 'over90', label: 'Vencido > 90d' },
+];
+const AMOUNT_FILTERS: { id: AmountFilter; label: string }[] = [
+  { id: 'under100k', label: '< $100k' },
+  { id: 'over500k', label: '> $500k' },
+  { id: '100kTo1m', label: '$100k-$1M' },
+  { id: 'over1m', label: '> $1M' },
+];
+const PRIORITY_FILTERS: { id: PaymentPriority; label: string }[] = [
+  { id: 'critical', label: 'Critico' },
+  { id: 'negotiable', label: 'Negociable' },
+  { id: 'highImpact', label: 'Impacto alto' },
+  { id: 'normal', label: 'Normal' },
+];
 
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
@@ -174,6 +206,40 @@ function parseDateToIso(value: string | undefined): string | null {
   return null;
 }
 
+function dueDateForRecord(record: Pick<CXPRecord, 'fechaProgramacionPago' | 'fechaVence' | 'fechaFactura'>): string | null {
+  return parseDateToIso(record.fechaProgramacionPago) ?? parseDateToIso(record.fechaVence) ?? parseDateToIso(record.fechaFactura);
+}
+
+function isDueThisWeek(record: CXPRecord): boolean {
+  const due = dueDateForRecord(record);
+  if (!due) return false;
+  const dueDate = new Date(`${due}T12:00:00`);
+  if (!Number.isFinite(dueDate.getTime())) return false;
+
+  const today = new Date();
+  const localNoon = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 0, 0);
+  const day = (localNoon.getDay() + 6) % 7;
+  const start = new Date(localNoon);
+  start.setDate(localNoon.getDate() - day);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return dueDate >= start && dueDate <= end;
+}
+
+function matchesDueFilter(record: CXPRecord, filter: DueFilter): boolean {
+  if (filter === 'dueThisWeek') return isDueThisWeek(record);
+  if (filter === 'current') return record.porVencer > 0 && record.diasVencida <= 0;
+  if (filter === 'overdue') return record.diasVencida > 0;
+  return record.diasVencida > 90;
+}
+
+function matchesAmountFilter(record: CXPRecord, filter: AmountFilter): boolean {
+  if (filter === 'under100k') return record.importePendientePesos < 100_000;
+  if (filter === 'over500k') return record.importePendientePesos >= MID_IMPACT_AMOUNT;
+  if (filter === '100kTo1m') return record.importePendientePesos >= 100_000 && record.importePendientePesos < HIGH_IMPACT_AMOUNT;
+  return record.importePendientePesos >= HIGH_IMPACT_AMOUNT;
+}
+
 function inferReferences(record: CXPRecord): PaymentReference[] {
   const refs: PaymentReference[] = [];
   if (record.noFactura) refs.push({ kind: 'Factura', label: record.noFactura });
@@ -211,8 +277,8 @@ function isHighImpact(record: Pick<EnrichedCXPRecord, 'importePendientePesos'>):
 
 function paymentPriority(record: EnrichedCXPRecord): PaymentPriority {
   if (isCritical(record)) return 'critical';
-  if (isNegotiable(record)) return 'negotiable';
   if (isHighImpact(record)) return 'highImpact';
+  if (isNegotiable(record)) return 'negotiable';
   return 'normal';
 }
 
@@ -224,7 +290,7 @@ function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provide
   });
   const providerFlexibility = provider?.flexibility ?? catalog.flexibility;
   const providerRisk = provider?.risk ?? riskFromFlexibility(providerFlexibility);
-  const providerType = provider?.type || record.clasificacionProveedor?.trim() || 'Sin clasificar';
+  const providerType = catalog.providerType || (provider?.type && provider.type !== 'Otro' ? provider.type : '') || record.clasificacionProveedor?.trim() || 'Sin clasificar';
   const enriched: EnrichedCXPRecord = {
     ...record,
     providerType,
@@ -234,6 +300,8 @@ function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provide
     providerFlexibilityComment: provider?.flexibilityComment,
     providerCreditLimit: provider?.creditLimit,
     providerDaysWithoutUpdate: daysSince(provider?.lastUpdatedAt),
+    providerDtiArea: provider?.dtiArea ?? catalog.dtiArea ?? undefined,
+    providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
   };
@@ -259,9 +327,46 @@ function priorityTone(priority: PaymentPriority): string {
   }
 }
 
-function isTaxPaid(record: CXPRecord): boolean {
-  const status = record.edoPago.toUpperCase();
-  return record.importePendientePesos <= 0 || status.includes('PAG') || status.includes('LIQ');
+function priorityReason(record: EnrichedCXPRecord): string {
+  const reasons: string[] = [];
+  if (record.providerDtiCriticidad) {
+    reasons.push(`DTI = ${record.providerDtiCriticidad}${record.providerDtiArea ? ` (${record.providerDtiArea})` : ''}`);
+  } else {
+    reasons.push(`riesgo = ${record.providerRisk}`);
+  }
+
+  reasons.push(`flexibilidad = ${flexibilityLabel(record.providerFlexibility).toLowerCase()}`);
+
+  if (record.diasVencida > 0) reasons.push(`vence con ${record.diasVencida} dias de atraso`);
+  else if (isDueThisWeek(record)) reasons.push('vence esta semana');
+  else reasons.push('esta por vencer');
+
+  if (record.importePendientePesos >= HIGH_IMPACT_AMOUNT) reasons.push(`monto >= ${fmt(HIGH_IMPACT_AMOUNT)}`);
+
+  if (record.paymentPriority === 'critical') return `Critico porque ${reasons.join(', ')}.`;
+  if (record.paymentPriority === 'highImpact') return `Impacto alto porque ${reasons.join(', ')}.`;
+  if (record.paymentPriority === 'negotiable') return `Negociable porque ${reasons.join(', ')}.`;
+  return `Normal porque ${reasons.join(', ')}.`;
+}
+
+function agingTooltip(days: number): string {
+  if (days <= 0) return 'Por vencer: aun esta dentro del plazo operativo.';
+  if (days <= 30) return `${days} dias vencido: seguimiento operativo; puede afectar la relacion si se acumula.`;
+  if (days <= 60) return `${days} dias vencido: tension con proveedor y posible bloqueo de credito.`;
+  if (days <= 90) return `${days} dias vencido: riesgo alto de suspension de servicio o condiciones mas estrictas.`;
+  return `${days} dias vencido: riesgo legal/comercial; requiere decision prioritaria.`;
+}
+
+function dueFilterLabel(filter: DueFilter): string {
+  return DUE_FILTERS.find(option => option.id === filter)?.label ?? filter;
+}
+
+function amountFilterLabel(filter: AmountFilter): string {
+  return AMOUNT_FILTERS.find(option => option.id === filter)?.label ?? filter;
+}
+
+function toggleListValue<T extends string>(values: T[], value: T): T[] {
+  return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -361,10 +466,14 @@ function parseCXP(text: string): CXPRecord[] {
 
 const ChartTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.[0]) return null;
+  const item = payload[0].payload;
   return (
-    <div className="bg-white/95 backdrop-blur-xl border border-[var(--gray-200)]/60 rounded-xl px-3 py-2 shadow-lg">
-      <p className="text-[12px] font-semibold text-[var(--gray-950)]">{payload[0].payload.name || payload[0].name}</p>
+    <div className="bg-white border border-[var(--gray-200)] rounded-xl px-3 py-2 shadow-lg">
+      <p className="text-[12px] font-semibold text-[var(--gray-950)]">{item.name || payload[0].name}</p>
       <p className="text-[12px] font-mono text-[var(--gray-500)]">{fmtFull(payload[0].value)}</p>
+      {typeof item.percent === 'number' && (
+        <p className="text-[11px] text-[var(--gray-400)]">{(item.percent * 100).toFixed(1)}% del total</p>
+      )}
     </div>
   );
 };
@@ -378,11 +487,15 @@ const CXPDashboard = ({
   onReset,
   companies: compCatalog,
   providers,
+  clients,
+  assumptions,
 }: {
   records: CXPRecord[];
   onReset: () => void;
   companies?: Company[];
   providers: Provider[];
+  clients: Client[];
+  assumptions: CashFlowAssumptions;
 }) => {
   /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
   const ciaName = useCallback((code: string): string => {
@@ -401,46 +514,46 @@ const CXPDashboard = ({
   const [sortKey, setSortKey] = useState<SortKey>('total');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [provPage, setProvPage] = useState(0);
-  const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
-  const [flexFilter, setFlexFilter] = useState<FlexFilter>('all');
-  const [dueFilter, setDueFilter] = useState<DueFilter>('all');
-  const [amountFilter, setAmountFilter] = useState<AmountFilter>('all');
-  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
+  const [filterPanelOpen, setFilterPanelOpen] = useState(true);
+  const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
+  const [riskFilters, setRiskFilters] = useState<ProviderRisk[]>([]);
+  const [flexFilters, setFlexFilters] = useState<ProviderFlexibility[]>([]);
+  const [dueFilters, setDueFilters] = useState<DueFilter[]>([]);
+  const [amountFilters, setAmountFilters] = useState<AmountFilter[]>([]);
+  const [priorityFilters, setPriorityFilters] = useState<PaymentPriority[]>([]);
 
   // Drilldown state
   const [activeBucket, setActiveBucket] = useState<string | null>(null);
-  const [activeClassification, setActiveClassification] = useState<string | null>(null);
   const [activeKpi, setActiveKpi] = useState<string | null>(null);
 
-  const clearDrill = () => { setActiveBucket(null); setActiveClassification(null); setActiveKpi(null); setProvPage(0); };
+  const clearDrill = () => { setActiveBucket(null); setActiveKpi(null); setProvPage(0); };
   const clearAllFilters = () => {
     setSearchTerm('');
-    setRiskFilter('all');
-    setFlexFilter('all');
-    setDueFilter('all');
-    setAmountFilter('all');
-    setPriorityFilter('all');
+    setCategoryFilters([]);
+    setRiskFilters([]);
+    setFlexFilters([]);
+    setDueFilters([]);
+    setAmountFilters([]);
+    setPriorityFilters([]);
     clearDrill();
   };
-  const hasDrill = searchTerm || activeBucket || activeClassification || activeKpi || riskFilter !== 'all' || flexFilter !== 'all' || dueFilter !== 'all' || amountFilter !== 'all' || priorityFilter !== 'all';
-  const drillLabel = activeBucket ? `Bucket "${activeBucket}"` :
-    activeClassification ? `Tipo "${activeClassification}"` :
-    activeKpi === 'porVencer' ? 'Por Vencer' :
-    activeKpi === 'vencido' ? 'Total Vencido' :
-    activeKpi === 'mas90' ? 'Vencido > 90 días' :
-    priorityFilter !== 'all' ? `Prioridad "${priorityLabel(priorityFilter)}"` :
-    riskFilter !== 'all' ? `Riesgo "${riskFilter}"` :
-    flexFilter !== 'all' ? `Flexibilidad "${flexibilityLabel(flexFilter)}"` :
-    dueFilter !== 'all' ? `Vencimiento "${dueFilter}"` :
-    amountFilter !== 'all' ? `Monto "${amountFilter}"` :
-    searchTerm ? `Busqueda "${searchTerm}"` : '';
+  const hasDrill = Boolean(
+    searchTerm ||
+    activeBucket ||
+    activeKpi ||
+    categoryFilters.length ||
+    riskFilters.length ||
+    flexFilters.length ||
+    dueFilters.length ||
+    amountFilters.length ||
+    priorityFilters.length
+  );
 
   // Reset local filters when parent switches company (records no longer include the selected cia)
   useEffect(() => {
     if (selectedCia !== 'all' && !records.some(r => r.cia === selectedCia)) {
       setSelectedCia('all');
       setActiveBucket(null);
-      setActiveClassification(null);
       setActiveKpi(null);
       setExpandedSupplier(null);
       setProvPage(0);
@@ -456,6 +569,23 @@ const CXPDashboard = ({
     () => records.map((record) => enrichCxpRecord(record, providersByName)),
     [providersByName, records],
   );
+
+  const recordsForFilterOptions = useMemo(
+    () => selectedCia === 'all' ? enrichedRecords : enrichedRecords.filter(record => record.cia === selectedCia),
+    [enrichedRecords, selectedCia],
+  );
+
+  const providerTypeOptions = useMemo(() => {
+    const map = new Map<string, { label: string; total: number; count: number }>();
+    recordsForFilterOptions.forEach((record) => {
+      const label = record.providerType || 'Sin clasificar';
+      const item = map.get(label) ?? { label, total: 0, count: 0 };
+      item.total += record.importePendientePesos;
+      item.count += 1;
+      map.set(label, item);
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, 'es'));
+  }, [recordsForFilterOptions]);
 
   // ── Filtered Records ──
   const filtered = useMemo(() => {
@@ -480,24 +610,29 @@ const CXPDashboard = ({
       const bi = BUCKET_LABELS.indexOf(activeBucket);
       if (bi >= 0) { const k = BUCKET_KEYS[bi]; f = f.filter(r => (r[k] as number) > 0); }
     }
-    if (activeClassification) f = f.filter(r => r.providerType === activeClassification);
+    if (categoryFilters.length) {
+      const selected = new Set(categoryFilters);
+      f = f.filter(r => selected.has(r.providerType));
+    }
     if (activeKpi === 'porVencer') f = f.filter(r => r.porVencer > 0);
     else if (activeKpi === 'vencido') f = f.filter(r => (r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
     else if (activeKpi === 'mas90') f = f.filter(r => (r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
-    if (riskFilter !== 'all') f = f.filter(r => r.providerRisk === riskFilter);
-    if (flexFilter !== 'all') f = f.filter(r => r.providerFlexibility === flexFilter);
-    if (dueFilter === 'current') f = f.filter(r => r.porVencer > 0 && r.diasVencida <= 0);
-    else if (dueFilter === 'overdue') f = f.filter(r => r.diasVencida > 0);
-    else if (dueFilter === 'over90') f = f.filter(r => r.diasVencida > 90);
-    if (amountFilter === 'under100k') f = f.filter(r => r.importePendientePesos < 100_000);
-    else if (amountFilter === '100kTo1m') f = f.filter(r => r.importePendientePesos >= 100_000 && r.importePendientePesos < HIGH_IMPACT_AMOUNT);
-    else if (amountFilter === 'over1m') f = f.filter(r => r.importePendientePesos >= HIGH_IMPACT_AMOUNT);
-    if (priorityFilter === 'critical') f = f.filter(isCritical);
-    else if (priorityFilter === 'negotiable') f = f.filter(isNegotiable);
-    else if (priorityFilter === 'highImpact') f = f.filter(isHighImpact);
-    else if (priorityFilter === 'normal') f = f.filter(r => !isCritical(r) && !isNegotiable(r) && !isHighImpact(r));
+    if (riskFilters.length) {
+      const selected = new Set(riskFilters);
+      f = f.filter(r => selected.has(r.providerRisk));
+    }
+    if (flexFilters.length) {
+      const selected = new Set(flexFilters);
+      f = f.filter(r => selected.has(r.providerFlexibility));
+    }
+    if (dueFilters.length) f = f.filter(r => dueFilters.some(filter => matchesDueFilter(r, filter)));
+    if (amountFilters.length) f = f.filter(r => amountFilters.some(filter => matchesAmountFilter(r, filter)));
+    if (priorityFilters.length) {
+      const selected = new Set(priorityFilters);
+      f = f.filter(r => selected.has(r.paymentPriority));
+    }
     return f;
-  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeClassification, activeKpi, riskFilter, flexFilter, dueFilter, amountFilter, priorityFilter]);
+  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, categoryFilters, activeKpi, riskFilters, flexFilters, dueFilters, amountFilters, priorityFilters]);
 
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
@@ -525,79 +660,64 @@ const CXPDashboard = ({
   const totalVencido = useMemo(() => agingBuckets.slice(1).reduce((s, b) => s + b.total, 0), [agingBuckets]);
   const totalPorVencer = agingBuckets[0]?.total || 0;
   const totalMas90 = useMemo(() => agingBuckets.slice(4).reduce((s, b) => s + b.total, 0), [agingBuckets]);
-  const paymentPlanningSummary = useMemo(() => {
-    const out = {
-      criticalCount: 0,
-      criticalTotal: 0,
-      negotiableCount: 0,
-      negotiableTotal: 0,
-      highImpactCount: 0,
-      highImpactTotal: 0,
+
+  const triageBuckets = useMemo(() => {
+    const buckets = {
+      critical: [] as EnrichedCXPRecord[],
+      negotiable: [] as EnrichedCXPRecord[],
+      highImpact: [] as EnrichedCXPRecord[],
     };
     filtered.forEach((record) => {
-      if (isCritical(record)) {
-        out.criticalCount += 1;
-        out.criticalTotal += record.importePendientePesos;
-      }
-      if (isNegotiable(record)) {
-        out.negotiableCount += 1;
-        out.negotiableTotal += record.importePendientePesos;
-      }
-      if (isHighImpact(record)) {
-        out.highImpactCount += 1;
-        out.highImpactTotal += record.importePendientePesos;
-      }
+      if (isCritical(record)) buckets.critical.push(record);
+      else if (isHighImpact(record)) buckets.highImpact.push(record);
+      else if (isNegotiable(record)) buckets.negotiable.push(record);
     });
-    return out;
+    Object.values(buckets).forEach((bucket) => {
+      bucket.sort((a, b) => b.importePendientePesos - a.importePendientePesos || b.diasVencida - a.diasVencida);
+    });
+    return buckets;
   }, [filtered]);
 
-  const taxRows = useMemo(() => (
-    filtered
-      .filter((record) => record.importeImpuestosPesos > 0)
-      .map((record) => {
-        const dueDate = parseDateToIso(record.fechaProgramacionPago) ?? parseDateToIso(record.fechaVence) ?? parseDateToIso(record.fechaFactura) ?? '';
-        const paid = isTaxPaid(record);
-        return {
-          record,
-          dueDate,
-          estimated: record.importeImpuestosPesos,
-          real: paid ? record.importeImpuestosPesos : 0,
-          pending: paid ? 0 : record.importeImpuestosPesos,
-        };
-      })
-      .sort((a, b) => (a.dueDate || '9999-99-99').localeCompare(b.dueDate || '9999-99-99'))
-  ), [filtered]);
-  const taxPending = taxRows.reduce((sum, row) => sum + row.pending, 0);
-  const taxEstimated = taxRows.reduce((sum, row) => sum + row.estimated, 0);
-  const taxReal = taxRows.reduce((sum, row) => sum + row.real, 0);
-  const nextTaxDate = taxRows.find((row) => row.pending > 0 && row.dueDate)?.dueDate ?? null;
-  const taxByMonth = useMemo(() => {
-    const map = new Map<string, { ym: string; count: number; estimated: number; real: number; pending: number }>();
-    taxRows.forEach((row) => {
-      const ym = row.dueDate ? row.dueDate.slice(0, 7) : 'Sin fecha';
-      const item = map.get(ym) ?? { ym, count: 0, estimated: 0, real: 0, pending: 0 };
-      item.count++;
-      item.estimated += row.estimated;
-      item.real += row.real;
-      item.pending += row.pending;
-      map.set(ym, item);
+  const paymentPlanningSummary = useMemo(() => ({
+    criticalCount: triageBuckets.critical.length,
+    criticalTotal: triageBuckets.critical.reduce((sum, record) => sum + record.importePendientePesos, 0),
+    negotiableCount: triageBuckets.negotiable.length,
+    negotiableTotal: triageBuckets.negotiable.reduce((sum, record) => sum + record.importePendientePesos, 0),
+    highImpactCount: triageBuckets.highImpact.length,
+    highImpactTotal: triageBuckets.highImpact.reduce((sum, record) => sum + record.importePendientePesos, 0),
+  }), [triageBuckets]);
+
+  const ivaMonth = useMemo(() => {
+    const today = new Date();
+    const targetMonth = today.getFullYear() === assumptions.year ? today.getMonth() : 0;
+    const ym = `${assumptions.year}-${String(targetMonth + 1).padStart(2, '0')}`;
+    const byClient = new Map(clients.map(client => [client.id, client]));
+    const cxcEvents = clients.length ? projectYear(clients, assumptions).filter(event => event.realDate.startsWith(ym)) : [];
+    const ivaCollected = cxcEvents.reduce((sum, event) => {
+      const rate = (byClient.get(event.clientId)?.ivaRate ?? 16) / 100;
+      return sum + (event.amount * rate) / (1 + rate);
+    }, 0);
+    let ivaPaid = 0;
+    let cxpCount = 0;
+    filtered.forEach((record) => {
+      const dueDate = dueDateForRecord(record);
+      if (!dueDate?.startsWith(ym)) return;
+      ivaPaid += record.importeImpuestosPesos;
+      cxpCount += 1;
     });
-    return Array.from(map.values()).sort((a, b) => a.ym.localeCompare(b.ym));
-  }, [taxRows]);
+    return {
+      ym,
+      ivaCollected,
+      ivaPaid,
+      net: ivaCollected - ivaPaid,
+      cxcCount: cxcEvents.length,
+      cxpCount,
+    };
+  }, [assumptions, clients, filtered]);
 
   // Supplier aggregation
   const supplierData = useMemo(() => {
-    const map = new Map<string, {
-      nombre: string;
-      total: number;
-      count: number;
-      maxDias: number;
-      providerType: string;
-      providerRisk: ProviderRisk;
-      providerFlexibility: ProviderFlexibility;
-      creditLimit?: number;
-      records: EnrichedCXPRecord[];
-    }>();
+    const map = new Map<string, SupplierSummary>();
     filtered.forEach(r => {
       const k = r.nombre || 'SIN NOMBRE';
       if (!map.has(k)) {
@@ -628,18 +748,35 @@ const CXPDashboard = ({
     return arr;
   }, [filtered, sortKey, sortDir]);
 
-  // Provider type — top 8 + "Otros"
+  // Provider type — top 7 + "Otros" with source categories preserved for filtering.
   const classData = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { name: string; value: number; count: number }>();
     filtered.forEach(r => {
       const k = r.providerType || 'Sin clasificar';
-      map.set(k, (map.get(k) || 0) + r.importePendientePesos);
+      const item = map.get(k) ?? { name: k, value: 0, count: 0 };
+      item.value += r.importePendientePesos;
+      item.count += 1;
+      map.set(k, item);
     });
-    const all = Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    const total = filtered.reduce((sum, record) => sum + record.importePendientePesos, 0);
+    const all = Array.from(map.values())
+      .map(item => ({ ...item, categories: [item.name], percent: total > 0 ? item.value / total : 0 }))
+      .sort((a, b) => b.value - a.value);
     if (all.length <= 8) return all;
     const top = all.slice(0, 7);
-    const otrosVal = all.slice(7).reduce((s, x) => s + x.value, 0);
-    return [...top, { name: `Otros (${all.length - 7})`, value: otrosVal }];
+    const other = all.slice(7);
+    const otrosVal = other.reduce((s, x) => s + x.value, 0);
+    const otrosCount = other.reduce((s, x) => s + x.count, 0);
+    return [
+      ...top,
+      {
+        name: `Otros (${other.length})`,
+        value: otrosVal,
+        count: otrosCount,
+        categories: other.flatMap(item => item.categories),
+        percent: total > 0 ? otrosVal / total : 0,
+      },
+    ];
   }, [filtered]);
 
   // Company breakdown — show names instead of codes
@@ -663,10 +800,34 @@ const CXPDashboard = ({
 
   const tabs: { id: DashboardTab; label: string; count?: number }[] = [
     { id: 'resumen', label: 'Resumen' },
+    { id: 'triage', label: 'Triage', count: paymentPlanningSummary.criticalCount + paymentPlanningSummary.negotiableCount + paymentPlanningSummary.highImpactCount },
     { id: 'proveedores', label: 'Proveedores', count: supplierData.length },
-    { id: 'antiguedad', label: 'Antigüedad' },
-    { id: 'impuestos', label: 'Impuestos', count: taxRows.length },
   ];
+
+  const activeFilterChips = [
+    ...(searchTerm ? [{ key: 'search', label: `Busqueda: ${searchTerm}`, onRemove: () => setSearchTerm('') }] : []),
+    ...(activeBucket ? [{ key: 'bucket', label: `Antiguedad: ${activeBucket}`, onRemove: () => setActiveBucket(null) }] : []),
+    ...(activeKpi ? [{
+      key: 'kpi',
+      label: activeKpi === 'porVencer' ? 'Por vencer' : activeKpi === 'vencido' ? 'Total vencido' : 'Vencido > 90 dias',
+      onRemove: () => setActiveKpi(null),
+    }] : []),
+    ...categoryFilters.map(value => ({ key: `cat-${value}`, label: `Categoria: ${value}`, onRemove: () => setCategoryFilters(prev => prev.filter(item => item !== value)) })),
+    ...riskFilters.map(value => ({ key: `risk-${value}`, label: `Riesgo: ${value}`, onRemove: () => setRiskFilters(prev => prev.filter(item => item !== value)) })),
+    ...flexFilters.map(value => ({ key: `flex-${value}`, label: `Flexibilidad: ${flexibilityLabel(value)}`, onRemove: () => setFlexFilters(prev => prev.filter(item => item !== value)) })),
+    ...dueFilters.map(value => ({ key: `due-${value}`, label: `Vencimiento: ${dueFilterLabel(value)}`, onRemove: () => setDueFilters(prev => prev.filter(item => item !== value)) })),
+    ...amountFilters.map(value => ({ key: `amount-${value}`, label: `Monto: ${amountFilterLabel(value)}`, onRemove: () => setAmountFilters(prev => prev.filter(item => item !== value)) })),
+    ...priorityFilters.map(value => ({ key: `priority-${value}`, label: `Prioridad: ${priorityLabel(value)}`, onRemove: () => setPriorityFilters(prev => prev.filter(item => item !== value)) })),
+  ];
+
+  const toggleCategoryGroup = (categories: string[]) => {
+    setCategoryFilters(prev => {
+      const allSelected = categories.every(category => prev.includes(category));
+      if (allSelected) return prev.filter(category => !categories.includes(category));
+      return Array.from(new Set([...prev, ...categories]));
+    });
+    setProvPage(0);
+  };
 
   /* ── Render ── */
   return (
@@ -687,33 +848,22 @@ const CXPDashboard = ({
           {companies.map(c => <option key={c} value={c}>{ciaName(c)}</option>)}
         </select>
 
-        <select value={riskFilter} onChange={e => { setRiskFilter(e.target.value as RiskFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Todo riesgo</option>
-          {RISKS.map(r => <option key={r} value={r}>Riesgo {r}</option>)}
-        </select>
-
-        <select value={flexFilter} onChange={e => { setFlexFilter(e.target.value as FlexFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Toda flexibilidad</option>
-          {FLEX_VALUES.map(f => <option key={f} value={f}>{flexibilityLabel(f)}</option>)}
-        </select>
-
-        <select value={dueFilter} onChange={e => { setDueFilter(e.target.value as DueFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Todo vencimiento</option>
-          <option value="current">Por vencer</option>
-          <option value="overdue">Vencido</option>
-          <option value="over90">Vencido &gt; 90d</option>
-        </select>
-
-        <select value={amountFilter} onChange={e => { setAmountFilter(e.target.value as AmountFilter); setProvPage(0); }}
-          className="text-[12px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 shadow-sm text-[var(--gray-700)] cursor-pointer">
-          <option value="all">Todo monto</option>
-          <option value="under100k">&lt; $100k</option>
-          <option value="100kTo1m">$100k-$1M</option>
-          <option value="over1m">&gt; $1M</option>
-        </select>
+        <button
+          onClick={() => setFilterPanelOpen(open => !open)}
+          className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium shadow-sm transition ${
+            filterPanelOpen || activeFilterChips.length > 0
+              ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
+              : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:text-[var(--primary)]'
+          }`}
+        >
+          <Filter className="w-3.5 h-3.5" />
+          Filtros
+          {activeFilterChips.length > 0 && (
+            <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)]">
+              {activeFilterChips.length}
+            </span>
+          )}
+        </button>
 
         <div className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] rounded-full px-3 py-1.5">
           <Receipt className="w-3.5 h-3.5" />
@@ -752,26 +902,129 @@ const CXPDashboard = ({
         </button>
       </div>
 
-      {/* ── Drilldown Banner ── */}
-      {hasDrill && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center justify-between animate-slide-down">
-          <div className="flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
-            <Filter className="w-3.5 h-3.5" />
-            Filtrando: {drillLabel} — {filtered.length.toLocaleString()} registros
+      {filterPanelOpen && (
+        <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm animate-slide-down">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.6fr_0.8fr_1fr]">
+            <FilterGroup title="Categoria">
+              {providerTypeOptions.map(option => (
+                <FilterPill
+                  key={option.label}
+                  active={categoryFilters.includes(option.label)}
+                  label={option.label}
+                  meta={fmt(option.total)}
+                  onClick={() => {
+                    setCategoryFilters(prev => toggleListValue(prev, option.label));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Riesgo">
+              {RISKS.map(risk => (
+                <FilterPill
+                  key={risk}
+                  active={riskFilters.includes(risk)}
+                  label={risk}
+                  onClick={() => {
+                    setRiskFilters(prev => toggleListValue(prev, risk));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Flexibilidad">
+              {FLEX_VALUES.map(flex => (
+                <FilterPill
+                  key={flex}
+                  active={flexFilters.includes(flex)}
+                  label={flexibilityLabel(flex)}
+                  onClick={() => {
+                    setFlexFilters(prev => toggleListValue(prev, flex));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Vencimiento">
+              {DUE_FILTERS.map(option => (
+                <FilterPill
+                  key={option.id}
+                  active={dueFilters.includes(option.id)}
+                  label={option.label}
+                  onClick={() => {
+                    setDueFilters(prev => toggleListValue(prev, option.id));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Monto">
+              {AMOUNT_FILTERS.map(option => (
+                <FilterPill
+                  key={option.id}
+                  active={amountFilters.includes(option.id)}
+                  label={option.label}
+                  onClick={() => {
+                    setAmountFilters(prev => toggleListValue(prev, option.id));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
+
+            <FilterGroup title="Prioridad">
+              {PRIORITY_FILTERS.map(option => (
+                <FilterPill
+                  key={option.id}
+                  active={priorityFilters.includes(option.id)}
+                  label={option.label}
+                  onClick={() => {
+                    setPriorityFilters(prev => toggleListValue(prev, option.id));
+                    setProvPage(0);
+                  }}
+                />
+              ))}
+            </FilterGroup>
           </div>
-          <button onClick={clearAllFilters} className="text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] flex items-center gap-1 hover-press">
+        </div>
+      )}
+
+      {/* ── Active filter chips ── */}
+      {hasDrill && (
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 animate-slide-down">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] text-[var(--primary)] font-medium">
+            <Filter className="w-3.5 h-3.5 flex-shrink-0" />
+            {activeFilterChips.map(chip => (
+              <button
+                key={chip.key}
+                onClick={chip.onRemove}
+                className="inline-flex max-w-[260px] items-center gap-1 rounded-full bg-white px-2 py-1 text-[11px] text-[var(--gray-700)] shadow-sm transition hover:text-[var(--danger)]"
+                title="Quitar filtro"
+              >
+                <span className="truncate">{chip.label}</span>
+                <X className="h-3 w-3 flex-shrink-0" />
+              </button>
+            ))}
+            <span className="ml-1 text-[var(--gray-500)]">{filtered.length.toLocaleString()} registros</span>
+          </div>
+          <button onClick={clearAllFilters} className="flex flex-shrink-0 items-center gap-1 text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)] hover-press">
             <X className="w-3.5 h-3.5" /> Limpiar
           </button>
         </div>
       )}
 
       {/* ── KPI Cards ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {[
           { label: 'Saldo Total CXP', value: totalPendiente, sub: `${supplierData.length} proveedores · ${filtered.length.toLocaleString()} facturas`, icon: Building2, color: hex.primary, kpi: null as string | null },
           { label: 'Por Vencer', value: totalPorVencer, sub: pct(totalPorVencer, totalPendiente) + ' del total', icon: Clock, color: hex.success, kpi: 'porVencer' },
           { label: 'Total Vencido', value: totalVencido, sub: pct(totalVencido, totalPendiente) + ' del total', icon: AlertTriangle, color: hex.warning, kpi: 'vencido' },
           { label: 'Vencido > 90 días', value: totalMas90, sub: pct(totalMas90, totalPendiente) + ' del total', icon: TrendingUp, color: hex.danger, kpi: 'mas90' },
+          { label: 'IVA neto del mes', value: ivaMonth.net, sub: `${fmt(ivaMonth.ivaCollected)} cobrado - ${fmt(ivaMonth.ivaPaid)} pagado`, icon: Receipt, color: ivaMonth.net >= 0 ? hex.warning : hex.success, kpi: null as string | null },
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           const active = activeKpi === kpi.kpi && kpi.kpi !== null;
@@ -808,8 +1061,8 @@ const CXPDashboard = ({
           count={paymentPlanningSummary.criticalCount}
           detail="Riesgo alto, inamovibles o vencidos relevantes."
           tone="danger"
-          active={priorityFilter === 'critical'}
-          onClick={() => { setPriorityFilter(priorityFilter === 'critical' ? 'all' : 'critical'); setTab('proveedores'); setProvPage(0); }}
+          active={priorityFilters.includes('critical')}
+          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'critical')); setTab('triage'); setProvPage(0); }}
         />
         <PlanningCard
           title="Pagos negociables"
@@ -817,8 +1070,8 @@ const CXPDashboard = ({
           count={paymentPlanningSummary.negotiableCount}
           detail="Flexibles y sin atraso severo; candidatos a reprogramar."
           tone="success"
-          active={priorityFilter === 'negotiable'}
-          onClick={() => { setPriorityFilter(priorityFilter === 'negotiable' ? 'all' : 'negotiable'); setTab('proveedores'); setProvPage(0); }}
+          active={priorityFilters.includes('negotiable')}
+          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'negotiable')); setTab('triage'); setProvPage(0); }}
         />
         <PlanningCard
           title="Mayor impacto en flujo"
@@ -826,8 +1079,8 @@ const CXPDashboard = ({
           count={paymentPlanningSummary.highImpactCount}
           detail={`Facturas de ${fmt(HIGH_IMPACT_AMOUNT)} o mas.`}
           tone="warning"
-          active={priorityFilter === 'highImpact'}
-          onClick={() => { setPriorityFilter(priorityFilter === 'highImpact' ? 'all' : 'highImpact'); setTab('proveedores'); setProvPage(0); }}
+          active={priorityFilters.includes('highImpact')}
+          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'highImpact')); setTab('triage'); setProvPage(0); }}
         />
       </div>
 
@@ -872,38 +1125,73 @@ const CXPDashboard = ({
           </div>
 
           {/* Two columns: Tipo proveedor + Top Proveedores */}
-          <div className="grid grid-cols-2 gap-4 animate-card-in stagger-7">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-7">
             {/* Provider Type Donut */}
             <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Por tipo de proveedor</h2>
                 <p className="text-[12px] text-[var(--gray-400)]">Click para filtrar</p>
               </div>
-              <ResponsiveContainer width="100%" height={200}>
-                <PieChart>
-                  <Pie data={classData} cx="50%" cy="50%" innerRadius={45} outerRadius={85}
-                    paddingAngle={2} dataKey="value" cursor="pointer"
-                    onClick={(data: any) => { clearDrill(); setActiveClassification(activeClassification === data.name ? null : data.name); setTab('proveedores'); }}>
-                    {classData.map((e, i) => (
-                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]}
-                        fillOpacity={activeClassification === e.name ? 1 : activeClassification ? 0.25 : 0.85}
-                        stroke={activeClassification === e.name ? PIE_COLORS[i % PIE_COLORS.length] : 'none'}
-                        strokeWidth={1.5} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<ChartTooltip />} />
-                </PieChart>
-              </ResponsiveContainer>
-              {/* Custom compact legend */}
-              <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
-                {classData.map((e, i) => (
-                  <button key={i} onClick={() => { clearDrill(); setActiveClassification(activeClassification === e.name ? null : e.name); setTab('proveedores'); }}
-                    className="flex items-center gap-1 text-[10px] hover:opacity-70 transition">
-                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                    <span className="text-[var(--gray-500)] truncate max-w-[100px]">{e.name}</span>
-                    <span className="font-mono text-[var(--gray-950)] font-medium">{fmt(e.value)}</span>
-                  </button>
-                ))}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
+                <ResponsiveContainer width="100%" height={220}>
+                  <PieChart>
+                    <Pie
+                      data={classData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={58}
+                      outerRadius={92}
+                      paddingAngle={1}
+                      dataKey="value"
+                      cursor="pointer"
+                      onClick={(data: any) => {
+                        clearDrill();
+                        toggleCategoryGroup(data.categories ?? [data.name]);
+                        setTab('proveedores');
+                      }}
+                    >
+                      {classData.map((e, i) => {
+                        const active = e.categories.some(category => categoryFilters.includes(category));
+                        const anyActive = categoryFilters.length > 0;
+                        return (
+                          <Cell
+                            key={i}
+                            fill={PIE_COLORS[i % PIE_COLORS.length]}
+                            fillOpacity={active ? 1 : anyActive ? 0.25 : 0.9}
+                            stroke={active ? 'var(--gray-950)' : 'var(--card)'}
+                            strokeWidth={active ? 1.5 : 1}
+                          />
+                        );
+                      })}
+                    </Pie>
+                    <Tooltip content={<ChartTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="space-y-1.5 self-center">
+                  {classData.map((e, i) => {
+                    const active = e.categories.some(category => categoryFilters.includes(category));
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          clearDrill();
+                          toggleCategoryGroup(e.categories);
+                          setTab('proveedores');
+                        }}
+                        className={`grid w-full grid-cols-[10px_1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-left transition ${
+                          active ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
+                        }`}
+                        title={`${e.name}: ${fmtFull(e.value)} (${pct(e.value, totalPendiente)})`}
+                      >
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+                        <span className="min-w-0 truncate text-[12px] font-medium text-[var(--gray-700)]">{e.name}</span>
+                        <span className="text-right text-[11px] font-mono text-[var(--gray-500)]">
+                          {pct(e.value, totalPendiente)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -934,6 +1222,13 @@ const CXPDashboard = ({
               </div>
             </div>
           </div>
+
+          <AgingMatrix
+            supplierData={supplierData}
+            agingBuckets={agingBuckets}
+            totalPendiente={totalPendiente}
+            filteredCount={filtered.length}
+          />
 
           {/* Company breakdown (if multiple) */}
           {ciaData.length > 1 && (
@@ -1003,12 +1298,15 @@ const CXPDashboard = ({
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[11px] text-[var(--gray-400)]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-100)] text-[var(--gray-500)]">{s.providerType}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.providerRisk === 'Alto' ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : s.providerRisk === 'Medio' ? 'bg-[var(--warning-muted)] text-[var(--warning)]' : 'bg-[var(--success-muted)] text-[var(--success)]'}`}>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.providerRisk === 'Alto' ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : s.providerRisk === 'Medio' ? 'bg-[var(--warning-muted)] text-[var(--warning)]' : 'bg-[var(--success-muted)] text-[var(--success)]'}`}
+                          title={`Riesgo ${s.providerRisk}`}
+                        >
                           Riesgo {s.providerRisk}
                         </span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-[var(--gray-200)] text-[var(--gray-500)]">{flexibilityLabel(s.providerFlexibility)}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-[var(--gray-200)] text-[var(--gray-500)]" title={`Flexibilidad ${flexibilityLabel(s.providerFlexibility)}`}>{flexibilityLabel(s.providerFlexibility)}</span>
                         {s.maxDias > 0 && (
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ backgroundColor: severity + '14', color: severity }}>
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-[var(--warning-muted)]" style={{ color: severity }} title={agingTooltip(s.maxDias)}>
                             máx {s.maxDias}d
                           </span>
                         )}
@@ -1016,7 +1314,7 @@ const CXPDashboard = ({
                     </div>
 
                     {/* Mini aging bar */}
-                    <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[var(--gray-100)]">
+                    <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[var(--gray-100)]" title={agingTooltip(s.maxDias)}>
                       {BUCKET_KEYS.map((key, bi) => {
                         const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
                         const bpct = s.total > 0 ? (bval / s.total) * 100 : 0;
@@ -1075,7 +1373,10 @@ const CXPDashboard = ({
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaFactura}</td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaVence}</td>
                                 <td className="py-1.5 text-right font-mono">
-                                  <span className={r.diasVencida > 90 ? 'text-[var(--danger)] font-semibold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}>
+                                  <span
+                                    className={r.diasVencida > 90 ? 'text-[var(--danger)] font-semibold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}
+                                    title={agingTooltip(r.diasVencida)}
+                                  >
                                     {r.diasVencida}
                                   </span>
                                 </td>
@@ -1083,8 +1384,12 @@ const CXPDashboard = ({
                                 <td className="py-1.5 pl-3 text-[var(--gray-400)]">{r.moneda}</td>
                                 <td className="py-1.5 text-[var(--gray-400)]">{r.condPago}</td>
                                 <td className="py-1.5">
-                                  <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(r.paymentPriority)}`}>
+                                  <span
+                                    className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(r.paymentPriority)}`}
+                                    title={priorityReason(r)}
+                                  >
                                     {priorityLabel(r.paymentPriority)}
+                                    <HelpCircle className="h-3 w-3" />
                                   </span>
                                 </td>
                                 <td className="py-1.5">
@@ -1131,164 +1436,230 @@ const CXPDashboard = ({
       )}
 
       {/* ════════════════════════════════════════════════════════════════
-         ANTIGÜEDAD TAB
+         TRIAGE TAB
          ════════════════════════════════════════════════════════════════ */}
-      {tab === 'antiguedad' && (
-        <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
-            <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
-              <thead className="sticky top-0 bg-white z-10">
-                <tr className="border-b-2 border-[var(--gray-200)]">
-                  <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
-                  <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-semibold w-[90px]">Total</th>
-                  <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-semibold w-[40px]">#</th>
-                  {BUCKET_LABELS.map((label, i) => (
-                    <th key={i} className="text-right py-2.5 px-2 font-semibold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {supplierData.slice(0, 100).map((s, si) => {
-                  const bucketVals = BUCKET_KEYS.map(key => s.records.reduce((sum, r) => sum + (r[key] as number), 0));
-                  const maxBucket = Math.max(...bucketVals);
-                  return (
-                    <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
-                      <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
-                      <td className="py-2 px-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</td>
-                      <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
-                      {bucketVals.map((val, bi) => {
-                        const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
-                        return (
-                          <td key={bi} className="py-2 px-2 text-right font-mono">
-                            {val > 0 ? (
-                              <span className="inline-block px-1.5 py-0.5 rounded"
-                                style={{
-                                  color: AGING_COLORS[bi],
-                                  backgroundColor: AGING_COLORS[bi] + (intensity > 0.5 ? '20' : '0a'),
-                                  fontWeight: intensity > 0.5 ? 600 : 400,
-                                }}>
-                                {fmt(val)}
-                              </span>
-                            ) : (
-                              <span className="text-[var(--gray-200)]">—</span>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-                {/* Totals */}
-                <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold sticky bottom-0">
-                  <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
-                  <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
-                  <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{filtered.length}</td>
-                  {agingBuckets.map((b, i) => (
-                    <td key={i} className="py-2.5 px-2 text-right font-mono font-bold" style={{ color: b.color }}>{fmt(b.total)}</td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {tab === 'impuestos' && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <TaxMetric label="Impuestos pendientes" value={taxPending} sub={`${taxRows.filter(row => row.pending > 0).length} facturas`} tone="danger" />
-            <TaxMetric label="Monto estimado" value={taxEstimated} sub={`${taxRows.length} facturas con impuesto`} tone="neutral" />
-            <TaxMetric label="Monto real" value={taxReal} sub="Segun estatus pagado/liquidado" tone="success" />
-            <TaxMetric label="Efecto en flujo" value={-taxPending} sub={nextTaxDate ? `Siguiente: ${nextTaxDate}` : 'Sin fecha pendiente'} tone="warning" />
-          </div>
-
-          <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-              <div>
-                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Calendario fiscal desde CXP</h2>
-                <p className="text-[12px] text-[var(--gray-400)] mt-1">
-                  Fechas, estimado, real y efecto neto para integrarlo al pronostico de efectivo.
-                </p>
-              </div>
-              <span className="rounded-full bg-[var(--warning-muted)] px-3 py-1 text-[11px] font-medium text-[var(--warning)]">
-                Impacto pendiente {fmt(taxPending)}
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-[12px]">
-                <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)]">
-                  <tr>
-                    <th className="text-left py-2.5 px-4 font-semibold">Periodo</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Facturas</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Estimado</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Real</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Pendiente</th>
-                    <th className="text-right py-2.5 px-4 font-semibold">Efecto flujo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {taxByMonth.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-10 text-center text-[var(--gray-400)]">
-                        No hay impuestos detectados en las CXP filtradas.
-                      </td>
-                    </tr>
-                  ) : taxByMonth.map((row) => (
-                    <tr key={row.ym} className="border-t border-[var(--gray-100)]">
-                      <td className="py-2.5 px-4 font-medium text-[var(--gray-950)]">{row.ym}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--gray-500)]">{row.count}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--gray-950)]">{fmtFull(row.estimated)}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--success)]">{fmtFull(row.real)}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums text-[var(--warning)]">{fmtFull(row.pending)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-[var(--danger)]">{fmtFull(-row.pending)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-[var(--gray-100)]">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Detalle de impuestos por factura</h2>
-            </div>
-            <div className="overflow-x-auto max-h-[420px]">
-              <table className="w-full text-[11px]">
-                <thead className="sticky top-0 bg-white z-10 text-[var(--gray-400)]">
-                  <tr className="border-b border-[var(--gray-100)]">
-                    <th className="text-left py-2.5 px-4 font-semibold">Proveedor</th>
-                    <th className="text-left py-2.5 px-3 font-semibold">Factura</th>
-                    <th className="text-left py-2.5 px-3 font-semibold">Fecha pago</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Estimado</th>
-                    <th className="text-right py-2.5 px-3 font-semibold">Real</th>
-                    <th className="text-right py-2.5 px-4 font-semibold">Efecto flujo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {taxRows.map((row) => (
-                    <tr key={`${row.record.noProveedor}-${row.record.noFactura}-${row.dueDate}`} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)]">
-                      <td className="py-2 px-4 font-medium text-[var(--gray-950)]">{row.record.nombre}</td>
-                      <td className="py-2 px-3 font-mono text-[var(--gray-500)]">{row.record.noFactura || '-'}</td>
-                      <td className="py-2 px-3 text-[var(--gray-500)]">{row.dueDate || 'Sin fecha'}</td>
-                      <td className="py-2 px-3 text-right tabular-nums text-[var(--gray-950)]">{fmtFull(row.estimated)}</td>
-                      <td className="py-2 px-3 text-right tabular-nums text-[var(--success)]">{row.real > 0 ? fmtFull(row.real) : '-'}</td>
-                      <td className="py-2 px-4 text-right tabular-nums font-semibold text-[var(--danger)]">{fmtFull(-row.pending)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+      {tab === 'triage' && (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <TriageColumn
+            title="Criticos"
+            detail="No conviene moverlos sin decision ejecutiva."
+            tone="danger"
+            records={triageBuckets.critical}
+          />
+          <TriageColumn
+            title="Negociables"
+            detail="Candidatos a reprogramar o negociar plazo."
+            tone="success"
+            records={triageBuckets.negotiable}
+          />
+          <TriageColumn
+            title="Mayor impacto"
+            detail={`Montos de ${fmt(HIGH_IMPACT_AMOUNT)} o mas.`}
+            tone="warning"
+            records={triageBuckets.highImpact}
+          />
         </div>
       )}
     </div>
   );
 };
+
+function FilterGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div>
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">{title}</p>
+      <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto pr-1">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function FilterPill({
+  active,
+  label,
+  meta,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  meta?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+        active
+          ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
+          : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:border-[var(--gray-300)] hover:text-[var(--gray-950)]'
+      }`}
+      title={label}
+    >
+      <span className="truncate">{label}</span>
+      {meta && <span className="font-mono text-[10px] opacity-70">{meta}</span>}
+    </button>
+  );
+}
+
+function AgingMatrix({
+  supplierData,
+  agingBuckets,
+  totalPendiente,
+  filteredCount,
+}: {
+  supplierData: SupplierSummary[];
+  agingBuckets: AgingBucket[];
+  totalPendiente: number;
+  filteredCount: number;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden animate-card-in stagger-8">
+      <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
+        <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
+        <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead className="sticky top-0 bg-white z-10">
+            <tr className="border-b-2 border-[var(--gray-200)]">
+              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
+              <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-semibold w-[90px]">Total</th>
+              <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-semibold w-[40px]">#</th>
+              {BUCKET_LABELS.map((label, i) => (
+                <th key={i} className="text-right py-2.5 px-2 font-semibold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {supplierData.slice(0, 100).map((s, si) => {
+              const bucketVals = BUCKET_KEYS.map(key => s.records.reduce((sum, r) => sum + (r[key] as number), 0));
+              const maxBucket = Math.max(...bucketVals);
+              return (
+                <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
+                  <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
+                  <td className="py-2 px-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</td>
+                  <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
+                  {bucketVals.map((val, bi) => {
+                    const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
+                    return (
+                      <td key={bi} className="py-2 px-2 text-right font-mono">
+                        {val > 0 ? (
+                          <span
+                            className="inline-block px-1.5 py-0.5 rounded"
+                            style={{
+                              color: AGING_COLORS[bi],
+                              backgroundColor: bi === 0
+                                ? 'var(--success-muted)'
+                                : intensity > 0.5
+                                  ? 'var(--warning-muted)'
+                                  : 'var(--gray-50)',
+                              fontWeight: intensity > 0.5 ? 600 : 400,
+                            }}
+                            title={agingTooltip(BUCKET_LABELS[bi] === 'Por Vencer' ? 0 : Number(BUCKET_LABELS[bi].split('-')[0]) || 181)}
+                          >
+                            {fmt(val)}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--gray-200)]">-</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold sticky bottom-0">
+              <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
+              <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
+              <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{filteredCount}</td>
+              {agingBuckets.map((b, i) => (
+                <td key={i} className="py-2.5 px-2 text-right font-mono font-bold" style={{ color: b.color }}>{fmt(b.total)}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function TriageColumn({
+  title,
+  detail,
+  tone,
+  records,
+}: {
+  title: string;
+  detail: string;
+  tone: 'danger' | 'success' | 'warning';
+  records: EnrichedCXPRecord[];
+}) {
+  const total = records.reduce((sum, record) => sum + record.importePendientePesos, 0);
+  const toneClass =
+    tone === 'danger'
+      ? 'bg-[var(--danger-muted)] text-[var(--danger)]'
+      : tone === 'success'
+        ? 'bg-[var(--success-muted)] text-[var(--success)]'
+        : 'bg-[var(--warning-muted)] text-[var(--warning)]';
+
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+      <header className="border-b border-[var(--gray-100)] p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">{title}</h2>
+            <p className="mt-1 text-[11px] leading-4 text-[var(--gray-400)]">{detail}</p>
+          </div>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
+            {records.length} fact.
+          </span>
+        </div>
+        <p className="mt-3 font-mono text-[20px] font-bold text-[var(--gray-950)]">{fmt(total)}</p>
+      </header>
+      <div className="max-h-[620px] space-y-2 overflow-y-auto bg-[var(--surface-alt)] p-3">
+        {records.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-[var(--gray-200)] bg-white p-5 text-center text-[12px] text-[var(--gray-400)]">
+            Sin facturas en este balde.
+          </div>
+        ) : records.slice(0, 40).map((record) => (
+          <article key={`${record.noProveedor}-${record.noFactura}-${record.fechaVence}`} className="rounded-xl border border-[var(--gray-200)] bg-white p-3 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-[12px] font-semibold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
+                <p className="mt-0.5 text-[10px] text-[var(--gray-400)]">{record.providerType}</p>
+              </div>
+              <p className="shrink-0 font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmt(record.importePendientePesos)}</p>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(record.paymentPriority)}`} title={priorityReason(record)}>
+                {priorityLabel(record.paymentPriority)}
+                <HelpCircle className="h-3 w-3" />
+              </span>
+              <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
+                {flexibilityLabel(record.providerFlexibility)}
+              </span>
+              <span
+                className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]"
+                title={agingTooltip(record.diasVencida)}
+              >
+                {record.diasVencida > 0 ? `${record.diasVencida}d vencido` : 'por vencer'}
+              </span>
+              <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
+                vence {dueDateForRecord(record) ?? 'sin fecha'}
+              </span>
+            </div>
+          </article>
+        ))}
+        {records.length > 40 && (
+          <p className="py-2 text-center text-[11px] text-[var(--gray-400)]">
+            {records.length - 40} facturas mas en este balde.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
 
 function PlanningCard({
   title,
@@ -1335,32 +1706,6 @@ function PlanningCard({
   );
 }
 
-function TaxMetric({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: number;
-  sub: string;
-  tone: 'danger' | 'success' | 'warning' | 'neutral';
-}) {
-  const colorClass =
-    tone === 'danger' ? 'text-[var(--danger)]' :
-    tone === 'success' ? 'text-[var(--success)]' :
-    tone === 'warning' ? 'text-[var(--warning)]' :
-    'text-[var(--gray-950)]';
-
-  return (
-    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</p>
-      <p className={`mt-2 text-[22px] font-bold font-mono ${colorClass}`}>{fmt(value)}</p>
-      <p className="mt-1 text-[11px] text-[var(--gray-400)]">{sub}</p>
-    </div>
-  );
-}
-
 /* ═══════════════════════════════════════════════════════════════════════
    Main CXP Component — per-cia cache + background fetch
    ═══════════════════════════════════════════════════════════════════════ */
@@ -1371,6 +1716,8 @@ interface CXPProps {
   companies: Company[];
   selectedCia: string;
   providers: Provider[];
+  clients: Client[];
+  assumptions: CashFlowAssumptions;
   onMergeCia: (cia: string, records: CXPRecord[]) => void;
   onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
   onReset: () => void;
@@ -1382,6 +1729,8 @@ const CXP = ({
   companies,
   selectedCia,
   providers,
+  clients,
+  assumptions,
   onMergeCia,
   onReplaceAll,
   onReset,
@@ -1685,7 +2034,14 @@ const CXP = ({
         </div>
       )}
 
-      <CXPDashboard records={visibleRecords} onReset={onReset} companies={companies} providers={providers} />
+      <CXPDashboard
+        records={visibleRecords}
+        onReset={onReset}
+        companies={companies}
+        providers={providers}
+        clients={clients}
+        assumptions={assumptions}
+      />
     </div>
   );
 };
