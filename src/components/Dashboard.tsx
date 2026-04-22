@@ -65,6 +65,7 @@ const CHART_COLORS = {
 };
 
 const OVERRIDES_KEY = 'flowsense.dashboard.projectionOverrides.v1';
+const STARTING_BALANCE_KEY = 'flowsense.dashboard.startingBalance.v1';
 
 function loadOverrides(): ProjectionOverrides {
   try {
@@ -76,6 +77,15 @@ function loadOverrides(): ProjectionOverrides {
   } catch { return {}; }
 }
 
+function loadStartingBalanceOverride(): number | null {
+  try {
+    const raw = localStorage.getItem(STARTING_BALANCE_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  } catch { return null; }
+}
+
 const Dashboard: React.FC<DashboardProps> = ({
   companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions, onOpenFlow,
 }) => {
@@ -84,10 +94,17 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<ProjectionOverrides>(() => loadOverrides());
+  const [startingBalanceOverride, setStartingBalanceOverride] = useState<number | null>(() => loadStartingBalanceOverride());
 
   useEffect(() => {
     try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); } catch { /* ignore */ }
   }, [overrides]);
+  useEffect(() => {
+    try {
+      if (startingBalanceOverride === null) localStorage.removeItem(STARTING_BALANCE_KEY);
+      else localStorage.setItem(STARTING_BALANCE_KEY, String(startingBalanceOverride));
+    } catch { /* ignore */ }
+  }, [startingBalanceOverride]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,9 +124,26 @@ const Dashboard: React.FC<DashboardProps> = ({
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const { base, baseline, projection } = useMemo(
-    () => computeBaseCashFlow({ bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides }),
-    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides],
+    () => computeBaseCashFlow({
+      bankStatements, aged, clients, providers, cxpRecords, assumptions,
+      companyCode, today, overrides,
+      startingBalance: startingBalanceOverride ?? undefined,
+    }),
+    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalanceOverride],
   );
+
+  // Caja inicial "auto" desde banco (suma saldoInicial). La UI la muestra como
+  // placeholder cuando no hay override; si el usuario la edita, se usa el
+  // valor editado.
+  const bankStartingBalance = useMemo(
+    () => computeBankStartingBalance(
+      companyCode === 'all' || !companyCode
+        ? bankStatements
+        : bankStatements.filter((s) => s.cia === companyCode),
+    ),
+    [bankStatements, companyCode],
+  );
+  const effectiveStartingBalance = startingBalanceOverride ?? bankStartingBalance;
   const evaluated = useMemo(() => evaluateCashFlow(base, proposals), [base, proposals]);
 
   const currentYear = new Date().getFullYear();
@@ -275,13 +309,21 @@ const Dashboard: React.FC<DashboardProps> = ({
             Flujo real desde JDE · {companyCode === 'all' ? 'todas las compañías' : `compañía ${companyCode}`}
           </p>
         </div>
-        <button
-          onClick={onOpenFlow}
-          className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
-        >
-          <LineChartIcon className="w-4 h-4" />
-          Abrir Simulación
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <StartingBalanceInput
+            value={effectiveStartingBalance}
+            isOverride={startingBalanceOverride !== null}
+            bankValue={bankStartingBalance}
+            onChange={setStartingBalanceOverride}
+          />
+          <button
+            onClick={onOpenFlow}
+            className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
+          >
+            <LineChartIcon className="w-4 h-4" />
+            Abrir Simulación
+          </button>
+        </div>
       </div>
 
       {!hasRealData && (
@@ -506,6 +548,73 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
   );
 };
 
+/**
+ * Control para ajustar la caja inicial del mes más antiguo. El valor por
+ * defecto sale de la suma de saldoInicial de las cuentas; si difiere del
+ * dato real de contabilidad, el usuario lo edita aquí y la caja final se
+ * recalcula encadenada en toda la serie.
+ */
+const StartingBalanceInput: React.FC<{
+  value: number;
+  isOverride: boolean;
+  bankValue: number;
+  onChange: (v: number | null) => void;
+}> = ({ value, isOverride, bankValue, onChange }) => {
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState('');
+
+  if (editing) {
+    const finish = (save: boolean) => {
+      setEditing(false);
+      if (!save) return;
+      const t = draft.replace(/[$,\s]/g, '');
+      if (t === '') { onChange(null); return; }
+      const n = Number(t);
+      if (Number.isFinite(n)) onChange(n);
+    };
+    return (
+      <div className="flex items-center gap-1 h-10 px-3 rounded-xl border border-[var(--primary)] bg-white">
+        <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Caja inicial</span>
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => finish(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') finish(true);
+            else if (e.key === 'Escape') finish(false);
+          }}
+          className="tabular-nums text-right bg-transparent outline-none text-[13px] w-36"
+          placeholder={bankValue.toFixed(0)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => { setDraft(String(Math.round(value))); setEditing(true); }}
+      className="flex items-center gap-2 h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white hover:bg-[var(--gray-50)]"
+      title={
+        isOverride
+          ? `Override manual. Banco reporta ${fmtCurrency(bankValue)}. Clic para editar.`
+          : 'Caja inicial = suma de saldoInicial reportado por JDE. Clic para editar.'
+      }
+    >
+      <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Caja inicial</span>
+      <span className="tabular-nums text-[13px] font-medium" style={{ color: 'var(--gray-950)' }}>
+        {fmtCurrency(value)}
+      </span>
+      {isOverride && (
+        <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full" style={{ background: 'var(--warning-muted)', color: 'var(--warning)' }}>
+          Manual
+        </span>
+      )}
+    </button>
+  );
+};
+
 const KpiCard: React.FC<{ label: string; value: number; icon: React.ReactNode; color: string }> = ({ label, value, icon, color }) => (
   <div className="rounded-xl border border-[var(--gray-200)] bg-white p-4">
     <div className="flex items-center justify-between mb-2">
@@ -530,6 +639,13 @@ interface ComputeInputs {
   companyCode: string;
   today: string;
   overrides: ProjectionOverrides;
+  /**
+   * Caja inicial (pesos) para el primer mes histórico. Si es undefined se
+   * usa la suma de saldoInicial reportado por JDE. Esta es la base del
+   * encadenado: todas las cajas finales salen de la fórmula
+   * caja_inicial + ingresos - egresos.
+   */
+  startingBalance?: number;
 }
 
 interface ComputeOutput {
@@ -538,8 +654,18 @@ interface ComputeOutput {
   projection: ReturnType<typeof buildMonthlyProjection>;
 }
 
+/**
+ * Caja inicial derivada del banco: suma de saldoInicial de todas las
+ * cuentas en el scope. Si una cuenta no reporta saldoInicial, vale 0 y
+ * se refleja como tal en la caja encadenada; el usuario puede sobreescribir
+ * este valor desde la UI para ajustarlo al dato real de contabilidad.
+ */
+export function computeBankStartingBalance(statements: BankAccountStatement[]): number {
+  return statements.reduce((s, acc) => s + (acc.saldoInicial ?? 0), 0);
+}
+
 function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
-  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides } = inputs;
+  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
@@ -590,8 +716,28 @@ function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   const overridden = applyProjectionOverrides(projection.months, overrides);
   const projectionByYm = new Map(overridden.map((p) => [p.yearMonth, p]));
 
-  const months: CashFlowMonth[] = [...historical];
-  let running = historical.length > 0 ? historical[historical.length - 1].closingCash : 0;
+  // ── Encadenado de caja con fórmula simple y predecible ──────────────
+  // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
+  //
+  // Esto reemplaza el cálculo antiguo de buildHistoricalMonths (que
+  // reconstruía saldos per-cuenta y acumulaba). Usar la fórmula única
+  // asegura que Dashboard y Flujo de Efectivo coincidan en el cierre
+  // mensual, y que el usuario pueda entender sin ambigüedad de dónde
+  // sale cada número.
+  const baseStart = typeof startingBalance === 'number'
+    ? startingBalance
+    : computeBankStartingBalance(filtered);
+  const historicalChained: CashFlowMonth[] = [];
+  let runningHist = baseStart;
+  for (const m of historical) {
+    runningHist = runningHist + m.income - m.expense;
+    historicalChained.push({ ...m, closingCash: runningHist });
+  }
+
+  const months: CashFlowMonth[] = [...historicalChained];
+  let running = historicalChained.length > 0
+    ? historicalChained[historicalChained.length - 1].closingCash
+    : baseStart;
   let cursor = firstFutureYm;
   while (compareYearMonth(cursor, lastFutureYm) <= 0) {
     const p = projectionByYm.get(cursor);
