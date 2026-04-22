@@ -155,6 +155,85 @@ table, [data-numeric] {
 }
 
 /* ═══════════════════════════════════════════════
+   CANONICAL SEMANTIC TYPOGRAPHY
+   Mirrors midas-design-system/colors_and_type.css.
+   Utility classes `.h1`..`.label` are provided so
+   Tailwind-authored markup can opt in without touching
+   native tag defaults from Tailwind Preflight.
+   ═══════════════════════════════════════════════ */
+
+.h1 {
+  font-size: var(--fs-h1);
+  line-height: var(--lh-tight);
+  font-weight: var(--fw-bold);
+  color: var(--gray-950);
+  letter-spacing: -0.02em;
+}
+
+.h2 {
+  font-size: var(--fs-h2);
+  line-height: var(--lh-tight);
+  font-weight: 600;
+  color: var(--gray-950);
+  letter-spacing: -0.01em;
+}
+
+.h3 {
+  font-size: var(--fs-h3);
+  line-height: var(--lh-tight);
+  font-weight: 600;
+  color: var(--gray-900);
+}
+
+.p {
+  font-size: var(--fs-body);
+  line-height: var(--lh-base);
+  color: var(--gray-700);
+}
+
+.small {
+  font-size: var(--fs-small);
+  line-height: var(--lh-base);
+  color: var(--gray-500);
+}
+
+.data {
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+  color: var(--gray-950);
+  font-variant-numeric: tabular-nums;
+}
+
+.label,
+.eyebrow,
+.label-meta {
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-meta);
+}
+
+code, kbd, samp, pre {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas,
+               'Roboto Mono', monospace;
+  font-size: 0.8125rem;
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--gray-400);
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+}
+
+/* ═══════════════════════════════════════════════
    KEYFRAME ANIMATIONS
    Duration rules: 100-150ms instant, 200-300ms state,
    300-500ms layout, 500-800ms entrance
@@ -386,6 +465,8 @@ table, [data-numeric] {
 }
 
 /* Value sign indicators — color + symbol */
+.value-positive { color: var(--success); }
+.value-negative { color: var(--danger); }
 .value-positive::before { content: '▲ '; font-size: 0.65em; vertical-align: middle; }
 .value-negative::before { content: '▼ '; font-size: 0.65em; vertical-align: middle; }
 
@@ -607,5 +688,103 @@ input[type="range"]::-moz-range-thumb {
   color: var(--gray-400);
   text-transform: uppercase;
   letter-spacing: var(--tracking-meta);
+}
+
+/* ═══════════════════════════════════════════════
+   DARK SHELL (Midas corporativo header + strip)
+   Aligns the top-of-app chrome with
+   midas-design-system/project/ui_kits/midas —
+   Senda logo inverts to white, Midas wordmark in
+   solid white, header sits on --secondary (#0f172a).
+   ═══════════════════════════════════════════════ */
+
+/* Senda wordmark inverted for the dark corporativo shell.
+   The burgundy SVG becomes white on the dark header so
+   contrast & hierarchy mirror the Midas spec. */
+.senda-mark-inverted {
+  filter: brightness(0) invert(1);
+  opacity: 0.95;
+  transition: opacity 0.2s var(--ease-smooth);
+}
+.senda-lockup-dark:hover .senda-mark-inverted {
+  opacity: 1;
+}
+
+/* Header icon button (bell, download) for the dark shell. */
+.shell-icon-btn {
+  background: transparent;
+  color: var(--shell-text-muted);
+  border: 1px solid transparent;
+}
+.shell-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--shell-text);
+  border-color: var(--shell-border);
+}
+
+/* Company picker button on dark shell. */
+.shell-picker-btn:hover {
+  background: rgba(255, 255, 255, 0.14) !important;
+}
+
+/* ═══════════════════════════════════════════════
+   MIDAS PILLS (badges) — Midas components.jsx spec
+   Tones: success, warning, danger, neutral, primary, shell.
+   Pill pairs a tinted bg with a matching dot indicator.
+   ═══════════════════════════════════════════════ */
+.midas-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  background: var(--gray-100);
+  color: var(--gray-700);
+}
+.midas-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gray-400);
+  flex-shrink: 0;
+}
+
+.midas-pill[data-tone="success"] { background: var(--success-muted); color: #166534; }
+.midas-pill[data-tone="success"] .midas-pill-dot { background: var(--success); }
+
+.midas-pill[data-tone="warning"] { background: var(--warning-muted); color: #92400e; }
+.midas-pill[data-tone="warning"] .midas-pill-dot { background: var(--warning); }
+
+.midas-pill[data-tone="danger"]  { background: var(--danger-muted); color: #991b1b; }
+.midas-pill[data-tone="danger"]  .midas-pill-dot { background: var(--danger); }
+
+.midas-pill[data-tone="neutral"] { background: var(--gray-100); color: var(--gray-700); }
+.midas-pill[data-tone="neutral"] .midas-pill-dot { background: var(--gray-400); }
+
+.midas-pill[data-tone="primary"] { background: var(--primary); color: #ffffff; }
+.midas-pill[data-tone="primary"] .midas-pill-dot { background: #ffffff; }
+
+/* Shell tone — the pill lives on the dark header. */
+.midas-pill[data-tone="shell"] {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+}
+.midas-pill[data-tone="shell"] .midas-pill-dot { background: rgba(255, 255, 255, 0.7); }
+
+/* ═══════════════════════════════════════════════
+   CARDS (Midas spec — white surface on dark shell)
+   ═══════════════════════════════════════════════ */
+.midas-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+.midas-card.hover-lift:hover {
+  box-shadow: var(--shadow-card-hover);
 }
 

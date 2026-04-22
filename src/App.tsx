@@ -538,30 +538,56 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen" style={{ background: 'var(--card)' }}>
-      {/* ─── HEADER ─── */}
-      <header className="border-b sticky top-0 z-50" style={{ borderColor: 'var(--gray-200)', background: 'var(--card)' }}>
+    <div className="min-h-screen" style={{ background: 'var(--background)' }}>
+      {/* Skip link — keyboard-only shortcut to main content */}
+      <a href="#main-content" className="skip-link">Saltar al contenido</a>
+
+      {/* ─── HEADER (Midas corporativo — dark slate shell) ─── */}
+      <header
+        role="banner"
+        className="border-b sticky top-0 z-50"
+        style={{
+          borderColor: 'var(--shell-border)',
+          background: 'var(--secondary)',
+        }}
+      >
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
-          {/* Brand lockup — Senda (burgundy) + divider + Midas (gold gradient) */}
+          {/* Brand lockup — Senda (white, inverted on dark) + divider + Midas */}
           <div
-            className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer"
+            className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer senda-lockup-dark"
             onClick={() => setActiveTab('netflow')}
             aria-label="Midas · Senda corporativo"
           >
-            <span className="senda-lockup">
-              <img src="/logos/senda-corporativo.svg" alt="Senda" />
-            </span>
-            <span className="midas-divider" aria-hidden="true" />
+            <img
+              src="/logos/senda-corporativo.svg"
+              alt="Senda"
+              className="senda-mark-inverted"
+              style={{ height: 22, width: 'auto', display: 'block' }}
+            />
             <span
-              className="midas-wordmark"
-              style={{ fontSize: '22px' }}
+              aria-hidden="true"
+              style={{ display: 'inline-block', width: 1, height: 22, background: 'var(--shell-border)' }}
+            />
+            <span
+              style={{
+                fontSize: '22px',
+                fontWeight: 700,
+                letterSpacing: '-0.03em',
+                lineHeight: 1,
+                color: 'var(--shell-text)',
+              }}
             >
               Midas
             </span>
           </div>
 
           {/* Section nav — prominent, distinctive icons */}
-          <nav className="flex items-center rounded-2xl p-1 gap-1" style={{ background: 'var(--gray-50)' }}>
+          <nav
+            role="navigation"
+            aria-label="Secciones principales"
+            className="flex items-center rounded-2xl p-1 gap-1"
+            style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--shell-border)' }}
+          >
             {SECTIONS.map(s => {
               const isActive = activeSection === s.id;
               const catalogCount = clients.length + providers.length;
@@ -570,14 +596,13 @@ export default function App() {
                 : s.id === 'operacion' && (cxpRecords.length > 0 || bankStatements.length > 0)
                   ? 'Activo'
                   : null;
-              const badgeColor = 'var(--gray-400)';
               return (
                 <button
                   key={s.id}
                   onClick={() => switchSection(s.id)}
                   className={`relative flex items-center gap-2 px-5 py-2 rounded-xl text-[14px] font-semibold transition-all duration-300 whitespace-nowrap`}
                   style={{
-                    color: isActive ? 'var(--gray-950)' : 'var(--gray-400)',
+                    color: isActive ? 'var(--gray-950)' : 'var(--shell-text-muted)',
                     transitionTimingFunction: 'var(--spring)',
                   }}
                   title={s.description}
@@ -591,17 +616,15 @@ export default function App() {
                   <span className="relative flex items-center gap-2">
                     <s.icon
                       className="w-[18px] h-[18px] transition-colors duration-300"
-                      style={{ color: isActive ? 'var(--primary)' : undefined }}
+                      style={{ color: isActive ? 'var(--primary)' : 'currentColor' }}
                     />
                     {s.label}
                     {badge && (
                       <span
-                        className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
-                        style={{
-                          background: 'var(--gray-100)',
-                          color: badgeColor,
-                        }}
+                        className="midas-pill"
+                        data-tone={isActive ? 'neutral' : 'shell'}
                       >
+                        <span className="midas-pill-dot" aria-hidden="true" />
                         {badge}
                       </span>
                     )}
@@ -628,10 +651,7 @@ export default function App() {
               onClick={() => setActivityOpen(true)}
               title="Actividad reciente"
               aria-label="Ver actividad reciente"
-              className="flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
-              style={{ color: 'var(--gray-400)' }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
+              className="shell-icon-btn flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
             >
               <Bell className="w-[18px] h-[18px]" />
             </button>
@@ -654,10 +674,7 @@ export default function App() {
               }}
               title="Descargar respaldo"
               aria-label="Descargar respaldo JSON"
-              className="flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
-              style={{ color: 'var(--gray-400)' }}
-              onMouseEnter={e => { e.currentTarget.style.color = 'var(--gray-950)'; e.currentTarget.style.background = 'var(--gray-100)'; }}
-              onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray-400)'; e.currentTarget.style.background = 'transparent'; }}
+              className="shell-icon-btn flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
             >
               <Download className="w-[18px] h-[18px]" />
             </button>
@@ -665,13 +682,13 @@ export default function App() {
         </div>
       </header>
 
-      {/* ─── SUB-TABS with context breadcrumb ─── */}
+      {/* ─── SUB-TABS with context breadcrumb (dark shell) ─── */}
       {subTabs.length > 0 && (
-        <div className="border-b" style={{ background: 'oklch(100% 0 0 / 0.6)', borderColor: 'var(--gray-100)' }}>
+        <div className="border-b" style={{ background: 'var(--primary)', borderColor: 'var(--shell-border)' }}>
           <div className="max-w-[1400px] mx-auto px-8">
             <div className="flex items-center gap-1 py-2">
               {/* Breadcrumb context */}
-              <span className="text-[12px] font-medium mr-2 flex items-center gap-1" style={{ color: 'var(--gray-400)' }}>
+              <span className="text-[12px] font-medium mr-2 flex items-center gap-1" style={{ color: 'var(--shell-text-muted)' }}>
                 {SECTIONS.find(s => s.id === activeSection)?.label}
                 <ChevronRight className="w-3 h-3" />
               </span>
@@ -683,8 +700,9 @@ export default function App() {
                     onClick={() => setActiveTab(t.id)}
                     className="px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-200 touch-target-44"
                     style={{
-                      background: isActive ? 'var(--primary-muted)' : undefined,
-                      color: isActive ? 'var(--primary)' : 'var(--gray-500)',
+                      background: isActive ? 'rgba(255,255,255,0.12)' : 'transparent',
+                      color: isActive ? 'var(--shell-text)' : 'var(--shell-text-muted)',
+                      border: isActive ? '1px solid var(--shell-border)' : '1px solid transparent',
                     }}
                   >
                     {t.label}
@@ -697,7 +715,7 @@ export default function App() {
       )}
 
       {/* ─── MAIN CONTENT ─── */}
-      <main className="max-w-[1400px] mx-auto px-8 py-6">
+      <main id="main-content" role="main" className="max-w-[1400px] mx-auto px-8 py-6">
         <div key={pageKey} className="animate-page-in">
           <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
             {activeTab === 'dashboard' && (
@@ -945,18 +963,22 @@ function CompanySelector({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`Compañía activa: ${label}. Filtra datos globalmente.`}
-        className="flex items-center gap-1.5 h-10 px-3 rounded-xl text-[13px] font-medium transition-all duration-200 max-w-[300px]"
-        style={{ background: activeGroup ? `${activeGroup.color}12` : 'var(--gray-50)', color: 'var(--gray-950)' }}
+        className="shell-picker-btn flex items-center gap-1.5 h-10 px-3 rounded-xl text-[13px] font-medium transition-all duration-200 max-w-[300px]"
+        style={{
+          background: activeGroup ? `${activeGroup.color}20` : 'rgba(255,255,255,0.08)',
+          color: 'var(--shell-text)',
+          border: '1px solid var(--shell-border)',
+        }}
         title="Compañía o grupo activo — filtra los datos de todas las pestañas"
       >
         {activeGroup
-          ? <FolderOpen className="w-4 h-4 flex-shrink-0" style={{ color: activeGroup.color ?? 'var(--primary)' }} />
-          : <Building2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--primary)' }} />
+          ? <FolderOpen className="w-4 h-4 flex-shrink-0" style={{ color: activeGroup.color ?? 'var(--shell-text)' }} />
+          : <Building2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--shell-text-muted)' }} />
         }
         <span className="truncate">{loading ? 'Cargando…' : label}</span>
         {loading
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" style={{ color: 'var(--gray-400)' }} />
-          : <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} style={{ color: 'var(--gray-400)' }} />
+          ? <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" style={{ color: 'var(--shell-text-muted)' }} />
+          : <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} style={{ color: 'var(--shell-text-muted)' }} />
         }
       </button>
 
