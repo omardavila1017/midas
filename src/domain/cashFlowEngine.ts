@@ -194,6 +194,66 @@ export function projectFutureIncome(
   return total / recent.length;
 }
 
+// ── 3.b Proyección de egresos futuros (regresión lineal) ─────────────────
+
+/**
+ * Regresión lineal simple sobre un arreglo de valores históricos.
+ * Devuelve una función que dado un offset >= 1 (meses después del último
+ * histórico) regresa el valor proyectado, nunca negativo.
+ *
+ * Con menos de 2 puntos cae en promedio / constante / cero.
+ */
+function buildLinearProjector(values: number[]): (offset: number) => number {
+  if (values.length === 0) return () => 0;
+  if (values.length === 1) {
+    const v = Math.max(0, values[0]);
+    return () => v;
+  }
+  const n = values.length;
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += i;
+    sumY += values[i];
+    sumXY += i * values[i];
+    sumX2 += i * i;
+  }
+  const denom = n * sumX2 - sumX * sumX;
+  const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  return (offset: number) => {
+    const x = (n - 1) + offset; // offset=1 → siguiente punto después del último
+    return Math.max(0, intercept + slope * x);
+  };
+}
+
+/**
+ * Proyector de egresos por regresión lineal sobre los últimos N meses
+ * históricos. `offset` es la distancia en meses contra el último histórico
+ * (1 = primer mes proyectado).
+ */
+export function buildExpenseProjector(
+  historical: CashFlowMonth[],
+  windowSize = 12,
+): (offset: number) => number {
+  if (historical.length === 0) return () => 0;
+  const recent = historical.slice(-windowSize);
+  return buildLinearProjector(recent.map((m) => m.expense));
+}
+
+/**
+ * Proyecta egresos para un mes futuro combinando la regresión lineal con los
+ * egresos ya comprometidos en /AntiguedadSaldos: toma el máximo para no
+ * subestimar pagos ya programados cuando la tendencia histórica es menor.
+ */
+export function projectMonthlyExpense(
+  offsetFromLastHistorical: number,
+  committed: number,
+  expenseProjector: (offset: number) => number,
+): number {
+  const projected = expenseProjector(offsetFromLastHistorical);
+  return Math.max(committed, projected);
+}
+
 // ── 4. Orquestación: base cash flow completo ─────────────────────────────
 
 export interface BuildBaseCashFlowOptions {
@@ -257,6 +317,7 @@ export async function buildBaseCashFlow(
   const historical = buildHistoricalMonths(filteredStatements);
   const futureExpenses = buildFutureExpenses(aged);
   const avgIncome = projectFutureIncome(historical, incomeProjectionWindow);
+  const expenseProjector = buildExpenseProjector(historical);
 
   // 4) Determinar rango final
   const lastHistoricalYm = historical.length > 0
@@ -278,7 +339,9 @@ export async function buildBaseCashFlow(
 
   let cursor = firstFutureYm;
   while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-    const expense = futureExpenses.get(cursor) ?? 0;
+    const offset = Math.max(1, monthsBetween(lastHistoricalYm, cursor));
+    const committed = futureExpenses.get(cursor) ?? 0;
+    const expense = projectMonthlyExpense(offset, committed, expenseProjector);
     const income = avgIncome;
     runningCash = runningCash + income - expense;
     months.push({

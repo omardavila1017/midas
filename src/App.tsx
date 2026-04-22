@@ -11,7 +11,7 @@ import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
-import CashFlowView from './components/CashFlowView';
+import Simulacion from './components/Simulacion';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/Toast';
 import { ActivityFeedProvider, useActivityFeed, ActivityFeedPanel } from './components/ActivityFeed';
@@ -49,7 +49,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: any }[]> = {
     { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
-    { id: 'flow',        label: 'Flujo de Caja', icon: LineChart },
+    { id: 'flow',        label: 'Simulación', icon: LineChart },
   ],
 };
 
@@ -594,15 +594,11 @@ export default function App() {
               />
             )}
             {activeTab === 'flow' && (
-              <CashFlowView
+              <Simulacion
                 companyCode={selectedCia}
                 bankStatements={bankStatements}
                 proposals={proposals}
-                scenarios={scenarios}
-                activeScenarioId={activeScenarioId}
                 onProposalsChange={setProposals}
-                onScenariosChange={setScenarios}
-                onActiveScenarioChange={setActiveScenarioId}
               />
             )}
             {activeTab === 'clients' && (

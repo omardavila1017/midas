@@ -9,6 +9,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
+  Legend,
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle, LineChart as LineChartIcon,
@@ -19,9 +20,12 @@ import {
   buildHistoricalMonths,
   buildFutureExpenses,
   projectFutureIncome,
+  buildExpenseProjector,
+  projectMonthlyExpense,
   toYearMonth,
   addMonths,
   compareYearMonth,
+  monthsBetween,
   evaluateCashFlow,
 } from '../domain/cashFlowEngine';
 import type { CashFlowMonth } from '../types';
@@ -80,16 +84,14 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
     const lastHist = [...evaluated.months].reverse().find((m) => m.isHistorical);
     return lastHist?.baseClosingCash ?? 0;
   })();
-  const cajaFinal12m = evaluated.totalForecastClosingCash;
 
   const chartData = evaluated.months.map((m) => ({
     yearMonth: m.yearMonth,
-    income: m.isHistorical ? m.baseIncome : null,
-    expense: m.isHistorical ? -m.baseExpense : null,
+    histIncome: m.isHistorical ? m.baseIncome : null,
+    histExpense: m.isHistorical ? m.baseExpense : null,
     projIncome: !m.isHistorical ? m.forecastIncome : null,
-    projExpense: !m.isHistorical ? -m.forecastExpense : null,
+    projExpense: !m.isHistorical ? m.forecastExpense : null,
     cashBase: m.baseClosingCash,
-    cashForecast: m.forecastClosingCash,
   }));
 
   const hasRealData = bankStatements.length > 0;
@@ -110,7 +112,7 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
           className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
         >
           <LineChartIcon className="w-4 h-4" />
-          Abrir Flujo de Caja
+          Abrir Simulación
         </button>
       </div>
 
@@ -135,7 +137,7 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
       )}
 
       {/* KPI cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <KpiCard
           label={`Ingresos YTD ${currentYear}`}
           value={ingresosYtd}
@@ -153,12 +155,6 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
           value={cajaActual}
           icon={<Wallet className="w-4 h-4" />}
           color="var(--gray-950)"
-        />
-        <KpiCard
-          label="Caja Final Pronosticada (+12m)"
-          value={cajaFinal12m}
-          icon={<LineChartIcon className="w-4 h-4" />}
-          color="var(--primary)"
         />
       </div>
 
@@ -180,13 +176,13 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
                 formatter={(v: number | string) => (typeof v === 'number' ? fmtCurrency(v) : v)}
                 contentStyle={{ borderRadius: 8, borderColor: '#e5e7eb' }}
               />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
               <ReferenceLine y={0} stroke="#cbd5e1" />
-              <Bar dataKey="income" fill="#10b981" name="Ingresos" />
-              <Bar dataKey="expense" fill="#ef4444" name="Egresos" />
-              <Bar dataKey="projIncome" fill="#10b981" fillOpacity={0.4} name="Ingresos (proy.)" />
-              <Bar dataKey="projExpense" fill="#ef4444" fillOpacity={0.4} name="Egresos (proy.)" />
-              <Line type="monotone" dataKey="cashBase" stroke="#94a3b8" strokeWidth={2} dot={false} name="Caja Final Base" />
-              <Line type="monotone" dataKey="cashForecast" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 2 }} name="Caja Final Pronosticada" />
+              <Bar dataKey="histIncome" fill="#cbd5e1" name="Ingresos (histórico)" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="histExpense" fill="#475569" name="Egresos (histórico)" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="projIncome" fill="#10b981" fillOpacity={0.85} name="Ingresos (proy.)" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="projExpense" fill="#ef4444" fillOpacity={0.85} name="Egresos (proy.)" radius={[4, 4, 0, 0]} />
+              <Line type="monotone" dataKey="cashBase" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 2 }} name="Caja Final" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -221,6 +217,7 @@ function computeBaseCashFlow(
   const historical = buildHistoricalMonths(filtered);
   const futureExpenses = buildFutureExpenses(agedBalances);
   const avgIncome = projectFutureIncome(historical, 6);
+  const expenseProjector = buildExpenseProjector(historical);
 
   const today = new Date().toISOString().slice(0, 10);
   const todayYm = toYearMonth(today);
@@ -238,7 +235,9 @@ function computeBaseCashFlow(
   let running = historical.length > 0 ? historical[historical.length - 1].closingCash : 0;
   let cursor = firstFutureYm;
   while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-    const expense = futureExpenses.get(cursor) ?? 0;
+    const offset = Math.max(1, monthsBetween(lastHistoricalYm, cursor));
+    const committed = futureExpenses.get(cursor) ?? 0;
+    const expense = projectMonthlyExpense(offset, committed, expenseProjector);
     const income = avgIncome;
     running = running + income - expense;
     months.push({
