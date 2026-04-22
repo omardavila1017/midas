@@ -590,6 +590,8 @@ export default function App() {
                 companyCode={selectedCia}
                 bankStatements={bankStatements}
                 proposals={proposals}
+                clients={clients}
+                assumptions={assumptions}
                 onOpenFlow={() => setActiveTab('flow')}
               />
             )}

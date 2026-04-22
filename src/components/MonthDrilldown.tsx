@@ -3,6 +3,8 @@ import { X, TrendingUp, TrendingDown, ChevronRight } from 'lucide-react';
 import type { BankAccountStatement, AgedBalanceRecord } from '../services/jde';
 import { fmtCurrency, fmtYearMonthLong } from '../formatters';
 import { toYearMonth, compareYearMonth } from '../domain/cashFlowEngine';
+import type { MonthlyProjection, ProjectionOverrides } from '../domain/projectionEngine';
+import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
 
 interface MonthDrilldownProps {
   yearMonth: string | null;
@@ -10,6 +12,10 @@ interface MonthDrilldownProps {
   agedBalances: AgedBalanceRecord[];
   companyCode: string;
   baseline: { avgIncome: number; avgExpense: number };
+  projectionByMonth: Map<string, MonthlyProjection>;
+  overrides: ProjectionOverrides;
+  onOverridesChange: (overrides: ProjectionOverrides) => void;
+  tableRows: CashFlowTableRow[];
   today: string;
   onClose: () => void;
 }
@@ -50,7 +56,9 @@ function topByAmount(rows: ConceptRow[], limit = 6): GroupedRows {
  *     periodo, agrupadas por proveedor.
  */
 const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
-  yearMonth, bankStatements, agedBalances, companyCode, baseline, today, onClose,
+  yearMonth, bankStatements, agedBalances, companyCode, baseline,
+  projectionByMonth, overrides, onOverridesChange, tableRows,
+  today, onClose,
 }) => {
   const ref = useRef<HTMLElement>(null);
 
@@ -71,9 +79,12 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
   const data = useMemo(() => {
     if (!yearMonth) return null;
     return buildDrilldownData({
-      yearMonth, bankStatements, agedBalances, companyCode, baseline, today,
+      yearMonth, bankStatements, agedBalances, companyCode, baseline,
+      projection: projectionByMonth.get(yearMonth) ?? null,
+      override: overrides[yearMonth],
+      today,
     });
-  }, [yearMonth, bankStatements, agedBalances, companyCode, baseline, today]);
+  }, [yearMonth, bankStatements, agedBalances, companyCode, baseline, projectionByMonth, overrides, today]);
 
   if (!yearMonth || !data) return null;
 
@@ -171,9 +182,38 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
           emptyRealHint={phase === 'future' ? 'Aún no hay movimientos — el mes está en el futuro.' : 'No se registraron cargos en el periodo.'}
         />
       </div>
+
+      {/* Tabla editable del flujo — contexto de 5 meses alrededor del mes seleccionado. */}
+      <div className="border-t border-[var(--gray-100)] px-5 py-4 bg-[var(--gray-50)]/40">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h4 className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gray-700)' }}>
+              Flujo mensual editable
+            </h4>
+            <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
+              Los ajustes aquí se reflejan de inmediato en el gráfico y la tabla superior.
+            </p>
+          </div>
+        </div>
+        <CashFlowTable
+          rows={tableRows}
+          overrides={overrides}
+          onOverridesChange={onOverridesChange}
+          compact
+          filter={(r) => Math.abs(monthsDistance(r.yearMonth, yearMonth)) <= 3}
+          highlightYearMonth={yearMonth}
+        />
+      </div>
     </section>
   );
 };
+
+/** Devuelve la diferencia en meses entre dos "YYYY-MM" (firmada). */
+function monthsDistance(a: string, b: string): number {
+  const [ay, am] = a.split('-').map(Number);
+  const [by, bm] = b.split('-').map(Number);
+  return (ay - by) * 12 + (am - bm);
+}
 
 const SummaryCell: React.FC<{ label: string; value: number; color: string; showSign?: boolean }> = ({
   label, value, color, showSign,
@@ -377,9 +417,11 @@ function buildDrilldownData(args: {
   agedBalances: AgedBalanceRecord[];
   companyCode: string;
   baseline: { avgIncome: number; avgExpense: number };
+  projection: MonthlyProjection | null;
+  override?: { income?: number; expense?: number };
   today: string;
 }) {
-  const { yearMonth, bankStatements, agedBalances, companyCode, baseline, today } = args;
+  const { yearMonth, bankStatements, agedBalances, companyCode, baseline, projection, override, today } = args;
   const currentYm = toYearMonth(today);
   const cmp = compareYearMonth(yearMonth, currentYm);
   const phase: 'past' | 'current' | 'future' = cmp < 0 ? 'past' : cmp === 0 ? 'current' : 'future';
@@ -442,34 +484,65 @@ function buildDrilldownData(args: {
   let expenseProjectedTotal = 0;
   let expenseProjectedNote: string | undefined;
 
+  // Proyección "total" del mes: override del usuario > engine de proyección >
+  // baseline MA6. El drilldown muestra el total y, si es el mes en curso,
+  // el gap contra lo real.
+  const incomeTotalProjected = override?.income
+    ?? projection?.income.total
+    ?? baseline.avgIncome;
+  const expenseTotalProjected = override?.expense
+    ?? projection?.expense.total
+    ?? baseline.avgExpense;
+
   if (phase === 'past') {
     incomeProjected = 0;
     expenseProjectedTotal = 0;
   } else if (phase === 'current') {
-    incomeProjected = Math.max(0, baseline.avgIncome - incomeReal.total);
-    incomeProjectedNote = `Baseline del mes ≈ ${fmtCurrency(baseline.avgIncome)} (promedio 6 meses). Real al día ${daysElapsed}: ${fmtCurrency(incomeReal.total)} → faltaría ${fmtCurrency(incomeProjected)} para llegar al baseline.`;
+    incomeProjected = Math.max(0, incomeTotalProjected - incomeReal.total);
+    const incomeSource = override?.income !== undefined
+      ? `Ajuste manual: ${fmtCurrency(incomeTotalProjected)}`
+      : projection && projection.income.source === 'clients'
+        ? `Cobranza de clientes: ${fmtCurrency(projection.income.fromClients)}`
+        : projection && projection.income.source === 'mixed'
+          ? `Cobranza ${fmtCurrency(projection.income.fromClients)} + baseline ${fmtCurrency(projection.income.fromBaseline)}`
+          : `Baseline MA6: ${fmtCurrency(baseline.avgIncome)}`;
+    incomeProjectedNote = `Total del mes: ${fmtCurrency(incomeTotalProjected)}. ${incomeSource}. Real al día ${daysElapsed}: ${fmtCurrency(incomeReal.total)} → falta ${fmtCurrency(incomeProjected)} para cerrar.`;
 
-    const baselineRemaining = baseline.avgExpense * (daysRemaining / Math.max(1, daysInMonth));
-    const baselineGapToMonth = Math.max(0, baseline.avgExpense - expenseReal.total);
-    expenseProjectedTotal = Math.max(committedInRemainingDays + baselineRemaining, baselineGapToMonth);
+    expenseProjectedTotal = Math.max(0, expenseTotalProjected - expenseReal.total);
     const pieces: string[] = [];
-    if (committedInRemainingDays > 0) {
-      pieces.push(`programado restante ${fmtCurrency(committedInRemainingDays)}`);
+    if (override?.expense !== undefined) {
+      pieces.push(`ajuste manual total ${fmtCurrency(expenseTotalProjected)}`);
+    } else if (projection) {
+      pieces.push(`programado ${fmtCurrency(projection.expense.scheduled)}`);
+      if (projection.expense.recurring > 0) pieces.push(`recurrente ${fmtCurrency(projection.expense.recurring)}`);
+      pieces.push(`baseline ${fmtCurrency(projection.expense.baseline)}`);
+    } else {
+      pieces.push(`baseline ${fmtCurrency(baseline.avgExpense)}`);
     }
-    if (baselineRemaining > 0) {
-      pieces.push(`baseline prorrateado ${fmtCurrency(baselineRemaining)} (${daysRemaining} días)`);
-    }
-    expenseProjectedNote = pieces.length > 0
-      ? `Resto del mes: ${pieces.join(' + ')}.`
-      : undefined;
+    expenseProjectedNote = `Total del mes: ${fmtCurrency(expenseTotalProjected)} (max de: ${pieces.join(', ')}). Falta pagar ${fmtCurrency(expenseProjectedTotal)} (${daysRemaining} días).`;
   } else {
-    incomeProjected = baseline.avgIncome;
-    incomeProjectedNote = `Promedio móvil 6 meses: ${fmtCurrency(baseline.avgIncome)}.`;
-    expenseProjectedTotal = Math.max(committedTotal, baseline.avgExpense);
+    incomeProjected = incomeTotalProjected;
+    if (override?.income !== undefined) {
+      incomeProjectedNote = `Ajuste manual: ${fmtCurrency(incomeTotalProjected)}.`;
+    } else if (projection && projection.income.source === 'clients') {
+      incomeProjectedNote = `Cobranza proyectada por catálogo de clientes: ${fmtCurrency(projection.income.fromClients)}.`;
+    } else if (projection && projection.income.source === 'mixed') {
+      incomeProjectedNote = `Cobranza clientes ${fmtCurrency(projection.income.fromClients)} + baseline MA6 ${fmtCurrency(projection.income.fromBaseline)} = ${fmtCurrency(incomeTotalProjected)}.`;
+    } else {
+      incomeProjectedNote = `Baseline MA6: ${fmtCurrency(incomeTotalProjected)}.`;
+    }
+    expenseProjectedTotal = expenseTotalProjected;
     const parts: string[] = [];
-    if (committedTotal > 0) parts.push(`programado ${fmtCurrency(committedTotal)}`);
-    parts.push(`baseline ${fmtCurrency(baseline.avgExpense)}`);
-    expenseProjectedNote = `max(${parts.join(', ')}).`;
+    if (override?.expense !== undefined) {
+      parts.push(`ajuste manual ${fmtCurrency(expenseTotalProjected)}`);
+    } else if (projection) {
+      parts.push(`programado ${fmtCurrency(projection.expense.scheduled)}`);
+      if (projection.expense.recurring > 0) parts.push(`recurrente ${fmtCurrency(projection.expense.recurring)}`);
+      parts.push(`baseline ${fmtCurrency(projection.expense.baseline)}`);
+    } else {
+      parts.push(`baseline ${fmtCurrency(baseline.avgExpense)}`);
+    }
+    expenseProjectedNote = `max(${parts.join(', ')}) = ${fmtCurrency(expenseTotalProjected)}.`;
   }
 
   return {
