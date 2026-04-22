@@ -24,6 +24,12 @@ interface ConceptRow {
   label: string;
   count: number;
   amount: number;
+  /** Etiqueta de flexibilidad cuando el row viene de un proveedor del catálogo. */
+  flexibility?: 'inamovible' | 'flexible' | 'revisar' | 'unknown';
+  /** Día de crédito (paymentPeriod) del proveedor, si está clasificado. */
+  paymentPeriod?: string;
+  /** Fuente del número: scheduled (CXP), recurring (banco), mixed. */
+  source?: 'scheduled' | 'recurring' | 'mixed' | 'real';
 }
 
 interface GroupedRows {
@@ -373,6 +379,41 @@ const SubBlock: React.FC<{
   </div>
 );
 
+const FlexChip: React.FC<{ flexibility?: ConceptRow['flexibility'] }> = ({ flexibility }) => {
+  if (!flexibility || flexibility === 'unknown') return null;
+  const styles: Record<string, { bg: string; fg: string; label: string }> = {
+    inamovible: { bg: 'var(--danger-muted)', fg: 'var(--danger)', label: 'Inamovible' },
+    flexible:   { bg: 'var(--success-muted)', fg: 'var(--success)', label: 'Flexible' },
+    revisar:    { bg: 'var(--warning-muted)', fg: 'var(--warning)', label: 'Revisar' },
+  };
+  const s = styles[flexibility];
+  if (!s) return null;
+  return (
+    <span
+      className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+      style={{ background: s.bg, color: s.fg }}
+    >
+      {s.label}
+    </span>
+  );
+};
+
+const SourceChip: React.FC<{ source?: ConceptRow['source'] }> = ({ source }) => {
+  if (!source) return null;
+  const labels: Record<string, string> = {
+    scheduled: 'CXP',
+    recurring: 'Recurrente',
+    mixed: 'CXP + recurrente',
+  };
+  const l = labels[source];
+  if (!l) return null;
+  return (
+    <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full border border-[var(--gray-200)]" style={{ color: 'var(--gray-500)' }}>
+      {l}
+    </span>
+  );
+};
+
 const RowList: React.FC<{ rows: GroupedRows }> = ({ rows }) => (
   <ul>
     {rows.top.map((r, idx) => (
@@ -384,9 +425,15 @@ const RowList: React.FC<{ rows: GroupedRows }> = ({ rows }) => (
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <ChevronRight className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--gray-300)' }} />
           <div className="min-w-0 flex-1">
-            <p className="truncate" style={{ color: 'var(--gray-900)' }}>{r.label}</p>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <p className="truncate" style={{ color: 'var(--gray-900)' }}>{r.label}</p>
+              <FlexChip flexibility={r.flexibility} />
+              <SourceChip source={r.source} />
+            </div>
             <p className="text-[10px]" style={{ color: 'var(--gray-400)' }}>
-              {r.count} mov.
+              {r.paymentPeriod
+                ? `Crédito ${r.paymentPeriod}${r.count > 1 ? ` · ${r.count} mov.` : ''}`
+                : `${r.count} mov.`}
             </p>
           </div>
         </div>
@@ -545,6 +592,24 @@ function buildDrilldownData(args: {
     expenseProjectedNote = `max(${parts.join(', ')}) = ${fmtCurrency(expenseTotalProjected)}.`;
   }
 
+  // Filas del desglose proyectado de egresos:
+  //   - Si el engine trajo providerLines (catálogo de proveedores), las usamos
+  //     con flexibility + paymentPeriod para que el usuario sepa si es un
+  //     proveedor inamovible o flexible.
+  //   - Si no hay providerLines pero sí aged, caemos al grupo por proveedor
+  //     desde aged (committedRows).
+  const providerLines = projection?.expense.providerLines ?? [];
+  const expenseProjectedRows: ConceptRow[] = providerLines.length > 0
+    ? providerLines.map((l) => ({
+        label: l.providerName,
+        count: 1,
+        amount: l.amount,
+        flexibility: l.flexibility,
+        paymentPeriod: l.paymentPeriod,
+        source: l.source,
+      }))
+    : committedRows.rows;
+
   return {
     phase,
     daysElapsed,
@@ -553,7 +618,7 @@ function buildDrilldownData(args: {
     incomeProjected,
     incomeProjectedNote,
     expenseReal,
-    expenseProjected: { total: expenseProjectedTotal, rows: committedRows.rows },
+    expenseProjected: { total: expenseProjectedTotal, rows: expenseProjectedRows },
     expenseProjectedNote,
   };
 
