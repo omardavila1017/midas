@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import {
   Bell,
   Plus,
@@ -74,9 +74,9 @@ const ENTITY_COLOR_MAP: Record<ActivityEntity, string> = {
 const ENTITY_LABEL_MAP: Record<ActivityEntity, string> = {
   client: 'Cliente',
   provider: 'Proveedor',
-  simulation: 'Propuesta',
+  simulation: 'Simulación',
   scenario: 'Escenario',
-  proposal: 'Simulación',
+  proposal: 'Propuesta',
   kpi: 'KPI',
   cxp: 'CXP',
   plan: 'Plan',

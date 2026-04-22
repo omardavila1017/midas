@@ -8,7 +8,7 @@ import {
   scaleFactor,
   MONTH_HEADERS,
 } from '../domain/budget';
-import { fmtCurrency, fmtYearMonthShort } from '../formatters';
+import { fmtCurrency } from '../formatters';
 
 interface Props {
   open: boolean;

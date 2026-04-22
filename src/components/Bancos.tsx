@@ -5,7 +5,6 @@ import {
   AlertCircle,
   CheckCircle,
   Wallet,
-  Building2,
   Receipt,
   Calendar,
   ChevronDown,
@@ -26,7 +25,7 @@ import {
   type BankStatementFormat,
 } from '../services/jde';
 import { hex } from '../theme';
-import { fmtCurrency as fmtCurrencyUnified, fmtCompact as fmtCompactUnified } from '../formatters';
+import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Props
@@ -54,7 +53,6 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 
 /* Formatters → unified imports from ../formatters */
 const fmtCurrency = (v: number, _moneda = 'MXN'): string => fmtCurrencyUnified(v);
-const fmtCompact = (v: number): string => fmtCompactUnified(v);
 
 const csvEscape = (v: string | number | undefined): string => {
   if (v === undefined || v === null) return '';

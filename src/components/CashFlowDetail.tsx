@@ -171,7 +171,7 @@ export default function CashFlowDetail({
   );
 
   const weekly = useMemo(() => aggregateWeekly(daily), [daily]);
-  const monthly = useMemo(() => aggregateMonthly(daily, startingBalance), [daily, startingBalance]);
+  const monthly = useMemo(() => aggregateMonthly(daily), [daily]);
 
   // Filter by month if selected
   const filteredDaily = useMemo(() => {
@@ -1105,24 +1105,6 @@ function WeekDetail({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function Badge({ tone, children }: {
-  tone: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
-  children: React.ReactNode;
-}) {
-  const map = {
-    success: 'bg-[var(--success)]/10 text-[var(--success)]',
-    warning: 'bg-[var(--warning)]/10 text-[var(--warning)]',
-    danger:  'bg-[var(--danger)]/10 text-[var(--danger)]',
-    info:    'bg-[var(--info)]/10 text-[var(--info)]',
-    neutral: 'bg-[var(--muted)] text-[var(--muted-foreground)]',
-  }[tone];
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${map}`}>
-      {children}
-    </span>
-  );
-}
-
 function EmptyTable({ msg }: { msg: string }) {
   return (
     <div className={`${T.surface} border ${T.border} rounded-xl py-16 text-center`}>

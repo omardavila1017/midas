@@ -4,7 +4,6 @@ import {
   FileSpreadsheet,
   Loader2,
   AlertCircle,
-  CheckCircle,
   Search,
   Building2,
   Clock,
@@ -33,11 +32,9 @@ import {
   PieChart,
   Pie,
   Cell,
-  Legend,
-  Treemap,
 } from 'recharts';
-import { hex, color } from '../theme';
-import { fmtCompact, fmtCurrency, fmtSmart } from '../formatters';
+import { hex } from '../theme';
+import { fmtCompact, fmtCurrency } from '../formatters';
 import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
 import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
 import { projectYear } from '../domain/collectionEngine';
@@ -118,7 +115,6 @@ interface SupplierSummary {
   records: EnrichedCXPRecord[];
 }
 
-type CXPView = 'upload' | 'dashboard';
 type DashboardTab = 'resumen' | 'triage' | 'proveedores';
 type SortKey = 'nombre' | 'total' | 'count' | 'maxDias';
 type SortDir = 'asc' | 'desc';
@@ -463,169 +459,6 @@ function parseCXP(text: string): CXPRecord[] {
   return records;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   Upload Component
-   ═══════════════════════════════════════════════════════════════════════ */
-
-const CXPUpload = ({
-  onDataLoaded,
-  selectedCia,
-}: {
-  onDataLoaded: (r: CXPRecord[]) => void;
-  selectedCia?: string;
-}) => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-  const [count, setCount] = useState(0);
-  const [source, setSource] = useState<'csv' | 'jde' | null>(null);
-  const [dragActive, setDragActive] = useState(false);
-  const ref = useRef<HTMLInputElement>(null);
-
-  const handle = useCallback(async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.csv')) { setError('Solo archivos .csv'); return; }
-    setSource('csv'); setLoading(true); setError(null);
-    try {
-      const text = await file.text();
-      const recs = parseCXP(text);
-      setCount(recs.length);
-      setSuccess(true);
-      onDataLoaded(recs);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error al procesar');
-      setLoading(false);
-    }
-  }, [onDataLoaded]);
-
-  const loadFromJde = useCallback(async () => {
-    if (!selectedCia || selectedCia === 'all') return;
-    setSource('jde'); setLoading(true); setError(null);
-    try {
-      const records = await fetchAgedBalances({ cia: selectedCia });
-      if (records.length === 0) throw new Error(`JDE devolvió 0 registros para la compañía ${selectedCia}`);
-      setCount(records.length);
-      setSuccess(true);
-      onDataLoaded(records as CXPRecord[]);
-    } catch (e) {
-      if (e instanceof JdeApiError) {
-        const hint = e.status === 401 ? ' — error de autenticación con el servidor' : '';
-        setError(`JDE ${e.status}: ${e.message}${hint}`);
-      } else {
-        setError(e instanceof Error ? e.message : 'Error al consultar JDE');
-      }
-      setLoading(false);
-    }
-  }, [selectedCia, onDataLoaded]);
-
-  const jdeDisabled = !selectedCia || selectedCia === 'all';
-
-  const onDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    setDragActive(e.type === 'dragenter' || e.type === 'dragover');
-  }, []);
-
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation(); setDragActive(false);
-    if (e.dataTransfer.files?.length) handle(e.dataTransfer.files[0]);
-  }, [handle]);
-
-  const retry = () => {
-    setError(null);
-    if (source === 'jde') loadFromJde();
-    else ref.current?.click();
-  };
-
-  return (
-    <div className="w-full max-w-3xl mx-auto">
-      <div className="text-center mb-8">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
-          <Clock className="text-white" size={26} />
-        </div>
-        <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Cuentas por Pagar</h1>
-        <p className="text-[15px] text-[var(--gray-400)] mt-1">Análisis de antigüedad de saldos CXP</p>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
-        {!loading && !success && !error && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* ── JDE ── */}
-            <div className={`border-2 rounded-2xl p-10 text-center transition-all ${
-              jdeDisabled ? 'border-[var(--gray-100)] bg-[var(--surface-alt)]' : 'border-[var(--primary)]/30 bg-[var(--primary-subtle)] hover:border-[var(--primary)] hover:bg-[var(--primary-muted)]'
-            }`}>
-              <Database className={`w-10 h-10 mx-auto mb-3 ${jdeDisabled ? 'text-[var(--gray-300)]' : 'text-[var(--primary)]'}`} />
-              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Consultar desde JDE</p>
-              <p className="text-[12px] text-[var(--gray-400)] mt-1">
-                Compañía: <span className="font-medium text-[var(--gray-950)]">
-                  {jdeDisabled ? '— selecciona en el header —' : selectedCia}
-                </span>
-              </p>
-              <button
-                onClick={loadFromJde}
-                disabled={jdeDisabled}
-                title={jdeDisabled ? 'Selecciona una compañía en el header primero' : undefined}
-                className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
-              >
-                <Database className="w-4 h-4" />
-                Consultar Antigüedad
-              </button>
-            </div>
-
-            {/* ── CSV ── */}
-            <div
-              onDragEnter={onDrag} onDragLeave={onDrag} onDragOver={onDrag} onDrop={onDrop}
-              onClick={() => ref.current?.click()}
-              className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all ${
-                dragActive ? 'border-[var(--primary)] bg-[var(--primary-muted)]' : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
-              }`}
-            >
-              <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
-              <p className="text-[15px] font-semibold text-[var(--gray-950)]">Arrastra tu CSV aquí</p>
-              <p className="text-[13px] text-[var(--gray-400)] mt-1">o haz click para seleccionar archivo</p>
-              <input ref={ref} type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handle(e.target.files[0])} />
-            </div>
-          </div>
-        )}
-
-        {loading && !success && (
-          <div className="text-center py-16">
-            <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-3" />
-            <p className="text-[15px] font-medium text-[var(--gray-950)]">
-              {source === 'jde' ? `Consultando JDE (compañía ${selectedCia})...` : 'Procesando archivo...'}
-            </p>
-          </div>
-        )}
-
-        {success && (
-          <div className="text-center py-14">
-            <CheckCircle className="w-12 h-12 text-[var(--success)] mx-auto mb-3" />
-            <p className="text-[15px] font-semibold text-[var(--gray-950)]">{count.toLocaleString()} registros cargados</p>
-            <p className="text-[13px] text-[var(--gray-400)] mt-1">
-              {source === 'jde' ? `Desde JDE · compañía ${selectedCia}` : 'Desde archivo CSV'} — abriendo análisis...
-            </p>
-          </div>
-        )}
-
-        {error && (
-          <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl p-5">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
-              <div className="flex-1">
-                <p className="text-[14px] font-semibold text-[var(--gray-950)]">
-                  {source === 'jde' ? 'Error al consultar JDE' : 'Error al procesar'}
-                </p>
-                <p className="text-[13px] text-[var(--gray-500)] mt-1">{error}</p>
-                <button onClick={retry}
-                  className="mt-3 text-[13px] font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]">
-                  Intentar de nuevo
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
 
 /* ═══════════════════════════════════════════════════════════════════════
    Custom Tooltip
@@ -1904,7 +1737,6 @@ const CXP = ({
 }: CXPProps) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCsv, setShowCsv] = useState(false);
   const csvInput = useRef<HTMLInputElement>(null);
   const autoFetchAttempted = useRef<Set<string>>(new Set());
 
@@ -2033,7 +1865,6 @@ const CXP = ({
       if (ciasInCsv.length > 0) {
         onReplaceAll(recs, ciasInCsv);
       }
-      setShowCsv(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al procesar');
     } finally {

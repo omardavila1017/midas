@@ -19,7 +19,6 @@ import {
   Landmark,
   Wallet,
   Search,
-  Loader2,
 } from 'lucide-react';
 
 type TabId =
@@ -295,7 +294,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                     </div>
 
                     {/* Items in category */}
-                    {group.items.map((item, indexInGroup) => {
+                    {group.items.map((item) => {
                       const globalIndex = flatResults.findIndex(
                         (r) => r.id === item.id
                       );

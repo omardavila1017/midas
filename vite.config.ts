@@ -41,5 +41,19 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    build: {
+      // Las dependencias de charts e icons pesan ~350 KB juntas y rara vez
+      // cambian. Separarlas a chunks propios acelera el arranque de sesiones
+      // nuevas porque el browser puede cachearlos entre deploys del app core.
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-charts': ['recharts'],
+            'vendor-icons': ['lucide-react'],
+            'vendor-react': ['react', 'react-dom'],
+          },
+        },
+      },
+    },
   }
 })
