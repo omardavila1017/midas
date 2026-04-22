@@ -104,6 +104,25 @@ export function fmtISO(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** "YYYY-MM" → "Ago 26" (para ejes compactos de mes-año). */
+export function fmtYearMonthShort(yearMonth: string): string {
+  const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const [y, m] = yearMonth.split('-').map(Number);
+  if (!y || !m || m < 1 || m > 12) return yearMonth;
+  return `${months[m - 1]} ${String(y).slice(-2)}`;
+}
+
+/** "YYYY-MM" → "Agosto 2026" (para títulos de detalle). */
+export function fmtYearMonthLong(yearMonth: string): string {
+  const months = [
+    'Enero','Febrero','Marzo','Abril','Mayo','Junio',
+    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre',
+  ];
+  const [y, m] = yearMonth.split('-').map(Number);
+  if (!y || !m || m < 1 || m > 12) return yearMonth;
+  return `${months[m - 1]} ${y}`;
+}
+
 /** Relative date: "Hoy", "Ayer", "Hace 3 días" */
 export function fmtRelative(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;

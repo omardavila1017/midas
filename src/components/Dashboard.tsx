@@ -15,7 +15,7 @@ import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle, LineChart as LineChartIcon,
 } from 'lucide-react';
 import type { Proposal } from '../types';
-import { fmtCompact, fmtCurrency } from '../formatters';
+import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
 import {
   buildHistoricalMonths,
   buildFutureExpenses,
@@ -35,6 +35,7 @@ import {
   type BankAccountStatement,
   type AgedBalanceRecord,
 } from '../services/jde';
+import MonthDrilldown from './MonthDrilldown';
 
 interface DashboardProps {
   companyCode: string;
@@ -43,10 +44,21 @@ interface DashboardProps {
   onOpenFlow: () => void;
 }
 
+const CHART_COLORS = {
+  income: '#059669',       // emerald-600 (real income)
+  incomePattern: '#10b981', // emerald-500 (projected stripes)
+  incomeBg: '#ecfdf5',     // emerald-50
+  expense: '#dc2626',       // red-600 (real expense)
+  expensePattern: '#ef4444', // red-500 (projected stripes)
+  expenseBg: '#fef2f2',    // red-50
+  cash: '#1d4ed8',         // blue-700
+};
+
 const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, proposals, onOpenFlow }) => {
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,14 +75,17 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
     return () => { cancelled = true; };
   }, [companyCode]);
 
-  const base = useMemo(
-    () => computeBaseCashFlow(bankStatements, aged, companyCode),
-    [bankStatements, aged, companyCode],
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const { base, baseline } = useMemo(
+    () => computeBaseCashFlow(bankStatements, aged, companyCode, today),
+    [bankStatements, aged, companyCode, today],
   );
   const evaluated = useMemo(() => evaluateCashFlow(base, proposals), [base, proposals]);
 
   const currentYear = new Date().getFullYear();
-  const currentYm = toYearMonth(new Date().toISOString().slice(0, 10));
+  const currentYm = toYearMonth(today);
+  const todayDay = new Date(today).getUTCDate();
   const monthsThisYear = evaluated.months.filter((m) => m.yearMonth.startsWith(String(currentYear)));
 
   const ingresosYtd = monthsThisYear
@@ -86,19 +101,89 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
     return lastHist?.baseClosingCash ?? 0;
   })();
 
-  const chartData = evaluated.months.map((m) => ({
-    yearMonth: m.yearMonth,
-    histIncome: m.isHistorical ? m.baseIncome : null,
-    histExpense: m.isHistorical ? m.baseExpense : null,
-    projIncome: !m.isHistorical ? m.forecastIncome : null,
-    projExpense: !m.isHistorical ? m.forecastExpense : null,
-    cashBase: m.baseClosingCash,
-  }));
+  // committed expenses por mes — para saber el "techo" del mes actual.
+  const committedByMonth = useMemo(() => buildFutureExpenses(aged), [aged]);
+
+  // Datos del chart: cada mes lleva ingresos/egresos partidos en real + proyectado.
+  // - Histórico completo: todo al tramo real.
+  // - Mes en curso: real = lo capturado; proyectado = lo que falta para cerrar
+  //   el mes (ingresos: gap al baseline; egresos: max(gap baseline, programado restante + baseline prorrateado)).
+  // - Mes futuro: todo al tramo proyectado.
+  const chartData = useMemo(() => evaluated.months.map((m) => {
+    const ym = m.yearMonth;
+    const cmp = compareYearMonth(ym, currentYm);
+    if (cmp < 0) {
+      return {
+        yearMonth: ym,
+        realIncome: m.baseIncome,
+        projIncome: 0,
+        realExpense: m.baseExpense,
+        projExpense: 0,
+        cashBase: m.baseClosingCash,
+        phase: 'past' as const,
+      };
+    }
+    if (cmp > 0) {
+      return {
+        yearMonth: ym,
+        realIncome: 0,
+        projIncome: m.baseIncome,
+        realExpense: 0,
+        projExpense: m.baseExpense,
+        cashBase: m.baseClosingCash,
+        phase: 'future' as const,
+      };
+    }
+    // Mes en curso: el engine lo marca como histórico con datos parciales.
+    const daysInCurMonth = daysInMonth(ym);
+    const daysRemaining = Math.max(0, daysInCurMonth - todayDay);
+    const committedThisMonth = committedByMonth.get(ym) ?? 0;
+    const expectedIncome = Math.max(baseline.avgIncome, m.baseIncome);
+    const projInc = Math.max(0, expectedIncome - m.baseIncome);
+    // Egresos esperados: lo ya ocurrido + lo programado restante y el baseline
+    // prorrateado a los días que faltan; respetando piso del baseline.
+    const baselineRemaining = baseline.avgExpense * (daysRemaining / Math.max(1, daysInCurMonth));
+    const projectedRemainder = Math.max(
+      baselineRemaining,
+      Math.max(0, committedThisMonth - m.baseExpense),
+      Math.max(0, baseline.avgExpense - m.baseExpense),
+    );
+    return {
+      yearMonth: ym,
+      realIncome: m.baseIncome,
+      projIncome: projInc,
+      realExpense: m.baseExpense,
+      projExpense: projectedRemainder,
+      cashBase: m.baseClosingCash,
+      phase: 'current' as const,
+    };
+  }), [evaluated.months, currentYm, todayDay, committedByMonth, baseline]);
 
   const hasRealData = bankStatements.length > 0;
 
+  const handleBarClick = (payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    const p = payload as { activeLabel?: string; activePayload?: { payload?: { yearMonth?: string } }[] };
+    const ym = p.activeLabel ?? p.activePayload?.[0]?.payload?.yearMonth;
+    if (ym) setSelectedMonth(ym);
+  };
+
   return (
     <div className="space-y-5">
+      {/* Patrones SVG para las barras proyectadas (relleno de líneas). */}
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
+        <defs>
+          <pattern id="hatchIncome" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill={CHART_COLORS.incomeBg} />
+            <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.incomePattern} strokeWidth="2.5" />
+          </pattern>
+          <pattern id="hatchExpense" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill={CHART_COLORS.expenseBg} />
+            <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.expensePattern} strokeWidth="2.5" />
+          </pattern>
+        </defs>
+      </svg>
+
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-[22px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
@@ -165,29 +250,134 @@ const Dashboard: React.FC<DashboardProps> = ({ companyCode, bankStatements, prop
           Flujo mensual
         </h2>
         <p className="text-[11px] mb-4" style={{ color: 'var(--gray-400)' }}>
-          Ingresos, egresos y caja final — histórico desde /Bancos, proyección desde /AntiguedadSaldos + promedio móvil.
+          Barra sólida = real · Barra de líneas = proyectado. Haz clic en un mes para ver el detalle.
         </p>
-        <div style={{ height: 320 }}>
+        <div style={{ height: 340 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 10 }}>
+            <ComposedChart
+              data={chartData}
+              margin={{ top: 10, right: 20, left: 10, bottom: 10 }}
+              onClick={handleBarClick}
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="yearMonth" tick={{ fontSize: 11 }} />
+              <XAxis
+                dataKey="yearMonth"
+                tick={{ fontSize: 11 }}
+                tickFormatter={fmtYearMonthShort}
+              />
               <YAxis tickFormatter={(v) => fmtCompact(v)} tick={{ fontSize: 11 }} width={70} />
               <Tooltip
-                formatter={(v: number | string) => (typeof v === 'number' ? fmtCurrency(v) : v)}
-                contentStyle={{ borderRadius: 8, borderColor: '#e5e7eb' }}
+                content={<MonthTooltip />}
+                cursor={{ fill: 'rgba(99, 102, 241, 0.06)' }}
               />
               <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
               <ReferenceLine y={0} stroke="#cbd5e1" />
-              <Bar dataKey="histIncome" fill="#cbd5e1" name="Ingresos (histórico)" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="histExpense" fill="#475569" name="Egresos (histórico)" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="projIncome" fill="#10b981" fillOpacity={0.85} name="Ingresos (proy.)" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="projExpense" fill="#ef4444" fillOpacity={0.85} name="Egresos (proy.)" radius={[4, 4, 0, 0]} />
-              <Line type="monotone" dataKey="cashBase" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 2 }} name="Caja Final" />
+              <Bar
+                dataKey="realIncome"
+                stackId="income"
+                fill={CHART_COLORS.income}
+                name="Ingresos (real)"
+                radius={[0, 0, 0, 0]}
+                cursor="pointer"
+              />
+              <Bar
+                dataKey="projIncome"
+                stackId="income"
+                fill="url(#hatchIncome)"
+                stroke={CHART_COLORS.incomePattern}
+                strokeWidth={1}
+                name="Ingresos (proy.)"
+                radius={[4, 4, 0, 0]}
+                cursor="pointer"
+              />
+              <Bar
+                dataKey="realExpense"
+                stackId="expense"
+                fill={CHART_COLORS.expense}
+                name="Egresos (real)"
+                radius={[0, 0, 0, 0]}
+                cursor="pointer"
+              />
+              <Bar
+                dataKey="projExpense"
+                stackId="expense"
+                fill="url(#hatchExpense)"
+                stroke={CHART_COLORS.expensePattern}
+                strokeWidth={1}
+                name="Egresos (proy.)"
+                radius={[4, 4, 0, 0]}
+                cursor="pointer"
+              />
+              <Line
+                type="monotone"
+                dataKey="cashBase"
+                stroke={CHART_COLORS.cash}
+                strokeWidth={2.5}
+                dot={{ r: 2 }}
+                name="Caja Final"
+              />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
       </div>
+
+      <MonthDrilldown
+        open={selectedMonth !== null}
+        yearMonth={selectedMonth}
+        bankStatements={bankStatements}
+        agedBalances={aged}
+        companyCode={companyCode}
+        baseline={baseline}
+        today={today}
+        onClose={() => setSelectedMonth(null)}
+      />
+    </div>
+  );
+};
+
+interface TooltipPayloadItem {
+  dataKey: string;
+  value: number;
+  payload: { yearMonth: string; phase?: 'past' | 'current' | 'future' };
+}
+
+const TOOLTIP_LABELS: Record<string, string> = {
+  realIncome: 'Ingresos (real)',
+  projIncome: 'Ingresos (proy.)',
+  realExpense: 'Egresos (real)',
+  projExpense: 'Egresos (proy.)',
+  cashBase: 'Caja Final',
+};
+
+const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[]; label?: string }> = ({
+  active, payload, label,
+}) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const ym = label ?? payload[0]?.payload?.yearMonth ?? '';
+  const phase = payload[0]?.payload?.phase;
+  const phaseText =
+    phase === 'past' ? 'Histórico' :
+    phase === 'current' ? 'En curso (real + proy.)' :
+    phase === 'future' ? 'Proyectado' : '';
+  return (
+    <div className="rounded-lg border border-[var(--gray-200)] bg-white shadow-sm px-3 py-2 text-[12px]">
+      <p className="font-semibold mb-0.5" style={{ color: 'var(--gray-950)' }}>{fmtYearMonthLong(ym)}</p>
+      {phaseText && <p className="text-[11px] mb-1.5" style={{ color: 'var(--gray-400)' }}>{phaseText}</p>}
+      <ul className="space-y-0.5">
+        {payload
+          .filter((p) => p.value !== 0 && p.value !== null && p.value !== undefined)
+          .map((p) => (
+            <li key={p.dataKey} className="flex items-center justify-between gap-4">
+              <span style={{ color: 'var(--gray-600)' }}>{TOOLTIP_LABELS[p.dataKey] ?? p.dataKey}</span>
+              <span className="tabular-nums font-medium" style={{ color: 'var(--gray-950)' }}>
+                {fmtCurrency(p.value)}
+              </span>
+            </li>
+          ))}
+      </ul>
+      <p className="text-[10px] mt-1.5" style={{ color: 'var(--gray-400)' }}>
+        Clic para desglose del mes
+      </p>
     </div>
   );
 };
@@ -206,11 +396,17 @@ const KpiCard: React.FC<{ label: string; value: number; icon: React.ReactNode; c
   </div>
 );
 
+function daysInMonth(ym: string): number {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
 function computeBaseCashFlow(
   bankStatements: BankAccountStatement[],
   agedBalances: AgedBalanceRecord[],
   companyCode: string,
-): CashFlowMonth[] {
+  today: string,
+): { base: CashFlowMonth[]; baseline: { avgIncome: number; avgExpense: number } } {
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
@@ -218,13 +414,13 @@ function computeBaseCashFlow(
   const historical = buildHistoricalMonths(filtered);
   const futureExpenses = buildFutureExpenses(agedBalances);
 
-  const today = new Date().toISOString().slice(0, 10);
   const todayYm = toYearMonth(today);
   // Excluimos el mes en curso (parcial) del input de proyección para no sesgar
   // los promedios hacia abajo.
   const completeHistorical = filterCompleteHistorical(historical, today);
   const avgIncome = projectFutureIncome(completeHistorical, 6);
   const expenseProjector = buildExpenseProjector(completeHistorical);
+  const avgExpense = expenseProjector(1);
 
   const horizonMonths = 12;
   const lastHistoricalYm = historical.length > 0
@@ -257,7 +453,7 @@ function computeBaseCashFlow(
     });
     cursor = addMonths(cursor, 1);
   }
-  return months;
+  return { base: months, baseline: { avgIncome, avgExpense } };
 }
 
 export default Dashboard;
