@@ -173,8 +173,6 @@ const PAGE_SIZE = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HIGH_IMPACT_AMOUNT = 1_000_000;
 const MID_IMPACT_AMOUNT = 500_000;
-const RISKS: ProviderRisk[] = ['Alto', 'Medio', 'Bajo'];
-const FLEX_VALUES: ProviderFlexibility[] = ['inamovible', 'flexible', 'revisar', 'unknown'];
 const DUE_FILTERS: { id: DueFilter; label: string }[] = [
   { id: 'dueThisWeek', label: 'Vence esta semana' },
   { id: 'current', label: 'Por vencer' },
@@ -733,10 +731,7 @@ const CXPDashboard = ({
   const [sortKey, setSortKey] = useState<SortKey>('total');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [provPage, setProvPage] = useState(0);
-  const [filterPanelOpen, setFilterPanelOpen] = useState(true);
   const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
-  const [riskFilters, setRiskFilters] = useState<ProviderRisk[]>([]);
-  const [flexFilters, setFlexFilters] = useState<ProviderFlexibility[]>([]);
   const [dueFilters, setDueFilters] = useState<DueFilter[]>([]);
   const [amountFilters, setAmountFilters] = useState<AmountFilter[]>([]);
   const [priorityFilters, setPriorityFilters] = useState<PaymentPriority[]>([]);
@@ -760,8 +755,6 @@ const CXPDashboard = ({
   const clearAllFilters = () => {
     setSearchTerm('');
     setCategoryFilters([]);
-    setRiskFilters([]);
-    setFlexFilters([]);
     setDueFilters([]);
     setAmountFilters([]);
     setPriorityFilters([]);
@@ -776,8 +769,6 @@ const CXPDashboard = ({
     drillStack.length ||
     activeTriageAlert ||
     categoryFilters.length ||
-    riskFilters.length ||
-    flexFilters.length ||
     dueFilters.length ||
     amountFilters.length ||
     priorityFilters.length
@@ -822,23 +813,6 @@ const CXPDashboard = ({
     });
   }, [providersByName, records]);
 
-  const recordsForFilterOptions = useMemo(
-    () => selectedCia === 'all' ? enrichedRecords : enrichedRecords.filter(record => record.cia === selectedCia),
-    [enrichedRecords, selectedCia],
-  );
-
-  const providerTypeOptions = useMemo(() => {
-    const map = new Map<string, { label: string; total: number; count: number }>();
-    recordsForFilterOptions.forEach((record) => {
-      const label = record.providerType || 'Sin clasificar';
-      const item = map.get(label) ?? { label, total: 0, count: 0 };
-      item.total += record.importePendientePesos;
-      item.count += 1;
-      map.set(label, item);
-    });
-    return Array.from(map.values()).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, 'es'));
-  }, [recordsForFilterOptions]);
-
   // ── Filtered Records ──
   const filtered = useMemo(() => {
     let f = enrichedRecords;
@@ -875,14 +849,6 @@ const CXPDashboard = ({
     if (activeKpi === 'porVencer') f = f.filter(r => r.porVencer > 0);
     else if (activeKpi === 'vencido') f = f.filter(r => (r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
     else if (activeKpi === 'mas90') f = f.filter(r => (r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
-    if (riskFilters.length) {
-      const selected = new Set(riskFilters);
-      f = f.filter(r => selected.has(r.providerRisk));
-    }
-    if (flexFilters.length) {
-      const selected = new Set(flexFilters);
-      f = f.filter(r => selected.has(r.providerFlexibility));
-    }
     if (dueFilters.length) f = f.filter(r => dueFilters.some(filter => matchesDueFilter(r, filter)));
     if (amountFilters.length) f = f.filter(r => amountFilters.some(filter => matchesAmountFilter(r, filter)));
     if (priorityFilters.length) {
@@ -893,7 +859,7 @@ const CXPDashboard = ({
       f = f.filter(r => r.alerts.some(alert => alert.type === activeTriageAlert));
     }
     return f;
-  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeAgingRange, drillStack, categoryFilters, activeKpi, riskFilters, flexFilters, dueFilters, amountFilters, priorityFilters, activeTriageAlert]);
+  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeAgingRange, drillStack, categoryFilters, activeKpi, dueFilters, amountFilters, priorityFilters, activeTriageAlert]);
 
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
@@ -1178,8 +1144,6 @@ const CXPDashboard = ({
       onRemove: () => setActiveKpi(null),
     }] : []),
     ...categoryFilters.map(value => ({ key: `cat-${value}`, label: `Categoria: ${value}`, onRemove: () => setCategoryFilters(prev => prev.filter(item => item !== value)) })),
-    ...riskFilters.map(value => ({ key: `risk-${value}`, label: `Riesgo: ${value}`, onRemove: () => setRiskFilters(prev => prev.filter(item => item !== value)) })),
-    ...flexFilters.map(value => ({ key: `flex-${value}`, label: `Flexibilidad: ${flexibilityLabel(value)}`, onRemove: () => setFlexFilters(prev => prev.filter(item => item !== value)) })),
     ...dueFilters.map(value => ({ key: `due-${value}`, label: `Vencimiento: ${dueFilterLabel(value)}`, onRemove: () => setDueFilters(prev => prev.filter(item => item !== value)) })),
     ...amountFilters.map(value => ({ key: `amount-${value}`, label: `Monto: ${amountFilterLabel(value)}`, onRemove: () => setAmountFilters(prev => prev.filter(item => item !== value)) })),
     ...priorityFilters.map(value => ({ key: `priority-${value}`, label: `Prioridad: ${priorityLabel(value)}`, onRemove: () => setPriorityFilters(prev => prev.filter(item => item !== value)) })),
@@ -1239,165 +1203,89 @@ const CXPDashboard = ({
   return (
     <div className="space-y-4">
       {/* ── Header Bar ── */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 gap-2 shadow-sm">
-          <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
-          <input type="text" placeholder="Buscar proveedor, factura, # prov..."
-            value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setProvPage(0); }}
-            className="text-[13px] bg-transparent border-none outline-none w-56 placeholder:text-[var(--gray-300)]" />
-          {searchTerm && <button onClick={() => setSearchTerm('')}><X className="w-3.5 h-3.5 text-[var(--gray-400)]" /></button>}
-        </div>
-
-        <select value={selectedCia} onChange={e => { setSelectedCia(e.target.value); setProvPage(0); }}
-          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
-          <option value="all">Todas las compañías</option>
-          {companies.map(c => <option key={c} value={c}>{ciaName(c)}</option>)}
-        </select>
-
-        <button
-          onClick={() => setFilterPanelOpen(open => !open)}
-          className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium shadow-sm transition ${
-            filterPanelOpen || activeFilterChips.length > 0
-              ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
-              : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:text-[var(--primary)]'
-          }`}
-        >
-          <Filter className="w-3.5 h-3.5" />
-          Filtros
-          {activeFilterChips.length > 0 && (
-            <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)]">
-              {activeFilterChips.length}
-            </span>
-          )}
-        </button>
-
-        <div className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] rounded-full px-3 py-1.5">
-          <Receipt className="w-3.5 h-3.5" />
-          {filtered.length.toLocaleString()} facturas
-        </div>
-
-        {hasDrill && (
-          <button onClick={clearAllFilters} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition">
-            <X className="w-3 h-3" /> Limpiar filtros
-          </button>
-        )}
-
-        {/* Sub-tabs — right aligned */}
-        <div className="ml-auto flex items-center bg-[var(--gray-50)]/80 rounded-full p-[3px] gap-[2px]">
-          {tabs.map(t => {
-            const isActive = tab === t.id;
-            return (
-              <button key={t.id} onClick={() => setTab(t.id)}
-                className={`relative px-3.5 py-[6px] rounded-full text-[12.5px] font-medium transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] flex items-center gap-1.5 ${
-                  isActive ? 'text-[var(--gray-950)]' : 'text-[var(--gray-400)] hover:text-[var(--gray-700)]'
-                }`}>
-                {isActive && (
-                  <span className="absolute inset-0 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.04)] animate-scale-in" />
-                )}
-                <span className="relative flex items-center gap-1.5">
-                  {t.label}
-                  {t.count !== undefined && <span className="text-[11px] text-[var(--gray-400)]">({t.count})</span>}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-
-        <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition">
-          <RotateCcw className="w-3 h-3" /> Nuevo archivo
-        </button>
-      </div>
-
-      {filterPanelOpen && (
-        <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm animate-slide-down">
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.6fr_0.8fr_1fr]">
-            <FilterGroup title="Categoria">
-              {providerTypeOptions.map(option => (
-                <FilterPill
-                  key={option.label}
-                  active={categoryFilters.includes(option.label)}
-                  label={option.label}
-                  meta={fmt(option.total)}
-                  onClick={() => {
-                    setCategoryFilters(prev => toggleListValue(prev, option.label));
-                    setProvPage(0);
-                  }}
-                />
-              ))}
-            </FilterGroup>
-
-            <FilterGroup title="Riesgo">
-              {RISKS.map(risk => (
-                <FilterPill
-                  key={risk}
-                  active={riskFilters.includes(risk)}
-                  label={risk}
-                  onClick={() => {
-                    setRiskFilters(prev => toggleListValue(prev, risk));
-                    setProvPage(0);
-                  }}
-                />
-              ))}
-            </FilterGroup>
-
-            <FilterGroup title="Flexibilidad">
-              {FLEX_VALUES.map(flex => (
-                <FilterPill
-                  key={flex}
-                  active={flexFilters.includes(flex)}
-                  label={flexibilityLabel(flex)}
-                  onClick={() => {
-                    setFlexFilters(prev => toggleListValue(prev, flex));
-                    setProvPage(0);
-                  }}
-                />
-              ))}
-            </FilterGroup>
-
-            <FilterGroup title="Vencimiento">
-              {DUE_FILTERS.map(option => (
-                <FilterPill
-                  key={option.id}
-                  active={dueFilters.includes(option.id)}
-                  label={option.label}
-                  onClick={() => {
-                    setDueFilters(prev => toggleListValue(prev, option.id));
-                    setProvPage(0);
-                  }}
-                />
-              ))}
-            </FilterGroup>
-
-            <FilterGroup title="Monto">
-              {AMOUNT_FILTERS.map(option => (
-                <FilterPill
-                  key={option.id}
-                  active={amountFilters.includes(option.id)}
-                  label={option.label}
-                  onClick={() => {
-                    setAmountFilters(prev => toggleListValue(prev, option.id));
-                    setProvPage(0);
-                  }}
-                />
-              ))}
-            </FilterGroup>
-
-            <FilterGroup title="Prioridad">
-              {PRIORITY_FILTERS.map(option => (
-                <FilterPill
-                  key={option.id}
-                  active={priorityFilters.includes(option.id)}
-                  label={option.label}
-                  onClick={() => {
-                    setPriorityFilters(prev => toggleListValue(prev, option.id));
-                    setProvPage(0);
-                  }}
-                />
-              ))}
-            </FilterGroup>
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-[240px] flex-1 items-center rounded-full border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-1.5 gap-2">
+            <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
+            <input type="text" placeholder="Buscar proveedor, factura, # prov..."
+              value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setProvPage(0); }}
+              className="min-w-0 flex-1 text-[13px] bg-transparent border-none outline-none placeholder:text-[var(--gray-300)]" />
+            {searchTerm && <button onClick={() => setSearchTerm('')}><X className="w-3.5 h-3.5 text-[var(--gray-400)]" /></button>}
           </div>
+
+          <select value={selectedCia} onChange={e => { setSelectedCia(e.target.value); setProvPage(0); }}
+            className="max-w-[220px] text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 text-[var(--gray-950)] cursor-pointer">
+            <option value="all">Todas las compañías</option>
+            {companies.map(c => <option key={c} value={c}>{ciaName(c)}</option>)}
+          </select>
+
+          <CompactFilterSelect
+            label="Vence"
+            value={dueFilters[0] ?? 'all'}
+            options={DUE_FILTERS}
+            onChange={(value) => {
+              setDueFilters(value === 'all' ? [] : [value]);
+              setProvPage(0);
+            }}
+          />
+
+          <CompactFilterSelect
+            label="Prioridad"
+            value={priorityFilters[0] ?? 'all'}
+            options={PRIORITY_FILTERS}
+            onChange={(value) => {
+              setPriorityFilters(value === 'all' ? [] : [value]);
+              setProvPage(0);
+            }}
+          />
+
+          <CompactFilterSelect
+            label="Monto"
+            value={amountFilters[0] ?? 'all'}
+            options={AMOUNT_FILTERS}
+            onChange={(value) => {
+              setAmountFilters(value === 'all' ? [] : [value]);
+              setProvPage(0);
+            }}
+          />
+
+          <div className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] rounded-full px-3 py-1.5">
+            <Receipt className="w-3.5 h-3.5" />
+            {filtered.length.toLocaleString()} facturas
+          </div>
+
+          {hasDrill && (
+            <button onClick={clearAllFilters} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition">
+              <X className="w-3 h-3" /> Limpiar filtros
+            </button>
+          )}
+
+          {/* Sub-tabs — right aligned */}
+          <div className="ml-auto flex items-center bg-[var(--gray-50)]/80 rounded-full p-[3px] gap-[2px]">
+            {tabs.map(t => {
+              const isActive = tab === t.id;
+              return (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`relative px-3.5 py-[6px] rounded-full text-[12.5px] font-medium transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] flex items-center gap-1.5 ${
+                    isActive ? 'text-[var(--gray-950)]' : 'text-[var(--gray-400)] hover:text-[var(--gray-700)]'
+                  }`}>
+                  {isActive && (
+                    <span className="absolute inset-0 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.04)] animate-scale-in" />
+                  )}
+                  <span className="relative flex items-center gap-1.5">
+                    {t.label}
+                    {t.count !== undefined && <span className="text-[11px] text-[var(--gray-400)]">({t.count})</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition">
+            <RotateCcw className="w-3 h-3" /> Nuevo archivo
+          </button>
         </div>
-      )}
+      </div>
 
       {/* ── Active filter chips ── */}
       {hasDrill && (
@@ -1925,41 +1813,38 @@ const CXPDashboard = ({
   );
 };
 
-function FilterGroup({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div>
-      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">{title}</p>
-      <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto pr-1">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function FilterPill({
-  active,
+function CompactFilterSelect<T extends string>({
   label,
-  meta,
-  onClick,
+  value,
+  options,
+  onChange,
 }: {
-  active: boolean;
   label: string;
-  meta?: string;
-  onClick: () => void;
+  value: 'all' | T;
+  options: { id: T; label: string }[];
+  onChange: (value: 'all' | T) => void;
 }) {
+  const active = value !== 'all';
   return (
-    <button
-      onClick={onClick}
+    <label
       className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
         active
           ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
-          : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:border-[var(--gray-300)] hover:text-[var(--gray-950)]'
+          : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)]'
       }`}
-      title={label}
     >
-      <span className="truncate">{label}</span>
-      {meta && <span className="font-mono text-[10px] opacity-70">{meta}</span>}
-    </button>
+      <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--gray-400)]">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as 'all' | T)}
+        className="max-w-[150px] cursor-pointer bg-transparent text-[12px] font-medium text-[var(--gray-950)] outline-none"
+      >
+        <option value="all">Todos</option>
+        {options.map(option => (
+          <option key={option.id} value={option.id}>{option.label}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
