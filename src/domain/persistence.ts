@@ -113,6 +113,9 @@ function normalizeProposal(v: unknown): Proposal | null {
   const startYearMonth = typeof o.startYearMonth === 'string' && /^\d{4}-\d{2}$/.test(o.startYearMonth)
     ? o.startYearMonth
     : new Date().toISOString().slice(0, 7);
+  const endYearMonth = typeof o.endYearMonth === 'string' && /^\d{4}-\d{2}$/.test(o.endYearMonth)
+    ? o.endYearMonth
+    : undefined;
   return {
     id: o.id,
     name: typeof o.name === 'string' && o.name.trim() ? o.name : 'Propuesta sin nombre',
@@ -120,6 +123,7 @@ function normalizeProposal(v: unknown): Proposal | null {
     kind,
     amount,
     startYearMonth,
+    endYearMonth,
     frequency,
     enabled: typeof o.enabled === 'boolean' ? o.enabled : true,
     createdAt: typeof o.createdAt === 'string' ? o.createdAt : isoNow(),

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, X, TrendingUp, TrendingDown, Repeat, Trash2, Plus, Minus } from 'lucide-react';
+import { Check, X, TrendingUp, TrendingDown, Repeat, Trash2, Plus, Minus, ChevronDown } from 'lucide-react';
 import type { Proposal, ProposalKind, ProposalFrequency } from '../types';
 import { PROPOSAL_FREQUENCY_LABELS } from '../types';
 import MonthPicker from './ui/MonthPicker';
@@ -35,22 +35,27 @@ export function parseAmount(input: string): number {
 }
 
 const FREQUENCY_OPTIONS: SelectOption<ProposalFrequency>[] = [
-  { value: 'one_time', label: PROPOSAL_FREQUENCY_LABELS.one_time, description: 'Aplica solo en el mes de inicio' },
-  { value: 'monthly', label: PROPOSAL_FREQUENCY_LABELS.monthly, description: 'Aplica todos los meses' },
-  { value: 'quarterly', label: PROPOSAL_FREQUENCY_LABELS.quarterly, description: 'Aplica cada 3 meses' },
-  { value: 'semiannual', label: PROPOSAL_FREQUENCY_LABELS.semiannual, description: 'Aplica cada 6 meses' },
+  { value: 'one_time', label: PROPOSAL_FREQUENCY_LABELS.one_time },
+  { value: 'monthly', label: PROPOSAL_FREQUENCY_LABELS.monthly },
+  { value: 'quarterly', label: PROPOSAL_FREQUENCY_LABELS.quarterly },
+  { value: 'semiannual', label: PROPOSAL_FREQUENCY_LABELS.semiannual },
 ];
 
-/**
- * Editor inline de propuestas — no es modal, no usa overlay oscuro.
- * Se renderiza como una card expandible en el flujo normal de la página.
- */
+const KIND_OPTIONS: { value: ProposalKind; label: string; icon: React.ReactNode; color: string }[] = [
+  { value: 'income_increase', label: 'Ingreso', icon: <TrendingUp className="w-3.5 h-3.5" />, color: 'var(--success)' },
+  { value: 'expense_saving', label: 'Ahorro', icon: <TrendingDown className="w-3.5 h-3.5" />, color: '#2563eb' },
+  { value: 'new_expense', label: 'Nuevo egreso', icon: <Plus className="w-3.5 h-3.5" />, color: 'var(--danger)' },
+  { value: 'revenue_loss', label: 'Pérdida', icon: <Minus className="w-3.5 h-3.5" />, color: 'var(--warning)' },
+];
+
 const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }) => {
   const [name, setName] = useState(initial?.name ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
+  const [showDescription, setShowDescription] = useState(Boolean(initial?.description));
   const [kind, setKind] = useState<ProposalKind>(initial?.kind ?? 'expense_saving');
   const [amount, setAmount] = useState<string>(initial ? String(initial.amount) : '');
   const [startYearMonth, setStartYearMonth] = useState(initial?.startYearMonth ?? currentYearMonth());
+  const [endYearMonth, setEndYearMonth] = useState<string | undefined>(initial?.endYearMonth);
   const [frequency, setFrequency] = useState<ProposalFrequency>(initial?.frequency ?? 'monthly');
 
   useEffect(() => {
@@ -64,12 +69,15 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
   const parsedAmount = parseAmount(amount);
   const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
   const nameValid = name.trim().length > 0;
-  const canSave = nameValid && amountValid;
+  const endValid = !endYearMonth || endYearMonth >= startYearMonth;
+  const canSave = nameValid && amountValid && endValid;
   const validationHint = !nameValid
-    ? 'Dale un nombre a la propuesta para poder guardarla.'
+    ? 'Dale un nombre a la propuesta.'
     : !amountValid
-      ? 'Escribe un monto mayor a $0 (acepta "50,000" o "50000").'
-      : null;
+      ? 'Monto inválido.'
+      : !endValid
+        ? 'La fecha fin debe ser igual o posterior al inicio.'
+        : null;
 
   const handleSave = () => {
     if (!canSave) return;
@@ -81,6 +89,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
       kind,
       amount: Math.abs(parsedAmount),
       startYearMonth,
+      endYearMonth: endYearMonth || undefined,
       frequency,
       enabled: initial?.enabled ?? true,
       createdAt: initial?.createdAt ?? now,
@@ -89,101 +98,67 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
     onSave(proposal);
   };
 
+  const activeKind = KIND_OPTIONS.find((k) => k.value === kind)!;
+
   return (
     <div
-      className="rounded-2xl border border-[var(--gray-200)] bg-white"
-      style={{ animation: 'scaleIn 0.25s var(--spring) both', boxShadow: '0 4px 16px -4px rgba(15,23,42,0.08)' }}
+      className="rounded-xl border border-[var(--gray-200)] bg-white"
+      style={{ animation: 'scaleIn 0.2s var(--spring) both', boxShadow: '0 4px 16px -4px rgba(15,23,42,0.08)' }}
     >
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--gray-100)] rounded-t-2xl">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--gray-100)' }}>
-            {kind === 'income_increase' && <TrendingUp className="w-4 h-4" style={{ color: 'var(--success)' }} />}
-            {kind === 'expense_saving' && <TrendingDown className="w-4 h-4" style={{ color: 'var(--primary)' }} />}
-            {kind === 'new_expense' && <Plus className="w-4 h-4" style={{ color: 'var(--danger)' }} />}
-            {kind === 'revenue_loss' && <Minus className="w-4 h-4" style={{ color: 'var(--warning)' }} />}
-          </div>
-          <h3 className="text-[14px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-            {initial ? 'Editar propuesta' : 'Nueva propuesta'}
-          </h3>
-        </div>
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--gray-100)] rounded-t-xl">
+        <h3 className="text-[13px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+          {initial ? 'Editar propuesta' : 'Nueva propuesta'}
+        </h3>
         <button
           type="button"
           onClick={onCancel}
-          className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-[var(--gray-100)] text-[var(--gray-400)] transition-colors"
+          className="h-6 w-6 flex items-center justify-center rounded-lg hover:bg-[var(--gray-100)] text-[var(--gray-400)] transition-colors"
           aria-label="Cerrar editor"
         >
-          <X className="w-4 h-4" />
+          <X className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      <div className="p-5 space-y-4">
-        {/* Tipo — pills grandes */}
-        <div>
-          <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1.5">
-            Tipo de propuesta
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            <KindPill
-              active={kind === 'income_increase'}
-              onClick={() => setKind('income_increase')}
-              icon={<TrendingUp className="w-4 h-4" />}
-              label="Ingreso"
-              description="Suma ingresos (nuevo cliente, venta extra)"
-              accentColor="var(--success)"
-            />
-            <KindPill
-              active={kind === 'expense_saving'}
-              onClick={() => setKind('expense_saving')}
-              icon={<TrendingDown className="w-4 h-4" />}
-              label="Ahorro"
-              description="Reduce egresos"
-              accentColor="#2563eb"
-            />
-            <KindPill
-              active={kind === 'new_expense'}
-              onClick={() => setKind('new_expense')}
-              icon={<Plus className="w-4 h-4" />}
-              label="Nuevo egreso / Deuda"
-              description="Suma egresos (pago de deuda, nómina, renta)"
-              accentColor="var(--danger)"
-            />
-            <KindPill
-              active={kind === 'revenue_loss'}
-              onClick={() => setKind('revenue_loss')}
-              icon={<Minus className="w-4 h-4" />}
-              label="Pérdida de ingresos"
-              description="Resta ingresos (baja de cliente)"
-              accentColor="var(--warning)"
-            />
-          </div>
+      <div className="p-4 space-y-3">
+        {/* Tipo — pills compactas en una fila */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {KIND_OPTIONS.map((opt) => {
+            const active = opt.value === kind;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setKind(opt.value)}
+                className="h-8 px-2.5 rounded-lg border text-[12px] font-medium flex items-center gap-1.5 transition-colors"
+                style={{
+                  borderColor: active ? opt.color : 'var(--gray-200)',
+                  background: active ? `${opt.color}0F` : 'white',
+                  color: active ? opt.color : 'var(--gray-500)',
+                }}
+              >
+                {opt.icon}
+                {opt.label}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Nombre */}
-        <div>
-          <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1.5">
-            Nombre
-          </label>
+        {/* Nombre + Monto */}
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_200px] gap-2">
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={
-              kind === 'income_increase' ? 'Ej: Nuevo cliente retail'
-              : kind === 'expense_saving' ? 'Ej: Ahorro en combustible'
-              : kind === 'new_expense' ? 'Ej: Pago de deuda banco X'
-              : 'Ej: Salida cliente Y'
-            }
+            placeholder={`Nombre · ej. ${
+              kind === 'income_increase' ? 'Nuevo cliente retail'
+              : kind === 'expense_saving' ? 'Ahorro combustible'
+              : kind === 'new_expense' ? 'Pago deuda banco X'
+              : 'Salida cliente Y'
+            }`}
             autoFocus
-            className="w-full h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] transition-colors hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
+            className="h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] transition-colors hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
             style={{ color: 'var(--gray-950)' }}
           />
-        </div>
-
-        {/* Monto */}
-        <div>
-          <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1.5">
-            Monto por aplicación
-          </label>
           <div className="relative">
             <span
               className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] font-medium pointer-events-none"
@@ -198,7 +173,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
               onChange={(e) => setAmount(e.target.value)}
               placeholder="50,000"
               aria-invalid={amount.length > 0 && !amountValid}
-              className="w-full h-10 pl-7 pr-14 rounded-xl border bg-white text-[13px] tabular-nums transition-colors focus:outline-none"
+              className="w-full h-10 pl-7 pr-12 rounded-xl border bg-white text-[13px] tabular-nums transition-colors focus:outline-none"
               style={{
                 color: 'var(--gray-950)',
                 borderColor: amount.length > 0 && !amountValid ? 'var(--danger)' : 'var(--gray-200)',
@@ -213,49 +188,82 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
           </div>
         </div>
 
-        {/* Inicio + Frecuencia */}
-        <div className="grid grid-cols-2 gap-3">
-          <MonthPicker
-            label="Mes de inicio"
-            value={startYearMonth}
-            onChange={setStartYearMonth}
-            minYear={2020}
-            maxYear={new Date().getFullYear() + 5}
-          />
+        {/* Frecuencia + Desde + Hasta */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <SelectPicker<ProposalFrequency>
-            label="Frecuencia"
             value={frequency}
             options={FREQUENCY_OPTIONS}
             onChange={setFrequency}
             leftIcon={<Repeat className="w-3.5 h-3.5" />}
           />
+          <MonthPicker
+            value={startYearMonth}
+            onChange={setStartYearMonth}
+            minYear={2020}
+            maxYear={new Date().getFullYear() + 5}
+            placeholder="Desde"
+          />
+          <div className="flex items-center gap-1.5">
+            <div className="flex-1">
+              <MonthPicker
+                value={endYearMonth ?? ''}
+                onChange={setEndYearMonth}
+                minYear={2020}
+                maxYear={new Date().getFullYear() + 5}
+                placeholder="Sin fecha fin"
+              />
+            </div>
+            {endYearMonth && (
+              <button
+                type="button"
+                onClick={() => setEndYearMonth(undefined)}
+                className="h-10 w-8 flex items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-700)] transition-colors flex-shrink-0"
+                aria-label="Quitar fecha fin"
+                title="Quitar fecha fin"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Descripción */}
-        <div>
-          <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1.5">
-            Descripción <span className="text-[var(--gray-400)] normal-case font-normal tracking-normal">(opcional)</span>
-          </label>
+        {/* Descripción colapsable */}
+        {!showDescription ? (
+          <button
+            type="button"
+            onClick={() => setShowDescription(true)}
+            className="text-[11px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)] flex items-center gap-1 transition-colors"
+          >
+            <ChevronDown className="w-3 h-3" />
+            Añadir descripción
+          </button>
+        ) : (
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Contexto o supuestos detrás de esta propuesta"
             rows={2}
-            className="w-full px-3 py-2 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] resize-none transition-colors hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
+            autoFocus
+            className="w-full px-3 py-2 rounded-xl border border-[var(--gray-200)] bg-white text-[12px] resize-none transition-colors hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
             style={{ color: 'var(--gray-950)' }}
           />
-        </div>
+        )}
       </div>
 
-      <div className="flex items-center gap-2 px-5 py-3.5 border-t border-[var(--gray-100)] bg-[var(--gray-50)] rounded-b-2xl">
-        {validationHint && (
+      <div className="flex items-center gap-2 px-4 py-2.5 border-t border-[var(--gray-100)] bg-[var(--gray-50)] rounded-b-xl">
+        {validationHint ? (
           <span
             className="text-[11px] truncate"
-            style={{ color: 'var(--gray-500)' }}
+            style={{ color: !endValid || (amount.length > 0 && !amountValid) ? 'var(--danger)' : 'var(--gray-500)' }}
             role="status"
             aria-live="polite"
           >
             {validationHint}
+          </span>
+        ) : (
+          <span className="text-[11px] truncate flex items-center gap-1.5" style={{ color: activeKind.color }}>
+            {activeKind.icon}
+            {activeKind.label}
           </span>
         )}
         {onDelete && (
@@ -264,17 +272,17 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
             onClick={() => {
               if (confirm('¿Eliminar esta propuesta?')) onDelete();
             }}
-            className="h-9 px-3 rounded-lg text-[12px] font-medium text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors flex items-center gap-1.5"
+            className="h-8 px-2.5 rounded-lg text-[11px] font-medium text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors flex items-center gap-1"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className="w-3 h-3" />
             Eliminar
           </button>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1.5">
           <button
             type="button"
             onClick={onCancel}
-            className="h-9 px-4 rounded-lg text-[12px] font-medium text-[var(--gray-500)] hover:bg-white hover:text-[var(--gray-950)] transition-colors border border-transparent hover:border-[var(--gray-200)]"
+            className="h-8 px-3 rounded-lg text-[11px] font-medium text-[var(--gray-500)] hover:bg-white hover:text-[var(--gray-950)] transition-colors border border-transparent hover:border-[var(--gray-200)]"
           >
             Cancelar
           </button>
@@ -282,48 +290,15 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
             type="button"
             onClick={handleSave}
             disabled={!canSave}
-            className="h-9 px-4 rounded-lg bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+            className="h-8 px-3 rounded-lg bg-[var(--primary)] text-white text-[11px] font-medium hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
           >
-            <Check className="w-3.5 h-3.5" />
-            {initial ? 'Guardar cambios' : 'Crear propuesta'}
+            <Check className="w-3 h-3" />
+            {initial ? 'Guardar' : 'Crear'}
           </button>
         </div>
       </div>
     </div>
   );
 };
-
-const KindPill: React.FC<{
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  description: string;
-  accentColor: string;
-}> = ({ active, onClick, icon, label, description, accentColor }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className="relative rounded-xl border p-3 text-left transition-colors"
-    style={{
-      borderColor: active ? accentColor : 'var(--gray-200)',
-      background: active ? `${accentColor}0F` : 'white',
-      boxShadow: active ? `0 0 0 3px ${accentColor}22` : 'none',
-    }}
-  >
-    <div className="flex items-center gap-2 mb-0.5">
-      <span style={{ color: active ? accentColor : 'var(--gray-400)' }}>{icon}</span>
-      <span
-        className="text-[13px] font-semibold"
-        style={{ color: active ? accentColor : 'var(--gray-700)' }}
-      >
-        {label}
-      </span>
-    </div>
-    <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
-      {description}
-    </p>
-  </button>
-);
 
 export default ProposalEditor;

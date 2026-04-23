@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus, AlertTriangle, Lightbulb, TrendingUp, TrendingDown,
   Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check, Download,
+  ChevronDown, Calendar,
 } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import type { Proposal, Scenario, EvaluatedCashFlow, ProposalKind } from '../types';
@@ -322,90 +323,7 @@ const Simulacion: React.FC<Props> = ({
         )}
       </div>
 
-      {/* Escenarios (presets de propuestas activas) */}
-      <ScenariosPanel
-        scenarios={scenarios}
-        activeScenarioId={activeScenarioId}
-        activeMatches={activeScenarioMatches}
-        proposalsCount={proposals.length}
-        enabledCount={enabled.length}
-        proposalsOutsideScenario={proposalsOutsideScenario}
-        onSave={handleSaveScenario}
-        onApply={handleApplyScenario}
-        onUpdateCurrent={handleUpdateScenarioToCurrent}
-        onDelete={handleDeleteScenario}
-      />
-
-      {/* Propuestas */}
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
-        <header className="flex items-center justify-between px-6 py-4 border-b border-[var(--gray-100)] rounded-t-2xl">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--primary-muted)' }}>
-              <Lightbulb className="w-4 h-4" style={{ color: 'var(--primary)' }} />
-            </div>
-            <div>
-              <h2 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-                Propuestas
-              </h2>
-              <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
-                {proposals.length === 0
-                  ? 'Crea propuestas para empezar a simular'
-                  : `${enabled.length} activa${enabled.length === 1 ? '' : 's'} · ${proposals.length} en total`}
-              </p>
-            </div>
-          </div>
-          {editor.mode === 'closed' && (
-            <button
-              onClick={() => setEditor({ mode: 'create' })}
-              className="h-9 px-3.5 rounded-xl bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] flex items-center gap-1.5 transition-colors"
-              style={{ boxShadow: '0 2px 8px -2px rgba(15,23,42,0.25)' }}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Nueva propuesta
-            </button>
-          )}
-        </header>
-
-        <div className="p-5 space-y-4">
-          {editor.mode === 'create' && (
-            <ProposalEditor
-              onCancel={() => setEditor({ mode: 'closed' })}
-              onSave={handleSaveProposal}
-            />
-          )}
-
-          {proposals.length === 0 && editor.mode === 'closed' ? (
-            <EmptyState onCreate={() => setEditor({ mode: 'create' })} />
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {proposals.map((p) => {
-                if (editor.mode === 'edit' && editor.id === p.id && editingProposal) {
-                  return (
-                    <div key={p.id} className="sm:col-span-2 lg:col-span-3">
-                      <ProposalEditor
-                        initial={editingProposal}
-                        onCancel={() => setEditor({ mode: 'closed' })}
-                        onSave={handleSaveProposal}
-                        onDelete={() => handleDelete(p.id)}
-                      />
-                    </div>
-                  );
-                }
-                return (
-                  <ProposalCard
-                    key={p.id}
-                    proposal={p}
-                    onToggle={(next) => handleToggle(p.id, next)}
-                    onEdit={() => setEditor({ mode: 'edit', id: p.id })}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Visualización: switches + chart */}
+      {/* Trayectoria de la caja */}
       <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden animate-card-in stagger-2">
         <header className="px-6 py-4 border-b border-[var(--gray-100)] flex items-baseline justify-between gap-4">
           <div>
@@ -428,34 +346,93 @@ const Simulacion: React.FC<Props> = ({
             </p>
           )}
         </header>
+        <div className="p-5">
+          <SimulacionChart data={evaluated} />
+        </div>
+      </section>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr]">
-          <aside
-            aria-label="Propuestas activables"
-            className="border-b lg:border-b-0 lg:border-r border-[var(--gray-100)] p-4 space-y-1 max-h-[440px] overflow-y-auto"
-          >
-            <p className="text-[10px] font-medium uppercase tracking-wider px-2 mb-2" style={{ color: 'var(--gray-400)' }}>
-              Propuestas
-            </p>
-            {proposals.length === 0 ? (
-              <p className="text-[12px] px-2 py-6 text-center" style={{ color: 'var(--gray-400)' }}>
-                No hay propuestas todavía. Créalas arriba para simular su impacto.
+      {/* Escenarios (presets de propuestas activas) */}
+      <ScenariosPanel
+        scenarios={scenarios}
+        activeScenarioId={activeScenarioId}
+        activeMatches={activeScenarioMatches}
+        proposalsCount={proposals.length}
+        enabledCount={enabled.length}
+        proposalsOutsideScenario={proposalsOutsideScenario}
+        onSave={handleSaveScenario}
+        onApply={handleApplyScenario}
+        onUpdateCurrent={handleUpdateScenarioToCurrent}
+        onDelete={handleDeleteScenario}
+      />
+
+      {/* Propuestas — lista slim con drilldown */}
+      <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+        <header className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--gray-100)] rounded-t-2xl">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--primary-muted)' }}>
+              <Lightbulb className="w-4 h-4" style={{ color: 'var(--primary)' }} />
+            </div>
+            <div>
+              <h2 className="text-[14px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+                Propuestas
+              </h2>
+              <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
+                {proposals.length === 0
+                  ? 'Crea propuestas para empezar a simular'
+                  : `${enabled.length} activa${enabled.length === 1 ? '' : 's'} · ${proposals.length} en total`}
               </p>
-            ) : (
-              proposals.map((p) => (
-                <SwitchRow
+            </div>
+          </div>
+          {editor.mode === 'closed' && (
+            <button
+              onClick={() => setEditor({ mode: 'create' })}
+              className="h-8 px-3 rounded-lg bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] flex items-center gap-1.5 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Nueva
+            </button>
+          )}
+        </header>
+
+        {editor.mode === 'create' && (
+          <div className="p-4 border-b border-[var(--gray-100)] bg-[var(--gray-50)]">
+            <ProposalEditor
+              onCancel={() => setEditor({ mode: 'closed' })}
+              onSave={handleSaveProposal}
+            />
+          </div>
+        )}
+
+        {proposals.length === 0 && editor.mode === 'closed' ? (
+          <div className="p-5">
+            <EmptyState onCreate={() => setEditor({ mode: 'create' })} />
+          </div>
+        ) : (
+          <ul className="divide-y divide-[var(--gray-100)]">
+            {proposals.map((p) => {
+              if (editor.mode === 'edit' && editor.id === p.id && editingProposal) {
+                return (
+                  <li key={p.id} className="p-4 bg-[var(--gray-50)]">
+                    <ProposalEditor
+                      initial={editingProposal}
+                      onCancel={() => setEditor({ mode: 'closed' })}
+                      onSave={handleSaveProposal}
+                      onDelete={() => handleDelete(p.id)}
+                    />
+                  </li>
+                );
+              }
+              return (
+                <ProposalRow
                   key={p.id}
                   proposal={p}
                   onToggle={(next) => handleToggle(p.id, next)}
+                  onEdit={() => setEditor({ mode: 'edit', id: p.id })}
                 />
-              ))
-            )}
-          </aside>
-
-          <div className="p-5">
-            <SimulacionChart data={evaluated} />
-          </div>
-        </div>
+              );
+            })}
+          </ul>
+        )}
       </section>
 
       {/* Tabla mensual */}
@@ -545,113 +522,136 @@ const KpiCard: React.FC<{
   </div>
 );
 
-const ProposalCard: React.FC<{
+function formatYmShort(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  if (!y || !m) return ym;
+  const labels = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  return `${labels[(m - 1) % 12]} ${String(y).slice(2)}`;
+}
+
+const ProposalRow: React.FC<{
   proposal: Proposal;
   onToggle: (next: boolean) => void;
   onEdit: () => void;
 }> = ({ proposal, onToggle, onEdit }) => {
+  const [expanded, setExpanded] = useState(false);
   const { label, accent, icon, sign } = getKindPresentation(proposal.kind);
   return (
-    <div
-      className="group rounded-xl border p-4 hover-lift"
-      style={{
-        borderColor: proposal.enabled ? `${accent}55` : 'var(--gray-200)',
-        background: proposal.enabled ? `${accent}06` : 'white',
-      }}
-    >
-      <div className="flex items-start justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2 min-w-0">
+    <li>
+      <div
+        className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-[var(--gray-50)]"
+        style={{
+          background: proposal.enabled ? `${accent}08` : undefined,
+        }}
+      >
+        <Switch enabled={proposal.enabled} onChange={onToggle} accent={accent} />
+
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex-1 flex items-center gap-3 min-w-0 text-left"
+          aria-expanded={expanded}
+        >
           <div
             className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: proposal.enabled ? `${accent}1a` : 'var(--gray-100)', color: proposal.enabled ? accent : 'var(--gray-400)' }}
+            style={{
+              background: proposal.enabled ? `${accent}1a` : 'var(--gray-100)',
+              color: proposal.enabled ? accent : 'var(--gray-400)',
+            }}
           >
             {icon}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p
-              className="text-[13px] font-semibold truncate"
+              className="text-[13px] font-medium truncate"
               style={{ color: proposal.enabled ? 'var(--gray-950)' : 'var(--gray-500)' }}
             >
               {proposal.name}
             </p>
-            <p className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
-              {label} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency]}
+            <p className="text-[11px] truncate" style={{ color: 'var(--gray-400)' }}>
+              {label} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency].toLowerCase()} · desde {formatYmShort(proposal.startYearMonth)}
+              {proposal.endYearMonth ? ` hasta ${formatYmShort(proposal.endYearMonth)}` : ''}
             </p>
           </div>
-        </div>
-        <Switch enabled={proposal.enabled} onChange={onToggle} accent={accent} />
-      </div>
-
-      <p
-        className="text-[18px] font-semibold tabular-nums mb-1"
-        style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }}
-      >
-        {sign}{fmtCompact(proposal.amount)}
-      </p>
-      <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>
-        Desde {proposal.startYearMonth}
-      </p>
-
-      {proposal.description && (
-        <p className="text-[11px] mt-2 line-clamp-2" style={{ color: 'var(--gray-500)' }}>
-          {proposal.description}
-        </p>
-      )}
-
-      <div className="mt-3 pt-3 border-t border-[var(--gray-100)] flex justify-end">
-        <button
-          onClick={onEdit}
-          className="h-7 px-2.5 rounded-lg text-[11px] font-medium text-[var(--gray-500)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)] transition-colors flex items-center gap-1"
-        >
-          <Pencil className="w-3 h-3" />
-          Editar
+          <p
+            className="text-[14px] font-semibold tabular-nums flex-shrink-0"
+            style={{ color: proposal.enabled ? accent : 'var(--gray-400)' }}
+          >
+            {sign}{fmtCompact(proposal.amount)}
+          </p>
+          <ChevronDown
+            className="w-4 h-4 flex-shrink-0 transition-transform text-[var(--gray-400)]"
+            style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0)' }}
+          />
         </button>
       </div>
-    </div>
+
+      {expanded && (
+        <div
+          className="px-5 pb-4 pt-1 border-t border-[var(--gray-100)] bg-[var(--gray-50)]"
+          style={{ animation: 'slideDown 0.2s var(--ease-smooth) both' }}
+        >
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <DetailField label="Tipo" value={label} accent={accent} />
+            <DetailField label="Monto por aplicación" value={`${sign}${fmtCurrency(proposal.amount)}`} mono />
+            <DetailField label="Frecuencia" value={PROPOSAL_FREQUENCY_LABELS[proposal.frequency]} />
+            <DetailField
+              label="Vigencia"
+              value={
+                proposal.endYearMonth
+                  ? `${formatYmShort(proposal.startYearMonth)} — ${formatYmShort(proposal.endYearMonth)}`
+                  : `Desde ${formatYmShort(proposal.startYearMonth)}`
+              }
+              icon={<Calendar className="w-3 h-3" />}
+            />
+          </div>
+
+          {proposal.description && (
+            <div className="mb-3">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1">
+                Descripción
+              </p>
+              <p className="text-[12px]" style={{ color: 'var(--gray-700)' }}>
+                {proposal.description}
+              </p>
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              onClick={onEdit}
+              className="h-8 px-3 rounded-lg text-[12px] font-medium text-[var(--gray-700)] hover:bg-white border border-[var(--gray-200)] hover:border-[var(--gray-300)] transition-colors flex items-center gap-1.5"
+            >
+              <Pencil className="w-3 h-3" />
+              Editar propuesta
+            </button>
+          </div>
+        </div>
+      )}
+    </li>
   );
 };
 
-const SwitchRow: React.FC<{
-  proposal: Proposal;
-  onToggle: (next: boolean) => void;
-}> = ({ proposal, onToggle }) => {
-  const { accent, sign } = getKindPresentation(proposal.kind);
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={proposal.enabled}
-      aria-label={`${proposal.enabled ? 'Desactivar' : 'Activar'} propuesta ${proposal.name}`}
-      onClick={() => onToggle(!proposal.enabled)}
-      className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md text-left transition-colors hover:bg-[var(--gray-50)] focus-visible:bg-[var(--gray-50)]"
+const DetailField: React.FC<{
+  label: string;
+  value: string;
+  accent?: string;
+  mono?: boolean;
+  icon?: React.ReactNode;
+}> = ({ label, value, accent, mono, icon }) => (
+  <div>
+    <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-0.5 flex items-center gap-1">
+      {icon}
+      {label}
+    </p>
+    <p
+      className={`text-[12px] font-medium truncate ${mono ? 'tabular-nums' : ''}`}
+      style={{ color: accent ?? 'var(--gray-950)' }}
     >
-      <span
-        className="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors"
-        style={{ background: proposal.enabled ? accent : 'var(--gray-200)' }}
-        aria-hidden="true"
-      >
-        <span
-          className="inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform"
-          style={{ transform: proposal.enabled ? 'translateX(18px)' : 'translateX(2px)' }}
-        />
-      </span>
-      <span className="flex-1 min-w-0">
-        <span
-          className="block text-[12px] font-medium truncate"
-          style={{ color: proposal.enabled ? 'var(--gray-950)' : 'var(--gray-500)' }}
-        >
-          {proposal.name}
-        </span>
-        <span
-          className="block text-[10px] tabular-nums truncate"
-          style={{ color: proposal.enabled ? 'var(--gray-500)' : 'var(--gray-400)' }}
-        >
-          {sign}{fmtCompact(proposal.amount)} · {PROPOSAL_FREQUENCY_LABELS[proposal.frequency].toLowerCase()}
-        </span>
-      </span>
-    </button>
-  );
-};
+      {value}
+    </p>
+  </div>
+);
 
 const Switch: React.FC<{ enabled: boolean; onChange: (next: boolean) => void; accent: string }> = ({
   enabled,

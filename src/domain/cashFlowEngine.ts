@@ -397,6 +397,9 @@ export function applyProposalToMonth(
   if (!proposal.enabled) return { deltaIncome: 0, deltaExpense: 0 };
   const diff = monthsBetween(proposal.startYearMonth, yearMonth);
   if (diff < 0) return { deltaIncome: 0, deltaExpense: 0 };
+  if (proposal.endYearMonth && monthsBetween(yearMonth, proposal.endYearMonth) < 0) {
+    return { deltaIncome: 0, deltaExpense: 0 };
+  }
 
   let hits = false;
   switch (proposal.frequency) {
