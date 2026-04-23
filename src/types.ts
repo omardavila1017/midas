@@ -66,6 +66,7 @@ export interface Proposal {
   kind: ProposalKind;
   amount: number;          // pesos, siempre positivo
   startYearMonth: string;  // "YYYY-MM"
+  endYearMonth?: string;   // "YYYY-MM" — si está definido, la propuesta deja de aplicar a partir del siguiente mes
   frequency: ProposalFrequency;
   enabled: boolean;
   createdAt: string;

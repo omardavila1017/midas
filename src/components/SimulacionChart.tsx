@@ -49,6 +49,58 @@ function formatMonthTick(yearMonth: string): string {
   return `${MONTH_LABELS_SHORT[(m - 1) % 12]} ${String(y).slice(2)}`;
 }
 
+const TOOLTIP_SERIES: Record<string, { label: string; color: string }> = {
+  base: { label: 'Caja base', color: '#475569' },
+  forecast: { label: 'Caja simulada', color: '#0f172a' },
+  historicalArea: { label: 'Histórico', color: '#64748b' },
+  deltaAbove: { label: 'Δ positivo', color: '#16a34a' },
+  deltaBelow: { label: 'Δ negativo', color: '#dc2626' },
+};
+
+const ChartTooltip: React.FC<{
+  active?: boolean;
+  payload?: Array<{ name?: string; value?: number | [number, number] | string }>;
+  label?: string;
+}> = ({ active, payload, label }) => {
+  if (!active || !payload || payload.length === 0) return null;
+  return (
+    <div
+      style={{
+        borderRadius: 'var(--radius-md)',
+        border: `1px solid ${COLOR.axis}`,
+        background: 'white',
+        boxShadow: 'var(--shadow-sm)',
+        padding: '8px 10px',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)', marginBottom: 4 }}>
+        {label ? formatMonthTick(label) : ''}
+      </div>
+      {payload.map((p, i) => {
+        const name = p.name ?? '';
+        const meta = TOOLTIP_SERIES[name];
+        if (!meta) return null;
+        let amount: number | null = null;
+        if (Array.isArray(p.value) && p.value.length === 2) {
+          const [lo, hi] = p.value;
+          if (typeof lo === 'number' && typeof hi === 'number') {
+            amount = Math.abs(hi - lo);
+          }
+        } else if (typeof p.value === 'number') {
+          amount = p.value;
+        }
+        if (amount === null) return null;
+        return (
+          <div key={i} style={{ padding: '2px 0', color: meta.color, fontWeight: 500 }}>
+            {meta.label} : {fmtCurrency(amount)}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // Dot fijo en el último punto de la proyección. Marca "dónde termina" sin
 // pelear con la línea.
 const LastPointDot: React.FC<{ cx?: number; cy?: number }> = ({ cx, cy }) => {
@@ -234,34 +286,7 @@ const SimulacionChart: React.FC<Props> = ({ data }) => {
               width={64}
             />
             <Tooltip
-              formatter={(v: number | string | Array<number | string>, name: string) => {
-                const labelMap: Record<string, string> = {
-                  base: 'Caja base',
-                  forecast: 'Caja simulada',
-                  historicalArea: 'Histórico',
-                  deltaAbove: 'Δ positivo',
-                  deltaBelow: 'Δ negativo',
-                };
-                const display = labelMap[name] ?? name;
-                // Los deltas son tuplas [low, high]: mostramos el ancho.
-                if (Array.isArray(v) && v.length === 2) {
-                  const [lo, hi] = v;
-                  if (typeof lo === 'number' && typeof hi === 'number') {
-                    return [fmtCurrency(Math.abs(hi - lo)), display];
-                  }
-                }
-                return [typeof v === 'number' ? fmtCurrency(v) : String(v), display];
-              }}
-              labelFormatter={(label: string) => formatMonthTick(label)}
-              labelStyle={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)' }}
-              contentStyle={{
-                borderRadius: 'var(--radius-md)',
-                border: `1px solid ${COLOR.axis}`,
-                boxShadow: 'var(--shadow-sm)',
-                padding: '8px 10px',
-                fontSize: 12,
-              }}
-              itemStyle={{ padding: '2px 0' }}
+              content={<ChartTooltip />}
               cursor={{ stroke: COLOR.refLine, strokeWidth: 1 }}
               isAnimationActive={false}
             />

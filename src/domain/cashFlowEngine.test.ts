@@ -292,6 +292,13 @@ describe('applyProposalToMonth', () => {
     expect(applyProposalToMonth(p, '2026-02')).toEqual({ deltaIncome: 0, deltaExpense: 0 });
   });
 
+  it('endYearMonth stops the proposal the month after it', () => {
+    const p: Proposal = { ...baseProposal, endYearMonth: '2026-03' };
+    expect(applyProposalToMonth(p, '2026-01').deltaExpense).toBe(-10_000);
+    expect(applyProposalToMonth(p, '2026-03').deltaExpense).toBe(-10_000);
+    expect(applyProposalToMonth(p, '2026-04').deltaExpense).toBe(0);
+  });
+
   it('quarterly fires every 3 months', () => {
     const p: Proposal = { ...baseProposal, frequency: 'quarterly' };
     expect(applyProposalToMonth(p, '2026-01').deltaExpense).toBe(-10_000);
