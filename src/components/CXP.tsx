@@ -86,11 +86,9 @@ type CxpAlertType =
   | 'overdue'
   | 'blocked'
   | 'incomplete'
-  | 'missingPo'
   | 'duplicate'
   | 'creditLimit'
-  | 'staleProvider'
-  | 'strategicProvider';
+  | 'staleProvider';
 type AlertTone = 'danger' | 'warning' | 'info';
 
 interface CxpAlert {
@@ -166,11 +164,9 @@ const ALERT_LABELS: Record<CxpAlertType, string> = {
   overdue: 'Facturas vencidas',
   blocked: 'Bloqueadas',
   incomplete: 'Datos incompletos',
-  missingPo: 'Sin OC',
   duplicate: 'Duplicidad posible',
   creditLimit: 'Límite comprometido',
   staleProvider: 'Proveedor sin actualizar',
-  strategicProvider: 'Proveedor estratégico',
 };
 const TRIAGE_ALERT_ORDER: CxpAlertType[] = [
   'riskHigh',
@@ -181,11 +177,9 @@ const TRIAGE_ALERT_ORDER: CxpAlertType[] = [
   'overdue',
   'blocked',
   'incomplete',
-  'missingPo',
   'duplicate',
   'creditLimit',
   'staleProvider',
-  'strategicProvider',
 ];
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
@@ -292,10 +286,6 @@ function invoiceKey(record: Pick<CXPRecord, 'cia' | 'noProveedor' | 'nombre' | '
   ].join('|');
 }
 
-function hasReference(record: EnrichedCXPRecord, kind: PaymentReference['kind']): boolean {
-  return record.referenceLinks.some(ref => ref.kind === kind);
-}
-
 function isBlocked(record: Pick<CXPRecord, 'edoPago' | 'clasifica' | 'clasificacionProveedor'>): boolean {
   const text = normName(`${record.edoPago} ${record.clasifica} ${record.clasificacionProveedor}`);
   return /\b(BLOQ|BLOQUE|RETEN|DETEN|APROB|RECHAZ|HOLD)\b/.test(text);
@@ -321,16 +311,12 @@ function buildCxpAlerts(
   if (!record.noFactura || !record.fechaFactura || !dueDateForRecord(record) || record.importePendientePesos <= 0) {
     alerts.push(alertItem('incomplete', 'Falta factura, fecha, vencimiento o monto pendiente.', 'warning'));
   }
-  if (!hasReference(record, 'OC')) alerts.push(alertItem('missingPo', 'No se detectó orden de compra en los datos recibidos.', 'info'));
   if (duplicateCount > 1) alerts.push(alertItem('duplicate', `${duplicateCount} registros con misma factura/proveedor/monto.`, 'warning'));
   if (record.providerCreditLimit && record.providerCreditLimit > 0 && supplierExposure >= record.providerCreditLimit * 0.9) {
     alerts.push(alertItem('creditLimit', `Exposición ${fmtFull(supplierExposure)} vs límite ${fmtFull(record.providerCreditLimit)}.`, 'warning'));
   }
   if (record.providerDaysWithoutUpdate !== null && record.providerDaysWithoutUpdate > 90) {
     alerts.push(alertItem('staleProvider', `${record.providerDaysWithoutUpdate} días sin actualización del proveedor.`, 'warning'));
-  }
-  if (record.providerDtiCriticidad || record.providerRisk === 'Alto') {
-    alerts.push(alertItem('strategicProvider', 'Proveedor marcado como crítico o estratégico por catálogo.', 'info'));
   }
   return alerts;
 }
@@ -1852,9 +1838,6 @@ function InvoiceDetailPanel({
                 </span>
               ))}
             </div>
-            {!hasReference(record, 'OC') && (
-              <p className="mt-2 text-[12px] text-[var(--warning)]">No se detectó OC en el archivo de CXP.</p>
-            )}
           </DetailSection>
 
           <DetailSection title="Bancos / pagos posibles">
