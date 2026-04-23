@@ -58,7 +58,7 @@ function SelectPicker<T extends string>({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full h-10 pl-3 pr-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-all hover:border-[var(--gray-300)] hover:shadow-sm active:scale-[0.99]"
+        className="w-full h-10 pl-3 pr-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
         style={{ color: current ? 'var(--gray-950)' : 'var(--gray-400)' }}
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -77,8 +77,8 @@ function SelectPicker<T extends string>({
         <div
           className="absolute left-0 right-0 mt-2 z-50 rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden origin-top"
           style={{
-            animation: 'scaleIn 0.18s var(--spring) both',
-            boxShadow: '0 20px 40px -12px rgba(15,23,42,0.18), 0 4px 8px -4px rgba(15,23,42,0.08)',
+            animation: 'slideDown var(--motion-state) var(--ease-smooth) both',
+            boxShadow: 'var(--shadow-md)',
           }}
         >
           <ul className="py-1.5 max-h-64 overflow-y-auto">

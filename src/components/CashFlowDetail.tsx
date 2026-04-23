@@ -892,10 +892,10 @@ function MonthlyTable({
                   <td className="px-4 py-3 min-w-[180px]">
                     <div className="flex flex-col gap-1">
                       <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden">
-                        <div className="h-full bg-[var(--success)] rounded-full transition-all duration-150" style={{ width: `${inflowPct}%` }} />
+                        <div className="h-full bg-[var(--success)] rounded-full" style={{ width: `${inflowPct}%`, transition: 'width var(--motion-state) var(--ease-smooth)' }} />
                       </div>
                       <div className="h-1.5 rounded-full bg-[var(--muted)] overflow-hidden">
-                        <div className="h-full bg-[var(--danger)] rounded-full transition-all duration-150" style={{ width: `${outflowPct}%` }} />
+                        <div className="h-full bg-[var(--danger)] rounded-full" style={{ width: `${outflowPct}%`, transition: 'width var(--motion-state) var(--ease-smooth)' }} />
                       </div>
                     </div>
                   </td>

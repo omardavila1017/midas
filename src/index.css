@@ -28,10 +28,10 @@
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
 
-  --shadow-card: 0 10px 25px -5px rgba(0, 0, 0, 0.25),
-                 0 8px 10px -6px rgba(0, 0, 0, 0.15);
-  --shadow-card-hover: 0 20px 35px -5px rgba(0, 0, 0, 0.3),
-                       0 12px 15px -6px rgba(0, 0, 0, 0.2);
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.08),
+                 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-card-hover: 0 8px 20px -12px rgba(15, 23, 42, 0.28),
+                       0 2px 6px rgba(15, 23, 42, 0.08);
 
   --primary: #1e293b;
   --primary-hover: #334155;
@@ -68,6 +68,11 @@
   --spring: var(--ease-out);
   --ease-out-expo: var(--ease-out);
   --ease-smooth: var(--ease-out);
+  --motion-instant: 120ms;
+  --motion-feedback: 150ms;
+  --motion-state: 180ms;
+  --motion-layout: 220ms;
+  --motion-emphasis: 280ms;
 
   /* ── Shadows ── */
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
@@ -99,19 +104,6 @@
 
   --tracking-meta: 0.05em;
 
-  /* ── Midas wordmark gold gradient ──
-     The one sanctioned gradient in the system. Used only
-     on the "Midas" header lockup — never on decorative UI. */
-  --midas-gold:        #e9b944;
-  --midas-gold-deep:   #b08518;
-  --midas-gold-light:  #f5c560;
-  --midas-gold-gradient: linear-gradient(
-    135deg,
-    #b08518 0%,
-    #e9b944 35%,
-    #f5c560 65%,
-    #b08518 100%
-  );
 }
 
 [data-skin="corporativo"] {
@@ -167,7 +159,7 @@ table, [data-numeric] {
   line-height: var(--lh-tight);
   font-weight: var(--fw-bold);
   color: var(--gray-950);
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .h2 {
@@ -175,7 +167,7 @@ table, [data-numeric] {
   line-height: var(--lh-tight);
   font-weight: 600;
   color: var(--gray-950);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .h3 {
@@ -235,13 +227,13 @@ kbd {
 
 /* ═══════════════════════════════════════════════
    KEYFRAME ANIMATIONS
-   Duration rules: 100-150ms instant, 200-300ms state,
-   300-500ms layout, 500-800ms entrance
+   Duration rules: 120ms instant, 150-180ms state,
+   180-220ms layout. Keep movement calm for data-heavy screens.
    ═══════════════════════════════════════════════ */
 
 @keyframes pageIn {
-  from { opacity: 0; transform: translateY(12px) scale(0.995); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes fadeIn {
@@ -250,22 +242,22 @@ kbd {
 }
 
 @keyframes cardIn {
-  from { opacity: 0; transform: translateY(16px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes slideDown {
-  from { opacity: 0; transform: translateY(-8px); }
+  from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.92); }
+  from { opacity: 0; transform: scale(0.98); }
   to   { opacity: 1; transform: scale(1); }
 }
 
@@ -289,24 +281,24 @@ kbd {
 }
 
 @keyframes countUp {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(3px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes pulseRing {
-  0%   { box-shadow: 0 0 0 0 var(--pulse-color, rgba(22, 163, 74, 0.4)); }
-  70%  { box-shadow: 0 0 0 8px var(--pulse-color-clear, rgba(22, 163, 74, 0)); }
+  0%   { box-shadow: 0 0 0 0 var(--pulse-color, rgba(22, 163, 74, 0.24)); }
+  70%  { box-shadow: 0 0 0 5px var(--pulse-color-clear, rgba(22, 163, 74, 0)); }
   100% { box-shadow: 0 0 0 0 var(--pulse-color-clear, rgba(22, 163, 74, 0)); }
 }
 
 @keyframes softPulse {
   0%, 100% { opacity: 1; }
-  50%      { opacity: 0.55; }
+  50%      { opacity: 0.72; }
 }
 
 @keyframes viewSwap {
-  from { opacity: 0; transform: translateY(6px) scale(0.995); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes progressFill {
@@ -314,51 +306,32 @@ kbd {
   to   { transform: scaleX(1); }
 }
 
-@keyframes successBounce {
-  0%   { transform: scale(0.6); opacity: 0; }
-  50%  { transform: scale(1.08); opacity: 1; }
-  100% { transform: scale(1); opacity: 1; }
-}
-
-@keyframes shakeX {
-  0%, 100% { transform: translateX(0); }
-  20%      { transform: translateX(-4px); }
-  40%      { transform: translateX(4px); }
-  60%      { transform: translateX(-3px); }
-  80%      { transform: translateX(2px); }
-}
-
-@keyframes dragBreathe {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.015); }
-}
-
 /* ═══════════════════════════════════════════════
    ANIMATION UTILITY CLASSES
    ═══════════════════════════════════════════════ */
 
 .animate-page-in {
-  animation: pageIn 0.5s var(--spring) both;
+  animation: pageIn var(--motion-layout) var(--ease-smooth) both;
 }
 
 .animate-fade-in {
-  animation: fadeIn 0.3s var(--ease-smooth) both;
+  animation: fadeIn var(--motion-state) var(--ease-smooth) both;
 }
 
 .animate-card-in {
-  animation: cardIn 0.45s var(--spring) both;
+  animation: cardIn var(--motion-state) var(--ease-smooth) both;
 }
 
 .animate-slide-down {
-  animation: slideDown 0.3s var(--spring) both;
+  animation: slideDown var(--motion-state) var(--ease-smooth) both;
 }
 
 .animate-slide-up {
-  animation: slideUp 0.3s var(--spring) both;
+  animation: slideUp var(--motion-state) var(--ease-smooth) both;
 }
 
 .animate-scale-in {
-  animation: scaleIn 0.25s var(--spring) both;
+  animation: scaleIn var(--motion-feedback) var(--ease-smooth) both;
 }
 
 .animate-spin {
@@ -366,40 +339,28 @@ kbd {
 }
 
 .animate-row-highlight {
-  animation: rowHighlight 1s ease-out both;
+  animation: rowHighlight 700ms ease-out both;
 }
 
 .animate-count-up {
-  animation: countUp 0.4s var(--spring) both;
+  animation: countUp var(--motion-state) var(--ease-smooth) both;
 }
 
 .animate-pulse-ring {
-  animation: pulseRing 1.6s var(--ease-smooth) infinite;
+  animation: pulseRing 2.2s var(--ease-smooth) infinite;
 }
 
 .animate-soft-pulse {
-  animation: softPulse 1.4s ease-in-out infinite;
+  animation: softPulse 2.2s ease-in-out infinite;
 }
 
 .animate-view-swap {
-  animation: viewSwap 0.32s var(--spring) both;
+  animation: viewSwap var(--motion-state) var(--ease-smooth) both;
 }
 
 .animate-progress-fill {
   transform-origin: left center;
-  animation: progressFill 0.6s var(--spring) both;
-}
-
-.animate-success-bounce {
-  animation: successBounce 0.45s var(--spring) both;
-}
-
-.animate-shake {
-  animation: shakeX 0.42s var(--ease-smooth) both;
-}
-
-.animate-drag-breathe {
-  animation: dragBreathe 1.8s var(--ease-smooth) infinite;
+  animation: progressFill var(--motion-layout) var(--ease-smooth) both;
 }
 
 /* Skeleton loader — shimmer effect */
@@ -409,50 +370,53 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
-/* Stagger delays (50ms increments, capped at 500ms) */
-.stagger-1  { animation-delay: 50ms; }
-.stagger-2  { animation-delay: 100ms; }
-.stagger-3  { animation-delay: 150ms; }
-.stagger-4  { animation-delay: 200ms; }
-.stagger-5  { animation-delay: 250ms; }
-.stagger-6  { animation-delay: 300ms; }
-.stagger-7  { animation-delay: 350ms; }
-.stagger-8  { animation-delay: 400ms; }
-.stagger-9  { animation-delay: 450ms; }
-.stagger-10 { animation-delay: 500ms; }
+/* Stagger delays kept short so dense tables do not feel theatrical. */
+.stagger-1  { animation-delay: 20ms; }
+.stagger-2  { animation-delay: 40ms; }
+.stagger-3  { animation-delay: 60ms; }
+.stagger-4  { animation-delay: 80ms; }
+.stagger-5  { animation-delay: 100ms; }
+.stagger-6  { animation-delay: 120ms; }
+.stagger-7  { animation-delay: 140ms; }
+.stagger-8  { animation-delay: 160ms; }
+.stagger-9  { animation-delay: 180ms; }
+.stagger-10 { animation-delay: 200ms; }
 
 /* ═══════════════════════════════════════════════
    MICRO-INTERACTIONS
    ═══════════════════════════════════════════════ */
 
-/* Card hover — subtle lift + shadow */
+/* Card hover - quiet depth cue for clickable cards. */
 .hover-lift {
-  transition: transform 0.3s var(--spring), box-shadow 0.3s var(--spring);
+  transition: transform var(--motion-state) var(--ease-smooth),
+              box-shadow var(--motion-state) var(--ease-smooth);
 }
 .hover-lift:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   box-shadow: var(--shadow-lg);
 }
 .hover-lift:active {
-  transform: translateY(0) scale(0.98);
-  transition-duration: 0.1s;
+  transform: translateY(0);
+  transition-duration: var(--motion-instant);
 }
 
-/* Button press — tactile */
+/* Button press - feedback by tone, not bounce. */
 .hover-press {
-  transition: transform 0.15s var(--ease-smooth), opacity 0.15s var(--ease-smooth);
+  transition: opacity var(--motion-feedback) var(--ease-smooth),
+              background-color var(--motion-state) var(--ease-smooth),
+              border-color var(--motion-state) var(--ease-smooth),
+              color var(--motion-state) var(--ease-smooth);
 }
 .hover-press:hover {
-  opacity: 0.88;
+  opacity: 0.92;
 }
 .hover-press:active {
-  transform: scale(0.97);
-  opacity: 0.75;
+  opacity: 0.78;
 }
 
 /* Row hover */
 .hover-row {
-  transition: background-color 0.2s var(--ease-smooth);
+  transition: background-color var(--motion-state) var(--ease-smooth);
 }
 .hover-row:hover {
   background-color: var(--primary-subtle);
@@ -492,7 +456,8 @@ input:focus, select:focus, textarea:focus {
   outline: none;
   box-shadow: 0 0 0 3px oklch(55% 0.22 255 / 0.12);
   border-color: var(--primary) !important;
-  transition: box-shadow 0.2s var(--spring), border-color 0.2s var(--spring);
+  transition: box-shadow var(--motion-state) var(--ease-smooth),
+              border-color var(--motion-state) var(--ease-smooth);
 }
 
 .input {
@@ -503,7 +468,9 @@ input:focus, select:focus, textarea:focus {
   background: white;
   font-size: 0.8125rem;
   color: var(--gray-950);
-  transition: all 0.2s var(--spring);
+  transition: border-color var(--motion-state) var(--ease-smooth),
+              box-shadow var(--motion-state) var(--ease-smooth),
+              background-color var(--motion-state) var(--ease-smooth);
 }
 .input:hover {
   border-color: var(--gray-400);
@@ -513,11 +480,17 @@ input:focus, select:focus, textarea:focus {
 }
 
 button, a {
-  transition: all 0.2s var(--ease-smooth);
+  transition: color var(--motion-feedback) var(--ease-smooth),
+              background-color var(--motion-feedback) var(--ease-smooth),
+              border-color var(--motion-feedback) var(--ease-smooth),
+              opacity var(--motion-feedback) var(--ease-smooth),
+              box-shadow var(--motion-feedback) var(--ease-smooth),
+              transform var(--motion-feedback) var(--ease-smooth);
 }
 
 input, select, textarea {
-  transition: border-color 0.2s var(--spring), box-shadow 0.2s var(--spring);
+  transition: border-color var(--motion-state) var(--ease-smooth),
+              box-shadow var(--motion-state) var(--ease-smooth);
 }
 
 /* ═══════════════════════════════════════════════
@@ -542,11 +515,12 @@ input[type="range"]::-webkit-slider-thumb {
   cursor: pointer;
   border: 2.5px solid white;
   box-shadow: 0 1px 4px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.04);
-  transition: transform 0.2s var(--spring), box-shadow 0.2s var(--spring);
+  transition: transform var(--motion-feedback) var(--ease-smooth),
+              box-shadow var(--motion-feedback) var(--ease-smooth);
 }
 input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  transform: scale(1.04);
+  box-shadow: 0 2px 7px rgba(0,0,0,0.16);
 }
 input[type="range"]::-moz-range-thumb {
   width: 18px;
@@ -559,21 +533,11 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ═══════════════════════════════════════════════
-   GLASS
-   ═══════════════════════════════════════════════ */
-
-.glass {
-  background: oklch(100% 0 0 / 0.72);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-}
-
-/* ═══════════════════════════════════════════════
    RECHARTS OVERRIDES
    ═══════════════════════════════════════════════ */
 
 .recharts-wrapper {
-  animation: fadeIn 0.5s var(--ease-smooth) both;
+  animation: fadeIn var(--motion-layout) var(--ease-smooth) both;
 }
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
@@ -633,53 +597,6 @@ input[type="range"]::-moz-range-thumb {
   top: 0;
 }
 
-/* ═══════════════════════════════════════════════
-   MIDAS BRAND LOCKUP
-   The only gradient allowed in the system (brand mark).
-   ═══════════════════════════════════════════════ */
-
-.midas-wordmark {
-  font-family: var(--font-family);
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1;
-  background: var(--midas-gold-gradient);
-  -webkit-background-clip: text;
-          background-clip: text;
-  -webkit-text-fill-color: transparent;
-          color: transparent;
-  /* subtle depth — NOT a glow — keeps the mark crisp on white */
-  text-shadow: 0 1px 0 rgba(176, 133, 24, 0.08);
-  user-select: none;
-}
-
-.midas-divider {
-  display: inline-block;
-  width: 1px;
-  height: 22px;
-  background: var(--gray-200);
-  flex-shrink: 0;
-}
-
-/* Senda wordmark container — gives the burgundy logo a stable chip
-   inside a light header so it keeps contrast next to the gold mark. */
-.senda-lockup {
-  display: inline-flex;
-  align-items: center;
-  height: 36px;
-  padding: 0 10px;
-  background: #ffffff;
-  border: 1px solid var(--gray-200);
-  border-radius: var(--radius-md);
-}
-
-.senda-lockup img {
-  height: 20px;
-  width: auto;
-  display: block;
-  object-fit: contain;
-}
-
 /* Meta / eyebrow helper (matches Midas spec) */
 .eyebrow,
 .label-meta {
@@ -704,7 +621,7 @@ input[type="range"]::-moz-range-thumb {
 .senda-mark-inverted {
   filter: brightness(0) invert(1);
   opacity: 0.95;
-  transition: opacity 0.2s var(--ease-smooth);
+  transition: opacity var(--motion-feedback) var(--ease-smooth);
 }
 .senda-lockup-dark:hover .senda-mark-inverted {
   opacity: 1;
@@ -787,4 +704,3 @@ input[type="range"]::-moz-range-thumb {
 .midas-card.hover-lift:hover {
   box-shadow: var(--shadow-card-hover);
 }
-

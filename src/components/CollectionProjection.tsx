@@ -114,7 +114,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   if (clients.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center animate-page-in">
-        <div className="w-16 h-16 rounded-2xl bg-[var(--primary-muted)] flex items-center justify-center mb-4 animate-success-bounce">
+        <div className="w-16 h-16 rounded-2xl bg-[var(--primary-muted)] flex items-center justify-center mb-4 animate-scale-in">
           <Inbox className="w-7 h-7 text-[var(--primary)]" />
         </div>
         <h2 className="text-xl font-semibold text-[var(--gray-950)]">Sin clientes cargados</h2>
@@ -580,8 +580,8 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
           </div>
           <div className="mt-1.5 h-2 bg-[var(--gray-50)] rounded-full overflow-hidden">
             <div
-              className="h-full bg-[var(--success)] rounded-full transition-all duration-500"
-              style={{ width: `${progressPct}%`, transitionTimingFunction: 'var(--spring)' }}
+              className="h-full bg-[var(--success)] rounded-full"
+              style={{ width: `${progressPct}%`, transition: 'width var(--motion-layout) var(--ease-smooth)' }}
             />
           </div>
         </div>
@@ -645,13 +645,19 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-3 bg-[var(--gray-50)] rounded-full overflow-hidden flex">
                   <div
-                    className="h-full bg-[var(--success)] transition-all"
-                    style={{ width: `${reconSummary.matchedCount / Math.max(1, reconSummary.matchedCount + reconSummary.likelyCount + reconSummary.unmatchedCount) * 100}%` }}
+                    className="h-full bg-[var(--success)]"
+                    style={{
+                      width: `${reconSummary.matchedCount / Math.max(1, reconSummary.matchedCount + reconSummary.likelyCount + reconSummary.unmatchedCount) * 100}%`,
+                      transition: 'width var(--motion-layout) var(--ease-smooth)',
+                    }}
                     title={`Cruzados: ${reconSummary.matchedCount}`}
                   />
                   <div
-                    className="h-full bg-[var(--info)] transition-all"
-                    style={{ width: `${reconSummary.likelyCount / Math.max(1, reconSummary.matchedCount + reconSummary.likelyCount + reconSummary.unmatchedCount) * 100}%` }}
+                    className="h-full bg-[var(--info)]"
+                    style={{
+                      width: `${reconSummary.likelyCount / Math.max(1, reconSummary.matchedCount + reconSummary.likelyCount + reconSummary.unmatchedCount) * 100}%`,
+                      transition: 'width var(--motion-layout) var(--ease-smooth)',
+                    }}
                     title={`Probables: ${reconSummary.likelyCount}`}
                   />
                 </div>
@@ -774,7 +780,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             return (
               <div
                 key={i}
-                className={`min-h-[84px] border-b border-r border-[var(--gray-200)]/30 p-1.5 cursor-pointer transition-all duration-150
+                className={`min-h-[84px] border-b border-r border-[var(--gray-200)]/30 p-1.5 cursor-pointer transition-colors duration-150
                   ${!isCurrentMonth ? 'bg-[var(--surface-alt)] opacity-30' : ''}
                   ${isWeekend && isCurrentMonth ? 'bg-[var(--surface-alt)]' : ''}
                   ${isSelected ? 'ring-2 ring-[var(--primary)] ring-inset' : ''}
@@ -894,7 +900,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                       ? 'bg-[var(--warning)]/10 border border-[var(--warning)]/30'
                       : 'bg-[var(--gray-50)] border border-transparent';
               return (
-                <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-lg ${rowBg} hover:brightness-95 transition-all`}>
+                <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-lg ${rowBg} hover:brightness-95 transition-colors`}>
                   {/* Confirm / Unconfirm toggle */}
                   <button
                     onClick={() => {
@@ -912,7 +918,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                       }
                     }}
                     title={isConfirmed ? 'Desmarcar cobro' : isReconciled ? 'Confirmar (cruzado con banco)' : 'Marcar como cobrado'}
-                    className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-all ${
+                    className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center transition-colors ${
                       isConfirmed
                         ? 'bg-[var(--success)] text-white shadow-sm shadow-[var(--success)]/30'
                         : isReconciled

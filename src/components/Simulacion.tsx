@@ -370,7 +370,7 @@ const Simulacion: React.FC<Props> = ({
           {editor.mode === 'closed' && (
             <button
               onClick={() => setEditor({ mode: 'create' })}
-              className="h-9 px-3.5 rounded-xl bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] flex items-center gap-1.5 transition-all active:scale-[0.98]"
+              className="h-9 px-3.5 rounded-xl bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] flex items-center gap-1.5 transition-colors"
               style={{ boxShadow: '0 2px 8px -2px rgba(15,23,42,0.25)' }}
             >
               <Plus className="w-3.5 h-3.5" />
@@ -540,9 +540,9 @@ const KpiCard: React.FC<{
   highlight?: boolean;
 }> = ({ label, value, color, icon, sign, highlight }) => (
   <div
-    className="rounded-xl p-4 transition-all hover-lift"
+    className="rounded-xl p-4 hover-lift"
     style={{
-      background: highlight ? 'linear-gradient(135deg, var(--gray-50), white)' : 'white',
+      background: highlight ? 'var(--gray-50)' : 'white',
       border: '1px solid var(--gray-200)',
     }}
   >
@@ -566,7 +566,7 @@ const ProposalCard: React.FC<{
   const { label, accent, icon, sign } = getKindPresentation(proposal.kind);
   return (
     <div
-      className="group rounded-xl border p-4 transition-all hover-lift"
+      className="group rounded-xl border p-4 hover-lift"
       style={{
         borderColor: proposal.enabled ? `${accent}55` : 'var(--gray-200)',
         background: proposal.enabled ? `${accent}06` : 'white',
@@ -677,7 +677,7 @@ const Switch: React.FC<{ enabled: boolean; onChange: (next: boolean) => void; ac
       e.stopPropagation();
       onChange(!enabled);
     }}
-    className="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition active:scale-95"
+    className="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors"
     style={{ background: enabled ? accent : 'var(--gray-200)' }}
     aria-label={enabled ? 'Apagar' : 'Prender'}
   >
@@ -744,7 +744,7 @@ const ScenariosPanel: React.FC<ScenariosPanelProps> = ({
           <button
             onClick={() => setShowForm(true)}
             disabled={proposalsCount === 0}
-            className="h-9 px-3.5 rounded-xl text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] border border-[var(--gray-200)] hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="h-9 px-3.5 rounded-xl text-[12px] font-medium flex items-center gap-1.5 transition-colors border border-[var(--gray-200)] hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ color: 'var(--gray-700)' }}
           >
             <Save className="w-3.5 h-3.5" />
@@ -917,7 +917,7 @@ const EmptyState: React.FC<{ onCreate: () => void }> = ({ onCreate }) => (
     </p>
     <button
       onClick={onCreate}
-      className="h-9 px-4 rounded-xl bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] inline-flex items-center gap-1.5 transition-all active:scale-[0.98]"
+      className="h-9 px-4 rounded-xl bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] inline-flex items-center gap-1.5 transition-colors"
     >
       <Plus className="w-3.5 h-3.5" />
       Crear primera propuesta

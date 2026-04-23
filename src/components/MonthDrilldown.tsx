@@ -283,7 +283,7 @@ const Column: React.FC<ColumnProps> = ({
                 className="h-full"
                 style={{
                   width: `${projPct}%`,
-                  backgroundImage: `repeating-linear-gradient(45deg, ${accent} 0 3px, color-mix(in srgb, ${accent} 20%, white) 3px 7px)`,
+                  backgroundColor: `color-mix(in srgb, ${accent} 38%, white)`,
                 }}
                 aria-label={`Proyectado: ${projPct.toFixed(0)}%`}
               />
@@ -345,8 +345,8 @@ const Swatch: React.FC<{ accent: string; striped?: boolean }> = ({ accent, strip
     className="inline-block w-2.5 h-2.5 rounded-sm"
     style={striped
       ? {
-          backgroundImage: `repeating-linear-gradient(45deg, ${accent} 0 2px, transparent 2px 5px)`,
-          backgroundColor: `color-mix(in srgb, ${accent} 18%, white)`,
+          backgroundColor: `color-mix(in srgb, ${accent} 38%, white)`,
+          border: `1px solid ${accent}`,
         }
       : { backgroundColor: accent }
     }

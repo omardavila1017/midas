@@ -253,7 +253,7 @@ function ToastItem({ toast, onRemove, onUndo, isLast }: ToastItemProps) {
         {/* Close button */}
         <button
           onClick={() => onRemove(toast.id)}
-          className="flex-shrink-0 text-[var(--gray-400)] hover:text-[var(--gray-500)] transition-colors active:scale-95"
+          className="flex-shrink-0 text-[var(--gray-400)] hover:text-[var(--gray-500)] transition-colors"
           aria-label="Cerrar notificación"
         >
           <X className="w-4 h-4 mt-0.5" />

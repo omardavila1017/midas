@@ -174,7 +174,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
               : 'Ej: Salida cliente Y'
             }
             autoFocus
-            className="w-full h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] transition-all hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
+            className="w-full h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] transition-colors hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
             style={{ color: 'var(--gray-950)' }}
           />
         </div>
@@ -198,7 +198,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
               onChange={(e) => setAmount(e.target.value)}
               placeholder="50,000"
               aria-invalid={amount.length > 0 && !amountValid}
-              className="w-full h-10 pl-7 pr-14 rounded-xl border bg-white text-[13px] tabular-nums transition-all focus:outline-none"
+              className="w-full h-10 pl-7 pr-14 rounded-xl border bg-white text-[13px] tabular-nums transition-colors focus:outline-none"
               style={{
                 color: 'var(--gray-950)',
                 borderColor: amount.length > 0 && !amountValid ? 'var(--danger)' : 'var(--gray-200)',
@@ -241,7 +241,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Contexto o supuestos detrás de esta propuesta"
             rows={2}
-            className="w-full px-3 py-2 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] resize-none transition-all hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
+            className="w-full px-3 py-2 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] resize-none transition-colors hover:border-[var(--gray-300)] focus:outline-none focus:border-[var(--primary)]"
             style={{ color: 'var(--gray-950)' }}
           />
         </div>
@@ -282,7 +282,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
             type="button"
             onClick={handleSave}
             disabled={!canSave}
-            className="h-9 px-4 rounded-lg bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.98] flex items-center gap-1.5"
+            className="h-9 px-4 rounded-lg bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
           >
             <Check className="w-3.5 h-3.5" />
             {initial ? 'Guardar cambios' : 'Crear propuesta'}
@@ -304,7 +304,7 @@ const KindPill: React.FC<{
   <button
     type="button"
     onClick={onClick}
-    className="relative rounded-xl border p-3 text-left transition-all active:scale-[0.98]"
+    className="relative rounded-xl border p-3 text-left transition-colors"
     style={{
       borderColor: active ? accentColor : 'var(--gray-200)',
       background: active ? `${accentColor}0F` : 'white',

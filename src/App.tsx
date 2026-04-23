@@ -551,10 +551,10 @@ export default function App() {
           background: 'var(--secondary)',
         }}
       >
-        <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between">
+        <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between gap-4">
           {/* Brand lockup — Senda (white, inverted on dark) + divider + Midas */}
           <div
-            className="flex items-center gap-3 flex-shrink-0 hover-press cursor-pointer senda-lockup-dark"
+            className="flex items-center gap-3 flex-shrink-0 cursor-pointer senda-lockup-dark"
             onClick={() => setActiveTab('netflow')}
             aria-label="Midas · Senda corporativo"
           >
@@ -572,7 +572,7 @@ export default function App() {
               style={{
                 fontSize: '22px',
                 fontWeight: 700,
-                letterSpacing: '-0.03em',
+                letterSpacing: 0,
                 lineHeight: 1,
                 color: 'var(--shell-text)',
               }}
@@ -581,12 +581,12 @@ export default function App() {
             </span>
           </div>
 
-          {/* Section nav — prominent, distinctive icons */}
+          {/* Section nav */}
           <nav
             role="navigation"
             aria-label="Secciones principales"
-            className="flex items-center rounded-2xl p-1 gap-1"
-            style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--shell-border)' }}
+            className="flex items-center rounded-lg p-0.5 gap-0.5"
+            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--shell-border)' }}
           >
             {SECTIONS.map(s => {
               const isActive = activeSection === s.id;
@@ -600,35 +600,30 @@ export default function App() {
                 <button
                   key={s.id}
                   onClick={() => switchSection(s.id)}
-                  className={`relative flex items-center gap-2 px-5 py-2 rounded-xl text-[14px] font-semibold transition-all duration-300 whitespace-nowrap`}
+                  aria-current={isActive ? 'page' : undefined}
+                  className="flex items-center gap-2 rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors duration-150 whitespace-nowrap"
                   style={{
+                    background: isActive ? 'var(--card)' : 'transparent',
                     color: isActive ? 'var(--gray-950)' : 'var(--shell-text-muted)',
-                    transitionTimingFunction: 'var(--spring)',
+                    borderColor: isActive ? 'transparent' : 'transparent',
                   }}
                   title={s.description}
                 >
-                  {isActive && (
+                  <s.icon
+                    className="w-4 h-4"
+                    strokeWidth={1.5}
+                    style={{ color: isActive ? 'var(--primary)' : 'currentColor' }}
+                  />
+                  {s.label}
+                  {badge && (
                     <span
-                      className="absolute inset-0 bg-white rounded-xl animate-scale-in"
-                      style={{ boxShadow: 'var(--shadow-sm)' }}
-                    />
+                      className="midas-pill"
+                      data-tone={isActive ? 'neutral' : 'shell'}
+                    >
+                      <span className="midas-pill-dot" aria-hidden="true" />
+                      {badge}
+                    </span>
                   )}
-                  <span className="relative flex items-center gap-2">
-                    <s.icon
-                      className="w-[18px] h-[18px] transition-colors duration-300"
-                      style={{ color: isActive ? 'var(--primary)' : 'currentColor' }}
-                    />
-                    {s.label}
-                    {badge && (
-                      <span
-                        className="midas-pill"
-                        data-tone={isActive ? 'neutral' : 'shell'}
-                      >
-                        <span className="midas-pill-dot" aria-hidden="true" />
-                        {badge}
-                      </span>
-                    )}
-                  </span>
                 </button>
               );
             })}
@@ -651,9 +646,9 @@ export default function App() {
               onClick={() => setActivityOpen(true)}
               title="Actividad reciente"
               aria-label="Ver actividad reciente"
-              className="shell-icon-btn flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
+              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 transition-colors duration-150"
             >
-              <Bell className="w-[18px] h-[18px]" />
+              <Bell className="w-4 h-4" strokeWidth={1.5} />
             </button>
             <button
               onClick={() => {
@@ -674,9 +669,9 @@ export default function App() {
               }}
               title="Descargar respaldo"
               aria-label="Descargar respaldo JSON"
-              className="shell-icon-btn flex items-center justify-center w-10 h-10 rounded-xl hover-press flex-shrink-0 transition-all duration-200"
+              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 transition-colors duration-150"
             >
-              <Download className="w-[18px] h-[18px]" />
+              <Download className="w-4 h-4" strokeWidth={1.5} />
             </button>
           </div>
         </div>
@@ -686,11 +681,11 @@ export default function App() {
       {subTabs.length > 0 && (
         <div className="border-b" style={{ background: 'var(--primary)', borderColor: 'var(--shell-border)' }}>
           <div className="max-w-[1400px] mx-auto px-8">
-            <div className="flex items-center gap-1 py-2">
+            <div className="flex items-center gap-1 py-1.5">
               {/* Breadcrumb context */}
               <span className="text-[12px] font-medium mr-2 flex items-center gap-1" style={{ color: 'var(--shell-text-muted)' }}>
                 {SECTIONS.find(s => s.id === activeSection)?.label}
-                <ChevronRight className="w-3 h-3" />
+                <ChevronRight className="w-3 h-3" strokeWidth={1.5} />
               </span>
               {subTabs.map(t => {
                 const isActive = activeTab === t.id;
@@ -698,7 +693,8 @@ export default function App() {
                   <button
                     key={t.id}
                     onClick={() => setActiveTab(t.id)}
-                    className="px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-200 touch-target-44"
+                    aria-current={isActive ? 'page' : undefined}
+                    className="min-h-9 px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors duration-150"
                     style={{
                       background: isActive ? 'rgba(255,255,255,0.12)' : 'transparent',
                       color: isActive ? 'var(--shell-text)' : 'var(--shell-text-muted)',
@@ -715,7 +711,7 @@ export default function App() {
       )}
 
       {/* ─── MAIN CONTENT ─── */}
-      <main id="main-content" role="main" className="max-w-[1400px] mx-auto px-8 py-6">
+      <main id="main-content" role="main" className="max-w-[1400px] mx-auto px-8 py-4">
         <div key={pageKey} className="animate-page-in">
           <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
             {activeTab === 'dashboard' && (
@@ -963,7 +959,7 @@ function CompanySelector({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`Compañía activa: ${label}. Filtra datos globalmente.`}
-        className="shell-picker-btn flex items-center gap-1.5 h-10 px-3 rounded-xl text-[13px] font-medium transition-all duration-200 max-w-[300px]"
+        className="shell-picker-btn flex items-center gap-1.5 h-9 px-3 rounded-lg text-[13px] font-medium transition-colors duration-150 max-w-[300px]"
         style={{
           background: activeGroup ? `${activeGroup.color}20` : 'rgba(255,255,255,0.08)',
           color: 'var(--shell-text)',
@@ -972,20 +968,20 @@ function CompanySelector({
         title="Compañía o grupo activo — filtra los datos de todas las pestañas"
       >
         {activeGroup
-          ? <FolderOpen className="w-4 h-4 flex-shrink-0" style={{ color: activeGroup.color ?? 'var(--shell-text)' }} />
-          : <Building2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--shell-text-muted)' }} />
+          ? <FolderOpen className="w-4 h-4 flex-shrink-0" strokeWidth={1.5} style={{ color: activeGroup.color ?? 'var(--shell-text)' }} />
+          : <Building2 className="w-4 h-4 flex-shrink-0" strokeWidth={1.5} style={{ color: 'var(--shell-text-muted)' }} />
         }
         <span className="truncate">{loading ? 'Cargando…' : label}</span>
         {loading
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" style={{ color: 'var(--shell-text-muted)' }} />
-          : <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} style={{ color: 'var(--shell-text-muted)' }} />
+          ? <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" strokeWidth={1.5} style={{ color: 'var(--shell-text-muted)' }} />
+          : <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={1.5} style={{ color: 'var(--shell-text-muted)' }} />
         }
       </button>
 
       {open && (
         <div
-          className="absolute right-0 top-12 w-[360px] rounded-2xl border p-1.5 z-50 max-h-[520px] overflow-y-auto animate-slide-down"
-          style={{ background: 'var(--surface)', borderColor: 'var(--gray-200)', boxShadow: 'var(--shadow-lg)' }}
+          className="absolute right-0 top-11 w-[360px] rounded-lg border p-1.5 z-50 max-h-[520px] overflow-y-auto animate-slide-down"
+          style={{ background: 'var(--surface)', borderColor: 'var(--gray-200)', boxShadow: 'var(--shadow-md)' }}
         >
           {error ? (
             <div className="p-3">
@@ -1127,7 +1123,7 @@ function CompanySelector({
                     <button
                       key={c}
                       onClick={() => setGroupColor(c)}
-                      className={`w-7 h-7 rounded-full transition-all ${groupColor === c ? 'ring-2 ring-offset-2 ring-[var(--gray-300)]' : 'hover:scale-110'}`}
+                      className={`w-7 h-7 rounded-full transition-shadow ${groupColor === c ? 'ring-2 ring-offset-2 ring-[var(--gray-300)]' : 'hover:ring-2 hover:ring-offset-1 hover:ring-[var(--gray-200)]'}`}
                       style={{ background: c }}
                     />
                   ))}

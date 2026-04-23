@@ -964,13 +964,13 @@ const CXPDashboard = ({
               const isActive = tab === t.id;
               return (
                 <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`relative px-3.5 py-[6px] rounded-full text-[12.5px] font-medium transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] flex items-center gap-1.5 ${
-                    isActive ? 'text-[var(--gray-950)]' : 'text-[var(--gray-400)] hover:text-[var(--gray-700)]'
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`px-3.5 py-[6px] rounded-full text-[12.5px] font-medium transition-colors duration-150 flex items-center gap-1.5 ${
+                    isActive
+                      ? 'bg-white text-[var(--gray-950)] shadow-[0_1px_3px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.04)]'
+                      : 'text-[var(--gray-400)] hover:text-[var(--gray-700)]'
                   }`}>
-                  {isActive && (
-                    <span className="absolute inset-0 bg-white rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.08),0_0_1px_rgba(0,0,0,0.04)] animate-scale-in" />
-                  )}
-                  <span className="relative flex items-center gap-1.5">
+                  <span className="flex items-center gap-1.5">
                     {t.label}
                     {t.count !== undefined && <span className="text-[11px] text-[var(--gray-400)]">({t.count})</span>}
                   </span>
@@ -994,7 +994,7 @@ const CXPDashboard = ({
               <button
                 key={chip.key}
                 onClick={chip.onRemove}
-                className="inline-flex max-w-[260px] items-center gap-1 rounded-full bg-white px-2 py-1 text-[11px] text-[var(--gray-700)] shadow-sm transition hover:text-[var(--danger)]"
+                className="inline-flex max-w-[260px] items-center gap-1 rounded-full bg-white px-2 py-1 text-[11px] text-[var(--gray-700)] shadow-sm transition-colors hover:text-[var(--danger)]"
                 title="Quitar filtro"
               >
                 <span className="truncate">{chip.label}</span>
@@ -1195,7 +1195,7 @@ const CXPDashboard = ({
                   const barPct = supplierData[0]?.total > 0 ? (s.total / supplierData[0].total) : 0;
                   return (
                     <div key={i}
-                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-lg transition-all duration-200"
+                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-lg transition-colors duration-150"
                       onClick={() => { clearDrill(); setSearchTerm(s.nombre.slice(0, 20)); setTab('proveedores'); setExpandedSupplier(s.nombre); setProvPage(0); }}>
                       <span className="text-[11px] font-mono text-[var(--gray-400)] w-4 text-right">{i + 1}</span>
                       <div className="flex-1 min-w-0">
@@ -2159,7 +2159,7 @@ const CXP = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="border-2 border-[var(--primary)]/30 bg-[var(--primary-subtle)] rounded-2xl p-10 text-center hover:border-[var(--primary)] hover:bg-[var(--primary-muted)] transition-all">
+                <div className="border-2 border-[var(--primary)]/30 bg-[var(--primary-subtle)] rounded-2xl p-10 text-center hover:border-[var(--primary)] hover:bg-[var(--primary-muted)] transition-colors">
                   <Database className="w-10 h-10 mx-auto mb-3 text-[var(--primary)]" />
                   <p className="text-[15px] font-semibold text-[var(--gray-950)]">Consultar desde JDE</p>
                   <p className="text-[12px] text-[var(--gray-400)] mt-1">{scopeLabel}</p>
@@ -2175,7 +2175,7 @@ const CXP = ({
 
                 <div
                   onClick={() => csvInput.current?.click()}
-                  className="border-2 border-dashed border-[var(--gray-200)] rounded-2xl p-10 text-center cursor-pointer hover:border-[var(--primary)] hover:bg-[var(--gray-50)] transition-all"
+                  className="border-2 border-dashed border-[var(--gray-200)] rounded-2xl p-10 text-center cursor-pointer hover:border-[var(--primary)] hover:bg-[var(--gray-50)] transition-colors"
                 >
                   <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
                   <p className="text-[15px] font-semibold text-[var(--gray-950)]">Subir CSV</p>

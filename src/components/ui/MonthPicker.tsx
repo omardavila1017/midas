@@ -77,7 +77,7 @@ const MonthPicker: React.FC<Props> = ({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full h-10 pl-3 pr-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-all hover:border-[var(--gray-300)] hover:shadow-sm active:scale-[0.99]"
+        className="w-full h-10 pl-3 pr-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
         style={{ color: value ? 'var(--gray-950)' : 'var(--gray-400)' }}
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -96,8 +96,8 @@ const MonthPicker: React.FC<Props> = ({
         <div
           className="absolute left-0 right-0 mt-2 z-50 rounded-2xl border border-[var(--gray-200)] bg-white shadow-xl overflow-hidden origin-top"
           style={{
-            animation: 'scaleIn 0.18s var(--spring) both',
-            boxShadow: '0 20px 40px -12px rgba(15,23,42,0.18), 0 4px 8px -4px rgba(15,23,42,0.08)',
+            animation: 'slideDown var(--motion-state) var(--ease-smooth) both',
+            boxShadow: 'var(--shadow-md)',
           }}
         >
           {/* Year nav */}
@@ -106,7 +106,7 @@ const MonthPicker: React.FC<Props> = ({
               type="button"
               onClick={() => canPrev && setViewYear((y) => y - 1)}
               disabled={!canPrev}
-              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-all active:scale-90"
+              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
               aria-label="Año anterior"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -118,7 +118,7 @@ const MonthPicker: React.FC<Props> = ({
               type="button"
               onClick={() => canNext && setViewYear((y) => y + 1)}
               disabled={!canNext}
-              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-all active:scale-90"
+              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
               aria-label="Año siguiente"
             >
               <ChevronRight className="w-4 h-4" />
@@ -135,7 +135,7 @@ const MonthPicker: React.FC<Props> = ({
                   key={m}
                   type="button"
                   onClick={() => handlePick(m)}
-                  className="h-9 rounded-lg text-[12px] font-medium transition-all active:scale-95"
+                  className="h-9 rounded-lg text-[12px] font-medium transition-colors"
                   style={{
                     background: isSelected ? 'var(--gray-950)' : 'transparent',
                     color: isSelected ? 'white' : 'var(--gray-700)',
