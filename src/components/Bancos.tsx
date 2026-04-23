@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   Landmark,
   Loader2,
@@ -16,6 +16,7 @@ import {
   Filter,
   ArrowDownCircle,
   ArrowUpCircle,
+  Upload,
 } from 'lucide-react';
 import {
   fetchBankStatements,
@@ -33,6 +34,7 @@ import {
   type ClassificationContext,
   type InternalReason,
 } from '../domain/netCashFlowEngine';
+import { parseSantanderCsv, SANTANDER_CSV_FORMAT } from '../domain/santanderCsv';
 import { hex } from '../theme';
 import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
 
@@ -75,23 +77,28 @@ const csvEscape = (v: string | number | undefined): string => {
 
 const BancosForm = ({
   initial,
+  selectedCia,
   onLoaded,
 }: {
   initial: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat } | null;
+  selectedCia: string;
   onLoaded: (
     statements: BankAccountStatement[],
     query: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat },
   ) => void;
 }) => {
+  const santanderInputRef = useRef<HTMLInputElement | null>(null);
   const [fecha, setFecha] = useState<string>(initial?.fechaEstadoCuenta ?? todayISO());
   const [formato, setFormato] = useState<BankStatementFormat>(initial?.formatoElectronico ?? 'SWIFT');
   const [loading, setLoading] = useState(false);
+  const [loadingSource, setLoadingSource] = useState<'jde' | 'csv' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorSource, setErrorSource] = useState<'jde' | 'csv' | null>(null);
   const [success, setSuccess] = useState(false);
   const [count, setCount] = useState(0);
 
   const consultar = useCallback(async () => {
-    setLoading(true); setError(null); setSuccess(false);
+    setLoading(true); setLoadingSource('jde'); setError(null); setErrorSource(null); setSuccess(false);
     try {
       const res = await fetchBankStatements({ fechaEstadoCuenta: fecha, formatoElectronico: formato });
       if (res.length === 0) throw new Error(`JDE devolvió 0 cuentas para ${fecha} (${formato})`);
@@ -105,9 +112,30 @@ const BancosForm = ({
       } else {
         setError(e instanceof Error ? e.message : 'Error al consultar JDE');
       }
+      setErrorSource('jde');
       setLoading(false);
     }
   }, [fecha, formato, onLoaded]);
+
+  const cargarSantanderCsv = useCallback(async (file: File) => {
+    setLoading(true); setLoadingSource('csv'); setError(null); setErrorSource(null); setSuccess(false);
+    try {
+      const text = await file.text();
+      const defaultCia = /^\d{5}$/.test(selectedCia) ? selectedCia : '';
+      const result = parseSantanderCsv(text, { defaultCia });
+      const latestDate = result.reduce(
+        (max, statement) => statement.fechaEstadoCuenta > max ? statement.fechaEstadoCuenta : max,
+        result[0]?.fechaEstadoCuenta ?? todayISO(),
+      );
+      setCount(result.length);
+      setSuccess(true);
+      onLoaded(result, { fechaEstadoCuenta: latestDate, formatoElectronico: SANTANDER_CSV_FORMAT });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al leer el CSV Santander');
+      setErrorSource('csv');
+      setLoading(false);
+    }
+  }, [onLoaded, selectedCia]);
 
   return (
     <div className="w-full max-w-lg mx-auto">
@@ -149,12 +177,47 @@ const BancosForm = ({
               <Landmark className="w-4 h-4" /> Consultar
             </button>
 
+            <div className="flex items-center gap-3 py-1">
+              <div className="h-px flex-1 bg-[var(--gray-100)]" />
+              <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-300)]">o</span>
+              <div className="h-px flex-1 bg-[var(--gray-100)]" />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-[12px] font-medium text-[var(--gray-500)]">Archivo Santander</label>
+              <input
+                ref={santanderInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.currentTarget.value = '';
+                  if (!file) return;
+                  await cargarSantanderCsv(file);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => santanderInputRef.current?.click()}
+                className="w-full h-11 rounded-xl border border-dashed border-[var(--gray-200)] bg-[var(--gray-50)] text-[13.5px] font-medium text-[var(--gray-700)] hover:border-[var(--primary)] hover:bg-[var(--primary-subtle)] transition flex items-center justify-center gap-2"
+              >
+                <Upload className="w-4 h-4" />
+                Subir CSV Santander
+              </button>
+              <p className="text-[11px] text-[var(--gray-400)]">
+                Carga el exportado CSV de movimientos para ver la cuenta en Bancos.
+              </p>
+            </div>
+
             {error && (
               <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl p-4">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
                   <div>
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)]">Error al consultar JDE</p>
+                    <p className="text-[13px] font-semibold text-[var(--gray-950)]">
+                      {errorSource === 'csv' ? 'Error al leer CSV Santander' : 'Error al consultar JDE'}
+                    </p>
                     <p className="text-[12px] text-[var(--gray-500)] mt-1">{error}</p>
                   </div>
                 </div>
@@ -166,8 +229,12 @@ const BancosForm = ({
         {loading && !success && (
           <div className="text-center py-16">
             <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-3" />
-            <p className="text-[15px] font-medium text-[var(--gray-950)]">Consultando JDE...</p>
-            <p className="text-[12px] text-[var(--gray-400)] mt-1">{fecha} · {formato}</p>
+            <p className="text-[15px] font-medium text-[var(--gray-950)]">
+              {loadingSource === 'csv' ? 'Leyendo CSV Santander...' : 'Consultando JDE...'}
+            </p>
+            <p className="text-[12px] text-[var(--gray-400)] mt-1">
+              {loadingSource === 'csv' ? 'Preparando movimientos bancarios' : `${fecha} · ${formato}`}
+            </p>
           </div>
         )}
 
@@ -193,6 +260,7 @@ const BancosDashboard = ({
   selectedCia,
   onReset,
   onRefresh,
+  canRefresh,
   refreshing,
   refreshError,
   companies = [],
@@ -202,10 +270,12 @@ const BancosDashboard = ({
   selectedCia: string;
   onReset: () => void;
   onRefresh: () => void;
+  canRefresh: boolean;
   refreshing: boolean;
   refreshError: string | null;
   companies?: { cia: string; nombre: string }[];
 }) => {
+  const refreshBlockedReason = 'Este dataset viene de un CSV Santander. Para actualizarlo, sube un archivo nuevo.';
   // Build a cia→nombre lookup map
   const ciaNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -385,12 +455,13 @@ const BancosDashboard = ({
           </button>
           <button
             onClick={onRefresh}
-            disabled={refreshing}
+            disabled={refreshing || !canRefresh}
+            title={canRefresh ? 'Actualizar desde JDE' : refreshBlockedReason}
             className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {refreshing
               ? <Loader2 className="w-3 h-3 animate-spin" />
-              : <RotateCcw className="w-3 h-3" />} Actualizar
+              : canRefresh ? <RotateCcw className="w-3 h-3" /> : <Upload className="w-3 h-3" />} {canRefresh ? 'Actualizar' : 'Archivo cargado'}
           </button>
           <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition">
             <X className="w-3 h-3" /> Nueva consulta
@@ -414,6 +485,13 @@ const BancosDashboard = ({
       {refreshError && (
         <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--danger)] font-medium">
           <AlertCircle className="w-3.5 h-3.5" /> {refreshError}
+        </div>
+      )}
+
+      {!canRefresh && (
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
+          <Upload className="w-3.5 h-3.5" />
+          CSV Santander cargado. Para actualizar los movimientos, sube un archivo nuevo.
         </div>
       )}
 
@@ -709,6 +787,10 @@ const Bancos = ({
   }, [onStatementsChange, onLastQueryChange]);
 
   const handleRefresh = useCallback(async () => {
+    if (lastQuery?.formatoElectronico === SANTANDER_CSV_FORMAT) {
+      setRefreshError('Este dataset viene de un CSV Santander. Usa "Nueva consulta" para subir un archivo nuevo.');
+      return;
+    }
     // Always refresh with today's date to get the latest data
     const queryToUse = {
       fechaEstadoCuenta: todayISO(),
@@ -733,7 +815,7 @@ const Bancos = ({
   if (view === 'form' || !lastQuery) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center p-6">
-        <BancosForm initial={lastQuery} onLoaded={handleLoaded} />
+        <BancosForm initial={lastQuery} selectedCia={selectedCia} onLoaded={handleLoaded} />
       </div>
     );
   }
@@ -745,6 +827,7 @@ const Bancos = ({
       selectedCia={selectedCia}
       onReset={handleReset}
       onRefresh={handleRefresh}
+      canRefresh={lastQuery.formatoElectronico !== SANTANDER_CSV_FORMAT}
       refreshing={refreshing}
       refreshError={refreshError}
       companies={companies}

@@ -115,6 +115,8 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerDaysWithoutUpdate: number | null;
   providerDtiArea?: string;
   providerDtiCriticidad?: 'Alta' | 'Media' | 'Baja';
+  providerLastPaymentDate?: string;
+  providerLastPaymentAmount?: number;
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
   alerts: CxpAlert[];
@@ -372,6 +374,8 @@ function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provide
     providerDaysWithoutUpdate: daysSince(provider?.lastUpdatedAt),
     providerDtiArea: provider?.dtiArea ?? catalog.dtiArea ?? undefined,
     providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,
+    providerLastPaymentDate: catalog.lastPayment?.ultimaFecha,
+    providerLastPaymentAmount: catalog.lastPayment?.ultimoMonto,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
     alerts: [],
@@ -929,7 +933,7 @@ const CXPDashboard = ({
 
   /* ── Render ── */
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
       {/* ── Header Bar ── */}
       <div className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
@@ -1767,13 +1771,19 @@ function InvoiceDetailPanel({
   bankMatches: BankStatementLine[];
   onClose: () => void;
 }) {
+  const lastPaymentDate = parseDateToIso(record.providerLastPaymentDate ?? undefined) ?? record.providerLastPaymentDate ?? 'Sin dato';
+  const lastPaymentAmount = record.providerLastPaymentAmount && record.providerLastPaymentAmount > 0
+    ? fmtFull(record.providerLastPaymentAmount)
+    : 'Sin dato';
+
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/10" onClick={onClose}>
-      <aside
-        className="h-full w-full max-w-xl overflow-y-auto border-l border-[var(--gray-200)] bg-white shadow-xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <header className="sticky top-0 z-10 border-b border-[var(--gray-100)] bg-white px-5 py-4">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/10" onClick={onClose}>
+      <div className="flex min-h-full justify-end">
+        <aside
+          className="min-h-screen w-full max-w-xl border-l border-[var(--gray-200)] bg-white shadow-xl"
+          onClick={e => e.stopPropagation()}
+        >
+        <header className="border-b border-[var(--gray-100)] bg-white px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Detalle de factura</p>
@@ -1812,6 +1822,8 @@ function InvoiceDetailPanel({
               ['Tipo', record.providerType],
               ['Riesgo', record.providerRisk],
               ['Flexibilidad', flexibilityLabel(record.providerFlexibility)],
+              ['Fecha último pago proveedor', lastPaymentDate],
+              ['Monto último pago proveedor', lastPaymentAmount],
               ['Límite crédito', record.providerCreditLimit ? fmtFull(record.providerCreditLimit) : 'No configurado'],
               ['Última actualización', record.providerDaysWithoutUpdate === null ? 'Sin dato' : `${record.providerDaysWithoutUpdate} días`],
               ['DTI', record.providerDtiCriticidad ? `${record.providerDtiCriticidad}${record.providerDtiArea ? ` · ${record.providerDtiArea}` : ''}` : 'No aplica'],
@@ -1867,7 +1879,8 @@ function InvoiceDetailPanel({
             <p className="text-[12px] text-[var(--gray-400)]">El historial de comentarios, responsables y aprobaciones todavía no viene en la fuente de CXP cargada.</p>
           </DetailSection>
         </div>
-      </aside>
+        </aside>
+      </div>
     </div>
   );
 }
