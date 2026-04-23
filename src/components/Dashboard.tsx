@@ -333,12 +333,9 @@ const Dashboard: React.FC<DashboardProps> = ({
 
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-[22px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+          <h1 className="text-[22px] font-semibold tracking-tight" style={{ color: '#ffffff' }}>
             Dashboard
           </h1>
-          <p className="text-[13px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-            Flujo real desde JDE · {companyCode === 'all' ? 'todas las compañías' : `compañía ${companyCode}`}
-          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <StartingBalanceInput

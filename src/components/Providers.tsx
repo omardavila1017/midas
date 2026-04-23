@@ -168,13 +168,10 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
       {/* ─── Header ─────────────────────────────────────────────────────── */}
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Proveedores</h1>
-          <p className="text-[13px] text-[var(--gray-400)] mt-1">
-            {providers.length === 0
-              ? 'Sincroniza el catálogo o agrega proveedores uno a uno.'
-              : `${providers.length} ${providers.length === 1 ? 'proveedor' : 'proveedores'} en el catálogo`}
-            {syncError && <span className="ml-2 text-[var(--danger)]">· {syncError}</span>}
-          </p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight">Proveedores</h1>
+          {syncError && (
+            <p className="text-[13px] text-[var(--danger)] mt-1">{syncError}</p>
+          )}
         </div>
         <div className="flex gap-2">
           <button

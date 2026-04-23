@@ -130,10 +130,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       {/* ── Header ─────────────────────────────────────────── */}
       <header className="flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight">Proyección de cobranza</h1>
-          <p className="text-[13px] text-[var(--gray-400)] mt-1">
-            La factura nace por ciclo de facturación; luego corre el crédito y el cobro cae en el siguiente día válido del patrón.
-          </p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight">Proyección de cobranza</h1>
         </div>
       </header>
 

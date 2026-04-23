@@ -315,13 +315,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     <div className="space-y-5">
       <header className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--gray-950)] tracking-tight animate-fade-in">Clientes</h1>
-          <p className="text-[13px] text-[var(--gray-400)] mt-1">
-            {hierarchy.length} grupos · {clients.length} cuentas · facturación anual {fmt(totalAnnual)} · por cobrar proyectado {fmt(totalReceivable)}
-            {issues.length > 0 && (
-              <span className="ml-2 text-amber-600">· {issues.length} avisos de importación</span>
-            )}
-          </p>
+          <h1 className="text-2xl font-semibold text-white tracking-tight animate-fade-in">Clientes</h1>
         </div>
         <div className="flex gap-2">
           <button

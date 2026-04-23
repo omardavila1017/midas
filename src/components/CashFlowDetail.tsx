@@ -228,8 +228,7 @@ export default function CashFlowDetail({
       {/* Header */}
       <header className="flex items-end justify-between gap-4">
         <div>
-          <h1 className={`text-2xl font-bold tracking-tight ${T.text}`}>Flujo de efectivo</h1>
-          <p className={`text-sm mt-1 ${T.textMuted}`}>Movimientos bancarios reales por día, semana y mes — traspasos internos filtrados.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-white">Flujo de efectivo</h1>
         </div>
         <button
           onClick={handleExport}
@@ -365,8 +364,7 @@ export default function CashFlowDetail({
 function PageHeader() {
   return (
     <header>
-      <h1 className={`text-2xl font-bold tracking-tight ${T.text}`}>Flujo de efectivo</h1>
-      <p className={`text-sm mt-1 ${T.textMuted}`}>Movimientos bancarios reales por día, semana y mes — traspasos internos filtrados.</p>
+      <h1 className="text-2xl font-bold tracking-tight text-white">Flujo de efectivo</h1>
     </header>
   );
 }

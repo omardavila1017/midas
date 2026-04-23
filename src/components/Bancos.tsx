@@ -174,8 +174,7 @@ const BancosForm = ({
         <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
           <Landmark className="text-white" size={26} />
         </div>
-        <h1 className="text-[28px] font-bold text-[var(--gray-950)] tracking-tight">Bancos</h1>
-        <p className="text-[15px] text-[var(--gray-400)] mt-1">Estado de cuenta bancario desde JDE o archivo Santander</p>
+        <h1 className="text-[28px] font-bold text-white tracking-tight">Bancos</h1>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">

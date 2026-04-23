@@ -261,22 +261,14 @@ const Simulacion: React.FC<Props> = ({
 
   return (
     <div className="space-y-6 animate-fade-in">
+      <div className="flex items-center gap-2">
+        <Sparkles className="w-4 h-4" style={{ color: '#ffffff' }} />
+        <h1 className="text-[22px] font-semibold tracking-tight" style={{ color: '#ffffff' }}>
+          Simulación
+        </h1>
+      </div>
       {/* Header + KPIs */}
       <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-6">
-        <div className="flex items-start justify-between flex-wrap gap-4 mb-5">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Sparkles className="w-4 h-4" style={{ color: 'var(--primary)' }} />
-              <h1 className="text-[22px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
-                Simulación
-              </h1>
-            </div>
-            <p className="text-[12px]" style={{ color: 'var(--gray-400)' }}>
-              Crea propuestas y observa cómo cambian la trayectoria de tu caja.
-            </p>
-          </div>
-        </div>
-
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <KpiCard
             label="Caja Final Base"
