@@ -359,18 +359,20 @@ export default function App() {
     });
   }, []);
 
-  // Save to localStorage after changes (debounced by 500ms)
+  // Save to localStorage after changes. Debounce coalesces bursts, but we also
+  // flush synchronously on tab hide/close so the last change never gets lost
+  // if the user navigates away within the debounce window.
+  const latestStoreRef = useRef<MidasStore | null>(null);
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const store: MidasStore = {
-        proposals, scenarios, activeScenarioId,
-        providers, clients,
-        assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
-        cashFlowOverrides,
-        lastSaved: new Date().toISOString(),
-      };
-      saveStore(store);
-    }, 500);
+    const snapshot: MidasStore = {
+      proposals, scenarios, activeScenarioId,
+      providers, clients,
+      assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+      cashFlowOverrides,
+      lastSaved: new Date().toISOString(),
+    };
+    latestStoreRef.current = snapshot;
+    const timer = setTimeout(() => saveStore(snapshot), 200);
     return () => clearTimeout(timer);
   }, [
     proposals, scenarios, activeScenarioId,
@@ -378,6 +380,21 @@ export default function App() {
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
     cashFlowOverrides,
   ]);
+
+  useEffect(() => {
+    const flush = () => {
+      if (latestStoreRef.current) saveStore(latestStoreRef.current);
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, []);
 
   // ── JDE: load companies on mount (sin fallback demo) ──
   const loadCompanies = useCallback(async () => {
