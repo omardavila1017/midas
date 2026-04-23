@@ -11,7 +11,9 @@ import {
   type BankAccountStatement,
   type BankStatementFormat,
 } from './services/jde';
-import Dashboard, { computeBankStartingBalance } from './components/Dashboard';
+import Dashboard from './components/Dashboard';
+
+const FIXED_STARTING_BALANCE = 76_300_000;
 import CXP from './components/CXP';
 import Bancos from './components/Bancos';
 import Providers from './components/Providers';
@@ -236,42 +238,8 @@ export default function App() {
     { done: number; total: number } | null
   >(null);
 
-  // Caja inicial / Saldo inicial — estado compartido entre Dashboard y
-  // CashFlowDetail. Si el usuario lo edita en cualquiera de las dos vistas,
-  // ambas quedan sincronizadas. null = usar la suma de saldoInicial de banco.
-  const [startingBalanceOverride, setStartingBalanceOverride] = useState<number | null>(() => {
-    try {
-      let raw = localStorage.getItem('midas.dashboard.startingBalance.v1');
-      if (raw === null) {
-        const legacy = localStorage.getItem('flowsense.dashboard.startingBalance.v1');
-        if (legacy !== null) {
-          try {
-            localStorage.setItem('midas.dashboard.startingBalance.v1', legacy);
-            localStorage.removeItem('flowsense.dashboard.startingBalance.v1');
-          } catch { /* ignore */ }
-          raw = legacy;
-        }
-      }
-      if (raw === null) return null;
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : null;
-    } catch { return null; }
-  });
-  useEffect(() => {
-    try {
-      if (startingBalanceOverride === null) localStorage.removeItem('midas.dashboard.startingBalance.v1');
-      else localStorage.setItem('midas.dashboard.startingBalance.v1', String(startingBalanceOverride));
-    } catch { /* ignore */ }
-  }, [startingBalanceOverride]);
-  const bankStartingBalance = useMemo(
-    () => computeBankStartingBalance(
-      selectedCia === 'all' || !selectedCia
-        ? bankStatements
-        : bankStatements.filter((s) => s.cia === selectedCia),
-    ),
-    [bankStatements, selectedCia],
-  );
-  const effectiveStartingBalance = startingBalanceOverride ?? bankStartingBalance;
+  // Caja inicial fija — decisión de negocio, no editable por el usuario.
+  const effectiveStartingBalance = FIXED_STARTING_BALANCE;
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
@@ -799,9 +767,7 @@ export default function App() {
                 assumptions={assumptions}
                 budget={budget}
                 onOpenFlow={() => setActiveTab('flow')}
-                startingBalanceOverride={startingBalanceOverride}
-                bankStartingBalance={bankStartingBalance}
-                onStartingBalanceChange={setStartingBalanceOverride}
+                startingBalance={effectiveStartingBalance}
               />
             )}
             {activeTab === 'flow' && (
@@ -819,7 +785,7 @@ export default function App() {
                 cxpRecords={cxpRecords}
                 assumptions={assumptions}
                 budget={budget}
-                startingBalanceOverride={startingBalanceOverride}
+                startingBalance={effectiveStartingBalance}
               />
             )}
             {activeTab === 'clients' && (
@@ -896,7 +862,6 @@ export default function App() {
                 bankFetchProgress={bankFetchProgress}
                 onRefreshBanks={() => refreshBankStatementsRange(true)}
                 startingBalance={effectiveStartingBalance}
-                onStartingBalanceChange={setStartingBalanceOverride}
               />
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}

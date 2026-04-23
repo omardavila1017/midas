@@ -51,12 +51,8 @@ interface DashboardProps {
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   onOpenFlow: () => void;
-  /** Override manual de la caja inicial. null = usar la suma de saldoInicial del banco. */
-  startingBalanceOverride: number | null;
-  /** Suma de saldoInicial reportada por banco (filtrada por cia). */
-  bankStartingBalance: number;
-  /** Sincroniza "Caja inicial" con "Saldo inicial" de CashFlowDetail. */
-  onStartingBalanceChange: (v: number | null) => void;
+  /** Caja inicial fija por decisión de negocio — se muestra pero no se edita. */
+  startingBalance: number;
 }
 
 const CHART_COLORS = {
@@ -99,7 +95,7 @@ export function loadOverrides(): ProjectionOverrides {
 const Dashboard: React.FC<DashboardProps> = ({
   companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions,
   budget, onOpenFlow,
-  startingBalanceOverride, bankStartingBalance, onStartingBalanceChange,
+  startingBalance,
 }) => {
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -132,16 +128,11 @@ const Dashboard: React.FC<DashboardProps> = ({
     () => computeBaseCashFlow({
       bankStatements, aged, clients, providers, cxpRecords, assumptions,
       companyCode, today, overrides, budget,
-      startingBalance: startingBalanceOverride ?? undefined,
+      startingBalance,
     }),
-    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalanceOverride, budget],
+    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance, budget],
   );
 
-  // Caja inicial "auto" desde banco (suma saldoInicial). La UI la muestra como
-  // placeholder cuando no hay override; si el usuario la edita, se usa el
-  // valor editado. `bankStartingBalance` viene de App para compartirse con
-  // "Saldo inicial" en CashFlowDetail.
-  const effectiveStartingBalance = startingBalanceOverride ?? bankStartingBalance;
   const evaluated = useMemo(() => evaluateCashFlow(base, proposals), [base, proposals]);
 
   const currentYear = new Date().getFullYear();
@@ -336,12 +327,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         title="Dashboard"
         actions={
           <>
-            <StartingBalanceInput
-              value={effectiveStartingBalance}
-              isOverride={startingBalanceOverride !== null}
-              bankValue={bankStartingBalance}
-              onChange={onStartingBalanceChange}
-            />
+            <StartingBalanceDisplay value={startingBalance} />
             <button
               onClick={onOpenFlow}
               className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
@@ -575,72 +561,17 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
   );
 };
 
-/**
- * Control para ajustar la caja inicial del mes más antiguo. El valor por
- * defecto sale de la suma de saldoInicial de las cuentas; si difiere del
- * dato real de contabilidad, el usuario lo edita aquí y la caja final se
- * recalcula encadenada en toda la serie.
- */
-const StartingBalanceInput: React.FC<{
-  value: number;
-  isOverride: boolean;
-  bankValue: number;
-  onChange: (v: number | null) => void;
-}> = ({ value, isOverride, bankValue, onChange }) => {
-  const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState('');
-
-  if (editing) {
-    const finish = (save: boolean) => {
-      setEditing(false);
-      if (!save) return;
-      const t = draft.replace(/[$,\s]/g, '');
-      if (t === '') { onChange(null); return; }
-      const n = Number(t);
-      if (Number.isFinite(n)) onChange(n);
-    };
-    return (
-      <div className="flex items-center gap-1 h-10 px-3 rounded-xl border border-[var(--primary)] bg-white">
-        <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Caja inicial</span>
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => finish(true)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') finish(true);
-            else if (e.key === 'Escape') finish(false);
-          }}
-          className="tabular-nums text-right bg-transparent outline-none text-[13px] w-36"
-          placeholder={bankValue.toFixed(0)}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => { setDraft(String(Math.round(value))); setEditing(true); }}
-      className="flex items-center gap-2 h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white hover:bg-[var(--gray-50)]"
-      title={
-        isOverride
-          ? `Override manual. Banco reporta ${fmtCurrency(bankValue)}. Clic para editar.`
-          : 'Caja inicial = suma de saldoInicial reportado por JDE. Clic para editar.'
-      }
-    >
-      <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Caja inicial</span>
-      <span className="tabular-nums text-[13px] font-medium" style={{ color: 'var(--gray-950)' }}>
-        {fmtCurrency(value)}
-      </span>
-      {isOverride && (
-        <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full" style={{ background: 'var(--warning-muted)', color: 'var(--warning)' }}>
-          Manual
-        </span>
-      )}
-    </button>
-  );
-};
+const StartingBalanceDisplay: React.FC<{ value: number }> = ({ value }) => (
+  <div
+    className="flex items-center gap-2 h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white"
+    title="Caja inicial fija por decisión de negocio."
+  >
+    <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Caja inicial</span>
+    <span className="tabular-nums text-[13px] font-medium" style={{ color: 'var(--gray-950)' }}>
+      {fmtCurrency(value)}
+    </span>
+  </div>
+);
 
 const KpiCard: React.FC<{ label: string; value: number; icon: React.ReactNode; color: string }> = ({ label, value, icon, color }) => (
   <div className="rounded-xl border border-[var(--gray-200)] bg-white p-4">

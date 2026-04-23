@@ -44,7 +44,7 @@ interface Props {
   cxpRecords: CXPRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
-  startingBalanceOverride: number | null;
+  startingBalance: number;
 }
 
 interface KindPresentation {
@@ -86,7 +86,7 @@ const Simulacion: React.FC<Props> = ({
   cxpRecords,
   assumptions,
   budget,
-  startingBalanceOverride,
+  startingBalance,
 }) => {
   const [agedBalances, setAgedBalances] = useState<AgedBalanceRecord[]>([]);
   const [agedLoading, setAgedLoading] = useState(false);
@@ -130,10 +130,10 @@ const Simulacion: React.FC<Props> = ({
     today,
     overrides: loadOverrides(),
     budget,
-    startingBalance: startingBalanceOverride ?? undefined,
+    startingBalance,
   }), [
     bankStatements, agedBalances, clients, providers, cxpRecords,
-    assumptions, companyCode, today, budget, startingBalanceOverride,
+    assumptions, companyCode, today, budget, startingBalance,
   ]);
 
   const evaluated: EvaluatedCashFlow = useMemo(
