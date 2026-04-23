@@ -37,6 +37,12 @@ import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_C
 import type { Budget } from './domain/budget';
 import { parseBudgetCsv } from './domain/budget';
 import { loadBudget, saveBudget } from './domain/budgetPersistence';
+import {
+  attachImportedStatementsToKnownCompanies,
+  mergeBankStatements,
+  type BankQueryState,
+} from './domain/bankStatements';
+import { SANTANDER_FILE_FORMAT } from './domain/santanderCsv';
 
 const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
 
@@ -167,8 +173,10 @@ export default function App() {
   useEffect(() => { saveCompanyGroups(companyGroups); }, [companyGroups]);
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
-  const [bankStatements, setBankStatements] = useState<BankAccountStatement[]>(() => {
+  const [bankJdeStatements, setBankJdeStatements] = useState<BankAccountStatement[]>(() => {
     try {
+      const rawQuery = localStorage.getItem('midas.bankLastQuery.v2');
+      const parsedQuery = rawQuery ? (JSON.parse(rawQuery) as BankQueryState) : null;
       const raw = localStorage.getItem('midas.bankStatements.v2');
       const parsed = raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
       // Descartar demo data ficticia que pudo haber quedado cacheada de
@@ -178,20 +186,48 @@ export default function App() {
       if (containsDemoBankData(parsed)) {
         localStorage.removeItem('midas.bankStatements.v2');
         localStorage.removeItem('midas.bankLastQuery.v2');
+        localStorage.removeItem('midas.bankSupplementalStatements.v1');
         return [];
       }
+      if (parsedQuery?.formatoElectronico === SANTANDER_FILE_FORMAT) return [];
       return parsed;
     } catch { return []; }
   });
-  const [bankLastQuery, setBankLastQuery] = useState<{
-    fechaEstadoCuenta: string;
-    formatoElectronico: BankStatementFormat;
-  } | null>(() => {
+  const [bankSupplementalStatements, setBankSupplementalStatements] = useState<BankAccountStatement[]>(() => {
+    try {
+      const rawCurrent = localStorage.getItem('midas.bankSupplementalStatements.v1');
+      if (rawCurrent) {
+        const parsedCurrent = JSON.parse(rawCurrent) as BankAccountStatement[];
+        if (!containsDemoBankData(parsedCurrent)) return parsedCurrent;
+        localStorage.removeItem('midas.bankSupplementalStatements.v1');
+      }
+
+      const rawQuery = localStorage.getItem('midas.bankLastQuery.v2');
+      const parsedQuery = rawQuery ? (JSON.parse(rawQuery) as BankQueryState) : null;
+      if (parsedQuery?.formatoElectronico !== SANTANDER_FILE_FORMAT) return [];
+
+      const rawLegacy = localStorage.getItem('midas.bankStatements.v2');
+      const parsedLegacy = rawLegacy ? (JSON.parse(rawLegacy) as BankAccountStatement[]) : [];
+      if (containsDemoBankData(parsedLegacy)) return [];
+      return parsedLegacy;
+    } catch { return []; }
+  });
+  const [bankLastQuery, setBankLastQuery] = useState<BankQueryState | null>(() => {
     try {
       const raw = localStorage.getItem('midas.bankLastQuery.v2');
-      return raw ? JSON.parse(raw) : null;
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as BankQueryState;
+      if (parsed.formatoElectronico === SANTANDER_FILE_FORMAT) {
+        return { ...parsed, hasUploadedSantander: true };
+      }
+      const hasSupplemental = !!localStorage.getItem('midas.bankSupplementalStatements.v1');
+      return hasSupplemental ? { ...parsed, hasUploadedSantander: true } : parsed;
     } catch { return null; }
   });
+  const bankStatements = useMemo(
+    () => mergeBankStatements(bankJdeStatements, bankSupplementalStatements),
+    [bankJdeStatements, bankSupplementalStatements],
+  );
   // UI status for the auto/manual bank refresh — shown as a pill in Flujo Neto.
   const [bankFetchStatus, setBankFetchStatus] = useState<
     'idle' | 'priming' | 'ranging'
@@ -377,9 +413,26 @@ export default function App() {
 
   // Persist bank statements + last query
   useEffect(() => {
-    try { localStorage.setItem('midas.bankStatements.v2', JSON.stringify(bankStatements)); }
+    try { localStorage.setItem('midas.bankStatements.v2', JSON.stringify(bankJdeStatements)); }
     catch { /* quota or serialization issue; ignore */ }
-  }, [bankStatements]);
+  }, [bankJdeStatements]);
+  useEffect(() => {
+    try {
+      if (bankSupplementalStatements.length > 0) localStorage.setItem('midas.bankSupplementalStatements.v1', JSON.stringify(bankSupplementalStatements));
+      else localStorage.removeItem('midas.bankSupplementalStatements.v1');
+    } catch { /* ignore */ }
+  }, [bankSupplementalStatements]);
+  useEffect(() => {
+    if (bankJdeStatements.length === 0 || bankSupplementalStatements.length === 0) return;
+    setBankSupplementalStatements((current) => {
+      const aligned = attachImportedStatementsToKnownCompanies(current, bankJdeStatements);
+      const changed = aligned.some((statement, index) => {
+        const previous = current[index];
+        return previous?.cia !== statement.cia || previous?.movimientos.some((movement, mIndex) => movement.cia !== statement.movimientos[mIndex]?.cia);
+      });
+      return changed ? aligned : current;
+    });
+  }, [bankJdeStatements, bankSupplementalStatements.length]);
   useEffect(() => {
     try {
       if (bankLastQuery) localStorage.setItem('midas.bankLastQuery.v2', JSON.stringify(bankLastQuery));
@@ -409,10 +462,11 @@ export default function App() {
     // Cache hit: skip unless forced.
     if (!force) {
       const distinctDates = new Set<string>();
-      for (const acc of bankStatements) {
+      for (const acc of bankJdeStatements) {
         for (const mov of acc.movimientos) distinctDates.add(mov.fechaOperacion);
       }
       const cacheIsFresh =
+        bankLastQuery?.formatoElectronico !== SANTANDER_FILE_FORMAT &&
         bankLastQuery?.fechaEstadoCuenta === today &&
         distinctDates.size >= 30;
       if (cacheIsFresh) {
@@ -431,7 +485,7 @@ export default function App() {
     setBankFetchStatus('priming');
 
     // ── Step 1: Prime con 1 día (solo si no hay cache o force) ──
-    let primed = !force && bankStatements.length > 0;
+    let primed = !force && bankJdeStatements.length > 0;
     if (!primed) {
       for (const fecha of tryDates) {
         try {
@@ -440,8 +494,12 @@ export default function App() {
             formatoElectronico: defaultFormat,
           });
           if (res.length > 0) {
-            setBankStatements(res);
-            setBankLastQuery({ fechaEstadoCuenta: fecha, formatoElectronico: defaultFormat });
+            setBankJdeStatements(res);
+            setBankLastQuery({
+              fechaEstadoCuenta: fecha,
+              formatoElectronico: defaultFormat,
+              hasUploadedSantander: bankSupplementalStatements.length > 0,
+            });
             primed = true;
             break;
           }
@@ -468,10 +526,11 @@ export default function App() {
         },
       );
       if (full.length > 0) {
-        setBankStatements(full);
+        setBankJdeStatements(full);
         setBankLastQuery({
           fechaEstadoCuenta: today,
           formatoElectronico: defaultFormat,
+          hasUploadedSantander: bankSupplementalStatements.length > 0,
         });
         ranged = true;
       }
@@ -482,9 +541,7 @@ export default function App() {
     setBankFetchStatus('idle');
     setBankFetchProgress(null);
     return { primed, ranged };
-  // bankStatements & bankLastQuery are intentionally read inside; stable callback
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [bankJdeStatements, bankLastQuery, bankSupplementalStatements.length]);
 
   useEffect(() => {
     (async () => {
@@ -802,7 +859,9 @@ export default function App() {
               <Bancos
                 selectedCia={selectedCia}
                 statements={bankStatements}
-                onStatementsChange={setBankStatements}
+                supplementalStatements={bankSupplementalStatements}
+                onJdeStatementsChange={setBankJdeStatements}
+                onSupplementalStatementsChange={setBankSupplementalStatements}
                 lastQuery={bankLastQuery}
                 onLastQueryChange={setBankLastQuery}
                 companies={companies}

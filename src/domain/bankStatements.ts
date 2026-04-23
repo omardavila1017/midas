@@ -1,0 +1,110 @@
+import type { BankAccountStatement, BankStatementFormat, BankStatementLine } from '../services/jdeTypes';
+
+export interface BankQueryState {
+  fechaEstadoCuenta: string;
+  formatoElectronico: BankStatementFormat;
+  hasUploadedSantander?: boolean;
+}
+
+function accountKey(statement: Pick<BankAccountStatement, 'cia' | 'cuenta' | 'moneda'>): string {
+  return `${statement.cia}::${statement.cuenta}::${statement.moneda}`;
+}
+
+function movementKey(movement: Pick<BankStatementLine, 'fechaOperacion' | 'referencia' | 'tipoMovimiento' | 'importe' | 'concepto'>): string {
+  return `${movement.fechaOperacion}|${movement.referencia}|${movement.tipoMovimiento}|${movement.importe}|${movement.concepto}`;
+}
+
+function movementSortKey(movement: Pick<BankStatementLine, 'fechaOperacion' | 'fechaValor' | 'referencia' | 'importe' | 'tipoMovimiento'>): string {
+  return [
+    movement.fechaOperacion,
+    movement.fechaValor ?? '',
+    movement.referencia ?? '',
+    movement.tipoMovimiento ?? '',
+    String(movement.importe ?? ''),
+  ].join('|');
+}
+
+export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAccountStatement[] {
+  const merged = new Map<string, BankAccountStatement>();
+  const seenMovements = new Map<string, Set<string>>();
+  const firstDate = new Map<string, string>();
+  const lastDate = new Map<string, string>();
+
+  for (const group of groups) {
+    for (const statement of group) {
+      const key = accountKey(statement);
+      let acc = merged.get(key);
+      if (!acc) {
+        acc = {
+          cia: statement.cia,
+          banco: statement.banco,
+          nombreBanco: statement.nombreBanco,
+          cuenta: statement.cuenta,
+          moneda: statement.moneda,
+          fechaEstadoCuenta: statement.fechaEstadoCuenta,
+          saldoInicial: statement.saldoInicial,
+          saldoFinal: statement.saldoFinal,
+          movimientos: [],
+        };
+        merged.set(key, acc);
+        seenMovements.set(key, new Set());
+        firstDate.set(key, statement.fechaEstadoCuenta);
+        lastDate.set(key, statement.fechaEstadoCuenta);
+      }
+
+      if (statement.fechaEstadoCuenta < (firstDate.get(key) ?? statement.fechaEstadoCuenta)) {
+        firstDate.set(key, statement.fechaEstadoCuenta);
+        if (statement.saldoInicial !== undefined) acc.saldoInicial = statement.saldoInicial;
+      }
+      if (statement.fechaEstadoCuenta >= (lastDate.get(key) ?? statement.fechaEstadoCuenta)) {
+        lastDate.set(key, statement.fechaEstadoCuenta);
+        acc.fechaEstadoCuenta = statement.fechaEstadoCuenta;
+        if (statement.saldoFinal !== undefined) acc.saldoFinal = statement.saldoFinal;
+        if (statement.nombreBanco) acc.nombreBanco = statement.nombreBanco;
+        if (statement.banco) acc.banco = statement.banco;
+      }
+
+      const seen = seenMovements.get(key)!;
+      for (const movement of statement.movimientos) {
+        const mk = movementKey(movement);
+        if (seen.has(mk)) continue;
+        seen.add(mk);
+        acc.movimientos.push(movement);
+      }
+    }
+  }
+
+  const result = Array.from(merged.values());
+  for (const statement of result) {
+    statement.movimientos.sort((a, b) => movementSortKey(a).localeCompare(movementSortKey(b)));
+  }
+
+  return result;
+}
+
+export function attachImportedStatementsToKnownCompanies(
+  imported: BankAccountStatement[],
+  existing: BankAccountStatement[],
+): BankAccountStatement[] {
+  const byAccount = new Map<string, string | null>();
+  for (const statement of existing) {
+    if (!statement.cia) continue;
+    const current = byAccount.get(statement.cuenta);
+    if (current === undefined) byAccount.set(statement.cuenta, statement.cia);
+    else if (current !== statement.cia) byAccount.set(statement.cuenta, null);
+  }
+
+  return imported.map((statement) => {
+    if (statement.cia) return statement;
+    const inferredCia = byAccount.get(statement.cuenta);
+    if (!inferredCia) return statement;
+    return {
+      ...statement,
+      cia: inferredCia,
+      movimientos: statement.movimientos.map((movement) => ({
+        ...movement,
+        cia: inferredCia,
+      })),
+    };
+  });
+}

@@ -34,6 +34,11 @@ import {
   type ClassificationContext,
   type InternalReason,
 } from '../domain/netCashFlowEngine';
+import {
+  attachImportedStatementsToKnownCompanies,
+  mergeBankStatements,
+  type BankQueryState,
+} from '../domain/bankStatements';
 import { parseSantanderFile, SANTANDER_FILE_FORMAT } from '../domain/santanderCsv';
 import { hex } from '../theme';
 import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
@@ -45,9 +50,11 @@ import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
 interface BancosProps {
   selectedCia: string;
   statements: BankAccountStatement[];
-  onStatementsChange: (list: BankAccountStatement[]) => void;
-  lastQuery: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat } | null;
-  onLastQueryChange: (q: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat } | null) => void;
+  supplementalStatements: BankAccountStatement[];
+  onJdeStatementsChange: (list: BankAccountStatement[]) => void;
+  onSupplementalStatementsChange: (list: BankAccountStatement[]) => void;
+  lastQuery: BankQueryState | null;
+  onLastQueryChange: (q: BankQueryState | null) => void;
   companies?: { cia: string; nombre: string }[];
 }
 
@@ -61,8 +68,27 @@ const FORMATS: BankStatementFormat[] = ['SWIFT', 'BAI2', 'MT940'];
    ═══════════════════════════════════════════════════════════════════════ */
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
-const formatSourceLabel = (format: string): string =>
-  format === SANTANDER_FILE_FORMAT ? 'Archivo Santander' : format;
+const formatSourceLabel = (format: string, hasUploadedSantander?: boolean): string => {
+  if (format === SANTANDER_FILE_FORMAT) return 'Archivo Santander';
+  if (hasUploadedSantander) return `${format} + Archivo Santander`;
+  return format;
+};
+
+async function readSantanderFile(
+  file: File,
+  selectedCia: string,
+  existingStatements: BankAccountStatement[],
+): Promise<{ statements: BankAccountStatement[]; latestDate: string }> {
+  const text = await file.text();
+  const defaultCia = /^\d{5}$/.test(selectedCia) ? selectedCia : '';
+  const parsed = parseSantanderFile(text, { defaultCia });
+  const statements = attachImportedStatementsToKnownCompanies(parsed, existingStatements);
+  const latestDate = statements.reduce(
+    (max, statement) => statement.fechaEstadoCuenta > max ? statement.fechaEstadoCuenta : max,
+    statements[0]?.fechaEstadoCuenta ?? todayISO(),
+  );
+  return { statements, latestDate };
+}
 
 /* Formatters → unified imports from ../formatters */
 const fmtCurrency = (v: number, _moneda = 'MXN'): string => fmtCurrencyUnified(v);
@@ -80,13 +106,18 @@ const csvEscape = (v: string | number | undefined): string => {
 const BancosForm = ({
   initial,
   selectedCia,
-  onLoaded,
+  onLoadedJde,
+  onLoadedFile,
 }: {
-  initial: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat } | null;
+  initial: BankQueryState | null;
   selectedCia: string;
-  onLoaded: (
+  onLoadedJde: (
     statements: BankAccountStatement[],
-    query: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat },
+    query: BankQueryState,
+  ) => void;
+  onLoadedFile: (
+    statements: BankAccountStatement[],
+    query: BankQueryState,
   ) => void;
 }) => {
   const santanderInputRef = useRef<HTMLInputElement | null>(null);
@@ -106,7 +137,7 @@ const BancosForm = ({
       if (res.length === 0) throw new Error(`JDE devolvió 0 cuentas para ${fecha} (${formato})`);
       setCount(res.length);
       setSuccess(true);
-      onLoaded(res, { fechaEstadoCuenta: fecha, formatoElectronico: formato });
+      onLoadedJde(res, { fechaEstadoCuenta: fecha, formatoElectronico: formato });
     } catch (e) {
       if (e instanceof JdeApiError) {
         const hint = e.status === 401 ? ' — error de autenticación con el servidor' : '';
@@ -117,27 +148,25 @@ const BancosForm = ({
       setErrorSource('jde');
       setLoading(false);
     }
-  }, [fecha, formato, onLoaded]);
+  }, [fecha, formato, onLoadedJde]);
 
   const cargarSantanderArchivo = useCallback(async (file: File) => {
     setLoading(true); setLoadingSource('file'); setError(null); setErrorSource(null); setSuccess(false);
     try {
-      const text = await file.text();
-      const defaultCia = /^\d{5}$/.test(selectedCia) ? selectedCia : '';
-      const result = parseSantanderFile(text, { defaultCia });
+      const result = parseSantanderFile(await file.text(), { defaultCia: /^\d{5}$/.test(selectedCia) ? selectedCia : '' });
       const latestDate = result.reduce(
         (max, statement) => statement.fechaEstadoCuenta > max ? statement.fechaEstadoCuenta : max,
         result[0]?.fechaEstadoCuenta ?? todayISO(),
       );
       setCount(result.length);
       setSuccess(true);
-      onLoaded(result, { fechaEstadoCuenta: latestDate, formatoElectronico: SANTANDER_FILE_FORMAT });
+      onLoadedFile(result, { fechaEstadoCuenta: latestDate, formatoElectronico: SANTANDER_FILE_FORMAT, hasUploadedSantander: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al leer el archivo Santander');
       setErrorSource('file');
       setLoading(false);
     }
-  }, [onLoaded, selectedCia]);
+  }, [onLoadedFile, selectedCia]);
 
   return (
     <div className="w-full max-w-lg mx-auto">
@@ -261,23 +290,28 @@ const BancosDashboard = ({
   query,
   selectedCia,
   onReset,
+  onUploadFile,
   onRefresh,
   canRefresh,
   refreshing,
+  uploadingFile,
   refreshError,
   companies = [],
 }: {
   statements: BankAccountStatement[];
-  query: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat };
+  query: BankQueryState;
   selectedCia: string;
   onReset: () => void;
+  onUploadFile: (file: File) => Promise<void>;
   onRefresh: () => void;
   canRefresh: boolean;
   refreshing: boolean;
+  uploadingFile: boolean;
   refreshError: string | null;
   companies?: { cia: string; nombre: string }[];
 }) => {
-  const refreshBlockedReason = 'Este dataset viene de un archivo Santander. Para actualizarlo, sube un archivo nuevo.';
+  const santanderInputRef = useRef<HTMLInputElement | null>(null);
+  const refreshBlockedReason = 'Este dataset viene solo de archivo Santander. Para actualizarlo desde JDE, primero corre una consulta.';
   // Build a cia→nombre lookup map
   const ciaNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -448,16 +482,36 @@ const BancosDashboard = ({
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          <input
+            ref={santanderInputRef}
+            type="file"
+            accept=".csv,.txt,text/csv,text/plain"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.currentTarget.value = '';
+              if (!file) return;
+              await onUploadFile(file);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => santanderInputRef.current?.click()}
+            disabled={uploadingFile}
+            className="h-8 rounded-full border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:border-[var(--primary)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {uploadingFile ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />} Subir archivo
+          </button>
           <button
             onClick={exportCsv}
-            disabled={totalMovs === 0}
+            disabled={totalMovs === 0 || uploadingFile}
             className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Download className="w-3 h-3" /> Exportar CSV
           </button>
           <button
             onClick={onRefresh}
-            disabled={refreshing || !canRefresh}
+            disabled={refreshing || uploadingFile || !canRefresh}
             title={canRefresh ? 'Actualizar desde JDE' : refreshBlockedReason}
             className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -465,7 +519,7 @@ const BancosDashboard = ({
               ? <Loader2 className="w-3 h-3 animate-spin" />
               : canRefresh ? <RotateCcw className="w-3 h-3" /> : <Upload className="w-3 h-3" />} {canRefresh ? 'Actualizar' : 'Archivo cargado'}
           </button>
-          <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition">
+          <button onClick={onReset} disabled={uploadingFile} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed">
             <X className="w-3 h-3" /> Nueva consulta
           </button>
         </div>
@@ -490,10 +544,12 @@ const BancosDashboard = ({
         </div>
       )}
 
-      {!canRefresh && (
+      {query.hasUploadedSantander && (
         <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
           <Upload className="w-3.5 h-3.5" />
-          Archivo Santander cargado. Para actualizar los movimientos, sube un archivo nuevo.
+          {canRefresh
+            ? 'Archivo Santander agregado al dataset actual.'
+            : 'Archivo Santander cargado. Para actualizar los movimientos, sube un archivo nuevo o corre una consulta JDE.'}
         </div>
       )}
 
@@ -556,7 +612,7 @@ const BancosDashboard = ({
         <Calendar className="w-3.5 h-3.5" />
         <span>Estado al <span className="text-[var(--gray-950)] font-medium">{query.fechaEstadoCuenta}</span></span>
         <span className="text-[var(--gray-300)]">·</span>
-        <span>Formato <span className="text-[var(--gray-950)] font-medium">{formatSourceLabel(query.formatoElectronico)}</span></span>
+        <span>Formato <span className="text-[var(--gray-950)] font-medium">{formatSourceLabel(query.formatoElectronico, query.hasUploadedSantander)}</span></span>
       </div>
 
       {/* ── Accounts list ── */}
@@ -755,7 +811,9 @@ const BancosMovimientos = ({
 const Bancos = ({
   selectedCia,
   statements,
-  onStatementsChange,
+  supplementalStatements,
+  onJdeStatementsChange,
+  onSupplementalStatementsChange,
   lastQuery,
   onLastQueryChange,
   companies = [],
@@ -764,14 +822,28 @@ const Bancos = ({
     statements.length > 0 && lastQuery ? 'dashboard' : 'form'
   );
   const [refreshing, setRefreshing] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const handleLoaded = useCallback(
-    (result: BankAccountStatement[], q: { fechaEstadoCuenta: string; formatoElectronico: BankStatementFormat }) => {
-      onStatementsChange(result);
-      onLastQueryChange(q);
+  const handleLoadedJde = useCallback(
+    (result: BankAccountStatement[], q: BankQueryState) => {
+      onJdeStatementsChange(result);
+      onLastQueryChange({ ...q, hasUploadedSantander: supplementalStatements.length > 0 });
       setView('dashboard');
     },
-    [onStatementsChange, onLastQueryChange],
+    [onJdeStatementsChange, onLastQueryChange, supplementalStatements.length],
+  );
+  const handleLoadedFile = useCallback(
+    (result: BankAccountStatement[], q: BankQueryState) => {
+      const mergedSupplemental = mergeBankStatements(supplementalStatements, attachImportedStatementsToKnownCompanies(result, statements));
+      onSupplementalStatementsChange(mergedSupplemental);
+      if (lastQuery && lastQuery.formatoElectronico !== SANTANDER_FILE_FORMAT) {
+        onLastQueryChange({ ...lastQuery, hasUploadedSantander: true });
+      } else {
+        onLastQueryChange(q);
+      }
+      setView('dashboard');
+    },
+    [lastQuery, onLastQueryChange, onSupplementalStatementsChange, statements, supplementalStatements],
   );
 
   // ── Switch to dashboard when data arrives from App-level fetch ──
@@ -782,15 +854,36 @@ const Bancos = ({
   }, [statements.length, lastQuery, view]);
 
   const handleReset = useCallback(() => {
-    onStatementsChange([]);
+    onJdeStatementsChange([]);
+    onSupplementalStatementsChange([]);
     onLastQueryChange(null);
     setRefreshError(null);
     setView('form');
-  }, [onStatementsChange, onLastQueryChange]);
+  }, [onJdeStatementsChange, onLastQueryChange, onSupplementalStatementsChange]);
+
+  const handleUploadFile = useCallback(async (file: File) => {
+    setUploadingFile(true);
+    setRefreshError(null);
+    try {
+      const { statements: result, latestDate } = await readSantanderFile(file, selectedCia, statements);
+      const mergedSupplemental = mergeBankStatements(supplementalStatements, result);
+      onSupplementalStatementsChange(mergedSupplemental);
+      if (lastQuery && lastQuery.formatoElectronico !== SANTANDER_FILE_FORMAT) {
+        onLastQueryChange({ ...lastQuery, hasUploadedSantander: true });
+      } else {
+        onLastQueryChange({ fechaEstadoCuenta: latestDate, formatoElectronico: SANTANDER_FILE_FORMAT, hasUploadedSantander: true });
+      }
+      setView('dashboard');
+    } catch (e) {
+      setRefreshError(e instanceof Error ? e.message : 'Error al leer el archivo Santander');
+    } finally {
+      setUploadingFile(false);
+    }
+  }, [lastQuery, onLastQueryChange, onSupplementalStatementsChange, selectedCia, statements, supplementalStatements]);
 
   const handleRefresh = useCallback(async () => {
     if (lastQuery?.formatoElectronico === SANTANDER_FILE_FORMAT) {
-      setRefreshError('Este dataset viene de un archivo Santander. Usa "Nueva consulta" para subir un archivo nuevo.');
+      setRefreshError('Este dataset viene solo de archivo Santander. Corre una consulta JDE para sumar más cuentas.');
       return;
     }
     // Always refresh with today's date to get the latest data
@@ -801,8 +894,8 @@ const Bancos = ({
     setRefreshing(true); setRefreshError(null);
     try {
       const res = await fetchBankStatements(queryToUse);
-      onStatementsChange(res);
-      onLastQueryChange(queryToUse);
+      onJdeStatementsChange(res);
+      onLastQueryChange({ ...queryToUse, hasUploadedSantander: supplementalStatements.length > 0 });
     } catch (e) {
       if (e instanceof JdeApiError) {
         setRefreshError(`JDE ${e.status}: ${e.message}`);
@@ -812,12 +905,17 @@ const Bancos = ({
     } finally {
       setRefreshing(false);
     }
-  }, [lastQuery, onStatementsChange, onLastQueryChange]);
+  }, [lastQuery, onJdeStatementsChange, onLastQueryChange, supplementalStatements.length]);
 
   if (view === 'form' || !lastQuery) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center p-6">
-        <BancosForm initial={lastQuery} selectedCia={selectedCia} onLoaded={handleLoaded} />
+        <BancosForm
+          initial={lastQuery}
+          selectedCia={selectedCia}
+          onLoadedJde={handleLoadedJde}
+          onLoadedFile={handleLoadedFile}
+        />
       </div>
     );
   }
@@ -828,9 +926,11 @@ const Bancos = ({
       query={lastQuery}
       selectedCia={selectedCia}
       onReset={handleReset}
+      onUploadFile={handleUploadFile}
       onRefresh={handleRefresh}
       canRefresh={lastQuery.formatoElectronico !== SANTANDER_FILE_FORMAT}
       refreshing={refreshing}
+      uploadingFile={uploadingFile}
       refreshError={refreshError}
       companies={companies}
     />
