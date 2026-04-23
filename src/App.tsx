@@ -7,6 +7,7 @@ import {
   fetchCompanies,
   fetchBankStatements,
   fetchBankStatementsRange,
+  fetchAgedBalances,
   type Company,
   type BankAccountStatement,
   type BankStatementFormat,
@@ -383,6 +384,38 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadCompanies(); }, [loadCompanies]);
+
+  // ── Auto-load CXP (antigüedad de saldos) en background al abrir el app ──
+  // Se dispara una sola vez por sesión en cuanto tenemos el catálogo de
+  // compañías. El usuario ve el empty state de CXP sólo si esto falla para
+  // todas las compañías activas; si al menos una responde, la vista se
+  // llena sola sin pasar por "Consultar todas". Llamadas secuenciales
+  // (ver comentario en CXP.loadAll) — JDE revienta en paralelo.
+  const cxpAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (cxpAutoFetchDone.current) return;
+    if (companies.length === 0) return;
+    const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
+    if (activeCias.length === 0) return;
+    cxpAutoFetchDone.current = true;
+    let cancelled = false;
+    (async () => {
+      for (const cia of activeCias) {
+        if (cancelled) return;
+        try {
+          const data = await fetchAgedBalances({ cia });
+          if (cancelled) return;
+          const stamped = (data as CXPRecord[]).map(r => ({ ...r, cia }));
+          setCxpRecords(prev => [...prev.filter(r => r.cia !== cia), ...stamped]);
+          setCxpLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+        } catch {
+          // Silent: si ninguna compañía carga, el empty state de CXP
+          // deja al usuario "Consultar todas" o subir CSV manualmente.
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [companies]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
