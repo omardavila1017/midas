@@ -292,14 +292,6 @@ const Simulacion: React.FC<Props> = ({
         <LiquidityAlert summary={liquidity} />
 
         {/* Warnings */}
-        {(!companyCode || companyCode === 'all') && (
-          <div className="mt-4 flex items-start gap-2 p-3 rounded-xl bg-[var(--warning-muted)]">
-            <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: 'var(--warning)' }} />
-            <p className="text-[12px]" style={{ color: 'var(--gray-700)' }}>
-              Selecciona una compañía para cargar egresos comprometidos.
-            </p>
-          </div>
-        )}
         {agedError && (
           <div className="mt-4 flex items-start gap-2 p-3 rounded-xl bg-[var(--danger)]/10">
             <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: 'var(--danger)' }} />
@@ -921,73 +913,170 @@ const MonthlyTable: React.FC<{ data: EvaluatedCashFlow }> = ({ data }) => {
     );
   }
   const { months } = data;
+  const anyProposalImpact = months.some((m) =>
+    m.forecastIncome !== m.baseIncome
+    || m.forecastExpense !== m.baseExpense
+    || m.forecastClosingCash !== m.baseClosingCash,
+  );
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[12px]">
         <thead>
-          <tr className="border-b border-[var(--gray-100)] bg-[var(--gray-50)]">
+          <tr className="border-b border-[var(--gray-200)] bg-[var(--gray-50)]">
             <th
               className="text-left px-4 py-2.5 font-medium sticky left-0 z-10 bg-[var(--gray-50)]"
               style={{ color: 'var(--gray-500)' }}
             >
-              Concepto
+              Mes
             </th>
-            {months.map((m) => (
-              <th
-                key={m.yearMonth}
-                className="text-right px-3 py-2.5 font-medium whitespace-nowrap tabular-nums"
-                style={{ color: m.isHistorical ? 'var(--gray-400)' : 'var(--gray-700)' }}
-              >
-                {m.yearMonth}
-                <span className="block text-[9px] normal-case font-normal" style={{ color: 'var(--gray-400)' }}>
-                  {m.isHistorical ? 'histórico' : 'proyección'}
-                </span>
+            <th className="text-right px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--gray-500)' }}>
+              Ingresos
+            </th>
+            <th className="text-right px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--gray-500)' }}>
+              Egresos
+            </th>
+            <th className="text-right px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--gray-500)' }}>
+              Neto
+            </th>
+            <th className="text-right px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--gray-950)' }}>
+              Caja Final
+            </th>
+            {anyProposalImpact && (
+              <th className="text-right px-3 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--gray-500)' }}>
+                Impacto propuestas
               </th>
-            ))}
+            )}
           </tr>
         </thead>
         <tbody>
-          <Row label="Ingresos (base)" values={months.map((m) => m.baseIncome)} />
-          <Row label="Egresos (base)" values={months.map((m) => m.baseExpense)} />
-          <Row label="Neto (base)" values={months.map((m) => m.baseIncome - m.baseExpense)} bold />
-          <Row label="Caja Final (base)" values={months.map((m) => m.baseClosingCash)} divider muted />
-          <Row label="Ingresos (sim.)" values={months.map((m) => m.forecastIncome)} accent />
-          <Row label="Egresos (sim.)" values={months.map((m) => m.forecastExpense)} accent />
-          <Row label="Neto (sim.)" values={months.map((m) => m.forecastIncome - m.forecastExpense)} bold accent />
-          <Row label="Caja Final (sim.)" values={months.map((m) => m.forecastClosingCash)} bold accent divider />
+          {months.map((m, idx) => {
+            const netoBase = m.baseIncome - m.baseExpense;
+            const netoSim = m.forecastIncome - m.forecastExpense;
+            const deltaCaja = m.forecastClosingCash - m.baseClosingCash;
+            const isLast = idx === months.length - 1;
+            return (
+              <tr
+                key={m.yearMonth}
+                className="border-t border-[var(--gray-100)]"
+                style={{ background: isLast ? 'var(--gray-50)' : undefined }}
+              >
+                <td
+                  className="px-4 py-2 sticky left-0 whitespace-nowrap"
+                  style={{
+                    background: isLast ? 'var(--gray-50)' : 'white',
+                    color: m.isHistorical ? 'var(--gray-400)' : 'var(--gray-950)',
+                  }}
+                >
+                  <span className="font-medium">{m.yearMonth}</span>
+                  <span
+                    className="ml-2 text-[9px] uppercase tracking-wider font-medium"
+                    style={{ color: m.isHistorical ? 'var(--gray-400)' : 'var(--primary)' }}
+                  >
+                    {m.isHistorical ? 'histórico' : 'proyección'}
+                  </span>
+                </td>
+                <MetricCell base={m.baseIncome} sim={m.forecastIncome} impactDir="up" />
+                <MetricCell base={m.baseExpense} sim={m.forecastExpense} impactDir="down" />
+                <NetoCell base={netoBase} sim={netoSim} />
+                <CajaCell base={m.baseClosingCash} sim={m.forecastClosingCash} />
+                {anyProposalImpact && (
+                  <td className="text-right px-3 py-2 tabular-nums whitespace-nowrap font-medium">
+                    {deltaCaja === 0 ? (
+                      <span style={{ color: 'var(--gray-300)' }}>—</span>
+                    ) : (
+                      <span style={{ color: deltaCaja > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        {deltaCaja > 0 ? '+' : ''}{fmtCompact(deltaCaja)}
+                      </span>
+                    )}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+      <div className="flex flex-wrap items-center gap-4 px-4 py-3 border-t border-[var(--gray-100)] bg-[var(--gray-50)] text-[10px]" style={{ color: 'var(--gray-500)' }}>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-2 h-2 rounded-full" style={{ background: 'var(--success)' }} />
+          Mejora con propuestas
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-2 h-2 rounded-full" style={{ background: 'var(--danger)' }} />
+          Empeora con propuestas
+        </span>
+        <span className="ml-auto tabular-nums">Última fila resaltada: cierre proyectado del período</span>
+      </div>
     </div>
   );
 };
 
-const Row: React.FC<{
-  label: string;
-  values: number[];
-  bold?: boolean;
-  accent?: boolean;
-  divider?: boolean;
-  muted?: boolean;
-}> = ({ label, values, bold, accent, divider, muted }) => {
-  const color = accent ? 'var(--primary)' : muted ? 'var(--gray-500)' : 'var(--gray-700)';
+/**
+ * Celda genérica para Ingresos/Egresos: muestra el valor simulado y, si
+ * difiere del base, añade el delta tachado-abajo con color según si mejora
+ * o empeora la caja. `impactDir='up'` significa "que suba es bueno"
+ * (ingresos). `impactDir='down'` = "que baje es bueno" (egresos).
+ */
+const MetricCell: React.FC<{ base: number; sim: number; impactDir: 'up' | 'down' }> = ({
+  base, sim, impactDir,
+}) => {
+  const delta = sim - base;
+  const unchanged = Math.abs(delta) < 0.005;
+  const goodForCash = impactDir === 'up' ? delta > 0 : delta < 0;
+  const color = unchanged ? 'var(--gray-700)' : goodForCash ? 'var(--success)' : 'var(--danger)';
   return (
-    <tr className={divider ? 'border-t border-[var(--gray-200)]' : 'border-t border-[var(--gray-50)]'}>
-      <td
-        className="px-4 py-2 sticky left-0 bg-white whitespace-nowrap"
-        style={{ color, fontWeight: bold ? 600 : 400 }}
-      >
-        {label}
-      </td>
-      {values.map((v, i) => (
-        <td
-          key={i}
-          className="text-right px-3 py-2 tabular-nums whitespace-nowrap"
-          style={{ color, fontWeight: bold ? 600 : 400 }}
-        >
-          {fmtCompact(v)}
-        </td>
-      ))}
-    </tr>
+    <td className="text-right px-3 py-2 tabular-nums whitespace-nowrap">
+      <span style={{ color: unchanged ? 'var(--gray-700)' : color, fontWeight: unchanged ? 400 : 500 }}>
+        {fmtCompact(sim)}
+      </span>
+      {!unchanged && (
+        <span className="block text-[10px]" style={{ color }}>
+          {delta > 0 ? '+' : ''}{fmtCompact(delta)}
+        </span>
+      )}
+    </td>
+  );
+};
+
+const NetoCell: React.FC<{ base: number; sim: number }> = ({ base, sim }) => {
+  const unchanged = Math.abs(sim - base) < 0.005;
+  const delta = sim - base;
+  const color = unchanged
+    ? sim < 0 ? 'var(--danger)' : 'var(--gray-700)'
+    : delta > 0 ? 'var(--success)' : 'var(--danger)';
+  return (
+    <td className="text-right px-3 py-2 tabular-nums whitespace-nowrap font-medium">
+      <span style={{ color }}>
+        {sim > 0 ? '+' : ''}{fmtCompact(sim)}
+      </span>
+      {!unchanged && (
+        <span className="block text-[10px]" style={{ color }}>
+          {delta > 0 ? '+' : ''}{fmtCompact(delta)}
+        </span>
+      )}
+    </td>
+  );
+};
+
+const CajaCell: React.FC<{ base: number; sim: number }> = ({ base, sim }) => {
+  const delta = sim - base;
+  const unchanged = Math.abs(delta) < 0.005;
+  const critical = sim < 0;
+  const color = critical
+    ? 'var(--danger)'
+    : unchanged
+      ? 'var(--gray-950)'
+      : delta > 0 ? 'var(--success)' : 'var(--danger)';
+  return (
+    <td className="text-right px-3 py-2 tabular-nums whitespace-nowrap font-semibold">
+      <span style={{ color }}>
+        {fmtCompact(sim)}
+      </span>
+      {!unchanged && (
+        <span className="block text-[10px] font-normal" style={{ color: 'var(--gray-400)' }}>
+          base {fmtCompact(base)}
+        </span>
+      )}
+    </td>
   );
 };
 
