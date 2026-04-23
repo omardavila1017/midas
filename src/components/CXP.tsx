@@ -92,27 +92,12 @@ type CxpAlertType =
   | 'staleProvider'
   | 'strategicProvider';
 type AlertTone = 'danger' | 'warning' | 'info';
-type DrillDimension = 'empresa' | 'tipoProveedor' | 'proveedor' | 'factura';
 
 interface CxpAlert {
   type: CxpAlertType;
   label: string;
   detail: string;
   tone: AlertTone;
-}
-
-interface DrillStep {
-  dimension: DrillDimension;
-  label: string;
-  value: string;
-}
-
-interface DrillNode {
-  value: string;
-  label: string;
-  total: number;
-  count: number;
-  records: EnrichedCXPRecord[];
 }
 
 interface PaymentReference {
@@ -158,8 +143,6 @@ interface SupplierSummary {
 type DashboardTab = 'resumen' | 'triage' | 'proveedores';
 type SortKey = 'nombre' | 'total' | 'count' | 'maxDias';
 type SortDir = 'asc' | 'desc';
-type DueFilter = 'dueThisWeek' | 'current' | 'overdue' | 'over90';
-type AmountFilter = 'under100k' | 'over500k' | '100kTo1m' | 'over1m';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Constants
@@ -172,32 +155,6 @@ const PIE_COLORS = [hex.primary, hex.success, hex.warning, 'var(--chart-4)', hex
 const PAGE_SIZE = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HIGH_IMPACT_AMOUNT = 1_000_000;
-const MID_IMPACT_AMOUNT = 500_000;
-const DUE_FILTERS: { id: DueFilter; label: string }[] = [
-  { id: 'dueThisWeek', label: 'Vence esta semana' },
-  { id: 'current', label: 'Por vencer' },
-  { id: 'overdue', label: 'Vencido' },
-  { id: 'over90', label: 'Vencido > 90d' },
-];
-const AMOUNT_FILTERS: { id: AmountFilter; label: string }[] = [
-  { id: 'under100k', label: '< $100k' },
-  { id: 'over500k', label: '> $500k' },
-  { id: '100kTo1m', label: '$100k-$1M' },
-  { id: 'over1m', label: '> $1M' },
-];
-const PRIORITY_FILTERS: { id: PaymentPriority; label: string }[] = [
-  { id: 'critical', label: 'Critico' },
-  { id: 'negotiable', label: 'Negociable' },
-  { id: 'highImpact', label: 'Impacto alto' },
-  { id: 'normal', label: 'Normal' },
-];
-const DRILL_SEQUENCE: DrillDimension[] = ['empresa', 'tipoProveedor', 'proveedor', 'factura'];
-const DRILL_LABELS: Record<DrillDimension, string> = {
-  empresa: 'Empresa',
-  tipoProveedor: 'Tipo de proveedor',
-  proveedor: 'Proveedor',
-  factura: 'Factura',
-};
 const ALERT_LABELS: Record<CxpAlertType, string> = {
   riskHigh: 'Riesgo alto',
   urgentPayment: 'Urgencia de pago',
@@ -228,16 +185,6 @@ const TRIAGE_ALERT_ORDER: CxpAlertType[] = [
   'staleProvider',
   'strategicProvider',
 ];
-const AGING_RANGE_DEFS = [
-  { id: 'current', label: 'Por vencer', min: -Infinity, max: 0 },
-  { id: '0-7', label: '0-7 días', min: 1, max: 7 },
-  { id: '8-15', label: '8-15 días', min: 8, max: 15 },
-  { id: '16-30', label: '16-30 días', min: 16, max: 30 },
-  { id: '31-60', label: '31-60 días', min: 31, max: 60 },
-  { id: '61-90', label: '61-90 días', min: 61, max: 90 },
-  { id: '90+', label: '+90 días', min: 91, max: Infinity },
-];
-
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
    ═══════════════════════════════════════════════════════════════════════ */
@@ -308,20 +255,6 @@ function isDueThisWeek(record: CXPRecord): boolean {
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
   return dueDate >= start && dueDate <= end;
-}
-
-function matchesDueFilter(record: CXPRecord, filter: DueFilter): boolean {
-  if (filter === 'dueThisWeek') return isDueThisWeek(record);
-  if (filter === 'current') return record.porVencer > 0 && record.diasVencida <= 0;
-  if (filter === 'overdue') return record.diasVencida > 0;
-  return record.diasVencida > 90;
-}
-
-function matchesAmountFilter(record: CXPRecord, filter: AmountFilter): boolean {
-  if (filter === 'under100k') return record.importePendientePesos < 100_000;
-  if (filter === 'over500k') return record.importePendientePesos >= MID_IMPACT_AMOUNT;
-  if (filter === '100kTo1m') return record.importePendientePesos >= 100_000 && record.importePendientePesos < HIGH_IMPACT_AMOUNT;
-  return record.importePendientePesos >= HIGH_IMPACT_AMOUNT;
 }
 
 function inferReferences(record: CXPRecord): PaymentReference[] {
@@ -495,56 +428,6 @@ function agingTooltip(days: number): string {
   return `${days} dias vencido: riesgo legal/comercial; requiere decision prioritaria.`;
 }
 
-function agingRangeForRecord(record: Pick<CXPRecord, 'diasVencida'>): { id: string; label: string } {
-  const days = record.diasVencida;
-  const found = AGING_RANGE_DEFS.find(range => days >= range.min && days <= range.max) ?? AGING_RANGE_DEFS[AGING_RANGE_DEFS.length - 1];
-  return { id: found.id, label: found.label };
-}
-
-function drillValue(record: EnrichedCXPRecord, dimension: DrillDimension): string {
-  switch (dimension) {
-    case 'empresa': return record.cia || 'Sin empresa';
-    case 'tipoProveedor': return record.providerType || 'Sin clasificar';
-    case 'proveedor': return record.nombre || 'Sin proveedor';
-    case 'factura': return invoiceKey(record);
-  }
-}
-
-function drillLabel(record: EnrichedCXPRecord, dimension: DrillDimension, ciaName: (code: string) => string): string {
-  switch (dimension) {
-    case 'empresa': return ciaName(record.cia || 'Sin empresa');
-    case 'tipoProveedor': return record.providerType || 'Sin clasificar';
-    case 'proveedor': return record.nombre || 'Sin proveedor';
-    case 'factura': return record.noFactura || 'Sin factura';
-  }
-}
-
-function applyDrillStack(
-  records: EnrichedCXPRecord[],
-  stack: DrillStep[],
-): EnrichedCXPRecord[] {
-  if (!stack.length) return records;
-  return records.filter(record => stack.every(step => drillValue(record, step.dimension) === step.value));
-}
-
-function groupByDrillDimension(
-  records: EnrichedCXPRecord[],
-  dimension: DrillDimension,
-  ciaName: (code: string) => string,
-): DrillNode[] {
-  const map = new Map<string, DrillNode>();
-  records.forEach(record => {
-    const value = drillValue(record, dimension);
-    const label = drillLabel(record, dimension, ciaName);
-    const item = map.get(value) ?? { value, label, total: 0, count: 0, records: [] };
-    item.total += record.importePendientePesos;
-    item.count += 1;
-    item.records.push(record);
-    map.set(value, item);
-  });
-  return Array.from(map.values()).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label, 'es'));
-}
-
 function flattenBankMovements(bankStatements: BankAccountStatement[], cia?: string): BankStatementLine[] {
   return bankStatements
     .filter(statement => !cia || cia === 'all' || statement.cia === cia)
@@ -566,14 +449,6 @@ function findPossibleBankPayments(record: EnrichedCXPRecord, bankStatements: Ban
     })
     .sort((a, b) => b.fechaOperacion.localeCompare(a.fechaOperacion))
     .slice(0, 6);
-}
-
-function dueFilterLabel(filter: DueFilter): string {
-  return DUE_FILTERS.find(option => option.id === filter)?.label ?? filter;
-}
-
-function amountFilterLabel(filter: AmountFilter): string {
-  return AMOUNT_FILTERS.find(option => option.id === filter)?.label ?? filter;
 }
 
 function toggleListValue<T extends string>(values: T[], value: T): T[] {
@@ -701,8 +576,6 @@ const CXPDashboard = ({
   clients,
   assumptions,
   bankStatements,
-  budget,
-  proposals,
 }: {
   records: CXPRecord[];
   onReset: () => void;
@@ -711,8 +584,6 @@ const CXPDashboard = ({
   clients: Client[];
   assumptions: CashFlowAssumptions;
   bankStatements: BankAccountStatement[];
-  budget: Budget | null;
-  proposals: Proposal[];
 }) => {
   /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
   const ciaName = useCallback((code: string): string => {
@@ -732,31 +603,23 @@ const CXPDashboard = ({
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [provPage, setProvPage] = useState(0);
   const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
-  const [dueFilters, setDueFilters] = useState<DueFilter[]>([]);
-  const [amountFilters, setAmountFilters] = useState<AmountFilter[]>([]);
   const [priorityFilters, setPriorityFilters] = useState<PaymentPriority[]>([]);
 
   // Drilldown state
   const [activeBucket, setActiveBucket] = useState<string | null>(null);
   const [activeKpi, setActiveKpi] = useState<string | null>(null);
-  const [activeAgingRange, setActiveAgingRange] = useState<string | null>(null);
-  const [drillStack, setDrillStack] = useState<DrillStep[]>([]);
   const [activeTriageAlert, setActiveTriageAlert] = useState<CxpAlertType | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<EnrichedCXPRecord | null>(null);
 
   const clearDrill = () => {
     setActiveBucket(null);
     setActiveKpi(null);
-    setActiveAgingRange(null);
-    setDrillStack([]);
     setActiveTriageAlert(null);
     setProvPage(0);
   };
   const clearAllFilters = () => {
     setSearchTerm('');
     setCategoryFilters([]);
-    setDueFilters([]);
-    setAmountFilters([]);
     setPriorityFilters([]);
     setSelectedRecord(null);
     clearDrill();
@@ -765,12 +628,8 @@ const CXPDashboard = ({
     searchTerm ||
     activeBucket ||
     activeKpi ||
-    activeAgingRange ||
-    drillStack.length ||
     activeTriageAlert ||
     categoryFilters.length ||
-    dueFilters.length ||
-    amountFilters.length ||
     priorityFilters.length
   );
 
@@ -780,8 +639,6 @@ const CXPDashboard = ({
       setSelectedCia('all');
       setActiveBucket(null);
       setActiveKpi(null);
-      setActiveAgingRange(null);
-      setDrillStack([]);
       setActiveTriageAlert(null);
       setSelectedRecord(null);
       setExpandedSupplier(null);
@@ -836,12 +693,6 @@ const CXPDashboard = ({
       const bi = BUCKET_LABELS.indexOf(activeBucket);
       if (bi >= 0) { const k = BUCKET_KEYS[bi]; f = f.filter(r => (r[k] as number) > 0); }
     }
-    if (activeAgingRange) {
-      f = f.filter(r => agingRangeForRecord(r).id === activeAgingRange);
-    }
-    if (drillStack.length) {
-      f = applyDrillStack(f, drillStack);
-    }
     if (categoryFilters.length) {
       const selected = new Set(categoryFilters);
       f = f.filter(r => selected.has(r.providerType));
@@ -849,8 +700,6 @@ const CXPDashboard = ({
     if (activeKpi === 'porVencer') f = f.filter(r => r.porVencer > 0);
     else if (activeKpi === 'vencido') f = f.filter(r => (r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
     else if (activeKpi === 'mas90') f = f.filter(r => (r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
-    if (dueFilters.length) f = f.filter(r => dueFilters.some(filter => matchesDueFilter(r, filter)));
-    if (amountFilters.length) f = f.filter(r => amountFilters.some(filter => matchesAmountFilter(r, filter)));
     if (priorityFilters.length) {
       const selected = new Set(priorityFilters);
       f = f.filter(r => selected.has(r.paymentPriority));
@@ -859,7 +708,7 @@ const CXPDashboard = ({
       f = f.filter(r => r.alerts.some(alert => alert.type === activeTriageAlert));
     }
     return f;
-  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, activeAgingRange, drillStack, categoryFilters, activeKpi, dueFilters, amountFilters, priorityFilters, activeTriageAlert]);
+  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, categoryFilters, activeKpi, priorityFilters, activeTriageAlert]);
 
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
@@ -887,95 +736,6 @@ const CXPDashboard = ({
   const totalVencido = useMemo(() => agingBuckets.slice(1).reduce((s, b) => s + b.total, 0), [agingBuckets]);
   const totalPorVencer = agingBuckets[0]?.total || 0;
   const totalMas90 = useMemo(() => agingBuckets.slice(4).reduce((s, b) => s + b.total, 0), [agingBuckets]);
-  const currentMonthIndex = new Date().getMonth();
-  const currentYm = `${assumptions.year}-${String(currentMonthIndex + 1).padStart(2, '0')}`;
-  const todayIso = new Date().toISOString().slice(0, 10);
-
-  const agingRangeData = useMemo(() => {
-    const map = new Map(AGING_RANGE_DEFS.map(range => [range.id, { ...range, total: 0, count: 0 }]));
-    filtered.forEach((record) => {
-      const range = agingRangeForRecord(record);
-      const item = map.get(range.id);
-      if (!item) return;
-      item.total += record.importePendientePesos;
-      item.count += 1;
-    });
-    return Array.from(map.values());
-  }, [filtered]);
-
-  const nextDrillDimension = DRILL_SEQUENCE[drillStack.length] ?? null;
-  const drillNodes = useMemo(
-    () => nextDrillDimension ? groupByDrillDimension(filtered, nextDrillDimension, ciaName) : [],
-    [ciaName, filtered, nextDrillDimension],
-  );
-
-  const biStats = useMemo(() => {
-    const overdueRecords = filtered.filter(record => record.diasVencida > 0);
-    const overdueTotal = overdueRecords.reduce((sum, record) => sum + record.importePendientePesos, 0);
-    const avgOverdueDays = overdueRecords.length
-      ? overdueRecords.reduce((sum, record) => sum + record.diasVencida, 0) / overdueRecords.length
-      : 0;
-    const bySupplier = new Map<string, number>();
-    filtered.forEach(record => bySupplier.set(record.nombre, (bySupplier.get(record.nombre) ?? 0) + record.importePendientePesos));
-    const topFiveTotal = Array.from(bySupplier.values()).sort((a, b) => b - a).slice(0, 5).reduce((sum, total) => sum + total, 0);
-    const alertTotal = (type: CxpAlertType) => filtered.filter(record => record.alerts.some(alert => alert.type === type)).length;
-    const missingCore = filtered.filter(record => record.alerts.some(alert => alert.type === 'incomplete')).length;
-    const catalogMatched = filtered.filter(record => record.providerType !== 'Sin clasificar' || record.providerRiskComment || record.providerFlexibility !== 'unknown').length;
-    const dataConfidence = filtered.length === 0
-      ? 0
-      : Math.max(0, Math.min(100,
-          60
-          + (catalogMatched / filtered.length) * 20
-          + (bankStatements.length > 0 ? 10 : 0)
-          + (budget ? 5 : 0)
-          + (proposals.length > 0 ? 5 : 0)
-          - (missingCore / filtered.length) * 30
-        ));
-    return {
-      overdueRatio: pct(overdueTotal, totalPendiente),
-      avgOverdueDays,
-      topFiveConcentration: pct(topFiveTotal, totalPendiente),
-      duplicateCount: alertTotal('duplicate'),
-      missingPoCount: alertTotal('missingPo'),
-      blockedCount: alertTotal('blocked'),
-      creditLimitCount: alertTotal('creditLimit'),
-      staleProviderCount: alertTotal('staleProvider'),
-      dataConfidence,
-    };
-  }, [bankStatements.length, budget, filtered, proposals.length, totalPendiente]);
-
-  const connectedSignals = useMemo(() => {
-    const today = new Date(`${todayIso}T12:00:00`);
-    const in30 = new Date(today);
-    in30.setDate(today.getDate() + 30);
-    const next30Cxp = filtered.reduce((sum, record) => {
-      const due = dueDateForRecord(record);
-      if (!due) return sum;
-      const date = new Date(`${due}T12:00:00`);
-      return date >= today && date <= in30 ? sum + record.importePendientePesos : sum;
-    }, 0);
-
-    const scopedStatements = selectedCia === 'all'
-      ? bankStatements
-      : bankStatements.filter(statement => statement.cia === selectedCia);
-    const cashAvailable = scopedStatements.reduce((sum, statement) => sum + (statement.saldoFinal ?? statement.saldoInicial ?? 0), 0);
-    const bankChargesMonth = flattenBankMovements(scopedStatements)
-      .filter(movement => movement.tipoMovimiento === 'CARGO' && movement.fechaOperacion.startsWith(currentYm))
-      .reduce((sum, movement) => sum + Math.abs(movement.importe), 0);
-    const plannedMonth = filtered.reduce((sum, record) => {
-      const due = dueDateForRecord(record);
-      return due?.startsWith(currentYm) ? sum + record.importePendientePesos : sum;
-    }, 0);
-    const budgetExpenseMonth = budget?.year === assumptions.year ? budget.expenseTotal[currentMonthIndex] ?? null : null;
-    return {
-      next30Cxp,
-      cashAvailable,
-      bankChargesMonth,
-      plannedMonth,
-      budgetExpenseMonth,
-      activeProposals: proposals.filter(proposal => proposal.enabled).length,
-    };
-  }, [assumptions.year, bankStatements, budget, currentMonthIndex, currentYm, filtered, proposals, selectedCia, todayIso]);
 
   const triageBuckets = useMemo(() => {
     const buckets = {
@@ -1123,16 +883,6 @@ const CXPDashboard = ({
   const activeFilterChips = [
     ...(searchTerm ? [{ key: 'search', label: `Busqueda: ${searchTerm}`, onRemove: () => setSearchTerm('') }] : []),
     ...(activeBucket ? [{ key: 'bucket', label: `Antiguedad: ${activeBucket}`, onRemove: () => setActiveBucket(null) }] : []),
-    ...(activeAgingRange ? [{
-      key: 'aging-range',
-      label: `Aging: ${AGING_RANGE_DEFS.find(range => range.id === activeAgingRange)?.label ?? activeAgingRange}`,
-      onRemove: () => setActiveAgingRange(null),
-    }] : []),
-    ...drillStack.map((step, index) => ({
-      key: `drill-${index}-${step.value}`,
-      label: `${DRILL_LABELS[step.dimension]}: ${step.label}`,
-      onRemove: () => setDrillStack(prev => prev.slice(0, index)),
-    })),
     ...(activeTriageAlert ? [{
       key: 'triage-alert',
       label: `Triage: ${ALERT_LABELS[activeTriageAlert]}`,
@@ -1144,8 +894,6 @@ const CXPDashboard = ({
       onRemove: () => setActiveKpi(null),
     }] : []),
     ...categoryFilters.map(value => ({ key: `cat-${value}`, label: `Categoria: ${value}`, onRemove: () => setCategoryFilters(prev => prev.filter(item => item !== value)) })),
-    ...dueFilters.map(value => ({ key: `due-${value}`, label: `Vencimiento: ${dueFilterLabel(value)}`, onRemove: () => setDueFilters(prev => prev.filter(item => item !== value)) })),
-    ...amountFilters.map(value => ({ key: `amount-${value}`, label: `Monto: ${amountFilterLabel(value)}`, onRemove: () => setAmountFilters(prev => prev.filter(item => item !== value)) })),
     ...priorityFilters.map(value => ({ key: `priority-${value}`, label: `Prioridad: ${priorityLabel(value)}`, onRemove: () => setPriorityFilters(prev => prev.filter(item => item !== value)) })),
   ];
 
@@ -1155,26 +903,6 @@ const CXPDashboard = ({
       if (allSelected) return prev.filter(category => !categories.includes(category));
       return Array.from(new Set([...prev, ...categories]));
     });
-    setProvPage(0);
-  };
-
-  const pushDrill = (node: DrillNode) => {
-    if (!nextDrillDimension) return;
-    if (nextDrillDimension === 'factura') {
-      setSelectedRecord(node.records[0] ?? null);
-      setDrillStack(prev => [...prev, {
-        dimension: nextDrillDimension,
-        value: node.value,
-        label: node.label,
-      }]);
-      return;
-    }
-    setDrillStack(prev => [...prev, {
-      dimension: nextDrillDimension,
-      value: node.value,
-      label: node.label,
-    }]);
-    setTab('proveedores');
     setProvPage(0);
   };
 
@@ -1218,36 +946,6 @@ const CXPDashboard = ({
             <option value="all">Todas las compañías</option>
             {companies.map(c => <option key={c} value={c}>{ciaName(c)}</option>)}
           </select>
-
-          <CompactFilterSelect
-            label="Vence"
-            value={dueFilters[0] ?? 'all'}
-            options={DUE_FILTERS}
-            onChange={(value) => {
-              setDueFilters(value === 'all' ? [] : [value]);
-              setProvPage(0);
-            }}
-          />
-
-          <CompactFilterSelect
-            label="Prioridad"
-            value={priorityFilters[0] ?? 'all'}
-            options={PRIORITY_FILTERS}
-            onChange={(value) => {
-              setPriorityFilters(value === 'all' ? [] : [value]);
-              setProvPage(0);
-            }}
-          />
-
-          <CompactFilterSelect
-            label="Monto"
-            value={amountFilters[0] ?? 'all'}
-            options={AMOUNT_FILTERS}
-            onChange={(value) => {
-              setAmountFilters(value === 'all' ? [] : [value]);
-              setProvPage(0);
-            }}
-          />
 
           <div className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] bg-[var(--gray-50)] rounded-full px-3 py-1.5">
             <Receipt className="w-3.5 h-3.5" />
@@ -1310,16 +1008,6 @@ const CXPDashboard = ({
           </button>
         </div>
       )}
-
-      <DrillExplorer
-        stack={drillStack}
-        nextDimension={nextDrillDimension}
-        nodes={drillNodes}
-        total={totalPendiente}
-        onPick={pushDrill}
-        onReset={() => setDrillStack([])}
-        onBackTo={(index) => setDrillStack(prev => prev.slice(0, index + 1))}
-      />
 
       {/* ── KPI Cards ── */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
@@ -1387,23 +1075,6 @@ const CXPDashboard = ({
           onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'highImpact')); setTab('triage'); setProvPage(0); }}
         />
       </div>
-
-      <BIInsightGrid
-        stats={biStats}
-        agingRanges={agingRangeData}
-        activeAgingRange={activeAgingRange}
-        onAgingRangeClick={(id) => {
-          setActiveAgingRange(prev => prev === id ? null : id);
-          setProvPage(0);
-        }}
-        onAlertClick={(type) => {
-          setActiveTriageAlert(type);
-          setTab('triage');
-          setProvPage(0);
-        }}
-      />
-
-      <ConnectedIntelligence signals={connectedSignals} hasBanks={bankStatements.length > 0} hasBudget={!!budget} />
 
       {/* ════════════════════════════════════════════════════════════════
          RESUMEN TAB
@@ -1813,238 +1484,10 @@ const CXPDashboard = ({
   );
 };
 
-function CompactFilterSelect<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: 'all' | T;
-  options: { id: T; label: string }[];
-  onChange: (value: 'all' | T) => void;
-}) {
-  const active = value !== 'all';
-  return (
-    <label
-      className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
-        active
-          ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
-          : 'border-[var(--gray-200)] bg-white text-[var(--gray-500)]'
-      }`}
-    >
-      <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--gray-400)]">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value as 'all' | T)}
-        className="max-w-[150px] cursor-pointer bg-transparent text-[12px] font-medium text-[var(--gray-950)] outline-none"
-      >
-        <option value="all">Todos</option>
-        {options.map(option => (
-          <option key={option.id} value={option.id}>{option.label}</option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
 function alertToneClass(tone: AlertTone): string {
   if (tone === 'danger') return 'bg-[var(--danger-muted)] text-[var(--danger)]';
   if (tone === 'warning') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
   return 'bg-[var(--primary-muted)] text-[var(--primary)]';
-}
-
-function DrillExplorer({
-  stack,
-  nextDimension,
-  nodes,
-  total,
-  onPick,
-  onReset,
-  onBackTo,
-}: {
-  stack: DrillStep[];
-  nextDimension: DrillDimension | null;
-  nodes: DrillNode[];
-  total: number;
-  onPick: (node: DrillNode) => void;
-  onReset: () => void;
-  onBackTo: (index: number) => void;
-}) {
-  return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
-            <button onClick={onReset} className="font-medium text-[var(--primary)] hover:text-[var(--primary-hover)]">Total CXP</button>
-            {stack.map((step, index) => (
-              <span key={`${step.dimension}-${step.value}`} className="flex min-w-0 items-center gap-1.5">
-                <ChevronRight className="h-3 w-3 text-[var(--gray-300)]" />
-                <button
-                  onClick={() => onBackTo(index)}
-                  className="max-w-[220px] truncate text-[var(--gray-700)] hover:text-[var(--primary)]"
-                  title={step.label}
-                >
-                  {step.label}
-                </button>
-              </span>
-            ))}
-          </div>
-          <p className="mt-1 text-[11px] text-[var(--gray-400)]">
-            {nextDimension ? `Siguiente nivel: ${DRILL_LABELS[nextDimension]}` : 'Detalle de factura seleccionado'}
-          </p>
-        </div>
-        <p className="font-mono text-[13px] font-semibold text-[var(--gray-950)]">{fmtFull(total)}</p>
-      </div>
-
-      {nextDimension && (
-        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {nodes.slice(0, 12).map(node => (
-            <button
-              key={node.value}
-              onClick={() => onPick(node)}
-              className="rounded-xl border border-[var(--gray-200)] px-3 py-2 text-left transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
-              title={`${node.label}: ${fmtFull(node.total)}`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <span className="min-w-0 truncate text-[12px] font-medium text-[var(--gray-950)]">{node.label}</span>
-                <span className="shrink-0 text-[10px] text-[var(--gray-400)]">{node.count}</span>
-              </div>
-              <p className="mt-1 font-mono text-[13px] font-semibold text-[var(--gray-950)]">{fmt(node.total)}</p>
-            </button>
-          ))}
-          {nodes.length === 0 && (
-            <div className="rounded-xl border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
-              Sin datos para bajar de nivel.
-            </div>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function BIInsightGrid({
-  stats,
-  agingRanges,
-  activeAgingRange,
-  onAgingRangeClick,
-  onAlertClick,
-}: {
-  stats: {
-    overdueRatio: string;
-    avgOverdueDays: number;
-    topFiveConcentration: string;
-    duplicateCount: number;
-    missingPoCount: number;
-    blockedCount: number;
-    creditLimitCount: number;
-    staleProviderCount: number;
-    dataConfidence: number;
-  };
-  agingRanges: Array<{ id: string; label: string; total: number; count: number }>;
-  activeAgingRange: string | null;
-  onAgingRangeClick: (id: string) => void;
-  onAlertClick: (type: CxpAlertType) => void;
-}) {
-  const alertStats: Array<{ type: CxpAlertType; count: number }> = [
-    { type: 'duplicate', count: stats.duplicateCount },
-    { type: 'missingPo', count: stats.missingPoCount },
-    { type: 'blocked', count: stats.blockedCount },
-    { type: 'creditLimit', count: stats.creditLimitCount },
-    { type: 'staleProvider', count: stats.staleProviderCount },
-  ];
-
-  return (
-    <section className="grid grid-cols-1 gap-3 xl:grid-cols-[1.2fr_1fr]">
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Aging y concentración</h2>
-          <span className="text-[11px] text-[var(--gray-400)]" title="Rangos calculados con días vencidos por factura">Rangos BI</span>
-        </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
-          <SmallBiStat label="Vencido / total" value={stats.overdueRatio} />
-          <SmallBiStat label="Promedio vencido" value={`${stats.avgOverdueDays.toFixed(0)}d`} />
-          <SmallBiStat label="Top 5 proveedores" value={stats.topFiveConcentration} />
-          <SmallBiStat label="Confianza" value={`${stats.dataConfidence.toFixed(0)}%`} />
-        </div>
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {agingRanges.map(range => (
-            <button
-              key={range.id}
-              onClick={() => onAgingRangeClick(range.id)}
-              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
-                activeAgingRange === range.id
-                  ? 'border-[var(--primary)]/25 bg-[var(--primary-muted)] text-[var(--primary)]'
-                  : 'border-[var(--gray-200)] text-[var(--gray-500)] hover:text-[var(--gray-950)]'
-              }`}
-              title={`${range.label}: ${fmtFull(range.total)}`}
-            >
-              {range.label} · {range.count}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Alertas BI</h2>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {alertStats.map(item => (
-            <button
-              key={item.type}
-              onClick={() => onAlertClick(item.type)}
-              className="rounded-xl border border-[var(--gray-200)] px-3 py-2 text-left transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
-            >
-              <p className="text-[11px] text-[var(--gray-400)]">{ALERT_LABELS[item.type]}</p>
-              <p className="mt-1 font-mono text-[18px] font-semibold text-[var(--gray-950)]">{item.count}</p>
-            </button>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SmallBiStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-[var(--gray-50)] px-3 py-2">
-      <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
-      <p className="mt-1 font-mono text-[16px] font-semibold text-[var(--gray-950)]">{value}</p>
-    </div>
-  );
-}
-
-function ConnectedIntelligence({
-  signals,
-  hasBanks,
-  hasBudget,
-}: {
-  signals: {
-    next30Cxp: number;
-    cashAvailable: number;
-    bankChargesMonth: number;
-    plannedMonth: number;
-    budgetExpenseMonth: number | null;
-    activeProposals: number;
-  };
-  hasBanks: boolean;
-  hasBudget: boolean;
-}) {
-  const coverage = signals.cashAvailable > 0 ? signals.next30Cxp / signals.cashAvailable : null;
-  return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Inteligencia conectada</h2>
-        <span className="text-[11px] text-[var(--gray-400)]">CXP · Flujo · Bancos · Presupuesto</span>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <SmallBiStat label="CXP próximos 30d" value={fmt(signals.next30Cxp)} />
-        <SmallBiStat label="Cobertura caja" value={coverage === null ? (hasBanks ? '0%' : 'Sin bancos') : `${(coverage * 100).toFixed(0)}%`} />
-        <SmallBiStat label="Planeado vs real" value={hasBanks ? `${fmt(signals.plannedMonth)} / ${fmt(signals.bankChargesMonth)}` : 'Sin bancos'} />
-        <SmallBiStat label="Presupuesto mes" value={hasBudget && signals.budgetExpenseMonth !== null ? fmt(signals.budgetExpenseMonth) : `${signals.activeProposals} prop.`} />
-      </div>
-    </section>
-  );
 }
 
 function AgingMatrix({
@@ -2534,8 +1977,6 @@ const CXP = ({
   clients,
   assumptions,
   bankStatements,
-  budget,
-  proposals,
   onMergeCia,
   onReplaceAll,
   onReset,
@@ -2847,8 +2288,6 @@ const CXP = ({
         clients={clients}
         assumptions={assumptions}
         bankStatements={bankStatements}
-        budget={budget}
-        proposals={proposals}
       />
     </div>
   );
