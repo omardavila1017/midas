@@ -26,6 +26,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { fmtCompact, fmtCurrency } from '../formatters';
+import PageHeader from './ui/PageHeader';
 
 /**
  * Flujo de efectivo detallado — vista BANK-ONLY.
@@ -200,8 +201,8 @@ export default function CashFlowDetail({
   // ── Empty state — sin datos bancarios todavía ──
   if (bankStatements.length === 0) {
     return (
-      <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-6">
-        <PageHeader />
+      <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-5">
+        <CashFlowPageHeader />
 
         {bankFetchStatus !== 'idle' ? (
           <BankSkeleton />
@@ -224,20 +225,19 @@ export default function CashFlowDetail({
   };
 
   return (
-    <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-6">
-      {/* Header */}
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Flujo de efectivo</h1>
-        </div>
-        <button
-          onClick={handleExport}
-          className={`inline-flex items-center gap-2 h-9 px-3 rounded-lg border ${T.border} text-sm font-medium ${T.textMuted} ${T.rowHover} hover:text-[var(--card-foreground)] transition-colors duration-150`}
-        >
-          <Download size={16} strokeWidth={1.5} />
-          Exportar
-        </button>
-      </header>
+    <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-5">
+      <PageHeader
+        title="Flujo de efectivo"
+        actions={
+          <button
+            onClick={handleExport}
+            className={`inline-flex items-center gap-2 h-9 px-3 rounded-lg border ${T.border} bg-white text-sm font-medium ${T.textMuted} ${T.rowHover} hover:text-[var(--card-foreground)] transition-colors duration-150`}
+          >
+            <Download size={16} strokeWidth={1.5} />
+            Exportar
+          </button>
+        }
+      />
 
       {/* KPI grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -361,12 +361,8 @@ export default function CashFlowDetail({
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function PageHeader() {
-  return (
-    <header>
-      <h1 className="text-2xl font-bold tracking-tight text-white">Flujo de efectivo</h1>
-    </header>
-  );
+function CashFlowPageHeader() {
+  return <PageHeader title="Flujo de efectivo" />;
 }
 
 function EmptyDataCard({ onRefreshBanks }: { onRefreshBanks?: () => void }) {

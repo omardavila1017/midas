@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Plus, AlertTriangle, Sparkles, Lightbulb, TrendingUp, TrendingDown,
+  Plus, AlertTriangle, Lightbulb, TrendingUp, TrendingDown,
   Pencil, Activity, Wallet, Minus, Save, Layers, Trash2, Check, Download,
 } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
@@ -23,6 +23,7 @@ import type { Budget } from '../domain/budget';
 import ProposalEditor from './ProposalEditor';
 import SimulacionChart from './SimulacionChart';
 import { computeBaseCashFlow, loadOverrides } from './Dashboard';
+import PageHeader from './ui/PageHeader';
 
 interface Props {
   companyCode: string;
@@ -260,14 +261,8 @@ const Simulacion: React.FC<Props> = ({
   }, [activeScenarioId, scenarios, proposals]);
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center gap-2">
-        <Sparkles className="w-4 h-4" style={{ color: '#ffffff' }} />
-        <h1 className="text-[22px] font-semibold tracking-tight" style={{ color: '#ffffff' }}>
-          Simulación
-        </h1>
-      </div>
-      {/* Header + KPIs */}
+    <div className="space-y-5 animate-fade-in">
+      <PageHeader title="Simulación" />
       <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <KpiCard

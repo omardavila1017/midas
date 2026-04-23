@@ -39,6 +39,7 @@ import {
 } from '../services/jde';
 import MonthDrilldown from './MonthDrilldown';
 import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
+import PageHeader from './ui/PageHeader';
 
 interface DashboardProps {
   companyCode: string;
@@ -331,28 +332,26 @@ const Dashboard: React.FC<DashboardProps> = ({
         </defs>
       </svg>
 
-      <div className="flex items-start justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-[22px] font-semibold tracking-tight" style={{ color: '#ffffff' }}>
-            Dashboard
-          </h1>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <StartingBalanceInput
-            value={effectiveStartingBalance}
-            isOverride={startingBalanceOverride !== null}
-            bankValue={bankStartingBalance}
-            onChange={onStartingBalanceChange}
-          />
-          <button
-            onClick={onOpenFlow}
-            className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
-          >
-            <LineChartIcon className="w-4 h-4" />
-            Abrir Simulación
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        actions={
+          <>
+            <StartingBalanceInput
+              value={effectiveStartingBalance}
+              isOverride={startingBalanceOverride !== null}
+              bankValue={bankStartingBalance}
+              onChange={onStartingBalanceChange}
+            />
+            <button
+              onClick={onOpenFlow}
+              className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
+            >
+              <LineChartIcon className="w-4 h-4" strokeWidth={1.5} />
+              Abrir Simulación
+            </button>
+          </>
+        }
+      />
 
       {!hasRealData && (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-[var(--warning-muted)]">

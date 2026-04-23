@@ -17,6 +17,7 @@ import {
   HelpCircle,
   X,
 } from 'lucide-react';
+import PageHeader from './ui/PageHeader';
 
 /**
  * Proveedores tab.
@@ -165,24 +166,23 @@ export default function Providers({ providers, onReplace, onAdd, onUpdate, onDel
 
   return (
     <div className="space-y-5">
-      {/* ─── Header ─────────────────────────────────────────────────────── */}
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight">Proveedores</h1>
-          {syncError && (
-            <p className="text-[13px] text-[var(--danger)] mt-1">{syncError}</p>
-          )}
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Proveedores"
+        actions={
           <button
             onClick={handleSyncCatalog}
             disabled={syncing}
             className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} /> Sincronizar
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} strokeWidth={1.5} /> Sincronizar
           </button>
-        </div>
-      </header>
+        }
+      />
+      {syncError && (
+        <p className="text-[13px] text-white/80 bg-[var(--danger)]/25 border border-[var(--danger)]/40 rounded-lg px-3 py-2">
+          {syncError}
+        </p>
+      )}
 
       {/* ─── Summary strip ──────────────────────────────────────────────── */}
       {providers.length > 0 && (

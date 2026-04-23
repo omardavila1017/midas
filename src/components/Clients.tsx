@@ -27,6 +27,7 @@ import {
   Check,
 } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
+import PageHeader from './ui/PageHeader';
 
 /**
  * Clientes tab.
@@ -313,26 +314,26 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
 
   return (
     <div className="space-y-5">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight animate-fade-in">Clientes</h1>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleExport}
-            title="Exportar catálogo"
-            className="p-2 h-9 rounded-lg hover:bg-[var(--gray-50)] text-[var(--gray-400)] hover:text-[var(--gray-950)] transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={addBlank}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
-          >
-            <Plus className="w-3.5 h-3.5" /> Nuevo cliente
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        title="Clientes"
+        actions={
+          <>
+            <button
+              onClick={handleExport}
+              title="Exportar catálogo"
+              className="p-2 h-9 rounded-lg bg-white border border-[var(--gray-200)] hover:bg-[var(--gray-50)] text-[var(--gray-500)] hover:text-[var(--gray-950)] transition-colors"
+            >
+              <Download className="w-4 h-4" strokeWidth={1.5} />
+            </button>
+            <button
+              onClick={addBlank}
+              className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
+            >
+              <Plus className="w-4 h-4" strokeWidth={1.5} /> Nuevo cliente
+            </button>
+          </>
+        }
+      />
 
       {/* Issues panel */}
       {issues.length > 0 && <div className="animate-slide-down"><IssuesPanel issues={issues} onDismiss={() => setIssues([])} /></div>}

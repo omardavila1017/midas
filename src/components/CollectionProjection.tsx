@@ -17,6 +17,7 @@ import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency } from '../formatters';
 import AnimatedNumber from './ui/AnimatedNumber';
+import PageHeader from './ui/PageHeader';
 
 /**
  * Proyección de Cobranza — simplified layout.
@@ -127,12 +128,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 
   return (
     <div className="space-y-5 animate-page-in">
-      {/* ── Header ─────────────────────────────────────────── */}
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-white tracking-tight">Proyección de cobranza</h1>
-        </div>
-      </header>
+      <PageHeader title="Proyección de cobranza" />
 
       {/* ── Summary strip ─────────────────────────────────── */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 animate-card-in stagger-1 hover-lift">
@@ -177,7 +173,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       {bankStatements.length > 0 && (() => {
         const bankEmpresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
         return (
-          <div className="bg-white border border-[var(--primary)]/20 rounded-xl animate-card-in stagger-1">
+          <div className="bg-white border border-[var(--gray-200)] rounded-xl animate-card-in stagger-1">
             <div className="flex items-end gap-8 p-4">
               <div className="flex items-center gap-2">
                 <Landmark className="w-4 h-4 text-[var(--primary)]" />
