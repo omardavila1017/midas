@@ -337,8 +337,8 @@ const Simulacion: React.FC<Props> = ({
       />
 
       {/* Propuestas */}
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden">
-        <header className="flex items-center justify-between px-6 py-4 border-b border-[var(--gray-100)]">
+      <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+        <header className="flex items-center justify-between px-6 py-4 border-b border-[var(--gray-100)] rounded-t-2xl">
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--primary-muted)' }}>
               <Lightbulb className="w-4 h-4" style={{ color: 'var(--primary)' }} />

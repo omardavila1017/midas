@@ -91,10 +91,10 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
 
   return (
     <div
-      className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden"
+      className="rounded-2xl border border-[var(--gray-200)] bg-white"
       style={{ animation: 'scaleIn 0.25s var(--spring) both', boxShadow: '0 4px 16px -4px rgba(15,23,42,0.08)' }}
     >
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--gray-100)]">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--gray-100)] rounded-t-2xl">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--gray-100)' }}>
             {kind === 'income_increase' && <TrendingUp className="w-4 h-4" style={{ color: 'var(--success)' }} />}
@@ -247,7 +247,7 @@ const ProposalEditor: React.FC<Props> = ({ initial, onSave, onCancel, onDelete }
         </div>
       </div>
 
-      <div className="flex items-center gap-2 px-5 py-3.5 border-t border-[var(--gray-100)] bg-[var(--gray-50)]">
+      <div className="flex items-center gap-2 px-5 py-3.5 border-t border-[var(--gray-100)] bg-[var(--gray-50)] rounded-b-2xl">
         {validationHint && (
           <span
             className="text-[11px] truncate"
