@@ -3,7 +3,43 @@ import { Lock, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 const AUTH_STORAGE_KEY = 'midas-auth-v1';
 const ADMIN_USER = 'admin';
-const ADMIN_PASSWORD = 'ARomo1$';
+
+// Hash SHA-256 del password admin. NO commitear el password en plano: esto
+// solo evita que cualquiera con acceso al repo o al bundle leyera la
+// credencial directamente. Sigue siendo un gate de cliente — un atacante
+// puede saltarlo manipulando sessionStorage. La autenticación real debe
+// delegarse a Atlas SSO (ver AUTH.md).
+//
+// Para rotar el password: calcula `echo -n "<nuevo>" | sha256sum` y pega el
+// hash en `VITE_ADMIN_PASSWORD_SHA256` en .env.local / Vercel env vars.
+// Si la variable no está definida cae al hash por defecto. **Recordatorio:
+// el hash anterior fue expuesto en git history; rotar el password es
+// requisito de despliegue.**
+const DEFAULT_ADMIN_PASSWORD_SHA256 =
+  // sha256("change-me") — placeholder no funcional; configurar via env.
+  '0184d8d9b0b88e5b41d68b65ab1d8be36e8e5da34f4e4e7e3a7ec2dfcd1a8cce';
+
+const ADMIN_PASSWORD_SHA256 = (
+  import.meta.env.VITE_ADMIN_PASSWORD_SHA256 ?? DEFAULT_ADMIN_PASSWORD_SHA256
+).toLowerCase();
+
+async function sha256Hex(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Comparación constante para evitar timing attacks triviales. */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
 
 function isAuthenticated(): boolean {
   try {
@@ -36,12 +72,20 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
     userInputRef.current?.focus();
   }, []);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (user.trim() === ADMIN_USER && password === ADMIN_PASSWORD) {
-      persistAuth();
-      onSuccess();
-      return;
+    try {
+      const candidateHash = await sha256Hex(password);
+      if (
+        user.trim() === ADMIN_USER &&
+        constantTimeEqual(candidateHash, ADMIN_PASSWORD_SHA256)
+      ) {
+        persistAuth();
+        onSuccess();
+        return;
+      }
+    } catch {
+      /* fallthrough → mostrar error genérico */
     }
     setError('Usuario o contraseña incorrectos.');
   };
