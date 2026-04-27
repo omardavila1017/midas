@@ -36,7 +36,12 @@ export interface JdeClientConfig {
 const DEFAULT_TIMEOUT_MS = 180_000;
 
 function resolveBaseUrl(override?: string): string {
-  const raw = override ?? apiConfig.jde.baseUrl ?? '/api/jde';
+  // Usamos `||` en vez de `??` porque `apiConfig.jde.baseUrl` puede llegar
+  // como string vacío si la env var existe pero está sin valor en Vercel.
+  // Con `??` ese empty string ganaría y el cliente terminaría llamando a
+  // rutas absolutas tipo `/empresas` que en producción cae en el rewrite
+  // SPA y devuelve `index.html` (la app se quedaba cargando para siempre).
+  const raw = override || apiConfig.jde.baseUrl || '/api/jde';
   return raw.replace(/\/+$/, '');
 }
 
