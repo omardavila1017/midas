@@ -12,7 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_COGNOS_BASE_URL?: string;
   readonly VITE_COGNOS_TOKEN?: string;
   readonly VITE_COGNOS_NAMESPACE?: string;
-  readonly VITE_ADMIN_PASSWORD_SHA256?: string;
+  readonly VITE_ADMIN_PASSWORD?: string;
+  readonly VITE_PAOLO_PASSWORD?: string;
 }
 
 interface ImportMeta {
