@@ -122,6 +122,15 @@ export default async function handler(
   } catch (e) {
     clearTimeout(timer);
     const isAbort = e instanceof Error && e.name === 'AbortError';
+    // Log para Vercel logs: ayuda a distinguir entre maxDuration cortado por
+    // Vercel (no llegamos aquí, la function muere) y AbortError nuestro a
+    // los 180s. Si vuelven a aparecer 504s en backfill, revisar maxDuration.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[jde-proxy] ${method} ${subPath} → ${
+        isAbort ? 'timeout 180s' : 'unreachable'
+      }: ${e instanceof Error ? e.message : String(e)}`,
+    );
     res.status(isAbort ? 504 : 502).json({
       error: isAbort ? 'JDE upstream timeout' : 'JDE upstream unreachable',
     });
@@ -143,4 +152,10 @@ export const config = {
   // Vercel Edge no expone Node Buffer y limita tamaño de respuesta. Tesorería
   // a veces devuelve 5–15 MB de movimientos bancarios → usamos Node runtime.
   runtime: 'nodejs',
+  // CRÍTICO: cada request a /bancos en JDE tarda ~60s. Sin maxDuration la
+  // function se mata con el default de Vercel (10–15s) y el backfill anual
+  // pierde casi todos los días — el frontend ve solo 2–3 días recientes.
+  // 300s es el máximo del plan Pro y deja margen real sobre el timeout
+  // interno del fetch (180s).
+  maxDuration: 300,
 };

@@ -428,21 +428,42 @@ export async function fetchBankStatementsRange(
   }
 
   // Parallel fetch with a simple worker pool.
+  // Cada día puede fallar por timeout transitorio del proxy serverless o
+  // por contención del API JDE (devuelve 500 cuando se le encima la cola).
+  // Reintentamos hasta 2 veces con backoff antes de aceptar 0 movimientos —
+  // en producción esto recupera la mayoría de días que de otro modo se
+  // perderían y dejaban al usuario viendo solo los pocos días que pasaron
+  // a la primera.
   const results: BankAccountStatement[][] = new Array(dates.length);
   let cursor = 0;
   let done = 0;
+  const MAX_ATTEMPTS = 3;
   const worker = async () => {
     while (true) {
       const idx = cursor++;
       if (idx >= dates.length) return;
-      try {
-        results[idx] = await fetchBankStatements(
-          { fechaEstadoCuenta: dates[idx], formatoElectronico: formato },
-          config,
-        );
-      } catch {
-        results[idx] = [];
+      let attempt = 0;
+      let dayResult: BankAccountStatement[] = [];
+      while (attempt < MAX_ATTEMPTS) {
+        try {
+          dayResult = await fetchBankStatements(
+            { fechaEstadoCuenta: dates[idx], formatoElectronico: formato },
+            config,
+          );
+          break;
+        } catch {
+          attempt++;
+          if (attempt >= MAX_ATTEMPTS) {
+            dayResult = [];
+            break;
+          }
+          // Backoff con jitter para no estampar al upstream cuando un batch
+          // entero de días concurrentes falla a la vez.
+          const delay = 400 * attempt + Math.floor(Math.random() * 300);
+          await new Promise((r) => setTimeout(r, delay));
+        }
       }
+      results[idx] = dayResult;
       done++;
       options.onProgress?.(done, dates.length);
     }
