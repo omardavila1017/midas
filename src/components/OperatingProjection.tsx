@@ -21,7 +21,10 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
+  Legend,
   Line,
+  Pie,
+  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -1711,9 +1714,21 @@ export default function OperatingProjection({
   const criticalUpcomingPayments = projection.supplierQueue
     .filter((item) => item.status === 'overdue' || item.risk === 'Alto' || item.flexibility === 'inamovible')
     .slice(0, 20);
+  const monthRiskDays = monthDays.filter((day) => day.closingCash < effectiveMinimumCash).length;
 
   return (
     <div className="space-y-6">
+      <OperatingStickyHeader
+        scenarios={scenarios}
+        activeScenarioId={activeScenarioId}
+        onActivate={activateScenario}
+        endingCash={projection.summary.endingCash}
+        minimumCash={effectiveMinimumCash}
+        cashGap={cashGap}
+        criticalPayments={criticalUpcomingPayments.length}
+        riskDays={monthRiskDays}
+      />
+
       <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium">
@@ -1765,6 +1780,16 @@ export default function OperatingProjection({
         onSelectMonth={setSelectedMonth}
       />
 
+      <OperatingTopCharts
+        days={monthDays}
+        allDays={projection.days}
+        minimumCash={effectiveMinimumCash}
+        monthSupplier={monthSupplierTotal}
+        monthTax={monthTaxTotal}
+        monthObligations={monthObligationTotal}
+        monthAdjustmentOutflows={monthAdjustmentOutflows}
+      />
+
       <OperatingBlocksPanel
         blocks={blockCards}
         expanded={expandedBlocks}
@@ -1772,6 +1797,13 @@ export default function OperatingProjection({
         onSchedule={() => {}}
         onExpandAll={() => setExpandedBlocks(new Set<OperatingBlockId>(blockCards.map((b) => b.id)))}
         onCollapseAll={() => setExpandedBlocks(new Set<OperatingBlockId>())}
+      />
+
+      <CobranzaBlock
+        expanded={expandedBlocks.has('cobranza')}
+        days={monthDays}
+        monthLabel={selectedMonthData ? fmtYearMonthLong(selectedMonthData.yearMonth) : '—'}
+        monthCollectionsTotal={monthCollectionsTotal}
       />
 
       <section className={`${T.section} overflow-hidden`}>
@@ -6189,6 +6221,324 @@ function OperatingBlocksPanel({
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+const TOP_CHART_COLORS = {
+  inflow: COLOR.inflow,
+  outflow: COLOR.suppliers,
+  suppliers: COLOR.suppliers,
+  taxes: '#9333ea',
+  obligations: '#0ea5e9',
+  adjustments: COLOR.warning,
+  riskBar: '#dc2626',
+  riskLine: '#0f172a',
+} as const;
+
+function OperatingTopCharts({
+  days,
+  allDays,
+  minimumCash,
+  monthSupplier,
+  monthTax,
+  monthObligations,
+  monthAdjustmentOutflows,
+}: {
+  days: OperatingProjectionDay[];
+  allDays: OperatingProjectionDay[];
+  minimumCash: number;
+  monthSupplier: number;
+  monthTax: number;
+  monthObligations: number;
+  monthAdjustmentOutflows: number;
+}) {
+  const barData = days.map((day) => ({
+    date: day.date,
+    label: shortDayLabel(day.date),
+    inflows: sumAmounts(day.cashInflows),
+    outflows: sumAmounts(day.scheduledOutflows) + sumAmounts(day.supplierPayments),
+  }));
+
+  const donutSlices = [
+    { key: 'suppliers', name: 'Proveedores', value: monthSupplier, fill: TOP_CHART_COLORS.suppliers },
+    { key: 'taxes', name: 'Impuestos', value: monthTax, fill: TOP_CHART_COLORS.taxes },
+    { key: 'obligations', name: 'Obligaciones', value: monthObligations, fill: TOP_CHART_COLORS.obligations },
+    { key: 'adjustments', name: 'Ajustes', value: monthAdjustmentOutflows, fill: TOP_CHART_COLORS.adjustments },
+  ].filter((slice) => slice.value > 0);
+  const donutTotal = donutSlices.reduce((sum, slice) => sum + slice.value, 0);
+
+  const weeklyMap = new Map<string, { week: string; weekNum: number; firstDate: string; total: number; risk: number }>();
+  for (const day of allDays) {
+    const key = isoWeekKey(day.date);
+    let bucket = weeklyMap.get(key);
+    if (!bucket) {
+      bucket = { week: key, weekNum: isoWeekNumber(day.date), firstDate: day.date, total: 0, risk: 0 };
+      weeklyMap.set(key, bucket);
+    }
+    bucket.total += 1;
+    if (day.closingCash < minimumCash) bucket.risk += 1;
+  }
+  const weeklyData = Array.from(weeklyMap.values())
+    .sort((a, b) => a.week.localeCompare(b.week))
+    .map((bucket) => ({
+      label: `S${String(bucket.weekNum).padStart(2, '0')}`,
+      risk: bucket.risk,
+      total: bucket.total,
+    }));
+
+  return (
+    <section className={`${T.section} overflow-hidden`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+        <div>
+          <h2 className={`text-[15px] font-semibold ${T.title}`}>Pulso del mes</h2>
+          <p className={`text-[12px] ${T.muted}`}>
+            Movimientos diarios, en qué se va el efectivo y qué semanas tienen días bajo el mínimo de caja.
+          </p>
+        </div>
+      </div>
+      <div className="grid gap-4 px-4 py-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-[var(--border)] bg-white p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[12px] font-medium text-[var(--gray-700)]">Ingresos vs egresos por día</div>
+            <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">{barData.length} días</div>
+          </div>
+          <div className="h-48">
+            {barData.length === 0 ? (
+              <EmptyMiniState label="Sin movimientos del mes" />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={barData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: COLOR.tickText }} stroke={COLOR.axis} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: COLOR.tickText }} stroke={COLOR.axis} tickFormatter={(value) => fmtCompact(Number(value))} width={56} />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(15,23,42,0.04)' }}
+                    formatter={(value: number, name: string) => [fmtCurrency(value), name === 'inflows' ? 'Ingresos' : 'Egresos']}
+                    labelFormatter={(label: string) => label}
+                    contentStyle={{ borderRadius: 12, border: `1px solid ${COLOR.axis}`, fontSize: 12 }}
+                  />
+                  <Bar dataKey="inflows" name="Ingresos" fill={TOP_CHART_COLORS.inflow} radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="outflows" name="Egresos" fill={TOP_CHART_COLORS.outflow} radius={[3, 3, 0, 0]} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[var(--border)] bg-white p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[12px] font-medium text-[var(--gray-700)]">Composición de egresos</div>
+            <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">total {fmtCompact(donutTotal)}</div>
+          </div>
+          <div className="h-48">
+            {donutTotal === 0 ? (
+              <EmptyMiniState label="Sin egresos del mes" />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Tooltip
+                    formatter={(value: number, name: string) => [fmtCurrency(value), name]}
+                    contentStyle={{ borderRadius: 12, border: `1px solid ${COLOR.axis}`, fontSize: 12 }}
+                  />
+                  <Pie
+                    data={donutSlices}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={48}
+                    outerRadius={72}
+                    paddingAngle={2}
+                    stroke="white"
+                  >
+                    {donutSlices.map((slice) => (
+                      <Cell key={slice.key} fill={slice.fill} />
+                    ))}
+                  </Pie>
+                  <Legend
+                    verticalAlign="bottom"
+                    height={28}
+                    iconType="circle"
+                    wrapperStyle={{ fontSize: 11, color: COLOR.tickText }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[var(--border)] bg-white p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[12px] font-medium text-[var(--gray-700)]">Días bajo el mínimo por semana</div>
+            <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">mín {fmtCompact(minimumCash)}</div>
+          </div>
+          <div className="h-48">
+            {weeklyData.length === 0 ? (
+              <EmptyMiniState label="Sin datos por semana" />
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={weeklyData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: COLOR.tickText }} stroke={COLOR.axis} interval="preserveStartEnd" />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: COLOR.tickText }} stroke={COLOR.axis} width={28} />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(15,23,42,0.04)' }}
+                    formatter={(value: number, name: string) => [`${value} días`, name === 'risk' ? 'Bajo mínimo' : 'Total']}
+                    contentStyle={{ borderRadius: 12, border: `1px solid ${COLOR.axis}`, fontSize: 12 }}
+                  />
+                  <Bar dataKey="risk" name="risk" fill={TOP_CHART_COLORS.riskBar} radius={[3, 3, 0, 0]} />
+                  <Line type="monotone" dataKey="total" name="total" stroke={TOP_CHART_COLORS.riskLine} strokeWidth={1} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OperatingStickyHeader({
+  scenarios,
+  activeScenarioId,
+  onActivate,
+  endingCash,
+  minimumCash,
+  cashGap,
+  criticalPayments,
+  riskDays,
+}: {
+  scenarios: OperatingProjectionScenario[];
+  activeScenarioId: string;
+  onActivate: (id: string) => void;
+  endingCash: number;
+  minimumCash: number;
+  cashGap: number;
+  criticalPayments: number;
+  riskDays: number;
+}) {
+  const cashTone = cashGap >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]';
+  const riskTone = riskDays > 0 ? 'text-[var(--danger)]' : 'text-[var(--success)]';
+  const criticalTone = criticalPayments > 0 ? 'text-[var(--warning)]' : 'text-[var(--success)]';
+  return (
+    <div className="sticky top-0 z-30 -mx-4 border-b border-[var(--border)] bg-white/90 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-white/75 lg:-mx-6 lg:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-medium uppercase tracking-[0.04em] text-[var(--gray-400)]">Escenario</span>
+          {scenarios.map((scenario) => {
+            const isActive = scenario.id === activeScenarioId;
+            return (
+              <button
+                key={scenario.id}
+                onClick={() => onActivate(scenario.id)}
+                className={`inline-flex h-7 items-center rounded-full border px-3 text-[11px] font-medium transition-colors ${
+                  isActive
+                    ? 'border-[var(--primary)] bg-[var(--primary)] text-white'
+                    : 'border-[var(--border)] bg-white text-[var(--gray-700)] hover:bg-[var(--surface-alt)]'
+                }`}
+              >
+                {scenario.name}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap items-center gap-4 text-right">
+          <StickyKpi label="Caja final" value={fmtCompact(endingCash)} tone={endingCash >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'} />
+          <StickyKpi label="Mínimo" value={fmtCompact(minimumCash)} tone="text-[var(--gray-700)]" />
+          <StickyKpi label={cashGap >= 0 ? 'Excedente' : 'Déficit'} value={fmtCompact(cashGap)} tone={cashTone} />
+          <StickyKpi label="Pagos críticos" value={String(criticalPayments)} tone={criticalTone} />
+          <StickyKpi label="Días bajo mínimo" value={String(riskDays)} tone={riskTone} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StickyKpi({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div className="text-right">
+      <div className="text-[9px] uppercase tracking-[0.04em] text-[var(--gray-400)]">{label}</div>
+      <div className={`text-[13px] font-semibold tabular-nums ${tone}`}>{value}</div>
+    </div>
+  );
+}
+
+function CobranzaBlock({
+  expanded,
+  days,
+  monthLabel,
+  monthCollectionsTotal,
+}: {
+  expanded: boolean;
+  days: OperatingProjectionDay[];
+  monthLabel: string;
+  monthCollectionsTotal: number;
+}) {
+  if (!expanded) return null;
+  const dailyRows = days
+    .map((day) => {
+      const lines = collectionLines(day);
+      const total = sumAmounts(lines);
+      return { date: day.date, label: shortDayLabel(day.date), lines, total };
+    })
+    .filter((row) => row.lines.length > 0);
+  const collectionCount = dailyRows.reduce((sum, row) => sum + row.lines.length, 0);
+  const bestDay = dailyRows.reduce<{ label: string; total: number } | null>((best, row) => {
+    if (!best || row.total > best.total) return { label: row.label, total: row.total };
+    return best;
+  }, null);
+  return (
+    <section className={`${T.section} overflow-hidden`}>
+      <div className="flex flex-col gap-3 border-b border-[var(--border)] px-4 py-4 xl:flex-row xl:items-end xl:justify-between">
+        <div>
+          <h2 className={`text-[15px] font-semibold ${T.title}`}>Cobranza programada</h2>
+          <p className={`mt-1 text-[12px] ${T.muted}`}>
+            Cobros proyectados por día. {monthLabel}.
+          </p>
+        </div>
+      </div>
+      <div className="grid gap-3 border-b border-[var(--border)] px-4 py-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SelectedKpi label="Mes" value={monthLabel} />
+        <SelectedKpi label="Total cobranza" value={fmtCurrency(monthCollectionsTotal)} />
+        <SelectedKpi label="Cobros del mes" value={String(collectionCount)} />
+        <SelectedKpi label="Mejor día" value={bestDay ? `${bestDay.label} · ${fmtCompact(bestDay.total)}` : '—'} />
+      </div>
+      <div className="px-4 py-3">
+        {dailyRows.length === 0 ? (
+          <EmptyMiniState label="Sin cobranza proyectada para el mes" />
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-[var(--border)]">
+            <table className="w-full text-[12px]">
+              <thead className="bg-[var(--surface-alt)]">
+                <tr>
+                  <Th>Día</Th>
+                  <Th>Fuente</Th>
+                  <Th align="right">Monto</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyRows.flatMap((row) =>
+                  row.lines.map((line, index) => (
+                    <tr
+                      key={`${row.date}:${line.source}:${index}`}
+                      className="border-t border-[var(--border)] hover:bg-[var(--surface-alt)]"
+                    >
+                      <td className="px-3 py-2 text-[var(--gray-700)]">
+                        {index === 0 ? row.label : ''}
+                      </td>
+                      <td className="px-3 py-2 text-[var(--gray-700)]">{sourceLabel(line.source)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-950)]">{fmtCurrency(line.amount)}</td>
+                    </tr>
+                  )),
+                )}
+                <tr className="border-t border-[var(--border)] bg-[var(--surface-alt)] font-semibold">
+                  <td className="px-3 py-2" colSpan={2}>Total mes</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(monthCollectionsTotal)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </section>
   );
