@@ -12,6 +12,19 @@ dist
 dist-ssr
 *.local
 
+# Secrets / env — solo .env.example debe estar en el repo.
+.env
+.env.*
+!.env.example
+
+# Credenciales locales que algunos editores generan automáticamente.
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
