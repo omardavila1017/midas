@@ -14,6 +14,7 @@
 
 export type TabId =
   | 'dashboard'
+  | 'operating'
   | 'flow'
   | 'providers'
   | 'collections'

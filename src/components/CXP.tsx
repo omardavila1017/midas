@@ -356,7 +356,7 @@ function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provide
     providerRiskComment: provider?.riskComment,
     providerFlexibility,
     providerFlexibilityComment: provider?.flexibilityComment,
-    providerCreditLimit: provider?.creditLimit,
+    providerCreditLimit: provider?.creditLimit ?? catalog.creditLimit ?? undefined,
     providerDaysWithoutUpdate: daysSince(provider?.lastUpdatedAt),
     providerDtiArea: provider?.dtiArea ?? catalog.dtiArea ?? undefined,
     providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,

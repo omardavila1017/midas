@@ -22,6 +22,7 @@ import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
 import Simulacion from './components/Simulacion';
+import OperatingProjection from './components/OperatingProjection';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
@@ -70,6 +71,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
+    { id: 'operating',   label: 'Operativa',   icon: LineChart },
     { id: 'flow',        label: 'Simulación', icon: LineChart },
   ],
 };
@@ -78,7 +80,7 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos',
   netflow: 'operacion', bancos: 'operacion',
   dashboard: 'proyeccion', collections: 'proyeccion',
-  cxp: 'proyeccion', flow: 'proyeccion',
+  cxp: 'proyeccion', operating: 'proyeccion', flow: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -249,7 +251,7 @@ export default function App() {
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
 
-  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'collections', 'cxp', 'flow'];
+  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'collections', 'cxp', 'operating', 'flow'];
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
@@ -317,8 +319,25 @@ export default function App() {
 
           const currentType = existing.provider.type?.trim();
           const catalogType = catalogProvider.type?.trim();
-          if ((!currentType || currentType === 'Otro' || currentType === 'Sin clasificar') && catalogType && catalogType !== 'Otro') {
-            merged[existing.index] = { ...existing.provider, type: catalogType };
+          const isCatalogManaged = existing.provider.id.startsWith('catalog-prov-');
+          const nextProvider = {
+            ...existing.provider,
+            type: (isCatalogManaged || !currentType || currentType === 'Otro' || currentType === 'Sin clasificar') && catalogType
+              ? catalogType
+              : existing.provider.type,
+            risk: catalogProvider.risk,
+            riskComment: catalogProvider.riskComment,
+            paymentPeriod: catalogProvider.paymentPeriod,
+            flexibility: catalogProvider.flexibility,
+            flexibilityComment: catalogProvider.flexibilityComment,
+            creditLimit: catalogProvider.creditLimit ?? existing.provider.creditLimit,
+            lastUpdatedAt: catalogProvider.lastUpdatedAt,
+            dtiArea: catalogProvider.dtiArea ?? existing.provider.dtiArea,
+            dtiCriticidad: catalogProvider.dtiCriticidad ?? existing.provider.dtiCriticidad,
+          };
+
+          if (JSON.stringify(nextProvider) !== JSON.stringify(existing.provider)) {
+            merged[existing.index] = nextProvider;
             changed = true;
           }
         }
@@ -819,6 +838,17 @@ export default function App() {
                 assumptions={assumptions}
                 budget={budget}
                 startingBalance={effectiveStartingBalance}
+              />
+            )}
+            {activeTab === 'operating' && (
+              <OperatingProjection
+                companyCode={selectedCia}
+                bankStatements={bankStatements}
+                clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
+                assumptions={assumptions}
+                budget={budget}
               />
             )}
             {activeTab === 'clients' && (

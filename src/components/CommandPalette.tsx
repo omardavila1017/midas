@@ -12,6 +12,7 @@ import {
   Sliders,
   FlaskConical,
   LineChart,
+  CalendarDays,
   Users,
   HandCoins,
   UserSquare,
@@ -26,6 +27,7 @@ type TabId =
   | 'kpis'
   | 'scenarios'
   | 'forecast'
+  | 'operating'
   | 'providers'
   | 'collections'
   | 'clients'
@@ -61,6 +63,7 @@ const NAVIGATION_ITEMS: NavigationItem[] = [
   { tabId: 'kpis', label: 'KPIs', icon: <Sliders size={18} /> },
   { tabId: 'scenarios', label: 'Escenarios', icon: <FlaskConical size={18} /> },
   { tabId: 'forecast', label: 'Pronóstico', icon: <LineChart size={18} /> },
+  { tabId: 'operating', label: 'Proyección operativa', icon: <CalendarDays size={18} /> },
   { tabId: 'providers', label: 'Proveedores', icon: <Users size={18} /> },
   { tabId: 'collections', label: 'Cobros', icon: <HandCoins size={18} /> },
   { tabId: 'clients', label: 'Clientes', icon: <UserSquare size={18} /> },

@@ -37,8 +37,12 @@ interface CatalogShape {
   version: string;
   generated: string;
   providerTypeByName?: Record<string, string>;
+  providerNoByName?: Record<string, string>;
+  classificationByName?: Record<string, string>;
   flexibilityByName: Record<string, Flexibility>;
   flexibilityByClass: Record<string, Flexibility>;
+  creditLimitByName?: Record<string, number>;
+  creditDaysByName?: Record<string, string>;
   dtiCatalog: Record<string, DtiEntry>;
   lastPayment: Record<string, LastPaymentEntry>;
 }
@@ -70,6 +74,9 @@ export interface EnrichmentResult {
   criticidad: Criticidad | null;
   dtiArea: string | null;
   lastPayment: LastPaymentEntry | null;
+  creditLimit: number | null;
+  creditDays: string | null;
+  providerNo: string | null;
 }
 
 /**
@@ -94,6 +101,9 @@ export function enrichFromCatalog(input: EnrichmentInput): EnrichmentResult {
   const dti = name ? catalog.dtiCatalog[name] ?? null : null;
   const last = name ? catalog.lastPayment[name] ?? null : null;
   const providerType = name ? catalog.providerTypeByName?.[name] ?? null : null;
+  const creditLimit = name ? catalog.creditLimitByName?.[name] ?? null : null;
+  const creditDays = name ? catalog.creditDaysByName?.[name] ?? null : null;
+  const providerNo = name ? catalog.providerNoByName?.[name] ?? null : null;
 
   return {
     providerType,
@@ -101,6 +111,9 @@ export function enrichFromCatalog(input: EnrichmentInput): EnrichmentResult {
     criticidad: dti?.criticidad ?? null,
     dtiArea: dti?.area ?? null,
     lastPayment: last,
+    creditLimit,
+    creditDays,
+    providerNo,
   };
 }
 
@@ -130,6 +143,9 @@ export function catalogStats(): {
   return {
     totalSuppliers: new Set([
       ...Object.keys(catalog.providerTypeByName ?? {}),
+      ...Object.keys(catalog.providerNoByName ?? {}),
+      ...Object.keys(catalog.creditLimitByName ?? {}),
+      ...Object.keys(catalog.creditDaysByName ?? {}),
       ...Object.keys(catalog.flexibilityByName),
     ]).size,
     totalClasses: Object.keys(catalog.flexibilityByClass).length,

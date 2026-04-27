@@ -50,8 +50,13 @@ interface CatalogShape {
   version: string;
   generated: string;
   providerTypeByName?: Record<string, string>;
+  providerNoByName?: Record<string, string>;
+  classificationByName?: Record<string, string>;
   flexibilityByName: Record<string, Flexibility>;
   flexibilityByClass: Record<string, Flexibility>;
+  riskNoteByName?: Record<string, string>;
+  creditLimitByName?: Record<string, number>;
+  creditDaysByName?: Record<string, string>;
   dtiCatalog: Record<string, DtiEntry>;
   lastPayment: Record<string, LastPaymentEntry>;
 }
@@ -80,6 +85,12 @@ function riskCommentFromFlexibility(flex: Flexibility, dti: DtiEntry | undefined
     default:
       return 'Sin evidencia suficiente en catalogo; se asigna riesgo medio de forma conservadora.';
   }
+}
+
+function riskCommentForProvider(name: string, flex: Flexibility, dti: DtiEntry | undefined): string {
+  const catalogNote = catalog.riskNoteByName?.[name]?.trim();
+  if (catalogNote) return catalogNote;
+  return riskCommentFromFlexibility(flex, dti);
 }
 
 function flexibilityCommentFromFlexibility(flex: Flexibility): string {
@@ -159,7 +170,11 @@ function idFor(name: string, index: number): string {
 export function loadProvidersCatalog(): Provider[] {
   const names = Array.from(new Set([
     ...Object.keys(catalog.providerTypeByName ?? {}),
+    ...Object.keys(catalog.providerNoByName ?? {}),
+    ...Object.keys(catalog.classificationByName ?? {}),
     ...Object.keys(catalog.flexibilityByName ?? {}),
+    ...Object.keys(catalog.creditLimitByName ?? {}),
+    ...Object.keys(catalog.creditDaysByName ?? {}),
   ]));
   const providers: Provider[] = [];
 
@@ -169,17 +184,18 @@ export function loadProvidersCatalog(): Provider[] {
     const flex: Flexibility = catalog.flexibilityByName[rawName] ?? 'unknown';
     const dti = catalog.dtiCatalog?.[name] ?? undefined;
     const last = catalog.lastPayment?.[name] ?? undefined;
+    const creditDays = catalog.creditDaysByName?.[name] ?? last?.condPago;
 
     providers.push({
       id: idFor(name, idx),
       name,
       type: typeFromCatalog(name, dti),
       risk: riskFromFlexibility(flex),
-      riskComment: riskCommentFromFlexibility(flex, dti),
-      paymentPeriod: paymentPeriodFromCondPago(last?.condPago),
+      riskComment: riskCommentForProvider(name, flex, dti),
+      paymentPeriod: paymentPeriodFromCondPago(creditDays),
       flexibility: flex,
       flexibilityComment: flexibilityCommentFromFlexibility(flex),
-      creditLimit: undefined,
+      creditLimit: catalog.creditLimitByName?.[name],
       lastUpdatedAt: normalizeDateLike(catalog.generated),
       dtiArea: dti?.area,
       dtiCriticidad: dti?.criticidad,
