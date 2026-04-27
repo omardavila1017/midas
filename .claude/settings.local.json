@@ -14,7 +14,12 @@
       "Bash(gh repo *)",
       "Bash(npm test *)",
       "Bash(git stash *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(awk 'NR==3613{print}' /Users/paolo/Documents/GitHub/flujo-senda/src/components/OperatingProjection.tsx)",
+      "Bash(sed -n '3544,3614p' /Users/paolo/Documents/GitHub/flujo-senda/src/components/OperatingProjection.tsx)",
+      "Read(//tmp/**)",
+      "Bash(md5 /tmp/snippet.txt)",
+      "Bash(python3)"
     ]
   }
 }

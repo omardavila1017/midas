@@ -18,10 +18,13 @@ import {
 } from 'lucide-react';
 import {
   Bar,
+  BarChart,
   CartesianGrid,
   Cell,
   ComposedChart,
   Line,
+  Pie,
+  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -29,6 +32,7 @@ import {
   YAxis,
 } from 'recharts';
 import type { Budget } from '../domain/budget';
+import Sparkline from './Sparkline';
 import {
   buildDefaultOperatingProjectionWindow,
   buildOperatingProjection,
@@ -96,7 +100,8 @@ interface Props {
 type DayDetailTab = 'cobranza' | 'pagos' | 'fijos' | 'alertas';
 type SheetGranularity = 'daily' | 'weekly' | 'monthly';
 type SheetScope = 'month' | 'year';
-type OperatingProjectionModuleId = 'overview' | 'suppliers' | 'taxes' | 'obligations' | 'projection' | 'adjustments';
+type OperatingProjectionModuleId = 'overview' | 'cobranza' | 'suppliers' | 'taxes' | 'obligations' | 'projection' | 'adjustments';
+type OperatingBlockId = 'cobranza' | 'suppliers' | 'taxes' | 'obligations' | 'adjustments' | 'projection';
 type TaxModuleTab = 'summary' | 'debts' | 'plan';
 type SupplierRiskFilter = 'all' | 'Alto' | 'Medio' | 'Bajo';
 type SupplierFlexFilter = 'all' | 'inamovible' | 'revisar' | 'flexible' | 'unknown';
@@ -145,12 +150,18 @@ interface SheetGroup {
   empty: string;
 }
 
-interface OperatingProjectionModuleCard {
-  id: OperatingProjectionModuleId;
+interface OperatingBlockCard {
+  id: OperatingBlockId;
   label: string;
   description: string;
-  metric: string;
-  meta: string;
+  total: number;
+  delta: number;
+  count: number;
+  sparkline: number[];
+  tone: 'success' | 'danger' | 'warning' | 'neutral';
+  countLabel: string;
+  scheduleHint?: string;
+  scheduleSeed?: { kind: 'adjustment' | 'obligation'; direction?: 'inflow' | 'outflow' };
 }
 
 interface TreasuryActionItem {
@@ -303,13 +314,19 @@ interface PlanningLedgerCsvRow {
   scheduledDate?: string;
   adjustedAmount?: number;
   comment?: string;
+  isAddition?: boolean;
+  additionType?: PlanningLedgerType;
+  additionDirection?: 'inflow' | 'outflow';
+  additionEntity?: string;
+  additionConcept?: string;
+  additionCategory?: string;
 }
 
 interface PlanningLedgerImportChange {
   id: string;
   label: string;
   type: PlanningLedgerType;
-  field: 'fecha' | 'monto' | 'comentario';
+  field: 'fecha' | 'monto' | 'comentario' | 'alta';
   before: string;
   after: string;
   severity: 'ok' | 'warning' | 'danger';
@@ -568,7 +585,25 @@ export default function OperatingProjection({
       ?? projection.months[0]?.yearMonth
       ?? todayMonth;
   });
-  const [activeModule, setActiveModule] = useState<OperatingProjectionModuleId>('overview');
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<OperatingBlockId>>(() => new Set<OperatingBlockId>(['suppliers']));
+  const toggleExpandedBlock = (id: OperatingBlockId) => {
+    setExpandedBlocks((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const expandBlock = (id: OperatingBlockId) => {
+    setExpandedBlocks((current) => {
+      if (current.has(id)) return current;
+      const next = new Set(current);
+      next.add(id);
+      return next;
+    });
+  };
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [calendarSeed, setCalendarSeed] = useState<{ kind: 'adjustment' | 'obligation'; direction?: 'inflow' | 'outflow' } | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DayDetailTab>('cobranza');
   const [sheetScope, setSheetScope] = useState<SheetScope>('month');
@@ -1091,16 +1126,36 @@ export default function OperatingProjection({
       });
     }
   };
+  const fullPlanningLedgerRows = useMemo(
+    () => buildPlanningLedgerRows({
+      monthDays: projection.days,
+      supplierQueue: projection.supplierQueue,
+      supplierOverrides: supplierOverrideRows,
+      taxDebtRows,
+      manualRows,
+      adjustmentRows,
+      selectedMonth: '',
+      scenarioUpdatedAt: activeScenario?.updatedAt ?? today,
+    }),
+    [
+      activeScenario?.updatedAt,
+      adjustmentRows,
+      manualRows,
+      projection.days,
+      projection.supplierQueue,
+      supplierOverrideRows,
+      taxDebtRows,
+      today,
+    ],
+  );
   const exportPlanningLedgerCsv = () => {
     const csv = buildPlanningLedgerCsv({
-      timelineRows: planningTimelineRows,
-      ledgerRows: planningLedgerRows,
-      selectedMonth,
+      ledgerRows: fullPlanningLedgerRows,
       scenarioName: activeScenario?.name ?? 'Escenario',
       comparison: scenarioComparison,
     });
     downloadTextFile(
-      `flujo-operativo-${selectedMonth}-${safeFileName(activeScenario?.name ?? 'escenario')}.csv`,
+      `programacion-operativa-${today}-${safeFileName(activeScenario?.name ?? 'escenario')}.csv`,
       csv,
       'text/csv;charset=utf-8',
     );
@@ -1108,16 +1163,16 @@ export default function OperatingProjection({
   const exportPlanningLedgerXlsx = async () => {
     const ExcelRuntime = await loadExcelJsRuntime();
     const workbook = await buildPlanningLedgerWorkbook(ExcelRuntime, {
-      timelineRows: planningTimelineRows,
-      ledgerRows: planningLedgerRows,
-      selectedMonth,
+      days: projection.days,
+      ledgerRows: fullPlanningLedgerRows,
       scenarioName: activeScenario?.name ?? 'Escenario',
       comparison: scenarioComparison,
       importPreview: ledgerImportPreview,
+      minimumCash: manualMinimumCash,
     });
     const buffer = await workbook.xlsx.writeBuffer();
     downloadBinaryFile(
-      `flujo-operativo-${selectedMonth}-${safeFileName(activeScenario?.name ?? 'escenario')}.xlsx`,
+      `programacion-operativa-${today}-${safeFileName(activeScenario?.name ?? 'escenario')}.xlsx`,
       buffer,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
@@ -1127,7 +1182,7 @@ export default function OperatingProjection({
       const rows = file.name.toLowerCase().endsWith('.xlsx')
         ? await parsePlanningLedgerXlsx(file)
         : parsePlanningLedgerCsv(await file.text());
-      const preview = buildPlanningLedgerImportPreview(file.name, rows, planningLedgerRows, projection, manualMinimumCash);
+      const preview = buildPlanningLedgerImportPreview(file.name, rows, fullPlanningLedgerRows, projection, manualMinimumCash);
       setLedgerImportPreview(preview);
       setLedgerImportStatus(`${preview.changes.length} cambios detectados · ${preview.ignored} filas ignoradas`);
     } catch (error) {
@@ -1137,16 +1192,25 @@ export default function OperatingProjection({
   const applyPlanningLedgerImportPreview = () => {
     if (!ledgerImportPreview) return;
     const before = scenarioComparison;
-    const result = applyPlanningLedgerCsvRows(ledgerImportPreview.rows);
-    appendAuditEntry({
-      action: 'Importación de flujo',
-      reason: 'Carga de Excel/CSV editado',
-      detail: `${ledgerImportPreview.fileName}: ${result.applied} cambios aplicados, ${result.ignored} filas ignoradas`,
-      impact: `Antes de recalcular: caja delta ${fmtCompact(before.endingCashDelta)}, riesgo ${before.scenarioRiskLabel}`,
-    });
-    setLedgerImportStatus(`${result.applied} cambios aplicados · ${result.ignored} filas ignoradas`);
+    const previewSnapshot = ledgerImportPreview;
+    const result = createScenarioFromImportPreview(previewSnapshot);
+    if (!result) {
+      setLedgerImportStatus('No se pudo crear el escenario desde la importación.');
+      return;
+    }
+    setLedgerImportStatus(
+      `Nuevo escenario "${result.scenarioName}" creado · ${result.applied} cambios · ${result.added} altas · ${result.ignored} ignoradas`,
+    );
     setLedgerImportPreview(null);
     setRunVersion((value) => value + 1);
+    setTimeout(() => {
+      appendAuditEntry({
+        action: 'Importación de flujo',
+        reason: 'Archivo Excel/CSV editado',
+        detail: `${previewSnapshot.fileName}: ${result.applied} edits, ${result.added} altas, ${result.ignored} ignoradas`,
+        impact: `Antes de recalcular: caja delta ${fmtCompact(before.endingCashDelta)}, riesgo ${before.scenarioRiskLabel}. Escenario creado: ${result.scenarioName}.`,
+      });
+    }, 0);
   };
   const appendAuditEntry = (entry: Omit<OperatingAuditEntry, 'id' | 'at' | 'user' | 'scenarioId'>) => {
     setScenarioUi((current) => {
@@ -1175,17 +1239,69 @@ export default function OperatingProjection({
       };
     });
   };
-  const applyPlanningLedgerCsvRows = (rows: PlanningLedgerCsvRow[]): { applied: number; ignored: number } => {
-    const byId = new Map(planningLedgerRows.map((row) => [row.id, row]));
+  const createScenarioFromImportPreview = (preview: PlanningLedgerImportPreview): {
+    applied: number;
+    added: number;
+    ignored: number;
+    scenarioName: string;
+  } | null => {
+    const byId = new Map(fullPlanningLedgerRows.map((row) => [row.id, row]));
+    const fileLabel = preview.fileName.replace(/\.[^.]+$/, '').slice(0, 48) || 'Excel';
+    const scenarioName = `Importado · ${fileLabel}`.slice(0, 60);
+
     let applied = 0;
+    let added = 0;
     let ignored = 0;
 
-    const supplierChanges: Array<{ item: OperatingSupplierQueueItem; patch: Partial<SupplierOverrideRow> }> = [];
-    const taxChanges: Array<{ debtId: string; paymentId: string; patch: Partial<TaxPaymentRow> }> = [];
-    const manualChanges: Array<{ rowId: string; patch: Partial<ManualEventRow> }> = [];
-    const adjustmentChanges: Array<{ rowId: string; patch: Partial<AdjustmentRow> }> = [];
+    let nextManualRows = manualRows.slice();
+    let nextAdjustmentRows = adjustmentRows.slice();
+    let nextSupplierOverrideRows = supplierOverrideRows.slice();
+    let nextTaxDebtRows = taxDebtRows.slice();
 
-    for (const incoming of rows) {
+    for (const incoming of preview.rows) {
+      if (incoming.isAddition) {
+        const date = incoming.scheduledDate;
+        const amount = incoming.adjustedAmount;
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || amount == null || amount <= 0) {
+          ignored += 1;
+          continue;
+        }
+        if (incoming.additionType === 'obligation') {
+          const concept = mapAdditionToManualConcept(incoming.additionCategory);
+          nextManualRows = sortManualRows([
+            ...nextManualRows,
+            {
+              id: `manual-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              concept,
+              date,
+              amountInput: editableAmount(amount),
+              label: incoming.additionConcept || incoming.comment || concept,
+              allowPartial: concept === TAX_MANUAL_CONCEPT,
+            },
+          ]);
+          added += 1;
+          continue;
+        }
+        if (incoming.additionType === 'adjustment') {
+          const direction: 'inflow' | 'outflow' = incoming.additionDirection === 'inflow' ? 'inflow' : 'outflow';
+          nextAdjustmentRows = sortAdjustmentRows([
+            ...nextAdjustmentRows,
+            {
+              id: `adjustment-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              date,
+              direction,
+              category: incoming.additionCategory || (direction === 'inflow' ? 'Entrada manual' : 'Salida manual'),
+              label: incoming.additionConcept || incoming.comment || (direction === 'inflow' ? 'Entrada importada' : 'Salida importada'),
+              amountInput: editableAmount(amount),
+            },
+          ]);
+          added += 1;
+          continue;
+        }
+        ignored += 1;
+        continue;
+      }
+
       const current = byId.get(incoming.id);
       if (!current) {
         ignored += 1;
@@ -1210,7 +1326,12 @@ export default function OperatingProjection({
         if (dateChanged) patch.date = incoming.scheduledDate;
         if (amountChanged) patch.amountInput = editableAmount(incoming.adjustedAmount ?? current.adjustedAmount);
         if (commentChanged) patch.note = incoming.comment;
-        supplierChanges.push({ item: current.supplier, patch });
+        nextSupplierOverrideRows = upsertSupplierOverrideFromQueueItem(
+          nextSupplierOverrideRows,
+          current.supplier,
+          patch,
+          current.supplier.plannedDate ?? current.supplier.dueDate ?? `${selectedMonth}-01`,
+        );
         applied += 1;
         continue;
       }
@@ -1220,7 +1341,7 @@ export default function OperatingProjection({
         if (dateChanged) patch.date = incoming.scheduledDate;
         if (amountChanged) patch.amountInput = editableAmount(incoming.adjustedAmount ?? current.adjustedAmount);
         if (commentChanged) patch.note = incoming.comment;
-        taxChanges.push({ debtId: current.parentId, paymentId: current.sourceId, patch });
+        nextTaxDebtRows = updateTaxPaymentRow(nextTaxDebtRows, current.parentId, current.sourceId, patch);
         applied += 1;
         continue;
       }
@@ -1230,7 +1351,9 @@ export default function OperatingProjection({
         if (dateChanged) patch.date = incoming.scheduledDate;
         if (amountChanged) patch.amountInput = editableAmount(incoming.adjustedAmount ?? current.adjustedAmount);
         if (commentChanged) patch.label = incoming.comment ?? '';
-        manualChanges.push({ rowId: current.sourceId, patch });
+        nextManualRows = sortManualRows(nextManualRows.map((row) => (
+          row.id === current.sourceId ? { ...row, ...patch } : row
+        )));
         applied += 1;
         continue;
       }
@@ -1240,7 +1363,9 @@ export default function OperatingProjection({
         if (dateChanged) patch.date = incoming.scheduledDate;
         if (amountChanged) patch.amountInput = editableAmount(incoming.adjustedAmount ?? current.adjustedAmount);
         if (commentChanged) patch.label = incoming.comment ?? '';
-        adjustmentChanges.push({ rowId: current.sourceId, patch });
+        nextAdjustmentRows = sortAdjustmentRows(nextAdjustmentRows.map((row) => (
+          row.id === current.sourceId ? { ...row, ...patch } : row
+        )));
         applied += 1;
         continue;
       }
@@ -1248,38 +1373,43 @@ export default function OperatingProjection({
       ignored += 1;
     }
 
-    if (supplierChanges.length > 0) {
-      setSupplierOverrideRows((current) => supplierChanges.reduce(
-        (next, change) => upsertSupplierOverrideFromQueueItem(
-          next,
-          change.item,
-          change.patch,
-          change.item.plannedDate ?? change.item.dueDate ?? `${selectedMonth}-01`,
-        ),
-        current,
-      ));
-    }
-    if (taxChanges.length > 0) {
-      setTaxDebtRows((current) => taxChanges.reduce(
-        (next, change) => updateTaxPaymentRow(next, change.debtId, change.paymentId, change.patch),
-        current,
-      ));
-    }
-    if (manualChanges.length > 0) {
-      setManualRows((current) => sortManualRows(current.map((row) => {
-        const change = manualChanges.find((item) => item.rowId === row.id);
-        return change ? { ...row, ...change.patch } : row;
-      })));
-    }
-    if (adjustmentChanges.length > 0) {
-      setAdjustmentRows((current) => sortAdjustmentRows(current.map((row) => {
-        const change = adjustmentChanges.find((item) => item.rowId === row.id);
-        return change ? { ...row, ...change.patch } : row;
-      })));
-    }
+    setScenarioUi((prev) => {
+      setUndoStack((history) => [cloneOperatingScenarioUiState(prev), ...history].slice(0, 20));
+      const manualEvents = nextManualRows
+        .map(toManualExpenseEvent)
+        .filter((value): value is ManualExpenseEvent => value !== null)
+        .sort(sortManualExpenseEvent);
+      const operatingAdjustmentList = nextAdjustmentRows
+        .map(toOperatingAdjustment)
+        .filter((value): value is OperatingAdjustment => value !== null)
+        .sort(sortOperatingAdjustment);
+      const supplierPaymentOverrideList = nextSupplierOverrideRows
+        .map(toSupplierPaymentOverride)
+        .filter((value): value is OperatingSupplierPaymentOverride => value !== null);
+      const taxDebtList = nextTaxDebtRows
+        .map(toOperatingTaxDebt)
+        .filter((value): value is OperatingTaxDebt => value !== null);
+      const scenario = createOperatingProjectionScenario(scenarioName, {
+        manualExpenseEvents: manualEvents,
+        operatingAdjustments: operatingAdjustmentList,
+        supplierPaymentOverrides: supplierPaymentOverrideList,
+        taxDebts: taxDebtList,
+        owner: currentUser.name,
+        role: currentUser.role,
+      });
+      return {
+        scenarios: [...prev.scenarios, scenario],
+        activeScenarioId: scenario.id,
+        manualRows: nextManualRows,
+        adjustmentRows: nextAdjustmentRows,
+        supplierOverrideRows: nextSupplierOverrideRows,
+        taxDebtRows: nextTaxDebtRows,
+      };
+    });
 
-    return { applied, ignored };
+    return { applied, added, ignored, scenarioName };
   };
+
   const undoLastScenarioChange = () => {
     setUndoStack((history) => {
       const [snapshot, ...rest] = history;
@@ -1480,7 +1610,9 @@ export default function OperatingProjection({
     topMonthAlerts,
   ]);
   const openTreasuryAction = (action: TreasuryActionItem) => {
-    setActiveModule(action.module);
+    if (action.module !== 'overview') {
+      expandBlock(action.module as OperatingBlockId);
+    }
     if (action.date) {
       setSelectedMonth(action.date.slice(0, 7));
       setSelectedDay(action.date);
@@ -1493,48 +1625,89 @@ export default function OperatingProjection({
       setTaxModuleTab('plan');
     }
   };
-  const moduleCards: OperatingProjectionModuleCard[] = [
+  const monthCollectionsByDay = monthDays.map((day) => sumAmounts(collectionLines(day)));
+  const monthSupplierByDay = monthDays.map((day) => sumAmounts(day.supplierPayments));
+  const monthTaxByDay = monthDays.map((day) => {
+    const dateKey = day.date;
+    return manualRows
+      .filter((row) => row.concept === TAX_MANUAL_CONCEPT && row.date === dateKey)
+      .reduce((sum, row) => sum + (Number(row.amountInput) || 0), 0);
+  });
+  const monthObligationByDay = monthDays.map((day) => {
+    const dateKey = day.date;
+    return manualRows
+      .filter((row) => row.concept !== TAX_MANUAL_CONCEPT && row.date === dateKey)
+      .reduce((sum, row) => sum + (Number(row.amountInput) || 0), 0);
+  });
+  const monthAdjustmentByDay = monthDays.map((day) => {
+    const dateKey = day.date;
+    return adjustmentRows
+      .filter((row) => row.date === dateKey)
+      .reduce((sum, row) => {
+        const amount = Number(row.amountInput) || 0;
+        return sum + (row.direction === 'inflow' ? amount : -amount);
+      }, 0);
+  });
+  const monthTaxTotal = monthTaxByDay.reduce((sum, value) => sum + value, 0);
+  const blockCards: OperatingBlockCard[] = [
     {
-      id: 'overview',
-      label: 'Resumen',
-      description: 'Caja, línea de tiempo y día seleccionado.',
-      metric: fmtCompact(projection.summary.endingCash),
-      meta: `${monthDays.length} días visibles`,
+      id: 'cobranza',
+      label: 'Cobranza',
+      description: 'Cobros proyectados desde clientes y otras entradas no manuales.',
+      total: monthCollectionsTotal,
+      delta: 0,
+      count: monthDays.reduce((sum, day) => sum + collectionLines(day).length, 0),
+      sparkline: monthCollectionsByDay,
+      tone: 'success',
+      countLabel: 'cobros del mes',
     },
     {
       id: 'suppliers',
-      label: 'Proveedores',
-      description: 'Pagos sugeridos, drag & drop y cambios por factura.',
-      metric: fmtCompact(projection.summary.totalSupplierPayments),
-      meta: `${supplierQueueSummary.criticalCount} críticos`,
+      label: 'Pagos a proveedores',
+      description: 'Cola priorizada por riesgo, flexibilidad y vencimiento.',
+      total: monthSupplierTotal,
+      delta: monthSupplierTotal - (baseProjection.months.find((m) => m.yearMonth === selectedMonth)?.totalSupplierPayments ?? monthSupplierTotal),
+      count: monthDays.reduce((sum, day) => sum + day.supplierPayments.length, 0),
+      sparkline: monthSupplierByDay,
+      tone: 'danger',
+      countLabel: 'pagos del mes',
+      scheduleHint: 'Programa nuevo desde calendario',
     },
     {
       id: 'taxes',
       label: 'Impuestos',
-      description: 'Adeudos 2025/2026, plan parcial y edición fiscal.',
-      metric: fmtCompact(taxDebtSummary.outstanding || taxSheetSummary.taxAmount),
-      meta: `${taxDebts.length} adeudos`,
+      description: 'Adeudos fiscales y plan de pagos parciales.',
+      total: monthTaxTotal,
+      delta: 0,
+      count: taxDebts.length,
+      sparkline: monthTaxByDay,
+      tone: 'warning',
+      countLabel: 'adeudos activos',
+      scheduleSeed: { kind: 'obligation', direction: 'outflow' },
     },
     {
       id: 'obligations',
-      label: 'Obligaciones',
+      label: 'Obligaciones / CAPEX',
       description: 'Finiquitos, CAPEX y pasivos no fiscales.',
-      metric: fmtCompact(monthObligationTotal),
-      meta: `${monthObligationRows.length} pagos del mes`,
-    },
-    {
-      id: 'projection',
-      label: 'Hoja anual',
-      description: 'Vista tipo Excel de caja proyectada.',
-      metric: String(sheetRows.length),
-      meta: sheetScope === 'year' ? 'filas del año' : 'filas del mes',
+      total: monthObligationTotal,
+      delta: 0,
+      count: monthObligationRows.length,
+      sparkline: monthObligationByDay,
+      tone: 'danger',
+      countLabel: 'pagos del mes',
+      scheduleSeed: { kind: 'obligation', direction: 'outflow' },
     },
     {
       id: 'adjustments',
-      label: 'Ajustes',
-      description: 'Entradas y salidas manuales con concepto exacto.',
-      metric: fmtCompact(monthAdjustmentInflows - monthAdjustmentOutflows),
-      meta: `${monthAdjustmentRows.length} ajustes del mes`,
+      label: 'Ajustes manuales',
+      description: 'Entradas y salidas extra para forzar el escenario.',
+      total: monthAdjustmentInflows - monthAdjustmentOutflows,
+      delta: 0,
+      count: monthAdjustmentRows.length,
+      sparkline: monthAdjustmentByDay,
+      tone: monthAdjustmentInflows >= monthAdjustmentOutflows ? 'success' : 'danger',
+      countLabel: 'ajustes del mes',
+      scheduleSeed: { kind: 'adjustment' },
     },
   ];
   const effectiveMinimumCash = Math.max(projection.summary.peakMandatoryReserve, manualMinimumCash);
@@ -1601,10 +1774,30 @@ export default function OperatingProjection({
         onSelectMonth={setSelectedMonth}
       />
 
-      <OperatingModuleSwitcher
-        modules={moduleCards}
-        activeModule={activeModule}
-        onChange={setActiveModule}
+      <OperatingTopCharts
+        days={monthDays}
+        allDays={projection.days}
+        minimumCash={effectiveMinimumCash}
+        manualMinimumCash={manualMinimumCash}
+        monthCollections={monthCollectionsTotal}
+        monthFixed={monthFixedTotal}
+        monthSupplier={monthSupplierTotal}
+        monthTax={monthTaxTotal}
+        monthObligations={monthObligationTotal}
+        monthAdjustmentInflows={monthAdjustmentInflows}
+        monthAdjustmentOutflows={monthAdjustmentOutflows}
+      />
+
+      <OperatingBlocksPanel
+        blocks={blockCards}
+        expanded={expandedBlocks}
+        onToggle={toggleExpandedBlock}
+        onSchedule={(seed) => {
+          setCalendarSeed(seed ?? null);
+          setCalendarOpen(true);
+        }}
+        onExpandAll={() => setExpandedBlocks(new Set<OperatingBlockId>(blockCards.map((b) => b.id)))}
+        onCollapseAll={() => setExpandedBlocks(new Set<OperatingBlockId>())}
       />
 
       <section className={`${T.section} overflow-hidden`}>
@@ -1687,7 +1880,7 @@ export default function OperatingProjection({
           currentUser={currentUser}
         />
 
-        {activeModule === 'suppliers' && (
+        {expandedBlocks.has('suppliers') && (
           <SupplierOverrideEditor
             rows={supplierOverrideRows}
             onChangeRows={setSupplierOverrideRows}
@@ -1695,7 +1888,7 @@ export default function OperatingProjection({
         )}
       </section>
 
-      <section className={`${activeModule === 'taxes' ? T.section : 'hidden'} overflow-hidden`}>
+      <section className={`${expandedBlocks.has('taxes') ? T.section : 'hidden'} overflow-hidden`}>
         <div className="flex flex-col gap-3 border-b border-[var(--border)] px-4 py-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <h2 className={`text-[15px] font-semibold ${T.title}`}>Módulo fiscal</h2>
@@ -1836,7 +2029,7 @@ export default function OperatingProjection({
         )}
       </section>
 
-      <section className={`${activeModule === 'obligations' ? T.section : 'hidden'} overflow-hidden`}>
+      <section className={`${expandedBlocks.has('obligations') ? T.section : 'hidden'} overflow-hidden`}>
         <div className="flex flex-col gap-3 border-b border-[var(--border)] px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className={`text-[15px] font-semibold ${T.title}`}>Hoja de obligaciones no fiscales</h2>
@@ -1991,7 +2184,7 @@ export default function OperatingProjection({
         </div>
       </section>
 
-      <section className={`${activeModule === 'adjustments' ? T.section : 'hidden'} overflow-hidden`}>
+      <section className={`${expandedBlocks.has('adjustments') ? T.section : 'hidden'} overflow-hidden`}>
         <div className="flex flex-col gap-3 border-b border-[var(--border)] px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className={`text-[15px] font-semibold ${T.title}`}>Detalle de ajustes manuales</h2>
@@ -2146,7 +2339,7 @@ export default function OperatingProjection({
         </div>
       </section>
 
-      <section className={`${activeModule === 'overview' ? T.section : 'hidden'} overflow-hidden`}>
+      <section className={`${T.section} overflow-hidden`}>
         <div className="border-b border-[var(--border)] px-4 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
@@ -2281,7 +2474,7 @@ export default function OperatingProjection({
         )}
       </section>
 
-      <section className={`${activeModule === 'overview' ? 'grid' : 'hidden'} gap-4 xl:grid-cols-[minmax(0,1fr)_380px]`}>
+      <section className={`grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]`}>
         <PlanningLedgerTable
           rows={filteredPlanningLedgerRows}
           allRows={planningLedgerRows}
@@ -2340,7 +2533,7 @@ export default function OperatingProjection({
         />
       </section>
 
-      <div className={activeModule === 'suppliers' ? 'space-y-6' : 'hidden'}>
+      <div className={expandedBlocks.has('suppliers') ? 'space-y-6' : 'hidden'}>
         <SupplierPriorityQueue
           rows={supplierQueueRows}
           allRows={projection.supplierQueue}
@@ -2409,7 +2602,7 @@ export default function OperatingProjection({
         </section>
       </div>
 
-      <section className={`${activeModule === 'projection' ? T.section : 'hidden'} overflow-hidden`}>
+      <section className={`${expandedBlocks.has('projection') ? T.section : 'hidden'} overflow-hidden`}>
         <div className="flex flex-col gap-3 border-b border-[var(--border)] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -2590,7 +2783,7 @@ export default function OperatingProjection({
         </div>
       </section>
 
-      <section className={`${activeModule === 'overview' ? 'grid' : 'hidden'} gap-4 lg:grid-cols-[minmax(0,1.4fr)_380px]`}>
+      <section className={`grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_380px]`}>
         <div className={`${T.section} overflow-hidden`}>
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div>
@@ -3412,114 +3605,162 @@ function buildPlanningLedgerRows({
     });
 }
 
-const PLANNING_CSV_HEADERS = [
-  'row_type',
+const PROGRAMACION_HEADERS = [
   'id',
-  'period_start',
-  'period_end',
-  'fecha_original',
-  'fecha_programada',
   'tipo',
-  'categoria',
-  'empresa_proveedor_cliente',
+  'direccion',
+  'fecha_programada',
+  'monto',
+  'entidad',
   'concepto',
-  'monto_original',
-  'monto_ajustado',
+  'categoria',
+  'comentario',
   'estatus',
   'prioridad',
   'riesgo',
   'flexibilidad',
-  'comentario',
+  'fecha_original',
+  'monto_original',
   'origen',
-  'ultima_actualizacion',
+  'editable',
+] as const;
+
+type ProgramacionHeader = (typeof PROGRAMACION_HEADERS)[number];
+
+const TIMELINE_HEADERS = [
+  'fecha',
+  'dia_semana',
   'caja_inicial',
   'ingresos',
-  'egresos',
-  'ajustes',
+  'egresos_fijos',
+  'pagos_proveedor',
+  'ajustes_neto',
   'caja_minima',
   'caja_final',
   'disponible',
   'alertas',
+  'top_movimientos',
 ] as const;
 
+const LEDGER_TYPE_TO_LABEL: Record<PlanningLedgerType, string> = {
+  collection: 'Cobranza',
+  supplier: 'Proveedor',
+  tax: 'Impuesto',
+  obligation: 'Obligación',
+  adjustment: 'Ajuste',
+  fixed: 'Fijo',
+};
+
+const LEDGER_LABEL_TO_TYPE: Record<string, PlanningLedgerType> = {
+  COBRANZA: 'collection',
+  COBRO: 'collection',
+  COLLECTION: 'collection',
+  INGRESO: 'collection',
+  INGRESOS: 'collection',
+  PROVEEDOR: 'supplier',
+  PROVEEDORES: 'supplier',
+  SUPPLIER: 'supplier',
+  IMPUESTO: 'tax',
+  IMPUESTOS: 'tax',
+  TAX: 'tax',
+  OBLIGACION: 'obligation',
+  OBLIGACIONES: 'obligation',
+  OBLIGATION: 'obligation',
+  AJUSTE: 'adjustment',
+  AJUSTES: 'adjustment',
+  ADJUSTMENT: 'adjustment',
+  FIJO: 'fixed',
+  FIJOS: 'fixed',
+  FIXED: 'fixed',
+  EGRESO_FIJO: 'fixed',
+};
+
+function parseLedgerTypeLabel(value: string | undefined): PlanningLedgerType | null {
+  if (!value) return null;
+  const key = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .toUpperCase();
+  return LEDGER_LABEL_TO_TYPE[key] ?? null;
+}
+
+function parseAdditionDirection(value: string | undefined): 'inflow' | 'outflow' | null {
+  if (!value) return null;
+  const key = value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+  if (key === 'INFLOW' || key === 'ENTRADA' || key === 'INGRESO') return 'inflow';
+  if (key === 'OUTFLOW' || key === 'SALIDA' || key === 'EGRESO') return 'outflow';
+  return null;
+}
+
 function buildPlanningLedgerCsv({
-  timelineRows,
   ledgerRows,
-  selectedMonth,
   scenarioName,
   comparison,
 }: {
-  timelineRows: ProjectionSheetRow[];
   ledgerRows: PlanningLedgerItem[];
-  selectedMonth: string;
   scenarioName: string;
   comparison: ScenarioComparison;
 }): string {
-  const rows: string[][] = [
-    PLANNING_CSV_HEADERS.map(String),
-    csvRow({
-      row_type: 'metadata',
-      id: `escenario:${selectedMonth}`,
-      categoria: 'Escenario',
-      concepto: scenarioName,
-      comentario: `Base vs escenario · caja final ${fmtCompact(comparison.endingCashDelta)} · dias bajo minimo ${comparison.riskDaysDelta} · pagos atrasados ${fmtCompact(comparison.latePaymentsDelta)}`,
-      origen: 'Senda',
-      ultima_actualizacion: new Date().toISOString(),
-    }),
-    ...timelineRows.map((row) => {
-      const ingresos = row.collections + row.otherInflows + row.adjustmentInflows;
-      const egresos = row.fixedOutflows + row.supplierPayments + row.adjustmentOutflows;
-      return csvRow({
-        row_type: 'flujo',
-        id: `flujo:${row.id}`,
-        period_start: row.startDate,
-        period_end: row.endDate,
-        fecha_programada: row.endDate,
-        tipo: 'Flujo de efectivo',
-        categoria: 'Timeline',
-        concepto: row.label,
-        comentario: row.sublabel,
-        origen: 'Modelo',
-        caja_inicial: row.openingCash,
-        ingresos,
-        egresos,
-        ajustes: row.adjustmentInflows - row.adjustmentOutflows,
-        caja_minima: row.mandatoryReserveRequired,
-        caja_final: row.closingCash,
-        disponible: row.freeCash,
-        alertas: row.alertCount,
-      });
-    }),
-    ...ledgerRows.map((row) => csvRow({
-      row_type: 'movimiento',
-      id: row.id,
-      fecha_original: row.originalDate,
-      fecha_programada: row.scheduledDate,
-      tipo: ledgerTypeLabel(row.type),
-      categoria: row.category,
-      empresa_proveedor_cliente: row.entity,
-      concepto: row.concept,
-      monto_original: row.originalAmount,
-      monto_ajustado: row.adjustedAmount,
-      estatus: ledgerStatusLabel(row.status),
-      prioridad: row.priority,
-      riesgo: row.risk,
-      flexibilidad: row.flexibility,
-      comentario: row.comment,
-      origen: row.origin,
-      ultima_actualizacion: row.updatedAt,
-    })),
+  const header = PROGRAMACION_HEADERS.map(String);
+  const meta = [
+    `# Senda · Programación operativa`,
+    `# Escenario: ${scenarioName}`,
+    `# Caja final delta vs base: ${fmtCompact(comparison.endingCashDelta)} · días bajo mínimo: ${comparison.riskDaysDelta} · pagos atrasados: ${fmtCompact(comparison.latePaymentsDelta)}`,
+    `# Edita 'fecha_programada', 'monto', 'comentario' o 'estatus'. Para ALTAS deja 'id' vacío y completa 'tipo' (Ajuste u Obligación), 'direccion', 'fecha_programada', 'monto' y 'concepto'.`,
   ];
-
+  const rows: string[][] = [
+    [meta.join(' | ')],
+    header,
+    ...ledgerRows.map((row) => programacionRow(row)),
+  ];
   return `\uFEFF${rows.map((row) => row.map(csvEscape).join(';')).join('\n')}`;
 }
 
-function csvRow(values: Partial<Record<(typeof PLANNING_CSV_HEADERS)[number], string | number>>): string[] {
-  return PLANNING_CSV_HEADERS.map((header) => {
+function programacionRow(row: PlanningLedgerItem): string[] {
+  const direction = ledgerDirection(row);
+  const editable = !row.editableDate && !row.editableAmount
+    ? 'Solo lectura'
+    : row.editableAmount
+      ? 'Sí'
+      : 'Solo fecha';
+  const values: Record<ProgramacionHeader, string | number> = {
+    id: row.id,
+    tipo: LEDGER_TYPE_TO_LABEL[row.type],
+    direccion: direction,
+    fecha_programada: row.scheduledDate,
+    monto: row.adjustedAmount,
+    entidad: row.entity,
+    concepto: row.concept,
+    categoria: row.category,
+    comentario: row.comment ?? '',
+    estatus: ledgerStatusLabel(row.status),
+    prioridad: row.priority,
+    riesgo: row.risk,
+    flexibilidad: row.flexibility,
+    fecha_original: row.originalDate,
+    monto_original: row.originalAmount,
+    origen: row.origin,
+    editable,
+  };
+  return PROGRAMACION_HEADERS.map((header) => {
     const value = values[header];
     if (value == null) return '';
     return typeof value === 'number' ? String(roundCsvNumber(value)) : value;
   });
+}
+
+function ledgerDirection(row: PlanningLedgerItem): 'inflow' | 'outflow' {
+  if (row.type === 'collection') return 'inflow';
+  if (row.type === 'adjustment') {
+    return row.category.toLowerCase().includes('entrada') ? 'inflow' : 'outflow';
+  }
+  return 'outflow';
 }
 
 function roundCsvNumber(value: number): number {
@@ -3534,32 +3775,102 @@ function csvEscape(value: string): string {
 function parsePlanningLedgerCsv(text: string): PlanningLedgerCsvRow[] {
   const rows = parseCsvRows(text);
   if (rows.length === 0) return [];
-  const headerIndex = rows.findIndex((row) => row.some((cell) => normalizeCsvHeader(cell) === 'row_type'));
-  if (headerIndex < 0) throw new Error('El CSV no tiene encabezado row_type. Descarga la plantilla desde la tabla antes de editar.');
+  const headerIndex = rows.findIndex((row) => row.some((cell) => {
+    const value = normalizeCsvHeader(cell);
+    return value === 'tipo' || value === 'row_type';
+  }));
+  if (headerIndex < 0) {
+    throw new Error("El CSV no tiene encabezado 'tipo'. Descarga la plantilla desde la tabla antes de editar.");
+  }
   const headers = rows[headerIndex].map(normalizeCsvHeader);
+  if (headers.includes('row_type')) {
+    return parseLegacyMovimientosCsv(rows, headers, headerIndex);
+  }
+  const data = rows.slice(headerIndex + 1).map((row) => row.map(normalizeCsvValue));
+  return parseProgramacionRows(data, headers);
+}
+
+function parseLegacyMovimientosCsv(
+  rows: string[][],
+  headers: string[],
+  headerIndex: number,
+): PlanningLedgerCsvRow[] {
   const rowTypeIndex = headers.indexOf('row_type');
   const idIndex = headers.indexOf('id');
   const dateIndex = headers.indexOf('fecha_programada');
   const amountIndex = headers.indexOf('monto_ajustado');
   const commentIndex = headers.indexOf('comentario');
   if (idIndex < 0 || dateIndex < 0 || amountIndex < 0) {
-    throw new Error('El CSV no tiene columnas necesarias: id, fecha_programada y monto_ajustado.');
+    throw new Error('El CSV legacy no tiene columnas necesarias: id, fecha_programada y monto_ajustado.');
   }
-
   const parsed: PlanningLedgerCsvRow[] = [];
   for (const row of rows.slice(headerIndex + 1)) {
-      const rowType = normalizeCsvValue(row[rowTypeIndex]);
-      if (rowType !== 'movimiento') continue;
-      const id = normalizeCsvValue(row[idIndex]);
-      if (!id) continue;
-      const amountRaw = normalizeCsvValue(row[amountIndex]);
-      const amount = amountRaw ? parseCsvAmount(amountRaw) : undefined;
+    const rowType = normalizeCsvValue(row[rowTypeIndex]);
+    if (rowType !== 'movimiento') continue;
+    const id = normalizeCsvValue(row[idIndex]);
+    if (!id) continue;
+    const amountRaw = normalizeCsvValue(row[amountIndex]);
+    const amount = amountRaw ? parseCsvAmount(amountRaw) : undefined;
+    parsed.push({
+      id,
+      scheduledDate: normalizeCsvValue(row[dateIndex]) || undefined,
+      adjustedAmount: amount,
+      comment: commentIndex >= 0 ? normalizeCsvValue(row[commentIndex]) : undefined,
+    });
+  }
+  return parsed;
+}
+
+function parseProgramacionRows(
+  rows: string[][],
+  headers: string[],
+): PlanningLedgerCsvRow[] {
+  const idIndex = headers.indexOf('id');
+  const tipoIndex = headers.indexOf('tipo');
+  const direccionIndex = headers.indexOf('direccion');
+  const dateIndex = headers.indexOf('fecha_programada');
+  const amountIndex = headers.indexOf('monto');
+  const entityIndex = headers.indexOf('entidad');
+  const conceptIndex = headers.indexOf('concepto');
+  const categoryIndex = headers.indexOf('categoria');
+  const commentIndex = headers.indexOf('comentario');
+  if (tipoIndex < 0 || dateIndex < 0 || amountIndex < 0) {
+    throw new Error("La hoja Programaci\u00f3n necesita las columnas 'tipo', 'fecha_programada' y 'monto'.");
+  }
+  const parsed: PlanningLedgerCsvRow[] = [];
+  for (const row of rows) {
+    if (row.every((cell) => !cell)) continue;
+    const id = idIndex >= 0 ? normalizeCsvValue(row[idIndex]) : '';
+    const dateRaw = normalizeCsvValue(row[dateIndex]);
+    const amountRaw = normalizeCsvValue(row[amountIndex]);
+    const commentRaw = commentIndex >= 0 ? normalizeCsvValue(row[commentIndex]) : '';
+    if (id) {
       parsed.push({
         id,
-        scheduledDate: normalizeCsvValue(row[dateIndex]) || undefined,
-        adjustedAmount: amount,
-        comment: commentIndex >= 0 ? normalizeCsvValue(row[commentIndex]) : undefined,
+        scheduledDate: dateRaw || undefined,
+        adjustedAmount: amountRaw ? parseCsvAmount(amountRaw) : undefined,
+        comment: commentRaw || undefined,
       });
+      continue;
+    }
+    const tipo = parseLedgerTypeLabel(normalizeCsvValue(row[tipoIndex]));
+    if (!tipo) continue;
+    if (tipo !== 'adjustment' && tipo !== 'obligation') continue;
+    const amount = amountRaw ? parseCsvAmount(amountRaw) : undefined;
+    if (!dateRaw || !/^\d{4}-\d{2}-\d{2}$/.test(dateRaw) || amount == null || amount <= 0) continue;
+    const direction = parseAdditionDirection(direccionIndex >= 0 ? normalizeCsvValue(row[direccionIndex]) : undefined);
+    parsed.push({
+      id: '',
+      isAddition: true,
+      additionType: tipo,
+      additionDirection: direction ?? 'outflow',
+      additionEntity: entityIndex >= 0 ? normalizeCsvValue(row[entityIndex]) : undefined,
+      additionConcept: conceptIndex >= 0 ? normalizeCsvValue(row[conceptIndex]) : undefined,
+      additionCategory: categoryIndex >= 0 ? normalizeCsvValue(row[categoryIndex]) : undefined,
+      scheduledDate: dateRaw,
+      adjustedAmount: amount,
+      comment: commentRaw || undefined,
+    });
   }
   return parsed;
 }
@@ -3576,126 +3887,97 @@ async function loadExcelJsRuntime(): Promise<ExcelJsRuntime> {
 async function buildPlanningLedgerWorkbook(
   ExcelRuntime: ExcelJsRuntime,
   {
-  timelineRows,
+  days,
   ledgerRows,
-  selectedMonth,
   scenarioName,
   comparison,
   importPreview,
+  minimumCash,
 }: {
-  timelineRows: ProjectionSheetRow[];
+  days: OperatingProjectionDay[];
   ledgerRows: PlanningLedgerItem[];
-  selectedMonth: string;
   scenarioName: string;
   comparison: ScenarioComparison;
   importPreview: PlanningLedgerImportPreview | null;
+  minimumCash: number;
 }): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelRuntime.Workbook();
   workbook.creator = 'Senda';
   workbook.created = new Date();
   workbook.modified = new Date();
 
-  const flow = workbook.addWorksheet('Flujo', { views: [{ state: 'frozen', ySplit: 1 }] });
-  flow.addRow([
-    'periodo',
-    'inicio',
-    'fin',
-    'caja_inicial',
-    'ingresos',
-    'egresos',
-    'ajustes',
-    'caja_minima',
-    'caja_final',
-    'disponible',
-    'alertas',
+  const intro = workbook.addWorksheet('Instrucciones', { views: [{ state: 'frozen', ySplit: 1 }] });
+  intro.addRow(['Senda · Programación operativa']);
+  intro.getRow(1).font = { bold: true, size: 14 };
+  intro.addRow([`Escenario: ${scenarioName}`]);
+  intro.addRow([
+    `Caja final delta vs base: ${fmtCompact(comparison.endingCashDelta)} | Días bajo mínimo: ${comparison.riskDaysDelta} | Pagos atrasados: ${fmtCompact(comparison.latePaymentsDelta)}`,
   ]);
-  for (const row of timelineRows) {
-    const ingresos = row.collections + row.otherInflows + row.adjustmentInflows;
-    const egresos = row.fixedOutflows + row.supplierPayments + row.adjustmentOutflows;
-    flow.addRow([
-      row.label,
-      row.startDate,
-      row.endDate,
-      roundCsvNumber(row.openingCash),
+  intro.addRow([]);
+  intro.addRow(['Cómo editar y subir cambios:']);
+  intro.addRow(['1. Edita la hoja Programación. Cambia "fecha_programada", "monto", "comentario" o "estatus".']);
+  intro.addRow(['2. Para programar un movimiento NUEVO, deja el campo "id" vacío y completa "tipo", "direccion" (entrada/salida), "fecha_programada", "monto" y "concepto".']);
+  intro.addRow(['3. Tipos disponibles para altas: "Ajuste" (entrada o salida libre) u "Obligación" (CAPEX, Finiquitos, Pasivos Financieros, Impuestos).']);
+  intro.addRow(['4. Sube el archivo en la app: se creará un escenario nuevo con tus cambios y se activará automáticamente.']);
+  intro.addRow([]);
+  intro.addRow(['Hojas:']);
+  intro.addRow(['  Programación → editable. 1 fila por movimiento.']);
+  intro.addRow(['  Línea de tiempo → resumen de caja día por día (solo lectura).']);
+  intro.addRow(['  Comparativo → métricas de este escenario contra el base.']);
+  intro.addRow(['  Errores → si hubo carga previa, aquí ves qué se ignoró y por qué.']);
+  setExcelColumnWidths(intro, [120]);
+
+  const programacion = workbook.addWorksheet('Programación', { views: [{ state: 'frozen', ySplit: 1 }] });
+  programacion.addRow([...PROGRAMACION_HEADERS]);
+  for (const row of ledgerRows) {
+    programacion.addRow(programacionRow(row));
+  }
+  styleExcelHeader(programacion, 1);
+  programacion.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: Math.max(1, programacion.rowCount), column: PROGRAMACION_HEADERS.length },
+  };
+  setExcelColumnWidths(programacion, [
+    32, 14, 12, 14, 16, 28, 36, 22, 36, 14, 12, 12, 18, 14, 16, 18, 14,
+  ]);
+  const montoCol = PROGRAMACION_HEADERS.indexOf('monto') + 1;
+  const montoOrigCol = PROGRAMACION_HEADERS.indexOf('monto_original') + 1;
+  formatExcelMoneyColumns(programacion, [montoCol, montoOrigCol]);
+  addProgramacionValidations(programacion);
+
+  const timeline = workbook.addWorksheet('Línea de tiempo', { views: [{ state: 'frozen', ySplit: 1 }] });
+  timeline.addRow([...TIMELINE_HEADERS]);
+  for (const day of days) {
+    const ingresos = day.cashInflows.reduce((sum, line) => sum + line.amount, 0);
+    const egresosFijos = day.scheduledOutflows
+      .filter((line) => line.source !== 'adjustment')
+      .reduce((sum, line) => sum + line.amount, 0);
+    const ajustesEntrada = day.cashInflows
+      .filter((line) => line.source === 'adjustment')
+      .reduce((sum, line) => sum + line.amount, 0);
+    const ajustesSalida = day.scheduledOutflows
+      .filter((line) => line.source === 'adjustment')
+      .reduce((sum, line) => sum + line.amount, 0);
+    const supplierPayments = day.supplierPayments.reduce((sum, line) => sum + line.amount, 0);
+    const top = topMovementsForDay(day);
+    timeline.addRow([
+      day.date,
+      weekdayLabel(day.date),
+      roundCsvNumber(day.openingCash),
       roundCsvNumber(ingresos),
-      roundCsvNumber(egresos),
-      roundCsvNumber(row.adjustmentInflows - row.adjustmentOutflows),
-      roundCsvNumber(row.mandatoryReserveRequired),
-      roundCsvNumber(row.closingCash),
-      roundCsvNumber(row.freeCash),
-      row.alertCount,
+      roundCsvNumber(egresosFijos),
+      roundCsvNumber(supplierPayments),
+      roundCsvNumber(ajustesEntrada - ajustesSalida),
+      roundCsvNumber(Math.max(day.mandatoryReserveRequired, minimumCash)),
+      roundCsvNumber(day.closingCash),
+      roundCsvNumber(day.freeCash),
+      day.alerts.length,
+      top,
     ]);
   }
-  styleExcelHeader(flow, 1);
-  setExcelColumnWidths(flow, [24, 14, 14, 16, 16, 16, 16, 16, 16, 16, 10]);
-  formatExcelMoneyColumns(flow, [4, 5, 6, 7, 8, 9, 10]);
-
-  const movements = workbook.addWorksheet('Movimientos', { views: [{ state: 'frozen', ySplit: 1 }] });
-  movements.addRow([...PLANNING_CSV_HEADERS]);
-  movements.addRow(csvRow({
-    row_type: 'metadata',
-    id: `escenario:${selectedMonth}`,
-    categoria: 'Escenario',
-    concepto: scenarioName,
-    comentario: `Base vs escenario · caja final ${fmtCompact(comparison.endingCashDelta)} · dias bajo minimo ${comparison.riskDaysDelta} · pagos atrasados ${fmtCompact(comparison.latePaymentsDelta)}`,
-    origen: 'Senda',
-    ultima_actualizacion: new Date().toISOString(),
-  }));
-  for (const row of timelineRows) {
-    const ingresos = row.collections + row.otherInflows + row.adjustmentInflows;
-    const egresos = row.fixedOutflows + row.supplierPayments + row.adjustmentOutflows;
-    movements.addRow(csvRow({
-      row_type: 'flujo',
-      id: `flujo:${row.id}`,
-      period_start: row.startDate,
-      period_end: row.endDate,
-      fecha_programada: row.endDate,
-      tipo: 'Flujo de efectivo',
-      categoria: 'Timeline',
-      concepto: row.label,
-      comentario: row.sublabel,
-      origen: 'Modelo',
-      caja_inicial: row.openingCash,
-      ingresos,
-      egresos,
-      ajustes: row.adjustmentInflows - row.adjustmentOutflows,
-      caja_minima: row.mandatoryReserveRequired,
-      caja_final: row.closingCash,
-      disponible: row.freeCash,
-      alertas: row.alertCount,
-    }));
-  }
-  for (const row of ledgerRows) {
-    movements.addRow(csvRow({
-      row_type: 'movimiento',
-      id: row.id,
-      fecha_original: row.originalDate,
-      fecha_programada: row.scheduledDate,
-      tipo: ledgerTypeLabel(row.type),
-      categoria: row.category,
-      empresa_proveedor_cliente: row.entity,
-      concepto: row.concept,
-      monto_original: row.originalAmount,
-      monto_ajustado: row.adjustedAmount,
-      estatus: ledgerStatusLabel(row.status),
-      prioridad: row.priority,
-      riesgo: row.risk,
-      flexibilidad: row.flexibility,
-      comentario: row.comment,
-      origen: row.origin,
-      ultima_actualizacion: row.updatedAt,
-    }));
-  }
-  styleExcelHeader(movements, 1);
-  movements.autoFilter = {
-    from: { row: 1, column: 1 },
-    to: { row: Math.max(1, movements.rowCount), column: PLANNING_CSV_HEADERS.length },
-  };
-  setExcelColumnWidths(movements, [
-    14, 42, 14, 14, 14, 16, 18, 20, 30, 34, 15, 16, 16, 14, 14, 18, 42, 16, 24, 15, 15, 15, 15, 15, 15, 15, 10,
-  ]);
-  formatExcelMoneyColumns(movements, [11, 12, 20, 21, 22, 23, 24, 25, 26]);
-  addMovementSheetValidations(movements);
+  styleExcelHeader(timeline, 1);
+  setExcelColumnWidths(timeline, [12, 12, 16, 16, 16, 16, 16, 16, 16, 16, 10, 60]);
+  formatExcelMoneyColumns(timeline, [3, 4, 5, 6, 7, 8, 9, 10]);
 
   const comparisonSheet = workbook.addWorksheet('Comparativo', { views: [{ state: 'frozen', ySplit: 1 }] });
   comparisonSheet.addRow(['Metrica', 'Base', 'Escenario', 'Diferencia']);
@@ -3732,19 +4014,92 @@ async function buildPlanningLedgerWorkbook(
   return workbook;
 }
 
+function topMovementsForDay(day: OperatingProjectionDay): string {
+  type Entry = { label: string; amount: number; sign: 1 | -1 };
+  const entries: Entry[] = [];
+  for (const line of day.cashInflows) entries.push({ label: line.label, amount: line.amount, sign: 1 });
+  for (const line of day.scheduledOutflows) entries.push({ label: line.label, amount: line.amount, sign: -1 });
+  for (const line of day.supplierPayments) entries.push({ label: line.providerName, amount: line.amount, sign: -1 });
+  entries.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  return entries
+    .slice(0, 3)
+    .map((entry) => `${entry.sign === 1 ? '+' : '-'}${fmtCompact(entry.amount)} ${entry.label}`)
+    .join(' · ');
+}
+
+function addProgramacionValidations(worksheet: ExcelJS.Worksheet): void {
+  const tipoColumn = PROGRAMACION_HEADERS.indexOf('tipo') + 1;
+  const direccionColumn = PROGRAMACION_HEADERS.indexOf('direccion') + 1;
+  const dateColumn = PROGRAMACION_HEADERS.indexOf('fecha_programada') + 1;
+  const amountColumn = PROGRAMACION_HEADERS.indexOf('monto') + 1;
+  const statusColumn = PROGRAMACION_HEADERS.indexOf('estatus') + 1;
+  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const tipoCell = worksheet.getRow(rowNumber).getCell(tipoColumn);
+    tipoCell.dataValidation = {
+      type: 'list',
+      allowBlank: false,
+      formulae: ['"Cobranza,Proveedor,Impuesto,Obligación,Ajuste,Fijo"'],
+    };
+    worksheet.getRow(rowNumber).getCell(direccionColumn).dataValidation = {
+      type: 'list',
+      allowBlank: true,
+      formulae: ['"inflow,outflow,entrada,salida"'],
+    };
+    worksheet.getRow(rowNumber).getCell(dateColumn).note = 'Editable: cambia la fecha YYYY-MM-DD y vuelve a subir el archivo.';
+    worksheet.getRow(rowNumber).getCell(amountColumn).note = 'Editable: cambia el monto. Usa 0 para patear o dejar sin pago.';
+    worksheet.getRow(rowNumber).getCell(statusColumn).dataValidation = {
+      type: 'list',
+      allowBlank: true,
+      formulae: ['"Proyectado,Confirmado,Pagado,Vencido,Reprogramado,Parcial,Sin programar"'],
+    };
+  }
+}
+
 async function parsePlanningLedgerXlsx(file: File): Promise<PlanningLedgerCsvRow[]> {
   const ExcelRuntime = await loadExcelJsRuntime();
   const workbook = new ExcelRuntime.Workbook();
   await workbook.xlsx.load(await file.arrayBuffer());
-  const worksheet = workbook.getWorksheet('Movimientos')
-    ?? workbook.worksheets.find((sheet) => worksheetHasHeader(sheet, 'row_type'));
-  if (!worksheet) {
-    throw new Error('El XLSX no tiene hoja Movimientos con encabezado row_type.');
+
+  const programacion = workbook.getWorksheet('Programación')
+    ?? workbook.worksheets.find((sheet) => worksheetHasHeader(sheet, 'tipo') && !worksheetHasHeader(sheet, 'row_type'));
+  if (programacion) {
+    return parseProgramacionXlsxSheet(programacion);
   }
 
+  const legacy = workbook.getWorksheet('Movimientos')
+    ?? workbook.worksheets.find((sheet) => worksheetHasHeader(sheet, 'row_type'));
+  if (!legacy) {
+    throw new Error("El XLSX no tiene hoja Programación con encabezado 'tipo'. Descarga la plantilla antes de editar.");
+  }
+  return parseLegacyMovimientosXlsxSheet(legacy);
+}
+
+function parseProgramacionXlsxSheet(worksheet: ExcelJS.Worksheet): PlanningLedgerCsvRow[] {
+  const headerRowNumber = findExcelHeaderRow(worksheet, 'tipo');
+  if (!headerRowNumber) {
+    throw new Error("La hoja Programación no tiene encabezado 'tipo'.");
+  }
+  const headerRow = worksheet.getRow(headerRowNumber);
+  const headers: string[] = [];
+  headerRow.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+    headers[columnNumber - 1] = normalizeCsvHeader(excelCellToText(cell.value));
+  });
+  const dataRows: string[][] = [];
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber <= headerRowNumber) return;
+    const cells: string[] = [];
+    for (let column = 1; column <= headers.length; column += 1) {
+      cells[column - 1] = normalizeCsvValue(excelCellToText(row.getCell(column).value));
+    }
+    dataRows.push(cells);
+  });
+  return parseProgramacionRows(dataRows, headers);
+}
+
+function parseLegacyMovimientosXlsxSheet(worksheet: ExcelJS.Worksheet): PlanningLedgerCsvRow[] {
   const headerRowNumber = findExcelHeaderRow(worksheet, 'row_type');
   if (!headerRowNumber) {
-    throw new Error('El XLSX no tiene encabezado row_type. Descarga la plantilla antes de editar.');
+    throw new Error('El XLSX legacy no tiene encabezado row_type. Descarga la plantilla antes de editar.');
   }
 
   const headerRow = worksheet.getRow(headerRowNumber);
@@ -3759,7 +4114,7 @@ async function parsePlanningLedgerXlsx(file: File): Promise<PlanningLedgerCsvRow
   const amountIndex = headers.indexOf('monto_ajustado') + 1;
   const commentIndex = headers.indexOf('comentario') + 1;
   if (!idIndex || !dateIndex || !amountIndex) {
-    throw new Error('El XLSX no tiene columnas necesarias: id, fecha_programada y monto_ajustado.');
+    throw new Error('El XLSX legacy no tiene columnas necesarias: id, fecha_programada y monto_ajustado.');
   }
 
   const parsed: PlanningLedgerCsvRow[] = [];
@@ -3794,6 +4149,40 @@ function buildPlanningLedgerImportPreview(
   let ignored = 0;
 
   for (const incoming of rows) {
+    if (incoming.isAddition) {
+      const additionType = incoming.additionType ?? 'adjustment';
+      if (additionType !== 'adjustment' && additionType !== 'obligation') {
+        ignored += 1;
+        continue;
+      }
+      if (!incoming.scheduledDate || !/^\d{4}-\d{2}-\d{2}$/.test(incoming.scheduledDate)) {
+        errors.push(`Alta inválida: fecha_programada faltante o con formato distinto a YYYY-MM-DD.`);
+        continue;
+      }
+      if (incoming.adjustedAmount == null || !Number.isFinite(incoming.adjustedAmount) || incoming.adjustedAmount <= 0) {
+        errors.push(`Alta inválida (${incoming.additionConcept ?? 'sin concepto'}): monto debe ser mayor a 0.`);
+        continue;
+      }
+      const direction = incoming.additionDirection === 'inflow' ? 'inflow' : 'outflow';
+      const targetDay = dayByDate.get(incoming.scheduledDate);
+      const severity: PlanningLedgerImportChange['severity'] = targetDay && isRiskDay(targetDay, manualMinimumCash) && direction === 'outflow'
+        ? 'warning'
+        : 'ok';
+      changes.push({
+        id: `nuevo:${incoming.additionType}:${changes.length}`,
+        label: incoming.additionConcept || incoming.additionEntity || (additionType === 'obligation' ? 'Obligación nueva' : 'Ajuste nuevo'),
+        type: additionType,
+        field: 'alta',
+        before: '—',
+        after: `${direction === 'inflow' ? 'Entrada' : 'Salida'} ${fmtCurrency(incoming.adjustedAmount)} el ${fmtDate(incoming.scheduledDate)}`,
+        severity,
+        message: severity === 'warning'
+          ? 'Alta programada en día con presión de caja mínima.'
+          : 'Movimiento nuevo programado desde la hoja Programación.',
+      });
+      continue;
+    }
+
     const current = currentById.get(incoming.id);
     if (!current) {
       ignored += 1;
@@ -3953,23 +4342,6 @@ function formatExcelMoneyColumns(worksheet: ExcelJS.Worksheet, columns: number[]
   }
 }
 
-function addMovementSheetValidations(worksheet: ExcelJS.Worksheet): void {
-  const dateColumn = PLANNING_CSV_HEADERS.indexOf('fecha_programada') + 1;
-  const amountColumn = PLANNING_CSV_HEADERS.indexOf('monto_ajustado') + 1;
-  const statusColumn = PLANNING_CSV_HEADERS.indexOf('estatus') + 1;
-  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
-    const rowType = normalizeCsvValue(excelCellToText(worksheet.getRow(rowNumber).getCell(1).value));
-    if (rowType !== 'movimiento') continue;
-    worksheet.getRow(rowNumber).getCell(dateColumn).note = 'Editable: cambia la fecha YYYY-MM-DD y vuelve a subir el archivo.';
-    worksheet.getRow(rowNumber).getCell(amountColumn).note = 'Editable: cambia el monto ajustado. Usa 0 para patear o dejar sin pago.';
-    worksheet.getRow(rowNumber).getCell(statusColumn).dataValidation = {
-      type: 'list',
-      allowBlank: true,
-      formulae: ['"Proyectado,Confirmado,Pagado,Vencido,Reprogramado,Parcial,Sin programar"'],
-    };
-  }
-}
-
 function parseCsvRows(text: string): string[][] {
   const source = text.replace(/^\uFEFF/, '');
   const delimiter = detectCsvDelimiter(source);
@@ -4087,6 +4459,20 @@ function ledgerTypeOrder(type: PlanningLedgerType): number {
     case 'adjustment': return 4;
     case 'collection': return 5;
   }
+}
+
+function mapAdditionToManualConcept(value: string | undefined): ManualConcept {
+  const normalized = (value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return 'Pasivos Financieros';
+  if (normalized.startsWith('impuest')) return 'Impuestos';
+  if (normalized.startsWith('finiquit')) return 'Finiquitos';
+  if (normalized.startsWith('capex') || normalized.includes('capital')) return 'CAPEX';
+  if (normalized.includes('pasivo') || normalized.includes('financier') || normalized.includes('credito')) return 'Pasivos Financieros';
+  return 'Pasivos Financieros';
 }
 
 function createManualRow(selectedMonth: string, concept: ManualConcept = 'Finiquitos'): ManualEventRow {
@@ -5177,7 +5563,7 @@ function PlanningLedgerTable({
         <div>
           <h2 className={`text-[15px] font-semibold ${T.title}`}>Tabla inteligente de planeación</h2>
           <p className={`mt-1 text-[12px] ${T.muted}`}>
-            Exporta el flujo, edita fecha/monto/comentario en Excel y súbelo para recalcular el escenario contra Base.
+            Exporta toda la programación a Excel: 1 fila por movimiento + línea de tiempo diaria. Edita fechas, montos, comentarios o añade movimientos nuevos (deja id vacío). Al subirlo se crea un escenario nuevo y el algoritmo recalcula caja contra Base.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 xl:justify-end">
@@ -5722,49 +6108,111 @@ function OperatingPeriodBar({
   );
 }
 
-function OperatingModuleSwitcher({
-  modules,
-  activeModule,
-  onChange,
+function OperatingBlocksPanel({
+  blocks,
+  expanded,
+  onToggle,
+  onSchedule,
+  onExpandAll,
+  onCollapseAll,
 }: {
-  modules: OperatingProjectionModuleCard[];
-  activeModule: OperatingProjectionModuleId;
-  onChange: (module: OperatingProjectionModuleId) => void;
+  blocks: OperatingBlockCard[];
+  expanded: Set<OperatingBlockId>;
+  onToggle: (id: OperatingBlockId) => void;
+  onSchedule: (seed: { kind: 'adjustment' | 'obligation'; direction?: 'inflow' | 'outflow' } | null) => void;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
 }) {
   return (
     <section className={`${T.section} overflow-hidden`}>
-      <div className="border-b border-[var(--border)] px-4 py-3">
-        <div className="flex flex-col gap-1">
-          <h2 className={`text-[15px] font-semibold ${T.title}`}>Módulos de tesorería</h2>
-          <p className={`text-[12px] ${T.muted}`}>Cada módulo usa la misma corrida, pero muestra solo la tarea que toca revisar.</p>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+        <div>
+          <h2 className={`text-[15px] font-semibold ${T.title}`}>Bloques operativos</h2>
+          <p className={`text-[12px] ${T.muted}`}>
+            Abre o cierra cada bloque. Programa nuevos movimientos directo al calendario y el algoritmo recalcula caja al instante.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onSchedule(null)}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--primary)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white transition-colors hover:opacity-90"
+          >
+            <Plus className="h-4 w-4" />
+            Programar movimiento
+          </button>
+          <button
+            onClick={onExpandAll}
+            className="h-9 rounded-xl border border-[var(--border)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] transition-colors hover:bg-[var(--surface-alt)]"
+          >
+            Abrir todo
+          </button>
+          <button
+            onClick={onCollapseAll}
+            className="h-9 rounded-xl border border-[var(--border)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] transition-colors hover:bg-[var(--surface-alt)]"
+          >
+            Cerrar todo
+          </button>
         </div>
       </div>
-      <div className="grid gap-px bg-[var(--border)] md:grid-cols-2 xl:grid-cols-6">
-        {modules.map((module) => {
-          const active = module.id === activeModule;
+      <div className="divide-y divide-[var(--border)]">
+        {blocks.map((block) => {
+          const isOpen = expanded.has(block.id);
+          const toneClass = block.tone === 'success'
+            ? 'text-[var(--success)]'
+            : block.tone === 'danger'
+              ? 'text-[var(--danger)]'
+              : block.tone === 'warning'
+                ? 'text-[var(--warning)]'
+                : 'text-[var(--gray-950)]';
+          const sparkColor = block.tone === 'success'
+            ? 'var(--success)'
+            : block.tone === 'danger'
+              ? 'var(--danger)'
+              : block.tone === 'warning'
+                ? 'var(--warning)'
+                : 'var(--primary)';
           return (
-            <button
-              key={module.id}
-              onClick={() => onChange(module.id)}
-              className={`bg-white px-4 py-3 text-left transition-colors ${
-                active ? 'text-[var(--gray-950)]' : 'text-[var(--gray-500)] hover:bg-[var(--surface-alt)]'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3">
+            <div key={block.id} className="grid items-center gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1.4fr)_120px_minmax(0,1fr)_140px_minmax(0,180px)]">
+              <button
+                onClick={() => onToggle(block.id)}
+                className="flex min-w-0 items-center gap-2 text-left"
+              >
+                {isOpen
+                  ? <ChevronDown className="h-4 w-4 shrink-0 text-[var(--gray-500)]" />
+                  : <ChevronRight className="h-4 w-4 shrink-0 text-[var(--gray-500)]" />}
                 <div className="min-w-0">
-                  <div className={`text-[13px] font-semibold ${active ? 'text-[var(--primary)]' : 'text-[var(--gray-950)]'}`}>
-                    {module.label}
-                  </div>
-                  <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-[var(--gray-400)]">
-                    {module.description}
-                  </div>
+                  <div className="text-[13px] font-semibold text-[var(--gray-950)]">{block.label}</div>
+                  <div className="line-clamp-1 text-[11px] text-[var(--gray-400)]">{block.description}</div>
                 </div>
-                <div className="shrink-0 text-right">
-                  <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">{module.metric}</div>
-                  <div className="mt-0.5 text-[10px] text-[var(--gray-400)]">{module.meta}</div>
-                </div>
+              </button>
+              <div className="text-right">
+                <div className={`text-[14px] font-semibold tabular-nums ${toneClass}`}>{fmtCompact(block.total)}</div>
+                <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">total mes</div>
               </div>
-            </button>
+              <div>
+                <Sparkline data={block.sparkline} width={120} height={28} color={sparkColor} areaFill />
+              </div>
+              <div className="text-right">
+                <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">{block.count}</div>
+                <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">{block.countLabel}</div>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => onSchedule(block.scheduleSeed ?? null)}
+                  className="inline-flex h-9 items-center gap-1 rounded-xl border border-[var(--border)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] transition-colors hover:bg-[var(--surface-alt)]"
+                  title={block.scheduleHint ?? 'Programar nuevo movimiento'}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Programar
+                </button>
+                <button
+                  onClick={() => onToggle(block.id)}
+                  className="inline-flex h-9 items-center rounded-xl border border-[var(--border)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] transition-colors hover:bg-[var(--surface-alt)]"
+                >
+                  {isOpen ? 'Cerrar' : 'Editar inline'}
+                </button>
+              </div>
+            </div>
           );
         })}
       </div>
