@@ -2,26 +2,28 @@ import { useState, useEffect, useRef, FormEvent, ReactNode } from 'react';
 import { Lock, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 const AUTH_STORAGE_KEY = 'midas-auth-v1';
-const ADMIN_USER = 'admin';
 
-// Hash SHA-256 del password admin. NO commitear el password en plano: esto
-// solo evita que cualquiera con acceso al repo o al bundle leyera la
+// Registro de usuarios habilitados. Cada entrada guarda el hash SHA-256
+// (hex, minúsculas) de la contraseña. NO commitear el password en plano:
+// esto solo evita que cualquiera con acceso al repo o al bundle leyera la
 // credencial directamente. Sigue siendo un gate de cliente — un atacante
 // puede saltarlo manipulando sessionStorage. La autenticación real debe
 // delegarse a Atlas SSO (ver AUTH.md).
 //
-// Para rotar el password: calcula `echo -n "<nuevo>" | sha256sum` y pega el
-// hash en `VITE_ADMIN_PASSWORD_SHA256` en .env.local / Vercel env vars.
-// Si la variable no está definida cae al hash por defecto. **Recordatorio:
-// el hash anterior fue expuesto en git history; rotar el password es
-// requisito de despliegue.**
-const DEFAULT_ADMIN_PASSWORD_SHA256 =
-  // sha256("change-me") — placeholder no funcional; configurar via env.
-  '0184d8d9b0b88e5b41d68b65ab1d8be36e8e5da34f4e4e7e3a7ec2dfcd1a8cce';
-
-const ADMIN_PASSWORD_SHA256 = (
-  import.meta.env.VITE_ADMIN_PASSWORD_SHA256 ?? DEFAULT_ADMIN_PASSWORD_SHA256
-).toLowerCase();
+// Para rotar un password: calcula `printf '%s' "<nuevo>" | sha256sum` y
+// pega el hash en la env var correspondiente (VITE_<USER>_PASSWORD_SHA256)
+// en .env.local / Vercel env vars. Si la variable no está definida, cae
+// al hash por defecto declarado abajo.
+const USERS: Record<string, string> = {
+  admin: (
+    import.meta.env.VITE_ADMIN_PASSWORD_SHA256 ??
+    '1a75cbde7f431ff693147935a3c4c04a515e726672ade70add05e650fd9f0f9c'
+  ).toLowerCase(),
+  paolo: (
+    import.meta.env.VITE_PAOLO_PASSWORD_SHA256 ??
+    '14987616e6d32d5452aa517406d11a0525da9ee3f35ff777bda0da6e4e58915b'
+  ).toLowerCase(),
+};
 
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
@@ -76,10 +78,8 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
     event.preventDefault();
     try {
       const candidateHash = await sha256Hex(password);
-      if (
-        user.trim() === ADMIN_USER &&
-        constantTimeEqual(candidateHash, ADMIN_PASSWORD_SHA256)
-      ) {
+      const expectedHash = USERS[user.trim().toLowerCase()];
+      if (expectedHash && constantTimeEqual(candidateHash, expectedHash)) {
         persistAuth();
         onSuccess();
         return;
