@@ -18,13 +18,10 @@ import {
 } from 'lucide-react';
 import {
   Bar,
-  BarChart,
   CartesianGrid,
   Cell,
   ComposedChart,
   Line,
-  Pie,
-  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -602,8 +599,6 @@ export default function OperatingProjection({
       return next;
     });
   };
-  const [calendarOpen, setCalendarOpen] = useState(false);
-  const [calendarSeed, setCalendarSeed] = useState<{ kind: 'adjustment' | 'obligation'; direction?: 'inflow' | 'outflow' } | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<DayDetailTab>('cobranza');
   const [sheetScope, setSheetScope] = useState<SheetScope>('month');
@@ -837,10 +832,6 @@ export default function OperatingProjection({
       supplierRiskFilter,
       supplierStatusFilter,
     ],
-  );
-  const supplierQueueSummary = useMemo(
-    () => summarizeSupplierQueue(projection.supplierQueue),
-    [projection.supplierQueue],
   );
   const projectionConfidence = useMemo(
     () => calculateProjectionConfidence(projection, taxDebtSummary),
@@ -1774,28 +1765,11 @@ export default function OperatingProjection({
         onSelectMonth={setSelectedMonth}
       />
 
-      <OperatingTopCharts
-        days={monthDays}
-        allDays={projection.days}
-        minimumCash={effectiveMinimumCash}
-        manualMinimumCash={manualMinimumCash}
-        monthCollections={monthCollectionsTotal}
-        monthFixed={monthFixedTotal}
-        monthSupplier={monthSupplierTotal}
-        monthTax={monthTaxTotal}
-        monthObligations={monthObligationTotal}
-        monthAdjustmentInflows={monthAdjustmentInflows}
-        monthAdjustmentOutflows={monthAdjustmentOutflows}
-      />
-
       <OperatingBlocksPanel
         blocks={blockCards}
         expanded={expandedBlocks}
         onToggle={toggleExpandedBlock}
-        onSchedule={(seed) => {
-          setCalendarSeed(seed ?? null);
-          setCalendarOpen(true);
-        }}
+        onSchedule={() => {}}
         onExpandAll={() => setExpandedBlocks(new Set<OperatingBlockId>(blockCards.map((b) => b.id)))}
         onCollapseAll={() => setExpandedBlocks(new Set<OperatingBlockId>())}
       />
