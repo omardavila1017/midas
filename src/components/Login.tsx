@@ -3,45 +3,14 @@ import { Lock, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 const AUTH_STORAGE_KEY = 'midas-auth-v1';
 
-// Registro de usuarios habilitados. Cada entrada guarda el hash SHA-256
-// (hex, minúsculas) de la contraseña. NO commitear el password en plano:
-// esto solo evita que cualquiera con acceso al repo o al bundle leyera la
-// credencial directamente. Sigue siendo un gate de cliente — un atacante
-// puede saltarlo manipulando sessionStorage. La autenticación real debe
-// delegarse a Atlas SSO (ver AUTH.md).
-//
-// Para rotar un password: calcula `printf '%s' "<nuevo>" | sha256sum` y
-// pega el hash en la env var correspondiente (VITE_<USER>_PASSWORD_SHA256)
-// en .env.local / Vercel env vars. Si la variable no está definida, cae
-// al hash por defecto declarado abajo.
+// Registro de usuarios habilitados. Comparación directa contra el password
+// en texto plano configurado en la env var correspondiente
+// (VITE_<USER>_PASSWORD). Este gate vive en cliente y solo disuade lecturas
+// casuales — la auth real debe delegarse a Atlas SSO (ver AUTH.md).
 const USERS: Record<string, string> = {
-  admin: (
-    import.meta.env.VITE_ADMIN_PASSWORD_SHA256 ??
-    '1a75cbde7f431ff693147935a3c4c04a515e726672ade70add05e650fd9f0f9c'
-  ).toLowerCase(),
-  paolo: (
-    import.meta.env.VITE_PAOLO_PASSWORD_SHA256 ??
-    '14987616e6d32d5452aa517406d11a0525da9ee3f35ff777bda0da6e4e58915b'
-  ).toLowerCase(),
+  admin: import.meta.env.VITE_ADMIN_PASSWORD ?? 'admin',
+  paolo: import.meta.env.VITE_PAOLO_PASSWORD ?? 'paolo',
 };
-
-async function sha256Hex(input: string): Promise<string> {
-  const data = new TextEncoder().encode(input);
-  const buf = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-/** Comparación constante para evitar timing attacks triviales. */
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) {
-    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return mismatch === 0;
-}
 
 function isAuthenticated(): boolean {
   try {
@@ -74,18 +43,13 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
     userInputRef.current?.focus();
   }, []);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    try {
-      const candidateHash = await sha256Hex(password);
-      const expectedHash = USERS[user.trim().toLowerCase()];
-      if (expectedHash && constantTimeEqual(candidateHash, expectedHash)) {
-        persistAuth();
-        onSuccess();
-        return;
-      }
-    } catch {
-      /* fallthrough → mostrar error genérico */
+    const expected = USERS[user.trim().toLowerCase()];
+    if (expected && password === expected) {
+      persistAuth();
+      onSuccess();
+      return;
     }
     setError('Usuario o contraseña incorrectos.');
   };
