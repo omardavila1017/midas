@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
-import { AlertTriangle, RotateCcw, Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, ChevronDown, ChevronRight, RotateCcw, Search } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import { fmtCompact, fmtCurrency } from '../../../formatters';
+import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong } from '../../../formatters';
 import {
   calculateBaseProjection,
   calculateScenarioProjection,
@@ -82,6 +82,8 @@ export default function FinancialProjectionDashboard(props: Props) {
 
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'INFLOW' | 'OUTFLOW'>('ALL');
+  const [groupBy, setGroupBy] = useState<GroupBy>('period');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const [drillMovement, setDrillMovement] = useState<FinancialMovement | null>(null);
   const [drillAnchor, setDrillAnchor] = useState<DOMRect | null>(null);
@@ -156,15 +158,55 @@ export default function FinancialProjectionDashboard(props: Props) {
         const db = b.actualDate ?? b.adjustedDate ?? b.projectedDate;
         return da.localeCompare(db);
       })
-      .slice(0, 200),
+      .slice(0, 500),
     [endDate, previewProjection.movements, search, startDate, typeFilter],
   );
+
+  const movementGroups = useMemo(
+    () => buildMovementGroups(tableMovements, groupBy, granularity, today),
+    [tableMovements, groupBy, granularity, today],
+  );
+
+  // Por defecto, expandir solo el primer grupo (más cercano a hoy si es por
+  // periodo, o el grupo más grande si es por contraparte). Se recalcula cuando
+  // cambia el modo de agrupación o cuando la tabla queda vacía.
+  useEffect(() => {
+    if (movementGroups.length === 0) {
+      setExpandedGroups(new Set());
+      return;
+    }
+    setExpandedGroups((current) => {
+      const validKeys = new Set(movementGroups.map((g) => g.key));
+      const intersection = new Set([...current].filter((key) => validKeys.has(key)));
+      if (intersection.size > 0) return intersection;
+      return new Set([defaultExpandedKey(movementGroups, groupBy, today)]);
+    });
+  }, [movementGroups, groupBy, today]);
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const allExpanded = movementGroups.length > 0
+    && movementGroups.every((group) => expandedGroups.has(group.key));
+
+  const toggleAllGroups = () => {
+    if (allExpanded) setExpandedGroups(new Set());
+    else setExpandedGroups(new Set(movementGroups.map((group) => group.key)));
+  };
 
   const resetView = () => {
     setSearch('');
     setTypeFilter('ALL');
     setGranularity('weekly');
     setPreset('eoy');
+    setGroupBy('period');
+    setExpandedGroups(new Set());
   };
 
   const handleSelectMovement = (movement: FinancialMovement, anchor: DOMRect) => {
@@ -272,7 +314,10 @@ export default function FinancialProjectionDashboard(props: Props) {
         baseProjection={previewProjection.scenarioId === baseProjection.scenarioId ? undefined : baseProjection}
       />
 
-      {/* Tabla con filtros inline en su mismo header — sin card extra. */}
+      {/* Tabla con filtros inline en su mismo header — sin card extra.
+          Las filas viven en grupos colapsables (por periodo o por contraparte)
+          con subtotal a la derecha, para que un rango completo se lea de un
+          vistazo y el detalle se abra solo cuando hace falta. */}
       <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
           <div>
@@ -280,7 +325,8 @@ export default function FinancialProjectionDashboard(props: Props) {
               Movimientos proyectados
             </h2>
             <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
-              {tableMovements.length} {tableMovements.length === 1 ? 'movimiento' : 'movimientos'} en el rango.
+              {tableMovements.length} {tableMovements.length === 1 ? 'movimiento' : 'movimientos'} en el rango ·{' '}
+              {movementGroups.length} {movementGroups.length === 1 ? 'grupo' : 'grupos'}.
               Para crear ajustes, abre <strong className="text-[var(--gray-700)]">Planeación</strong>.
             </p>
           </div>
@@ -305,8 +351,32 @@ export default function FinancialProjectionDashboard(props: Props) {
             />
           </div>
         </div>
-        <MovementsTable
-          movements={tableMovements}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-2.5 bg-[var(--gray-50)]/60">
+          <SegmentedControl
+            label="Agrupar por"
+            value={groupBy}
+            options={[
+              { id: 'period', label: granularity === 'monthly' ? 'Mes' : granularity === 'weekly' ? 'Semana' : 'Día' },
+              { id: 'counterparty', label: 'Contraparte' },
+              { id: 'category', label: 'Categoría' },
+            ]}
+            onChange={(value) => setGroupBy(value)}
+          />
+          <button
+            onClick={toggleAllGroups}
+            disabled={movementGroups.length === 0}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {allExpanded
+              ? <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.5} />
+              : <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.5} />}
+            {allExpanded ? 'Contraer todo' : 'Expandir todo'}
+          </button>
+        </div>
+        <GroupedMovementsTable
+          groups={movementGroups}
+          expandedGroups={expandedGroups}
+          onToggleGroup={toggleGroup}
           onSelectMovement={handleSelectMovement}
         />
       </section>
@@ -315,23 +385,54 @@ export default function FinancialProjectionDashboard(props: Props) {
         movement={drillMovement}
         anchor={drillAnchor}
         onClose={() => { setDrillMovement(null); setDrillAnchor(null); }}
+        invoiceContext={{
+          cxpRecords: props.cxpRecords,
+          clients: props.clients,
+          assumptions: props.assumptions,
+          budget: props.budget,
+        }}
       />
     </div>
   );
 }
 
+type GroupBy = 'period' | 'counterparty' | 'category';
+
+interface MovementGroup {
+  key: string;
+  label: string;
+  sublabel?: string;
+  movements: FinancialMovement[];
+  inflowTotal: number;
+  outflowTotal: number;
+  netTotal: number;
+  containsToday?: boolean;
+}
+
 /**
- * Tabla densa, embebida en el card padre (no card propio) para que el
- * conjunto (header + tabla) se lea como una sola unidad.
+ * Tabla agrupada de movimientos. En lugar de soltar 200+ filas planas (que
+ * son ilegibles en cualquier monitor), las divide en grupos colapsables —
+ * por periodo (alineado a la granularidad del chart) o por tipo de
+ * contraparte. Cada grupo muestra un solo renglón resumen con
+ * #movimientos, ingresos, egresos y neto. Al expandir, aparecen las filas
+ * densas tradicionales.
+ *
+ * Patrón: por defecto solo el grupo más cercano a hoy (o el más grande,
+ * si se agrupa por contraparte) queda abierto. El usuario abre lo que le
+ * importa, el resto se queda recogido.
  */
-function MovementsTable({
-  movements,
+function GroupedMovementsTable({
+  groups,
+  expandedGroups,
+  onToggleGroup,
   onSelectMovement,
 }: {
-  movements: FinancialMovement[];
+  groups: MovementGroup[];
+  expandedGroups: Set<string>;
+  onToggleGroup: (key: string) => void;
   onSelectMovement: (movement: FinancialMovement, anchor: DOMRect) => void;
 }) {
-  if (movements.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="px-4 py-12 text-center text-[12px] text-[var(--gray-400)]">
         No hay movimientos para los filtros aplicados.
@@ -343,71 +444,324 @@ function MovementsTable({
       <table className="w-full min-w-[820px] text-[13px]">
         <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
           <tr>
-            <th className="px-4 py-2.5">Fecha</th>
-            <th className="px-4 py-2.5">Tipo</th>
-            <th className="px-4 py-2.5">Contraparte</th>
-            <th className="px-4 py-2.5">Concepto</th>
-            <th className="px-4 py-2.5 text-right">Monto</th>
-            <th className="px-4 py-2.5">Estado</th>
+            <th className="px-4 py-2.5 w-[40%]">Grupo</th>
+            <th className="px-4 py-2.5 text-right">Ingresos</th>
+            <th className="px-4 py-2.5 text-right">Egresos</th>
+            <th className="px-4 py-2.5 text-right">Neto</th>
+            <th className="px-4 py-2.5 text-right"># mov.</th>
             <th className="px-4 py-2.5"></th>
           </tr>
         </thead>
         <tbody>
-          {movements.map((movement) => (
-            <tr
-              key={movement.id}
-              className="border-t border-[var(--gray-200)] cursor-pointer hover:bg-[var(--gray-50)] transition-colors"
-              onClick={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                onSelectMovement(movement, rect);
-              }}
-            >
-              <td className="px-4 py-3 tabular-nums text-[var(--gray-700)] whitespace-nowrap">
-                {effectiveMovementDate(movement)}
-              </td>
-              <td className="px-4 py-3 whitespace-nowrap">
-                <span
-                  className="inline-flex h-6 items-center rounded-full px-2 text-[11px] font-medium"
-                  style={{
-                    background: movement.type === 'INFLOW' ? 'var(--success-muted)' : 'var(--danger-muted)',
-                    color: movement.type === 'INFLOW' ? 'var(--success)' : 'var(--danger)',
-                  }}
-                >
-                  {movement.type === 'INFLOW' ? 'Ingreso' : 'Egreso'}
-                </span>
-              </td>
-              <td className="px-4 py-3 max-w-[240px]">
-                <div className="truncate font-medium text-[var(--gray-950)]">
-                  {movement.counterpartyName ?? '—'}
-                </div>
-                <div className="text-[11px] text-[var(--gray-400)]">
-                  {counterpartyTypeLabel(movement.counterpartyType)}
-                </div>
-              </td>
-              <td className="px-4 py-3 max-w-[300px]">
-                <div className="truncate text-[var(--gray-700)]">{movement.concept}</div>
-                <div className="text-[11px] text-[var(--gray-400)] truncate">
-                  {movement.ruleApplied ?? movement.category}
-                </div>
-              </td>
-              <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--gray-950)] whitespace-nowrap">
-                {fmtCurrency(effectiveAmount(movement))}
-              </td>
-              <td className="px-4 py-3 whitespace-nowrap">
-                <div className="flex items-center gap-1.5">
-                  <StatusBadge status={movement.status} />
-                  <ConfidenceBadge band={movement.confidenceBand} />
-                </div>
-              </td>
-              <td className="px-4 py-3 text-right">
-                <span className="text-[11px] font-medium text-[var(--primary)]">Ver detalle →</span>
-              </td>
-            </tr>
-          ))}
+          {groups.map((group) => {
+            const expanded = expandedGroups.has(group.key);
+            return (
+              <GroupRows
+                key={group.key}
+                group={group}
+                expanded={expanded}
+                onToggle={() => onToggleGroup(group.key)}
+                onSelectMovement={onSelectMovement}
+              />
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
+}
+
+function GroupRows({
+  group,
+  expanded,
+  onToggle,
+  onSelectMovement,
+}: {
+  group: MovementGroup;
+  expanded: boolean;
+  onToggle: () => void;
+  onSelectMovement: (movement: FinancialMovement, anchor: DOMRect) => void;
+}) {
+  return (
+    <>
+      <tr
+        onClick={onToggle}
+        className="border-t border-[var(--gray-200)] cursor-pointer hover:bg-[var(--gray-50)] transition-colors"
+        style={{ background: expanded ? 'var(--gray-50)' : undefined }}
+      >
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2">
+            {expanded
+              ? <ChevronDown className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.75} />
+              : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.75} />}
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-[var(--gray-950)]">{group.label}</span>
+                {group.containsToday && (
+                  <span className="inline-flex h-5 items-center rounded-full bg-[var(--primary-muted,var(--gray-100))] px-2 text-[10px] font-medium text-[var(--primary,var(--gray-700))]">
+                    En curso
+                  </span>
+                )}
+              </div>
+              {group.sublabel && (
+                <div className="text-[11px] text-[var(--gray-400)]">{group.sublabel}</div>
+              )}
+            </div>
+          </div>
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap" style={{ color: 'var(--success)' }}>
+          {group.inflowTotal > 0 ? fmtCompact(group.inflowTotal) : '—'}
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap" style={{ color: 'var(--danger)' }}>
+          {group.outflowTotal > 0 ? `-${fmtCompact(group.outflowTotal)}` : '—'}
+        </td>
+        <td
+          className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-semibold"
+          style={{ color: netColor(group.netTotal) }}
+        >
+          {formatNet(group.netTotal)}
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-500)] whitespace-nowrap">
+          {group.movements.length}
+        </td>
+        <td className="px-4 py-3 text-right">
+          <span className="text-[11px] font-medium text-[var(--gray-400)]">
+            {expanded ? 'Ocultar' : 'Ver'}
+          </span>
+        </td>
+      </tr>
+      {expanded && group.movements.length > 0 && (
+        <tr>
+          <td colSpan={6} className="p-0 bg-white">
+            <div className="border-t border-[var(--gray-200)]">
+              <table className="w-full text-[12.5px]">
+                <thead className="text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)] bg-[var(--gray-50)]/50">
+                  <tr>
+                    <th className="px-4 py-2 pl-10">Fecha</th>
+                    <th className="px-4 py-2">Tipo</th>
+                    <th className="px-4 py-2">Contraparte</th>
+                    <th className="px-4 py-2">Concepto</th>
+                    <th className="px-4 py-2 text-right">Monto</th>
+                    <th className="px-4 py-2">Estado</th>
+                    <th className="px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.movements.map((movement) => (
+                    <tr
+                      key={movement.id}
+                      className="border-t border-[var(--gray-100)] cursor-pointer hover:bg-[var(--gray-50)] transition-colors"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        onSelectMovement(movement, rect);
+                      }}
+                    >
+                      <td className="px-4 py-2.5 pl-10 tabular-nums text-[var(--gray-700)] whitespace-nowrap">
+                        {effectiveMovementDate(movement)}
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <span
+                          className="inline-flex h-5 items-center rounded-full px-1.5 text-[10px] font-medium"
+                          style={{
+                            background: movement.type === 'INFLOW' ? 'var(--success-muted)' : 'var(--danger-muted)',
+                            color: movement.type === 'INFLOW' ? 'var(--success)' : 'var(--danger)',
+                          }}
+                        >
+                          {movement.type === 'INFLOW' ? 'Ingreso' : 'Egreso'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 max-w-[220px]">
+                        <div className="truncate font-medium text-[var(--gray-950)]">
+                          {movement.counterpartyName ?? '—'}
+                        </div>
+                        <div className="text-[10.5px] text-[var(--gray-400)]">
+                          {counterpartyTypeLabel(movement.counterpartyType)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 max-w-[280px]">
+                        <div className="truncate text-[var(--gray-700)]">{movement.concept}</div>
+                        <div className="text-[10.5px] text-[var(--gray-400)] truncate">
+                          {movement.ruleApplied ?? movement.category}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-medium text-[var(--gray-950)] whitespace-nowrap">
+                        {fmtCurrency(effectiveAmount(movement))}
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <div className="flex items-center gap-1">
+                          <StatusBadge status={movement.status} />
+                          <ConfidenceBadge band={movement.confidenceBand} />
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                        <span className="text-[10.5px] font-medium text-[var(--primary)]">Detalle →</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function buildMovementGroups(
+  movements: FinancialMovement[],
+  groupBy: GroupBy,
+  granularity: ProjectionGranularity,
+  today: string,
+): MovementGroup[] {
+  const buckets = new Map<string, FinancialMovement[]>();
+  for (const movement of movements) {
+    const key = groupKeyFor(movement, groupBy, granularity);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(movement);
+  }
+  const groups: MovementGroup[] = [];
+  for (const [key, items] of buckets) {
+    let inflowTotal = 0;
+    let outflowTotal = 0;
+    for (const movement of items) {
+      const amount = effectiveAmount(movement);
+      if (movement.type === 'INFLOW') inflowTotal += amount;
+      else outflowTotal += amount;
+    }
+    items.sort((a, b) => {
+      const da = a.actualDate ?? a.adjustedDate ?? a.projectedDate;
+      const db = b.actualDate ?? b.adjustedDate ?? b.projectedDate;
+      return da.localeCompare(db);
+    });
+    const labelInfo = groupLabelFor(key, groupBy, granularity, items, today);
+    groups.push({
+      key,
+      label: labelInfo.label,
+      sublabel: labelInfo.sublabel,
+      movements: items,
+      inflowTotal,
+      outflowTotal,
+      netTotal: inflowTotal - outflowTotal,
+      containsToday: labelInfo.containsToday,
+    });
+  }
+  if (groupBy === 'period') {
+    groups.sort((a, b) => a.key.localeCompare(b.key));
+  } else {
+    groups.sort((a, b) => {
+      const sizeDiff = b.movements.length - a.movements.length;
+      if (sizeDiff !== 0) return sizeDiff;
+      return Math.abs(b.netTotal) - Math.abs(a.netTotal);
+    });
+  }
+  return groups;
+}
+
+function groupKeyFor(
+  movement: FinancialMovement,
+  groupBy: GroupBy,
+  granularity: ProjectionGranularity,
+): string {
+  if (groupBy === 'counterparty') return movement.counterpartyType ?? '__UNCATEGORIZED__';
+  if (groupBy === 'category') return movement.category;
+  const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
+  if (granularity === 'daily') return date;
+  if (granularity === 'monthly') return date.slice(0, 7);
+  // weekly: lunes ISO de esa semana
+  const d = new Date(`${date}T00:00:00.000Z`);
+  const dow = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() - (dow - 1));
+  return d.toISOString().slice(0, 10);
+}
+
+function groupLabelFor(
+  key: string,
+  groupBy: GroupBy,
+  granularity: ProjectionGranularity,
+  items: FinancialMovement[],
+  today: string,
+): { label: string; sublabel?: string; containsToday?: boolean } {
+  if (groupBy === 'counterparty') {
+    const realKey = key === '__UNCATEGORIZED__' ? undefined : key;
+    return {
+      label: counterpartyTypeLabel(realKey),
+      sublabel: `${items.length} ${items.length === 1 ? 'movimiento' : 'movimientos'}`,
+    };
+  }
+  if (groupBy === 'category') {
+    return {
+      label: categoryLabel(key),
+      sublabel: `${items.length} ${items.length === 1 ? 'movimiento' : 'movimientos'}`,
+    };
+  }
+  if (granularity === 'daily') {
+    return {
+      label: fmtDate(key),
+      sublabel: `${items.length} ${items.length === 1 ? 'movimiento' : 'movimientos'}`,
+      containsToday: key === today,
+    };
+  }
+  if (granularity === 'monthly') {
+    return {
+      label: fmtYearMonthLong(key),
+      sublabel: `${items.length} ${items.length === 1 ? 'movimiento' : 'movimientos'}`,
+      containsToday: key === today.slice(0, 7),
+    };
+  }
+  // weekly
+  const start = new Date(`${key}T00:00:00.000Z`);
+  const end = new Date(start);
+  end.setUTCDate(start.getUTCDate() + 6);
+  const startISO = start.toISOString().slice(0, 10);
+  const endISO = end.toISOString().slice(0, 10);
+  return {
+    label: `${fmtDate(start)} – ${fmtDate(end)}`,
+    sublabel: `Semana · ${items.length} ${items.length === 1 ? 'movimiento' : 'movimientos'}`,
+    containsToday: today >= startISO && today <= endISO,
+  };
+}
+
+function defaultExpandedKey(
+  groups: MovementGroup[],
+  groupBy: GroupBy,
+  today: string,
+): string {
+  if (groupBy === 'period') {
+    const containing = groups.find((g) => g.containsToday);
+    if (containing) return containing.key;
+    const upcoming = groups.find((g) => g.key >= today);
+    if (upcoming) return upcoming.key;
+  }
+  return groups[0].key;
+}
+
+function netColor(value: number): string {
+  if (value > 0) return 'var(--success)';
+  if (value < 0) return 'var(--danger)';
+  return 'var(--gray-700)';
+}
+
+function formatNet(value: number): string {
+  if (value === 0) return '$0';
+  const sign = value > 0 ? '+' : '-';
+  return `${sign}${fmtCompact(Math.abs(value))}`;
+}
+
+function categoryLabel(category: string): string {
+  switch (category) {
+    case 'AR_COLLECTION': return 'Cobranza (AR)';
+    case 'AP_PAYMENT': return 'Pago a proveedores (AP)';
+    case 'PAYROLL': return 'Nómina';
+    case 'TAX': return 'Impuestos';
+    case 'DEBT': return 'Deuda';
+    case 'CAPEX': return 'CAPEX';
+    case 'OPEX': return 'OPEX';
+    case 'TRANSFER': return 'Transferencia';
+    case 'MANUAL': return 'Manual';
+    default: return category;
+  }
 }
 
 interface SegmentedOption<T extends string> {

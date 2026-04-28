@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Plus, Pencil, Wallet, AlertTriangle as AlertIcon, Banknote } from 'lucide-react';
+import { AlertTriangle, Eye, Plus, Pencil, Wallet, AlertTriangle as AlertIcon, Banknote } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -26,6 +26,7 @@ import type {
   FinancialScenario,
 } from '../../shared-finance/types';
 import { CashFlowChart } from '../../financial-projection/components/CashFlowChart';
+import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
 import {
   buildFinancialProjectionSourceData,
   calculateInitialCash,
@@ -108,6 +109,8 @@ export default function FinancialPlanningDashboard(props: Props) {
   const [activeScenarioId, setActiveScenarioId] = useState(initialActiveId);
   const [editorMovement, setEditorMovement] = useState<FinancialMovement | null>(null);
   const [editorAnchor, setEditorAnchor] = useState<DOMRect | null>(null);
+  const [detailMovement, setDetailMovement] = useState<FinancialMovement | null>(null);
+  const [detailAnchor, setDetailAnchor] = useState<DOMRect | null>(null);
 
   useEffect(() => {
     if (!scenarios.some((s) => s.id === activeScenarioId)) {
@@ -193,6 +196,11 @@ export default function FinancialPlanningDashboard(props: Props) {
   const handleSaveAdjustment = () => {
     setEditorMovement(null);
     setEditorAnchor(null);
+  };
+
+  const handleViewDetail = (movement: FinancialMovement, anchor: DOMRect) => {
+    setDetailMovement(movement);
+    setDetailAnchor(anchor);
   };
 
   if (!source.hasData) {
@@ -281,6 +289,7 @@ export default function FinancialPlanningDashboard(props: Props) {
         <PlanningMovementsTable
           movements={activeMovements}
           onAdjust={handleAdjustClick}
+          onViewDetail={handleViewDetail}
         />
       </section>
 
@@ -291,6 +300,18 @@ export default function FinancialPlanningDashboard(props: Props) {
         defaultScenarioId={activeScenario.id}
         onClose={() => { setEditorMovement(null); setEditorAnchor(null); }}
         onSave={handleSaveAdjustment}
+      />
+
+      <MovementDrillDownDrawer
+        movement={detailMovement}
+        anchor={detailAnchor}
+        onClose={() => { setDetailMovement(null); setDetailAnchor(null); }}
+        invoiceContext={{
+          cxpRecords: props.cxpRecords,
+          clients: props.clients,
+          assumptions: props.assumptions,
+          budget: props.budget,
+        }}
       />
     </div>
   );
@@ -369,9 +390,11 @@ function ScenarioChips({
 function PlanningMovementsTable({
   movements,
   onAdjust,
+  onViewDetail,
 }: {
   movements: FinancialMovement[];
   onAdjust: (movement: FinancialMovement, anchor: DOMRect) => void;
+  onViewDetail: (movement: FinancialMovement, anchor: DOMRect) => void;
 }) {
   if (movements.length === 0) {
     return (
@@ -436,19 +459,32 @@ function PlanningMovementsTable({
                   <ConfidenceBadge band={movement.confidenceBand} />
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={(event) => {
-                      if (!editable) return;
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      onAdjust(movement, rect);
-                    }}
-                    disabled={!editable}
-                    title={editable ? 'Crear ajuste' : lockReason}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Pencil className="h-3.5 w-3.5" strokeWidth={1.5} />
-                    Editar
-                  </button>
+                  <div className="inline-flex items-center gap-1.5">
+                    <button
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        onViewDetail(movement, rect);
+                      }}
+                      title="Ver factura / origen del movimiento"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] transition-colors"
+                    >
+                      <Eye className="h-3.5 w-3.5" strokeWidth={1.5} />
+                      Detalle
+                    </button>
+                    <button
+                      onClick={(event) => {
+                        if (!editable) return;
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        onAdjust(movement, rect);
+                      }}
+                      disabled={!editable}
+                      title={editable ? 'Crear ajuste' : lockReason}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Pencil className="h-3.5 w-3.5" strokeWidth={1.5} />
+                      Editar
+                    </button>
+                  </div>
                 </td>
               </tr>
             );

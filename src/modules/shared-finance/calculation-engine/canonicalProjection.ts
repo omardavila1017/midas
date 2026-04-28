@@ -206,7 +206,69 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     }));
   }
 
+  // 3) Mes en curso (histórico parcial). El canónico de este mes ya
+  //    refleja sólo lo que pasó realmente en el banco, por lo que
+  //    `balanceMonth` no aplica (no hay un "target" futuro contra el
+  //    cual escalar). Emitimos las líneas de catálogo cuya fecha cae
+  //    DESPUÉS de hoy como PROJECTED_BASE sin escalar — son los
+  //    movimientos esperados para los días que aún faltan del mes.
+  //    Sin esto el usuario sólo ve los confirmados del banco y queda
+  //    ciego al resto del mes.
+  const currentYm = todayYm;
+  const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
+  if (currentHistorical) {
+    const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm)
+      .filter((line) => line.date > inputs.asOfDate);
+    out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
+
+    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm)
+      .filter((line) => line.date > inputs.asOfDate);
+    out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
+  }
+
   return out;
+}
+
+/**
+ * Convierte `RawLine[]` directamente a `FinancialMovement[]` sin
+ * escalar contra un total canónico. Se usa para el mes en curso, donde
+ * los días pasados ya están cubiertos por movimientos REAL del banco
+ * y los días futuros son proyecciones genuinas que no deben "balancear"
+ * a nada — sólo sumarse.
+ */
+function emitRawLines(
+  lines: RawLine[],
+  type: FinancialMovement['type'],
+  asOfDate: string,
+): FinancialMovement[] {
+  return lines.map((line) => ({
+    id: line.id,
+    sourceSystem: line.sourceSystem,
+    sourceObjectId: line.sourceObjectId,
+    type,
+    category: line.category,
+    companyId: line.companyId,
+    counterpartyId: line.counterpartyId,
+    counterpartyName: line.counterpartyName,
+    counterpartyType: line.counterpartyType,
+    concept: line.concept,
+    currency: 'MXN',
+    originalAmount: line.amount,
+    baseAmount: line.amount,
+    projectedAmount: line.amount,
+    issueDate: line.issueDate,
+    dueDate: line.dueDate,
+    projectedDate: line.date,
+    confidenceScore: line.confidenceScore,
+    confidenceBand: calculateConfidenceBand(line.confidenceScore),
+    forecastMethod: line.forecastMethod,
+    ruleApplied: line.ruleApplied,
+    status: 'PROJECTED_BASE',
+    lockState: line.lockState,
+    comments: [line.comment],
+    createdAt: `${asOfDate}T00:00:00.000Z`,
+    updatedAt: `${asOfDate}T00:00:00.000Z`,
+  }));
 }
 
 interface RawLine {
