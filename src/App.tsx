@@ -23,6 +23,8 @@ import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
 import Simulacion from './components/Simulacion';
 import OperatingProjection from './components/OperatingProjection';
+import FinancialProjectionDashboard from './modules/financial-projection/pages/FinancialProjectionDashboard';
+import FinancialPlanningDashboard from './modules/financial-planning/pages/FinancialPlanningDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
@@ -34,7 +36,7 @@ import {
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
   HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
-  Bell,
+  Bell, ClipboardList, BarChart3,
   type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS } from './domain/companyGroups';
@@ -69,6 +71,8 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   ],
   proyeccion: [
     { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
+    { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
+    { id: 'financialPlanning', label: 'Planeación Financiera', icon: ClipboardList },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'operating',   label: 'Operativa',   icon: LineChart },
@@ -80,6 +84,7 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos',
   netflow: 'operacion', bancos: 'operacion',
   dashboard: 'proyeccion', collections: 'proyeccion',
+  financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
   cxp: 'proyeccion', operating: 'proyeccion', flow: 'proyeccion',
 };
 
@@ -251,7 +256,7 @@ export default function App() {
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
 
-  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'collections', 'cxp', 'operating', 'flow'];
+  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'financialProjection', 'financialPlanning', 'collections', 'cxp', 'operating', 'flow'];
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
@@ -832,6 +837,30 @@ export default function App() {
                 onScenariosChange={setScenarios}
                 activeScenarioId={activeScenarioId}
                 onActiveScenarioChange={setActiveScenarioId}
+                clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
+                assumptions={assumptions}
+                budget={budget}
+                startingBalance={effectiveStartingBalance}
+              />
+            )}
+            {activeTab === 'financialProjection' && (
+              <FinancialProjectionDashboard
+                companyCode={selectedCia}
+                bankStatements={bankStatements}
+                clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
+                assumptions={assumptions}
+                budget={budget}
+                startingBalance={effectiveStartingBalance}
+              />
+            )}
+            {activeTab === 'financialPlanning' && (
+              <FinancialPlanningDashboard
+                companyCode={selectedCia}
+                bankStatements={bankStatements}
                 clients={clients}
                 providers={providers}
                 cxpRecords={cxpRecords}

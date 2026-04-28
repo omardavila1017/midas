@@ -39,9 +39,11 @@ import {
   priorityBlockLabel,
   type ManualExpenseEvent,
   type OperatingAdjustment,
+  type OperatingCollectionOverride,
   type OperatingFlowLine,
   type OperatingProjectionDay,
   type OperatingMandatoryReserveLine,
+  type OperatingScheduledOutflowOverride,
   type OperatingSupplierPayment,
   type OperatingSupplierPaymentOverride,
   type OperatingSupplierQueueItem,
@@ -97,7 +99,7 @@ interface Props {
   budget: Budget | null;
 }
 
-type DayDetailTab = 'cobranza' | 'pagos' | 'fijos' | 'alertas';
+type DayDetailTab = 'ingresos' | 'egresos' | 'alertas';
 type SheetGranularity = 'daily' | 'weekly' | 'monthly';
 type SheetScope = 'month' | 'year';
 type OperatingProjectionModuleId = 'overview' | 'cobranza' | 'suppliers' | 'taxes' | 'obligations' | 'projection' | 'adjustments';
@@ -307,6 +309,8 @@ interface PlanningLedgerItem {
   editableDate: boolean;
   editableAmount: boolean;
   supplier?: OperatingSupplierQueueItem;
+  collectionLine?: OperatingFlowLine;
+  outflowLine?: OperatingFlowLine;
 }
 
 interface PlanningLedgerCsvRow {
@@ -383,6 +387,26 @@ interface SupplierOverrideRow {
   note: string;
 }
 
+interface CollectionOverrideRow {
+  id: string;
+  sourceKey: string;
+  clientName: string;
+  invoiceDate?: string;
+  date: string;
+  amountInput: string;
+  note: string;
+}
+
+interface ScheduledOutflowOverrideRow {
+  id: string;
+  sourceKey: string;
+  label: string;
+  category: string;
+  date: string;
+  amountInput: string;
+  note: string;
+}
+
 interface SupplierPaymentMoveImpact {
   providerName: string;
   invoiceNumber?: string;
@@ -406,6 +430,8 @@ interface OperatingScenarioUiState {
   manualRows: ManualEventRow[];
   adjustmentRows: AdjustmentRow[];
   supplierOverrideRows: SupplierOverrideRow[];
+  collectionOverrideRows: CollectionOverrideRow[];
+  scheduledOutflowOverrideRows: ScheduledOutflowOverrideRow[];
   taxDebtRows: TaxDebtRow[];
 }
 
@@ -440,7 +466,16 @@ export default function OperatingProjection({
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [scenarioUi, setScenarioUi] = useState<OperatingScenarioUiState>(loadInitialScenarioUiState);
   const [runVersion, setRunVersion] = useState(0);
-  const { scenarios, activeScenarioId, manualRows, adjustmentRows, supplierOverrideRows, taxDebtRows } = scenarioUi;
+  const {
+    scenarios,
+    activeScenarioId,
+    manualRows,
+    adjustmentRows,
+    supplierOverrideRows,
+    collectionOverrideRows,
+    scheduledOutflowOverrideRows,
+    taxDebtRows,
+  } = scenarioUi;
   const activeScenario = useMemo(
     () => scenarios.find((scenario) => scenario.id === activeScenarioId) ?? scenarios[0],
     [activeScenarioId, scenarios],
@@ -475,6 +510,26 @@ export default function OperatingProjection({
       });
     });
   };
+  const setCollectionOverrideRows = (updater: (current: CollectionOverrideRow[]) => CollectionOverrideRow[]) => {
+    setScenarioUi((current) => {
+      setUndoStack((history) => [cloneOperatingScenarioUiState(current), ...history].slice(0, 20));
+      const editable = ensureEditableScenarioUiState(current);
+      return syncActiveScenarioRows({
+        ...editable,
+        collectionOverrideRows: updater(editable.collectionOverrideRows),
+      });
+    });
+  };
+  const setScheduledOutflowOverrideRows = (updater: (current: ScheduledOutflowOverrideRow[]) => ScheduledOutflowOverrideRow[]) => {
+    setScenarioUi((current) => {
+      setUndoStack((history) => [cloneOperatingScenarioUiState(current), ...history].slice(0, 20));
+      const editable = ensureEditableScenarioUiState(current);
+      return syncActiveScenarioRows({
+        ...editable,
+        scheduledOutflowOverrideRows: updater(editable.scheduledOutflowOverrideRows),
+      });
+    });
+  };
   const setTaxDebtRows = (updater: (current: TaxDebtRow[]) => TaxDebtRow[]) => {
     setScenarioUi((current) => {
       setUndoStack((history) => [cloneOperatingScenarioUiState(current), ...history].slice(0, 20));
@@ -504,6 +559,18 @@ export default function OperatingProjection({
       .map(toSupplierPaymentOverride)
       .filter((value): value is OperatingSupplierPaymentOverride => value !== null),
     [supplierOverrideRows],
+  );
+  const collectionOverrides = useMemo(
+    () => collectionOverrideRows
+      .map(toOperatingCollectionOverride)
+      .filter((value): value is OperatingCollectionOverride => value !== null),
+    [collectionOverrideRows],
+  );
+  const scheduledOutflowOverrides = useMemo(
+    () => scheduledOutflowOverrideRows
+      .map(toOperatingScheduledOutflowOverride)
+      .filter((value): value is OperatingScheduledOutflowOverride => value !== null),
+    [scheduledOutflowOverrideRows],
   );
   const taxDebts = useMemo(
     () => taxDebtRows
@@ -555,8 +622,10 @@ export default function OperatingProjection({
       manualExpenseEvents: projectionManualEvents,
       operatingAdjustments,
       supplierPaymentOverrides,
+      collectionOverrides,
+      scheduledOutflowOverrides,
     });
-  }, [assumptions, bankStatements, budget, clients, cxpRecords, operatingAdjustments, projectionManualEvents, providers, runVersion, supplierPaymentOverrides, today]);
+  }, [assumptions, bankStatements, budget, clients, collectionOverrides, cxpRecords, operatingAdjustments, projectionManualEvents, providers, runVersion, scheduledOutflowOverrides, supplierPaymentOverrides, today]);
   const baseProjection = useMemo(() => {
     const baseScenario = scenarios.find((scenario) => scenario.id === 'base') ?? scenarios[0];
     const window = buildDefaultOperatingProjectionWindow(today, budget);
@@ -576,6 +645,8 @@ export default function OperatingProjection({
       manualExpenseEvents: baseManualEvents,
       operatingAdjustments: baseScenario?.operatingAdjustments ?? [],
       supplierPaymentOverrides: baseScenario?.supplierPaymentOverrides ?? [],
+      collectionOverrides: baseScenario?.collectionOverrides ?? [],
+      scheduledOutflowOverrides: baseScenario?.scheduledOutflowOverrides ?? [],
     });
   }, [assumptions, bankStatements, budget, clients, cxpRecords, providers, scenarios, today]);
 
@@ -603,7 +674,7 @@ export default function OperatingProjection({
     });
   };
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [detailTab, setDetailTab] = useState<DayDetailTab>('cobranza');
+  const [detailTab, setDetailTab] = useState<DayDetailTab>('ingresos');
   const [sheetScope, setSheetScope] = useState<SheetScope>('month');
   const [sheetGranularity, setSheetGranularity] = useState<SheetGranularity>('daily');
   const [planningGranularity, setPlanningGranularity] = useState<SheetGranularity>('daily');
@@ -869,6 +940,8 @@ export default function OperatingProjection({
       monthDays,
       supplierQueue: projection.supplierQueue,
       supplierOverrides: supplierOverrideRows,
+      collectionOverrides: collectionOverrideRows,
+      scheduledOutflowOverrides: scheduledOutflowOverrideRows,
       taxDebtRows,
       manualRows,
       adjustmentRows,
@@ -878,9 +951,11 @@ export default function OperatingProjection({
     [
       activeScenario?.updatedAt,
       adjustmentRows,
+      collectionOverrideRows,
       manualRows,
       monthDays,
       projection.supplierQueue,
+      scheduledOutflowOverrideRows,
       selectedMonth,
       supplierOverrideRows,
       taxDebtRows,
@@ -933,6 +1008,8 @@ export default function OperatingProjection({
         manualRows: nextActive.manualExpenseEvents.map(rowFromManualEvent),
         adjustmentRows: nextActive.operatingAdjustments.map(rowFromOperatingAdjustment),
         supplierOverrideRows: nextActive.supplierPaymentOverrides.map(rowFromSupplierPaymentOverride),
+        collectionOverrideRows: nextActive.collectionOverrides.map(rowFromOperatingCollectionOverride),
+        scheduledOutflowOverrideRows: nextActive.scheduledOutflowOverrides.map(rowFromOperatingScheduledOutflowOverride),
         taxDebtRows: nextActive.taxDebts.map(rowFromOperatingTaxDebt),
       };
     });
@@ -956,6 +1033,8 @@ export default function OperatingProjection({
         manualRows: [],
         adjustmentRows: [],
         supplierOverrideRows: [],
+        collectionOverrideRows: [],
+        scheduledOutflowOverrideRows: [],
         taxDebtRows: [],
       };
     });
@@ -967,6 +1046,8 @@ export default function OperatingProjection({
         manualExpenseEvents: manualEvents,
         operatingAdjustments: operatingAdjustments,
         supplierPaymentOverrides,
+        collectionOverrides,
+        scheduledOutflowOverrides,
         taxDebts,
       });
       return {
@@ -975,6 +1056,8 @@ export default function OperatingProjection({
         manualRows: scenario.manualExpenseEvents.map(rowFromManualEvent),
         adjustmentRows: scenario.operatingAdjustments.map(rowFromOperatingAdjustment),
         supplierOverrideRows: scenario.supplierPaymentOverrides.map(rowFromSupplierPaymentOverride),
+        collectionOverrideRows: scenario.collectionOverrides.map(rowFromOperatingCollectionOverride),
+        scheduledOutflowOverrideRows: scenario.scheduledOutflowOverrides.map(rowFromOperatingScheduledOutflowOverride),
         taxDebtRows: scenario.taxDebts.map(rowFromOperatingTaxDebt),
       };
     });
@@ -990,6 +1073,8 @@ export default function OperatingProjection({
         manualRows: nextActive.manualExpenseEvents.map(rowFromManualEvent),
         adjustmentRows: nextActive.operatingAdjustments.map(rowFromOperatingAdjustment),
         supplierOverrideRows: nextActive.supplierPaymentOverrides.map(rowFromSupplierPaymentOverride),
+        collectionOverrideRows: nextActive.collectionOverrides.map(rowFromOperatingCollectionOverride),
+        scheduledOutflowOverrideRows: nextActive.scheduledOutflowOverrides.map(rowFromOperatingScheduledOutflowOverride),
         taxDebtRows: nextActive.taxDebts.map(rowFromOperatingTaxDebt),
       };
     });
@@ -999,6 +1084,18 @@ export default function OperatingProjection({
   };
   const removeSupplierOverride = (invoiceKey: string) => {
     setSupplierOverrideRows((current) => current.filter((row) => row.invoiceKey !== invoiceKey));
+  };
+  const updateCollectionOverride = (line: OperatingFlowLine, patch: Partial<CollectionOverrideRow>, fallbackDate: string) => {
+    setCollectionOverrideRows((current) => upsertCollectionOverrideRow(current, line, patch, fallbackDate));
+  };
+  const removeCollectionOverride = (sourceKey: string) => {
+    setCollectionOverrideRows((current) => current.filter((row) => row.sourceKey !== sourceKey));
+  };
+  const updateScheduledOutflowOverride = (line: OperatingFlowLine, patch: Partial<ScheduledOutflowOverrideRow>, fallbackDate: string) => {
+    setScheduledOutflowOverrideRows((current) => upsertScheduledOutflowOverrideRow(current, line, patch, fallbackDate));
+  };
+  const removeScheduledOutflowOverride = (sourceKey: string) => {
+    setScheduledOutflowOverrideRows((current) => current.filter((row) => row.sourceKey !== sourceKey));
   };
   const moveSupplierPaymentByKey = (invoiceKey: string, fromDate: string, toDate: string) => {
     if (fromDate === toDate) return;
@@ -1016,7 +1113,7 @@ export default function OperatingProjection({
       note: currentOverride?.note || `Movido desde ${fmtDate(fromDate)}`,
     }, fromDate);
     setSelectedDay(toDate);
-    setDetailTab('pagos');
+    setDetailTab('egresos');
     setLastSupplierMove({
       providerName: payment.providerName,
       invoiceNumber: payment.invoiceNumber,
@@ -1078,6 +1175,34 @@ export default function OperatingProjection({
       });
       return;
     }
+    if (item.type === 'collection' && item.collectionLine) {
+      const collectionPatch: Partial<CollectionOverrideRow> = {};
+      if (patch.date !== undefined) collectionPatch.date = patch.date;
+      if (patch.amountInput !== undefined) collectionPatch.amountInput = patch.amountInput;
+      if (patch.comment !== undefined) collectionPatch.note = patch.comment;
+      updateCollectionOverride(item.collectionLine, collectionPatch, item.scheduledDate);
+      appendAuditEntry({
+        action: 'Edición de ingreso',
+        reason: patch.comment || 'Cambio manual de cobranza desde tabla inteligente',
+        detail,
+        impact,
+      });
+      return;
+    }
+    if (item.type === 'fixed' && item.outflowLine) {
+      const outflowPatch: Partial<ScheduledOutflowOverrideRow> = {};
+      if (patch.date !== undefined) outflowPatch.date = patch.date;
+      if (patch.amountInput !== undefined) outflowPatch.amountInput = patch.amountInput;
+      if (patch.comment !== undefined) outflowPatch.note = patch.comment;
+      updateScheduledOutflowOverride(item.outflowLine, outflowPatch, item.scheduledDate);
+      appendAuditEntry({
+        action: 'Edición de egreso fijo',
+        reason: patch.comment || 'Cambio manual de egreso desde tabla inteligente',
+        detail,
+        impact,
+      });
+      return;
+    }
     if (item.type === 'tax' && item.parentId) {
       const taxPatch: Partial<TaxPaymentRow> = {};
       if (patch.date !== undefined) taxPatch.date = patch.date;
@@ -1125,6 +1250,8 @@ export default function OperatingProjection({
       monthDays: projection.days,
       supplierQueue: projection.supplierQueue,
       supplierOverrides: supplierOverrideRows,
+      collectionOverrides: collectionOverrideRows,
+      scheduledOutflowOverrides: scheduledOutflowOverrideRows,
       taxDebtRows,
       manualRows,
       adjustmentRows,
@@ -1134,9 +1261,11 @@ export default function OperatingProjection({
     [
       activeScenario?.updatedAt,
       adjustmentRows,
+      collectionOverrideRows,
       manualRows,
       projection.days,
       projection.supplierQueue,
+      scheduledOutflowOverrideRows,
       supplierOverrideRows,
       taxDebtRows,
       today,
@@ -1250,6 +1379,8 @@ export default function OperatingProjection({
     let nextManualRows = manualRows.slice();
     let nextAdjustmentRows = adjustmentRows.slice();
     let nextSupplierOverrideRows = supplierOverrideRows.slice();
+    let nextCollectionOverrideRows = collectionOverrideRows.slice();
+    let nextScheduledOutflowOverrideRows = scheduledOutflowOverrideRows.slice();
     let nextTaxDebtRows = taxDebtRows.slice();
 
     for (const incoming of preview.rows) {
@@ -1330,6 +1461,36 @@ export default function OperatingProjection({
         continue;
       }
 
+      if (current.type === 'collection' && current.collectionLine) {
+        const patch: Partial<CollectionOverrideRow> = {};
+        if (dateChanged) patch.date = incoming.scheduledDate;
+        if (amountChanged) patch.amountInput = editableAmount(incoming.adjustedAmount ?? current.adjustedAmount);
+        if (commentChanged) patch.note = incoming.comment;
+        nextCollectionOverrideRows = upsertCollectionOverrideRow(
+          nextCollectionOverrideRows,
+          current.collectionLine,
+          patch,
+          current.scheduledDate,
+        );
+        applied += 1;
+        continue;
+      }
+
+      if (current.type === 'fixed' && current.outflowLine) {
+        const patch: Partial<ScheduledOutflowOverrideRow> = {};
+        if (dateChanged) patch.date = incoming.scheduledDate;
+        if (amountChanged) patch.amountInput = editableAmount(incoming.adjustedAmount ?? current.adjustedAmount);
+        if (commentChanged) patch.note = incoming.comment;
+        nextScheduledOutflowOverrideRows = upsertScheduledOutflowOverrideRow(
+          nextScheduledOutflowOverrideRows,
+          current.outflowLine,
+          patch,
+          current.scheduledDate,
+        );
+        applied += 1;
+        continue;
+      }
+
       if (current.type === 'tax' && current.parentId) {
         const patch: Partial<TaxPaymentRow> = {};
         if (dateChanged) patch.date = incoming.scheduledDate;
@@ -1380,6 +1541,12 @@ export default function OperatingProjection({
       const supplierPaymentOverrideList = nextSupplierOverrideRows
         .map(toSupplierPaymentOverride)
         .filter((value): value is OperatingSupplierPaymentOverride => value !== null);
+      const collectionOverrideList = nextCollectionOverrideRows
+        .map(toOperatingCollectionOverride)
+        .filter((value): value is OperatingCollectionOverride => value !== null);
+      const scheduledOutflowOverrideList = nextScheduledOutflowOverrideRows
+        .map(toOperatingScheduledOutflowOverride)
+        .filter((value): value is OperatingScheduledOutflowOverride => value !== null);
       const taxDebtList = nextTaxDebtRows
         .map(toOperatingTaxDebt)
         .filter((value): value is OperatingTaxDebt => value !== null);
@@ -1387,6 +1554,8 @@ export default function OperatingProjection({
         manualExpenseEvents: manualEvents,
         operatingAdjustments: operatingAdjustmentList,
         supplierPaymentOverrides: supplierPaymentOverrideList,
+        collectionOverrides: collectionOverrideList,
+        scheduledOutflowOverrides: scheduledOutflowOverrideList,
         taxDebts: taxDebtList,
         owner: currentUser.name,
         role: currentUser.role,
@@ -1397,6 +1566,8 @@ export default function OperatingProjection({
         manualRows: nextManualRows,
         adjustmentRows: nextAdjustmentRows,
         supplierOverrideRows: nextSupplierOverrideRows,
+        collectionOverrideRows: nextCollectionOverrideRows,
+        scheduledOutflowOverrideRows: nextScheduledOutflowOverrideRows,
         taxDebtRows: nextTaxDebtRows,
       };
     });
@@ -1422,6 +1593,8 @@ export default function OperatingProjection({
         manualExpenseEvents: base.manualExpenseEvents,
         operatingAdjustments: base.operatingAdjustments,
         supplierPaymentOverrides: base.supplierPaymentOverrides,
+        collectionOverrides: base.collectionOverrides,
+        scheduledOutflowOverrides: base.scheduledOutflowOverrides,
         taxDebts: base.taxDebts,
         owner: currentUser.name,
         role: currentUser.role,
@@ -1432,6 +1605,8 @@ export default function OperatingProjection({
         manualRows: restored.manualExpenseEvents.map(rowFromManualEvent),
         adjustmentRows: restored.operatingAdjustments.map(rowFromOperatingAdjustment),
         supplierOverrideRows: restored.supplierPaymentOverrides.map(rowFromSupplierPaymentOverride),
+        collectionOverrideRows: restored.collectionOverrides.map(rowFromOperatingCollectionOverride),
+        scheduledOutflowOverrideRows: restored.scheduledOutflowOverrides.map(rowFromOperatingScheduledOutflowOverride),
         taxDebtRows: restored.taxDebts.map(rowFromOperatingTaxDebt),
       };
     });
@@ -2572,40 +2747,6 @@ export default function OperatingProjection({
           onRemoveOverride={removeSupplierQueueOverride}
         />
 
-        <PaymentCalendarBoard
-          days={monthDays}
-          selectedDay={selectedDayData?.date ?? null}
-          lastMove={lastSupplierMove}
-          onSelectDay={setSelectedDay}
-          onMovePayment={moveSupplierPaymentByKey}
-        />
-
-        <section className={`${T.section} overflow-hidden`}>
-          <div className="border-b border-[var(--border)] px-4 py-4">
-            <h2 className={`text-[15px] font-semibold ${T.title}`}>
-              Pagos del día seleccionado {selectedDayData ? `· ${fmtDate(selectedDayData.date)}` : ''}
-            </h2>
-            <p className={`mt-1 text-[12px] ${T.muted}`}>
-              Edita fecha o monto por factura y la corrida se actualiza en el escenario activo.
-            </p>
-          </div>
-          {selectedDayData ? (
-            <div className="px-4 pb-4">
-              <SupplierPaymentDrilldown
-                empty="Sin pagos sugeridos para este día."
-                payments={selectedDayData.supplierPayments}
-                date={selectedDayData.date}
-                overrideRows={supplierOverrideRows}
-                onOverrideChange={updateSupplierOverride}
-                onOverrideRemove={removeSupplierOverride}
-              />
-            </div>
-          ) : (
-            <div className="px-4 py-4">
-              <EmptyMiniState label="Selecciona un día del tablero para ver las facturas." />
-            </div>
-          )}
-        </section>
       </div>
 
       <section className={`${expandedBlocks.has('projection') ? T.section : 'hidden'} overflow-hidden`}>
@@ -2789,74 +2930,17 @@ export default function OperatingProjection({
         </div>
       </section>
 
-      <section className={`grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_380px]`}>
-        <div className={`${T.section} overflow-hidden`}>
-          <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-            <div>
-              <h2 className={`text-[15px] font-semibold ${T.title}`}>Agenda diaria</h2>
-              <p className={`text-[12px] ${T.muted}`}>Lectura rápida del mes con neto y conteo de eventos.</p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-[12px]">
-              <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)]">
-                <tr>
-                  <Th>Fecha</Th>
-                  <Th align="right">Cobranza</Th>
-                  <Th align="right">Fijos</Th>
-                  <Th align="right">Pagos</Th>
-                  <Th align="right">Neto</Th>
-                  <Th align="right">Caja cierre</Th>
-                  <Th align="center">Alertas</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {monthDays.map((day) => {
-                  const active = day.date === selectedDayData?.date;
-                  const collections = sumAmounts(collectionLines(day));
-                  const fixed = sumAmounts(day.scheduledOutflows);
-                  const suppliers = sumAmounts(day.supplierPayments);
-                  const net = sumAmounts(day.cashInflows) - fixed - suppliers;
-                  return (
-                    <tr
-                      key={day.date}
-                      onClick={() => setSelectedDay(day.date)}
-                      className={`cursor-pointer border-t border-[var(--border)] transition-colors ${
-                        active ? 'bg-[var(--primary)]/5' : 'hover:bg-[var(--surface-alt)]'
-                      }`}
-                    >
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-[var(--gray-950)]">{fmtDate(day.date)}</div>
-                        <div className="text-[11px] text-[var(--gray-400)]">
-                          {collectionLines(day).length} cobros · {day.supplierPayments.length} pagos
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium tabular-nums text-[var(--success)]">{collections > 0 ? fmtCurrency(collections) : '—'}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-[var(--warning)]">{fixed > 0 ? fmtCurrency(fixed) : '—'}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">{suppliers > 0 ? fmtCurrency(suppliers) : '—'}</td>
-                      <td className={`px-4 py-3 text-right font-semibold tabular-nums ${net >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
-                        {fmtCurrency(net)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-semibold tabular-nums ${day.closingCash >= 0 ? 'text-[var(--gray-950)]' : 'text-[var(--danger)]'}`}>
-                        {fmtCurrency(day.closingCash)}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {day.alerts.length > 0 ? (
-                          <span className="inline-flex min-w-7 items-center justify-center rounded-full bg-[var(--warning-muted)] px-2 py-1 text-[11px] font-semibold text-[var(--warning)]">
-                            {day.alerts.length}
-                          </span>
-                        ) : (
-                          <span className="text-[var(--gray-300)]">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <section className={`grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_420px]`}>
+        <OperatingDailyCalendar
+          days={monthDays}
+          selectedDay={selectedDayData?.date ?? null}
+          lastMove={lastSupplierMove}
+          onSelectDay={(date, tab) => {
+            setSelectedDay(date);
+            if (tab) setDetailTab(tab);
+          }}
+          onMovePayment={moveSupplierPaymentByKey}
+        />
 
         <div className="space-y-4">
           <section className={`${T.section} p-4`}>
@@ -2869,9 +2953,8 @@ export default function OperatingProjection({
               </div>
               <div className="inline-flex rounded-lg bg-[var(--surface-alt)] p-1 text-[11px] font-medium">
                 {([
-                  { id: 'cobranza', label: 'Cobranza' },
-                  { id: 'pagos', label: 'Pagos' },
-                  { id: 'fijos', label: 'Fijos' },
+                  { id: 'ingresos', label: 'Ingresos' },
+                  { id: 'egresos', label: 'Egresos' },
                   { id: 'alertas', label: 'Alertas' },
                 ] as Array<{ id: DayDetailTab; label: string }>).map((tab) => (
                   <button
@@ -2885,51 +2968,28 @@ export default function OperatingProjection({
               </div>
             </div>
 
-            {selectedDayData && detailTab === 'cobranza' && (
-              <DetailList
-                empty="Sin cobranza proyectada para este día."
-                items={[
-                  ...dayCollections.map((line) => ({
-                    title: line.label,
-                    subtitle: line.detail ?? 'Cobranza proyectada',
-                    meta: [line.confidence ? `confianza ${line.confidence.toLowerCase()}` : null, line.lagDays != null ? `lag ${line.lagDays}d` : null]
-                      .filter(Boolean)
-                      .join(' · '),
-                    amount: line.amount,
-                    tone: 'success' as const,
-                  })),
-                  ...selectedOtherInflows.map((line) => ({
-                    title: line.label,
-                    subtitle: line.detail ?? line.category,
-                    meta: line.category,
-                    amount: line.amount,
-                    tone: 'success' as const,
-                  })),
-                ]}
-              />
-            )}
-
-            {selectedDayData && detailTab === 'pagos' && (
-              <SupplierPaymentDrilldown
-                empty="Sin pagos sugeridos para este día."
-                payments={selectedDayData.supplierPayments}
+            {selectedDayData && detailTab === 'ingresos' && (
+              <IncomeDrilldown
+                collections={dayCollections}
+                otherInflows={selectedOtherInflows}
                 date={selectedDayData.date}
-                overrideRows={supplierOverrideRows}
-                onOverrideChange={updateSupplierOverride}
-                onOverrideRemove={removeSupplierOverride}
+                overrideRows={collectionOverrideRows}
+                onOverrideChange={updateCollectionOverride}
+                onOverrideRemove={removeCollectionOverride}
               />
             )}
 
-            {selectedDayData && detailTab === 'fijos' && (
-              <DetailList
-                empty="Sin egresos fijos en este día."
-                items={selectedDayData.scheduledOutflows.map((line) => ({
-                  title: line.label,
-                  subtitle: line.category,
-                  meta: line.detail ?? line.source,
-                  amount: line.amount,
-                  tone: 'warning',
-                }))}
+            {selectedDayData && detailTab === 'egresos' && (
+              <OutflowDrilldown
+                supplierPayments={selectedDayData.supplierPayments}
+                scheduledOutflows={selectedDayData.scheduledOutflows}
+                date={selectedDayData.date}
+                supplierOverrideRows={supplierOverrideRows}
+                scheduledOverrideRows={scheduledOutflowOverrideRows}
+                onSupplierOverrideChange={updateSupplierOverride}
+                onSupplierOverrideRemove={removeSupplierOverride}
+                onScheduledOverrideChange={updateScheduledOutflowOverride}
+                onScheduledOverrideRemove={removeScheduledOutflowOverride}
               />
             )}
 
@@ -3416,6 +3476,8 @@ function buildPlanningLedgerRows({
   monthDays,
   supplierQueue,
   supplierOverrides,
+  collectionOverrides,
+  scheduledOutflowOverrides,
   taxDebtRows,
   manualRows,
   adjustmentRows,
@@ -3425,6 +3487,8 @@ function buildPlanningLedgerRows({
   monthDays: OperatingProjectionDay[];
   supplierQueue: OperatingSupplierQueueItem[];
   supplierOverrides: SupplierOverrideRow[];
+  collectionOverrides: CollectionOverrideRow[];
+  scheduledOutflowOverrides: ScheduledOutflowOverrideRow[];
   taxDebtRows: TaxDebtRow[];
   manualRows: ManualEventRow[];
   adjustmentRows: AdjustmentRow[];
@@ -3438,6 +3502,8 @@ function buildPlanningLedgerRows({
     bucket.push(override);
     overrideByInvoice.set(override.invoiceKey, bucket);
   }
+  const collectionOverrideByKey = new Map(collectionOverrides.map((row) => [row.sourceKey, row]));
+  const scheduledOutflowOverrideByKey = new Map(scheduledOutflowOverrides.map((row) => [row.sourceKey, row]));
 
   for (const item of supplierQueue) {
     const overrides = overrideByInvoice.get(item.invoiceKey) ?? [];
@@ -3553,50 +3619,56 @@ function buildPlanningLedgerRows({
 
   for (const day of monthDays) {
     for (const line of day.cashInflows.filter((entry) => entry.source !== 'adjustment')) {
+      const sourceKey = collectionOverrideSourceKey(line);
+      const override = collectionOverrideByKey.get(sourceKey);
       rows.push({
-        id: `collection:${day.date}:${line.id}`,
+        id: `collection:${sourceKey}`,
         type: 'collection',
-        sourceId: line.id,
-        originalDate: line.theoreticalDate ?? day.date,
+        sourceId: sourceKey,
+        originalDate: line.originalDate ?? line.theoreticalDate ?? day.date,
         scheduledDate: day.date,
         entity: line.label,
-        concept: line.detail ?? line.category,
+        concept: line.invoiceDate ? `Factura proyectada ${fmtDate(line.invoiceDate)}` : (line.detail ?? line.category),
         category: line.category || 'Cobranza',
         originalAmount: line.amount,
         adjustedAmount: line.amount,
-        status: 'projected',
+        status: override ? 'rescheduled' : 'projected',
         priority: 'Media',
         risk: line.confidence === 'Baja' ? 'Alto' : line.confidence === 'Media' ? 'Medio' : 'Bajo',
-        flexibility: 'No aplica',
-        comment: line.detail ?? '',
-        origin: line.source === 'collections' ? 'Algoritmo/JDE' : sourceLabel(line.source),
+        flexibility: 'Editable por escenario',
+        comment: override?.note || line.overrideNote || line.detail || '',
+        origin: override ? 'Manual' : line.source === 'collections' ? 'Algoritmo/JDE' : sourceLabel(line.source),
         updatedAt: scenarioUpdatedAt,
-        editableDate: false,
-        editableAmount: false,
+        editableDate: true,
+        editableAmount: true,
+        collectionLine: line,
       });
     }
     for (const line of day.scheduledOutflows.filter((entry) => entry.source !== 'adjustment')) {
       if (normalizeLabel(line.category).includes('IMPUEST')) continue;
+      const sourceKey = scheduledOutflowOverrideSourceKey(line);
+      const override = scheduledOutflowOverrideByKey.get(sourceKey);
       rows.push({
-        id: `fixed:${day.date}:${line.id}`,
+        id: `fixed:${day.date}:${sourceKey}`,
         type: 'fixed',
-        sourceId: line.id,
-        originalDate: line.theoreticalDate ?? day.date,
+        sourceId: sourceKey,
+        originalDate: line.originalDate ?? line.theoreticalDate ?? day.date,
         scheduledDate: day.date,
         entity: line.category,
         concept: line.label,
         category: line.category,
         originalAmount: line.amount,
         adjustedAmount: line.amount,
-        status: 'projected',
+        status: override ? 'rescheduled' : 'projected',
         priority: 'Alta',
         risk: 'Medio',
-        flexibility: 'Regla',
-        comment: line.detail ?? '',
-        origin: sourceLabel(line.source),
+        flexibility: line.source === 'fixed' ? 'Regla fija' : 'Editable por escenario',
+        comment: override?.note || line.overrideNote || line.detail || '',
+        origin: override ? 'Manual' : sourceLabel(line.source),
         updatedAt: scenarioUpdatedAt,
-        editableDate: false,
-        editableAmount: false,
+        editableDate: true,
+        editableAmount: true,
+        outflowLine: line,
       });
     }
   }
@@ -4230,7 +4302,7 @@ function buildDateImportChange(
   targetDay: OperatingProjectionDay | undefined,
   manualMinimumCash: number,
 ): PlanningLedgerImportChange {
-  const blocked = !current.editableDate || current.type === 'collection' || current.type === 'fixed';
+  const blocked = !current.editableDate;
   const movedLater = scheduledDate > current.originalDate;
   let severity: PlanningLedgerImportChange['severity'] = 'ok';
   let message = 'Fecha reprogramada; el escenario conserva la fecha original para auditoría.';
@@ -4268,7 +4340,7 @@ function buildAmountImportChange(
   current: PlanningLedgerItem,
   adjustedAmount: number,
 ): PlanningLedgerImportChange {
-  const blocked = !current.editableAmount || current.type === 'collection' || current.type === 'fixed';
+  const blocked = !current.editableAmount;
   let severity: PlanningLedgerImportChange['severity'] = 'ok';
   let message = 'Monto ajustado; el monto original se conserva para comparación.';
   if (blocked) {
@@ -4701,6 +4773,59 @@ function toOperatingAdjustment(row: AdjustmentRow): OperatingAdjustment | null {
   };
 }
 
+function rowFromOperatingCollectionOverride(override: OperatingCollectionOverride): CollectionOverrideRow {
+  return {
+    id: override.id ?? `collection-override-${override.sourceKey}`,
+    sourceKey: override.sourceKey,
+    clientName: 'Cliente',
+    date: override.date,
+    amountInput: String(override.amount),
+    note: override.note ?? '',
+  };
+}
+
+function rowFromOperatingScheduledOutflowOverride(override: OperatingScheduledOutflowOverride): ScheduledOutflowOverrideRow {
+  return {
+    id: override.id ?? `outflow-override-${override.sourceKey}`,
+    sourceKey: override.sourceKey,
+    label: 'Egreso',
+    category: 'Egreso programado',
+    date: override.date,
+    amountInput: String(override.amount),
+    note: override.note ?? '',
+  };
+}
+
+function toOperatingCollectionOverride(row: CollectionOverrideRow): OperatingCollectionOverride | null {
+  if (!row.sourceKey) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) return null;
+  if (row.amountInput.trim() === '') return null;
+  const amount = Number(row.amountInput);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return {
+    id: row.id,
+    sourceKey: row.sourceKey,
+    date: row.date,
+    amount,
+    note: row.note.trim() || undefined,
+  };
+}
+
+function toOperatingScheduledOutflowOverride(row: ScheduledOutflowOverrideRow): OperatingScheduledOutflowOverride | null {
+  if (!row.sourceKey) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) return null;
+  if (row.amountInput.trim() === '') return null;
+  const amount = Number(row.amountInput);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return {
+    id: row.id,
+    sourceKey: row.sourceKey,
+    date: row.date,
+    amount,
+    note: row.note.trim() || undefined,
+  };
+}
+
 function loadInitialScenarioUiState(): OperatingScenarioUiState {
   const scenarios = loadOperatingProjectionScenarios(
     loadOperatingManualExpenseEvents(),
@@ -4714,6 +4839,8 @@ function loadInitialScenarioUiState(): OperatingScenarioUiState {
     manualRows: activeScenario.manualExpenseEvents.map(rowFromManualEvent),
     adjustmentRows: activeScenario.operatingAdjustments.map(rowFromOperatingAdjustment),
     supplierOverrideRows: activeScenario.supplierPaymentOverrides.map(rowFromSupplierPaymentOverride),
+    collectionOverrideRows: activeScenario.collectionOverrides.map(rowFromOperatingCollectionOverride),
+    scheduledOutflowOverrideRows: activeScenario.scheduledOutflowOverrides.map(rowFromOperatingScheduledOutflowOverride),
     taxDebtRows: activeScenario.taxDebts.map(rowFromOperatingTaxDebt),
   };
 }
@@ -4770,6 +4897,8 @@ function cloneOperatingScenarioUiState(state: OperatingScenarioUiState): Operati
       manualExpenseEvents: scenario.manualExpenseEvents.map((event) => ({ ...event })),
       operatingAdjustments: scenario.operatingAdjustments.map((adjustment) => ({ ...adjustment })),
       supplierPaymentOverrides: scenario.supplierPaymentOverrides.map((override) => ({ ...override })),
+      collectionOverrides: scenario.collectionOverrides.map((override) => ({ ...override })),
+      scheduledOutflowOverrides: scenario.scheduledOutflowOverrides.map((override) => ({ ...override })),
       taxDebts: scenario.taxDebts.map(cloneOperatingTaxDebt),
       auditLog: scenario.auditLog?.map((entry) => ({ ...entry })),
     })),
@@ -4777,6 +4906,8 @@ function cloneOperatingScenarioUiState(state: OperatingScenarioUiState): Operati
     manualRows: state.manualRows.map((row) => ({ ...row })),
     adjustmentRows: state.adjustmentRows.map((row) => ({ ...row })),
     supplierOverrideRows: state.supplierOverrideRows.map((row) => ({ ...row })),
+    collectionOverrideRows: state.collectionOverrideRows.map((row) => ({ ...row })),
+    scheduledOutflowOverrideRows: state.scheduledOutflowOverrideRows.map((row) => ({ ...row })),
     taxDebtRows: state.taxDebtRows.map((row) => ({
       ...row,
       plannedPayments: row.plannedPayments.map((payment) => ({ ...payment })),
@@ -4806,6 +4937,12 @@ function ensureEditableScenarioUiState(state: OperatingScenarioUiState): Operati
     supplierPaymentOverrides: state.supplierOverrideRows
       .map(toSupplierPaymentOverride)
       .filter((value): value is OperatingSupplierPaymentOverride => value !== null),
+    collectionOverrides: state.collectionOverrideRows
+      .map(toOperatingCollectionOverride)
+      .filter((value): value is OperatingCollectionOverride => value !== null),
+    scheduledOutflowOverrides: state.scheduledOutflowOverrideRows
+      .map(toOperatingScheduledOutflowOverride)
+      .filter((value): value is OperatingScheduledOutflowOverride => value !== null),
     taxDebts: state.taxDebtRows
       .map(toOperatingTaxDebt)
       .filter((value): value is OperatingTaxDebt => value !== null),
@@ -4830,6 +4967,12 @@ function syncActiveScenarioRows(state: OperatingScenarioUiState): OperatingScena
   const supplierPaymentOverrides = state.supplierOverrideRows
     .map(toSupplierPaymentOverride)
     .filter((value): value is OperatingSupplierPaymentOverride => value !== null);
+  const collectionOverrides = state.collectionOverrideRows
+    .map(toOperatingCollectionOverride)
+    .filter((value): value is OperatingCollectionOverride => value !== null);
+  const scheduledOutflowOverrides = state.scheduledOutflowOverrideRows
+    .map(toOperatingScheduledOutflowOverride)
+    .filter((value): value is OperatingScheduledOutflowOverride => value !== null);
   const taxDebts = state.taxDebtRows
     .map(toOperatingTaxDebt)
     .filter((value): value is OperatingTaxDebt => value !== null);
@@ -4843,6 +4986,8 @@ function syncActiveScenarioRows(state: OperatingScenarioUiState): OperatingScena
           manualExpenseEvents,
           operatingAdjustments,
           supplierPaymentOverrides,
+          collectionOverrides,
+          scheduledOutflowOverrides,
           taxDebts,
           updatedAt: now,
         }
@@ -4880,6 +5025,78 @@ function toSupplierPaymentOverride(row: SupplierOverrideRow): OperatingSupplierP
     amount,
     note: row.note.trim() || undefined,
   };
+}
+
+function collectionOverrideSourceKey(line: OperatingFlowLine): string {
+  return line.sourceKey ?? line.id;
+}
+
+function scheduledOutflowOverrideSourceKey(line: OperatingFlowLine): string {
+  return line.sourceKey ?? line.id.replace(/^paid:/, '').replace(/:\d{4}-\d{2}-\d{2}$/, '');
+}
+
+function upsertCollectionOverrideRow(
+  rows: CollectionOverrideRow[],
+  line: OperatingFlowLine,
+  patch: Partial<CollectionOverrideRow>,
+  fallbackDate: string,
+): CollectionOverrideRow[] {
+  const sourceKey = collectionOverrideSourceKey(line);
+  const current = rows.find((row) => row.sourceKey === sourceKey);
+  const next: CollectionOverrideRow = {
+    id: current?.id ?? `collection-override-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sourceKey,
+    clientName: current?.clientName ?? line.label,
+    invoiceDate: current?.invoiceDate ?? line.invoiceDate,
+    date: current?.date ?? fallbackDate,
+    amountInput: current?.amountInput ?? editableAmount(line.amount),
+    note: current?.note ?? '',
+    ...patch,
+  };
+  return sortCollectionOverrideRows(current
+    ? rows.map((row) => (row.id === current.id ? next : row))
+    : [...rows, next]);
+}
+
+function upsertScheduledOutflowOverrideRow(
+  rows: ScheduledOutflowOverrideRow[],
+  line: OperatingFlowLine,
+  patch: Partial<ScheduledOutflowOverrideRow>,
+  fallbackDate: string,
+): ScheduledOutflowOverrideRow[] {
+  const sourceKey = scheduledOutflowOverrideSourceKey(line);
+  const current = rows.find((row) => row.sourceKey === sourceKey);
+  const next: ScheduledOutflowOverrideRow = {
+    id: current?.id ?? `outflow-override-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sourceKey,
+    label: current?.label ?? line.label,
+    category: current?.category ?? line.category,
+    date: current?.date ?? fallbackDate,
+    amountInput: current?.amountInput ?? editableAmount(line.amount),
+    note: current?.note ?? '',
+    ...patch,
+  };
+  return sortScheduledOutflowOverrideRows(current
+    ? rows.map((row) => (row.id === current.id ? next : row))
+    : [...rows, next]);
+}
+
+function sortCollectionOverrideRows(rows: CollectionOverrideRow[]): CollectionOverrideRow[] {
+  return [...rows].sort((a, b) => {
+    const dateDelta = a.date.localeCompare(b.date);
+    if (dateDelta !== 0) return dateDelta;
+    return a.clientName.localeCompare(b.clientName);
+  });
+}
+
+function sortScheduledOutflowOverrideRows(rows: ScheduledOutflowOverrideRow[]): ScheduledOutflowOverrideRow[] {
+  return [...rows].sort((a, b) => {
+    const dateDelta = a.date.localeCompare(b.date);
+    if (dateDelta !== 0) return dateDelta;
+    const categoryDelta = a.category.localeCompare(b.category);
+    if (categoryDelta !== 0) return categoryDelta;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 function upsertSupplierOverrideRow(
@@ -5989,12 +6206,17 @@ function MiniStat({
 }: {
   label: string;
   value: number;
-  accent?: 'neutral' | 'danger';
+  accent?: 'neutral' | 'success' | 'danger';
 }) {
+  const valueClass = accent === 'danger'
+    ? 'text-[var(--danger)]'
+    : accent === 'success'
+      ? 'text-[var(--success)]'
+      : 'text-[var(--gray-950)]';
   return (
     <div>
       <div className="text-[10px] uppercase tracking-[0.02em] text-[var(--gray-400)]">{label}</div>
-      <div className={`mt-0.5 font-semibold tabular-nums ${accent === 'danger' ? 'text-[var(--danger)]' : 'text-[var(--gray-950)]'}`}>
+      <div className={`mt-0.5 font-semibold tabular-nums ${valueClass}`}>
         {fmtCompact(value)}
       </div>
     </div>
@@ -7522,7 +7744,7 @@ function SupplierOverrideEditor({
   );
 }
 
-function PaymentCalendarBoard({
+function OperatingDailyCalendar({
   days,
   selectedDay,
   lastMove,
@@ -7532,13 +7754,15 @@ function PaymentCalendarBoard({
   days: OperatingProjectionDay[];
   selectedDay: string | null;
   lastMove: SupplierPaymentMoveImpact | null;
-  onSelectDay: (date: string) => void;
+  onSelectDay: (date: string, tab?: DayDetailTab) => void;
   onMovePayment: (invoiceKey: string, fromDate: string, toDate: string) => void;
 }) {
-  const totalPayments = days.reduce((sum, day) => sum + day.supplierPayments.length, 0);
-  const movedPayments = days.reduce((sum, day) => (
-    sum + day.supplierPayments.filter((payment) => payment.reason === 'manual').length
-  ), 0);
+  const monthLabel = days[0] ? fmtYearMonthLong(days[0].date.slice(0, 7)) : 'Sin mes';
+  const calendarDates = buildOperatingCalendarDates(days);
+  const dayByDate = new Map(days.map((day) => [day.date, day]));
+  const totalInflows = days.reduce((sum, day) => sum + sumAmounts(day.cashInflows), 0);
+  const totalOutflows = days.reduce((sum, day) => sum + sumAmounts(day.scheduledOutflows) + sumAmounts(day.supplierPayments), 0);
+  const totalEvents = days.reduce((sum, day) => sum + day.cashInflows.length + day.scheduledOutflows.length + day.supplierPayments.length, 0);
   const alertDays = days.filter((day) => day.alerts.length > 0).length;
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>, targetDate: string) => {
@@ -7555,14 +7779,15 @@ function PaymentCalendarBoard({
     <section className={`${T.section} overflow-hidden`}>
       <div className="flex flex-col gap-3 border-b border-[var(--border)] px-4 py-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h2 className={`text-[15px] font-semibold ${T.title}`}>Tablero diario de pagos</h2>
+          <h2 className={`text-[15px] font-semibold ${T.title}`}>Calendario operativo diario</h2>
           <p className={`mt-1 text-[12px] ${T.muted}`}>
-            Vista diaria accionable de caja, pagos, obligaciones y riesgo después de cada corrida.
+            {monthLabel} · ingresos, egresos, neto, caja y riesgo por día.
           </p>
         </div>
-        <div className="grid grid-cols-3 gap-3 text-right text-[12px]">
-          <MiniStat label="Pagos" value={totalPayments} />
-          <MiniStat label="Movidos" value={movedPayments} />
+        <div className="grid grid-cols-4 gap-3 text-right text-[12px]">
+          <MiniStat label="Ingresos" value={totalInflows} accent="success" />
+          <MiniStat label="Egresos" value={totalOutflows} accent="danger" />
+          <MiniStat label="Eventos" value={totalEvents} />
           <MiniStat label="Días alerta" value={alertDays} accent={alertDays > 0 ? 'danger' : 'neutral'} />
         </div>
       </div>
@@ -7600,12 +7825,28 @@ function PaymentCalendarBoard({
       )}
 
       <div className="overflow-x-auto">
-        <div className="grid auto-cols-[270px] grid-flow-col gap-3 p-4">
-          {days.map((day) => {
+        <div className="min-w-[980px]">
+          <div className="grid grid-cols-7 border-b border-[var(--border)] bg-[var(--surface-alt)] text-center text-[10px] font-medium uppercase tracking-[0.02em] text-[var(--gray-400)]">
+            {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map((label) => (
+              <div key={label} className="px-3 py-2">{label}</div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {calendarDates.map((date) => {
+              const day = dayByDate.get(date);
+              if (!day) {
+                return (
+                  <div key={date} className="min-h-[156px] border-b border-r border-[var(--border)] bg-[var(--surface-alt)]/55 p-2 text-[11px] text-[var(--gray-300)]">
+                    {date.slice(8)}
+                  </div>
+                );
+              }
             const active = day.date === selectedDay;
-            const collections = sumAmounts(collectionLines(day));
-            const fixed = sumAmounts(day.scheduledOutflows);
+            const inflows = sumAmounts(day.cashInflows);
+            const scheduled = sumAmounts(day.scheduledOutflows);
             const supplierTotal = sumAmounts(day.supplierPayments);
+            const outflows = scheduled + supplierTotal;
+            const net = inflows - outflows;
             const risk = dailyRisk(day);
             return (
               <div
@@ -7616,67 +7857,114 @@ function PaymentCalendarBoard({
                   event.dataTransfer.dropEffect = 'move';
                 }}
                 onDrop={(event) => handleDrop(event, day.date)}
-                className={`min-h-[360px] rounded-xl border bg-white p-3 transition-colors ${
+                className={`min-h-[168px] border-b border-r bg-white p-2.5 transition-colors ${
                   active
-                    ? 'border-[var(--primary)] shadow-sm'
-                    : 'border-[var(--border)] hover:border-[var(--gray-300)]'
+                    ? 'relative z-[1] ring-2 ring-inset ring-[var(--primary)]'
+                    : 'hover:bg-[var(--surface-alt)]/65'
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <div className="text-[12px] font-semibold text-[var(--gray-950)]">{fmtDate(day.date)}</div>
-                    <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">{weekdayLabel(day.date)}</div>
+                    <div className="text-[12px] font-semibold text-[var(--gray-950)]">{day.date.slice(8)}</div>
+                    <div className="mt-0.5 text-[10px] text-[var(--gray-400)]">{weekdayLabel(day.date)}</div>
                   </div>
                   <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${risk.className}`}>
                     {risk.label}
                   </span>
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
-                  <BoardMetric label="Inicial" value={day.openingCash} />
-                  <BoardMetric label="Entradas" value={collections} tone="success" />
-                  <BoardMetric label="Fijos" value={fixed} tone="warning" />
-                  <BoardMetric label="Proveedores" value={supplierTotal} tone="danger" />
-                  <BoardMetric label="Apartado" value={day.mandatoryReserve} tone="warning" />
-                  <BoardMetric label="Final" value={day.closingCash} tone={day.closingCash < 0 ? 'danger' : 'neutral'} />
+                <div className="mt-2 space-y-1.5">
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectDay(day.date, 'ingresos');
+                    }}
+                    className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-white px-2 py-1.5 text-[11px] transition-colors hover:border-[var(--success)]/40 hover:bg-[var(--success)]/5"
+                  >
+                    <span className="text-[var(--gray-500)]">Ingresos · {day.cashInflows.length}</span>
+                    <span className="font-semibold tabular-nums text-[var(--success)]">+{fmtCompact(inflows)}</span>
+                  </button>
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectDay(day.date, 'egresos');
+                    }}
+                    className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-white px-2 py-1.5 text-[11px] transition-colors hover:border-[var(--danger)]/40 hover:bg-[var(--danger)]/5"
+                  >
+                    <span className="text-[var(--gray-500)]">Egresos · {day.scheduledOutflows.length + day.supplierPayments.length}</span>
+                    <span className="font-semibold tabular-nums text-[var(--danger)]">-{fmtCompact(outflows)}</span>
+                  </button>
+                  <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                    <div className={`rounded-md bg-[var(--surface-alt)] px-2 py-1.5 tabular-nums ${net >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
+                      Neto <span className="font-semibold">{fmtCompact(net)}</span>
+                    </div>
+                    <div className="rounded-md bg-[var(--surface-alt)] px-2 py-1.5 text-right tabular-nums text-[var(--gray-700)]">
+                      Cierre <span className="font-semibold">{fmtCompact(day.closingCash)}</span>
+                    </div>
+                  </div>
                 </div>
 
                 {day.alerts.length > 0 && (
-                  <div className="mt-3 rounded-lg border border-[var(--warning)]/20 bg-[var(--warning-muted)] px-2.5 py-2 text-[11px] leading-4 text-[var(--gray-700)]">
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelectDay(day.date, 'alertas');
+                    }}
+                    className="mt-2 w-full rounded-lg border border-[var(--warning)]/20 bg-[var(--warning-muted)] px-2 py-1.5 text-left text-[10px] leading-4 text-[var(--gray-700)]"
+                  >
                     {day.alerts[0]}
                     {day.alerts.length > 1 && (
                       <span className="font-medium text-[var(--warning)]"> +{day.alerts.length - 1}</span>
                     )}
-                  </div>
+                  </button>
                 )}
 
-                <div className="mt-3 space-y-2">
-                  {day.supplierPayments.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-5 text-center text-[11px] text-[var(--gray-300)]">
-                      Sin pagos de proveedor
-                    </div>
-                  ) : (
-                    day.supplierPayments.slice(0, 8).map((payment, index) => (
+                {day.supplierPayments.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {day.supplierPayments.slice(0, 2).map((payment, index) => (
                       <SupplierPaymentBoardCard
                         key={`${day.date}-${payment.invoiceKey}-${payment.reason}-${index}`}
                         payment={payment}
                         date={day.date}
                       />
-                    ))
-                  )}
-                  {day.supplierPayments.length > 8 && (
+                    ))}
+                    {day.supplierPayments.length > 2 && (
                     <div className="text-center text-[11px] font-medium text-[var(--gray-400)]">
-                      +{day.supplierPayments.length - 8} pagos
+                        +{day.supplierPayments.length - 2} pagos proveedor
                     </div>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
+          </div>
         </div>
       </div>
     </section>
   );
+}
+
+function buildOperatingCalendarDates(days: OperatingProjectionDay[]): string[] {
+  if (days.length === 0) return [];
+  const first = parseCalendarDate(days[0].date);
+  const last = parseCalendarDate(days[days.length - 1].date);
+  const start = new Date(first);
+  start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+  const end = new Date(last);
+  end.setUTCDate(end.getUTCDate() + (6 - ((end.getUTCDay() + 6) % 7)));
+  const out: string[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    out.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return out;
+}
+
+function parseCalendarDate(date: string): Date {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(Date.UTC(year, (month || 1) - 1, day || 1));
 }
 
 function SupplierPaymentBoardCard({
@@ -7718,29 +8006,6 @@ function SupplierPaymentBoardCard({
           {fmtCompact(payment.amount)}
         </span>
       </div>
-    </div>
-  );
-}
-
-function BoardMetric({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string;
-  value: number;
-  tone?: 'neutral' | 'success' | 'warning' | 'danger';
-}) {
-  const toneClass = {
-    neutral: 'text-[var(--gray-950)]',
-    success: 'text-[var(--success)]',
-    warning: 'text-[var(--warning)]',
-    danger: 'text-[var(--danger)]',
-  }[tone];
-  return (
-    <div className="rounded-lg border border-[var(--border)] bg-white px-2.5 py-2">
-      <div className="text-[10px] uppercase tracking-[0.02em] text-[var(--gray-400)]">{label}</div>
-      <div className={`mt-1 text-[12px] font-semibold tabular-nums ${toneClass}`}>{fmtCompact(value)}</div>
     </div>
   );
 }
@@ -7970,6 +8235,283 @@ function supplierCreditStatusClass(status: OperatingSupplierQueueItem['creditSta
     case 'normal': return 'text-[var(--success)]';
     case 'none': return 'text-[var(--gray-500)]';
   }
+}
+
+function IncomeDrilldown({
+  collections,
+  otherInflows,
+  date,
+  overrideRows,
+  onOverrideChange,
+  onOverrideRemove,
+}: {
+  collections: OperatingFlowLine[];
+  otherInflows: OperatingFlowLine[];
+  date: string;
+  overrideRows: CollectionOverrideRow[];
+  onOverrideChange: (line: OperatingFlowLine, patch: Partial<CollectionOverrideRow>, fallbackDate: string) => void;
+  onOverrideRemove: (sourceKey: string) => void;
+}) {
+  const hasRows = collections.length > 0 || otherInflows.length > 0;
+  if (!hasRows) {
+    return (
+      <div className="mt-4">
+        <EmptyMiniState label="Sin ingresos proyectados para este día." />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 space-y-4">
+      {collections.length > 0 && (
+        <div className="overflow-hidden rounded-xl border border-[var(--border)]">
+          <div className="border-b border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-[11px] font-medium uppercase tracking-[0.02em] text-[var(--gray-400)]">
+            Cobranza proyectada
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1080px] text-[11px]">
+              <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)]">
+                <tr>
+                  <Th>Cliente / factura proyectada</Th>
+                  <Th>Regla</Th>
+                  <Th>Fecha escenario</Th>
+                  <Th align="right">Monto escenario</Th>
+                  <Th>Nota</Th>
+                  <Th align="right">Monto proyectado</Th>
+                  <Th align="center">Acción</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {collections.map((line) => {
+                  const sourceKey = collectionOverrideSourceKey(line);
+                  const override = overrideRows.find((row) => row.sourceKey === sourceKey);
+                  return (
+                    <tr key={sourceKey} className="border-t border-[var(--border)] align-top">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-[var(--gray-950)]">{line.label}</div>
+                        <div className="mt-0.5 text-[11px] text-[var(--gray-500)]">
+                          {line.invoiceDate ? `Factura proyectada ${fmtDate(line.invoiceDate)}` : 'Factura proyectada'}
+                        </div>
+                        <div className="mt-0.5 text-[10px] text-[var(--gray-400)]">
+                          Original {fmtDate(line.originalDate ?? date)}
+                          {line.theoreticalDate ? ` · contractual ${fmtDate(line.theoreticalDate)}` : ''}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-[11px] text-[var(--gray-700)]">{line.detail ?? 'Cobranza proyectada'}</div>
+                        <div className="mt-0.5 text-[10px] text-[var(--gray-400)]">
+                          {[line.confidence ? `confianza ${line.confidence.toLowerCase()}` : null, line.lagDays != null ? `lag ${line.lagDays}d` : null].filter(Boolean).join(' · ')}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="date"
+                          value={override?.date ?? date}
+                          onChange={(event) => onOverrideChange(line, { date: event.target.value }, date)}
+                          className="h-9 w-full rounded-lg border border-[var(--border)] bg-white px-2.5 text-[12px] text-[var(--gray-950)] outline-none transition-colors focus:border-[var(--primary)]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min="0"
+                          step="0.01"
+                          value={override?.amountInput ?? editableAmount(line.amount)}
+                          onChange={(event) => onOverrideChange(line, { amountInput: event.target.value }, date)}
+                          className="h-9 w-full rounded-lg border border-[var(--border)] bg-white px-2.5 text-right text-[12px] tabular-nums text-[var(--gray-950)] outline-none transition-colors focus:border-[var(--primary)]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          value={override?.note ?? ''}
+                          onChange={(event) => onOverrideChange(line, { note: event.target.value }, date)}
+                          placeholder="Justificación"
+                          className="h-9 w-full rounded-lg border border-[var(--border)] bg-white px-2.5 text-[12px] text-[var(--gray-950)] outline-none placeholder:text-[var(--gray-300)] focus:border-[var(--primary)]"
+                        />
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(line.amount)}</td>
+                      <td className="px-4 py-3 text-center">
+                        {override ? (
+                          <button
+                            onClick={() => onOverrideRemove(sourceKey)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--gray-500)] transition-colors hover:bg-[var(--danger)]/8 hover:text-[var(--danger)]"
+                            title="Quitar cambio del escenario"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <span className="text-[var(--gray-300)]">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {otherInflows.length > 0 && (
+        <DetailList
+          empty="Sin otros ingresos para este día."
+          items={otherInflows.map((line) => ({
+            title: line.label,
+            subtitle: line.detail ?? line.category,
+            meta: `${line.category} · ${sourceLabel(line.source)}`,
+            amount: line.amount,
+            tone: 'success',
+          }))}
+        />
+      )}
+    </div>
+  );
+}
+
+function OutflowDrilldown({
+  supplierPayments,
+  scheduledOutflows,
+  date,
+  supplierOverrideRows,
+  scheduledOverrideRows,
+  onSupplierOverrideChange,
+  onSupplierOverrideRemove,
+  onScheduledOverrideChange,
+  onScheduledOverrideRemove,
+}: {
+  supplierPayments: OperatingSupplierPayment[];
+  scheduledOutflows: OperatingFlowLine[];
+  date: string;
+  supplierOverrideRows: SupplierOverrideRow[];
+  scheduledOverrideRows: ScheduledOutflowOverrideRow[];
+  onSupplierOverrideChange: (payment: OperatingSupplierPayment, patch: Partial<SupplierOverrideRow>, fallbackDate: string) => void;
+  onSupplierOverrideRemove: (invoiceKey: string) => void;
+  onScheduledOverrideChange: (line: OperatingFlowLine, patch: Partial<ScheduledOutflowOverrideRow>, fallbackDate: string) => void;
+  onScheduledOverrideRemove: (sourceKey: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <SupplierPaymentDrilldown
+        empty="Sin pagos sugeridos para este día."
+        payments={supplierPayments}
+        date={date}
+        overrideRows={supplierOverrideRows}
+        onOverrideChange={onSupplierOverrideChange}
+        onOverrideRemove={onSupplierOverrideRemove}
+      />
+      <ScheduledOutflowDrilldown
+        outflows={scheduledOutflows}
+        date={date}
+        overrideRows={scheduledOverrideRows}
+        onOverrideChange={onScheduledOverrideChange}
+        onOverrideRemove={onScheduledOverrideRemove}
+      />
+    </div>
+  );
+}
+
+function ScheduledOutflowDrilldown({
+  outflows,
+  date,
+  overrideRows,
+  onOverrideChange,
+  onOverrideRemove,
+}: {
+  outflows: OperatingFlowLine[];
+  date: string;
+  overrideRows: ScheduledOutflowOverrideRow[];
+  onOverrideChange: (line: OperatingFlowLine, patch: Partial<ScheduledOutflowOverrideRow>, fallbackDate: string) => void;
+  onOverrideRemove: (sourceKey: string) => void;
+}) {
+  return (
+    <div>
+      {outflows.length === 0 ? (
+        <EmptyMiniState label="Sin egresos fijos, impuestos u obligaciones para este día." />
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-[var(--border)]">
+          <div className="border-b border-[var(--border)] bg-[var(--surface-alt)] px-3 py-2 text-[11px] font-medium uppercase tracking-[0.02em] text-[var(--gray-400)]">
+            Egresos programados
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1080px] text-[11px]">
+              <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)]">
+                <tr>
+                  <Th>Concepto</Th>
+                  <Th>Origen</Th>
+                  <Th>Fecha escenario</Th>
+                  <Th align="right">Monto escenario</Th>
+                  <Th>Nota</Th>
+                  <Th align="right">Monto programado</Th>
+                  <Th align="center">Acción</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {outflows.map((line, index) => {
+                  const sourceKey = scheduledOutflowOverrideSourceKey(line);
+                  const override = overrideRows.find((row) => row.sourceKey === sourceKey);
+                  return (
+                    <tr key={`${sourceKey}:${index}`} className="border-t border-[var(--border)] align-top">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-[var(--gray-950)]">{line.label}</div>
+                        <div className="mt-0.5 text-[11px] text-[var(--gray-500)]">{line.category}</div>
+                        <div className="mt-0.5 text-[10px] text-[var(--gray-400)]">Original {fmtDate(line.originalDate ?? date)}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-[11px] text-[var(--gray-700)]">{sourceLabel(line.source)}</div>
+                        <div className="mt-0.5 max-w-[260px] text-[10px] text-[var(--gray-400)]">{line.detail ?? 'Programado por motor operativo'}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="date"
+                          value={override?.date ?? date}
+                          onChange={(event) => onOverrideChange(line, { date: event.target.value }, date)}
+                          className="h-9 w-full rounded-lg border border-[var(--border)] bg-white px-2.5 text-[12px] text-[var(--gray-950)] outline-none transition-colors focus:border-[var(--primary)]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min="0"
+                          step="0.01"
+                          value={override?.amountInput ?? editableAmount(line.amount)}
+                          onChange={(event) => onOverrideChange(line, { amountInput: event.target.value }, date)}
+                          className="h-9 w-full rounded-lg border border-[var(--border)] bg-white px-2.5 text-right text-[12px] tabular-nums text-[var(--gray-950)] outline-none transition-colors focus:border-[var(--primary)]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <input
+                          value={override?.note ?? ''}
+                          onChange={(event) => onOverrideChange(line, { note: event.target.value }, date)}
+                          placeholder="Justificación"
+                          className="h-9 w-full rounded-lg border border-[var(--border)] bg-white px-2.5 text-[12px] text-[var(--gray-950)] outline-none placeholder:text-[var(--gray-300)] focus:border-[var(--primary)]"
+                        />
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-[var(--warning)]">{fmtCurrency(line.amount)}</td>
+                      <td className="px-4 py-3 text-center">
+                        {override ? (
+                          <button
+                            onClick={() => onOverrideRemove(sourceKey)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--gray-500)] transition-colors hover:bg-[var(--danger)]/8 hover:text-[var(--danger)]"
+                            title="Quitar cambio del escenario"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <span className="text-[var(--gray-300)]">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SupplierPaymentDrilldown({
