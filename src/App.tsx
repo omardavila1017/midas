@@ -878,6 +878,7 @@ export default function App() {
             {activeTab === 'providers' && (
               <Providers
                 providers={providers}
+                cxpRecords={cxpRecords}
                 onReplace={setProviders}
                 onAdd={addProvider}
                 onUpdate={updateProvider}

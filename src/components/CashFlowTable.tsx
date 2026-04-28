@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Pencil, RotateCcw, TrendingUp, TrendingDown } from 'lucide-react';
+import { Download, Pencil, RotateCcw, TrendingUp, TrendingDown } from 'lucide-react';
 import { fmtCurrency, fmtYearMonthShort } from '../formatters';
 import { compareYearMonth } from '../domain/cashFlowEngine';
 import type { ProjectionOverride, ProjectionOverrides, MonthlyProjection } from '../domain/projectionEngine';
@@ -36,6 +36,8 @@ interface Props {
   /** yearMonth seleccionado (scroll-highlight). */
   highlightYearMonth?: string | null;
   onRowClick?: (yearMonth: string) => void;
+  /** Si se proporciona, muestra un botón "Descargar Excel" en el header. */
+  onDownloadExcel?: () => void;
 }
 
 /**
@@ -44,7 +46,7 @@ interface Props {
  * `onOverridesChange`. La caja se recomputa en el padre.
  */
 const CashFlowTable: React.FC<Props> = ({
-  rows, overrides, onOverridesChange, filter, title, subtitle, compact, highlightYearMonth, onRowClick,
+  rows, overrides, onOverridesChange, filter, title, subtitle, compact, highlightYearMonth, onRowClick, onDownloadExcel,
 }) => {
   const filtered = useMemo(() => {
     const list = filter ? rows.filter(filter) : rows;
@@ -97,16 +99,28 @@ const CashFlowTable: React.FC<Props> = ({
               </p>
             )}
           </div>
-          {hasAnyOverride && (
-            <button
-              onClick={resetAll}
-              className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
-              title="Limpiar todos los ajustes manuales"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Limpiar ajustes
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {hasAnyOverride && (
+              <button
+                onClick={resetAll}
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+                title="Limpiar todos los ajustes manuales"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Limpiar ajustes
+              </button>
+            )}
+            {onDownloadExcel && (
+              <button
+                onClick={onDownloadExcel}
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)]"
+                title="Descargar el flujo mensual completo como Excel"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Descargar Excel
+              </button>
+            )}
+          </div>
         </header>
       )}
       <div className="overflow-x-auto">

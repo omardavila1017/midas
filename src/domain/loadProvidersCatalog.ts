@@ -23,7 +23,9 @@
  */
 
 import catalogRaw from '../assets/providerCatalog.json';
+import clasificacionRaw from '../data/proveedores-clasificacion.json';
 import {
+  ClasificacionAlberto,
   Provider,
   ProviderRisk,
   ProviderPaymentPeriod,
@@ -63,6 +65,58 @@ interface CatalogShape {
 
 const catalog = catalogRaw as unknown as CatalogShape;
 
+// ---------------------------------------------------------------------------
+// Clasificación Alberto (proveedores-clasificacion.json)
+// ---------------------------------------------------------------------------
+
+interface ClasificacionEntry {
+  numProveedor: string;
+  nombre: string;
+  categoria: string;
+  clasificacionAlberto: ClasificacionAlberto;
+  clasificacionAlbertoRaw: string;
+  override: string | null;
+  frecuencia: string | null;
+  montoPromedioPago: number | null;
+  numPagos2025: number | null;
+  montoTotal2025: number | null;
+  gastoMinimoMensual: number | null;
+  score: number | null;
+  clasificacionAutomatica: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO' | null;
+  scoreCriterios: {
+    sustituibilidad: number;
+    impactoOperativo: number;
+    riesgoLegal: number;
+    diasCredito: number;
+  } | null;
+}
+
+interface ClasificacionShape {
+  meta: {
+    generadoDesde: string;
+    fechaGeneracion: string;
+    totalProveedores: number;
+    totalConHistoricoPagos: number;
+    multiplicadoresFrecuencia: Record<string, number>;
+    [k: string]: unknown;
+  };
+  proveedores: ClasificacionEntry[];
+}
+
+const clasificacion = clasificacionRaw as unknown as ClasificacionShape;
+
+/** Normaliza el nombre para hacer match entre catálogo viejo y plantilla nueva. */
+function normalizeName(name: string): string {
+  return name
+    .toUpperCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+
 /** Derive ProviderRisk from flexibility classification. */
 function riskFromFlexibility(flex: Flexibility): ProviderRisk {
   switch (flex) {
@@ -85,12 +139,6 @@ function riskCommentFromFlexibility(flex: Flexibility, dti: DtiEntry | undefined
     default:
       return 'Sin evidencia suficiente en catalogo; se asigna riesgo medio de forma conservadora.';
   }
-}
-
-function riskCommentForProvider(name: string, flex: Flexibility, dti: DtiEntry | undefined): string {
-  const catalogNote = catalog.riskNoteByName?.[name]?.trim();
-  if (catalogNote) return catalogNote;
-  return riskCommentFromFlexibility(flex, dti);
 }
 
 function flexibilityCommentFromFlexibility(flex: Flexibility): string {
@@ -164,41 +212,102 @@ function idFor(name: string, index: number): string {
 }
 
 /**
- * Load providers from the bundled catalog. Pure + synchronous — returns
- * immediately with the full list derived from providerCatalog.json.
+ * Mapeo Clasificación Alberto → ProviderRisk para mantener compatibilidad
+ * con el resto del sistema (cola de pagos, queue priorización, etc.).
+ */
+function riskFromAlberto(alberto: ClasificacionAlberto | undefined): ProviderRisk {
+  switch (alberto) {
+    case 'CRITICO':    return 'Alto';
+    case 'FLEX_ALTO':  return 'Alto';
+    case 'FLEX_MEDIO': return 'Medio';
+    case 'FLEX_BAJO':  return 'Bajo';
+    case 'PAUSAR':     return 'Bajo';
+    default:           return 'Medio';
+  }
+}
+
+function flexibilityFromAlberto(alberto: ClasificacionAlberto | undefined): Flexibility {
+  switch (alberto) {
+    case 'CRITICO':    return 'inamovible';
+    case 'FLEX_ALTO':  return 'revisar';
+    case 'FLEX_MEDIO': return 'revisar';
+    case 'FLEX_BAJO':  return 'flexible';
+    case 'PAUSAR':     return 'flexible';
+    default:           return 'unknown';
+  }
+}
+
+/** Build Map por nombre normalizado para enriquecer desde el catálogo legacy. */
+const legacyByName = new Map<string, string>();
+Object.keys(catalog.providerNoByName ?? {}).forEach((name) => {
+  legacyByName.set(normalizeName(name), name);
+});
+['providerTypeByName', 'classificationByName', 'flexibilityByName', 'creditLimitByName', 'creditDaysByName', 'riskNoteByName', 'dtiCatalog', 'lastPayment']
+  .forEach((key) => {
+    const map = (catalog as unknown as Record<string, Record<string, unknown> | undefined>)[key];
+    if (map) Object.keys(map).forEach((name) => {
+      const norm = normalizeName(name);
+      if (!legacyByName.has(norm)) legacyByName.set(norm, name);
+    });
+  });
+
+/**
+ * Load providers from the Plantilla de Proveedores (proveedores-clasificacion.json).
+ * El JSON es la **única fuente de verdad**. Cualquier proveedor del catálogo
+ * antiguo que no esté en la plantilla queda fuera. El catálogo legacy se usa
+ * únicamente para enriquecer datos (DTI, condPago, comentarios) cuando hay match.
  */
 export function loadProvidersCatalog(): Provider[] {
-  const names = Array.from(new Set([
-    ...Object.keys(catalog.providerTypeByName ?? {}),
-    ...Object.keys(catalog.providerNoByName ?? {}),
-    ...Object.keys(catalog.classificationByName ?? {}),
-    ...Object.keys(catalog.flexibilityByName ?? {}),
-    ...Object.keys(catalog.creditLimitByName ?? {}),
-    ...Object.keys(catalog.creditDaysByName ?? {}),
-  ]));
   const providers: Provider[] = [];
 
-  names.forEach((rawName, idx) => {
-    const name = rawName.trim();
+  clasificacion.proveedores.forEach((entry, idx) => {
+    const name = entry.nombre.trim();
     if (!name) return;
-    const flex: Flexibility = catalog.flexibilityByName[rawName] ?? 'unknown';
-    const dti = catalog.dtiCatalog?.[name] ?? undefined;
-    const last = catalog.lastPayment?.[name] ?? undefined;
-    const creditDays = catalog.creditDaysByName?.[name] ?? last?.condPago;
+
+    const norm = normalizeName(name);
+    const legacyName = legacyByName.get(norm);
+    const dti = legacyName ? catalog.dtiCatalog?.[legacyName] : undefined;
+    const last = legacyName ? catalog.lastPayment?.[legacyName] : undefined;
+    const creditDays = legacyName
+      ? (catalog.creditDaysByName?.[legacyName] ?? last?.condPago)
+      : undefined;
+    const legacyFlex = legacyName ? catalog.flexibilityByName?.[legacyName] : undefined;
+    const legacyRiskNote = legacyName ? catalog.riskNoteByName?.[legacyName]?.trim() : undefined;
+    const creditLimit = legacyName ? catalog.creditLimitByName?.[legacyName] : undefined;
+
+    // Risk + flexibility se derivan de Alberto (manda); si no hay clasificación,
+    // se cae al legacy.
+    const risk = entry.clasificacionAlberto !== 'SIN_CLASIFICAR' && entry.clasificacionAlberto
+      ? riskFromAlberto(entry.clasificacionAlberto)
+      : riskFromFlexibility(legacyFlex ?? 'unknown');
+    const flex = entry.clasificacionAlberto !== 'SIN_CLASIFICAR' && entry.clasificacionAlberto
+      ? flexibilityFromAlberto(entry.clasificacionAlberto)
+      : (legacyFlex ?? 'unknown');
 
     providers.push({
-      id: idFor(name, idx),
+      id: legacyName ? idFor(name, idx) : `plantilla-${entry.numProveedor || idx}`,
       name,
-      type: typeFromCatalog(name, dti),
-      risk: riskFromFlexibility(flex),
-      riskComment: riskCommentForProvider(name, flex, dti),
+      type: entry.categoria?.trim() || typeFromCatalog(legacyName ?? name, dti),
+      risk,
+      riskComment: legacyRiskNote || riskCommentFromFlexibility(flex, dti),
       paymentPeriod: paymentPeriodFromCondPago(creditDays),
       flexibility: flex,
       flexibilityComment: flexibilityCommentFromFlexibility(flex),
-      creditLimit: catalog.creditLimitByName?.[name],
-      lastUpdatedAt: normalizeDateLike(catalog.generated),
+      creditLimit,
+      lastUpdatedAt: normalizeDateLike(clasificacion.meta.fechaGeneracion) ?? normalizeDateLike(catalog.generated),
       dtiArea: dti?.area,
       dtiCriticidad: dti?.criticidad,
+      clasificacionAlberto: entry.clasificacionAlberto,
+      clasificacionAlbertoRaw: entry.clasificacionAlbertoRaw,
+      clasificacionAutomatica: entry.clasificacionAutomatica ?? undefined,
+      score: entry.score ?? undefined,
+      scoreCriterios: entry.scoreCriterios ?? undefined,
+      numProveedorJDE: entry.numProveedor,
+      frecuenciaHistorica: entry.frecuencia ?? undefined,
+      montoPromedioPago: entry.montoPromedioPago ?? undefined,
+      numPagos2025: entry.numPagos2025 ?? undefined,
+      montoTotal2025: entry.montoTotal2025 ?? undefined,
+      gastoMinimoMensual: entry.gastoMinimoMensual ?? undefined,
     });
   });
 

@@ -113,6 +113,48 @@ export type ProviderPaymentPeriod =
  */
 export type ProviderFlexibility = 'inamovible' | 'flexible' | 'revisar' | 'unknown';
 
+/**
+ * Clasificación manual asignada por Alberto en la Plantilla de Proveedores.
+ * Override "humano" sobre el score automático; manda en la lógica de gasto
+ * mínimo de operación.
+ *   - CRITICO:        no se puede pausar; debe pagarse o la operación cae
+ *                     (servicios públicos, combustible, casetas, seguros).
+ *   - FLEX_ALTO:      flexible con riesgo alto si se difiere.
+ *   - FLEX_MEDIO:     flexible con riesgo medio.
+ *   - FLEX_BAJO:      flexible con margen amplio de negociación.
+ *   - PAUSAR:         se puede dejar de pagar sin afectar operación inmediata.
+ *   - SIN_CLASIFICAR: aún no clasificado por Alberto.
+ */
+export type ClasificacionAlberto =
+  | 'CRITICO'
+  | 'FLEX_ALTO'
+  | 'FLEX_MEDIO'
+  | 'FLEX_BAJO'
+  | 'PAUSAR'
+  | 'SIN_CLASIFICAR';
+
+/**
+ * Etiquetas de UI para mostrar al usuario. Los códigos internos siguen siendo
+ * los del Excel de Alberto, pero el front los muestra con lenguaje de negocio.
+ */
+export const CLASIFICACION_LABELS: Record<ClasificacionAlberto, string> = {
+  CRITICO: 'Operación',
+  FLEX_ALTO: 'Prioritario',
+  FLEX_MEDIO: 'Negociable',
+  FLEX_BAJO: 'Flexible',
+  PAUSAR: 'Pausa',
+  SIN_CLASIFICAR: 'Sin clasificar',
+};
+
+export const CLASIFICACION_DESCRIPTIONS: Record<ClasificacionAlberto, string> = {
+  CRITICO: 'Vital para la operación — no se puede pausar',
+  FLEX_ALTO: 'Alto impacto si se difiere — pago prioritario',
+  FLEX_MEDIO: 'Negociable — se puede mover con autorización',
+  FLEX_BAJO: 'Margen amplio de negociación',
+  PAUSAR: 'Se puede dejar de pagar sin afectar la operación',
+  SIN_CLASIFICAR: 'Aún no clasificado',
+};
+
 export interface Provider {
   id: string;
   name: string;
@@ -133,6 +175,38 @@ export interface Provider {
   dtiArea?: string;
   /** Criticidad DTI si aplica. */
   dtiCriticidad?: 'Alta' | 'Media' | 'Baja';
+  /** Clasificación manual de Alberto (override sobre el score automático). */
+  clasificacionAlberto?: ClasificacionAlberto;
+  /** Texto original de la plantilla, p.ej. "(a) Crítico". */
+  clasificacionAlbertoRaw?: string;
+  /** Clasificación derivada del score automático (CRITICO/ALTO/MEDIO/BAJO). */
+  clasificacionAutomatica?: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO';
+  /** Score de criticidad 0-100 calculado de los 4 criterios ponderados. */
+  score?: number;
+  /** Calificaciones individuales 1-5 de los 4 criterios. */
+  scoreCriterios?: {
+    sustituibilidad: number;
+    impactoOperativo: number;
+    riesgoLegal: number;
+    diasCredito: number;
+  };
+  /** Número de proveedor JDE de la plantilla. */
+  numProveedorJDE?: string;
+  /** Frecuencia de pago observada en el histórico 2025 (Semanal, Mensual…). */
+  frecuenciaHistorica?: string;
+  /** Monto promedio por pago observado en 2025 (MXN). */
+  montoPromedioPago?: number;
+  /** Número de pagos realizados en 2025. */
+  numPagos2025?: number;
+  /** Monto total pagado en 2025 (MXN). */
+  montoTotal2025?: number;
+  /**
+   * Gasto mínimo mensual estimado para proveedores CRÍTICOS. Calculado como
+   * `montoPromedioPago × multiplicador(frecuenciaHistorica)`. Cuando un
+   * proveedor está marcado como CRITICO y este campo está poblado, se suma al
+   * piso operativo amarillo en la proyección.
+   */
+  gastoMinimoMensual?: number;
 }
 
 // ---------------------------------------------------------------------------

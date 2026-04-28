@@ -140,6 +140,10 @@ export interface OperatingSupplierPayment extends OperatingFlowLine {
   risk: ProviderRisk;
   flexibility: ProviderFlexibility;
   priorityBlock: number;
+  /** Score 0-100 del proveedor (de la Plantilla de Alberto). */
+  score?: number;
+  /** Clasificación Alberto del proveedor. */
+  clasificacionAlberto?: import('./types').ClasificacionAlberto;
   reason: 'credit_limit' | 'due' | 'manual';
   dueDate?: string;
   creditLimit?: number;
@@ -160,6 +164,10 @@ export interface OperatingSupplierQueueItem {
   risk: ProviderRisk;
   flexibility: ProviderFlexibility;
   priorityBlock: number;
+  /** Score 0-100 del proveedor para ponderación de pago. */
+  score?: number;
+  /** Clasificación Alberto (CRITICO siempre va primero). */
+  clasificacionAlberto?: import('./types').ClasificacionAlberto;
   status: 'suggested' | 'moved' | 'overdue' | 'partial' | 'unplanned';
   dueDate?: string;
   plannedDate?: string;
@@ -272,6 +280,10 @@ interface SupplierInvoice {
   remaining: number;
   priorityBlock: number;
   onlyMonTueWed: boolean;
+  /** Score 0-100 del proveedor (de la Plantilla de Alberto). Mayor = más crítico. */
+  score?: number;
+  /** Clasificación Alberto del proveedor. CRITICO siempre se paga primero. */
+  clasificacionAlberto?: import('./types').ClasificacionAlberto;
 }
 
 function cloneDate(value: Date): Date {
@@ -855,14 +867,32 @@ function buildInvoices(
         remaining: record.importePendientePesos,
         priorityBlock: priorityBlock(risk, flexibility),
         onlyMonTueWed: providerAllowsOnlyMonTueWed(matched ?? null, record),
+        score: matched?.score,
+        clasificacionAlberto: matched?.clasificacionAlberto,
       } satisfies SupplierInvoice;
     })
-    .sort((a, b) => {
-      if (a.priorityBlock !== b.priorityBlock) return a.priorityBlock - b.priorityBlock;
-      const due = compareIsoDate(a.dueDate, b.dueDate);
-      if (due !== 0) return due;
-      return a.amount - b.amount;
-    });
+    .sort(supplierInvoiceComparator);
+}
+
+/**
+ * Comparador maestro de facturas. Orden de prioridad:
+ *   1. Proveedores CRÍTICOS de Alberto (siempre primero, sin importar otra cosa)
+ *   2. priorityBlock (riesgo + flexibilidad)
+ *   3. Score (mayor → más prioridad)
+ *   4. Fecha de vencimiento (más antigua primero)
+ *   5. Monto (menor primero, para liberar volumen de facturas)
+ */
+function supplierInvoiceComparator(a: SupplierInvoice, b: SupplierInvoice): number {
+  const aCritico = a.clasificacionAlberto === 'CRITICO' ? 0 : 1;
+  const bCritico = b.clasificacionAlberto === 'CRITICO' ? 0 : 1;
+  if (aCritico !== bCritico) return aCritico - bCritico;
+  if (a.priorityBlock !== b.priorityBlock) return a.priorityBlock - b.priorityBlock;
+  const aScore = a.score ?? 0;
+  const bScore = b.score ?? 0;
+  if (aScore !== bScore) return bScore - aScore;
+  const due = compareIsoDate(a.dueDate, b.dueDate);
+  if (due !== 0) return due;
+  return a.amount - b.amount;
 }
 
 function allocateProportionally(
@@ -907,13 +937,30 @@ function supplierPaymentExplanation(
 }
 
 function supplierPriorityExplanation(invoice: SupplierInvoice): string {
-  return `${priorityBlockLabel(invoice.priorityBlock)} · riesgo ${invoice.risk.toLowerCase()} · ${
-    invoice.flexibility === 'inamovible'
-      ? 'no conviene mover fecha'
-      : invoice.flexibility === 'flexible'
-        ? 'puede negociarse si falta caja'
-        : 'requiere revisión antes de mover fecha'
-  }`;
+  const albertoLabel = invoice.clasificacionAlberto === 'CRITICO'
+    ? 'Operación · NO PAUSAR'
+    : invoice.clasificacionAlberto === 'FLEX_ALTO'
+      ? 'Prioritario'
+      : invoice.clasificacionAlberto === 'FLEX_MEDIO'
+        ? 'Negociable'
+        : invoice.clasificacionAlberto === 'FLEX_BAJO'
+          ? 'Flexible'
+          : invoice.clasificacionAlberto === 'PAUSAR'
+            ? 'Pausa'
+            : null;
+  const scoreLabel = invoice.score != null ? `score ${invoice.score.toFixed(0)}/100` : null;
+  const flexLabel = invoice.flexibility === 'inamovible'
+    ? 'no conviene mover fecha'
+    : invoice.flexibility === 'flexible'
+      ? 'puede negociarse si falta caja'
+      : 'requiere revisión antes de mover fecha';
+  const parts = [
+    albertoLabel,
+    scoreLabel,
+    `${priorityBlockLabel(invoice.priorityBlock)}`,
+    flexLabel,
+  ].filter(Boolean);
+  return parts.join(' · ');
 }
 
 function applyInvoiceAllocation(
@@ -952,6 +999,8 @@ function applyInvoiceAllocation(
       risk: invoice.risk,
       flexibility: invoice.flexibility,
       priorityBlock: invoice.priorityBlock,
+      score: invoice.score,
+      clasificacionAlberto: invoice.clasificacionAlberto,
       reason,
       dueDate: invoice.dueDate,
       creditLimit: invoice.creditLimit,
@@ -1329,6 +1378,8 @@ function buildSupplierQueue(
       risk: invoice.risk,
       flexibility: invoice.flexibility,
       priorityBlock: invoice.priorityBlock,
+      score: invoice.score,
+      clasificacionAlberto: invoice.clasificacionAlberto,
       status,
       dueDate: invoice.dueDate,
       plannedDate: firstPayment?.date,
@@ -1339,7 +1390,16 @@ function buildSupplierQueue(
       priorityExplanation: supplierPriorityExplanation(invoice),
     };
   }).sort((a, b) => {
+    // Críticos Alberto siempre primero
+    const aCritico = a.clasificacionAlberto === 'CRITICO' ? 0 : 1;
+    const bCritico = b.clasificacionAlberto === 'CRITICO' ? 0 : 1;
+    if (aCritico !== bCritico) return aCritico - bCritico;
+    // Luego por priorityBlock
     if (a.priorityBlock !== b.priorityBlock) return a.priorityBlock - b.priorityBlock;
+    // Luego por score (mayor primero)
+    const aScore = a.score ?? 0;
+    const bScore = b.score ?? 0;
+    if (aScore !== bScore) return bScore - aScore;
     const statusDelta = supplierQueueStatusOrder(a.status) - supplierQueueStatusOrder(b.status);
     if (statusDelta !== 0) return statusDelta;
     const dueDelta = (a.dueDate ?? '').localeCompare(b.dueDate ?? '');

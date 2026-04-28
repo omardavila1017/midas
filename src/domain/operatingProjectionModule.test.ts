@@ -87,7 +87,7 @@ describe('buildOperatingProjection', () => {
       remainingAfterPayment: 0,
       reason: 'due',
       paymentExplanation: expect.stringContaining('programada'),
-      priorityExplanation: expect.stringContaining('riesgo alto'),
+      priorityExplanation: expect.stringMatching(/riesgo alto/i),
     }));
   });
 
@@ -331,7 +331,7 @@ describe('buildOperatingProjection', () => {
         paidAmount: 250,
         remainingAmount: 450,
         paymentExplanation: expect.stringContaining('Negociado con compras'),
-        priorityExplanation: expect.stringContaining('riesgo alto'),
+        priorityExplanation: expect.stringMatching(/riesgo alto/i),
       }),
     ]);
   });

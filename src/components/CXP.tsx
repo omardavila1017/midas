@@ -340,8 +340,16 @@ function paymentPriority(record: EnrichedCXPRecord): PaymentPriority {
   return 'normal';
 }
 
-function enrichCxpRecord(record: CXPRecord, providersByName: Map<string, Provider>): EnrichedCXPRecord {
-  const provider = providersByName.get(normName(record.nombre));
+function enrichCxpRecord(
+  record: CXPRecord,
+  providersByName: Map<string, Provider>,
+  providersByJde?: Map<string, Provider>,
+): EnrichedCXPRecord {
+  // Primero matcheamos por número JDE (más confiable); fallback a nombre normalizado.
+  const noProveedorTrim = record.noProveedor ? String(record.noProveedor).trim() : '';
+  const provider: Provider | undefined =
+    (noProveedorTrim ? providersByJde?.get(noProveedorTrim) : undefined)
+    ?? providersByName.get(normName(record.nombre));
   const catalog = enrichFromCatalog({
     supplier: record.nombre,
     classification: record.clasificacionProveedor,
@@ -640,9 +648,16 @@ const CXPDashboard = ({
     () => new Map(providers.map((provider) => [normName(provider.name), provider])),
     [providers],
   );
+  const providersByJde = useMemo(() => {
+    const map = new Map<string, Provider>();
+    providers.forEach((p) => {
+      if (p.numProveedorJDE) map.set(String(p.numProveedorJDE).trim(), p);
+    });
+    return map;
+  }, [providers]);
 
   const enrichedRecords = useMemo(() => {
-    const base = records.map((record) => enrichCxpRecord(record, providersByName));
+    const base = records.map((record) => enrichCxpRecord(record, providersByName, providersByJde));
     const duplicateCounts = new Map<string, number>();
     const exposureBySupplier = new Map<string, number>();
     base.forEach((record) => {
@@ -658,7 +673,7 @@ const CXPDashboard = ({
         alerts: buildCxpAlerts(record, duplicateCounts.get(invoiceKey(record)) ?? 0, supplierExposure),
       };
     });
-  }, [providersByName, records]);
+  }, [providersByName, providersByJde, records]);
 
   // ── Filtered Records ──
   const filtered = useMemo(() => {

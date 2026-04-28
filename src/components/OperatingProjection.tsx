@@ -17,6 +17,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  Area,
   Bar,
   CartesianGrid,
   Cell,
@@ -82,8 +83,17 @@ import {
   type OperatingTaxPriority,
   type OperatingTaxType,
 } from '../domain/operatingProjectionTaxes';
+import {
+  computeMinimumOperatingExpense,
+  loadMinimumExpenseOverrides,
+  prorateMinimumExpense,
+  resolveMinimumExpenseForMonth,
+  saveMinimumExpenseOverrides,
+  type MinimumExpenseOverride,
+  type MinimumExpenseSummary,
+} from '../domain/operatingProjectionMinimumExpense';
 import type { CXPRecord } from '../domain/persistence';
-import type { CashFlowAssumptions, Client, Provider } from '../domain/types';
+import { CLASIFICACION_LABELS, type CashFlowAssumptions, type ClasificacionAlberto, type Client, type Provider } from '../domain/types';
 import type { BankAccountStatement } from '../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong } from '../formatters';
 
@@ -105,6 +115,7 @@ type OperatingBlockId = 'cobranza' | 'suppliers' | 'taxes' | 'obligations' | 'ad
 type TaxModuleTab = 'summary' | 'debts' | 'plan';
 type SupplierRiskFilter = 'all' | 'Alto' | 'Medio' | 'Bajo';
 type SupplierFlexFilter = 'all' | 'inamovible' | 'revisar' | 'flexible' | 'unknown';
+type SupplierAlbertoFilter = 'all' | ClasificacionAlberto;
 type SupplierStatusFilter = 'all' | OperatingSupplierQueueItem['status'];
 type SupplierCreditFilter = 'all' | OperatingSupplierQueueItem['creditStatus'];
 type SupplierDateFilter = 'all' | 'day' | 'week' | 'month';
@@ -260,6 +271,7 @@ interface TaxDebtRow {
 interface SupplierQueueFilters {
   risk: SupplierRiskFilter;
   flexibility: SupplierFlexFilter;
+  alberto: SupplierAlbertoFilter;
   status: SupplierStatusFilter;
   credit: SupplierCreditFilter;
   date: SupplierDateFilter;
@@ -612,6 +624,7 @@ export default function OperatingProjection({
   const [taxModuleTab, setTaxModuleTab] = useState<TaxModuleTab>('summary');
   const [supplierRiskFilter, setSupplierRiskFilter] = useState<SupplierRiskFilter>('all');
   const [supplierFlexFilter, setSupplierFlexFilter] = useState<SupplierFlexFilter>('all');
+  const [supplierAlbertoFilter, setSupplierAlbertoFilter] = useState<SupplierAlbertoFilter>('all');
   const [supplierStatusFilter, setSupplierStatusFilter] = useState<SupplierStatusFilter>('all');
   const [supplierCreditFilter, setSupplierCreditFilter] = useState<SupplierCreditFilter>('all');
   const [supplierDateFilter, setSupplierDateFilter] = useState<SupplierDateFilter>('all');
@@ -632,6 +645,22 @@ export default function OperatingProjection({
       setSelectedMonth(projection.months[0]?.yearMonth ?? today.slice(0, 7));
     }
   }, [projection.months, selectedMonth, today]);
+
+  // ─── Gasto mínimo de operación (piso amarillo) ─────────────────────────
+  const minimumExpenseSummary = useMemo<MinimumExpenseSummary>(
+    () => computeMinimumOperatingExpense(providers),
+    [providers],
+  );
+  const [minimumExpenseOverrides, setMinimumExpenseOverrides] = useState<MinimumExpenseOverride[]>(
+    () => loadMinimumExpenseOverrides(),
+  );
+  useEffect(() => {
+    saveMinimumExpenseOverrides(minimumExpenseOverrides);
+  }, [minimumExpenseOverrides]);
+  const [showMinimumExpenseDetail, setShowMinimumExpenseDetail] = useState(false);
+  const [editingOverrideMonth, setEditingOverrideMonth] = useState<string | null>(null);
+  const [overrideDraftAmount, setOverrideDraftAmount] = useState('');
+  const [overrideDraftNote, setOverrideDraftNote] = useState('');
 
   const monthDays = useMemo(
     () => projection.days.filter((day) => day.date.slice(0, 7) === selectedMonth),
@@ -680,6 +709,18 @@ export default function OperatingProjection({
         row.mandatoryReserveRequired,
         Number.isFinite(configuredMinimumCash) && configuredMinimumCash > 0 ? configuredMinimumCash : 0,
       );
+      // Piso operativo prorrateado para esta fila
+      const rowYearMonth = row.startDate.slice(0, 7);
+      const monthBase = resolveMinimumExpenseForMonth(
+        rowYearMonth,
+        minimumExpenseSummary.totalMonthly,
+        minimumExpenseOverrides,
+      );
+      const proratedMinimum = prorateMinimumExpense(
+        monthBase.amount,
+        row.startDate,
+        row.endDate,
+      );
       return {
         date: row.startDate,
         label: row.label,
@@ -696,6 +737,9 @@ export default function OperatingProjection({
         supplierNegative: -row.supplierPayments,
         adjustmentNegative: -row.adjustmentOutflows,
         totalOutflowsNegative: -totalOutflows,
+        // Piso operativo (en negativo para que aparezca en la zona de egresos)
+        gastoMinimoOperativo: -proratedMinimum,
+        gastoMinimoOperativoAbs: proratedMinimum,
         net: inflows - totalOutflows,
         collectionCount: row.days.reduce((sum, day) => sum + collectionLines(day).length, 0),
         paymentCount: row.days.reduce((sum, day) => sum + day.supplierPayments.length, 0),
@@ -703,7 +747,7 @@ export default function OperatingProjection({
         alertCount: row.alertCount,
       };
     }),
-    [minimumCashPolicy.amountInput, planningTimelineRows],
+    [minimumCashPolicy.amountInput, minimumExpenseOverrides, minimumExpenseSummary.totalMonthly, planningTimelineRows],
   );
 
   const upcomingPayments = useMemo(() => {
@@ -812,23 +856,34 @@ export default function OperatingProjection({
   );
 
   const monthSupplierTotal = monthDays.reduce((sum, day) => sum + sumAmounts(day.supplierPayments), 0);
+  const albertoByProviderId = useMemo(() => {
+    const map = new Map<string, ClasificacionAlberto>();
+    providers.forEach((p) => {
+      if (p.clasificacionAlberto) map.set(p.id, p.clasificacionAlberto);
+    });
+    return map;
+  }, [providers]);
   const supplierQueueRows = useMemo(
     () => filterSupplierQueueRows(
       projection.supplierQueue,
       {
         risk: supplierRiskFilter,
         flexibility: supplierFlexFilter,
+        alberto: supplierAlbertoFilter,
         status: supplierStatusFilter,
         credit: supplierCreditFilter,
         date: supplierDateFilter,
       },
       selectedDayData?.date ?? `${selectedMonth}-01`,
       selectedMonth,
+      albertoByProviderId,
     ),
     [
+      albertoByProviderId,
       projection.supplierQueue,
       selectedDayData?.date,
       selectedMonth,
+      supplierAlbertoFilter,
       supplierCreditFilter,
       supplierDateFilter,
       supplierFlexFilter,
@@ -2396,6 +2451,12 @@ export default function OperatingProjection({
                   }
                 }}
               >
+                <defs>
+                  <pattern id="gastoMinimoStripes" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
+                    <rect width="8" height="8" fill="#FEF3C7" />
+                    <line x1="0" y1="0" x2="0" y2="8" stroke="#F59E0B" strokeWidth="2.5" opacity="0.85" />
+                  </pattern>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -2423,6 +2484,17 @@ export default function OperatingProjection({
                 {selectedDay && (
                   <ReferenceLine x={selectedDay} stroke={COLOR.warning} strokeDasharray="3 3" />
                 )}
+                <Area
+                  type="stepAfter"
+                  dataKey="gastoMinimoOperativo"
+                  name="Gasto mínimo operativo"
+                  fill="url(#gastoMinimoStripes)"
+                  stroke="#F59E0B"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 2"
+                  fillOpacity={0.85}
+                  isAnimationActive={false}
+                />
                 <Bar
                   dataKey="net"
                   name="Flujo neto"
@@ -2549,12 +2621,14 @@ export default function OperatingProjection({
           filters={{
             risk: supplierRiskFilter,
             flexibility: supplierFlexFilter,
+            alberto: supplierAlbertoFilter,
             status: supplierStatusFilter,
             credit: supplierCreditFilter,
             date: supplierDateFilter,
           }}
           onChangeRisk={setSupplierRiskFilter}
           onChangeFlexibility={setSupplierFlexFilter}
+          onChangeAlberto={setSupplierAlbertoFilter}
           onChangeStatus={setSupplierStatusFilter}
           onChangeCredit={setSupplierCreditFilter}
           onChangeDate={setSupplierDateFilter}
@@ -2664,6 +2738,54 @@ export default function OperatingProjection({
           <SelectedKpi label="Faltante de apartado" value={fmtCurrency(sheetSummary.reserveShortfall)} />
         </div>
 
+        <MinimumOperatingExpenseBanner
+          summary={minimumExpenseSummary}
+          overrides={minimumExpenseOverrides}
+          showDetail={showMinimumExpenseDetail}
+          onToggleDetail={() => setShowMinimumExpenseDetail((v) => !v)}
+          months={projection.months.map((m) => m.yearMonth)}
+          editingMonth={editingOverrideMonth}
+          overrideDraftAmount={overrideDraftAmount}
+          overrideDraftNote={overrideDraftNote}
+          onStartEdit={(yearMonth) => {
+            setEditingOverrideMonth(yearMonth);
+            const existing = minimumExpenseOverrides.find((o) => o.yearMonth === yearMonth);
+            setOverrideDraftAmount(existing ? String(existing.amount) : String(Math.round(minimumExpenseSummary.totalMonthly)));
+            setOverrideDraftNote(existing?.note ?? '');
+          }}
+          onCancelEdit={() => {
+            setEditingOverrideMonth(null);
+            setOverrideDraftAmount('');
+            setOverrideDraftNote('');
+          }}
+          onChangeDraftAmount={setOverrideDraftAmount}
+          onChangeDraftNote={setOverrideDraftNote}
+          onSaveOverride={() => {
+            if (!editingOverrideMonth) return;
+            const parsed = Number(overrideDraftAmount);
+            if (!Number.isFinite(parsed) || parsed < 0) return;
+            const updatedAt = new Date().toISOString();
+            setMinimumExpenseOverrides((current) => {
+              const without = current.filter((o) => o.yearMonth !== editingOverrideMonth);
+              return [
+                ...without,
+                {
+                  yearMonth: editingOverrideMonth,
+                  amount: parsed,
+                  note: overrideDraftNote.trim() || undefined,
+                  updatedAt,
+                },
+              ].sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
+            });
+            setEditingOverrideMonth(null);
+            setOverrideDraftAmount('');
+            setOverrideDraftNote('');
+          }}
+          onRemoveOverride={(yearMonth) => {
+            setMinimumExpenseOverrides((current) => current.filter((o) => o.yearMonth !== yearMonth));
+          }}
+        />
+
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1580px] text-[12px]">
             <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)]">
@@ -2695,6 +2817,19 @@ export default function OperatingProjection({
                   const expanded = expandedSheetRows.has(row.id);
                   const totalOutflows = row.fixedOutflows + row.supplierPayments + row.adjustmentOutflows;
                   const canEditRow = projectionAdjustmentDate(row) !== null;
+                  // Piso operativo prorrateado para esta fila
+                  const rowYearMonth = row.startDate.slice(0, 7);
+                  const monthBase = resolveMinimumExpenseForMonth(
+                    rowYearMonth,
+                    minimumExpenseSummary.totalMonthly,
+                    minimumExpenseOverrides,
+                  );
+                  const proratedMinimum = prorateMinimumExpense(
+                    monthBase.amount,
+                    row.startDate,
+                    row.endDate,
+                  );
+                  const isMonthOverride = monthBase.isOverride && row.startDate.slice(0, 7) === row.endDate.slice(0, 7);
                   return (
                     <Fragment key={row.id}>
                       <tr
@@ -2735,7 +2870,18 @@ export default function OperatingProjection({
                           />
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums text-[var(--success)]">{row.otherInflows > 0 ? fmtCurrency(row.otherInflows) : '—'}</td>
-                        <td className="px-4 py-3 text-right tabular-nums text-[var(--warning)]">{row.fixedOutflows > 0 ? fmtCurrency(row.fixedOutflows) : '—'}</td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          <div className="text-[var(--warning)]">{row.fixedOutflows > 0 ? fmtCurrency(row.fixedOutflows) : '—'}</div>
+                          {proratedMinimum > 0 && (
+                            <div
+                              className="mt-1 inline-flex flex-col items-end rounded-md bg-yellow-100 px-2 py-1 text-[10px] font-medium text-yellow-900 ring-1 ring-yellow-300"
+                              title={`Gasto mínimo de operación (proveedores críticos)${isMonthOverride ? ' — override manual' : ''}`}
+                            >
+                              <span className="text-[9px] uppercase tracking-wide opacity-70">Piso operativo{isMonthOverride ? ' (manual)' : ''}</span>
+                              <span className="tabular-nums">{fmtCurrency(proratedMinimum)}</span>
+                            </div>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">{row.supplierPayments > 0 ? fmtCurrency(row.supplierPayments) : '—'}</td>
                         <td className="px-4 py-2">
                           <EditableProjectionCell
@@ -4982,10 +5128,15 @@ function filterSupplierQueueRows(
   filters: SupplierQueueFilters,
   selectedDay: string,
   selectedMonth: string,
+  albertoByProviderId?: Map<string, ClasificacionAlberto>,
 ): OperatingSupplierQueueItem[] {
   return rows.filter((row) => {
     if (filters.risk !== 'all' && row.risk !== filters.risk) return false;
     if (filters.flexibility !== 'all' && row.flexibility !== filters.flexibility) return false;
+    if (filters.alberto !== 'all') {
+      const albertoForRow = row.providerId ? albertoByProviderId?.get(row.providerId) : undefined;
+      if (albertoForRow !== filters.alberto) return false;
+    }
     if (filters.status !== 'all' && row.status !== filters.status) return false;
     if (filters.credit !== 'all' && row.creditStatus !== filters.credit) return false;
     const relevantDate = row.plannedDate ?? row.dueDate ?? '';
@@ -6006,6 +6157,306 @@ function SelectedKpi({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-[10px] uppercase tracking-[0.02em] text-[var(--gray-400)]">{label}</div>
       <div className="mt-1 font-semibold tabular-nums text-[var(--gray-950)]">{value}</div>
+    </div>
+  );
+}
+
+function SupplierAlbertoChip({ clasificacion }: { clasificacion?: ClasificacionAlberto }) {
+  if (!clasificacion || clasificacion === 'SIN_CLASIFICAR') {
+    return <span className="text-[10px] text-[var(--gray-300)]">—</span>;
+  }
+  const styleMap: Record<Exclude<ClasificacionAlberto, 'SIN_CLASIFICAR'>, { bg: string; text: string; border: string }> = {
+    CRITICO:    { bg: 'var(--danger-muted)', text: 'var(--danger)',  border: 'oklch(88% 0.08 25)' },
+    FLEX_ALTO:  { bg: '#FEF3C7',             text: '#92400E',         border: '#FCD34D' },
+    FLEX_MEDIO: { bg: '#FFEDD5',             text: '#9A3412',         border: '#FED7AA' },
+    FLEX_BAJO:  { bg: 'var(--success-muted)',text: 'var(--success)',  border: 'oklch(88% 0.08 145)' },
+    PAUSAR:     { bg: 'var(--gray-100)',     text: 'var(--gray-500)', border: 'var(--gray-200)' },
+  };
+  const s = styleMap[clasificacion];
+  return (
+    <span
+      className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium"
+      style={{ backgroundColor: s.bg, color: s.text, borderColor: s.border }}
+    >
+      {CLASIFICACION_LABELS[clasificacion]}
+    </span>
+  );
+}
+
+function SupplierScoreBar({ score }: { score: number | undefined }) {
+  if (score == null || !Number.isFinite(score)) {
+    return <span className="text-[10px] text-[var(--gray-300)]">—</span>;
+  }
+  const pct = Math.max(0, Math.min(100, score));
+  let color = 'var(--success)';
+  if (pct >= 80) color = 'var(--danger)';
+  else if (pct >= 60) color = '#F59E0B';
+  else if (pct >= 40) color = '#F97316';
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <div className="w-14 h-1 rounded-full bg-[var(--gray-100)] overflow-hidden">
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+      </div>
+      <span className="text-[10px] tabular-nums font-medium" style={{ color }}>{pct.toFixed(0)}</span>
+    </div>
+  );
+}
+
+function MinimumOperatingExpenseBanner({
+  summary,
+  overrides,
+  showDetail,
+  onToggleDetail,
+  months,
+  editingMonth,
+  overrideDraftAmount,
+  overrideDraftNote,
+  onStartEdit,
+  onCancelEdit,
+  onChangeDraftAmount,
+  onChangeDraftNote,
+  onSaveOverride,
+  onRemoveOverride,
+}: {
+  summary: MinimumExpenseSummary;
+  overrides: MinimumExpenseOverride[];
+  showDetail: boolean;
+  onToggleDetail: () => void;
+  months: string[];
+  editingMonth: string | null;
+  overrideDraftAmount: string;
+  overrideDraftNote: string;
+  onStartEdit: (yearMonth: string) => void;
+  onCancelEdit: () => void;
+  onChangeDraftAmount: (value: string) => void;
+  onChangeDraftNote: (value: string) => void;
+  onSaveOverride: () => void;
+  onRemoveOverride: (yearMonth: string) => void;
+}) {
+  if (summary.criticalCount === 0) return null;
+  const topByCategory = summary.byCategory.slice(0, 5);
+  const topByProvider = summary.byProvider.slice(0, 8);
+  const overridesActive = overrides.length;
+  return (
+    <div className="border-b border-yellow-200 bg-yellow-50/60 px-4 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-yellow-200/70 text-yellow-900">
+            <ShieldAlert className="h-4 w-4" strokeWidth={1.75} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="text-[13px] font-semibold text-yellow-900">
+                Gasto mínimo de operación
+              </h3>
+              <span className="inline-flex items-center rounded-full bg-yellow-200/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-yellow-900">
+                Proveedores de Operación
+              </span>
+              {overridesActive > 0 && (
+                <span className="inline-flex items-center rounded-full bg-yellow-300/70 px-2 py-0.5 text-[10px] font-semibold text-yellow-900">
+                  {overridesActive} override{overridesActive === 1 ? '' : 's'} manual{overridesActive === 1 ? '' : 'es'}
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-[12px] text-yellow-900/80">
+              Piso mensual estimado a partir del histórico 2025 de proveedores marcados como CRÍTICO por Alberto.
+              Aparece prorrateado en cada periodo del calendario.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide text-yellow-900/70">Piso mensual</div>
+            <div className="text-[18px] font-semibold tabular-nums text-yellow-900">
+              {fmtCurrency(summary.totalMonthly)}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wide text-yellow-900/70">Anualizado</div>
+            <div className="text-[14px] font-medium tabular-nums text-yellow-900">
+              {fmtCurrency(summary.totalAnnual)}
+            </div>
+          </div>
+          <button
+            onClick={onToggleDetail}
+            className="inline-flex items-center gap-1 rounded-md border border-yellow-300 bg-white/70 px-2.5 py-1 text-[11px] font-medium text-yellow-900 hover:bg-yellow-100"
+          >
+            {showDetail ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            {showDetail ? 'Ocultar desglose' : 'Ver desglose'}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-2 grid gap-2 text-[11px] text-yellow-900/80 sm:grid-cols-3">
+        <div>
+          <span className="font-semibold">{summary.criticalCount}</span> proveedores de Operación
+        </div>
+        <div>
+          <span className="font-semibold">{summary.criticalWithData}</span> con histórico calculable
+        </div>
+        <div>
+          <span className="font-semibold">{summary.criticalMissingData}</span> requieren input manual
+        </div>
+      </div>
+
+      {showDetail && (
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <div className="rounded-lg border border-yellow-200 bg-white/70 p-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-yellow-900/80">
+              Top categorías
+            </div>
+            <ul className="space-y-1">
+              {topByCategory.map((cat) => (
+                <li key={cat.categoria} className="flex items-center justify-between text-[12px]">
+                  <span className="truncate text-yellow-900">{cat.categoria} <span className="text-yellow-900/60">({cat.count})</span></span>
+                  <span className="ml-2 shrink-0 font-medium tabular-nums text-yellow-900">{fmtCurrency(cat.total)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="rounded-lg border border-yellow-200 bg-white/70 p-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-yellow-900/80">
+              Top proveedores críticos
+            </div>
+            <ul className="space-y-1">
+              {topByProvider.map((p) => (
+                <li key={p.providerId} className="flex items-center justify-between text-[12px]">
+                  <span className="truncate text-yellow-900" title={`${p.providerName} · ${p.frecuencia ?? 'sin frecuencia'}`}>
+                    {p.providerName}
+                  </span>
+                  <span className="ml-2 shrink-0 font-medium tabular-nums text-yellow-900">{fmtCurrency(p.gastoMinimoMensual)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          {summary.criticalsWithoutData.length > 0 && (
+            <div className="rounded-lg border border-yellow-200 bg-white/70 p-3 lg:col-span-2">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-yellow-900/80">
+                Críticos sin histórico ({summary.criticalsWithoutData.length}) — requieren un monto mínimo manual
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {summary.criticalsWithoutData.slice(0, 30).map((p) => (
+                  <span
+                    key={p.providerId}
+                    className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] text-yellow-900"
+                    title={p.categoria}
+                  >
+                    {p.providerName}
+                  </span>
+                ))}
+                {summary.criticalsWithoutData.length > 30 && (
+                  <span className="inline-flex items-center text-[10px] text-yellow-900/70">
+                    + {summary.criticalsWithoutData.length - 30} más
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-lg border border-yellow-200 bg-white/70 p-3 lg:col-span-2">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-yellow-900/80">
+                Override manual del piso por mes
+              </div>
+              <span className="text-[10px] text-yellow-900/60">
+                Si quieres forzar un piso distinto al automático para un mes específico, captúralo aquí.
+              </span>
+            </div>
+
+            {overrides.length > 0 && (
+              <ul className="mb-2 space-y-1">
+                {overrides.map((o) => (
+                  <li key={o.yearMonth} className="flex items-center justify-between gap-2 rounded-md bg-yellow-50 px-2 py-1 text-[12px]">
+                    <span className="font-medium text-yellow-900">{o.yearMonth}</span>
+                    <span className="font-semibold tabular-nums text-yellow-900">{fmtCurrency(o.amount)}</span>
+                    {o.note && <span className="truncate text-[11px] text-yellow-900/70" title={o.note}>{o.note}</span>}
+                    <div className="ml-auto flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => onStartEdit(o.yearMonth)}
+                        className="rounded border border-yellow-300 bg-white px-2 py-0.5 text-[10px] font-medium text-yellow-900 hover:bg-yellow-100"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveOverride(o.yearMonth)}
+                        className="rounded border border-red-200 bg-white px-2 py-0.5 text-[10px] font-medium text-red-700 hover:bg-red-50"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {editingMonth ? (
+              <div className="grid gap-2 rounded-md border border-yellow-300 bg-yellow-50 p-2 sm:grid-cols-[120px_1fr_1fr_auto]">
+                <select
+                  value={editingMonth}
+                  onChange={(e) => onStartEdit(e.target.value)}
+                  className="rounded border border-yellow-300 bg-white px-2 py-1 text-[12px]"
+                >
+                  {months.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  value={overrideDraftAmount}
+                  onChange={(e) => onChangeDraftAmount(e.target.value)}
+                  placeholder="Monto del piso ($)"
+                  className="rounded border border-yellow-300 bg-white px-2 py-1 text-[12px] tabular-nums"
+                />
+                <input
+                  type="text"
+                  value={overrideDraftNote}
+                  onChange={(e) => onChangeDraftNote(e.target.value)}
+                  placeholder="Nota (opcional)"
+                  className="rounded border border-yellow-300 bg-white px-2 py-1 text-[12px]"
+                />
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={onSaveOverride}
+                    className="rounded bg-yellow-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-yellow-700"
+                  >
+                    Guardar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCancelEdit}
+                    className="rounded border border-yellow-300 bg-white px-3 py-1 text-[11px] font-medium text-yellow-900 hover:bg-yellow-100"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {months.slice(0, 12).map((m) => {
+                  const hasOverride = overrides.some((o) => o.yearMonth === m);
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => onStartEdit(m)}
+                      className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
+                        hasOverride
+                          ? 'border-yellow-400 bg-yellow-200 text-yellow-900'
+                          : 'border-yellow-200 bg-white text-yellow-900 hover:bg-yellow-50'
+                      }`}
+                    >
+                      {hasOverride ? '✏️ ' : '+ '}{m}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -7211,6 +7662,7 @@ function SupplierPriorityQueue({
   filters,
   onChangeRisk,
   onChangeFlexibility,
+  onChangeAlberto,
   onChangeStatus,
   onChangeCredit,
   onChangeDate,
@@ -7228,6 +7680,7 @@ function SupplierPriorityQueue({
   filters: SupplierQueueFilters;
   onChangeRisk: (value: SupplierRiskFilter) => void;
   onChangeFlexibility: (value: SupplierFlexFilter) => void;
+  onChangeAlberto: (value: SupplierAlbertoFilter) => void;
   onChangeStatus: (value: SupplierStatusFilter) => void;
   onChangeCredit: (value: SupplierCreditFilter) => void;
   onChangeDate: (value: SupplierDateFilter) => void;
@@ -7245,7 +7698,8 @@ function SupplierPriorityQueue({
         <div>
           <h2 className={`text-[15px] font-semibold ${T.title}`}>Cola priorizada de proveedores</h2>
           <p className={`mt-1 text-[12px] ${T.muted}`}>
-            Ordena facturas por riesgo, flexibilidad, vencimiento, línea de crédito e impacto de caja. Cambios aquí recalculan el escenario.
+            Orden de pago: <span className="font-semibold text-yellow-700">Operación</span> → score más alto → vencimiento más antiguo → menor monto.
+            Cambios aquí recalculan el escenario.
           </p>
         </div>
         <div className="grid grid-cols-3 gap-3 text-right text-[12px]">
@@ -7255,7 +7709,7 @@ function SupplierPriorityQueue({
         </div>
       </div>
 
-      <div className="grid gap-3 border-b border-[var(--border)] px-4 py-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 border-b border-[var(--border)] px-4 py-3 md:grid-cols-2 xl:grid-cols-6">
         <QueueSelect label="Riesgo" value={filters.risk} onChange={(value) => onChangeRisk(value as SupplierRiskFilter)}>
           <option value="all">Todos</option>
           <option value="Alto">Alto</option>
@@ -7268,6 +7722,15 @@ function SupplierPriorityQueue({
           <option value="revisar">Revisar</option>
           <option value="flexible">Flexible</option>
           <option value="unknown">Sin clasificar</option>
+        </QueueSelect>
+        <QueueSelect label="Clasif." value={filters.alberto} onChange={(value) => onChangeAlberto(value as SupplierAlbertoFilter)}>
+          <option value="all">Todas</option>
+          <option value="CRITICO">{CLASIFICACION_LABELS.CRITICO}</option>
+          <option value="FLEX_ALTO">{CLASIFICACION_LABELS.FLEX_ALTO}</option>
+          <option value="FLEX_MEDIO">{CLASIFICACION_LABELS.FLEX_MEDIO}</option>
+          <option value="FLEX_BAJO">{CLASIFICACION_LABELS.FLEX_BAJO}</option>
+          <option value="PAUSAR">{CLASIFICACION_LABELS.PAUSAR}</option>
+          <option value="SIN_CLASIFICAR">{CLASIFICACION_LABELS.SIN_CLASIFICAR}</option>
         </QueueSelect>
         <QueueSelect label="Estado" value={filters.status} onChange={(value) => onChangeStatus(value as SupplierStatusFilter)}>
           <option value="all">Todos</option>
@@ -7293,10 +7756,12 @@ function SupplierPriorityQueue({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1560px] text-[12px]">
+        <table className="w-full min-w-[1660px] text-[12px]">
           <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)]">
             <tr>
               <Th>Proveedor / factura</Th>
+              <Th>Clasif.</Th>
+              <Th align="center">Score</Th>
               <Th>Riesgo</Th>
               <Th>Flexibilidad</Th>
               <Th>Estado</Th>
@@ -7311,7 +7776,7 @@ function SupplierPriorityQueue({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-4 py-6">
+                <td colSpan={12} className="px-4 py-6">
                   <EmptyMiniState label={`Sin facturas para los filtros actuales en ${fmtYearMonthLong(selectedMonth)}.`} />
                 </td>
               </tr>
@@ -7320,9 +7785,10 @@ function SupplierPriorityQueue({
                 const override = overrideRows.find((row) => row.invoiceKey === item.invoiceKey);
                 const baseDate = override?.date ?? item.plannedDate ?? item.dueDate ?? selectedDay;
                 const baseAmount = override?.amountInput ?? editableAmount(item.plannedAmount ?? item.remainingAmount);
+                const isCritico = item.clasificacionAlberto === 'CRITICO';
                 return (
-                  <tr key={item.invoiceKey} className="border-t border-[var(--border)] align-top">
-                    <td className="px-4 py-3">
+                  <tr key={item.invoiceKey} className={`border-t border-[var(--border)] align-top ${isCritico ? 'bg-yellow-50/40' : ''}`}>
+                    <td className={`px-4 py-3 ${isCritico ? 'border-l-2 border-yellow-400' : ''}`}>
                       <div className="font-medium text-[var(--gray-950)]">{item.providerName}</div>
                       <div className="mt-0.5 text-[11px] text-[var(--gray-500)]">
                         {item.invoiceNumber ? `Factura ${item.invoiceNumber}` : 'Factura sin número'}
@@ -7332,6 +7798,12 @@ function SupplierPriorityQueue({
                         {item.dueDate ? `vence ${fmtDate(item.dueDate)}` : 'sin vencimiento'}
                         {item.invoiceDate ? ` · emitida ${fmtDate(item.invoiceDate)}` : ''}
                       </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <SupplierAlbertoChip clasificacion={item.clasificacionAlberto} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <SupplierScoreBar score={item.score} />
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${supplierRiskClass(item.risk)}`}>{item.risk}</span>

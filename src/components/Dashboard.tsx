@@ -3,19 +3,21 @@ import {
   ComposedChart,
   Line,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  ReferenceLine,
   Legend,
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle, LineChart as LineChartIcon,
+  ShieldAlert,
 } from 'lucide-react';
 import type { Proposal } from '../types';
 import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
+import { computeMinimumOperatingExpense, floorForMonth } from '../domain/operatingProjectionMinimumExpense';
 import type { CXPRecord } from '../domain/persistence';
 import type { Budget } from '../domain/budget';
 import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
@@ -124,6 +126,14 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
+  // Gasto mínimo operativo: proveedores de Operación + nómina del presupuesto.
+  // Nómina y finiquitos son obligaciones contractuales no-pausables, igual que
+  // los proveedores críticos, así que se suman al piso operativo del Dashboard.
+  const minimumExpense = useMemo(
+    () => computeMinimumOperatingExpense(providers, budget),
+    [providers, budget],
+  );
+
   const { base, baseline, projection } = useMemo(
     () => computeBaseCashFlow({
       bankStatements, aged, clients, providers, cxpRecords, assumptions,
@@ -139,18 +149,30 @@ const Dashboard: React.FC<DashboardProps> = ({
   const currentYm = toYearMonth(today);
   const monthsThisYear = evaluated.months.filter((m) => m.yearMonth.startsWith(String(currentYear)));
 
-  const ingresosYtd = monthsThisYear
-    .filter((m) => m.isHistorical)
-    .reduce((s, m) => s + m.baseIncome, 0);
-  const egresosYtd = monthsThisYear
-    .filter((m) => m.isHistorical)
-    .reduce((s, m) => s + m.baseExpense, 0);
+  const histThisYear = monthsThisYear.filter((m) => m.isHistorical);
+  const ingresosYtd = histThisYear.reduce((s, m) => s + m.baseIncome, 0);
+  const egresosYtd = histThisYear.reduce((s, m) => s + m.baseExpense, 0);
+  const monthsElapsed = histThisYear.length;
+  const ingresosAvgMonth = monthsElapsed > 0 ? ingresosYtd / monthsElapsed : 0;
+  const egresosAvgMonth = monthsElapsed > 0 ? egresosYtd / monthsElapsed : 0;
+  const flujoNetoYtd = ingresosYtd - egresosYtd;
+  const margenYtd = ingresosYtd > 0 ? flujoNetoYtd / ingresosYtd : 0;
+  const cajaInicial = (() => {
+    const firstHist = evaluated.months.find((m) => m.isHistorical);
+    if (firstHist) {
+      // Reconstruir caja inicial: closing - net del primer mes
+      return firstHist.baseClosingCash - firstHist.baseIncome + firstHist.baseExpense;
+    }
+    return 0;
+  })();
   const cajaActual = (() => {
     const currentMonth = evaluated.months.find((m) => m.yearMonth === currentYm);
     if (currentMonth) return currentMonth.baseClosingCash;
     const lastHist = [...evaluated.months].reverse().find((m) => m.isHistorical);
     return lastHist?.baseClosingCash ?? 0;
   })();
+  const cajaDelta = cajaActual - cajaInicial;
+  const cajaDeltaPct = cajaInicial !== 0 ? cajaDelta / cajaInicial : 0;
 
   const projectionByMonth = useMemo(() => {
     const map = new Map<string, MonthlyProjection>();
@@ -176,6 +198,27 @@ const Dashboard: React.FC<DashboardProps> = ({
     return typeof v === 'number' ? v : null;
   };
 
+  /**
+   * Para un mes dado, parte el egreso total en 3 segmentos apilables:
+   *   1. floorPortion (yellow rayado) — piso operativo carved out at the bottom
+   *   2. realAboveFloor (red solid) — egreso real arriba del piso
+   *   3. projGapAboveFloor (red striped) — proyectado arriba del piso
+   * La suma de los 3 = realExpense + projExpenseGap (sin cambios en altura total).
+   */
+  const partitionExpense = (realExpense: number, projGap: number, ym: string) => {
+    const floor = floorForMonth(ym, minimumExpense.providersMonthly, budget);
+    const total = realExpense + projGap;
+    const floorPortion = Math.max(0, Math.min(floor, total));
+    const carvedFromReal = Math.min(realExpense, floorPortion);
+    const carvedFromProj = floorPortion - carvedFromReal;
+    return {
+      gastoMinFloor: floorPortion,
+      realExpenseAboveFloor: Math.max(0, realExpense - carvedFromReal),
+      projExpenseGapAboveFloor: Math.max(0, projGap - carvedFromProj),
+      monthlyFloor: floor,
+    };
+  };
+
   const chartData = useMemo(() => evaluated.months.map((m) => {
     const ym = m.yearMonth;
     const cmp = compareYearMonth(ym, currentYm);
@@ -184,8 +227,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     const budgetExpense = budgetMonthValue(ym, 'expense');
 
     if (cmp < 0) {
-      // Mes pasado: real del banco. Si hay budget, mostramos la variación
-      // contra presupuesto como overlay rayado cuando budget > real.
       const projectedIncomeTotal = override?.income ?? budgetIncome ?? 0;
       const projectedExpenseTotal = override?.expense ?? budgetExpense ?? 0;
       const projIncGap = projectedIncomeTotal > 0
@@ -194,6 +235,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       const projExpGap = projectedExpenseTotal > 0
         ? Math.max(0, projectedExpenseTotal - m.baseExpense)
         : 0;
+      const parts = partitionExpense(m.baseExpense, projExpGap, ym);
       return {
         yearMonth: ym,
         realIncome: m.baseIncome,
@@ -202,11 +244,13 @@ const Dashboard: React.FC<DashboardProps> = ({
         realExpense: m.baseExpense,
         projExpenseGap: projExpGap,
         projExpenseTotal: projectedExpenseTotal || m.baseExpense,
+        ...parts,
         cashBase: m.baseClosingCash,
         phase: 'past' as const,
       };
     }
     if (cmp > 0) {
+      const parts = partitionExpense(0, m.baseExpense, ym);
       return {
         yearMonth: ym,
         realIncome: 0,
@@ -215,18 +259,16 @@ const Dashboard: React.FC<DashboardProps> = ({
         realExpense: 0,
         projExpenseGap: m.baseExpense,
         projExpenseTotal: m.baseExpense,
+        ...parts,
         cashBase: m.baseClosingCash,
         phase: 'future' as const,
       };
     }
-    // Mes en curso: real parcial + lo que falta para llegar al total proyectado.
-    // El total proyectado sale del presupuesto (o del override si existe).
-    // Antes caía a baseline.avgIncome/avgExpense (regresión sobre el histórico)
-    // cuando no había budget — eso se removió a pedido del usuario.
     const projectedIncomeTotal = override?.income ?? budgetIncome ?? 0;
     const projectedExpenseTotal = override?.expense ?? budgetExpense ?? 0;
     const projIncGap = Math.max(0, projectedIncomeTotal - m.baseIncome);
     const projExpGap = Math.max(0, projectedExpenseTotal - m.baseExpense);
+    const parts = partitionExpense(m.baseExpense, projExpGap, ym);
     return {
       yearMonth: ym,
       realIncome: m.baseIncome,
@@ -235,10 +277,11 @@ const Dashboard: React.FC<DashboardProps> = ({
       realExpense: m.baseExpense,
       projExpenseGap: projExpGap,
       projExpenseTotal: projectedExpenseTotal,
+      ...parts,
       cashBase: m.baseClosingCash,
       phase: 'current' as const,
     };
-  }), [evaluated.months, currentYm, overrides, projectionByMonth, baseline, budget]);
+  }), [evaluated.months, currentYm, overrides, projectionByMonth, baseline, budget, minimumExpense.providersMonthly]);
 
   const tableRows: CashFlowTableRow[] = useMemo(
     () => evaluated.months.map((m) => {
@@ -320,8 +363,13 @@ const Dashboard: React.FC<DashboardProps> = ({
             <rect width="6" height="6" fill={CHART_COLORS.expenseBg} />
             <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.expensePattern} strokeWidth="2.5" />
           </pattern>
+          <pattern id="hatchMinimum" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
+            <rect width="8" height="8" fill="#FEF3C7" />
+            <line x1="0" y1="0" x2="0" y2="8" stroke="#F59E0B" strokeWidth="3" opacity="0.95" />
+          </pattern>
         </defs>
       </svg>
+      {/* Color sólido del piso operativo para meses pasados (real ya pagado). */}
 
       <PageHeader
         title="Dashboard"
@@ -360,24 +408,58 @@ const Dashboard: React.FC<DashboardProps> = ({
       )}
 
       {/* KPI cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard
           label={`Ingresos YTD ${currentYear}`}
           value={ingresosYtd}
           icon={<TrendingUp className="w-4 h-4" />}
           color="var(--success)"
+          sublabel={monthsElapsed > 0 ? `${fmtCompact(ingresosAvgMonth)} / mes promedio` : undefined}
+          breakdown={monthsElapsed > 0 ? [
+            { label: 'Meses transcurridos', value: String(monthsElapsed) },
+            { label: 'Margen neto', value: `${(margenYtd * 100).toFixed(1)}%`, valueColor: margenYtd >= 0 ? 'var(--success)' : 'var(--danger)' },
+          ] : undefined}
         />
         <KpiCard
           label={`Egresos YTD ${currentYear}`}
           value={egresosYtd}
           icon={<TrendingDown className="w-4 h-4" />}
           color="var(--danger)"
+          sublabel={monthsElapsed > 0 ? `${fmtCompact(egresosAvgMonth)} / mes promedio` : undefined}
+          breakdown={monthsElapsed > 0 ? [
+            { label: 'Vs Ingresos', value: `${ingresosYtd > 0 ? ((egresosYtd / ingresosYtd) * 100).toFixed(1) : '—'}%` },
+            { label: 'Flujo neto YTD', value: fmtCompact(flujoNetoYtd), valueColor: flujoNetoYtd >= 0 ? 'var(--success)' : 'var(--danger)' },
+          ] : undefined}
         />
         <KpiCard
           label="Caja Actual"
           value={cajaActual}
           icon={<Wallet className="w-4 h-4" />}
           color="var(--gray-950)"
+          sublabel={cajaInicial !== 0
+            ? `${cajaDelta >= 0 ? '+' : ''}${fmtCompact(cajaDelta)} vs inicial (${(cajaDeltaPct * 100).toFixed(1)}%)`
+            : undefined}
+          breakdown={[
+            { label: 'Caja inicial año', value: fmtCompact(cajaInicial) },
+            {
+              label: 'Runway aprox.',
+              value: minimumExpense.totalMonthly > 0
+                ? `${(cajaActual / minimumExpense.totalMonthly).toFixed(1)} meses`
+                : '—',
+              valueColor: cajaActual / Math.max(1, minimumExpense.totalMonthly) < 1
+                ? 'var(--danger)'
+                : cajaActual / minimumExpense.totalMonthly < 3
+                ? 'var(--warning)'
+                : 'var(--success)',
+            },
+          ]}
+        />
+        <MinimumExpenseKpi
+          monthly={minimumExpense.totalMonthly}
+          annual={minimumExpense.totalAnnual}
+          providersMonthly={minimumExpense.providersMonthly}
+          payrollMonthly={minimumExpense.payrollMonthly}
+          criticalCount={minimumExpense.criticalCount}
         />
       </div>
 
@@ -409,7 +491,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                 cursor={{ fill: 'rgba(99, 102, 241, 0.06)' }}
               />
               <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
-              <ReferenceLine y={0} stroke="#cbd5e1" />
               <Bar
                 dataKey="realIncome"
                 stackId="income"
@@ -428,8 +509,30 @@ const Dashboard: React.FC<DashboardProps> = ({
                 radius={[4, 4, 0, 0]}
                 cursor="pointer"
               />
+              {/* Piso operativo — base del stack de egresos.
+                  Sólido amarillo para meses pasados (real, ya ejecutado).
+                  Rayado amarillo para meses en curso/futuros (proyectado/forecast).
+                  fill default es amarillo sólido para que el legend lo muestre correctamente. */}
               <Bar
-                dataKey="realExpense"
+                dataKey="gastoMinFloor"
+                stackId="expense"
+                fill="#FCD34D"
+                stroke="#F59E0B"
+                strokeWidth={1.5}
+                name="Piso operativo"
+                radius={[0, 0, 0, 0]}
+                cursor="pointer"
+                legendType="square"
+              >
+                {chartData.map((row) => (
+                  <Cell
+                    key={`floor-${row.yearMonth}`}
+                    fill={row.phase === 'past' ? '#FCD34D' : 'url(#hatchMinimum)'}
+                  />
+                ))}
+              </Bar>
+              <Bar
+                dataKey="realExpenseAboveFloor"
                 stackId="expense"
                 fill={CHART_COLORS.expense}
                 name="Egresos (real)"
@@ -437,7 +540,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 cursor="pointer"
               />
               <Bar
-                dataKey="projExpenseGap"
+                dataKey="projExpenseGapAboveFloor"
                 stackId="expense"
                 fill="url(#hatchExpense)"
                 stroke={CHART_COLORS.expensePattern}
@@ -459,17 +562,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* Monthly editable cash flow table */}
-      <CashFlowTable
-        rows={tableRows}
-        overrides={overrides}
-        onOverridesChange={setOverrides}
-        title="Flujo de efectivo mensual"
-        subtitle="Ajusta manualmente el ingreso o egreso proyectado; la caja se recalcula al instante en el gráfico superior."
-        highlightYearMonth={selectedMonth}
-        onRowClick={(ym) => setSelectedMonth(ym)}
-      />
-
       <MonthDrilldown
         yearMonth={selectedMonth}
         bankStatements={bankStatements}
@@ -483,9 +575,116 @@ const Dashboard: React.FC<DashboardProps> = ({
         today={today}
         onClose={() => setSelectedMonth(null)}
       />
+
+      {/* Monthly editable cash flow table — abajo del detalle del mes seleccionado.
+          Incluye botón para descargar todo el flujo como Excel. */}
+      <CashFlowTable
+        rows={tableRows}
+        overrides={overrides}
+        onOverridesChange={setOverrides}
+        title="Flujo de efectivo mensual"
+        subtitle="Ajusta manualmente el ingreso o egreso proyectado; la caja se recalcula al instante en el gráfico superior."
+        highlightYearMonth={selectedMonth}
+        onRowClick={(ym) => setSelectedMonth(ym)}
+        onDownloadExcel={() => downloadCashFlowExcel(chartData, minimumExpense)}
+      />
     </div>
   );
 };
+
+/** Descarga el flujo mensual como Excel con todas las columnas relevantes. */
+async function downloadCashFlowExcel(
+  chartData: Array<{
+    yearMonth: string;
+    realIncome: number;
+    projIncomeGap: number;
+    projIncomeTotal: number;
+    realExpense: number;
+    projExpenseGap: number;
+    projExpenseTotal: number;
+    gastoMinFloor: number;
+    realExpenseAboveFloor: number;
+    projExpenseGapAboveFloor: number;
+    monthlyFloor: number;
+    cashBase: number;
+    phase: 'past' | 'current' | 'future';
+  }>,
+  minimumExpense: { totalMonthly: number; providersMonthly: number; payrollMonthly: number },
+): Promise<void> {
+  const ExcelMod = await import('exceljs');
+  const ExcelRuntime = (((ExcelMod as unknown) as { default?: typeof ExcelMod }).default ?? ExcelMod);
+  const wb = new ExcelRuntime.Workbook();
+  wb.creator = 'Senda · Midas';
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet('Flujo mensual', { views: [{ state: 'frozen', ySplit: 1 }] });
+  ws.columns = [
+    { header: 'Mes', key: 'mes', width: 12 },
+    { header: 'Fase', key: 'fase', width: 12 },
+    { header: 'Ingresos (real)', key: 'ingReal', width: 18, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Ingresos (proy.)', key: 'ingProy', width: 18, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Egresos (real)', key: 'egReal', width: 18, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Egresos (proy.)', key: 'egProy', width: 18, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Piso operativo', key: 'piso', width: 18, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Egreso total', key: 'egTotal', width: 18, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Flujo neto', key: 'neto', width: 18, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Caja final', key: 'caja', width: 18, style: { numFmt: '"$"#,##0.00' } },
+  ];
+  ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+
+  const phaseLabel: Record<string, string> = {
+    past: 'Histórico',
+    current: 'En curso',
+    future: 'Proyectado',
+  };
+
+  for (const r of chartData) {
+    const ingResolved = r.realIncome > 0 ? r.realIncome : r.projIncomeTotal;
+    const egResolved = r.realExpense + r.projExpenseGap;
+    const row = ws.addRow({
+      mes: r.yearMonth,
+      fase: phaseLabel[r.phase] ?? r.phase,
+      ingReal: r.realIncome,
+      ingProy: r.projIncomeTotal,
+      egReal: r.realExpense,
+      egProy: r.projExpenseTotal,
+      piso: r.monthlyFloor,
+      egTotal: egResolved,
+      neto: ingResolved - egResolved,
+      caja: r.cashBase,
+    });
+    // Highlight piso operativo column in yellow
+    row.getCell('piso').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+    row.getCell('piso').font = { color: { argb: 'FF92400E' }, bold: true };
+  }
+
+  // Hoja de resumen del piso operativo
+  const wsMin = wb.addWorksheet('Piso operativo');
+  wsMin.columns = [
+    { header: 'Concepto', key: 'concepto', width: 32 },
+    { header: 'Monto mensual', key: 'monto', width: 20, style: { numFmt: '"$"#,##0.00' } },
+    { header: 'Anualizado', key: 'anual', width: 20, style: { numFmt: '"$"#,##0.00' } },
+  ];
+  wsMin.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  wsMin.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+  wsMin.addRow({ concepto: 'Proveedores de Operación', monto: minimumExpense.providersMonthly, anual: minimumExpense.providersMonthly * 12 });
+  wsMin.addRow({ concepto: 'Nómina + finiquitos', monto: minimumExpense.payrollMonthly, anual: minimumExpense.payrollMonthly * 12 });
+  const totalRow = wsMin.addRow({ concepto: 'TOTAL piso operativo', monto: minimumExpense.totalMonthly, anual: minimumExpense.totalMonthly * 12 });
+  totalRow.font = { bold: true };
+  totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `flujo-mensual-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 interface TooltipPayloadItem {
   dataKey: string;
@@ -505,6 +704,9 @@ const TOOLTIP_LABELS: Record<string, string> = {
   projIncomeGap: 'Ingresos (proy.)',
   realExpense: 'Egresos (real)',
   projExpenseGap: 'Egresos (proy.)',
+  gastoMinFloor: 'Piso operativo',
+  realExpenseAboveFloor: 'Egresos (real)',
+  projExpenseGapAboveFloor: 'Egresos (proy.)',
   cashBase: 'Caja Final',
 };
 
@@ -544,6 +746,14 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
             if (p.dataKey === 'projExpenseGap' && data?.projExpenseTotal !== undefined) {
               displayValue = data.projExpenseTotal;
             }
+            // Para los segmentos de la nueva descomposición (piso + above):
+            // muestran el monto TOTAL de su categoría, no la porción del bar.
+            if (p.dataKey === 'realExpenseAboveFloor' && data?.realExpense !== undefined) {
+              displayValue = data.realExpense;
+            }
+            if (p.dataKey === 'projExpenseGapAboveFloor' && data?.projExpenseTotal !== undefined) {
+              displayValue = data.projExpenseTotal;
+            }
             return (
               <li key={p.dataKey} className="flex items-center justify-between gap-4">
                 <span style={{ color: 'var(--gray-600)' }}>{TOOLTIP_LABELS[p.dataKey] ?? p.dataKey}</span>
@@ -573,17 +783,114 @@ const StartingBalanceDisplay: React.FC<{ value: number }> = ({ value }) => (
   </div>
 );
 
-const KpiCard: React.FC<{ label: string; value: number; icon: React.ReactNode; color: string }> = ({ label, value, icon, color }) => (
-  <div className="rounded-xl border border-[var(--gray-200)] bg-white p-4">
+interface KpiBreakdownItem {
+  label: string;
+  value: string;
+  valueColor?: string;
+}
+
+const KpiCard: React.FC<{
+  label: string;
+  value: number;
+  icon: React.ReactNode;
+  color: string;
+  sublabel?: string;
+  breakdown?: KpiBreakdownItem[];
+}> = ({ label, value, icon, color, sublabel, breakdown }) => (
+  <div className="rounded-xl border border-[var(--gray-200)] bg-white p-4 flex flex-col">
     <div className="flex items-center justify-between mb-2">
       <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
         {label}
       </p>
       <span style={{ color }}>{icon}</span>
     </div>
-    <p className="text-[20px] font-semibold tabular-nums" style={{ color }}>
+    <p className="text-[20px] font-semibold tabular-nums leading-tight" style={{ color }}>
       {fmtCurrency(value)}
     </p>
+    {sublabel && (
+      <p className="text-[10px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
+        {sublabel}
+      </p>
+    )}
+    {breakdown && breakdown.length > 0 && (
+      <div className="mt-2.5 space-y-1 border-t border-[var(--gray-100)] pt-2">
+        {breakdown.map((item, idx) => (
+          <div key={idx} className="flex items-center justify-between text-[11px]">
+            <span style={{ color: 'var(--gray-500)' }}>{item.label}</span>
+            <span
+              className="font-medium tabular-nums"
+              style={{ color: item.valueColor ?? 'var(--gray-950)' }}
+            >
+              {item.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+);
+
+/**
+ * KPI especial del piso operativo. Se renderiza con fondo amarillo rayado
+ * (mismo lenguaje visual que la línea amarilla de la proyección operativa).
+ */
+const MinimumExpenseKpi: React.FC<{
+  monthly: number;
+  annual: number;
+  providersMonthly: number;
+  payrollMonthly: number;
+  criticalCount: number;
+}> = ({ monthly, annual, providersMonthly, payrollMonthly, criticalCount }) => (
+  <div
+    className="relative overflow-hidden rounded-xl border-2 border-yellow-300 bg-yellow-50 p-4"
+    style={{
+      backgroundImage: `repeating-linear-gradient(
+        45deg,
+        rgba(251, 191, 36, 0.12) 0px,
+        rgba(251, 191, 36, 0.12) 8px,
+        transparent 8px,
+        transparent 16px
+      )`,
+    }}
+    title="Piso operativo: proveedores de Operación + nómina/finiquitos. Es el monto que necesitas cubrir cada mes para no afectar operación."
+  >
+    <div className="flex items-center justify-between mb-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-yellow-800">
+        Gasto mín. operativo
+      </p>
+      <span className="text-yellow-700">
+        <ShieldAlert className="w-4 h-4" />
+      </span>
+    </div>
+    <p className="text-[20px] font-semibold tabular-nums text-yellow-900 leading-tight">
+      {fmtCurrency(monthly)}
+      <span className="text-[11px] font-normal text-yellow-800/80 ml-1">/ mes</span>
+    </p>
+    <p className="text-[10px] text-yellow-800/70 mt-0.5">
+      {fmtCompact(annual)} anualizado
+    </p>
+    {/* Desglose con jerarquía clara: una línea por componente */}
+    <div className="mt-2.5 space-y-1 border-t border-yellow-200/70 pt-2">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-yellow-800/80">
+          Proveedores Operación
+          <span className="text-yellow-700/60 ml-1">· {criticalCount}</span>
+        </span>
+        <span className="font-medium tabular-nums text-yellow-900">
+          {fmtCompact(providersMonthly)}
+        </span>
+      </div>
+      {payrollMonthly > 0 && (
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="text-yellow-800/80">
+            Nómina + finiquitos
+          </span>
+          <span className="font-medium tabular-nums text-yellow-900">
+            {fmtCompact(payrollMonthly)}
+          </span>
+        </div>
+      )}
+    </div>
   </div>
 );
 
