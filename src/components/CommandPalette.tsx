@@ -20,10 +20,14 @@ import {
   Landmark,
   Wallet,
   Search,
+  BarChart3,
+  ClipboardList,
 } from 'lucide-react';
 
 type TabId =
   | 'dashboard'
+  | 'financialProjection'
+  | 'financialPlanning'
   | 'kpis'
   | 'scenarios'
   | 'forecast'
@@ -60,6 +64,8 @@ interface ResultItem {
 
 const NAVIGATION_ITEMS: NavigationItem[] = [
   { tabId: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+  { tabId: 'financialProjection', label: 'Proyección Financiera', icon: <BarChart3 size={18} /> },
+  { tabId: 'financialPlanning', label: 'Planeación Financiera', icon: <ClipboardList size={18} /> },
   { tabId: 'kpis', label: 'KPIs', icon: <Sliders size={18} /> },
   { tabId: 'scenarios', label: 'Escenarios', icon: <FlaskConical size={18} /> },
   { tabId: 'forecast', label: 'Pronóstico', icon: <LineChart size={18} /> },

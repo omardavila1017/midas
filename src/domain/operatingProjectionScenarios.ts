@@ -1,6 +1,8 @@
 import type {
   ManualExpenseEvent,
   OperatingAdjustment,
+  OperatingCollectionOverride,
+  OperatingScheduledOutflowOverride,
   OperatingSupplierPaymentOverride,
 } from './operatingProjectionModule';
 import {
@@ -31,6 +33,8 @@ export interface OperatingProjectionScenario {
   manualExpenseEvents: ManualExpenseEvent[];
   operatingAdjustments: OperatingAdjustment[];
   supplierPaymentOverrides: OperatingSupplierPaymentOverride[];
+  collectionOverrides: OperatingCollectionOverride[];
+  scheduledOutflowOverrides: OperatingScheduledOutflowOverride[];
   taxDebts: OperatingTaxDebt[];
 }
 
@@ -50,6 +54,8 @@ export function createOperatingProjectionScenario(
     manualExpenseEvents: seed?.manualExpenseEvents ?? [],
     operatingAdjustments: seed?.operatingAdjustments ?? [],
     supplierPaymentOverrides: seed?.supplierPaymentOverrides ?? [],
+    collectionOverrides: seed?.collectionOverrides ?? [],
+    scheduledOutflowOverrides: seed?.scheduledOutflowOverrides ?? [],
     taxDebts: seed?.taxDebts ?? [],
   };
 }
@@ -70,6 +76,8 @@ export function baseOperatingProjectionScenario(
     manualExpenseEvents,
     operatingAdjustments,
     supplierPaymentOverrides: [],
+    collectionOverrides: [],
+    scheduledOutflowOverrides: [],
     taxDebts: [],
   };
 }
@@ -142,6 +150,12 @@ function normalizeScenario(value: unknown, index: number): OperatingProjectionSc
   const supplierPaymentOverrides = Array.isArray(raw.supplierPaymentOverrides)
     ? raw.supplierPaymentOverrides.map(normalizeSupplierOverride).filter((item): item is OperatingSupplierPaymentOverride => item !== null)
     : [];
+  const collectionOverrides = Array.isArray(raw.collectionOverrides)
+    ? raw.collectionOverrides.map(normalizeCollectionOverride).filter((item): item is OperatingCollectionOverride => item !== null)
+    : [];
+  const scheduledOutflowOverrides = Array.isArray(raw.scheduledOutflowOverrides)
+    ? raw.scheduledOutflowOverrides.map(normalizeScheduledOutflowOverride).filter((item): item is OperatingScheduledOutflowOverride => item !== null)
+    : [];
   const taxDebts = Array.isArray(raw.taxDebts)
     ? raw.taxDebts.map(normalizeOperatingTaxDebt).filter((item): item is OperatingTaxDebt => item !== null)
     : [];
@@ -160,6 +174,8 @@ function normalizeScenario(value: unknown, index: number): OperatingProjectionSc
     manualExpenseEvents,
     operatingAdjustments,
     supplierPaymentOverrides,
+    collectionOverrides,
+    scheduledOutflowOverrides,
     taxDebts,
   };
 }
@@ -235,6 +251,38 @@ function normalizeSupplierOverride(value: unknown): OperatingSupplierPaymentOver
     providerName: typeof raw.providerName === 'string' && raw.providerName.trim() ? raw.providerName.trim() : undefined,
     supplierNumber: typeof raw.supplierNumber === 'string' && raw.supplierNumber.trim() ? raw.supplierNumber.trim() : undefined,
     invoiceNumber: typeof raw.invoiceNumber === 'string' && raw.invoiceNumber.trim() ? raw.invoiceNumber.trim() : undefined,
+    date,
+    amount,
+    note: typeof raw.note === 'string' && raw.note.trim() ? raw.note.trim() : undefined,
+  };
+}
+
+function normalizeCollectionOverride(value: unknown): OperatingCollectionOverride | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const sourceKey = typeof raw.sourceKey === 'string' && raw.sourceKey.trim() ? raw.sourceKey.trim() : null;
+  const date = typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : null;
+  const amount = typeof raw.amount === 'number' ? raw.amount : typeof raw.amount === 'string' ? Number(raw.amount) : NaN;
+  if (!sourceKey || !date || !Number.isFinite(amount) || amount < 0) return null;
+  return {
+    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : undefined,
+    sourceKey,
+    date,
+    amount,
+    note: typeof raw.note === 'string' && raw.note.trim() ? raw.note.trim() : undefined,
+  };
+}
+
+function normalizeScheduledOutflowOverride(value: unknown): OperatingScheduledOutflowOverride | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const sourceKey = typeof raw.sourceKey === 'string' && raw.sourceKey.trim() ? raw.sourceKey.trim() : null;
+  const date = typeof raw.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : null;
+  const amount = typeof raw.amount === 'number' ? raw.amount : typeof raw.amount === 'string' ? Number(raw.amount) : NaN;
+  if (!sourceKey || !date || !Number.isFinite(amount) || amount < 0) return null;
+  return {
+    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : undefined,
+    sourceKey,
     date,
     amount,
     note: typeof raw.note === 'string' && raw.note.trim() ? raw.note.trim() : undefined,

@@ -6,6 +6,7 @@ import {
 } from './operatingProjectionModule';
 import type {
   CashFlowAssumptions,
+  Client,
   Provider,
 } from './types';
 import type {
@@ -455,6 +456,161 @@ describe('buildOperatingProjection', () => {
     expect(result.summary.totalScheduledOutflows).toBeCloseTo(0, 4);
     expect(result.alerts.some((alert) => alert.includes('sin carga manual'))).toBe(false);
   });
+
+  it('moves a projected collection with a scenario override', () => {
+    const result = buildOperatingProjection({
+      startDate: '2026-05-01',
+      endDate: '2026-05-04',
+      bankStatements: [bank({ saldoFinal: 0 })],
+      clients: [clientMonthly('c1', 'Cliente Diario', 100)],
+      providers: [],
+      agedBalances: [],
+      assumptions,
+      fixedRules: [],
+      collectionOverrides: [
+        {
+          sourceKey: 'collection:c1:2026-05-01:2026-05-01',
+          date: '2026-05-04',
+          amount: 100,
+          note: 'Cobro confirmado para lunes',
+        },
+      ],
+    });
+
+    expect(result.days.find((day) => day.date === '2026-05-01')!.cashInflows).toHaveLength(0);
+    expect(result.days.find((day) => day.date === '2026-05-01')!.closingCash).toBeCloseTo(0, 4);
+    expect(result.days.find((day) => day.date === '2026-05-04')!.cashInflows).toEqual([
+      expect.objectContaining({
+        sourceKey: 'collection:c1:2026-05-01:2026-05-01',
+        originalDate: '2026-05-01',
+        overrideNote: 'Cobro confirmado para lunes',
+        amount: 100,
+      }),
+    ]);
+    expect(result.days.find((day) => day.date === '2026-05-04')!.closingCash).toBeCloseTo(100, 4);
+  });
+
+  it('replaces projected collection amount with a scenario override', () => {
+    const result = buildOperatingProjection({
+      startDate: '2026-05-01',
+      endDate: '2026-05-01',
+      bankStatements: [bank({ saldoFinal: 0 })],
+      clients: [clientMonthly('c1', 'Cliente Diario', 100)],
+      providers: [],
+      agedBalances: [],
+      assumptions,
+      fixedRules: [],
+      collectionOverrides: [
+        {
+          sourceKey: 'collection:c1:2026-05-01:2026-05-01',
+          date: '2026-05-01',
+          amount: 250,
+        },
+      ],
+    });
+
+    expect(result.days[0].cashInflows[0].amount).toBeCloseTo(250, 4);
+    expect(result.summary.totalCashInflows).toBeCloseTo(250, 4);
+    expect(result.summary.endingCash).toBeCloseTo(250, 4);
+  });
+
+  it('cancels a projected collection with a zero scenario override', () => {
+    const result = buildOperatingProjection({
+      startDate: '2026-05-01',
+      endDate: '2026-05-01',
+      bankStatements: [bank({ saldoFinal: 0 })],
+      clients: [clientMonthly('c1', 'Cliente Diario', 100)],
+      providers: [],
+      agedBalances: [],
+      assumptions,
+      fixedRules: [],
+      collectionOverrides: [
+        {
+          sourceKey: 'collection:c1:2026-05-01:2026-05-01',
+          date: '2026-05-01',
+          amount: 0,
+          note: 'No se cobra en este escenario',
+        },
+      ],
+    });
+
+    expect(result.days[0].cashInflows).toHaveLength(0);
+    expect(result.summary.totalCashInflows).toBeCloseTo(0, 4);
+    expect(result.summary.endingCash).toBeCloseTo(0, 4);
+  });
+
+  it('moves a scheduled fixed outflow with a scenario override', () => {
+    const result = buildOperatingProjection({
+      startDate: '2026-05-01',
+      endDate: '2026-05-04',
+      bankStatements: [bank({ saldoFinal: 500 })],
+      clients: [],
+      providers: [],
+      agedBalances: [],
+      assumptions,
+      fixedRules: [
+        {
+          id: 'fixed-rent',
+          label: 'Renta patio',
+          concept: 'Gastos de Operación',
+          amount: 300,
+          anchorDate: '2026-05-01',
+        },
+      ],
+      scheduledOutflowOverrides: [
+        {
+          sourceKey: 'fixed:fixed-rent:2026-05-01',
+          date: '2026-05-04',
+          amount: 300,
+          note: 'Pateado al lunes',
+        },
+      ],
+    });
+
+    expect(result.days.find((day) => day.date === '2026-05-01')!.scheduledOutflows).toHaveLength(0);
+    expect(result.days.find((day) => day.date === '2026-05-01')!.closingCash).toBeCloseTo(500, 4);
+    expect(result.days.find((day) => day.date === '2026-05-04')!.scheduledOutflows).toEqual([
+      expect.objectContaining({
+        sourceKey: 'fixed:fixed-rent:2026-05-01',
+        originalDate: '2026-05-01',
+        overrideNote: 'Pateado al lunes',
+        amount: 300,
+      }),
+    ]);
+    expect(result.days.find((day) => day.date === '2026-05-04')!.closingCash).toBeCloseTo(200, 4);
+  });
+
+  it('cancels a scheduled fixed outflow with a zero scenario override', () => {
+    const result = buildOperatingProjection({
+      startDate: '2026-05-01',
+      endDate: '2026-05-01',
+      bankStatements: [bank({ saldoFinal: 500 })],
+      clients: [],
+      providers: [],
+      agedBalances: [],
+      assumptions,
+      fixedRules: [
+        {
+          id: 'fixed-rent',
+          label: 'Renta patio',
+          concept: 'Gastos de Operación',
+          amount: 300,
+          anchorDate: '2026-05-01',
+        },
+      ],
+      scheduledOutflowOverrides: [
+        {
+          sourceKey: 'fixed:fixed-rent:2026-05-01',
+          date: '2026-05-01',
+          amount: 0,
+        },
+      ],
+    });
+
+    expect(result.days[0].scheduledOutflows).toHaveLength(0);
+    expect(result.summary.totalScheduledOutflows).toBeCloseTo(0, 4);
+    expect(result.summary.endingCash).toBeCloseTo(500, 4);
+  });
 });
 
 function budget(overrides: Partial<Budget>): Budget {
@@ -486,6 +642,24 @@ function provider(name: string, overrides: Partial<Provider> = {}): Provider {
     flexibility: 'revisar',
     ...overrides,
   };
+}
+
+function clientMonthly(id: string, name: string, amount: number): Client {
+  return {
+    id,
+    name,
+    paymentDay: { kind: 'ANY' },
+    frequency: 'Mensual',
+    creditDays: 0,
+    monthlyBilling: monthlyBilling(amount),
+    complianceRate: 1,
+  };
+}
+
+function monthlyBilling(amount: number): number[] {
+  const values = Array.from({ length: 12 }, () => 0);
+  values[4] = amount;
+  return values;
 }
 
 function aged(

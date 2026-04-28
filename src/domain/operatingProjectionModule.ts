@@ -96,6 +96,22 @@ export interface OperatingSupplierPaymentOverride {
   note?: string;
 }
 
+export interface OperatingCollectionOverride {
+  id?: string;
+  sourceKey: string;
+  date: string;
+  amount: number;
+  note?: string;
+}
+
+export interface OperatingScheduledOutflowOverride {
+  id?: string;
+  sourceKey: string;
+  date: string;
+  amount: number;
+  note?: string;
+}
+
 export interface OperatingProjectionInput {
   startDate: string;
   endDate: string;
@@ -108,6 +124,8 @@ export interface OperatingProjectionInput {
   manualExpenseEvents?: ManualExpenseEvent[];
   operatingAdjustments?: OperatingAdjustment[];
   supplierPaymentOverrides?: OperatingSupplierPaymentOverride[];
+  collectionOverrides?: OperatingCollectionOverride[];
+  scheduledOutflowOverrides?: OperatingScheduledOutflowOverride[];
   fixedRules?: OperatingFixedRule[];
   payrollSplit?: Partial<PayrollSplitWeights>;
   creditTargetRatio?: number;
@@ -121,6 +139,9 @@ export interface OperatingFlowLine {
   source: 'collections' | 'budget' | 'manual' | 'fixed' | 'supplier' | 'adjustment';
   affectsCash: boolean;
   entityId?: string;
+  sourceKey?: string;
+  originalDate?: string;
+  overrideNote?: string;
   detail?: string;
   invoiceDate?: string;
   theoreticalDate?: string;
@@ -262,6 +283,9 @@ interface ScheduledExpense {
   remaining: number;
   source: 'budget' | 'manual' | 'fixed';
   allowPartial: boolean;
+  sourceKey?: string;
+  originalDate?: string;
+  overrideNote?: string;
 }
 
 interface SupplierInvoice {
@@ -311,6 +335,10 @@ function addMonthsKeepingDom(value: Date, months: number): Date {
 
 function compareIsoDate(a: string, b: string): number {
   return a.localeCompare(b);
+}
+
+function isIsoDateString(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function monthKey(value: Date | string): string {
@@ -1186,6 +1214,72 @@ function fixedExpenseSort(a: ScheduledExpense, b: ScheduledExpense): number {
   return a.label.localeCompare(b.label);
 }
 
+function normalizedOverrideDate(date: string): string | null {
+  if (!isIsoDateString(date)) return null;
+  return toIsoDate(nextBusinessDay(parseIsoDate(date)));
+}
+
+function overrideDateInRange(date: string, startDate: string, endDate: string): boolean {
+  return compareIsoDate(date, startDate) >= 0 && compareIsoDate(date, endDate) <= 0;
+}
+
+function buildCollectionOverrideMap(
+  overrides: OperatingCollectionOverride[],
+  startDate: string,
+  endDate: string,
+): Map<string, OperatingCollectionOverride & { date: string }> {
+  const byKey = new Map<string, OperatingCollectionOverride & { date: string }>();
+  for (const override of overrides) {
+    if (!override.sourceKey || !Number.isFinite(override.amount) || override.amount < 0) continue;
+    const date = normalizedOverrideDate(override.date);
+    if (!date) continue;
+    if (override.amount > 0 && !overrideDateInRange(date, startDate, endDate)) continue;
+    byKey.set(override.sourceKey, { ...override, date });
+  }
+  return byKey;
+}
+
+function buildScheduledOutflowOverrideMap(
+  overrides: OperatingScheduledOutflowOverride[],
+  startDate: string,
+  endDate: string,
+): Map<string, OperatingScheduledOutflowOverride & { date: string }> {
+  const byKey = new Map<string, OperatingScheduledOutflowOverride & { date: string }>();
+  for (const override of overrides) {
+    if (!override.sourceKey || !Number.isFinite(override.amount) || override.amount < 0) continue;
+    const date = normalizedOverrideDate(override.date);
+    if (!date) continue;
+    if (override.amount > 0 && !overrideDateInRange(date, startDate, endDate)) continue;
+    byKey.set(override.sourceKey, { ...override, date });
+  }
+  return byKey;
+}
+
+function applyScheduledOutflowOverrides(
+  expenses: ScheduledExpense[],
+  overrides: OperatingScheduledOutflowOverride[],
+  startDate: string,
+  endDate: string,
+): ScheduledExpense[] {
+  const byKey = buildScheduledOutflowOverrideMap(overrides, startDate, endDate);
+  return expenses.flatMap((expense) => {
+    const sourceKey = expense.sourceKey ?? expense.id;
+    const originalDate = expense.originalDate ?? expense.date;
+    const override = byKey.get(sourceKey);
+    if (!override) return [{ ...expense, sourceKey, originalDate }];
+    if (override.amount <= 0) return [];
+    return [{
+      ...expense,
+      date: override.date,
+      amount: override.amount,
+      remaining: override.amount,
+      sourceKey,
+      originalDate,
+      overrideNote: override.note,
+    }];
+  });
+}
+
 function addAmount(map: Map<string, number>, key: string, amount: number): void {
   if (!Number.isFinite(amount) || Math.abs(amount) < 0.005) return;
   map.set(key, (map.get(key) ?? 0) + amount);
@@ -1502,6 +1596,7 @@ export function buildOperatingProjection(input: OperatingProjectionInput): Opera
   const manualEvents = input.manualExpenseEvents ?? [];
   const operatingAdjustments = input.operatingAdjustments ?? [];
   const supplierPaymentOverrides = input.supplierPaymentOverrides ?? [];
+  const collectionOverrideMap = buildCollectionOverrideMap(input.collectionOverrides ?? [], startDate, endDate);
   const payrollSplit = defaultPayrollSplit(input.payrollSplit);
   const fixedRules = input.fixedRules ?? defaultOperatingFixedRules();
   const creditTargetRatio = input.creditTargetRatio ?? DEFAULT_CREDIT_TARGET_RATIO;
@@ -1513,16 +1608,24 @@ export function buildOperatingProjection(input: OperatingProjectionInput): Opera
   const collections = projectCollectionsForRange(input.clients, input.assumptions, startDate, endDate);
   const collectionsByDate = new Map<string, OperatingFlowLine[]>();
   for (const event of collections) {
+    const sourceKey = `collection:${event.clientId}:${event.invoiceDate}:${event.realDate}`;
+    const override = collectionOverrideMap.get(sourceKey);
+    if (override?.amount === 0) continue;
+    const effectiveDate = override?.date ?? event.realDate;
+    const effectiveAmount = override ? override.amount : event.amount;
     const client = clientsById.get(event.clientId);
-    const bucket = collectionsByDate.get(event.realDate) ?? [];
+    const bucket = collectionsByDate.get(effectiveDate) ?? [];
     bucket.push({
-      id: `collection:${event.clientId}:${event.invoiceDate}:${event.realDate}`,
+      id: sourceKey,
       label: client?.name ?? event.clientId,
-      amount: event.amount,
+      amount: effectiveAmount,
       category: 'Cobranza',
       source: 'collections',
       affectsCash: true,
       entityId: event.clientId,
+      sourceKey,
+      originalDate: event.realDate,
+      overrideNote: override?.note,
       detail: client
         ? `${client.frequency}${client.factoraje ? ' · factoraje' : ''}${client.paymentDayRaw ? ` · ${client.paymentDayRaw}` : ''}`
         : 'Cobranza proyectada',
@@ -1531,7 +1634,7 @@ export function buildOperatingProjection(input: OperatingProjectionInput): Opera
       lagDays: event.lagDays,
       confidence: collectionConfidence(client),
     });
-    collectionsByDate.set(event.realDate, bucket);
+    collectionsByDate.set(effectiveDate, bucket);
   }
 
   const adjustmentByDate = new Map<string, OperatingFlowLine[]>();
@@ -1572,7 +1675,12 @@ export function buildOperatingProjection(input: OperatingProjectionInput): Opera
     payrollSplit,
   });
   alerts.push(...budgetBuild.alerts);
-  const scheduledExpenses = budgetBuild.expenses.sort(fixedExpenseSort);
+  const scheduledExpenses = applyScheduledOutflowOverrides(
+    budgetBuild.expenses,
+    input.scheduledOutflowOverrides ?? [],
+    startDate,
+    endDate,
+  ).sort(fixedExpenseSort);
 
   const invoices = buildInvoices(input.agedBalances, input.providers, startDate);
   const providerExposure = new Map<string, number>();
@@ -1666,6 +1774,9 @@ export function buildOperatingProjection(input: OperatingProjectionInput): Opera
             category: expense.concept,
             source: expense.source,
             affectsCash: true,
+            sourceKey: expense.sourceKey ?? expense.id,
+            originalDate: expense.originalDate ?? expense.date,
+            overrideNote: expense.overrideNote,
             detail: `${expense.source === 'fixed' ? 'Regla fija' : expense.source === 'manual' ? 'Manual' : 'Presupuesto'} · programado ${expense.date}`,
           });
         }
@@ -1689,6 +1800,9 @@ export function buildOperatingProjection(input: OperatingProjectionInput): Opera
             category: expense.concept,
             source: expense.source,
             affectsCash: true,
+            sourceKey: expense.sourceKey ?? expense.id,
+            originalDate: expense.originalDate ?? expense.date,
+            overrideNote: expense.overrideNote,
             detail: `${expense.source === 'fixed' ? 'Regla fija' : expense.source === 'manual' ? 'Manual' : 'Presupuesto'} · programado ${expense.date}`,
           });
           reserveState = mandatoryReserveSnapshot(date, scheduledExpenses, futureCashByDate, runningCash);
