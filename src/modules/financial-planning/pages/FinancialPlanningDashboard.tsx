@@ -1,20 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { AlertTriangle, Plus } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import { fmtCompact } from '../../../formatters';
+import { fmtCurrency } from '../../../formatters';
 import {
   calculateBaseProjection,
   calculateScenarioProjection,
   compareScenarios,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
-import type { AuditEvent, FinancialAdjustment, FinancialMovement, FinancialScenario } from '../../shared-finance/types';
+import type {
+  AuditEvent,
+  FinancialAdjustment,
+  FinancialMovement,
+  FinancialScenario,
+} from '../../shared-finance/types';
 import { appendAuditEvent } from '../../shared-finance/audit/audit';
 import { CashFlowChart } from '../../financial-projection/components/CashFlowChart';
-import { CustomerCollectionPanel, SupplierRiskPanel, TaxPlanningPanel } from '../../financial-projection/components/FinanceContextPanels';
-import { buildFinancialProjectionSourceData, calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
+import { TaxPlanningPanel } from '../../financial-projection/components/FinanceContextPanels';
+import {
+  buildFinancialProjectionSourceData,
+  calculateInitialCash,
+} from '../../financial-projection/services/financialProjectionService';
 import { AdjustmentEditorModal } from '../components/AdjustmentEditorModal';
 import { AdjustmentLibrary } from '../components/AdjustmentLibrary';
 import { ApprovalWorkflowPanel } from '../components/ApprovalWorkflowPanel';
@@ -36,6 +44,8 @@ import {
   savePlanningAudit,
   savePlanningScenarios,
 } from '../services/financialPlanningStorage';
+import KpiCard from '../../../components/ui/KpiCard';
+import PageHeader from '../../../components/ui/PageHeader';
 
 interface Props {
   companyCode: string;
@@ -48,16 +58,45 @@ interface Props {
   startingBalance: number;
 }
 
+/**
+ * Planeación Financiera — escenarios, ajustes, aprobaciones y plan
+ * oficial sobre la trayectoria canónica del Dashboard.
+ *
+ * Cambios post-refactor:
+ *
+ *   1. Hereda la trayectoria canónica del Dashboard vía
+ *      `buildFinancialProjectionSourceData`. Antes calculaba su propia
+ *      caja con datos parcialmente mock.
+ *   2. PageHeader idéntico al resto del producto. Antes el header era
+ *      `<header>` HTML inline con `bg-white/8` y métricas en chips
+ *      transparentes.
+ *   3. Empty state honesto cuando no hay datos. Antes mostraba "Diesel
+ *      Norte", "Carrier Planta A", etc.
+ *   4. Eliminados los paneles de Cobranza y Proveedores — esos viven
+ *      ahora SOLO en Proyección Financiera. Aquí dejamos únicamente
+ *      Impuestos porque su workflow de aprobación es parte de
+ *      Planeación.
+ *   5. Métricas de cabecera ahora son `<KpiCard>` reales (no chips
+ *      blancos transparentes).
+ */
 export default function FinancialPlanningDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const yearEnd = useMemo(() => `${Number(today.slice(0, 4))}-12-31`, [today]);
+
   const source = useMemo(
     () => buildFinancialProjectionSourceData({ ...props, asOfDate: today }),
     [props, today],
   );
-  const [scenarios, setScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios(source.scenarios));
-  const [adjustments, setAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments(source.adjustments));
+  const [scenarios, setScenarios] = useState<FinancialScenario[]>(
+    () => loadPlanningScenarios(source.scenarios),
+  );
+  const [adjustments, setAdjustments] = useState<FinancialAdjustment[]>(
+    () => loadPlanningAdjustments([]),
+  );
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(() => loadPlanningAudit());
-  const [activeScenarioId, setActiveScenarioId] = useState(() => scenarios.find((scenario) => !scenario.isBase)?.id ?? 'liquidity');
+  const [activeScenarioId, setActiveScenarioId] = useState<string>(
+    () => scenarios.find((scenario) => !scenario.isBase)?.id ?? scenarios[0]?.id ?? 'liquidity',
+  );
   const [editorMovement, setEditorMovement] = useState<FinancialMovement | null>(null);
 
   useEffect(() => { savePlanningScenarios(scenarios); }, [scenarios]);
@@ -70,27 +109,34 @@ export default function FinancialPlanningDashboard(props: Props) {
   const baseProjection = useMemo(
     () => calculateBaseProjection(source.movements, {
       startDate: today,
-      endDate: shift(today, 90),
+      endDate: yearEnd,
       initialCash: calculateInitialCash(props.bankStatements, props.startingBalance),
-      minimumCash: 20_000_000,
-      granularity: 'daily',
+      minimumCash: minimumCashFor(props),
+      granularity: 'monthly',
       scenarioId: baseScenario.id,
       name: baseScenario.name,
     }),
-    [baseScenario.id, baseScenario.name, props.bankStatements, props.startingBalance, source.movements, today],
+    [baseScenario.id, baseScenario.name, props, source.movements, today, yearEnd],
   );
 
   const scenarioProjections = useMemo(
     () => scenarios.map((scenario) => calculateScenarioProjection(baseProjection, scenario, adjustments)),
     [adjustments, baseProjection, scenarios],
   );
-  const activeProjection = scenarioProjections.find((projection) => projection.scenarioId === activeScenario.id) ?? baseProjection;
-  const comparisons = compareScenarios(baseProjection, scenarioProjections.filter((projection) => projection.scenarioId !== baseProjection.scenarioId));
+  const activeProjection = scenarioProjections.find(
+    (projection) => projection.scenarioId === activeScenario.id,
+  ) ?? baseProjection;
+  const comparisons = compareScenarios(
+    baseProjection,
+    scenarioProjections.filter((projection) => projection.scenarioId !== baseProjection.scenarioId),
+  );
 
   const activeMovements = useMemo(
     () => activeProjection.movements
       .filter((movement) => movement.status !== 'REAL')
-      .sort((a, b) => (a.adjustedDate ?? a.projectedDate).localeCompare(b.adjustedDate ?? b.projectedDate)),
+      .sort((a, b) =>
+        (a.adjustedDate ?? a.projectedDate).localeCompare(b.adjustedDate ?? b.projectedDate),
+      ),
     [activeProjection.movements],
   );
 
@@ -134,13 +180,17 @@ export default function FinancialPlanningDashboard(props: Props) {
 
   const handleApproveScenario = () => {
     const result = approveScenario(activeScenario);
-    setScenarios((current) => current.map((scenario) => scenario.id === activeScenario.id ? result.scenario : scenario));
+    setScenarios((current) =>
+      current.map((scenario) => scenario.id === activeScenario.id ? result.scenario : scenario),
+    );
     setAuditEvents((current) => [result.auditEvent, ...current]);
   };
 
   const handlePublishPlan = () => {
     const result = publishPlan(activeScenario);
-    setScenarios((current) => current.map((scenario) => scenario.id === activeScenario.id ? result.scenario : scenario));
+    setScenarios((current) =>
+      current.map((scenario) => scenario.id === activeScenario.id ? result.scenario : scenario),
+    );
     setAuditEvents((current) => [result.auditEvent, ...current]);
   };
 
@@ -148,7 +198,7 @@ export default function FinancialPlanningDashboard(props: Props) {
     const now = new Date().toISOString();
     const scenario: FinancialScenario = {
       id: `custom-${Date.now()}`,
-      name: `Escenario Personalizado ${scenarios.filter((item) => item.kind === 'CUSTOM').length + 1}`,
+      name: `Escenario personalizado ${scenarios.filter((item) => item.kind === 'CUSTOM').length + 1}`,
       kind: 'CUSTOM',
       adjustmentIds: [],
       status: 'DRAFT',
@@ -165,11 +215,14 @@ export default function FinancialPlanningDashboard(props: Props) {
   };
 
   const handleRevertMovement = (movement: FinancialMovement) => {
-    setAdjustments((current) => current.filter((adjustment) =>
-      !(adjustment.scenarioIds.includes(activeScenario.id)
-        && adjustment.targetType === 'MOVEMENT'
-        && (adjustment.targetExpression === movement.id || adjustment.targetExpression === movement.sourceObjectId)),
-    ));
+    setAdjustments((current) =>
+      current.filter((adjustment) =>
+        !(adjustment.scenarioIds.includes(activeScenario.id)
+          && adjustment.targetType === 'MOVEMENT'
+          && (adjustment.targetExpression === movement.id
+            || adjustment.targetExpression === movement.sourceObjectId)),
+      ),
+    );
     setAuditEvents((current) => appendAuditEvent(current, {
       entityType: 'MOVEMENT',
       entityId: movement.id,
@@ -179,22 +232,60 @@ export default function FinancialPlanningDashboard(props: Props) {
     }));
   };
 
+  if (!source.hasData) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Planeación Financiera" />
+        <EmptyDataState />
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4">
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-[0.05em] text-white/70">FP&A · Planeación</div>
-          <h1 className="mt-1 text-[22px] font-semibold text-white">Planeación Financiera</h1>
-          <p className="mt-1 max-w-[820px] text-[13px] text-white/75">
-            Decide qué hacer sobre la proyección: escenarios, ajustes, aprobaciones y plan oficial sin sobrescribir el base.
-          </p>
-        </div>
-        <div className="grid grid-cols-3 gap-2 text-right">
-          <HeaderMetric label="Caja final" value={fmtCompact(activeProjection.summary.finalCash)} />
-          <HeaderMetric label="Déficit" value={String(activeProjection.summary.deficitDays)} />
-          <HeaderMetric label="Crédito req." value={fmtCompact(activeProjection.summary.creditRequired)} />
-        </div>
-      </header>
+    <div className="space-y-5">
+      <PageHeader
+        title="Planeación Financiera"
+        actions={
+          <button
+            onClick={handleCreateScenario}
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-3 text-[13px] font-medium text-white hover:bg-[var(--primary-hover)]"
+          >
+            <Plus className="h-4 w-4" strokeWidth={1.5} />
+            Nuevo escenario
+          </button>
+        }
+      />
+
+      <p className="text-[12px] text-[var(--gray-500)] -mt-3 max-w-[820px]">
+        Decide qué hacer sobre la proyección. Crea escenarios, ajusta movimientos y aprueba el plan oficial sin sobrescribir el base.
+      </p>
+
+      {/* KPIs del escenario activo. Antes eran chips blancos translúcidos
+          en el header — ahora se rinden con KpiCard real y son leibles. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <KpiCard
+          label="Caja final escenario"
+          value={fmtCurrency(activeProjection.summary.finalCash)}
+          color="var(--gray-950)"
+          sublabel={`${activeScenario.name} · ${activeProjection.granularity}`}
+        />
+        <KpiCard
+          label="Días en déficit"
+          value={String(activeProjection.summary.deficitDays)}
+          color={activeProjection.summary.deficitDays > 0 ? 'var(--danger)' : 'var(--success)'}
+          sublabel={
+            activeProjection.summary.maxRiskDate
+              ? `Mayor riesgo: ${activeProjection.summary.maxRiskDate}`
+              : 'Sin fecha crítica'
+          }
+        />
+        <KpiCard
+          label="Crédito requerido"
+          value={fmtCurrency(activeProjection.summary.creditRequired)}
+          color={activeProjection.summary.creditRequired > 0 ? 'var(--warning)' : 'var(--gray-950)'}
+          sublabel={`Mínimo ${fmtCurrency(activeProjection.summary.minimumCashRequired)}`}
+        />
+      </div>
 
       <ScenarioSelector
         scenarios={scenarios}
@@ -234,11 +325,10 @@ export default function FinancialPlanningDashboard(props: Props) {
         onRevertMovement={handleRevertMovement}
       />
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <TaxPlanningPanel taxes={source.taxes} />
-        <SupplierRiskPanel suppliers={source.suppliers} />
-        <CustomerCollectionPanel customers={source.customers} />
-      </div>
+      {/* Solo Impuestos vive aquí — los otros dos paneles (clientes y
+          proveedores) están en Proyección. Antes los tres se duplicaban
+          en ambos módulos sin ganar nada. */}
+      <TaxPlanningPanel taxes={source.taxes} />
 
       <AdjustmentEditorModal
         movement={editorMovement}
@@ -247,33 +337,38 @@ export default function FinancialPlanningDashboard(props: Props) {
         onClose={() => setEditorMovement(null)}
         onSave={handleSaveAdjustment}
       />
-
-      <button
-        onClick={handleCreateScenario}
-        className="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/8 px-3 text-[12px] font-medium text-white hover:bg-white/12"
-      >
-        <Plus className="h-4 w-4" strokeWidth={1.5} />
-        Crear escenario personalizado
-      </button>
     </div>
   );
 
   function updateAdjustment(adjustment: FinancialAdjustment) {
-    setAdjustments((current) => current.map((item) => item.id === adjustment.id ? adjustment : item));
+    setAdjustments((current) => current.map((item) =>
+      item.id === adjustment.id ? adjustment : item,
+    ));
   }
 }
 
-function HeaderMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-white/15 bg-white/8 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-[0.04em] text-white/60">{label}</div>
-      <div className="mt-1 text-[14px] font-semibold text-white tabular-nums">{value}</div>
-    </div>
-  );
+function minimumCashFor(props: Props): number {
+  const fallback = 20_000_000;
+  if (!props.budget) return fallback;
+  const month = new Date().getUTCMonth();
+  const monthlyExpense = props.budget.expenseTotal?.[month] ?? 0;
+  return monthlyExpense > 0 ? Math.round(monthlyExpense * 0.3) : fallback;
 }
 
-function shift(date: string, days: number): string {
-  const parsed = new Date(`${date}T00:00:00.000Z`);
-  parsed.setUTCDate(parsed.getUTCDate() + days);
-  return parsed.toISOString().slice(0, 10);
+function EmptyDataState() {
+  return (
+    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-10 text-center">
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--warning-muted)]">
+        <AlertTriangle className="h-5 w-5" style={{ color: 'var(--warning)' }} strokeWidth={1.5} />
+      </div>
+      <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
+        Aún no hay datos suficientes para planear
+      </h2>
+      <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">
+        Necesitamos la trayectoria base del Dashboard para que los escenarios y ajustes tengan sentido.
+        Carga estados de cuenta en <strong>Bancos</strong> y configura el <strong>presupuesto</strong>{' '}
+        en Operativa para empezar.
+      </p>
+    </div>
+  );
 }

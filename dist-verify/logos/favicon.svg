@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bevel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"></stop>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"></stop>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.18"></stop>
+    </linearGradient>
+  </defs>
+  
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="#0f172a"></rect>
+  
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="url(#bevel)"></rect>
+  
+  <text x="32" y="43" font-family="Roboto, &#39;Helvetica Neue&#39;, Arial, sans-serif" font-size="42" font-weight="700" text-anchor="middle" fill="#ffffff">S</text>
+</svg>

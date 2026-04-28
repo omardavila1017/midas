@@ -13,6 +13,17 @@ import {
 import { fmtCompact, fmtCurrency } from '../../../formatters';
 import type { ForecastRun } from '../../shared-finance/types';
 
+/**
+ * Chart de caja proyectada. Mantiene el modelo del Dashboard:
+ *   - Barras apiladas de ingresos vs egresos
+ *   - Línea de caja final
+ *   - Referencia horizontal a caja mínima
+ *   - Línea punteada del base cuando se compara escenario vs base
+ *
+ * Antes el chart estaba dentro de un card con `shadow-[var(--shadow-card)]`
+ * que no usa nadie más; ahora hereda el patrón de Dashboard
+ * (border-[var(--gray-200)] sin sombra) para consistencia visual.
+ */
 export function CashFlowChart({
   projection,
   baseProjection,
@@ -20,7 +31,9 @@ export function CashFlowChart({
   projection: ForecastRun;
   baseProjection?: ForecastRun;
 }) {
-  const baseByDate = new Map(baseProjection?.buckets.map((bucket) => [bucket.date, bucket.closingCash]) ?? []);
+  const baseByDate = new Map(
+    baseProjection?.buckets.map((bucket) => [bucket.date, bucket.closingCash]) ?? [],
+  );
   const data = projection.buckets.map((bucket) => ({
     date: bucket.label,
     rawDate: bucket.date,
@@ -32,35 +45,89 @@ export function CashFlowChart({
   }));
 
   return (
-    <section className="rounded-xl border border-[var(--border)] bg-white p-4 shadow-[var(--shadow-card)]">
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Caja proyectada</h2>
-          <p className="mt-1 text-[12px] text-[var(--gray-500)]">Entradas, salidas, cierre y caja mínima. La línea punteada compara contra el base.</p>
+          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
+            Caja proyectada
+          </h2>
+          <p className="mt-1 text-[12px] text-[var(--gray-400)]">
+            Entradas, salidas, cierre y caja mínima.
+            {baseProjection ? ' La línea punteada es el escenario base.' : ' Vista del escenario base.'}
+          </p>
         </div>
-        <div className="text-right text-[12px] text-[var(--gray-500)]">
+        <div className="text-right text-[12px] text-[var(--gray-400)]">
           {projection.startDate} → {projection.endDate}
         </div>
       </div>
-      <div className="mt-4 h-[320px]">
+      <div className="mt-4" style={{ height: 340 }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 12, right: 18, bottom: 0, left: 4 }}>
-            <CartesianGrid stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--gray-400)' }} minTickGap={18} />
-            <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11, fill: 'var(--gray-400)' }} width={72} />
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 11, fill: 'var(--gray-400)' }}
+              minTickGap={18}
+            />
+            <YAxis
+              tickFormatter={fmtCompact}
+              tick={{ fontSize: 11, fill: 'var(--gray-400)' }}
+              width={72}
+            />
             <Tooltip
               formatter={(value: number, name: string) => [fmtCurrency(value), name]}
               labelFormatter={(_, payload) => payload?.[0]?.payload?.rawDate ?? ''}
-              contentStyle={{ border: '1px solid var(--border)', borderRadius: '10px', fontSize: 12 }}
+              contentStyle={{
+                border: '1px solid var(--gray-200)',
+                borderRadius: '10px',
+                fontSize: 12,
+              }}
             />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Bar dataKey="entradas" name="Entradas" fill="var(--success)" barSize={12} radius={[4, 4, 0, 0]} />
-            <Bar dataKey="salidas" name="Salidas" fill="var(--danger)" barSize={12} radius={[4, 4, 0, 0]} />
-            <Line type="monotone" dataKey="caja" name="Caja final" stroke="var(--primary)" strokeWidth={2} dot={false} />
+            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+            <Bar
+              dataKey="entradas"
+              name="Ingresos"
+              fill="var(--success)"
+              barSize={12}
+              radius={[4, 4, 0, 0]}
+            />
+            <Bar
+              dataKey="salidas"
+              name="Egresos"
+              fill="var(--danger)"
+              barSize={12}
+              radius={[4, 4, 0, 0]}
+            />
+            <Line
+              type="monotone"
+              dataKey="caja"
+              name="Caja final"
+              stroke="#1d4ed8"
+              strokeWidth={2.5}
+              dot={false}
+            />
             {baseProjection && (
-              <Line type="monotone" dataKey="base" name="Base" stroke="var(--gray-400)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} />
+              <Line
+                type="monotone"
+                dataKey="base"
+                name="Caja base"
+                stroke="var(--gray-400)"
+                strokeWidth={1.5}
+                strokeDasharray="4 4"
+                dot={false}
+              />
             )}
-            <ReferenceLine y={projection.summary.minimumCashRequired} stroke="var(--warning)" strokeDasharray="3 3" />
+            <ReferenceLine
+              y={projection.summary.minimumCashRequired}
+              stroke="var(--warning)"
+              strokeDasharray="3 3"
+              label={{
+                value: 'Caja mínima',
+                position: 'right',
+                fill: 'var(--warning)',
+                fontSize: 10,
+              }}
+            />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
