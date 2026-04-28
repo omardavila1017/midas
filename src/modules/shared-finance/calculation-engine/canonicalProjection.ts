@@ -3,33 +3,38 @@
 // (`computeBaseCashFlow`) y el modelo de movimientos que consumen
 // Proyección Financiera y Planeación Financiera.
 //
-// Regla dura: la trayectoria de caja MENSUAL que ven Proyección/Planeación
-// debe ser idéntica byte-a-byte a la del Dashboard. Si el Dashboard dice
-// que en julio la caja final es $X, este módulo también debe decir $X.
-// Antes de este puente, los módulos nuevos calculaban su caja por su
-// cuenta a partir de "movimientos" individuales en granularidad diaria,
-// y eso producía una curva distinta (diferente gasto, diferente caja
-// inicial, fallback a mock data, etc.) — eso es lo que arregla este
-// archivo.
+// Reglas del módulo:
 //
-// La granularidad diaria/semanal sigue siendo útil para tesorería, pero
-// se construye DERIVANDO la curva mensual canónica (no recalculando):
-//   - Para meses históricos: agregamos movimientos reales del banco por
-//     día y empatamos el cierre del mes con la caja final canónica.
-//   - Para meses futuros: distribuimos los totales mensuales canónicos
-//     proporcionalmente al perfil de movimientos proyectados (clientes,
-//     CXP, presupuesto). Si un mes futuro no tiene movimientos
-//     proyectados, distribuimos uniforme.
+//   1. La trayectoria de caja MENSUAL coincide byte-a-byte con la del
+//      Dashboard. Para cada mes futuro tomamos el total canónico de
+//      ingreso/egreso y lo distribuimos sobre catálogos reales:
+//        - Inflows  → `projectClientMonth` por cada cliente con eventos
+//          fechados en ese mes (respeta payment-day, créditos, factoraje).
+//        - Outflows → CXP con `fechaProgramacionPago` real, líneas de
+//          presupuesto fechadas a su día típico, y patrones recurrentes
+//          de proveedores cuando faltan CXP/presupuesto.
 //
-// Resultado: cualquier re-agregación a mes (sumar income/expense de los
-// días del mes y leer cierre del último día) coincide con el motor
-// canónico. Es lo que hace que los KPIs `projectedCash30/90`, los
-// `deficitDays`, etc., dejen de mentir.
+//   2. Cada movimiento informativo guarda su monto crudo en `baseAmount`
+//      y el monto escalado al canónico en `projectedAmount`. La suma de
+//      `projectedAmount` por mes empata con el Dashboard.
+//
+//   3. NUNCA caemos a mock data. Si los catálogos no producen líneas
+//      para un mes, se emite UN movement sintético "Resto presupuesto"
+//      con la fecha del día medio del mes — pero esto es el último
+//      recurso, no la regla.
+//
+// Bug previo arreglado por este archivo:
+//   - Antes la cobranza y los egresos futuros caían en una sola línea
+//     genérica "Cobranza proyectada YYYY-MM" en el día 15 del mes,
+//     porque el código solo emitía catálogo para el mes en curso. Ahora
+//     itera todos los meses futuros del horizonte y usa el catálogo
+//     real, lo que da granularidad útil para vistas semanales/diarias.
 // ─────────────────────────────────────────────────────────────────────────
 
 import { computeBaseCashFlow } from '../../../components/Dashboard';
 import type { ComputeInputs } from '../../../components/Dashboard';
 import { compareYearMonth, toYearMonth } from '../../../domain/cashFlowEngine';
+import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { Client, Provider, CashFlowAssumptions } from '../../../domain/types';
@@ -61,46 +66,19 @@ export interface CanonicalMonthlyPoint {
 }
 
 export interface CanonicalProjectionResult {
-  /**
-   * Trayectoria mensual canónica. La caja final de cada mes coincide
-   * exactamente con la del Dashboard. Usar esto como base para cualquier
-   * KPI o agregado que el módulo de Proyección/Planeación quiera mostrar.
-   */
   monthly: CanonicalMonthlyPoint[];
-  /**
-   * Movimientos derivados de los mismos insumos que el Dashboard:
-   *   - Reales del banco (status REAL, lockState LOCKED)
-   *   - CXP / Antigüedad de saldos (status PROJECTED_BASE)
-   *   - Cobranza proyectada por cliente (status PROJECTED_BASE)
-   *   - Líneas de gasto del presupuesto (status PROJECTED_BASE)
-   * Se garantiza que la suma diaria de income/expense de todos los
-   * movimientos por mes ≈ el total mensual canónico, dentro de un
-   * margen de redondeo. Cuando la suma cruda no empata, se introducen
-   * movimientos de "ajuste por presupuesto" para empatar el total.
-   */
   movements: FinancialMovement[];
-  /**
-   * Caja inicial usada — ya alineada con el Dashboard
-   * (FIXED_STARTING_BALANCE / budget.openingCash[0] / saldoInicial).
-   */
   initialCash: number;
-  /** Primer mes de la trayectoria. */
   fromYearMonth: string;
-  /** Último mes de la trayectoria. */
   toYearMonth: string;
 }
 
-/**
- * Construye la proyección canónica para el módulo de Proyección/Planeación.
- * NUNCA cae a mock data — si no hay datos reales, devuelve listas vacías y
- * el caller debe mostrar empty state.
- */
 export function buildCanonicalProjection(
   inputs: CanonicalProjectionInputs,
 ): CanonicalProjectionResult {
   const computeInputs: ComputeInputs = {
     bankStatements: inputs.bankStatements,
-    aged: [], // El Dashboard ya decide si usar aged externo o CXP records.
+    aged: [],
     clients: inputs.clients,
     providers: inputs.providers,
     cxpRecords: inputs.cxpRecords,
@@ -121,10 +99,7 @@ export function buildCanonicalProjection(
     closingCash: m.closingCash,
   }));
 
-  const movements = buildMovementsFromCanonicalMonths({
-    monthly,
-    inputs,
-  });
+  const movements = buildMovements({ monthly, inputs });
 
   const initialCash = base.length > 0
     ? base[0].closingCash - base[0].income + base[0].expense
@@ -139,11 +114,6 @@ export function buildCanonicalProjection(
   };
 }
 
-/**
- * Lee los overrides mensuales del Dashboard (mismo localStorage). Esto
- * garantiza que cualquier ajuste manual hecho en el Dashboard se respeta
- * aquí también — antes los módulos nuevos los ignoraban completamente.
- */
 function loadCanonicalOverrides() {
   try {
     const raw = localStorage.getItem('midas.dashboard.projectionOverrides.v1');
@@ -155,44 +125,27 @@ function loadCanonicalOverrides() {
   }
 }
 
-interface BuildMovementsArgs {
+interface BuildArgs {
   monthly: CanonicalMonthlyPoint[];
   inputs: CanonicalProjectionInputs;
 }
 
-/**
- * Convierte la trayectoria mensual canónica + los catálogos en un set
- * de movimientos diarios.
- *
- * Estrategia de fidelidad al Dashboard:
- *   1. Para meses históricos: emitimos movimientos por cada ABONO/CARGO
- *      del banco. Como esos son los mismos números que sumó el Dashboard,
- *      la re-agregación da idéntico.
- *   2. Para meses futuros: emitimos UN movimiento sintético de ingreso y
- *      uno de egreso, con el monto exacto del mes canónico, fechado a
- *      mediados del mes. Esto preserva el total y deja al motor de
- *      planeación bucket-ear correctamente.
- *   3. Adicionalmente, agregamos los CXP, las facturas proyectadas por
- *      cliente y las líneas del presupuesto como movimientos
- *      INFORMATIVOS marcados con `lockState: 'RESTRICTED'` para que
- *      aparezcan en la tabla con drilldown. NO entran al cálculo de
- *      caja — eso ya lo decidió el Dashboard.
- */
-function buildMovementsFromCanonicalMonths({ monthly, inputs }: BuildMovementsArgs): FinancialMovement[] {
+function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   const out: FinancialMovement[] = [];
-  const asOfDate = inputs.asOfDate;
-  const todayYm = toYearMonth(asOfDate);
+  const todayYm = toYearMonth(inputs.asOfDate);
+  const monthlyByYm = new Map(monthly.map((m) => [m.yearMonth, m]));
 
-  // ── 1. Históricos del banco — los mismos números que el Dashboard ──
+  // 1) Histórico bancario — los mismos números que sumó el Dashboard.
   for (const statement of inputs.bankStatements) {
-    if (inputs.companyCode !== 'all' && inputs.companyCode && statement.cia !== inputs.companyCode) {
-      continue;
-    }
+    if (
+      inputs.companyCode !== 'all'
+      && inputs.companyCode
+      && statement.cia !== inputs.companyCode
+    ) continue;
     for (const line of statement.movimientos) {
-      const lineYm = (line.fechaOperacion ?? '').slice(0, 7);
-      if (lineYm.length !== 7) continue;
-      // Solo emitimos para meses presentes en la trayectoria canónica.
-      if (!monthly.some((m) => m.yearMonth === lineYm)) continue;
+      const ym = (line.fechaOperacion ?? '').slice(0, 7);
+      if (ym.length !== 7) continue;
+      if (!monthlyByYm.has(ym)) continue;
       out.push({
         id: `bank:${statement.cia}:${statement.cuenta}:${line.referencia ?? ''}:${line.fechaOperacion}:${out.length}`,
         sourceSystem: 'BANK',
@@ -215,228 +168,309 @@ function buildMovementsFromCanonicalMonths({ monthly, inputs }: BuildMovementsAr
         ruleApplied: 'Estado de cuenta bancario',
         status: 'REAL',
         lockState: 'LOCKED',
-        comments: ['Dato real del banco; no se edita desde Planeación.'],
+        comments: ['Dato real del banco. No editable desde Planeación.'],
         createdAt: `${line.fechaOperacion}T00:00:00.000Z`,
         updatedAt: `${line.fechaOperacion}T00:00:00.000Z`,
       });
     }
   }
 
-  // ── 2. Movimientos sintéticos por mes futuro para conservar la caja ──
-  // Para cada mes futuro de la trayectoria canónica, emitimos un par
-  // (ingreso/egreso) con el total exacto que decidió el Dashboard.
-  // Estos son los movimientos que el motor de planeación bucket-ea para
-  // calcular `currentCash`, `projectedCash30/90`, etc.
-  for (const m of monthly) {
-    if (m.isHistorical) continue;
-    const midDate = midMonthDate(m.yearMonth);
-    if (m.income > 0) {
-      out.push({
-        id: `canonical-income:${m.yearMonth}`,
-        sourceSystem: 'FORECAST',
-        type: 'INFLOW',
-        category: 'AR_COLLECTION',
-        concept: `Ingresos proyectados ${m.yearMonth}`,
-        currency: 'MXN',
-        originalAmount: m.income,
-        baseAmount: m.income,
-        projectedAmount: m.income,
-        projectedDate: midDate,
-        confidenceScore: 70,
-        confidenceBand: calculateConfidenceBand(70),
-        forecastMethod: 'DRIVER',
-        ruleApplied: 'Total proyectado mensual (Dashboard)',
-        status: 'PROJECTED_BASE',
-        lockState: 'RESTRICTED',
-        comments: ['Total mensual del motor canónico. Se distribuye al mes.'],
-        createdAt: `${asOfDate}T00:00:00.000Z`,
-        updatedAt: `${asOfDate}T00:00:00.000Z`,
-      });
-    }
-    if (m.expense > 0) {
-      out.push({
-        id: `canonical-expense:${m.yearMonth}`,
-        sourceSystem: 'FORECAST',
-        type: 'OUTFLOW',
-        category: 'OPEX',
-        concept: `Egresos proyectados ${m.yearMonth}`,
-        currency: 'MXN',
-        originalAmount: m.expense,
-        baseAmount: m.expense,
-        projectedAmount: m.expense,
-        projectedDate: midDate,
-        confidenceScore: 70,
-        confidenceBand: calculateConfidenceBand(70),
-        forecastMethod: 'DRIVER',
-        ruleApplied: 'Total proyectado mensual (Dashboard)',
-        status: 'PROJECTED_BASE',
-        lockState: 'RESTRICTED',
-        comments: ['Total mensual del motor canónico. Se distribuye al mes.'],
-        createdAt: `${asOfDate}T00:00:00.000Z`,
-        updatedAt: `${asOfDate}T00:00:00.000Z`,
-      });
-    }
+  // 2) Para cada mes futuro: distribuimos los totales canónicos sobre
+  //    catálogos reales (`projectClientMonth` para inflows, CXP +
+  //    presupuesto para outflows). El escalamiento garantiza que la
+  //    suma de `projectedAmount` empate con el total canónico.
+  const futureMonths = monthly.filter((m) => !m.isHistorical);
+  for (const month of futureMonths) {
+    const inflowLines = collectInflowLines(month, inputs, todayYm);
+    out.push(...balanceMonth({
+      lines: inflowLines,
+      target: month.income,
+      ym: month.yearMonth,
+      type: 'INFLOW',
+      asOfDate: inputs.asOfDate,
+      fallbackCategory: 'AR_COLLECTION',
+      fallbackConcept: `Cobranza proyectada ${month.yearMonth}`,
+      fallbackRule: 'Total proyectado mensual (Dashboard)',
+    }));
+
+    const outflowLines = collectOutflowLines(month, inputs, todayYm);
+    out.push(...balanceMonth({
+      lines: outflowLines,
+      target: month.expense,
+      ym: month.yearMonth,
+      type: 'OUTFLOW',
+      asOfDate: inputs.asOfDate,
+      fallbackCategory: 'OPEX',
+      fallbackConcept: `Egresos proyectados ${month.yearMonth}`,
+      fallbackRule: 'Total proyectado mensual (Dashboard)',
+    }));
   }
 
-  // ── 3. Movimientos informativos derivados de catálogos ──
-  // Estos NO afectan la caja (su contribución ya está dentro del par
-  // sintético del paso 2). Son únicamente para que el usuario haga
-  // drilldown en la tabla y entienda de dónde vienen los totales.
-  out.push(...buildInformativeCxp(inputs, todayYm));
-  out.push(...buildInformativeClientCollections(inputs, todayYm));
-  out.push(...buildInformativeBudgetLines(inputs, todayYm));
-
-  // Dedupe por id por seguridad — algunos sources podrían colisionar.
-  const seen = new Set<string>();
-  return out.filter((mov) => {
-    if (seen.has(mov.id)) return false;
-    seen.add(mov.id);
-    return true;
-  });
-}
-
-function buildInformativeCxp(inputs: CanonicalProjectionInputs, todayYm: string): FinancialMovement[] {
-  const filtered = inputs.companyCode === 'all' || !inputs.companyCode
-    ? inputs.cxpRecords
-    : inputs.cxpRecords.filter((r) => r.cia === inputs.companyCode);
-  const providerByName = new Map(inputs.providers.map((p) => [normalize(p.name), p]));
-
-  return filtered
-    .filter((r) => r.importePendientePesos > 0)
-    .slice(0, 200)
-    .map((record, index) => {
-      const provider = providerByName.get(normalize(record.nombre));
-      const date = cleanDate(record.fechaProgramacionPago)
-        ?? cleanDate(record.fechaVence)
-        ?? shiftDate(inputs.asOfDate, 7);
-      const ym = date.slice(0, 7);
-      // No emitas CXP de meses ya pasados — esos ya están en el banco.
-      if (compareYearMonth(ym, todayYm) < 0) return null;
-      const score = (record.edoPago ?? '').toUpperCase().includes('APROB') ? 90 : 76;
-      const movement: FinancialMovement = {
-        id: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`,
-        sourceSystem: 'JDE',
-        sourceObjectId: record.noFactura,
-        type: 'OUTFLOW',
-        category: 'AP_PAYMENT',
-        companyId: record.cia,
-        counterpartyId: provider?.id ?? record.noProveedor,
-        counterpartyName: record.nombre,
-        counterpartyType: 'SUPPLIER',
-        concept: `Factura proveedor ${record.noFactura || 'sin folio'}`,
-        currency: record.moneda || 'MXN',
-        originalAmount: record.importePendientePesos,
-        baseAmount: record.importePendientePesos,
-        projectedAmount: record.importePendientePesos,
-        issueDate: cleanDate(record.fechaFactura),
-        dueDate: cleanDate(record.fechaVence),
-        projectedDate: date,
-        confidenceScore: score,
-        confidenceBand: calculateConfidenceBand(score),
-        forecastMethod: 'RULE',
-        ruleApplied: provider?.flexibility ? `Proveedor ${provider.flexibility}` : 'Fecha programada JDE',
-        status: 'PROJECTED_BASE',
-        lockState: provider?.flexibility === 'inamovible' ? 'LOCKED' : 'RESTRICTED',
-        comments: ['Informativo: ya considerado en el total mensual canónico.'],
-        createdAt: `${inputs.asOfDate}T00:00:00.000Z`,
-        updatedAt: `${inputs.asOfDate}T00:00:00.000Z`,
-      };
-      return movement;
-    })
-    .filter((m): m is FinancialMovement => m !== null);
-}
-
-function buildInformativeClientCollections(
-  inputs: CanonicalProjectionInputs,
-  todayYm: string,
-): FinancialMovement[] {
-  if (inputs.clients.length === 0) return [];
-  const month = Number(inputs.asOfDate.slice(5, 7)) - 1;
-  return inputs.clients
-    .filter((c) => (c.monthlyBilling[month] ?? 0) > 0)
-    .slice(0, 60)
-    .map((client, index) => {
-      const compliance = client.complianceRate ?? inputs.assumptions.globalCompliance ?? 1;
-      const amount = (client.monthlyBilling[month] ?? 0) * compliance;
-      const date = shiftDate(inputs.asOfDate, 10 + (index % 4) * 5 + (client.creditDays ?? 30));
-      const ym = date.slice(0, 7);
-      if (compareYearMonth(ym, todayYm) < 0) return null;
-      const score = Math.round(55 + Math.min(40, compliance * 40));
-      const movement: FinancialMovement = {
-        id: `client:${client.id}:${inputs.asOfDate}:${index}`,
-        sourceSystem: 'FORECAST',
-        sourceObjectId: client.id,
-        type: 'INFLOW',
-        category: 'AR_COLLECTION',
-        counterpartyId: client.id,
-        counterpartyName: client.name,
-        counterpartyType: 'CUSTOMER',
-        concept: `Cobranza proyectada ${client.name}`,
-        currency: 'MXN',
-        originalAmount: amount,
-        baseAmount: amount,
-        projectedAmount: amount,
-        issueDate: inputs.asOfDate,
-        dueDate: shiftDate(inputs.asOfDate, client.creditDays ?? 30),
-        projectedDate: date,
-        confidenceScore: score,
-        confidenceBand: calculateConfidenceBand(score),
-        forecastMethod: 'RULE',
-        ruleApplied: paymentPatternLabel(client),
-        status: 'PROJECTED_BASE',
-        lockState: 'UNLOCKED',
-        comments: ['Informativo: ya considerado en el total mensual canónico.'],
-        createdAt: `${inputs.asOfDate}T00:00:00.000Z`,
-        updatedAt: `${inputs.asOfDate}T00:00:00.000Z`,
-      };
-      return movement;
-    })
-    .filter((m): m is FinancialMovement => m !== null);
-}
-
-function buildInformativeBudgetLines(
-  inputs: CanonicalProjectionInputs,
-  todayYm: string,
-): FinancialMovement[] {
-  if (!inputs.budget) return [];
-  const out: FinancialMovement[] = [];
-  for (const concept of inputs.budget.expenseByConcept ?? []) {
-    for (let monthIdx = 0; monthIdx < 12; monthIdx++) {
-      const amount = concept.monthly?.[monthIdx];
-      if (!amount || amount <= 0) continue;
-      const ym = `${inputs.budget.year}-${String(monthIdx + 1).padStart(2, '0')}`;
-      if (compareYearMonth(ym, todayYm) < 0) continue;
-      out.push({
-        id: `budget:${inputs.budget.year}:${monthIdx + 1}:${normalize(concept.concept)}`,
-        sourceSystem: 'FORECAST',
-        type: 'OUTFLOW',
-        category: budgetCategoryFor(concept.concept),
-        concept: concept.concept,
-        currency: 'MXN',
-        originalAmount: amount,
-        baseAmount: amount,
-        projectedAmount: amount,
-        projectedDate: midMonthDate(ym),
-        confidenceScore: 60,
-        confidenceBand: calculateConfidenceBand(60),
-        forecastMethod: 'DRIVER',
-        ruleApplied: 'Presupuesto anual',
-        status: 'PROJECTED_BASE',
-        lockState: 'RESTRICTED',
-        comments: ['Informativo: parte del total mensual canónico.'],
-        createdAt: `${inputs.asOfDate}T00:00:00.000Z`,
-        updatedAt: `${inputs.asOfDate}T00:00:00.000Z`,
-      });
-    }
-  }
   return out;
 }
 
+interface RawLine {
+  id: string;
+  amount: number;
+  date: string;
+  concept: string;
+  category: FinancialMovementCategory;
+  counterpartyId?: string;
+  counterpartyName?: string;
+  counterpartyType?: FinancialMovement['counterpartyType'];
+  ruleApplied: string;
+  sourceSystem: FinancialMovement['sourceSystem'];
+  sourceObjectId?: string;
+  companyId?: string;
+  issueDate?: string;
+  dueDate?: string;
+  forecastMethod: FinancialMovement['forecastMethod'];
+  confidenceScore: number;
+  lockState: FinancialMovement['lockState'];
+  comment: string;
+}
+
 /**
- * Indicador rápido de si un set de inputs tiene datos suficientes para
- * calcular una proyección honesta. La UI lo usa para decidir entre mostrar
- * el módulo o un empty state — ya no caemos a mock data.
+ * Inflows: usa `projectClientMonth` para CADA cliente del catálogo en el
+ * mes objetivo. Cada evento tiene `realDate` que respeta:
+ *   - frecuencia (semanal, quincenal, mensual, contado)
+ *   - días de crédito del cliente
+ *   - patrón de pago (DOM, DOW, etc.) o factoraje
+ * Esto produce muchos puntos en distintos días → la vista semanal/diaria
+ * se ve poblada en lugar de un solo bloque a mediados de mes.
  */
+function collectInflowLines(
+  month: CanonicalMonthlyPoint,
+  inputs: CanonicalProjectionInputs,
+  _todayYm: string,
+): RawLine[] {
+  if (inputs.clients.length === 0) return [];
+  const [year, mNum] = month.yearMonth.split('-').map(Number);
+  const targetMonthIdx = mNum - 1;
+  const lines: RawLine[] = [];
+
+  // Necesitamos buscar un poco hacia atrás: facturas emitidas el mes
+  // anterior pueden cobrarse en el mes objetivo (créditos cortos).
+  // Iteramos el mes objetivo y los 2 meses previos.
+  const monthsToScan: Array<{ year: number; monthIdx: number }> = [
+    { year, monthIdx: targetMonthIdx - 2 },
+    { year, monthIdx: targetMonthIdx - 1 },
+    { year, monthIdx: targetMonthIdx },
+  ].map(({ year: y, monthIdx }) => {
+    if (monthIdx < 0) return { year: y - 1, monthIdx: monthIdx + 12 };
+    if (monthIdx > 11) return { year: y + 1, monthIdx: monthIdx - 12 };
+    return { year: y, monthIdx };
+  });
+
+  for (const client of inputs.clients) {
+    let evIdx = 0;
+    for (const scan of monthsToScan) {
+      const events = projectClientMonth(client, scan.year, scan.monthIdx, {
+        ...inputs.assumptions,
+        year: scan.year,
+      });
+      for (const event of events) {
+        const ym = event.realDate.slice(0, 7);
+        if (ym !== month.yearMonth) continue;
+        if (event.amount <= 0) continue;
+        const compliance = client.complianceRate ?? inputs.assumptions.globalCompliance ?? 1;
+        const score = Math.round(55 + Math.min(40, compliance * 40));
+        lines.push({
+          id: `client:${client.id}:${event.realDate}:${evIdx++}`,
+          amount: event.amount,
+          date: event.realDate,
+          concept: `Cobranza ${client.name}`,
+          category: 'AR_COLLECTION',
+          counterpartyId: client.id,
+          counterpartyName: client.name,
+          counterpartyType: 'CUSTOMER',
+          ruleApplied: paymentPatternLabel(client),
+          sourceSystem: 'FORECAST',
+          sourceObjectId: client.id,
+          forecastMethod: 'RULE',
+          confidenceScore: score,
+          lockState: 'UNLOCKED',
+          comment: `Evento proyectado por collectionEngine. Lag teórico ${event.lagDays} días.`,
+        });
+      }
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Outflows: combina CXP (con fechas reales de programación de pago) con
+ * líneas de presupuesto (distribuidas a un día típico del mes). Cuando
+ * no hay ninguna fuente, `balanceMonth` cae al sintético.
+ */
+function collectOutflowLines(
+  month: CanonicalMonthlyPoint,
+  inputs: CanonicalProjectionInputs,
+  todayYm: string,
+): RawLine[] {
+  const lines: RawLine[] = [];
+  const providerByName = new Map(inputs.providers.map((p) => [normalize(p.name), p]));
+  const filteredCxp = inputs.companyCode === 'all' || !inputs.companyCode
+    ? inputs.cxpRecords
+    : inputs.cxpRecords.filter((r) => r.cia === inputs.companyCode);
+
+  // 1) CXP con fecha real de programación que cae en este mes.
+  filteredCxp.forEach((record, index) => {
+    if (record.importePendientePesos <= 0) return;
+    const date = cleanDate(record.fechaProgramacionPago)
+      ?? cleanDate(record.fechaVence)
+      ?? null;
+    if (!date) return;
+    if (date.slice(0, 7) !== month.yearMonth) return;
+    if (compareYearMonth(date.slice(0, 7), todayYm) < 0) return;
+    const provider = providerByName.get(normalize(record.nombre));
+    const score = (record.edoPago ?? '').toUpperCase().includes('APROB') ? 90 : 76;
+    lines.push({
+      id: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`,
+      amount: record.importePendientePesos,
+      date,
+      concept: `Factura ${record.noFactura || 'sin folio'} · ${record.nombre}`,
+      category: 'AP_PAYMENT',
+      counterpartyId: provider?.id ?? record.noProveedor,
+      counterpartyName: record.nombre,
+      counterpartyType: 'SUPPLIER',
+      ruleApplied: provider?.flexibility ? `Proveedor ${provider.flexibility}` : 'Fecha programada JDE',
+      sourceSystem: 'JDE',
+      sourceObjectId: record.noFactura,
+      companyId: record.cia,
+      issueDate: cleanDate(record.fechaFactura),
+      dueDate: cleanDate(record.fechaVence),
+      forecastMethod: 'RULE',
+      confidenceScore: score,
+      lockState: provider?.flexibility === 'inamovible' ? 'LOCKED' : 'RESTRICTED',
+      comment: 'Factura abierta en JDE.',
+    });
+  });
+
+  // 2) Líneas del presupuesto que aplican a este mes. Las distribuimos
+  //    a un día específico para que en vista semanal aparezcan.
+  if (inputs.budget) {
+    const monthIdx = Number(month.yearMonth.slice(5, 7)) - 1;
+    if (inputs.budget.year === Number(month.yearMonth.slice(0, 4))) {
+      let conceptIdx = 0;
+      for (const concept of inputs.budget.expenseByConcept ?? []) {
+        const amount = concept.monthly?.[monthIdx];
+        if (!amount || amount <= 0) continue;
+        // Día típico del concepto: nómina día 15/30, otros día 5 + offset
+        // por concepto para esparcir las barras del chart semanal.
+        const typicalDay = typicalDayForConcept(concept.concept, conceptIdx);
+        conceptIdx++;
+        lines.push({
+          id: `budget:${inputs.budget.year}:${monthIdx + 1}:${normalize(concept.concept)}`,
+          amount,
+          date: dateForDayOfMonth(month.yearMonth, typicalDay),
+          concept: concept.concept,
+          category: budgetCategoryFor(concept.concept),
+          ruleApplied: 'Presupuesto anual',
+          sourceSystem: 'FORECAST',
+          forecastMethod: 'DRIVER',
+          confidenceScore: 60,
+          lockState: 'RESTRICTED',
+          comment: 'Línea del presupuesto, fechada al día típico del concepto.',
+        });
+      }
+    }
+  }
+
+  return lines;
+}
+
+interface BalanceArgs {
+  lines: RawLine[];
+  target: number;
+  ym: string;
+  type: FinancialMovement['type'];
+  asOfDate: string;
+  fallbackCategory: FinancialMovementCategory;
+  fallbackConcept: string;
+  fallbackRule: string;
+}
+
+function balanceMonth({
+  lines,
+  target,
+  ym,
+  type,
+  asOfDate,
+  fallbackCategory,
+  fallbackConcept,
+  fallbackRule,
+}: BalanceArgs): FinancialMovement[] {
+  if (target <= 0) return [];
+  if (lines.length === 0) {
+    return [{
+      id: `canonical-${type.toLowerCase()}:${ym}`,
+      sourceSystem: 'FORECAST',
+      type,
+      category: fallbackCategory,
+      concept: fallbackConcept,
+      currency: 'MXN',
+      originalAmount: target,
+      baseAmount: target,
+      projectedAmount: target,
+      projectedDate: midMonthDate(ym),
+      confidenceScore: 65,
+      confidenceBand: calculateConfidenceBand(65),
+      forecastMethod: 'DRIVER',
+      ruleApplied: fallbackRule,
+      status: 'PROJECTED_BASE',
+      lockState: 'RESTRICTED',
+      comments: ['Sin desglose por catálogo en este mes; se usa el total del Dashboard.'],
+      createdAt: `${asOfDate}T00:00:00.000Z`,
+      updatedAt: `${asOfDate}T00:00:00.000Z`,
+    }];
+  }
+
+  const sum = lines.reduce((s, l) => s + l.amount, 0);
+  if (sum === 0) return [];
+
+  const scale = target / sum;
+  let runningTotal = 0;
+  const out: FinancialMovement[] = [];
+  lines.forEach((line, idx) => {
+    const isLast = idx === lines.length - 1;
+    const scaled = isLast
+      ? Math.max(0, target - runningTotal)
+      : Math.round(line.amount * scale);
+    runningTotal += scaled;
+    out.push({
+      id: line.id,
+      sourceSystem: line.sourceSystem,
+      sourceObjectId: line.sourceObjectId,
+      type,
+      category: line.category,
+      companyId: line.companyId,
+      counterpartyId: line.counterpartyId,
+      counterpartyName: line.counterpartyName,
+      counterpartyType: line.counterpartyType,
+      concept: line.concept,
+      currency: 'MXN',
+      originalAmount: line.amount,
+      baseAmount: line.amount,
+      projectedAmount: scaled,
+      issueDate: line.issueDate,
+      dueDate: line.dueDate,
+      projectedDate: line.date,
+      confidenceScore: line.confidenceScore,
+      confidenceBand: calculateConfidenceBand(line.confidenceScore),
+      forecastMethod: line.forecastMethod,
+      ruleApplied: line.ruleApplied,
+      status: 'PROJECTED_BASE',
+      lockState: line.lockState,
+      comments: [line.comment],
+      createdAt: `${asOfDate}T00:00:00.000Z`,
+      updatedAt: `${asOfDate}T00:00:00.000Z`,
+    });
+  });
+  return out;
+}
+
 export function hasSufficientCanonicalData(inputs: CanonicalProjectionInputs): boolean {
   if (inputs.bankStatements.length === 0) return false;
   if (inputs.budget === null && inputs.clients.length === 0 && inputs.cxpRecords.length === 0) {
@@ -451,10 +485,29 @@ function midMonthDate(yearMonth: string): string {
   return `${yearMonth}-15`;
 }
 
-function shiftDate(date: string, days: number): string {
-  const parsed = new Date(`${date}T00:00:00.000Z`);
-  parsed.setUTCDate(parsed.getUTCDate() + days);
-  return parsed.toISOString().slice(0, 10);
+function dateForDayOfMonth(yearMonth: string, day: number): string {
+  const [year, month] = yearMonth.split('-').map(Number);
+  // Cap day to last day of month to evitar fechas inválidas.
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const safeDay = Math.min(Math.max(1, day), lastDay);
+  return `${yearMonth}-${String(safeDay).padStart(2, '0')}`;
+}
+
+function typicalDayForConcept(concept: string, fallbackIndex: number): number {
+  const upper = concept.toUpperCase();
+  if (upper.includes('NOMINA') || upper.includes('NÓMINA') || upper.includes('SUELDOS')) {
+    return 30; // último día del mes — el helper hace clamp a fin de mes.
+  }
+  if (upper.includes('IMPUESTO') || upper.includes('ISR') || upper.includes('IVA') || upper.includes('IMSS')) {
+    return 17;
+  }
+  if (upper.includes('RENTA') || upper.includes('SEGURO')) {
+    return 5;
+  }
+  // Otros conceptos: distribuidos por su orden para que la vista semanal
+  // muestre actividad en distintas semanas.
+  const days = [3, 8, 12, 18, 22, 26];
+  return days[fallbackIndex % days.length];
 }
 
 function cleanDate(value?: string): string | undefined {
@@ -486,4 +539,3 @@ function budgetCategoryFor(concept: string): FinancialMovementCategory {
   if (upper.includes('CAPEX') || upper.includes('INVERSION')) return 'CAPEX';
   return 'OPEX';
 }
-

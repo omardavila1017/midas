@@ -53,7 +53,12 @@ export function ProjectionTable({
   movements: FinancialMovement[];
   filters: ProjectionTableFilters;
   onFiltersChange: (filters: ProjectionTableFilters) => void;
-  onSelectMovement: (movement: FinancialMovement) => void;
+  /**
+   * Callback para abrir el detalle del movimiento. Se incluye `anchor`
+   * (DOMRect del botón clickeado) para que el popover aparezca pegado a
+   * la fila del usuario, no centrado en pantalla.
+   */
+  onSelectMovement: (movement: FinancialMovement, anchor: DOMRect) => void;
 }) {
   const filtered = movements.filter((movement) => {
     const haystack = `${movement.counterpartyName ?? ''} ${movement.concept} ${movement.category}`.toLowerCase();
@@ -179,7 +184,10 @@ export function ProjectionTable({
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1.5">
                       <button
-                        onClick={() => onSelectMovement(movement)}
+                        onClick={(event) => {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          onSelectMovement(movement, rect);
+                        }}
                         className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
                       >
                         <Eye className="h-3.5 w-3.5" strokeWidth={1.5} />

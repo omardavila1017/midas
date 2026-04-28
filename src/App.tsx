@@ -867,6 +867,10 @@ export default function App() {
                 assumptions={assumptions}
                 budget={budget}
                 startingBalance={effectiveStartingBalance}
+                legacyProposals={proposals}
+                legacyScenarios={scenarios}
+                legacyActiveScenarioId={activeScenarioId}
+                onLegacyScenariosChange={setScenarios}
               />
             )}
             {activeTab === 'operating' && (
