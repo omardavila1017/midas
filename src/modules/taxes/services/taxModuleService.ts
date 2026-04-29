@@ -24,6 +24,8 @@ const ISN_RATE = 0.03;
 export interface TaxStore {
   adjustments: TaxManualAdjustment[];
   obligations: TaxObligation[];
+  /** Saldo vencido acumulado de impuestos (no cubierto por los periodos visibles). */
+  overdueBalance: number;
   migratedAt?: string;
 }
 
@@ -88,18 +90,24 @@ export interface TaxPeriodSummary {
 export interface TaxDashboardView {
   periods: TaxPeriodSummary[];
   obligations: TaxObligation[];
+  /** Saldo vencido acumulado que se arrastra de periodos anteriores. */
+  overdueBalance: number;
   totals: {
     ivaNet: number;
     isn: number;
     imss: number;
     total: number;
+    /** Total incluyendo el saldo vencido arrastrado. */
+    totalWithOverdue: number;
     cashImpact: number;
     unclassified: number;
+    /** Ingresos gravables totales del periodo (Base 16% + Base 8%). */
+    grossIncome: number;
   };
 }
 
 export function defaultTaxStore(): TaxStore {
-  return { adjustments: [], obligations: [] };
+  return { adjustments: [], obligations: [], overdueBalance: 0 };
 }
 
 export function loadTaxStore(fallback: TaxStore = defaultTaxStore()): TaxStore {
@@ -276,23 +284,35 @@ export function buildTaxDashboardView(params: {
     .map((acc) => finalizeTaxPeriod(acc, params.store, params.today));
 
   const obligations = periods.flatMap((period) => period.obligations);
+  const overdueBalance = params.store.overdueBalance;
+  // Sumar también obligaciones vencidas de periodos ANTERIORES al rango visible.
+  const pastPendingObligations = params.store.obligations
+    .filter((ob) => ob.period < params.projection.startDate.slice(0, 7) && ob.pendingAmount > 0)
+    .reduce((sum, ob) => sum + ob.pendingAmount, 0);
+
+  const totalOverdue = overdueBalance + pastPendingObligations;
+
   const totals = periods.reduce<TaxDashboardView['totals']>((sum, period) => ({
     ivaNet: sum.ivaNet + period.ivaNet,
     isn: sum.isn + period.isn,
     imss: sum.imss + period.imss,
     total: sum.total + period.total,
+    totalWithOverdue: sum.totalWithOverdue + period.total,
     cashImpact: sum.cashImpact + period.cashImpact,
     unclassified: sum.unclassified + period.iva.unclassifiedIncome + period.iva.unclassifiedExpense,
+    grossIncome: sum.grossIncome + period.iva.incomeBase16 + period.iva.incomeBase8,
   }), {
     ivaNet: 0,
     isn: 0,
     imss: 0,
     total: 0,
+    totalWithOverdue: totalOverdue,
     cashImpact: 0,
     unclassified: 0,
+    grossIncome: 0,
   });
 
-  return { periods, obligations, totals };
+  return { periods, obligations, overdueBalance: totalOverdue, totals };
 }
 
 export function buildApprovedTaxPaymentMovements(params: {
@@ -433,38 +453,32 @@ function accumulateIva(acc: TaxPeriodAccumulator, movement: FinancialMovement): 
   const sourceLine = lineForMovement(movement);
 
   if (movement.type === 'INFLOW' && treatment === 'IVA_CAUSED') {
-    if (movement.taxRate === 16 || movement.taxRate === 8) {
-      const { base, tax } = taxAmounts(movement, amount);
-      if (movement.taxRate === 16) {
-        acc.incomeBase16 += base;
-        acc.ivaCaused16 += tax;
-      } else {
-        acc.incomeBase8 += base;
-        acc.ivaCaused8 += tax;
-      }
-      acc.incomeLines.push({ ...sourceLine, taxBase: base, taxRate: movement.taxRate, taxAmount: tax });
+    // Default a 16% cuando el movimiento no trae tasa explícita (Régimen 601).
+    const rate: 8 | 16 = movement.taxRate === 8 ? 8 : 16;
+    const { base, tax } = taxAmounts({ ...movement, taxRate: rate }, amount);
+    if (rate === 16) {
+      acc.incomeBase16 += base;
+      acc.ivaCaused16 += tax;
     } else {
-      acc.unclassifiedIncome += amount;
-      acc.unclassifiedLines.push(sourceLine);
+      acc.incomeBase8 += base;
+      acc.ivaCaused8 += tax;
     }
+    acc.incomeLines.push({ ...sourceLine, taxBase: base, taxRate: rate, taxAmount: tax });
     return;
   }
 
   if (movement.type === 'OUTFLOW' && treatment === 'IVA_CREDITABLE') {
-    if (movement.taxRate === 16 || movement.taxRate === 8) {
-      const { base, tax } = taxAmounts(movement, amount);
-      if (movement.taxRate === 16) {
-        acc.expenseBase16 += base;
-        acc.ivaCreditable16 += tax;
-      } else {
-        acc.expenseBase8 += base;
-        acc.ivaCreditable8 += tax;
-      }
-      acc.expenseLines.push({ ...sourceLine, taxBase: base, taxRate: movement.taxRate, taxAmount: tax });
+    // Default a 16% cuando el movimiento no trae tasa explícita (Régimen 601).
+    const rate: 8 | 16 = movement.taxRate === 8 ? 8 : 16;
+    const { base, tax } = taxAmounts({ ...movement, taxRate: rate }, amount);
+    if (rate === 16) {
+      acc.expenseBase16 += base;
+      acc.ivaCreditable16 += tax;
     } else {
-      acc.unclassifiedExpense += amount;
-      acc.unclassifiedLines.push(sourceLine);
+      acc.expenseBase8 += base;
+      acc.ivaCreditable8 += tax;
     }
+    acc.expenseLines.push({ ...sourceLine, taxBase: base, taxRate: rate, taxAmount: tax });
     return;
   }
 
@@ -679,8 +693,23 @@ function normalizeTaxTreatment(
 ): FinancialMovement['taxTreatment'] {
   if (treatment === 'TAXABLE_IVA') return 'IVA_CAUSED';
   if (treatment) return treatment;
-  if (movement.category === 'PAYROLL' || movement.category === 'TAX' || movement.category === 'DEBT' || movement.category === 'TRANSFER') return 'IVA_EXEMPT';
-  if (movement.category === 'AR_COLLECTION' || movement.category === 'AP_PAYMENT') return 'UNCLASSIFIED';
+
+  // Excepciones explícitas (no generan IVA o se manejan por separado)
+  if (
+    movement.category === 'PAYROLL' ||
+    movement.category === 'TAX' ||
+    movement.category === 'DEBT' ||
+    movement.category === 'TRANSFER'
+  ) {
+    return 'IVA_EXEMPT';
+  }
+
+  // Regla general para Régimen 601:
+  // Cualquier ingreso (Inflow) que no sea deuda/transferencia se presume causado.
+  // Cualquier egreso (Outflow) que no sea nómina/impuesto se presume acreditable.
+  if (movement.type === 'INFLOW') return 'IVA_CAUSED';
+  if (movement.type === 'OUTFLOW') return 'IVA_CREDITABLE';
+
   return 'UNCLASSIFIED';
 }
 
@@ -700,6 +729,9 @@ function normalizeTaxStore(value: unknown, fallback: TaxStore): TaxStore {
     obligations: Array.isArray(raw.obligations)
       ? raw.obligations.map(normalizeObligation).filter((item): item is TaxObligation => item !== null)
       : fallback.obligations,
+    overdueBalance: typeof raw.overdueBalance === 'number' && Number.isFinite(raw.overdueBalance)
+      ? Math.max(0, raw.overdueBalance)
+      : fallback.overdueBalance,
     migratedAt: typeof raw.migratedAt === 'string' ? raw.migratedAt : fallback.migratedAt,
   };
 }
@@ -741,6 +773,7 @@ function migrateLegacyTaxStore(): TaxStore {
   return {
     adjustments,
     obligations: dedupeObligations(obligations),
+    overdueBalance: 0,
     migratedAt: adjustments.length > 0 || obligations.length > 0 ? new Date().toISOString() : undefined,
   };
 }

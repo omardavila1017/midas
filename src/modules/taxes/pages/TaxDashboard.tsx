@@ -1,4 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { CalendarDays, Check, ChevronDown, ChevronRight, FileText, Landmark, Pencil, Plus, RotateCcw, Wallet, X } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
@@ -94,7 +104,14 @@ export default function TaxDashboard(props: Props) {
   const [granularity] = useState<ProjectionGranularity>('monthly');
   const endDate = useMemo(() => preset === 'eoy' ? yearEnd : addDays(today, 90), [preset, today, yearEnd]);
 
-  const [taxStore, setTaxStore] = useState<TaxStore>(() => loadTaxStore(defaultTaxStore()));
+  const [taxStore, setTaxStore] = useState<TaxStore>(() => {
+    const loaded = loadTaxStore(defaultTaxStore());
+    // Seed: si el saldo vencido es 0, lo arrancamos en $180M por defecto para este despliegue.
+    if (loaded.overdueBalance === 0) {
+      return { ...loaded, overdueBalance: 180_000_000 };
+    }
+    return loaded;
+  });
   const [selectedPeriod, setSelectedPeriod] = useState<string>(today.slice(0, 7));
   const [detailTab, setDetailTab] = useState<DetailTab>('iva');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -384,12 +401,25 @@ export default function TaxDashboard(props: Props) {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <KpiCard label="Saldo vencido" value={fmtCurrency(view.overdueBalance)} icon={<CalendarDays className="w-4 h-4" />} color="var(--danger)" sublabel="Impuestos acumulados" />
         <KpiCard label="IVA neto" value={fmtCurrency(view.totals.ivaNet)} icon={<FileText className="w-4 h-4" />} color={view.totals.ivaNet > 0 ? 'var(--warning)' : 'var(--success)'} sublabel="Causado menos acreditable" />
         <KpiCard label="ISN" value={fmtCurrency(view.totals.isn)} icon={<Landmark className="w-4 h-4" />} color="var(--gray-950)" sublabel="3% sobre nómina pagada" />
         <KpiCard label="IMSS" value={fmtCurrency(view.totals.imss)} icon={<Check className="w-4 h-4" />} color={view.totals.imss > 0 ? 'var(--danger)' : 'var(--gray-950)'} sublabel="JDE o captura manual" />
-        <KpiCard label="Impacto caja" value={fmtCurrency(view.totals.cashImpact)} icon={<Wallet className="w-4 h-4" />} color={view.totals.cashImpact > 0 ? 'var(--danger)' : 'var(--gray-950)'} sublabel="Pagos fiscales aprobados" />
+        <KpiCard label="Total acumulado" value={fmtCurrency(view.totals.totalWithOverdue)} icon={<Wallet className="w-4 h-4" />} color="var(--danger)" sublabel="Vencido + nuevos periodos" />
       </div>
+
+      {/* Overdue balance tracker */}
+      <section className="grid gap-5 xl:grid-cols-2">
+        <OverdueBalanceSection
+          balance={taxStore.overdueBalance}
+          newPeriodTotal={view.totals.total}
+          grossIncome={view.totals.grossIncome}
+          cashImpact={view.totals.cashImpact}
+          onChange={(amount) => setTaxStore((prev) => ({ ...prev, overdueBalance: Math.max(0, amount) }))}
+        />
+        <TaxTrajectoryChart view={view} />
+      </section>
 
       <CashFlowChart
         projection={activeProjection}
@@ -581,6 +611,115 @@ function TaxForms({
             </button>
           </div>
         )}
+      </div>
+    </section>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────── */
+/* Overdue Balance Section                                       */
+/* ────────────────────────────────────────────────────────────── */
+
+function OverdueBalanceSection({
+  balance,
+  newPeriodTotal,
+  grossIncome,
+  cashImpact,
+  onChange,
+}: {
+  balance: number;
+  newPeriodTotal: number;
+  grossIncome: number;
+  cashImpact: number;
+  onChange: (amount: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const runningTotal = balance + newPeriodTotal;
+  const netPending = runningTotal - cashImpact;
+  const benchmark8 = grossIncome * 0.08;
+
+  const startEdit = () => {
+    setEditing(true);
+    setEditValue(String(Math.round(balance)));
+  };
+  const commit = () => {
+    const val = Number(editValue);
+    if (Number.isFinite(val) && val >= 0) onChange(val);
+    setEditing(false);
+  };
+
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+      <div className="border-b border-[var(--gray-200)] px-4 py-3">
+        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Seguimiento de deuda fiscal</h2>
+        <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+          Saldo vencido acumulado + nuevas obligaciones por periodo. Haz clic en el monto para editarlo.
+        </p>
+      </div>
+      <div className="grid gap-2 p-4 sm:grid-cols-4">
+        {/* Saldo vencido */}
+        <div className="rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--danger)]">
+            Saldo vencido acumulado
+          </div>
+          {editing ? (
+            <input
+              autoFocus
+              type="number"
+              min="0"
+              step="1000000"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commit();
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              onBlur={commit}
+              className="mt-1 h-8 w-full rounded-lg border border-[var(--danger)] bg-white px-2 text-right text-[16px] font-bold tabular-nums text-[var(--danger)] outline-none"
+            />
+          ) : (
+            <button
+              onClick={startEdit}
+              className="group mt-1 flex w-full items-center justify-between"
+            >
+              <span className="text-[18px] font-bold tabular-nums text-[var(--danger)]">{fmtCurrency(balance)}</span>
+              <Pencil className="h-3.5 w-3.5 text-[var(--danger)]/40 opacity-0 transition-opacity group-hover:opacity-100" strokeWidth={1.5} />
+            </button>
+          )}
+        </div>
+
+        {/* Nuevas obligaciones del periodo */}
+        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Nuevos impuestos</div>
+          <div className="mt-1 flex items-baseline justify-between gap-2">
+            <span className="text-[18px] font-bold tabular-nums text-[var(--warning)]">{fmtCurrency(newPeriodTotal)}</span>
+          </div>
+          <div className="mt-0.5 flex items-center justify-between text-[11px] text-[var(--gray-400)]">
+            <span>Calculado (IVA+ISN+IMSS)</span>
+          </div>
+        </div>
+
+        {/* Benchmark 8% */}
+        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Referencia (8% Ingresos)</div>
+          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-400)]">{fmtCurrency(benchmark8)}</div>
+          <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Meta basada en facturación</div>
+        </div>
+
+        {/* Total acumulado */}
+        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Total acumulado</div>
+          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(runningTotal)}</div>
+          <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Vencido + nuevos periodos</div>
+        </div>
+
+        {/* Neto pendiente */}
+        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Neto pendiente</div>
+          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(netPending)}</div>
+          <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Total − pagos aprobados/ejecutados</div>
+        </div>
       </div>
     </section>
   );
@@ -1123,3 +1262,47 @@ function addDays(date: string, days: number): string {
 
 const taxInputClass = 'h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
 const taxButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed';
+/* ────────────────────────────────────────────────────────────── */
+/* Trajectory Chart                                              */
+/* ────────────────────────────────────────────────────────────── */
+
+function TaxTrajectoryChart({ view }: { view: TaxDashboardView }) {
+  const data = useMemo(() => {
+    let runningTotal = view.overdueBalance;
+    return view.periods.map((period) => {
+      runningTotal += period.total;
+      runningTotal -= period.cashImpact;
+      return {
+        name: period.period,
+        nuevos: period.total,
+        pagos: period.cashImpact,
+        acumulado: runningTotal,
+      };
+    });
+  }, [view.overdueBalance, view.periods]);
+
+  return (
+    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+      <div className="mb-4">
+        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Trayectoria de Deuda Fiscal</h3>
+        <p className="text-[11px] text-[var(--gray-400)]">Evolución del saldo acumulado proyectado vs pagos aprobados.</p>
+      </div>
+      <div className="h-[180px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+            <XAxis dataKey="name" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
+            <Tooltip
+              formatter={(value: number) => fmtCurrency(value)}
+              contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontSize: '12px' }}
+            />
+            <Bar dataKey="nuevos" fill="var(--warning)" radius={[4, 4, 0, 0]} barSize={20} name="Nuevos" />
+            <Bar dataKey="pagos" fill="var(--success)" radius={[4, 4, 0, 0]} barSize={20} name="Pagos" />
+            <Line type="monotone" dataKey="acumulado" stroke="var(--danger)" strokeWidth={2} dot={{ r: 3 }} name="Saldo Acumulado" />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}

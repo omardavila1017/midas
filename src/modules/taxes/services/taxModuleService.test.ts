@@ -62,6 +62,7 @@ describe('taxModuleService', () => {
         }),
       ],
       obligations: [],
+      overdueBalance: 0,
     };
 
     const view = buildTaxDashboardView({ projection, store, today: '2026-06-01' });
