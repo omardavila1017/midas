@@ -7204,7 +7204,8 @@ function CobranzaBlock({
               <thead className="bg-[var(--surface-alt)]">
                 <tr>
                   <Th>Día</Th>
-                  <Th>Fuente</Th>
+                  <Th>Cliente</Th>
+                  <Th>Detalle</Th>
                   <Th align="right">Monto</Th>
                 </tr>
               </thead>
@@ -7212,19 +7213,23 @@ function CobranzaBlock({
                 {dailyRows.flatMap((row) =>
                   row.lines.map((line, index) => (
                     <tr
-                      key={`${row.date}:${line.source}:${index}`}
+                      key={`${row.date}:${line.id}:${index}`}
                       className="border-t border-[var(--border)] hover:bg-[var(--surface-alt)]"
                     >
                       <td className="px-3 py-2 text-[var(--gray-700)]">
                         {index === 0 ? row.label : ''}
                       </td>
-                      <td className="px-3 py-2 text-[var(--gray-700)]">{sourceLabel(line.source)}</td>
+                      <td className="px-3 py-2 font-medium text-[var(--gray-950)]">{line.label}</td>
+                      <td className="px-3 py-2 text-[11px] text-[var(--gray-500)]">
+                        {line.detail ?? 'Cobranza proyectada'}
+                        {line.confidence ? ` · ${line.confidence}` : ''}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-950)]">{fmtCurrency(line.amount)}</td>
                     </tr>
                   )),
                 )}
                 <tr className="border-t border-[var(--border)] bg-[var(--surface-alt)] font-semibold">
-                  <td className="px-3 py-2" colSpan={2}>Total mes</td>
+                  <td className="px-3 py-2" colSpan={3}>Total mes</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(monthCollectionsTotal)}</td>
                 </tr>
               </tbody>
