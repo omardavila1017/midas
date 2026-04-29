@@ -62,6 +62,11 @@ const fmtDate = (iso?: string): string => {
 const normName = (s: string): string =>
   s.toUpperCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
+const automaticaLabel = (b: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO' | undefined): string => {
+  if (!b) return '—';
+  return ({ CRITICO: 'Operativo', ALTO: 'Prioritario', MEDIO: 'Negociable', BAJO: 'Flexible' } as const)[b];
+};
+
 const ALBERTO_COLORS: Record<ClasificacionAlberto, { bg: string; text: string; ring: string; tag: string }> = {
   CRITICO:        { bg: 'var(--danger-muted)', text: 'var(--danger)',  ring: 'oklch(88% 0.08 25)',   tag: 'bg-red-100 text-red-800' },
   FLEX_ALTO:      { bg: '#FEF3C7',             text: '#92400E',         ring: '#FCD34D',              tag: 'bg-amber-100 text-amber-800' },
@@ -242,8 +247,8 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                 icon={<ShieldAlert className="w-4 h-4" />}
                 label="Gasto mínimo / mes"
                 value={fmtCompact(provider.gastoMinimoMensual)}
-                tone={alberto === 'CRITICO' ? 'warning' : 'neutral'}
-                sublabel={alberto === 'CRITICO' && provider.gastoMinimoMensual
+                tone={provider.clasificacionAutomatica === 'CRITICO' ? 'warning' : 'neutral'}
+                sublabel={provider.clasificacionAutomatica === 'CRITICO' && provider.gastoMinimoMensual
                   ? `${fmtCompact(provider.gastoMinimoMensual * 12)} anual`
                   : undefined}
               />
@@ -263,9 +268,9 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                 </div>
                 <p className="mt-3 text-[11px] text-[var(--gray-500)]">
                   Score 0-100 ponderado de 4 criterios. Cada criterio se califica 1-5 (1 = bajo riesgo, 5 = alto riesgo).
-                  Score automático: <span className="font-semibold text-[var(--gray-700)]">{provider.clasificacionAutomatica ?? '—'}</span>
-                  {provider.clasificacionAutomatica !== alberto.replace('FLEX_', '') && alberto !== 'SIN_CLASIFICAR' && (
-                    <span> · Override manual: <span className="font-semibold text-[var(--gray-700)]">{CLASIFICACION_LABELS[alberto]}</span></span>
+                  Categoría: <span className="font-semibold text-[var(--gray-700)]">{automaticaLabel(provider.clasificacionAutomatica)}</span>
+                  {alberto !== 'SIN_CLASIFICAR' && (
+                    <span> · Alberto lo marcó como <span className="font-semibold text-[var(--gray-700)]">{CLASIFICACION_LABELS[alberto]}</span></span>
                   )}
                 </p>
               </div>

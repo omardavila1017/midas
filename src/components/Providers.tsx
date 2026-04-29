@@ -1,7 +1,5 @@
 import { useMemo, useState } from 'react';
 import {
-  ClasificacionAlberto,
-  CLASIFICACION_DESCRIPTIONS,
   CLASIFICACION_LABELS,
   Provider,
 } from '../domain/types';
@@ -40,37 +38,34 @@ import type { CXPRecord } from '../domain/persistence';
  * regenera el JSON.
  */
 
-const ALBERTO_VALUES: ClasificacionAlberto[] = [
-  'CRITICO', 'FLEX_ALTO', 'FLEX_MEDIO', 'FLEX_BAJO', 'PAUSAR', 'SIN_CLASIFICAR',
-];
+type ScoreBucket = 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO';
+
+const SCORE_BUCKETS: ScoreBucket[] = ['CRITICO', 'ALTO', 'MEDIO', 'BAJO'];
 
 interface ChipStyle { bg: string; text: string; border: string; dot: string; label: string; description: string }
 
-const ALBERTO_STYLES: Record<ClasificacionAlberto, ChipStyle> = {
+const SCORE_STYLES: Record<ScoreBucket, ChipStyle> = {
   CRITICO: {
     bg: 'var(--danger-muted)', text: 'var(--danger)', border: 'oklch(88% 0.08 25)', dot: 'var(--danger)',
-    label: CLASIFICACION_LABELS.CRITICO, description: CLASIFICACION_DESCRIPTIONS.CRITICO,
+    label: 'Operativo', description: 'Score ≥ 80. Crítico para la operación: NO PAUSAR. Su gasto mínimo se suma al piso operativo.',
   },
-  FLEX_ALTO: {
+  ALTO: {
     bg: '#FEF3C7', text: '#92400E', border: '#FCD34D', dot: '#F59E0B',
-    label: CLASIFICACION_LABELS.FLEX_ALTO, description: CLASIFICACION_DESCRIPTIONS.FLEX_ALTO,
+    label: 'Prioritario', description: 'Score 60–79. Alta prioridad: pagar a tiempo siempre que la caja lo permita.',
   },
-  FLEX_MEDIO: {
+  MEDIO: {
     bg: '#FFEDD5', text: '#9A3412', border: '#FED7AA', dot: '#F97316',
-    label: CLASIFICACION_LABELS.FLEX_MEDIO, description: CLASIFICACION_DESCRIPTIONS.FLEX_MEDIO,
+    label: 'Negociable', description: 'Score 40–59. Negociable: se puede mover fecha o monto si falta caja.',
   },
-  FLEX_BAJO: {
+  BAJO: {
     bg: 'var(--success-muted)', text: 'var(--success)', border: 'oklch(88% 0.08 145)', dot: 'var(--success)',
-    label: CLASIFICACION_LABELS.FLEX_BAJO, description: CLASIFICACION_DESCRIPTIONS.FLEX_BAJO,
+    label: 'Flexible', description: 'Score < 40. Flexible: el último en cobrar prioridad cuando la caja escasea.',
   },
-  PAUSAR: {
-    bg: 'var(--gray-100)', text: 'var(--gray-500)', border: 'var(--gray-200)', dot: 'var(--gray-400)',
-    label: CLASIFICACION_LABELS.PAUSAR, description: CLASIFICACION_DESCRIPTIONS.PAUSAR,
-  },
-  SIN_CLASIFICAR: {
-    bg: 'var(--gray-50)', text: 'var(--gray-400)', border: 'var(--gray-200)', dot: 'var(--gray-300)',
-    label: CLASIFICACION_LABELS.SIN_CLASIFICAR, description: CLASIFICACION_DESCRIPTIONS.SIN_CLASIFICAR,
-  },
+};
+
+const PAUSAR_BADGE: ChipStyle = {
+  bg: 'var(--gray-100)', text: 'var(--gray-500)', border: 'var(--gray-200)', dot: 'var(--gray-400)',
+  label: CLASIFICACION_LABELS.PAUSAR, description: 'Alberto pidió pausar pagos. Bandera operativa independiente del score.',
 };
 
 const FREQ_ORDER = ['Diario', 'Semanal', 'Quincenal', 'Mensual', 'Bimestral/Trimestral', 'Bimestral', 'Trimestral', 'Semestral', 'Anual/Esporádico', 'Anual', 'Pago único', 'Esporádico'];
@@ -84,9 +79,11 @@ interface Props {
   onDelete: (id: string) => void;
 }
 
-type AlbertoFilter = 'all' | ClasificacionAlberto;
+type ScoreFilter = 'all' | ScoreBucket;
 type FreqFilter = 'all' | string;
 type CategoryFilter = 'all' | string;
+
+const bucketOf = (p: Provider): ScoreBucket => p.clasificacionAutomatica ?? 'BAJO';
 
 const fmtCurrency = (n: number | null | undefined): string => {
   if (n == null || !Number.isFinite(n)) return '—';
@@ -103,28 +100,23 @@ const fmtCompact = (n: number | null | undefined): string => {
 export default function Providers({ providers, cxpRecords, onReplace, onAdd, onUpdate: _onUpdate, onDelete: _onDelete }: Props) {
   void _onUpdate; void _onDelete;
   const [query, setQuery] = useState('');
-  const [albertoFilter, setAlbertoFilter] = useState<AlbertoFilter>('all');
+  const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [freqFilter, setFreqFilter] = useState<FreqFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
 
-  // ─── KPIs por Clasificación Alberto ───────────────────────────────────
-  const albertoCounts = useMemo(() => {
-    const out: Record<ClasificacionAlberto, number> = {
-      CRITICO: 0, FLEX_ALTO: 0, FLEX_MEDIO: 0, FLEX_BAJO: 0, PAUSAR: 0, SIN_CLASIFICAR: 0,
-    };
-    for (const p of providers) {
-      const k = p.clasificacionAlberto ?? 'SIN_CLASIFICAR';
-      out[k]++;
-    }
+  // ─── Conteos por bucket de score ──────────────────────────────────────
+  const scoreCounts = useMemo(() => {
+    const out: Record<ScoreBucket, number> = { CRITICO: 0, ALTO: 0, MEDIO: 0, BAJO: 0 };
+    for (const p of providers) out[bucketOf(p)]++;
     return out;
   }, [providers]);
 
   const totalMinimumExpense = useMemo(
     () => providers
-      .filter((p) => p.clasificacionAlberto === 'CRITICO' && p.gastoMinimoMensual)
+      .filter((p) => p.clasificacionAutomatica === 'CRITICO' && p.gastoMinimoMensual)
       .reduce((sum, p) => sum + (p.gastoMinimoMensual ?? 0), 0),
     [providers],
   );
@@ -161,8 +153,7 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
     const q = query.trim().toLowerCase();
     return providers
       .filter((p) => {
-        const alberto = p.clasificacionAlberto ?? 'SIN_CLASIFICAR';
-        if (albertoFilter !== 'all' && alberto !== albertoFilter) return false;
+        if (scoreFilter !== 'all' && bucketOf(p) !== scoreFilter) return false;
         if (freqFilter !== 'all' && p.frecuenciaHistorica !== freqFilter) return false;
         if (categoryFilter !== 'all' && p.type !== categoryFilter) return false;
         if (q) {
@@ -174,21 +165,21 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
         return true;
       })
       .sort((a, b) => {
-        // Críticos primero, luego por score desc, luego por nombre
-        const aCritico = a.clasificacionAlberto === 'CRITICO' ? 1 : 0;
-        const bCritico = b.clasificacionAlberto === 'CRITICO' ? 1 : 0;
+        // Operativos (score ≥ 80) primero, luego por score desc, luego por nombre
+        const aCritico = a.clasificacionAutomatica === 'CRITICO' ? 1 : 0;
+        const bCritico = b.clasificacionAutomatica === 'CRITICO' ? 1 : 0;
         if (aCritico !== bCritico) return bCritico - aCritico;
         const aScore = a.score ?? 0;
         const bScore = b.score ?? 0;
         if (aScore !== bScore) return bScore - aScore;
         return a.name.localeCompare(b.name, 'es');
       });
-  }, [providers, query, albertoFilter, freqFilter, categoryFilter]);
+  }, [providers, query, scoreFilter, freqFilter, categoryFilter]);
 
-  const filtersActive = query.length > 0 || albertoFilter !== 'all' || freqFilter !== 'all' || categoryFilter !== 'all';
+  const filtersActive = query.length > 0 || scoreFilter !== 'all' || freqFilter !== 'all' || categoryFilter !== 'all';
   const clearFilters = () => {
     setQuery('');
-    setAlbertoFilter('all');
+    setScoreFilter('all');
     setFreqFilter('all');
     setCategoryFilter('all');
   };
@@ -242,9 +233,9 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
             tone="neutral"
           />
           <KpiCard
-            label="Críticos (Alberto)"
-            value={albertoCounts.CRITICO.toString()}
-            sublabel={`${Math.round(albertoCounts.CRITICO / providers.length * 100)}% del catálogo`}
+            label="Operativos (score ≥ 80)"
+            value={scoreCounts.CRITICO.toString()}
+            sublabel={`${Math.round(scoreCounts.CRITICO / providers.length * 100)}% del catálogo`}
             icon={<ShieldAlert className="w-4 h-4" strokeWidth={1.5} />}
             tone="danger"
           />
@@ -265,19 +256,19 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
         </div>
       )}
 
-      {/* ─── Chips filtro Alberto ─────────────────────────────────────── */}
+      {/* ─── Chips filtro por bucket de score ─────────────────────────── */}
       {providers.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {ALBERTO_VALUES.map((k) => {
-            const s = ALBERTO_STYLES[k];
+          {SCORE_BUCKETS.map((k) => {
+            const s = SCORE_STYLES[k];
             return (
               <StatChip
                 key={k}
                 label={s.label}
-                count={albertoCounts[k]}
+                count={scoreCounts[k]}
                 style={s}
-                active={albertoFilter === k}
-                onClick={() => setAlbertoFilter(albertoFilter === k ? 'all' : k)}
+                active={scoreFilter === k}
+                onClick={() => setScoreFilter(scoreFilter === k ? 'all' : k)}
               />
             );
           })}
@@ -372,9 +363,10 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                 </tr>
               ) : (
                 filtered.map((p, idx) => {
-                  const alberto = p.clasificacionAlberto ?? 'SIN_CLASIFICAR';
-                  const albertoStyle = ALBERTO_STYLES[alberto];
-                  const isCritico = alberto === 'CRITICO';
+                  const bucket = bucketOf(p);
+                  const bucketStyle = SCORE_STYLES[bucket];
+                  const isCritico = bucket === 'CRITICO';
+                  const showPausarBadge = p.clasificacionAlberto === 'PAUSAR';
                   return (
                     <tr
                       key={p.id}
@@ -393,6 +385,16 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                             <AlertTriangle className="w-3 h-3" /> Crítico DTI · {p.dtiArea}
                           </div>
                         )}
+                        {showPausarBadge && (
+                          <div
+                            className="text-[10px] mt-0.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 border"
+                            style={{ backgroundColor: PAUSAR_BADGE.bg, color: PAUSAR_BADGE.text, borderColor: PAUSAR_BADGE.border }}
+                            title={PAUSAR_BADGE.description}
+                          >
+                            <span className="inline-block w-1 h-1 rounded-full" style={{ backgroundColor: PAUSAR_BADGE.dot }} />
+                            {PAUSAR_BADGE.label}
+                          </div>
+                        )}
                       </Td>
                       <Td>
                         <span className="inline-block max-w-[160px] truncate text-[var(--gray-700)]" title={p.type}>
@@ -400,8 +402,8 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                         </span>
                       </Td>
                       <Td>
-                        <Chip style={albertoStyle} title={albertoStyle.description}>
-                          {albertoStyle.label}
+                        <Chip style={bucketStyle} title={bucketStyle.description}>
+                          {bucketStyle.label}
                         </Chip>
                       </Td>
                       <Td align="center">
@@ -469,13 +471,13 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
             <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <div className="space-y-1">
               <p>
-                Los <span className="font-semibold text-yellow-700">críticos</span> aparecen con fondo amarillo y su gasto mínimo mensual
-                se proyecta automáticamente como piso operativo en la pestaña de Proyección Operativa.
+                Los <span className="font-semibold text-yellow-700">Operativos</span> (score ≥ 80) aparecen con fondo amarillo y su
+                gasto mínimo mensual se suma automáticamente al piso operativo en Proyección Operativa.
               </p>
               <p>
                 <span className="font-semibold">Score 0-100</span> calculado de 4 criterios:
                 Sustituibilidad (30%), Impacto operativo (45%), Riesgo legal (10%), Días crédito (15%).
-                Score ≥ 80 = Crítico automático · 60-79 = Alto · 40-59 = Medio · &lt;40 = Bajo.
+                Score ≥ 80 = <span className="font-semibold">Operativo</span> · 60-79 = Prioritario · 40-59 = Negociable · &lt;40 = Flexible.
               </p>
               <p className="flex items-center gap-1">
                 <Calendar className="w-3 h-3" />

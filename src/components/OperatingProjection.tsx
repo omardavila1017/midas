@@ -95,7 +95,7 @@ import {
   type MinimumExpenseSummary,
 } from '../domain/operatingProjectionMinimumExpense';
 import type { CXPRecord } from '../domain/persistence';
-import { CLASIFICACION_LABELS, type CashFlowAssumptions, type ClasificacionAlberto, type Client, type Provider } from '../domain/types';
+import { type CashFlowAssumptions, type Client, type Provider } from '../domain/types';
 import type { BankAccountStatement } from '../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong } from '../formatters';
 
@@ -117,7 +117,8 @@ type OperatingBlockId = 'cobranza' | 'suppliers' | 'taxes' | 'obligations' | 'ad
 type TaxModuleTab = 'summary' | 'debts' | 'plan';
 type SupplierRiskFilter = 'all' | 'Alto' | 'Medio' | 'Bajo';
 type SupplierFlexFilter = 'all' | 'inamovible' | 'revisar' | 'flexible' | 'unknown';
-type SupplierAlbertoFilter = 'all' | ClasificacionAlberto;
+type SupplierBucket = 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO';
+type SupplierBucketFilter = 'all' | SupplierBucket;
 type SupplierStatusFilter = 'all' | OperatingSupplierQueueItem['status'];
 type SupplierCreditFilter = 'all' | OperatingSupplierQueueItem['creditStatus'];
 type SupplierDateFilter = 'all' | 'day' | 'week' | 'month';
@@ -273,7 +274,7 @@ interface TaxDebtRow {
 interface SupplierQueueFilters {
   risk: SupplierRiskFilter;
   flexibility: SupplierFlexFilter;
-  alberto: SupplierAlbertoFilter;
+  bucket: SupplierBucketFilter;
   status: SupplierStatusFilter;
   credit: SupplierCreditFilter;
   date: SupplierDateFilter;
@@ -697,7 +698,7 @@ export default function OperatingProjection({
   const [taxModuleTab, setTaxModuleTab] = useState<TaxModuleTab>('summary');
   const [supplierRiskFilter, setSupplierRiskFilter] = useState<SupplierRiskFilter>('all');
   const [supplierFlexFilter, setSupplierFlexFilter] = useState<SupplierFlexFilter>('all');
-  const [supplierAlbertoFilter, setSupplierAlbertoFilter] = useState<SupplierAlbertoFilter>('all');
+  const [supplierBucketFilter, setSupplierBucketFilter] = useState<SupplierBucketFilter>('all');
   const [supplierStatusFilter, setSupplierStatusFilter] = useState<SupplierStatusFilter>('all');
   const [supplierCreditFilter, setSupplierCreditFilter] = useState<SupplierCreditFilter>('all');
   const [supplierDateFilter, setSupplierDateFilter] = useState<SupplierDateFilter>('all');
@@ -929,10 +930,10 @@ export default function OperatingProjection({
   );
 
   const monthSupplierTotal = monthDays.reduce((sum, day) => sum + sumAmounts(day.supplierPayments), 0);
-  const albertoByProviderId = useMemo(() => {
-    const map = new Map<string, ClasificacionAlberto>();
+  const bucketByProviderId = useMemo(() => {
+    const map = new Map<string, SupplierBucket>();
     providers.forEach((p) => {
-      if (p.clasificacionAlberto) map.set(p.id, p.clasificacionAlberto);
+      if (p.clasificacionAutomatica) map.set(p.id, p.clasificacionAutomatica);
     });
     return map;
   }, [providers]);
@@ -942,21 +943,21 @@ export default function OperatingProjection({
       {
         risk: supplierRiskFilter,
         flexibility: supplierFlexFilter,
-        alberto: supplierAlbertoFilter,
+        bucket: supplierBucketFilter,
         status: supplierStatusFilter,
         credit: supplierCreditFilter,
         date: supplierDateFilter,
       },
       selectedDayData?.date ?? `${selectedMonth}-01`,
       selectedMonth,
-      albertoByProviderId,
+      bucketByProviderId,
     ),
     [
-      albertoByProviderId,
+      bucketByProviderId,
       projection.supplierQueue,
       selectedDayData?.date,
       selectedMonth,
-      supplierAlbertoFilter,
+      supplierBucketFilter,
       supplierCreditFilter,
       supplierDateFilter,
       supplierFlexFilter,
@@ -2807,14 +2808,14 @@ export default function OperatingProjection({
           filters={{
             risk: supplierRiskFilter,
             flexibility: supplierFlexFilter,
-            alberto: supplierAlbertoFilter,
+            bucket: supplierBucketFilter,
             status: supplierStatusFilter,
             credit: supplierCreditFilter,
             date: supplierDateFilter,
           }}
           onChangeRisk={setSupplierRiskFilter}
           onChangeFlexibility={setSupplierFlexFilter}
-          onChangeAlberto={setSupplierAlbertoFilter}
+          onChangeBucket={setSupplierBucketFilter}
           onChangeStatus={setSupplierStatusFilter}
           onChangeCredit={setSupplierCreditFilter}
           onChangeDate={setSupplierDateFilter}
@@ -5356,14 +5357,15 @@ function filterSupplierQueueRows(
   filters: SupplierQueueFilters,
   selectedDay: string,
   selectedMonth: string,
-  albertoByProviderId?: Map<string, ClasificacionAlberto>,
+  bucketByProviderId?: Map<string, SupplierBucket>,
 ): OperatingSupplierQueueItem[] {
   return rows.filter((row) => {
     if (filters.risk !== 'all' && row.risk !== filters.risk) return false;
     if (filters.flexibility !== 'all' && row.flexibility !== filters.flexibility) return false;
-    if (filters.alberto !== 'all') {
-      const albertoForRow = row.providerId ? albertoByProviderId?.get(row.providerId) : undefined;
-      if (albertoForRow !== filters.alberto) return false;
+    if (filters.bucket !== 'all') {
+      const bucketForRow = row.clasificacionAutomatica
+        ?? (row.providerId ? bucketByProviderId?.get(row.providerId) : undefined);
+      if (bucketForRow !== filters.bucket) return false;
     }
     if (filters.status !== 'all' && row.status !== filters.status) return false;
     if (filters.credit !== 'all' && row.creditStatus !== filters.credit) return false;
@@ -6394,24 +6396,30 @@ function SelectedKpi({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SupplierAlbertoChip({ clasificacion }: { clasificacion?: ClasificacionAlberto }) {
-  if (!clasificacion || clasificacion === 'SIN_CLASIFICAR') {
+const BUCKET_LABELS: Record<SupplierBucket, string> = {
+  CRITICO: 'Operativo',
+  ALTO:    'Prioritario',
+  MEDIO:   'Negociable',
+  BAJO:    'Flexible',
+};
+
+function SupplierBucketChip({ bucket }: { bucket?: SupplierBucket }) {
+  if (!bucket) {
     return <span className="text-[10px] text-[var(--gray-300)]">—</span>;
   }
-  const styleMap: Record<Exclude<ClasificacionAlberto, 'SIN_CLASIFICAR'>, { bg: string; text: string; border: string }> = {
-    CRITICO:    { bg: 'var(--danger-muted)', text: 'var(--danger)',  border: 'oklch(88% 0.08 25)' },
-    FLEX_ALTO:  { bg: '#FEF3C7',             text: '#92400E',         border: '#FCD34D' },
-    FLEX_MEDIO: { bg: '#FFEDD5',             text: '#9A3412',         border: '#FED7AA' },
-    FLEX_BAJO:  { bg: 'var(--success-muted)',text: 'var(--success)',  border: 'oklch(88% 0.08 145)' },
-    PAUSAR:     { bg: 'var(--gray-100)',     text: 'var(--gray-500)', border: 'var(--gray-200)' },
+  const styleMap: Record<SupplierBucket, { bg: string; text: string; border: string }> = {
+    CRITICO: { bg: 'var(--danger-muted)',  text: 'var(--danger)',  border: 'oklch(88% 0.08 25)' },
+    ALTO:    { bg: '#FEF3C7',              text: '#92400E',         border: '#FCD34D' },
+    MEDIO:   { bg: '#FFEDD5',              text: '#9A3412',         border: '#FED7AA' },
+    BAJO:    { bg: 'var(--success-muted)', text: 'var(--success)', border: 'oklch(88% 0.08 145)' },
   };
-  const s = styleMap[clasificacion];
+  const s = styleMap[bucket];
   return (
     <span
       className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium"
       style={{ backgroundColor: s.bg, color: s.text, borderColor: s.border }}
     >
-      {CLASIFICACION_LABELS[clasificacion]}
+      {BUCKET_LABELS[bucket]}
     </span>
   );
 }
@@ -7895,7 +7903,7 @@ function SupplierPriorityQueue({
   filters,
   onChangeRisk,
   onChangeFlexibility,
-  onChangeAlberto,
+  onChangeBucket,
   onChangeStatus,
   onChangeCredit,
   onChangeDate,
@@ -7913,7 +7921,7 @@ function SupplierPriorityQueue({
   filters: SupplierQueueFilters;
   onChangeRisk: (value: SupplierRiskFilter) => void;
   onChangeFlexibility: (value: SupplierFlexFilter) => void;
-  onChangeAlberto: (value: SupplierAlbertoFilter) => void;
+  onChangeBucket: (value: SupplierBucketFilter) => void;
   onChangeStatus: (value: SupplierStatusFilter) => void;
   onChangeCredit: (value: SupplierCreditFilter) => void;
   onChangeDate: (value: SupplierDateFilter) => void;
@@ -7956,14 +7964,12 @@ function SupplierPriorityQueue({
           <option value="flexible">Flexible</option>
           <option value="unknown">Sin clasificar</option>
         </QueueSelect>
-        <QueueSelect label="Clasif." value={filters.alberto} onChange={(value) => onChangeAlberto(value as SupplierAlbertoFilter)}>
+        <QueueSelect label="Clasif." value={filters.bucket} onChange={(value) => onChangeBucket(value as SupplierBucketFilter)}>
           <option value="all">Todas</option>
-          <option value="CRITICO">{CLASIFICACION_LABELS.CRITICO}</option>
-          <option value="FLEX_ALTO">{CLASIFICACION_LABELS.FLEX_ALTO}</option>
-          <option value="FLEX_MEDIO">{CLASIFICACION_LABELS.FLEX_MEDIO}</option>
-          <option value="FLEX_BAJO">{CLASIFICACION_LABELS.FLEX_BAJO}</option>
-          <option value="PAUSAR">{CLASIFICACION_LABELS.PAUSAR}</option>
-          <option value="SIN_CLASIFICAR">{CLASIFICACION_LABELS.SIN_CLASIFICAR}</option>
+          <option value="CRITICO">{BUCKET_LABELS.CRITICO}</option>
+          <option value="ALTO">{BUCKET_LABELS.ALTO}</option>
+          <option value="MEDIO">{BUCKET_LABELS.MEDIO}</option>
+          <option value="BAJO">{BUCKET_LABELS.BAJO}</option>
         </QueueSelect>
         <QueueSelect label="Estado" value={filters.status} onChange={(value) => onChangeStatus(value as SupplierStatusFilter)}>
           <option value="all">Todos</option>
@@ -8018,7 +8024,7 @@ function SupplierPriorityQueue({
                 const override = overrideRows.find((row) => row.invoiceKey === item.invoiceKey);
                 const baseDate = override?.date ?? item.plannedDate ?? item.dueDate ?? selectedDay;
                 const baseAmount = override?.amountInput ?? editableAmount(item.plannedAmount ?? item.remainingAmount);
-                const isCritico = item.clasificacionAlberto === 'CRITICO';
+                const isCritico = item.clasificacionAutomatica === 'CRITICO';
                 return (
                   <tr key={item.invoiceKey} className={`border-t border-[var(--border)] align-top ${isCritico ? 'bg-yellow-50/40' : ''}`}>
                     <td className={`px-4 py-3 ${isCritico ? 'border-l-2 border-yellow-400' : ''}`}>
@@ -8033,7 +8039,7 @@ function SupplierPriorityQueue({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <SupplierAlbertoChip clasificacion={item.clasificacionAlberto} />
+                      <SupplierBucketChip bucket={item.clasificacionAutomatica} />
                     </td>
                     <td className="px-4 py-3">
                       <SupplierScoreBar score={item.score} />
