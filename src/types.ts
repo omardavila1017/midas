@@ -16,6 +16,7 @@ export type TabId =
   | 'dashboard'
   | 'financialProjection'
   | 'financialPlanning'
+  | 'taxes'
   | 'operating'
   | 'flow'
   | 'providers'

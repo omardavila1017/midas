@@ -453,6 +453,8 @@ const T = {
   title: 'text-[var(--gray-950)]',
 } as const;
 
+const TAXES_MOVED_TO_INDEPENDENT_MODULE = true;
+
 const COLOR = {
   cash: '#0f172a',
   opening: '#94a3b8',
@@ -1900,14 +1902,13 @@ export default function OperatingProjection({
     {
       id: 'taxes',
       label: 'Impuestos',
-      description: 'Adeudos fiscales y plan de pagos parciales.',
+      description: 'Lectura legacy; la edición vive en Proyección > Impuestos.',
       total: monthTaxTotal,
       delta: 0,
       count: taxDebts.length,
       sparkline: monthTaxByDay,
       tone: 'warning',
       countLabel: 'adeudos activos',
-      scheduleSeed: { kind: 'obligation', direction: 'outflow' },
     },
     {
       id: 'obligations',
@@ -2129,9 +2130,10 @@ export default function OperatingProjection({
           <div>
             <h2 className={`text-[15px] font-semibold ${T.title}`}>Módulo fiscal</h2>
             <p className={`mt-1 text-[12px] ${T.muted}`}>
-              Adeudos 2025/2026 separados de proveedores. El plan fiscal se edita por pago parcial y alimenta la corrida como Impuestos.
+              Lectura legacy de adeudos fiscales. La edición de IVA, ISN, IMSS y pagos parciales ahora vive en Proyección &gt; Impuestos.
             </p>
           </div>
+          {!TAXES_MOVED_TO_INDEPENDENT_MODULE && (
           <div className="flex flex-wrap gap-2">
             <button
               onClick={addTaxDebt}
@@ -2171,6 +2173,7 @@ export default function OperatingProjection({
               Recalcular
             </button>
           </div>
+          )}
         </div>
 
         <div className="grid gap-3 border-b border-[var(--border)] px-4 py-3 sm:grid-cols-2 xl:grid-cols-8">
@@ -2184,6 +2187,13 @@ export default function OperatingProjection({
           <SelectedKpi label="Falta plan" value={fmtCurrency(taxDebtSummary.unscheduled)} />
         </div>
 
+        {TAXES_MOVED_TO_INDEPENDENT_MODULE && (
+          <div className="border-b border-[var(--border)] px-4 py-3 text-[12px] text-[var(--gray-600)]">
+            Este bloque conserva la lectura histórica para auditoría operativa; captura, overrides y pagos se hacen en el módulo independiente de Impuestos.
+          </div>
+        )}
+
+        {!TAXES_MOVED_TO_INDEPENDENT_MODULE && (
         <div className="flex flex-col gap-3 border-b border-[var(--border)] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="inline-flex w-fit rounded-lg bg-[var(--surface-alt)] p-1 text-[11px] font-medium">
             {([
@@ -2239,15 +2249,16 @@ export default function OperatingProjection({
             </div>
           )}
         </div>
+        )}
 
-        {taxModuleTab === 'summary' && (
+        {(TAXES_MOVED_TO_INDEPENDENT_MODULE || taxModuleTab === 'summary') && (
           <TaxDebtSummaryView
             debts={taxDebts}
             summary={taxDebtSummary}
             today={today}
           />
         )}
-        {taxModuleTab === 'debts' && (
+        {!TAXES_MOVED_TO_INDEPENDENT_MODULE && taxModuleTab === 'debts' && (
           <TaxDebtEditor
             rows={taxDebtRows}
             onChangeRows={setTaxDebtRows}
@@ -2255,7 +2266,7 @@ export default function OperatingProjection({
             selectedMonth={selectedMonth}
           />
         )}
-        {taxModuleTab === 'plan' && (
+        {!TAXES_MOVED_TO_INDEPENDENT_MODULE && taxModuleTab === 'plan' && (
           <TaxPaymentPlanEditor
             rows={taxDebtRows}
             onChangeRows={setTaxDebtRows}

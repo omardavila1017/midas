@@ -24,6 +24,12 @@ export type ConfidenceBand = 'CONFIRMED' | 'HIGH' | 'MEDIUM' | 'LOW' | 'EXPLORAT
 export type ForecastMethod = 'RULE' | 'STATISTICAL' | 'ML' | 'DRIVER' | 'MANUAL';
 export type FinancialDataStatus = 'REAL' | 'PROJECTED_BASE' | 'ADJUSTED' | 'APPROVED' | 'EXECUTED' | 'CANCELLED';
 export type LockState = 'UNLOCKED' | 'RESTRICTED' | 'LOCKED';
+export type FinancialTaxRate = 0 | 8 | 16;
+export type FinancialTaxTreatment = 'IVA_CAUSED' | 'IVA_CREDITABLE' | 'IVA_EXEMPT' | 'UNCLASSIFIED';
+export type TaxType = 'IVA' | 'ISN' | 'IMSS';
+export type TaxStatus = 'PROJECTED' | 'CONFIRMED' | 'PAID' | 'PENDING';
+export type TaxSource = 'CALCULATED' | 'JDE' | 'MANUAL' | 'SCENARIO';
+export type TaxPaymentPlanStatus = 'DRAFT' | 'APPROVED' | 'PAID';
 
 export interface FinancialMovement {
   id: string;
@@ -53,6 +59,10 @@ export interface FinancialMovement {
   confidenceBand: ConfidenceBand;
   forecastMethod: ForecastMethod;
   ruleApplied?: string;
+  taxTreatment?: FinancialTaxTreatment;
+  taxRate?: FinancialTaxRate;
+  taxBaseAmount?: number;
+  taxAmount?: number;
   status: FinancialDataStatus;
   lockState: LockState;
   comments?: string[];
@@ -77,6 +87,40 @@ export interface FinancialScenario {
   approvedBy?: string;
   approvedAt?: string;
   publishedAt?: string;
+  archivedAt?: string;
+  promotedFromScenarioId?: string;
+  promotedAt?: string;
+}
+
+export type ManualPlanningCategory =
+  | 'MANUAL_INFLOW'
+  | 'MANUAL_OUTFLOW'
+  | 'SUPPLIER_PAYMENT'
+  | 'TAX_PAYMENT'
+  | 'OTHER';
+
+export type ManualPlanningRecurrence = 'ONE_TIME' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'QUARTERLY';
+
+export interface ManualPlanningEntry {
+  id: string;
+  scenarioIds: string[];
+  type: FinancialMovementType;
+  category: ManualPlanningCategory;
+  name: string;
+  amount: number;
+  startDate: string;
+  endDate?: string;
+  recurrence: ManualPlanningRecurrence;
+  counterpartyName?: string;
+  description?: string;
+  taxTreatment: FinancialTaxTreatment;
+  taxRate?: FinancialTaxRate;
+  taxBaseAmount?: number;
+  taxAmount?: number;
+  status: 'DRAFT' | 'APPROVED';
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type FinancialAdjustmentType =
@@ -240,18 +284,47 @@ export interface CustomerCollectionProfile {
   comment?: string;
 }
 
+export interface TaxPaymentPlanItem {
+  id: string;
+  date: string;
+  amount: number;
+  status: TaxPaymentPlanStatus;
+  scenarioId?: string;
+  note?: string;
+}
+
+export interface TaxManualAdjustment {
+  id: string;
+  taxType: TaxType;
+  period: string;
+  kind:
+    | 'IVA_CAUSED'
+    | 'IVA_CREDITABLE'
+    | 'IVA_PAID'
+    | 'IVA_PAYABLE'
+    | 'ISN_OVERRIDE'
+    | 'IMSS_MANUAL';
+  amount: number;
+  note?: string;
+  source: TaxSource;
+  createdAt: string;
+}
+
 export interface TaxObligation {
   id: string;
-  taxType: 'IVA' | 'ISR' | 'IMSS' | 'INFONAVIT' | 'STATE' | 'OTHER';
-  sourceSystem: 'MANUAL' | 'TAX' | 'JDE' | 'EXCEL';
+  taxType: TaxType;
+  period: string;
+  label: string;
+  source: TaxSource;
+  sourceSystem?: 'MANUAL' | 'TAX' | 'JDE' | 'EXCEL' | 'CALCULATED' | 'SCENARIO';
   totalAmount: number;
   paidAmount: number;
   pendingAmount: number;
   dueDate: string;
-  paymentPlan: { id: string; date: string; amount: number; status: 'DRAFT' | 'APPROVED' | 'PAID' }[];
+  paymentPlan: TaxPaymentPlanItem[];
   risk: 'LOW' | 'MEDIUM' | 'HIGH' | 'LEGAL';
   comment?: string;
-  status: 'OPEN' | 'PARTIAL' | 'PAID' | 'OVERDUE';
+  status: TaxStatus;
 }
 
 export interface AuditEvent {

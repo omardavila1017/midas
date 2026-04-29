@@ -1,23 +1,48 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, RotateCcw, Search } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, RotateCcw, Search, ShieldAlert } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong } from '../../../formatters';
 import {
+  applyAdjustmentsToMovements,
   calculateBaseProjection,
-  calculateScenarioProjection,
   compareProjectionVsScenario,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
-import type { FinancialMovement, ProjectionGranularity } from '../../shared-finance/types';
+import type { FinancialAdjustment, FinancialMovement, FinancialScenario, ManualPlanningEntry, ProjectionGranularity, ScenarioComparison } from '../../shared-finance/types';
 import { CashFlowChart } from '../components/CashFlowChart';
 import { MovementDrillDownDrawer } from '../components/MovementDrillDownDrawer';
 import {
   buildFinancialProjectionSourceData,
   calculateInitialCash,
 } from '../services/financialProjectionService';
-import { loadPlanningAdjustments } from '../../financial-planning/services/financialPlanningStorage';
+import {
+  convertLegacyScenariosToFinancial,
+  isLegacyScenarioId,
+  legacyProposalToAdjustments,
+  legacyProposalsForActiveScenario,
+  legacyScenarioId,
+} from '../../shared-finance/calculation-engine/legacyScenarioBridge';
+import {
+  loadManualPlanningEntries,
+  expandManualPlanningEntriesToMovements,
+} from '../../financial-planning/services/manualPlanningEntries';
+import {
+  loadPlanningAdjustments,
+  loadPlanningScenarios,
+} from '../../financial-planning/services/financialPlanningStorage';
+import {
+  buildSupplierCriticalAlerts,
+  type SupplierCriticalAlert,
+} from '../services/supplierCriticalAlerts';
+import {
+  buildApprovedTaxPaymentMovements,
+  buildTaxDashboardView,
+  defaultTaxStore,
+  loadTaxStore,
+  type TaxDashboardView,
+} from '../../taxes/services/taxModuleService';
 import { ConfidenceBadge, StatusBadge } from '../../shared-finance/components/FinanceBadges';
 import {
   effectiveAmount,
@@ -26,6 +51,7 @@ import {
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import { Wallet, AlertTriangle as AlertIcon, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
+import type { Proposal, Scenario as LegacyScenario } from '../../../types';
 
 interface Props {
   companyCode: string;
@@ -36,6 +62,9 @@ interface Props {
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
+  legacyProposals?: Proposal[];
+  legacyScenarios?: LegacyScenario[];
+  legacyActiveScenarioId?: string | null;
 }
 
 const GRANULARITY_LABELS: Record<ProjectionGranularity, string> = {
@@ -104,12 +133,63 @@ export default function FinancialProjectionDashboard(props: Props) {
     ],
   );
 
-  const adjustments = useMemo(() => loadPlanningAdjustments([]), []);
-  const baseScenario = source.scenarios.find((scenario) => scenario.isBase) ?? source.scenarios[0];
-  const previewScenario = source.scenarios.find((scenario) => !scenario.isBase);
+  const [storedScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
+  const [storedAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
+  const [manualEntries] = useState<ManualPlanningEntry[]>(() => loadManualPlanningEntries([]));
+  const [taxStore] = useState(() => loadTaxStore(defaultTaxStore()));
+  const [selectedSupplierAlert, setSelectedSupplierAlert] = useState<SupplierCriticalAlert | null>(null);
+
+  const sourceBaseScenario = source.scenarios.find((scenario) => scenario.isBase) ?? source.scenarios[0];
+  const storedBaseScenario = storedScenarios.find((scenario) => scenario.isBase && !scenario.archivedAt);
+  const baseScenario = storedBaseScenario ?? sourceBaseScenario;
+  const legacyScenarios = useMemo(
+    () => convertLegacyScenariosToFinancial(props.legacyScenarios ?? []),
+    [props.legacyScenarios],
+  );
+  const archivedBaseScenarios = storedScenarios.filter((scenario) => scenario.archivedAt);
+  const scenarios = useMemo(
+    () => [baseScenario, ...legacyScenarios, ...archivedBaseScenarios],
+    [archivedBaseScenarios, baseScenario, legacyScenarios],
+  );
+  const initialScenarioId = useMemo(() => {
+    if (props.legacyActiveScenarioId) {
+      return legacyScenarioId({ id: props.legacyActiveScenarioId } as LegacyScenario);
+    }
+    return baseScenario.id;
+  }, [baseScenario.id, props.legacyActiveScenarioId]);
+  const [activeScenarioId, setActiveScenarioId] = useState(initialScenarioId);
+
+  useEffect(() => {
+    if (!scenarios.some((scenario) => scenario.id === activeScenarioId)) {
+      setActiveScenarioId(scenarios[0]?.id ?? activeScenarioId);
+    }
+  }, [activeScenarioId, scenarios]);
+
+  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? baseScenario;
+  const horizonYearMonth = yearEnd.slice(0, 7);
+  const baseSeedMovements = useMemo(() => {
+    const baseManualMovements = expandManualPlanningEntriesToMovements(manualEntries, {
+      scenarioId: baseScenario.id,
+      startDate,
+      endDate,
+      asOfDate: today,
+    });
+    const baseTaxMovements = buildApprovedTaxPaymentMovements({
+      obligations: taxStore.obligations,
+      scenarioId: baseScenario.id,
+      startDate,
+      endDate,
+      asOfDate: today,
+    });
+    return applyAdjustmentsToMovements(
+      [...source.movements, ...baseManualMovements, ...baseTaxMovements],
+      storedAdjustments,
+      baseScenario.id,
+    );
+  }, [baseScenario.id, endDate, manualEntries, source.movements, startDate, storedAdjustments, taxStore.obligations, today]);
 
   const baseProjection = useMemo(
-    () => calculateBaseProjection(source.movements, {
+    () => calculateBaseProjection(baseSeedMovements, {
       startDate,
       endDate,
       initialCash: calculateInitialCash(props.bankStatements, props.startingBalance),
@@ -127,22 +207,120 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.bankStatements,
       props.budget,
       props.startingBalance,
-      source.movements,
+      baseSeedMovements,
       startDate,
     ],
   );
 
-  const previewProjection = useMemo(() => {
-    if (!previewScenario || adjustments.length === 0) return baseProjection;
-    return calculateScenarioProjection(baseProjection, previewScenario, adjustments, { granularity });
-  }, [adjustments, baseProjection, granularity, previewScenario]);
+  const activeAdjustments = useMemo<FinancialAdjustment[]>(() => {
+    const stored = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(activeScenario.id));
+    if (!isLegacyScenarioId(activeScenario.id)) return stored;
+    const proposals = legacyProposalsForActiveScenario(
+      activeScenario.id,
+      props.legacyScenarios ?? [],
+      props.legacyProposals ?? [],
+    );
+    const legacy = proposals.flatMap((proposal) =>
+      legacyProposalToAdjustments(proposal, activeScenario.id, today, horizonYearMonth),
+    );
+    return [...stored, ...legacy];
+  }, [activeScenario.id, horizonYearMonth, props.legacyProposals, props.legacyScenarios, storedAdjustments, today]);
 
-  const comparison = previewScenario && adjustments.length > 0
-    ? compareProjectionVsScenario(baseProjection, previewProjection)
+  const activeManualMovements = useMemo(
+    () => expandManualPlanningEntriesToMovements(manualEntries, {
+      scenarioId: activeScenario.id,
+      startDate,
+      endDate,
+      asOfDate: today,
+    }),
+    [activeScenario.id, endDate, manualEntries, startDate, today],
+  );
+
+  const activeProjection = useMemo(() => {
+    const activeTaxMovements = buildApprovedTaxPaymentMovements({
+      obligations: taxStore.obligations,
+      scenarioId: activeScenario.id,
+      startDate,
+      endDate,
+      asOfDate: today,
+    });
+    if (activeScenario.isBase) return baseProjection;
+    if (activeScenario.archivedAt) {
+      const archivedMovements = applyAdjustmentsToMovements(
+        [...source.movements, ...activeManualMovements, ...activeTaxMovements],
+        activeAdjustments,
+        activeScenario.id,
+      );
+      return calculateBaseProjection(archivedMovements, {
+        startDate,
+        endDate,
+        initialCash: calculateInitialCash(props.bankStatements, props.startingBalance),
+        minimumCash: minimumCashFor(props),
+        granularity,
+        scenarioId: activeScenario.id,
+        name: activeScenario.name,
+      });
+    }
+    const adjustedMovements = applyAdjustmentsToMovements(
+      [...baseProjection.movements, ...activeManualMovements, ...activeTaxMovements],
+      activeAdjustments,
+      activeScenario.id,
+    );
+    return calculateBaseProjection(adjustedMovements, {
+      startDate,
+      endDate,
+      initialCash: baseProjection.buckets[0]?.openingCash ?? baseProjection.summary.currentCash,
+      minimumCash: baseProjection.summary.minimumCashRequired,
+      granularity,
+      scenarioId: activeScenario.id,
+      name: activeScenario.name,
+    });
+  }, [
+    activeAdjustments,
+    activeManualMovements,
+    activeScenario,
+    baseProjection,
+    endDate,
+    granularity,
+    props.bankStatements,
+    props.budget,
+    props.startingBalance,
+    source.movements,
+    startDate,
+    taxStore.obligations,
+    today,
+  ]);
+
+  const comparison = activeScenario.id !== baseProjection.scenarioId
+    ? compareProjectionVsScenario(baseProjection, activeProjection)
     : undefined;
 
+  const taxView = useMemo(
+    () => buildTaxDashboardView({
+      projection: activeProjection,
+      store: taxStore,
+      providers: props.providers,
+      cxpRecords: props.cxpRecords,
+      scenarioId: activeScenario.id,
+      today,
+    }),
+    [activeProjection, activeScenario.id, props.cxpRecords, props.providers, taxStore, today],
+  );
+  const supplierAlerts = useMemo(
+    () => buildSupplierCriticalAlerts({
+      providers: props.providers,
+      cxpRecords: props.cxpRecords,
+      movements: activeProjection.movements,
+      manualEntries,
+      bankStatements: props.bankStatements,
+      scenarioId: activeScenario.id,
+      today,
+    }),
+    [activeProjection.movements, activeScenario.id, manualEntries, props.bankStatements, props.cxpRecords, props.providers, today],
+  );
+
   const tableMovements = useMemo(
-    () => previewProjection.movements
+    () => activeProjection.movements
       .filter((movement) => {
         const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
         if (date < startDate || date > endDate) return false;
@@ -157,9 +335,8 @@ export default function FinancialProjectionDashboard(props: Props) {
         const da = a.actualDate ?? a.adjustedDate ?? a.projectedDate;
         const db = b.actualDate ?? b.adjustedDate ?? b.projectedDate;
         return da.localeCompare(db);
-      })
-      .slice(0, 500),
-    [endDate, previewProjection.movements, search, startDate, typeFilter],
+      }),
+    [activeProjection.movements, endDate, search, startDate, typeFilter],
   );
 
   const movementGroups = useMemo(
@@ -223,7 +400,7 @@ export default function FinancialProjectionDashboard(props: Props) {
     );
   }
 
-  const summary = previewProjection.summary;
+  const summary = activeProjection.summary;
 
   return (
     <div className="space-y-5 animate-page-in">
@@ -267,11 +444,23 @@ export default function FinancialProjectionDashboard(props: Props) {
             </span>
             <span className="hidden sm:inline">·</span>
             <span className="tabular-nums">
-              {previewProjection.buckets.length} {previewProjection.buckets.length === 1 ? 'periodo' : 'periodos'}
+              {activeProjection.buckets.length} {activeProjection.buckets.length === 1 ? 'periodo' : 'periodos'}
             </span>
           </div>
         </div>
       </section>
+
+      <ProjectionScenarioDetail
+        scenarios={scenarios}
+        activeScenario={activeScenario}
+        activeScenarioId={activeScenario.id}
+        onSelect={setActiveScenarioId}
+        comparison={comparison}
+        manualEntries={manualEntries.filter((entry) => entry.scenarioIds.includes(activeScenario.id))}
+        adjustments={activeAdjustments}
+        taxView={taxView}
+        supplierAlerts={supplierAlerts}
+      />
 
       {/* 4 KPIs críticos. Mantengo la jerarquía del Dashboard: caja actual,
           caja proyectada al rango, días en déficit, mayor riesgo. */}
@@ -310,9 +499,35 @@ export default function FinancialProjectionDashboard(props: Props) {
 
       {/* Chart hero. */}
       <CashFlowChart
-        projection={previewProjection}
-        baseProjection={previewProjection.scenarioId === baseProjection.scenarioId ? undefined : baseProjection}
+        projection={activeProjection}
+        baseProjection={activeProjection.scenarioId === baseProjection.scenarioId ? undefined : baseProjection}
       />
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1.2fr)]">
+        <SupplierCriticalAlertsPanel
+          alerts={supplierAlerts}
+          selectedAlert={selectedSupplierAlert}
+          onSelect={setSelectedSupplierAlert}
+        />
+        <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+          <div className="flex items-start justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
+            <div>
+              <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Impuestos</h2>
+              <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">El cálculo y los pagos parciales viven en Proyección &gt; Impuestos.</p>
+            </div>
+            <div className="text-right text-[12px]">
+              <div className="font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(taxView.totals.total)}</div>
+              <div className="text-[var(--gray-400)]">obligaciones visibles</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
+            <ScenarioMiniStat label="IVA" value={fmtCompact(taxView.totals.ivaNet)} tone={taxView.totals.ivaNet > 0 ? 'warning' : 'neutral'} />
+            <ScenarioMiniStat label="ISN" value={fmtCompact(taxView.totals.isn)} tone={taxView.totals.isn > 0 ? 'warning' : 'neutral'} />
+            <ScenarioMiniStat label="IMSS" value={fmtCompact(taxView.totals.imss)} tone={taxView.totals.imss > 0 ? 'danger' : 'neutral'} />
+            <ScenarioMiniStat label="Caja" value={fmtCompact(taxView.totals.cashImpact)} tone={taxView.totals.cashImpact > 0 ? 'danger' : 'neutral'} />
+          </div>
+        </section>
+      </div>
 
       {/* Tabla con filtros inline en su mismo header — sin card extra.
           Las filas viven en grupos colapsables (por periodo o por contraparte)
@@ -482,6 +697,13 @@ function GroupRows({
   onToggle: () => void;
   onSelectMovement: (movement: FinancialMovement, anchor: DOMRect) => void;
 }) {
+  const [visibleLimit, setVisibleLimit] = useState(120);
+  useEffect(() => {
+    setVisibleLimit(120);
+  }, [group.key]);
+  const visibleMovements = group.movements.slice(0, visibleLimit);
+  const hiddenCount = Math.max(0, group.movements.length - visibleMovements.length);
+
   return (
     <>
       <tr
@@ -547,7 +769,7 @@ function GroupRows({
                   </tr>
                 </thead>
                 <tbody>
-                  {group.movements.map((movement) => (
+                  {visibleMovements.map((movement) => (
                     <tr
                       key={movement.id}
                       className="border-t border-[var(--gray-100)] cursor-pointer hover:bg-[var(--gray-50)] transition-colors"
@@ -599,6 +821,21 @@ function GroupRows({
                       </td>
                     </tr>
                   ))}
+                  {hiddenCount > 0 && (
+                    <tr className="border-t border-[var(--gray-100)]">
+                      <td colSpan={7} className="px-4 py-3 pl-10">
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setVisibleLimit((current) => current + 120);
+                          }}
+                          className="inline-flex h-9 items-center rounded-lg border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+                        >
+                          Cargar 120 más · faltan {hiddenCount}
+                        </button>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -762,6 +999,201 @@ function categoryLabel(category: string): string {
     case 'MANUAL': return 'Manual';
     default: return category;
   }
+}
+
+function ProjectionScenarioDetail({
+  scenarios,
+  activeScenario,
+  activeScenarioId,
+  onSelect,
+  comparison,
+  manualEntries,
+  adjustments,
+  taxView,
+  supplierAlerts,
+}: {
+  scenarios: FinancialScenario[];
+  activeScenario: FinancialScenario;
+  activeScenarioId: string;
+  onSelect: (id: string) => void;
+  comparison?: ScenarioComparison;
+  manualEntries: ManualPlanningEntry[];
+  adjustments: FinancialAdjustment[];
+  taxView: TaxDashboardView;
+  supplierAlerts: SupplierCriticalAlert[];
+}) {
+  const taxPayable = taxView.totals.total;
+  const criticalSuppliers = supplierAlerts.filter((alert) => alert.severity === 'CRITICAL').length;
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+      <div className="flex flex-col gap-3 border-b border-[var(--gray-200)] px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Detalle de escenarios</h2>
+          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+            Base vigente contra escenario activo, incluyendo altas manuales, impuestos y proveedores críticos.
+          </p>
+        </div>
+        <select
+          value={activeScenarioId}
+          onChange={(event) => onSelect(event.target.value)}
+          className="h-10 min-w-[260px] rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
+        >
+          {scenarios.map((scenario) => (
+            <option key={scenario.id} value={scenario.id}>
+              {scenario.name}{scenario.archivedAt ? ' · archivado' : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="grid gap-3 px-4 py-3 md:grid-cols-2 xl:grid-cols-5">
+        <ScenarioMiniStat label="Caja vs base" value={comparison ? formatDelta(comparison.finalCashDelta) : 'Base'} tone={!comparison || comparison.finalCashDelta >= 0 ? 'success' : 'danger'} />
+        <ScenarioMiniStat label="Días déficit" value={comparison ? `${comparison.deficitDays}` : '0'} tone={comparison && comparison.deficitDays > 0 ? 'danger' : 'neutral'} />
+        <ScenarioMiniStat label="Altas manuales" value={String(manualEntries.length)} tone={manualEntries.length > 0 ? 'warning' : 'neutral'} />
+        <ScenarioMiniStat label="Impuestos" value={fmtCompact(taxPayable)} tone={taxPayable > 0 ? 'warning' : 'neutral'} />
+        <ScenarioMiniStat label="Prov. críticos" value={String(criticalSuppliers)} tone={criticalSuppliers > 0 ? 'danger' : 'neutral'} />
+      </div>
+      <div className="grid gap-3 border-t border-[var(--gray-200)] px-4 py-3 lg:grid-cols-3">
+        <ScenarioChangeList
+          title="Altas manuales"
+          empty="Sin altas manuales."
+          items={manualEntries.slice(0, 5).map((entry) => `${entry.name} · ${fmtCompact(entry.amount)}`)}
+        />
+        <ScenarioChangeList
+          title="Ajustes"
+          empty="Sin ajustes del escenario."
+          items={adjustments.slice(0, 5).map((adjustment) => adjustment.name)}
+        />
+        <ScenarioChangeList
+          title="Fiscal / proveedores"
+          empty="Sin alertas críticas."
+          items={[
+            ...taxView.periods.filter((row) => row.total > 0).slice(0, 3).map((row) => `${row.period} · ${fmtCompact(row.total)}`),
+            ...supplierAlerts.filter((alert) => alert.severity === 'CRITICAL').slice(0, 2).map((alert) => `${alert.providerName} · ${alert.statusLabel}`),
+          ]}
+        />
+      </div>
+      {activeScenario.archivedAt && (
+        <div className="border-t border-[var(--gray-200)] px-4 py-2 text-[12px] text-[var(--gray-500)]">
+          Base archivada el {fmtDate(activeScenario.archivedAt.slice(0, 10))}; se conserva para auditoría.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ScenarioMiniStat({
+  label,
+  value,
+  tone: statTone,
+}: {
+  label: string;
+  value: string;
+  tone: 'success' | 'warning' | 'danger' | 'neutral';
+}) {
+  const toneClass = statTone === 'success'
+    ? 'text-[var(--success)]'
+    : statTone === 'warning'
+      ? 'text-[var(--warning)]'
+      : statTone === 'danger'
+        ? 'text-[var(--danger)]'
+        : 'text-[var(--gray-950)]';
+  return (
+    <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</div>
+      <div className={`mt-1 text-[14px] font-semibold tabular-nums ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function ScenarioChangeList({
+  title,
+  empty,
+  items,
+}: {
+  title: string;
+  empty: string;
+  items: string[];
+}) {
+  return (
+    <div>
+      <div className="text-[11px] font-semibold text-[var(--gray-950)]">{title}</div>
+      <div className="mt-2 space-y-1.5">
+        {items.length === 0 ? (
+          <div className="text-[12px] text-[var(--gray-400)]">{empty}</div>
+        ) : (
+          items.map((item, index) => (
+            <div key={`${item}-${index}`} className="truncate rounded-lg border border-[var(--gray-200)] bg-white px-2.5 py-1.5 text-[11px] text-[var(--gray-700)]">
+              {item}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SupplierCriticalAlertsPanel({
+  alerts,
+  selectedAlert,
+  onSelect,
+}: {
+  alerts: SupplierCriticalAlert[];
+  selectedAlert: SupplierCriticalAlert | null;
+  onSelect: (alert: SupplierCriticalAlert | null) => void;
+}) {
+  const visible = alerts.slice(0, 10);
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+      <div className="flex items-start justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
+        <div>
+          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Proveedores críticos</h2>
+          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Pagado real, programado, parcial o pendiente.</p>
+        </div>
+        <ShieldAlert className="h-5 w-5 text-[var(--warning)]" strokeWidth={1.5} />
+      </div>
+      <div className="divide-y divide-[var(--gray-100)]">
+        {visible.length === 0 ? (
+          <div className="px-4 py-8 text-center text-[12px] text-[var(--gray-400)]">Sin alertas de proveedores críticos.</div>
+        ) : (
+          visible.map((alert) => (
+            <button
+              key={alert.id}
+              onClick={() => onSelect(selectedAlert?.id === alert.id ? null : alert)}
+              className="block w-full px-4 py-3 text-left hover:bg-[var(--gray-50)]"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-medium text-[var(--gray-950)]">{alert.providerName}</div>
+                  <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
+                    {alert.invoiceNumber ? `Factura ${alert.invoiceNumber}` : 'Factura s/n'} · {alert.dueDate ? `vence ${fmtDate(alert.dueDate)}` : 'sin vencimiento'}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${supplierAlertClass(alert.severity)}`}>
+                    {alert.statusLabel}
+                  </span>
+                  <div className="mt-1 text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{fmtCompact(alert.pendingAmount)}</div>
+                </div>
+              </div>
+              {selectedAlert?.id === alert.id && (
+                <div className="mt-3 grid gap-2 rounded-xl border border-[var(--gray-200)] bg-white p-3 text-[11px] text-[var(--gray-600)]">
+                  <div>{alert.detail}</div>
+                  <div>Programado: {fmtCurrency(alert.scheduledAmount)} · Manual: {fmtCurrency(alert.manualAmount)}</div>
+                  <div>Evidencia banco/JDE: {alert.bankEvidenceCount}</div>
+                </div>
+              )}
+            </button>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function supplierAlertClass(severity: SupplierCriticalAlert['severity']): string {
+  if (severity === 'CRITICAL') return 'bg-[var(--danger)]/10 text-[var(--danger)]';
+  if (severity === 'WARNING') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
+  return 'bg-[var(--success)]/10 text-[var(--success)]';
 }
 
 interface SegmentedOption<T extends string> {

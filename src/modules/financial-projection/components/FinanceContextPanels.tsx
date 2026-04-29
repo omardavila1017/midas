@@ -105,10 +105,10 @@ function EmptyRow({ message }: { message: string }) {
 
 function humanStatus(status: string): string {
   switch (status) {
-    case 'OPEN': return 'Abierto';
-    case 'PARTIAL': return 'Pago parcial';
+    case 'PROJECTED': return 'Proyectado';
+    case 'CONFIRMED': return 'Confirmado';
     case 'PAID': return 'Pagado';
-    case 'OVERDUE': return 'Vencido';
+    case 'PENDING': return 'Pendiente';
     default: return status;
   }
 }

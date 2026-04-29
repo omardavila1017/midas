@@ -43,6 +43,7 @@ import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
   FinancialMovement,
   FinancialMovementCategory,
+  FinancialTaxRate,
 } from '../types';
 
 export interface CanonicalProjectionInputs {
@@ -263,6 +264,9 @@ function emitRawLines(
     confidenceBand: calculateConfidenceBand(line.confidenceScore),
     forecastMethod: line.forecastMethod,
     ruleApplied: line.ruleApplied,
+    taxTreatment: line.taxTreatment,
+    taxRate: line.taxRate,
+    ...taxMetaFromGross(line.amount, line.taxRate),
     status: 'PROJECTED_BASE',
     lockState: line.lockState,
     comments: [line.comment],
@@ -290,6 +294,8 @@ interface RawLine {
   confidenceScore: number;
   lockState: FinancialMovement['lockState'];
   comment: string;
+  taxTreatment?: FinancialMovement['taxTreatment'];
+  taxRate?: FinancialTaxRate;
 }
 
 /**
@@ -352,6 +358,8 @@ function collectInflowLines(
           forecastMethod: 'RULE',
           confidenceScore: score,
           lockState: 'UNLOCKED',
+          taxTreatment: client.ivaRate ? 'IVA_CAUSED' : 'UNCLASSIFIED',
+          taxRate: client.ivaRate,
           comment: `Evento proyectado por collectionEngine. Lag teórico ${event.lagDays} días.`,
         });
       }
@@ -388,6 +396,7 @@ function collectOutflowLines(
     if (compareYearMonth(date.slice(0, 7), todayYm) < 0) return;
     const provider = providerByName.get(normalize(record.nombre));
     const score = (record.edoPago ?? '').toUpperCase().includes('APROB') ? 90 : 76;
+    const taxRate = taxRateFromCxp(record.importeSubtotalPesos, record.importeImpuestosPesos);
     lines.push({
       id: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`,
       amount: record.importePendientePesos,
@@ -406,6 +415,8 @@ function collectOutflowLines(
       forecastMethod: 'RULE',
       confidenceScore: score,
       lockState: provider?.flexibility === 'inamovible' ? 'LOCKED' : 'RESTRICTED',
+      taxTreatment: taxRate ? 'IVA_CREDITABLE' : 'UNCLASSIFIED',
+      taxRate,
       comment: 'Factura abierta en JDE.',
     });
   });
@@ -434,6 +445,9 @@ function collectOutflowLines(
           forecastMethod: 'DRIVER',
           confidenceScore: 60,
           lockState: 'RESTRICTED',
+          taxTreatment: budgetCategoryFor(concept.concept) === 'PAYROLL' || budgetCategoryFor(concept.concept) === 'TAX'
+            ? 'IVA_EXEMPT'
+            : 'UNCLASSIFIED',
           comment: 'Línea del presupuesto, fechada al día típico del concepto.',
         });
       }
@@ -481,6 +495,7 @@ function balanceMonth({
       confidenceBand: calculateConfidenceBand(65),
       forecastMethod: 'DRIVER',
       ruleApplied: fallbackRule,
+      taxTreatment: fallbackCategory === 'AR_COLLECTION' ? 'UNCLASSIFIED' : fallbackCategory === 'PAYROLL' || fallbackCategory === 'TAX' ? 'IVA_EXEMPT' : 'UNCLASSIFIED',
       status: 'PROJECTED_BASE',
       lockState: 'RESTRICTED',
       comments: ['Sin desglose por catálogo en este mes; se usa el total del Dashboard.'],
@@ -523,6 +538,9 @@ function balanceMonth({
       confidenceBand: calculateConfidenceBand(line.confidenceScore),
       forecastMethod: line.forecastMethod,
       ruleApplied: line.ruleApplied,
+      taxTreatment: line.taxTreatment,
+      taxRate: line.taxRate,
+      ...taxMetaFromGross(scaled, line.taxRate),
       status: 'PROJECTED_BASE',
       lockState: line.lockState,
       comments: [line.comment],
@@ -580,6 +598,27 @@ function cleanDate(value?: string): string | undefined {
 
 function normalize(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function taxRateFromCxp(subtotal: number, taxAmount: number): FinancialTaxRate | undefined {
+  if (!Number.isFinite(subtotal) || subtotal <= 0 || !Number.isFinite(taxAmount) || taxAmount <= 0) return undefined;
+  const pct = Math.round((taxAmount / subtotal) * 100);
+  if (Math.abs(pct - 16) <= 1) return 16;
+  if (Math.abs(pct - 8) <= 1) return 8;
+  return undefined;
+}
+
+function taxMetaFromGross(
+  grossAmount: number,
+  taxRate: FinancialTaxRate | undefined,
+): Pick<FinancialMovement, 'taxBaseAmount' | 'taxAmount'> {
+  if (!taxRate || taxRate <= 0) return {};
+  const divisor = 1 + taxRate / 100;
+  const taxBaseAmount = grossAmount / divisor;
+  return {
+    taxBaseAmount,
+    taxAmount: grossAmount - taxBaseAmount,
+  };
 }
 
 function paymentPatternLabel(client: Client): string {

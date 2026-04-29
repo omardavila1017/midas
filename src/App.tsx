@@ -25,6 +25,7 @@ import Simulacion from './components/Simulacion';
 import OperatingProjection from './components/OperatingProjection';
 import FinancialProjectionDashboard from './modules/financial-projection/pages/FinancialProjectionDashboard';
 import FinancialPlanningDashboard from './modules/financial-planning/pages/FinancialPlanningDashboard';
+import TaxDashboard from './modules/taxes/pages/TaxDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
@@ -73,6 +74,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
     { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
     { id: 'financialPlanning', label: 'Planeación Financiera', icon: ClipboardList },
+    { id: 'taxes', label: 'Impuestos', icon: Landmark },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'operating',   label: 'Operativa',   icon: LineChart },
@@ -84,7 +86,7 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos',
   netflow: 'operacion', bancos: 'operacion',
   dashboard: 'proyeccion', collections: 'proyeccion',
-  financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
+  financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
   cxp: 'proyeccion', operating: 'proyeccion', flow: 'proyeccion',
 };
 
@@ -855,6 +857,9 @@ export default function App() {
                 assumptions={assumptions}
                 budget={budget}
                 startingBalance={effectiveStartingBalance}
+                legacyProposals={proposals}
+                legacyScenarios={scenarios}
+                legacyActiveScenarioId={activeScenarioId}
               />
             )}
             {activeTab === 'financialPlanning' && (
@@ -871,6 +876,21 @@ export default function App() {
                 legacyScenarios={scenarios}
                 legacyActiveScenarioId={activeScenarioId}
                 onLegacyScenariosChange={setScenarios}
+              />
+            )}
+            {activeTab === 'taxes' && (
+              <TaxDashboard
+                companyCode={selectedCia}
+                bankStatements={bankStatements}
+                clients={clients}
+                providers={providers}
+                cxpRecords={cxpRecords}
+                assumptions={assumptions}
+                budget={budget}
+                startingBalance={effectiveStartingBalance}
+                legacyProposals={proposals}
+                legacyScenarios={scenarios}
+                legacyActiveScenarioId={activeScenarioId}
               />
             )}
             {activeTab === 'operating' && (

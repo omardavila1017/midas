@@ -42,9 +42,9 @@ export function buildFinanceMockData(asOfDate = '2026-05-01'): FinanceMockData {
   ];
 
   const taxes: TaxObligation[] = [
-    { id: 'tax-iva-may', taxType: 'IVA', sourceSystem: 'MANUAL', totalAmount: 7_250_000, paidAmount: 0, pendingAmount: 7_250_000, dueDate: shift(asOfDate, 16), paymentPlan: [{ id: 'tax-iva-may-1', date: shift(asOfDate, 16), amount: 7_250_000, status: 'DRAFT' }], risk: 'HIGH', comment: 'Captura manual de tesorería; pendiente validar contabilidad.', status: 'OPEN' },
-    { id: 'tax-isr-may', taxType: 'ISR', sourceSystem: 'MANUAL', totalAmount: 5_800_000, paidAmount: 1_000_000, pendingAmount: 4_800_000, dueDate: shift(asOfDate, 18), paymentPlan: [{ id: 'tax-isr-may-1', date: shift(asOfDate, 18), amount: 4_800_000, status: 'DRAFT' }], risk: 'MEDIUM', status: 'PARTIAL' },
-    { id: 'tax-imss-may', taxType: 'IMSS', sourceSystem: 'JDE', totalAmount: 3_350_000, paidAmount: 0, pendingAmount: 3_350_000, dueDate: shift(asOfDate, 20), paymentPlan: [{ id: 'tax-imss-may-1', date: shift(asOfDate, 20), amount: 3_350_000, status: 'DRAFT' }], risk: 'LEGAL', comment: 'No patear sin aprobación CFO.', status: 'OPEN' },
+    { id: 'tax-iva-may', taxType: 'IVA', period: asOfDate.slice(0, 7), label: 'IVA mayo', source: 'MANUAL', sourceSystem: 'MANUAL', totalAmount: 7_250_000, paidAmount: 0, pendingAmount: 7_250_000, dueDate: shift(asOfDate, 16), paymentPlan: [{ id: 'tax-iva-may-1', date: shift(asOfDate, 16), amount: 7_250_000, status: 'DRAFT' }], risk: 'HIGH', comment: 'Captura manual de tesorería; pendiente validar contabilidad.', status: 'PENDING' },
+    { id: 'tax-isn-may', taxType: 'ISN', period: asOfDate.slice(0, 7), label: 'ISN mayo', source: 'MANUAL', sourceSystem: 'MANUAL', totalAmount: 5_800_000, paidAmount: 1_000_000, pendingAmount: 4_800_000, dueDate: shift(asOfDate, 18), paymentPlan: [{ id: 'tax-isn-may-1', date: shift(asOfDate, 18), amount: 4_800_000, status: 'DRAFT' }], risk: 'MEDIUM', status: 'CONFIRMED' },
+    { id: 'tax-imss-may', taxType: 'IMSS', period: asOfDate.slice(0, 7), label: 'IMSS mayo', source: 'JDE', sourceSystem: 'JDE', totalAmount: 3_350_000, paidAmount: 0, pendingAmount: 3_350_000, dueDate: shift(asOfDate, 20), paymentPlan: [{ id: 'tax-imss-may-1', date: shift(asOfDate, 20), amount: 3_350_000, status: 'DRAFT' }], risk: 'LEGAL', comment: 'No patear sin aprobación CFO.', status: 'PENDING' },
   ];
 
   const movements: FinancialMovement[] = [
@@ -195,15 +195,20 @@ function outflow(
 }
 
 function taxMovement(tax: TaxObligation, confidenceScore: number): FinancialMovement {
+  const sourceSystem: FinancialMovement['sourceSystem'] = tax.source === 'JDE'
+    ? 'JDE'
+    : tax.source === 'MANUAL'
+      ? 'MANUAL'
+      : 'TAX';
   return {
-    ...movement(`${tax.id}-movement`, tax.sourceSystem === 'TAX' ? 'TAX' : tax.sourceSystem, 'OUTFLOW', 'TAX', tax.dueDate, tax.pendingAmount, `${tax.taxType} pendiente`, 'TAX_AUTHORITY', 'PROJECTED_BASE', calculateConfidenceBand(confidenceScore), tax.risk === 'LEGAL' ? 'LOCKED' : 'RESTRICTED'),
+    ...movement(`${tax.id}-movement`, sourceSystem, 'OUTFLOW', 'TAX', tax.dueDate, tax.pendingAmount, `${tax.taxType} pendiente`, 'TAX_AUTHORITY', 'PROJECTED_BASE', calculateConfidenceBand(confidenceScore), tax.risk === 'LEGAL' ? 'LOCKED' : 'RESTRICTED'),
     sourceObjectId: tax.id,
     counterpartyId: 'sat',
     counterpartyName: 'Autoridad fiscal',
     dueDate: tax.dueDate,
     confidenceScore,
     confidenceBand: calculateConfidenceBand(confidenceScore),
-    forecastMethod: tax.sourceSystem === 'MANUAL' ? 'MANUAL' : 'RULE',
+    forecastMethod: sourceSystem === 'MANUAL' ? 'MANUAL' : 'RULE',
     ruleApplied: `Impuesto ${tax.taxType} capturado por separado`,
   };
 }
