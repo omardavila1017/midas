@@ -114,7 +114,7 @@ export function computeMinimumOperatingExpense(
   providers: Provider[],
   budget?: Budget | null,
 ): MinimumExpenseSummary {
-  const criticals = providers.filter((p) => p.clasificacionAlberto === 'CRITICO');
+  const criticals = providers.filter((p) => p.clasificacionAutomatica === 'CRITICO');
   const withData: Provider[] = [];
   const withoutData: Provider[] = [];
   for (const p of criticals) {
