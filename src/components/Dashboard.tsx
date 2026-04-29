@@ -16,7 +16,6 @@ import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle, LineChart as LineChartIcon,
   ShieldAlert,
 } from 'lucide-react';
-import type { Proposal } from '../types';
 import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
 import { computeMinimumOperatingExpense, floorForMonth } from '../domain/operatingProjectionMinimumExpense';
 import type { CXPRecord } from '../domain/persistence';
@@ -27,7 +26,6 @@ import {
   toYearMonth,
   addMonths,
   compareYearMonth,
-  evaluateCashFlow,
 } from '../domain/cashFlowEngine';
 import {
   buildMonthlyProjection,
@@ -47,7 +45,6 @@ import PageHeader from './ui/PageHeader';
 interface DashboardProps {
   companyCode: string;
   bankStatements: BankAccountStatement[];
-  proposals: Proposal[];
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
@@ -96,7 +93,7 @@ export function loadOverrides(): ProjectionOverrides {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
-  companyCode, bankStatements, proposals, clients, providers, cxpRecords, assumptions,
+  companyCode, bankStatements, clients, providers, cxpRecords, assumptions,
   budget, onOpenFlow,
   startingBalance,
 }) => {
@@ -144,7 +141,18 @@ const Dashboard: React.FC<DashboardProps> = ({
     [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance, budget],
   );
 
-  const evaluated = useMemo(() => evaluateCashFlow(base, proposals), [base, proposals]);
+  // Antes el Dashboard pasaba por `evaluateCashFlow` (motor de Simulación) con
+  // un array vacío de propuestas. Tras eliminar el módulo de Simulación basta
+  // con derivar el shape consumido por la UI directamente desde la base.
+  const evaluated = useMemo(() => ({
+    months: base.map((m) => ({
+      yearMonth: m.yearMonth,
+      isHistorical: m.isHistorical,
+      baseIncome: m.income,
+      baseExpense: m.expense,
+      baseClosingCash: m.closingCash,
+    })),
+  }), [base]);
 
   const currentYear = new Date().getFullYear();
   const currentYm = toYearMonth(today);
@@ -396,7 +404,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
             >
               <LineChartIcon className="w-4 h-4" strokeWidth={1.5} />
-              Abrir Simulación
+              Abrir Planeación
             </button>
           </>
         }

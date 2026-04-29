@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, Eye, Plus, Pencil, Wallet, AlertTriangle as AlertIcon, Banknote, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, Eye, Plus, Pencil, Wallet, AlertTriangle as AlertIcon, Banknote, ShieldCheck, Trash2, Search, Lock } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -12,13 +12,6 @@ import {
   effectiveAmount,
   effectiveMovementDate,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
-import {
-  convertLegacyScenariosToFinancial,
-  isLegacyScenarioId,
-  legacyProposalToAdjustments,
-  legacyProposalsForActiveScenario,
-  legacyScenarioId,
-} from '../../shared-finance/calculation-engine/legacyScenarioBridge';
 import { ConfidenceBadge } from '../../shared-finance/components/FinanceBadges';
 import type {
   FinancialAdjustment,
@@ -29,8 +22,9 @@ import type {
   ManualPlanningRecurrence,
 } from '../../shared-finance/types';
 import { createAuditEvent } from '../../shared-finance/audit/audit';
-import { CashFlowChart } from '../../financial-projection/components/CashFlowChart';
 import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
+import { CashTrajectoryChart } from '../components/CashTrajectoryChart';
+import { MonthlyCashTable } from '../components/MonthlyCashTable';
 import {
   buildFinancialProjectionSourceData,
   calculateInitialCash,
@@ -60,7 +54,6 @@ import {
 } from '../services/financialPlanningStorage';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
-import type { Proposal, Scenario as LegacyScenario } from '../../../types';
 
 interface Props {
   companyCode: string;
@@ -71,10 +64,6 @@ interface Props {
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
-  legacyProposals: Proposal[];
-  legacyScenarios: LegacyScenario[];
-  legacyActiveScenarioId?: string | null;
-  onLegacyScenariosChange?: (next: LegacyScenario[]) => void;
 }
 
 /**
@@ -97,7 +86,6 @@ interface Props {
 export default function FinancialPlanningDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const yearEnd = useMemo(() => `${Number(today.slice(0, 4))}-12-31`, [today]);
-  const horizonYearMonth = yearEnd.slice(0, 7);
 
   const source = useMemo(
     () => buildFinancialProjectionSourceData({ ...props, asOfDate: today }),
@@ -141,21 +129,19 @@ export default function FinancialPlanningDashboard(props: Props) {
     () => storedScenarios.filter((scenario) => scenario.archivedAt),
     [storedScenarios],
   );
-  const legacyAsFinancial = useMemo(
-    () => convertLegacyScenariosToFinancial(props.legacyScenarios),
-    [props.legacyScenarios],
+  const userScenarios = useMemo(
+    () => storedScenarios.filter((scenario) => !scenario.isBase && !scenario.archivedAt),
+    [storedScenarios],
   );
   const scenarios = useMemo(
-    () => [baseScenario, ...legacyAsFinancial, ...archivedBaseScenarios],
-    [archivedBaseScenarios, baseScenario, legacyAsFinancial],
+    () => [baseScenario, ...userScenarios, ...archivedBaseScenarios],
+    [archivedBaseScenarios, baseScenario, userScenarios],
   );
 
-  const initialActiveId = useMemo(() => {
-    if (props.legacyActiveScenarioId) {
-      return legacyScenarioId({ id: props.legacyActiveScenarioId } as LegacyScenario);
-    }
-    return legacyAsFinancial[0]?.id ?? baseScenario.id;
-  }, [baseScenario.id, legacyAsFinancial, props.legacyActiveScenarioId]);
+  const initialActiveId = useMemo(
+    () => userScenarios[0]?.id ?? baseScenario.id,
+    [baseScenario.id, userScenarios],
+  );
 
   const [activeScenarioId, setActiveScenarioId] = useState(initialActiveId);
   const [editorMovement, setEditorMovement] = useState<FinancialMovement | null>(null);
@@ -215,17 +201,10 @@ export default function FinancialPlanningDashboard(props: Props) {
     ],
   );
 
-  const activeAdjustments = useMemo<FinancialAdjustment[]>(() => {
-    const stored = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(activeScenario.id));
-    if (!isLegacyScenarioId(activeScenario.id)) return stored;
-    const proposals = legacyProposalsForActiveScenario(
-      activeScenario.id,
-      props.legacyScenarios,
-      props.legacyProposals,
-    );
-    const legacy = proposals.flatMap((p) => legacyProposalToAdjustments(p, activeScenario.id, today, horizonYearMonth));
-    return [...stored, ...legacy];
-  }, [activeScenario.id, horizonYearMonth, props.legacyProposals, props.legacyScenarios, storedAdjustments, today]);
+  const activeAdjustments = useMemo<FinancialAdjustment[]>(
+    () => storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(activeScenario.id)),
+    [activeScenario.id, storedAdjustments],
+  );
 
   const activeManualMovements = useMemo(
     () => expandManualPlanningEntriesToMovements(manualEntries, {
@@ -305,19 +284,26 @@ export default function FinancialPlanningDashboard(props: Props) {
     [activeProjection.movements],
   );
 
-  const handleCreateLegacyScenario = () => {
-    if (!props.onLegacyScenariosChange) return;
+  const handleCreateScenario = () => {
     const now = new Date().toISOString();
-    const next: LegacyScenario = {
-      id: `simulacion-${Date.now()}`,
-      name: `Escenario ${props.legacyScenarios.length + 1}`,
+    const id = `scn-${Date.now().toString(36)}`;
+    const next: FinancialScenario = {
+      ...baseScenario,
+      id,
+      name: `Escenario ${userScenarios.length + 1}`,
+      kind: 'CUSTOM',
       description: 'Creado desde Planeación Financiera.',
-      proposalStates: {},
+      isBase: false,
+      status: 'DRAFT',
+      adjustmentIds: [],
+      archivedAt: undefined,
+      promotedFromScenarioId: undefined,
+      promotedAt: undefined,
       createdAt: now,
       updatedAt: now,
     };
-    props.onLegacyScenariosChange([...props.legacyScenarios, next]);
-    setActiveScenarioId(legacyScenarioId(next));
+    setStoredScenarios((current) => [...current, next]);
+    setActiveScenarioId(id);
   };
 
   const handleAdjustClick = (movement: FinancialMovement, anchor: DOMRect) => {
@@ -455,8 +441,7 @@ export default function FinancialPlanningDashboard(props: Props) {
               Hacer base vigente
             </button>
             <button
-              onClick={handleCreateLegacyScenario}
-              disabled={!props.onLegacyScenariosChange}
+              onClick={handleCreateScenario}
               className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-3 text-[13px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:opacity-40 transition-colors"
             >
               <Plus className="h-4 w-4" strokeWidth={1.5} />
@@ -511,10 +496,20 @@ export default function FinancialPlanningDashboard(props: Props) {
         />
       </div>
 
-      {/* Chart hero. */}
-      <CashFlowChart
+      {/* Chart hero — trayectoria mensual rescatada del módulo de Simulación.
+          Cuando el escenario activo no es base, mostramos la línea base
+          punteada para ver el delta de un vistazo. */}
+      <CashTrajectoryChart
         projection={activeProjection}
-        baseProjection={isLegacyScenarioId(activeScenario.id) ? baseProjection : undefined}
+        baseProjection={activeScenario.isBase ? undefined : baseProjection}
+      />
+
+      {/* Detalle mensual — tabla rescatada de Simulación, alimentada con la
+          misma proyección que el chart. Da los números exactos por mes. */}
+      <MonthlyCashTable
+        projection={activeProjection}
+        baseProjection={activeScenario.isBase ? undefined : baseProjection}
+        scenarioName={activeScenario.name}
       />
 
       <ManualPlanningEntriesPanel
@@ -526,23 +521,15 @@ export default function FinancialPlanningDashboard(props: Props) {
         onRemove={handleRemoveManualEntry}
       />
 
-      {/* Tabla de movimientos del escenario activo, single-action. */}
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
-        <div className="border-b border-[var(--gray-200)] px-4 py-3">
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
-            Movimientos del escenario
-          </h2>
-          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
-            Click en <strong>Editar</strong> para crear un ajuste sobre <strong>{activeScenario.name}</strong>.
-            El movimiento base no se modifica.
-          </p>
-        </div>
-        <PlanningMovementsTable
-          movements={activeMovements}
-          onAdjust={handleAdjustClick}
-          onViewDetail={handleViewDetail}
-        />
-      </section>
+      {/* Tabla de movimientos del escenario activo. Filtros + agrupación por
+          mes. Cada movimiento se puede editar (crea un ajuste) o abrir en
+          detalle (factura/origen). */}
+      <PlanningMovementsSection
+        movements={activeMovements}
+        scenarioName={activeScenario.name}
+        onAdjust={handleAdjustClick}
+        onViewDetail={handleViewDetail}
+      />
 
       <AdjustmentEditorPopover
         movement={editorMovement}
@@ -902,110 +889,331 @@ function ManualPlanningEntriesPanel({
   );
 }
 
-function PlanningMovementsTable({
+type MovementTypeFilter = 'ALL' | 'INFLOW' | 'OUTFLOW';
+type MovementConfidenceFilter = 'ALL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+interface MovementGroup {
+  yearMonth: string;
+  movements: FinancialMovement[];
+  netImpact: number;
+}
+
+function groupMovementsByMonth(movements: FinancialMovement[]): MovementGroup[] {
+  const map = new Map<string, MovementGroup>();
+  for (const movement of movements) {
+    const ym = effectiveMovementDate(movement).slice(0, 7);
+    let group = map.get(ym);
+    if (!group) {
+      group = { yearMonth: ym, movements: [], netImpact: 0 };
+      map.set(ym, group);
+    }
+    group.movements.push(movement);
+    const delta = movement.type === 'INFLOW'
+      ? effectiveAmount(movement) - movement.baseAmount
+      : movement.baseAmount - effectiveAmount(movement);
+    group.netImpact += delta;
+  }
+  return Array.from(map.values()).sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
+}
+
+function PlanningMovementsSection({
   movements,
+  scenarioName,
   onAdjust,
   onViewDetail,
 }: {
   movements: FinancialMovement[];
+  scenarioName: string;
   onAdjust: (movement: FinancialMovement, anchor: DOMRect) => void;
   onViewDetail: (movement: FinancialMovement, anchor: DOMRect) => void;
 }) {
-  if (movements.length === 0) {
-    return (
-      <div className="px-4 py-12 text-center text-[12px] text-[var(--gray-400)]">
-        Sin movimientos editables para este escenario.
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<MovementTypeFilter>('ALL');
+  const [confidenceFilter, setConfidenceFilter] = useState<MovementConfidenceFilter>('ALL');
+  const [onlyAdjusted, setOnlyAdjusted] = useState(false);
+
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return movements.filter((movement) => {
+      if (typeFilter !== 'ALL' && movement.type !== typeFilter) return false;
+      if (confidenceFilter !== 'ALL') {
+        const band = movement.confidenceBand;
+        const bucket: MovementConfidenceFilter = band === 'CONFIRMED' || band === 'HIGH'
+          ? 'HIGH'
+          : band === 'MEDIUM'
+            ? 'MEDIUM'
+            : 'LOW';
+        if (bucket !== confidenceFilter) return false;
+      }
+      if (onlyAdjusted) {
+        const adjusted = movement.adjustedAmount !== undefined
+          && movement.adjustedAmount !== movement.baseAmount;
+        if (!adjusted) return false;
+      }
+      if (needle) {
+        const haystack = `${movement.concept} ${movement.counterpartyName ?? ''} ${movement.category}`.toLowerCase();
+        if (!haystack.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [movements, typeFilter, confidenceFilter, onlyAdjusted, search]);
+
+  const groups = useMemo(() => groupMovementsByMonth(filtered), [filtered]);
+
+  return (
+    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+      <div className="border-b border-[var(--gray-200)] px-4 py-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
+            Movimientos del escenario
+          </h2>
+          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+            Click en <strong>Editar</strong> para ajustar el monto o la fecha en <strong>{scenarioName}</strong>. El movimiento base no se modifica.
+          </p>
+        </div>
+        <div className="text-[11px] text-[var(--gray-400)] tabular-nums">
+          {filtered.length} de {movements.length} movimientos
+        </div>
       </div>
+
+      <div className="border-b border-[var(--gray-200)] px-4 py-2.5 flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Buscar por concepto, contraparte o categoría…"
+            className="h-8 w-full rounded-lg border border-[var(--gray-200)] bg-white pl-8 pr-3 text-[12px] text-[var(--gray-950)] placeholder:text-[var(--gray-400)] focus:outline-none focus:border-[var(--gray-400)]"
+          />
+        </div>
+        <SegmentedFilter
+          value={typeFilter}
+          onChange={setTypeFilter}
+          options={[
+            { value: 'ALL', label: 'Todos' },
+            { value: 'INFLOW', label: 'Ingresos' },
+            { value: 'OUTFLOW', label: 'Egresos' },
+          ]}
+        />
+        <SegmentedFilter
+          value={confidenceFilter}
+          onChange={setConfidenceFilter}
+          options={[
+            { value: 'ALL', label: 'Conf.' },
+            { value: 'HIGH', label: 'Alta' },
+            { value: 'MEDIUM', label: 'Media' },
+            { value: 'LOW', label: 'Baja' },
+          ]}
+        />
+        <label className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-[var(--gray-200)] text-[12px] font-medium text-[var(--gray-700)] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={onlyAdjusted}
+            onChange={(event) => setOnlyAdjusted(event.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          Solo ajustados
+        </label>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="px-4 py-12 text-center text-[12px] text-[var(--gray-400)]">
+          {movements.length === 0
+            ? 'Sin movimientos editables para este escenario.'
+            : 'Ningún movimiento coincide con los filtros activos.'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[860px] text-[13px]">
+            <thead className="sticky top-0 z-10 bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+              <tr>
+                <th className="px-4 py-2.5">Fecha</th>
+                <th className="px-4 py-2.5">Movimiento</th>
+                <th className="px-4 py-2.5 text-right">Monto base</th>
+                <th className="px-4 py-2.5 text-right">Ajustado</th>
+                <th className="px-4 py-2.5 text-right">Impacto</th>
+                <th className="px-4 py-2.5">Confianza</th>
+                <th className="px-4 py-2.5 text-right">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map((group) => (
+                <MovementGroupRows
+                  key={group.yearMonth}
+                  group={group}
+                  onAdjust={onAdjust}
+                  onViewDetail={onViewDetail}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MovementGroupRows({
+  group,
+  onAdjust,
+  onViewDetail,
+}: {
+  group: MovementGroup;
+  onAdjust: (movement: FinancialMovement, anchor: DOMRect) => void;
+  onViewDetail: (movement: FinancialMovement, anchor: DOMRect) => void;
+}) {
+  const impactColor = group.netImpact > 0
+    ? 'var(--success)'
+    : group.netImpact < 0
+      ? 'var(--danger)'
+      : 'var(--gray-400)';
+  return (
+    <>
+      <tr className="bg-[var(--gray-50)] border-t border-[var(--gray-200)]">
+        <td colSpan={4} className="px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--gray-500)]">
+          {group.yearMonth} · {group.movements.length} mov.
+        </td>
+        <td
+          className="px-4 py-1.5 text-right text-[11px] font-semibold tabular-nums"
+          style={{ color: impactColor }}
+        >
+          {group.netImpact === 0 ? '—' : `${group.netImpact > 0 ? '+' : ''}${fmtCompact(group.netImpact)}`}
+        </td>
+        <td colSpan={2} />
+      </tr>
+      {group.movements.map((movement) => {
+        const effective = effectiveAmount(movement);
+        const delta = movement.type === 'INFLOW'
+          ? effective - movement.baseAmount
+          : movement.baseAmount - effective;
+        const editable = movement.status !== 'REAL' && movement.lockState !== 'LOCKED';
+        const lockReason = movement.status === 'REAL'
+          ? 'Movimiento real del banco; no editable.'
+          : movement.lockState === 'LOCKED'
+            ? 'Movimiento bloqueado.'
+            : '';
+        return (
+          <tr
+            key={movement.id}
+            className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)] transition-colors"
+          >
+            <td className="px-4 py-3 tabular-nums text-[var(--gray-700)] whitespace-nowrap">
+              {effectiveMovementDate(movement)}
+            </td>
+            <td className="px-4 py-3 max-w-[320px]">
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-[var(--gray-950)] truncate">{movement.concept}</span>
+                <MovementStatusBadge movement={movement} />
+              </div>
+              <div className="text-[11px] text-[var(--gray-400)] truncate">
+                {movement.counterpartyName ?? movement.category}
+              </div>
+            </td>
+            <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-700)]">
+              {fmtCurrency(movement.baseAmount)}
+            </td>
+            <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-950)] font-medium">
+              {fmtCurrency(effective)}
+            </td>
+            <td
+              className="px-4 py-3 text-right font-medium tabular-nums"
+              style={{ color: delta > 0 ? 'var(--success)' : delta < 0 ? 'var(--danger)' : 'var(--gray-400)' }}
+            >
+              {delta === 0 ? '—' : fmtCurrency(delta)}
+            </td>
+            <td className="px-4 py-3">
+              <ConfidenceBadge band={movement.confidenceBand} />
+            </td>
+            <td className="px-4 py-3 text-right">
+              <div className="inline-flex items-center gap-1.5">
+                <button
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    onViewDetail(movement, rect);
+                  }}
+                  title="Ver factura / origen del movimiento"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] transition-colors"
+                >
+                  <Eye className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  Detalle
+                </button>
+                <button
+                  onClick={(event) => {
+                    if (!editable) return;
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    onAdjust(movement, rect);
+                  }}
+                  disabled={!editable}
+                  title={editable ? 'Crear ajuste' : lockReason}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Pencil className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  Editar
+                </button>
+              </div>
+            </td>
+          </tr>
+        );
+      })}
+    </>
+  );
+}
+
+function MovementStatusBadge({ movement }: { movement: FinancialMovement }) {
+  if (movement.status === 'REAL') {
+    return (
+      <span
+        title="Movimiento real del banco"
+        className="inline-flex items-center h-4 px-1.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-[var(--gray-200)] text-[var(--gray-700)]"
+      >
+        Real
+      </span>
     );
   }
+  if (movement.lockState === 'LOCKED') {
+    return (
+      <span
+        title="Movimiento bloqueado"
+        className="inline-flex items-center h-4 px-1.5 gap-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-[var(--warning-muted)] text-[var(--warning)]"
+      >
+        <Lock className="h-2.5 w-2.5" strokeWidth={2} />
+        Lock
+      </span>
+    );
+  }
+  return null;
+}
+
+function SegmentedFilter<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (next: T) => void;
+  options: Array<{ value: T; label: string }>;
+}) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[820px] text-[13px]">
-        <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
-          <tr>
-            <th className="px-4 py-2.5">Fecha</th>
-            <th className="px-4 py-2.5">Movimiento</th>
-            <th className="px-4 py-2.5 text-right">Monto base</th>
-            <th className="px-4 py-2.5 text-right">Ajustado</th>
-            <th className="px-4 py-2.5 text-right">Impacto</th>
-            <th className="px-4 py-2.5">Confianza</th>
-            <th className="px-4 py-2.5 text-right">Acción</th>
-          </tr>
-        </thead>
-        <tbody>
-          {movements.map((movement) => {
-            const effective = effectiveAmount(movement);
-            const delta = movement.type === 'INFLOW'
-              ? effective - movement.baseAmount
-              : movement.baseAmount - effective;
-            const editable = movement.status !== 'REAL' && movement.lockState !== 'LOCKED';
-            const lockReason = movement.status === 'REAL'
-              ? 'Movimiento real del banco; no editable.'
-              : movement.lockState === 'LOCKED'
-                ? 'Movimiento bloqueado.'
-                : '';
-            return (
-              <tr
-                key={movement.id}
-                className="border-t border-[var(--gray-200)] hover:bg-[var(--gray-50)] transition-colors"
-              >
-                <td className="px-4 py-3 tabular-nums text-[var(--gray-700)] whitespace-nowrap">
-                  {effectiveMovementDate(movement)}
-                </td>
-                <td className="px-4 py-3 max-w-[300px]">
-                  <div className="font-medium text-[var(--gray-950)] truncate">{movement.concept}</div>
-                  <div className="text-[11px] text-[var(--gray-400)] truncate">
-                    {movement.counterpartyName ?? movement.category}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-700)]">
-                  {fmtCurrency(movement.baseAmount)}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-950)] font-medium">
-                  {fmtCurrency(effective)}
-                </td>
-                <td
-                  className="px-4 py-3 text-right font-medium tabular-nums"
-                  style={{ color: delta > 0 ? 'var(--success)' : delta < 0 ? 'var(--danger)' : 'var(--gray-400)' }}
-                >
-                  {delta === 0 ? '—' : fmtCurrency(delta)}
-                </td>
-                <td className="px-4 py-3">
-                  <ConfidenceBadge band={movement.confidenceBand} />
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <div className="inline-flex items-center gap-1.5">
-                    <button
-                      onClick={(event) => {
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        onViewDetail(movement, rect);
-                      }}
-                      title="Ver factura / origen del movimiento"
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] transition-colors"
-                    >
-                      <Eye className="h-3.5 w-3.5" strokeWidth={1.5} />
-                      Detalle
-                    </button>
-                    <button
-                      onClick={(event) => {
-                        if (!editable) return;
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        onAdjust(movement, rect);
-                      }}
-                      disabled={!editable}
-                      title={editable ? 'Crear ajuste' : lockReason}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <Pencil className="h-3.5 w-3.5" strokeWidth={1.5} />
-                      Editar
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="inline-flex h-8 rounded-lg border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5">
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className="px-2.5 text-[11px] font-medium rounded-md transition-colors"
+            style={{
+              background: active ? 'white' : 'transparent',
+              color: active ? 'var(--gray-950)' : 'var(--gray-500)',
+              boxShadow: active ? '0 1px 2px rgba(15, 23, 42, 0.08)' : 'none',
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

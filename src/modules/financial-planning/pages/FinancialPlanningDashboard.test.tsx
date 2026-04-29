@@ -4,7 +4,6 @@ import FinancialPlanningDashboard from './FinancialPlanningDashboard';
 import type { Budget } from '../../../domain/budget';
 import type { Client, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { Scenario } from '../../../types';
 
 const TODAY = '2026-05-01';
 
@@ -28,7 +27,7 @@ afterEach(() => {
 });
 
 describe('<FinancialPlanningDashboard /> altas manuales', () => {
-  it('captures a manual income in the active scenario and persists it', () => {
+  it('captures a manual income in a freshly created scenario and persists it', () => {
     render(
       <FinancialPlanningDashboard
         companyCode="all"
@@ -39,12 +38,10 @@ describe('<FinancialPlanningDashboard /> altas manuales', () => {
         assumptions={assumptions}
         budget={budget()}
         startingBalance={10_000}
-        legacyProposals={[]}
-        legacyScenarios={[scenario()]}
-        legacyActiveScenarioId="scn-1"
-        onLegacyScenariosChange={() => {}}
       />,
     );
+
+    fireEvent.click(screen.getByRole('button', { name: /Nuevo escenario/i }));
 
     const section = screen.getByText('Altas manuales').closest('section');
     expect(section).toBeTruthy();
@@ -63,8 +60,8 @@ describe('<FinancialPlanningDashboard /> altas manuales', () => {
     expect(stored[0]).toMatchObject({
       name: 'Viaje especial Monterrey',
       amount: 1500,
-      scenarioIds: ['legacy:scn-1'],
     });
+    expect(stored[0].scenarioIds[0]).toMatch(/^scn-/);
   });
 });
 
@@ -73,16 +70,6 @@ const assumptions: CashFlowAssumptions = {
   globalCompliance: 1,
   factorajeDays: 30,
 };
-
-function scenario(): Scenario {
-  return {
-    id: 'scn-1',
-    name: 'Escenario IMSS confirmado',
-    proposalStates: {},
-    createdAt: '2026-05-01T00:00:00Z',
-    updatedAt: '2026-05-01T00:00:00Z',
-  };
-}
 
 function client(): Client {
   const monthlyBilling = Array.from({ length: 12 }, () => 0);

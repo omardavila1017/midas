@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Proposal, Scenario, TabId, CashFlowOverrides } from './types';
+import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
@@ -21,7 +21,6 @@ import Providers from './components/Providers';
 import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
-import Simulacion from './components/Simulacion';
 import OperatingProjection from './components/OperatingProjection';
 import FinancialProjectionDashboard from './modules/financial-projection/pages/FinancialProjectionDashboard';
 import FinancialPlanningDashboard from './modules/financial-planning/pages/FinancialPlanningDashboard';
@@ -79,7 +78,6 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'operating',   label: 'Operativa',   icon: LineChart },
-    { id: 'flow',        label: 'Simulación', icon: LineChart },
   ],
 };
 
@@ -88,7 +86,7 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   netflow: 'operacion', bancos: 'operacion',
   dashboard: 'proyeccion', collections: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
-  cxp: 'proyeccion', operating: 'proyeccion', flow: 'proyeccion',
+  cxp: 'proyeccion', operating: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -136,9 +134,6 @@ function containsDemoBankData(statements: BankAccountStatement[] | undefined | n
 }
 
 export default function App() {
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [assumptions, setAssumptions] = useState<CashFlowAssumptions>({
@@ -264,7 +259,7 @@ export default function App() {
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
 
-  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'financialProjection', 'financialPlanning', 'collections', 'cxp', 'operating', 'flow'];
+  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'financialProjection', 'financialPlanning', 'collections', 'cxp', 'operating'];
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
@@ -273,9 +268,6 @@ export default function App() {
   useEffect(() => {
     const stored = loadStore();
     if (stored) {
-      if (stored.proposals.length) setProposals(stored.proposals);
-      if (stored.scenarios.length) setScenarios(stored.scenarios);
-      setActiveScenarioId(stored.activeScenarioId ?? null);
       if (stored.providers.length) setProviders(stored.providers);
       if (stored.clients.length) setClients(stored.clients);
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
@@ -382,7 +374,6 @@ export default function App() {
   const latestStoreRef = useRef<MidasStore | null>(null);
   useEffect(() => {
     const snapshot: MidasStore = {
-      proposals, scenarios, activeScenarioId,
       providers, clients,
       assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
       cashFlowOverrides,
@@ -392,7 +383,6 @@ export default function App() {
     const timer = setTimeout(() => saveStore(snapshot), 200);
     return () => clearTimeout(timer);
   }, [
-    proposals, scenarios, activeScenarioId,
     providers, clients,
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
     cashFlowOverrides,
@@ -840,7 +830,6 @@ export default function App() {
             <button
               onClick={() => {
                 const json = exportStore({
-                  proposals, scenarios, activeScenarioId,
                   providers, clients,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
                   cashFlowOverrides,
@@ -905,31 +894,12 @@ export default function App() {
               <Dashboard
                 companyCode={selectedCia}
                 bankStatements={bankStatements}
-                proposals={proposals}
                 clients={clients}
                 providers={providers}
                 cxpRecords={cxpRecords}
                 assumptions={assumptions}
                 budget={budget}
-                onOpenFlow={() => setActiveTab('flow')}
-                startingBalance={effectiveStartingBalance}
-              />
-            )}
-            {activeTab === 'flow' && (
-              <Simulacion
-                companyCode={selectedCia}
-                bankStatements={bankStatements}
-                proposals={proposals}
-                onProposalsChange={setProposals}
-                scenarios={scenarios}
-                onScenariosChange={setScenarios}
-                activeScenarioId={activeScenarioId}
-                onActiveScenarioChange={setActiveScenarioId}
-                clients={clients}
-                providers={providers}
-                cxpRecords={cxpRecords}
-                assumptions={assumptions}
-                budget={budget}
+                onOpenFlow={() => setActiveTab('financialPlanning')}
                 startingBalance={effectiveStartingBalance}
               />
             )}
@@ -943,9 +913,6 @@ export default function App() {
                 assumptions={assumptions}
                 budget={budget}
                 startingBalance={effectiveStartingBalance}
-                legacyProposals={proposals}
-                legacyScenarios={scenarios}
-                legacyActiveScenarioId={activeScenarioId}
                 onNavigateToTax={() => setActiveTab('taxes')}
               />
             )}
@@ -959,10 +926,6 @@ export default function App() {
                 assumptions={assumptions}
                 budget={budget}
                 startingBalance={effectiveStartingBalance}
-                legacyProposals={proposals}
-                legacyScenarios={scenarios}
-                legacyActiveScenarioId={activeScenarioId}
-                onLegacyScenariosChange={setScenarios}
               />
             )}
             {activeTab === 'taxes' && (
@@ -975,9 +938,6 @@ export default function App() {
                 assumptions={assumptions}
                 budget={budget}
                 startingBalance={effectiveStartingBalance}
-                legacyProposals={proposals}
-                legacyScenarios={scenarios}
-                legacyActiveScenarioId={activeScenarioId}
               />
             )}
             {activeTab === 'operating' && (
@@ -1036,7 +996,6 @@ export default function App() {
                 assumptions={assumptions}
                 bankStatements={bankStatements}
                 budget={budget}
-                proposals={proposals}
                 onMergeCia={mergeCxpForCia}
                 onReplaceAll={replaceAllCxp}
                 onReset={resetCxp}

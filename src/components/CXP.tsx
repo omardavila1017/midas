@@ -39,7 +39,6 @@ import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, Provid
 import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
 import { projectYear } from '../domain/collectionEngine';
 import type { Budget } from '../domain/budget';
-import type { Proposal } from '../types';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -1973,7 +1972,6 @@ interface CXPProps {
   assumptions: CashFlowAssumptions;
   bankStatements: BankAccountStatement[];
   budget: Budget | null;
-  proposals: Proposal[];
   onMergeCia: (cia: string, records: CXPRecord[]) => void;
   onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
   onReset: () => void;

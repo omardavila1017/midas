@@ -1,24 +1,22 @@
 /**
- * Persistence layer for Midas — v5 (clean slate).
+ * Persistence layer for Midas — v6.
  *
- * Este archivo reemplaza a la persistencia vieja (v1..v4). El modelo anterior
- * tenía Simulación > Escenario > Propuesta con un compilador de efectos; se
- * reemplazó por un modelo mucho más simple:
+ * v6 removes the legacy simulation model (proposals/scenarios/activeScenarioId)
+ * that lived alongside the financial-planning native scenarios. Anything
+ * scenario-related now lives in the financial-planning module storage; this
+ * store only carries shared application data (catalogs, CXP, assumptions,
+ * cash-flow overrides).
  *
- *   Proposal: id + name + kind ('income_increase' | 'expense_saving') +
- *             amount + startYearMonth + frequency + enabled
- *   Scenario: id + name + proposalStates (snapshot de {proposalId -> enabled})
- *
- * Al cargar desde un store antiguo (flowsense-v1..v4) se descarta el contenido
- * de propuestas/escenarios/simulaciones — el modelo es incompatible. Se
- * conservan los demás campos (clientes, proveedores, confirmedPayments,
- * cxpRecords, assumptions) para no perder trabajo del usuario.
- *
- * El store `flowsense-v5` se migra como-está porque comparte esquema (rebrand
- * a Midas).
+ * Migrations:
+ *   - midas-v5 → midas-v6: drop proposals/scenarios/activeScenarioId, keep
+ *     the rest as-is.
+ *   - flowsense-v5 → midas-v6: same shape rebrand, dropping the simulation
+ *     fields.
+ *   - flowsense-v1..v4 → midas-v6: incompatible simulation models; keep only
+ *     the catalog/CXP/assumptions data.
  */
 
-import { Proposal, Scenario, CashFlowOverrides } from '../types';
+import { CashFlowOverrides } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 
 export interface CXPRecord {
@@ -53,9 +51,6 @@ export interface CXPRecord {
 }
 
 export interface MidasStore {
-  proposals: Proposal[];
-  scenarios: Scenario[];
-  activeScenarioId: string | null; // null = sin escenario cargado (base)
   providers: Provider[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
@@ -66,9 +61,9 @@ export interface MidasStore {
   lastSaved: string;
 }
 
-const STORE_VERSION = 5;
-const STORAGE_KEY = 'midas-v5';
-const SAME_SCHEMA_LEGACY_KEY = 'flowsense-v5';
+const STORE_VERSION = 6;
+const STORAGE_KEY = 'midas-v6';
+const SAME_SCHEMA_LEGACY_KEYS = ['midas-v5', 'flowsense-v5'];
 const LEGACY_KEYS = ['flowsense-v4', 'flowsense-v3', 'flowsense-v2', 'flowsense-v1'];
 
 function isoNow(): string {
@@ -77,9 +72,6 @@ function isoNow(): string {
 
 export function getDefaultStore(): MidasStore {
   return {
-    proposals: [],
-    scenarios: [],
-    activeScenarioId: null,
     providers: [],
     clients: [],
     assumptions: {
@@ -96,60 +88,6 @@ export function getDefaultStore(): MidasStore {
 }
 
 // ── Normalizadores defensivos ────────────────────────────────────────────
-
-function normalizeProposal(v: unknown): Proposal | null {
-  if (!v || typeof v !== 'object') return null;
-  const o = v as Record<string, unknown>;
-  if (typeof o.id !== 'string') return null;
-  const kind =
-    o.kind === 'income_increase' || o.kind === 'expense_saving'
-      || o.kind === 'new_expense' || o.kind === 'revenue_loss'
-      ? o.kind : null;
-  if (!kind) return null;
-  const frequency = (o.frequency === 'one_time' || o.frequency === 'monthly'
-    || o.frequency === 'quarterly' || o.frequency === 'semiannual')
-    ? o.frequency : 'monthly';
-  const amount = typeof o.amount === 'number' && isFinite(o.amount) ? Math.abs(o.amount) : 0;
-  const startYearMonth = typeof o.startYearMonth === 'string' && /^\d{4}-\d{2}$/.test(o.startYearMonth)
-    ? o.startYearMonth
-    : new Date().toISOString().slice(0, 7);
-  const endYearMonth = typeof o.endYearMonth === 'string' && /^\d{4}-\d{2}$/.test(o.endYearMonth)
-    ? o.endYearMonth
-    : undefined;
-  return {
-    id: o.id,
-    name: typeof o.name === 'string' && o.name.trim() ? o.name : 'Propuesta sin nombre',
-    description: typeof o.description === 'string' ? o.description : undefined,
-    kind,
-    amount,
-    startYearMonth,
-    endYearMonth,
-    frequency,
-    enabled: typeof o.enabled === 'boolean' ? o.enabled : true,
-    createdAt: typeof o.createdAt === 'string' ? o.createdAt : isoNow(),
-    updatedAt: typeof o.updatedAt === 'string' ? o.updatedAt : isoNow(),
-  };
-}
-
-function normalizeScenario(v: unknown): Scenario | null {
-  if (!v || typeof v !== 'object') return null;
-  const o = v as Record<string, unknown>;
-  if (typeof o.id !== 'string') return null;
-  const states: Record<string, boolean> = {};
-  if (o.proposalStates && typeof o.proposalStates === 'object') {
-    for (const [k, val] of Object.entries(o.proposalStates as Record<string, unknown>)) {
-      if (typeof val === 'boolean') states[k] = val;
-    }
-  }
-  return {
-    id: o.id,
-    name: typeof o.name === 'string' && o.name.trim() ? o.name : 'Escenario sin nombre',
-    description: typeof o.description === 'string' ? o.description : undefined,
-    proposalStates: states,
-    createdAt: typeof o.createdAt === 'string' ? o.createdAt : isoNow(),
-    updatedAt: typeof o.updatedAt === 'string' ? o.updatedAt : isoNow(),
-  };
-}
 
 function isObjectWithStringId(v: unknown): v is Record<string, unknown> & { id: string } {
   return !!v && typeof v === 'object' && typeof (v as { id?: unknown }).id === 'string';
@@ -190,18 +128,6 @@ function normalizeStore(raw: unknown): MidasStore {
   if (!raw || typeof raw !== 'object') return base;
   const o = raw as Record<string, unknown>;
 
-  const proposals = Array.isArray(o.proposals)
-    ? (o.proposals.map(normalizeProposal).filter(Boolean) as Proposal[])
-    : [];
-  const scenarios = Array.isArray(o.scenarios)
-    ? (o.scenarios.map(normalizeScenario).filter(Boolean) as Scenario[])
-    : [];
-
-  const activeScenarioId = typeof o.activeScenarioId === 'string'
-    && scenarios.some((s) => s.id === o.activeScenarioId)
-    ? (o.activeScenarioId as string)
-    : null;
-
   // Filtramos por shape mínima: cualquier item que no tenga `id: string` se
   // descarta. CXPRecords no se modela con id; aceptamos cualquier objeto.
   const providers = Array.isArray(o.providers)
@@ -224,9 +150,6 @@ function normalizeStore(raw: unknown): MidasStore {
   }
 
   return {
-    proposals,
-    scenarios,
-    activeScenarioId,
     providers,
     clients,
     confirmedPayments,
@@ -278,25 +201,30 @@ export function loadStore(): MidasStore | null {
     // fallthrough
   }
 
-  // Rebrand: flowsense-v5 comparte esquema con midas-v5, se migra tal cual.
-  try {
-    const raw = localStorage.getItem(SAME_SCHEMA_LEGACY_KEY);
-    if (raw) {
+  // midas-v5 / flowsense-v5: misma forma menos los campos de simulación, que
+  // se descartan en `normalizeStore`. Migramos al store actual y limpiamos la
+  // versión vieja para que el mensaje de migración no se repita.
+  for (const legacyKey of SAME_SCHEMA_LEGACY_KEYS) {
+    try {
+      const raw = localStorage.getItem(legacyKey);
+      if (!raw) continue;
       const payload = JSON.parse(raw) as { version?: number; data?: unknown };
       if (payload && typeof payload === 'object' && payload.data !== undefined) {
+        // eslint-disable-next-line no-console
+        console.info(`[persistence] migrando ${legacyKey} → ${STORAGE_KEY}; descartando propuestas/escenarios legacy.`);
         const migrated = normalizeStore(payload.data);
         saveStore(migrated);
-        try { localStorage.removeItem(SAME_SCHEMA_LEGACY_KEY); } catch { /* ignore */ }
+        try { localStorage.removeItem(legacyKey); } catch { /* ignore */ }
         return migrated;
       }
+    } catch {
+      // fallthrough
     }
-  } catch {
-    // fallthrough
   }
 
-  // Si hay un store legacy (v1..v4), NO intentamos migrar propuestas /
-  // escenarios — el modelo es incompatible. Conservamos sólo los datos
-  // independientes (clientes, proveedores, cxp, assumptions, confirmedPayments).
+  // Stores legacy v1..v4: modelo de propuestas/escenarios totalmente
+  // incompatible. Conservamos los datos independientes (clientes, proveedores,
+  // cxp, assumptions, confirmedPayments).
   for (const legacyKey of LEGACY_KEYS) {
     try {
       const raw = localStorage.getItem(legacyKey);
@@ -319,8 +247,6 @@ export function loadStore(): MidasStore | null {
           ? (legacy.assumptions as CashFlowAssumptions)
           : getDefaultStore().assumptions),
       };
-      // Persistir la nueva forma y borrar la vieja para que el mensaje no
-      // vuelva a salir en el próximo load.
       saveStore(seed);
       try { localStorage.removeItem(legacyKey); } catch { /* ignore */ }
       return seed;
@@ -335,7 +261,7 @@ export function loadStore(): MidasStore | null {
 export function clearStore(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(SAME_SCHEMA_LEGACY_KEY);
+    for (const k of SAME_SCHEMA_LEGACY_KEYS) localStorage.removeItem(k);
     for (const k of LEGACY_KEYS) localStorage.removeItem(k);
   } catch {
     // ignore

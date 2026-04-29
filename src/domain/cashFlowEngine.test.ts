@@ -8,27 +8,12 @@ import {
   buildExpenseProjector,
   projectMonthlyExpense,
   filterCompleteHistorical,
-  applyProposalToMonth,
-  evaluateCashFlow,
-  analyzeLiquidity,
 } from './cashFlowEngine';
-import type { Proposal, CashFlowMonth } from '../types';
+import type { CashFlowMonth } from '../types';
 import type {
   BankAccountStatement,
   AgedBalanceRecord,
 } from '../services/jde';
-
-const baseProposal: Proposal = {
-  id: 'p1',
-  name: 'Test',
-  kind: 'expense_saving',
-  amount: 10_000,
-  startYearMonth: '2026-01',
-  frequency: 'monthly',
-  enabled: true,
-  createdAt: '2026-01-01',
-  updatedAt: '2026-01-01',
-};
 
 describe('date helpers', () => {
   it('addMonths across year boundary', () => {
@@ -77,9 +62,6 @@ describe('buildHistoricalMonths', () => {
   });
 
   it('filtra traspasos entre cuentas propias (no cuentan como ingreso/egreso real)', () => {
-    // Dos cuentas del grupo (mismo prefijo >= 6 chars para entrar al detector).
-    // Un traspaso aparece como CARGO en una y ABONO en la otra, con la leyenda
-    // "TRASPASO REF ..." — ambas deben quedar fuera del total mensual.
     const statements: BankAccountStatement[] = [
       {
         cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
@@ -105,17 +87,11 @@ describe('buildHistoricalMonths', () => {
     ];
     const months = buildHistoricalMonths(statements);
     expect(months).toHaveLength(1);
-    // Sólo debe contar el pago real de cliente, no el traspaso interno.
     expect(months[0].income).toBe(100_000);
     expect(months[0].expense).toBe(0);
   });
 
   it('filtra traspasos pair-matched sin leyenda (paridad con pantalla Bancos)', () => {
-    // Dos cuentas del mismo grupo con un CARGO y un ABONO simétricos el
-    // mismo día, mismo importe. Sin leyenda "TRASPASO". Antes el engine
-    // dejaba pasar estos pares como ingreso/egreso real, mientras la
-    // pantalla de Bancos ya los marcaba como internos — la gráfica de caja
-    // se desviaba del filtro visible en Bancos. Ahora se alinean.
     const statements: BankAccountStatement[] = [
       {
         cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
@@ -136,8 +112,6 @@ describe('buildHistoricalMonths', () => {
         ],
       },
     ];
-    // Si SÓLO hubiera un legítimo pago de cliente además del pair-match,
-    // lo contaríamos sin inflar con el traspaso pair-matched.
     statements[0].movimientos.push({
       cia: '00011', banco: 'BANAMEX', cuenta: '019004783A', moneda: 'MXN',
       fechaOperacion: '2026-01-20', referencia: 'CLI-1', concepto: 'PAGO CLIENTE',
@@ -145,8 +119,6 @@ describe('buildHistoricalMonths', () => {
     });
     const months = buildHistoricalMonths(statements);
     expect(months).toHaveLength(1);
-    // El traspaso pair-matched (CARGO+ABONO 500k mismo día/grupo) no cuenta;
-    // sólo entra el pago de cliente.
     expect(months[0].income).toBe(250_000);
     expect(months[0].expense).toBe(0);
   });
@@ -210,16 +182,12 @@ describe('buildExpenseProjector', () => {
       { yearMonth: '2026-03', isHistorical: true, income: 0, expense: 300, closingCash: 0 },
     ];
     const p = buildExpenseProjector(hist);
-    // Promedio = (100+200+300)/3 = 200, constante para cualquier offset.
     expect(p(1)).toBeCloseTo(200, 2);
     expect(p(6)).toBeCloseTo(200, 2);
     expect(p(12)).toBeCloseTo(200, 2);
   });
 
   it('does not collapse to zero when recent months trend down', () => {
-    // Antes la regresión lineal devolvía 0 para offsets grandes cuando los
-    // últimos meses bajaban (típicamente porque el mes en curso venía
-    // parcial). Con la media móvil mantenemos un baseline estable.
     const hist: CashFlowMonth[] = [
       { yearMonth: '2026-01', isHistorical: true, income: 0, expense: 300, closingCash: 0 },
       { yearMonth: '2026-02', isHistorical: true, income: 0, expense: 200, closingCash: 0 },
@@ -271,194 +239,5 @@ describe('projectMonthlyExpense', () => {
   it('falls back to the regression when nothing is committed', () => {
     const projector = (offset: number) => 200 * offset;
     expect(projectMonthlyExpense(3, 0, projector)).toBe(600);
-  });
-});
-
-describe('applyProposalToMonth', () => {
-  it('disabled proposal contributes nothing', () => {
-    const p = { ...baseProposal, enabled: false };
-    expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: 0, deltaExpense: 0 });
-  });
-
-  it('monthly saving applies every month from start', () => {
-    expect(applyProposalToMonth(baseProposal, '2025-12')).toEqual({ deltaIncome: 0, deltaExpense: 0 });
-    expect(applyProposalToMonth(baseProposal, '2026-01')).toEqual({ deltaIncome: 0, deltaExpense: -10_000 });
-    expect(applyProposalToMonth(baseProposal, '2026-06')).toEqual({ deltaIncome: 0, deltaExpense: -10_000 });
-  });
-
-  it('one_time only fires at startYearMonth', () => {
-    const p: Proposal = { ...baseProposal, frequency: 'one_time' };
-    expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: 0, deltaExpense: -10_000 });
-    expect(applyProposalToMonth(p, '2026-02')).toEqual({ deltaIncome: 0, deltaExpense: 0 });
-  });
-
-  it('endYearMonth stops the proposal the month after it', () => {
-    const p: Proposal = { ...baseProposal, endYearMonth: '2026-03' };
-    expect(applyProposalToMonth(p, '2026-01').deltaExpense).toBe(-10_000);
-    expect(applyProposalToMonth(p, '2026-03').deltaExpense).toBe(-10_000);
-    expect(applyProposalToMonth(p, '2026-04').deltaExpense).toBe(0);
-  });
-
-  it('quarterly fires every 3 months', () => {
-    const p: Proposal = { ...baseProposal, frequency: 'quarterly' };
-    expect(applyProposalToMonth(p, '2026-01').deltaExpense).toBe(-10_000);
-    expect(applyProposalToMonth(p, '2026-02').deltaExpense).toBe(0);
-    expect(applyProposalToMonth(p, '2026-04').deltaExpense).toBe(-10_000);
-    expect(applyProposalToMonth(p, '2026-07').deltaExpense).toBe(-10_000);
-  });
-
-  it('semiannual fires every 6 months', () => {
-    const p: Proposal = { ...baseProposal, frequency: 'semiannual' };
-    expect(applyProposalToMonth(p, '2026-01').deltaExpense).toBe(-10_000);
-    expect(applyProposalToMonth(p, '2026-07').deltaExpense).toBe(-10_000);
-    expect(applyProposalToMonth(p, '2026-04').deltaExpense).toBe(0);
-  });
-
-  it('income_increase delta goes to income', () => {
-    const p: Proposal = { ...baseProposal, kind: 'income_increase' };
-    expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: 10_000, deltaExpense: 0 });
-  });
-
-  it('new_expense delta adds to expense (pago de deuda, nuevo gasto)', () => {
-    const p: Proposal = { ...baseProposal, kind: 'new_expense' };
-    expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: 0, deltaExpense: 10_000 });
-  });
-
-  it('revenue_loss delta subtracts from income', () => {
-    const p: Proposal = { ...baseProposal, kind: 'revenue_loss' };
-    expect(applyProposalToMonth(p, '2026-01')).toEqual({ deltaIncome: -10_000, deltaExpense: 0 });
-  });
-});
-
-describe('evaluateCashFlow', () => {
-  it('historical months are untouched by proposals', () => {
-    const base: CashFlowMonth[] = [
-      { yearMonth: '2025-12', isHistorical: true, income: 50_000, expense: 30_000, closingCash: 20_000 },
-      { yearMonth: '2026-01', isHistorical: false, income: 60_000, expense: 40_000, closingCash: 40_000 },
-      { yearMonth: '2026-02', isHistorical: false, income: 60_000, expense: 40_000, closingCash: 60_000 },
-    ];
-    const ev = evaluateCashFlow(base, [baseProposal]);
-    expect(ev.months[0].forecastClosingCash).toBe(20_000);  // histórico, sin cambio
-    expect(ev.months[0].proposalDeltas).toHaveLength(0);
-    expect(ev.months[1].forecastClosingCash).toBe(50_000);  // 20_000 + 20_000 (base) + 10_000 (ahorro)
-    expect(ev.months[2].forecastClosingCash).toBe(80_000);  // 50_000 + 20_000 + 10_000
-  });
-
-  it('multiple proposals stack', () => {
-    const base: CashFlowMonth[] = [
-      { yearMonth: '2025-12', isHistorical: true, income: 0, expense: 0, closingCash: 100_000 },
-      { yearMonth: '2026-01', isHistorical: false, income: 0, expense: 0, closingCash: 100_000 },
-    ];
-    const ahorro: Proposal = { ...baseProposal, id: 'a', amount: 10_000 };
-    const ingreso: Proposal = { ...baseProposal, id: 'i', kind: 'income_increase', amount: 5_000 };
-    const ev = evaluateCashFlow(base, [ahorro, ingreso]);
-    expect(ev.months[1].proposalDeltas).toHaveLength(2);
-    expect(ev.months[1].forecastClosingCash).toBe(115_000);
-  });
-
-  it('disabled proposals do not contribute', () => {
-    const base: CashFlowMonth[] = [
-      { yearMonth: '2026-01', isHistorical: false, income: 0, expense: 0, closingCash: 0 },
-    ];
-    const disabled: Proposal = { ...baseProposal, enabled: false };
-    const ev = evaluateCashFlow(base, [disabled]);
-    expect(ev.months[0].forecastClosingCash).toBe(0);
-    expect(ev.months[0].proposalDeltas).toHaveLength(0);
-  });
-
-  it('chains closing cash across future months', () => {
-    const base: CashFlowMonth[] = [
-      { yearMonth: '2026-01', isHistorical: false, income: 100, expense: 50, closingCash: 50 },
-      { yearMonth: '2026-02', isHistorical: false, income: 100, expense: 50, closingCash: 100 },
-      { yearMonth: '2026-03', isHistorical: false, income: 100, expense: 50, closingCash: 150 },
-    ];
-    const p: Proposal = { ...baseProposal, amount: 10, kind: 'expense_saving', frequency: 'monthly' };
-    const ev = evaluateCashFlow(base, [p]);
-    // Base: 50, 100, 150
-    // Con ahorro (reduce egresos 10/mes): 60, 120, 180
-    expect(ev.months.map((m) => m.forecastClosingCash)).toEqual([60, 120, 180]);
-  });
-});
-
-describe('analyzeLiquidity', () => {
-  const futureMonths = (cashes: Array<{ base: number; fore: number; ym: string }>): CashFlowMonth[] =>
-    cashes.map((c) => ({
-      yearMonth: c.ym,
-      isHistorical: false,
-      income: 0,
-      expense: 0,
-      closingCash: c.base,
-    }));
-
-  it('ignora meses históricos aunque estén en rojo', () => {
-    // El mes histórico está negativo pero no se reporta como alerta porque
-    // ya ocurrió. El mes futuro parte de una caja histórica sana y queda
-    // positivo, así que tampoco se reporta.
-    const ev = evaluateCashFlow(
-      [
-        { yearMonth: '2025-11', isHistorical: true, income: 0, expense: 0, closingCash: -50_000 },
-        { yearMonth: '2025-12', isHistorical: true, income: 0, expense: 0, closingCash: 10_000 },
-        { yearMonth: '2026-01', isHistorical: false, income: 100, expense: 50, closingCash: 10_050 },
-      ],
-      [],
-    );
-    const summary = analyzeLiquidity(ev);
-    expect(summary.shortfalls).toHaveLength(0);
-  });
-
-  it('reporta un mes forecast en crisis y no confunde base_only con forecast_only', () => {
-    const base = futureMonths([
-      { ym: '2026-05', base: 10, fore: 10 },
-    ]);
-    const p: Proposal = { ...baseProposal, kind: 'new_expense', amount: 500, frequency: 'one_time', startYearMonth: '2026-05' };
-    const ev = evaluateCashFlow(base, [p]);
-    const summary = analyzeLiquidity(ev);
-    expect(summary.shortfalls).toHaveLength(1);
-    expect(summary.shortfalls[0].status).toBe('forecast_only');
-    expect(summary.forecastWorsensAnyMonth).toBe(true);
-  });
-
-  it('marca base_only cuando las propuestas rescatan un mes negativo', () => {
-    const base: CashFlowMonth[] = [
-      { yearMonth: '2026-06', isHistorical: false, income: 0, expense: 0, closingCash: -100 },
-    ];
-    const p: Proposal = { ...baseProposal, kind: 'income_increase', amount: 500, frequency: 'one_time', startYearMonth: '2026-06' };
-    const ev = evaluateCashFlow(base, [p]);
-    const summary = analyzeLiquidity(ev);
-    expect(summary.shortfalls).toHaveLength(1);
-    expect(summary.shortfalls[0].status).toBe('base_only');
-    expect(summary.shortfalls[0].forecastClosingCash).toBeGreaterThan(0);
-    expect(summary.forecastWorsensAnyMonth).toBe(false);
-  });
-
-  it('si ambos están bajo el umbral, status es "both"', () => {
-    const base: CashFlowMonth[] = [
-      { yearMonth: '2026-07', isHistorical: false, income: 0, expense: 0, closingCash: -100 },
-    ];
-    const ev = evaluateCashFlow(base, []);
-    const summary = analyzeLiquidity(ev);
-    expect(summary.shortfalls).toHaveLength(1);
-    expect(summary.shortfalls[0].status).toBe('both');
-    expect(summary.worstForecastMonth).toBe('2026-07');
-    expect(summary.worstForecastClosingCash).toBe(-100);
-  });
-
-  it('respeta el umbral prudencial (threshold > 0)', () => {
-    const base: CashFlowMonth[] = [
-      { yearMonth: '2026-08', isHistorical: false, income: 0, expense: 0, closingCash: 50_000 },
-    ];
-    const ev = evaluateCashFlow(base, []);
-    expect(analyzeLiquidity(ev, 0).shortfalls).toHaveLength(0);
-    expect(analyzeLiquidity(ev, 100_000).shortfalls).toHaveLength(1);
-  });
-
-  it('resumen neutro cuando no hay meses futuros', () => {
-    const ev = evaluateCashFlow([], []);
-    const summary = analyzeLiquidity(ev);
-    expect(summary.shortfalls).toHaveLength(0);
-    expect(summary.worstForecastMonth).toBeNull();
-    expect(summary.worstForecastClosingCash).toBe(0);
-    // referencia intencional para evitar unused-var
-    expect(futureMonths([])).toEqual([]);
   });
 });

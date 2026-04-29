@@ -38,8 +38,6 @@ describe('<TaxDashboard />', () => {
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
-        legacyProposals={[]}
-        legacyScenarios={[]}
       />,
     );
 
@@ -78,8 +76,6 @@ describe('<TaxDashboard />', () => {
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
-        legacyProposals={[]}
-        legacyScenarios={[]}
       />,
     );
 

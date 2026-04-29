@@ -18,13 +18,6 @@ import {
   calculateInitialCash,
 } from '../services/financialProjectionService';
 import {
-  convertLegacyScenariosToFinancial,
-  isLegacyScenarioId,
-  legacyProposalToAdjustments,
-  legacyProposalsForActiveScenario,
-  legacyScenarioId,
-} from '../../shared-finance/calculation-engine/legacyScenarioBridge';
-import {
   loadManualPlanningEntries,
   expandManualPlanningEntriesToMovements,
 } from '../../financial-planning/services/manualPlanningEntries';
@@ -51,8 +44,6 @@ import {
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import { Wallet, AlertTriangle as AlertIcon, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
-import type { Proposal, Scenario as LegacyScenario } from '../../../types';
-
 interface Props {
   companyCode: string;
   bankStatements: BankAccountStatement[];
@@ -62,9 +53,6 @@ interface Props {
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
-  legacyProposals?: Proposal[];
-  legacyScenarios?: LegacyScenario[];
-  legacyActiveScenarioId?: string | null;
   onNavigateToTax?: () => void;
 }
 
@@ -143,22 +131,16 @@ export default function FinancialProjectionDashboard(props: Props) {
   const sourceBaseScenario = source.scenarios.find((scenario) => scenario.isBase) ?? source.scenarios[0];
   const storedBaseScenario = storedScenarios.find((scenario) => scenario.isBase && !scenario.archivedAt);
   const baseScenario = storedBaseScenario ?? sourceBaseScenario;
-  const legacyScenarios = useMemo(
-    () => convertLegacyScenariosToFinancial(props.legacyScenarios ?? []),
-    [props.legacyScenarios],
+  const userScenarios = useMemo(
+    () => storedScenarios.filter((scenario) => !scenario.isBase && !scenario.archivedAt),
+    [storedScenarios],
   );
   const archivedBaseScenarios = storedScenarios.filter((scenario) => scenario.archivedAt);
   const scenarios = useMemo(
-    () => [baseScenario, ...legacyScenarios, ...archivedBaseScenarios],
-    [archivedBaseScenarios, baseScenario, legacyScenarios],
+    () => [baseScenario, ...userScenarios, ...archivedBaseScenarios],
+    [archivedBaseScenarios, baseScenario, userScenarios],
   );
-  const initialScenarioId = useMemo(() => {
-    if (props.legacyActiveScenarioId) {
-      return legacyScenarioId({ id: props.legacyActiveScenarioId } as LegacyScenario);
-    }
-    return baseScenario.id;
-  }, [baseScenario.id, props.legacyActiveScenarioId]);
-  const [activeScenarioId, setActiveScenarioId] = useState(initialScenarioId);
+  const [activeScenarioId, setActiveScenarioId] = useState(baseScenario.id);
 
   useEffect(() => {
     if (!scenarios.some((scenario) => scenario.id === activeScenarioId)) {
@@ -167,7 +149,6 @@ export default function FinancialProjectionDashboard(props: Props) {
   }, [activeScenarioId, scenarios]);
 
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? baseScenario;
-  const horizonYearMonth = yearEnd.slice(0, 7);
   const baseSeedMovements = useMemo(() => {
     const baseManualMovements = expandManualPlanningEntriesToMovements(manualEntries, {
       scenarioId: baseScenario.id,
@@ -213,19 +194,10 @@ export default function FinancialProjectionDashboard(props: Props) {
     ],
   );
 
-  const activeAdjustments = useMemo<FinancialAdjustment[]>(() => {
-    const stored = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(activeScenario.id));
-    if (!isLegacyScenarioId(activeScenario.id)) return stored;
-    const proposals = legacyProposalsForActiveScenario(
-      activeScenario.id,
-      props.legacyScenarios ?? [],
-      props.legacyProposals ?? [],
-    );
-    const legacy = proposals.flatMap((proposal) =>
-      legacyProposalToAdjustments(proposal, activeScenario.id, today, horizonYearMonth),
-    );
-    return [...stored, ...legacy];
-  }, [activeScenario.id, horizonYearMonth, props.legacyProposals, props.legacyScenarios, storedAdjustments, today]);
+  const activeAdjustments = useMemo<FinancialAdjustment[]>(
+    () => storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(activeScenario.id)),
+    [activeScenario.id, storedAdjustments],
+  );
 
   const activeManualMovements = useMemo(
     () => expandManualPlanningEntriesToMovements(manualEntries, {
