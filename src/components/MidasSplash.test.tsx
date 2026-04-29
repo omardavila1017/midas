@@ -3,21 +3,25 @@ import { render, screen } from '@testing-library/react';
 import MidasSplash from './MidasSplash';
 
 describe('<MidasSplash /> bank progress', () => {
-  it('shows three pulsing dots when no progress yet (priming)', () => {
+  it('shows empty progress bar (no dots) when no progress yet (priming)', () => {
     const { container } = render(
       <MidasSplash visible step="banks" progress={null} />,
     );
-    expect(container.querySelectorAll('[data-splash-dot]').length).toBe(3);
-    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+    expect(container.querySelectorAll('[data-splash-dot]').length).toBe(0);
+    const bar = container.querySelector('[role="progressbar"]') as HTMLElement;
+    expect(bar).not.toBeNull();
+    const fill = bar.firstElementChild as HTMLElement;
+    expect(fill.style.width).toBe('0%');
     expect(screen.getByText('Sincronizando bancos…')).toBeTruthy();
   });
 
-  it('shows three pulsing dots when ranging just started (total=0)', () => {
+  it('shows empty progress bar when ranging just started (total=0)', () => {
     const { container } = render(
       <MidasSplash visible step="banks" progress={{ done: 0, total: 0 }} />,
     );
-    expect(container.querySelectorAll('[data-splash-dot]').length).toBe(3);
-    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+    expect(container.querySelectorAll('[data-splash-dot]').length).toBe(0);
+    const bar = container.querySelector('[role="progressbar"]');
+    expect(bar).not.toBeNull();
   });
 
   it('renders progress bar with correct aria + fill width during ranging', () => {
