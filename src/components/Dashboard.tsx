@@ -10,6 +10,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   Legend,
+  Customized,
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, Wallet, AlertTriangle, LineChart as LineChartIcon,
@@ -236,6 +237,14 @@ const Dashboard: React.FC<DashboardProps> = ({
         ? Math.max(0, projectedExpenseTotal - m.baseExpense)
         : 0;
       const parts = partitionExpense(m.baseExpense, projExpGap, ym);
+      const projIncomeOverrun =
+        projectedIncomeTotal > 0 && m.baseIncome > projectedIncomeTotal
+          ? projectedIncomeTotal
+          : null;
+      const projExpenseOverrun =
+        projectedExpenseTotal > 0 && m.baseExpense > projectedExpenseTotal
+          ? projectedExpenseTotal
+          : null;
       return {
         yearMonth: ym,
         realIncome: m.baseIncome,
@@ -245,6 +254,8 @@ const Dashboard: React.FC<DashboardProps> = ({
         projExpenseGap: projExpGap,
         projExpenseTotal: projectedExpenseTotal || m.baseExpense,
         ...parts,
+        projIncomeOverrun,
+        projExpenseOverrun,
         cashBase: m.baseClosingCash,
         phase: 'past' as const,
       };
@@ -260,6 +271,8 @@ const Dashboard: React.FC<DashboardProps> = ({
         projExpenseGap: m.baseExpense,
         projExpenseTotal: m.baseExpense,
         ...parts,
+        projIncomeOverrun: null,
+        projExpenseOverrun: null,
         cashBase: m.baseClosingCash,
         phase: 'future' as const,
       };
@@ -278,6 +291,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       projExpenseGap: projExpGap,
       projExpenseTotal: projectedExpenseTotal,
       ...parts,
+      projIncomeOverrun: null,
+      projExpenseOverrun: null,
       cashBase: m.baseClosingCash,
       phase: 'current' as const,
     };
@@ -469,7 +484,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           Flujo mensual
         </h2>
         <p className="text-[11px] mb-4" style={{ color: 'var(--gray-400)' }}>
-          Barra sólida = real · Barra de líneas = proyectado. Haz clic en un mes para ver el detalle.
+          Barra sólida = real · Barra de líneas = proyectado · Línea punteada = nivel proyectado cuando el real lo excedió. Haz clic en un mes para ver el detalle.
           {clients.length > 0 && ' Ingreso proyectado desde catálogo de clientes; egreso desde /AntiguedadSaldos + CARGOs recurrentes.'}
         </p>
         <div style={{ height: 340 }}>
@@ -549,6 +564,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 radius={[4, 4, 0, 0]}
                 cursor="pointer"
               />
+              <Customized component={OverrunMarkers} />
               <Line
                 type="monotone"
                 dataKey="cashBase"
@@ -696,6 +712,8 @@ interface TooltipPayloadItem {
     projExpenseTotal?: number;
     realIncome?: number;
     realExpense?: number;
+    projIncomeOverrun?: number | null;
+    projExpenseOverrun?: number | null;
   };
 }
 
@@ -716,6 +734,69 @@ const TOOLTIP_LABELS: Record<string, string> = {
  * espera cerrar), NO el gap contra lo real. Eso quitaba visibilidad
  * al usuario en el mes en curso.
  */
+/**
+ * Marca el nivel del proyectado en barras de meses pasados donde el real
+ * excedió al proyectado. Usa `Customized` para reusar la geometría exacta
+ * de las barras ya renderizadas y el scale del eje y.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const OverrunMarkers: React.FC<any> = (props) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { yAxisMap, formattedGraphicalItems } = props as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const incomeBar = formattedGraphicalItems?.find(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (gi: any) => gi?.item?.props?.dataKey === 'projIncomeGap',
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const expenseBar = formattedGraphicalItems?.find(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (gi: any) => gi?.item?.props?.dataKey === 'projExpenseGapAboveFloor',
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const yScale = (Object.values(yAxisMap ?? {})[0] as any)?.scale;
+  if (!yScale) return null;
+
+  const lines: React.ReactNode[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  incomeBar?.props?.data?.forEach((bar: any, idx: number) => {
+    const v = bar?.payload?.projIncomeOverrun;
+    if (v == null) return;
+    const y = yScale(v);
+    lines.push(
+      <line
+        key={`oi-${idx}`}
+        x1={bar.x}
+        x2={bar.x + bar.width}
+        y1={y}
+        y2={y}
+        stroke={CHART_COLORS.incomePattern}
+        strokeWidth={2}
+        strokeDasharray="3 3"
+      />,
+    );
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  expenseBar?.props?.data?.forEach((bar: any, idx: number) => {
+    const v = bar?.payload?.projExpenseOverrun;
+    if (v == null) return;
+    const y = yScale(v);
+    lines.push(
+      <line
+        key={`oe-${idx}`}
+        x1={bar.x}
+        x2={bar.x + bar.width}
+        y1={y}
+        y2={y}
+        stroke={CHART_COLORS.expensePattern}
+        strokeWidth={2}
+        strokeDasharray="3 3"
+      />,
+    );
+  });
+  return <g>{lines}</g>;
+};
+
 const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[]; label?: string }> = ({
   active, payload, label,
 }) => {
@@ -764,6 +845,16 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
             );
           })}
       </ul>
+      {data?.phase === 'past' && data?.projIncomeOverrun != null && (
+        <p className="text-[10px] mt-1" style={{ color: CHART_COLORS.incomePattern }}>
+          Ingreso real excedió proyectado por {fmtCurrency((data.realIncome ?? 0) - data.projIncomeOverrun)}
+        </p>
+      )}
+      {data?.phase === 'past' && data?.projExpenseOverrun != null && (
+        <p className="text-[10px]" style={{ color: CHART_COLORS.expensePattern }}>
+          Egreso real excedió proyectado por {fmtCurrency((data.realExpense ?? 0) - data.projExpenseOverrun)}
+        </p>
+      )}
       <p className="text-[10px] mt-1.5" style={{ color: 'var(--gray-400)' }}>
         Clic para ver el detalle abajo
       </p>
