@@ -946,6 +946,7 @@ export default function App() {
                 legacyProposals={proposals}
                 legacyScenarios={scenarios}
                 legacyActiveScenarioId={activeScenarioId}
+                onNavigateToTax={() => setActiveTab('taxes')}
               />
             )}
             {activeTab === 'financialPlanning' && (

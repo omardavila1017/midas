@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Check, FileText, Landmark, Plus, RotateCcw, Wallet } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, ChevronRight, FileText, Landmark, Pencil, Plus, RotateCcw, Wallet, X } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -84,17 +84,6 @@ const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
   { id: 'eoy', label: 'Fin de año' },
 ];
 
-const ADJUSTMENT_KIND_BY_TAX: Record<TaxType, Array<{ id: TaxManualAdjustment['kind']; label: string }>> = {
-  IVA: [
-    { id: 'IVA_CAUSED', label: 'IVA causado' },
-    { id: 'IVA_CREDITABLE', label: 'IVA acreditable' },
-    { id: 'IVA_PAID', label: 'IVA pagado' },
-    { id: 'IVA_PAYABLE', label: 'IVA por pagar' },
-  ],
-  ISN: [{ id: 'ISN_OVERRIDE', label: 'Override ISN' }],
-  IMSS: [{ id: 'IMSS_MANUAL', label: 'IMSS manual' }],
-};
-
 export default function TaxDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const monthStart = useMemo(() => `${today.slice(0, 7)}-01`, [today]);
@@ -109,6 +98,7 @@ export default function TaxDashboard(props: Props) {
   const [selectedPeriod, setSelectedPeriod] = useState<string>(today.slice(0, 7));
   const [detailTab, setDetailTab] = useState<DetailTab>('iva');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
 
   useEffect(() => {
     saveTaxStore(taxStore);
@@ -287,6 +277,16 @@ export default function TaxDashboard(props: Props) {
     setStatusMessage(`Obligación ${obligation.label} capturada.`);
   };
 
+  const handleInlineEdit = (period: string, taxType: TaxType, kind: TaxManualAdjustment['kind'], amount: number) => {
+    handleAddAdjustment(createTaxManualAdjustment({
+      taxType,
+      period,
+      kind,
+      amount,
+      note: 'Ajuste desde tabla de periodos',
+    }));
+  };
+
   const handleApproveSuggestedPayment = (obligation: TaxObligation) => {
     const pending = Math.max(0, obligation.totalAmount - obligation.paymentPlan
       .filter((payment) => payment.status === 'PAID')
@@ -314,6 +314,7 @@ export default function TaxDashboard(props: Props) {
     setPreset('eoy');
     setSelectedPeriod(today.slice(0, 7));
     setDetailTab('iva');
+    setShowAddForm(false);
   };
 
   if (!source.hasData) {
@@ -332,19 +333,31 @@ export default function TaxDashboard(props: Props) {
       <PageHeader
         title="Impuestos"
         actions={
-          <button
-            onClick={resetView}
-            className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
-          >
-            <RotateCcw className="h-4 w-4" strokeWidth={1.5} />
-            Restablecer
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAddForm((v) => !v)}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+            >
+              <Plus className="h-4 w-4" strokeWidth={1.5} />
+              Captura manual
+            </button>
+            <button
+              onClick={resetView}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+            >
+              <RotateCcw className="h-4 w-4" strokeWidth={1.5} />
+              Restablecer
+            </button>
+          </div>
         }
       />
 
       {statusMessage && (
-        <div className="rounded-xl border border-[var(--gray-200)] bg-white px-4 py-2 text-[12px] font-medium text-[var(--gray-700)]">
-          {statusMessage}
+        <div className="flex items-center justify-between rounded-xl border border-[var(--gray-200)] bg-white px-4 py-2">
+          <span className="text-[12px] font-medium text-[var(--gray-700)]">{statusMessage}</span>
+          <button onClick={() => setStatusMessage(null)} className="text-[var(--gray-400)] hover:text-[var(--gray-600)]">
+            <X className="h-3.5 w-3.5" strokeWidth={1.5} />
+          </button>
         </div>
       )}
 
@@ -366,7 +379,7 @@ export default function TaxDashboard(props: Props) {
             </select>
           </label>
           <div className="ml-auto text-[12px] text-[var(--gray-500)]">
-            Régimen 601 · calendario editable · vencimiento semilla día 17
+            Régimen 601 · vencimiento semilla día 17
           </div>
         </div>
       </section>
@@ -383,17 +396,22 @@ export default function TaxDashboard(props: Props) {
         baseProjection={activeProjection.scenarioId === baseProjection.scenarioId ? undefined : baseProjection}
       />
 
-      <TaxForms
-        activePeriod={selectedPeriod}
-        onAddAdjustment={handleAddAdjustment}
-        onAddObligation={handleAddManualObligation}
-      />
+      {showAddForm && (
+        <TaxForms
+          activePeriod={selectedPeriod}
+          onAddAdjustment={handleAddAdjustment}
+          onAddObligation={handleAddManualObligation}
+          onClose={() => setShowAddForm(false)}
+        />
+      )}
 
+      {/* Main content: period table with inline edit + detail panel */}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <TaxPeriodTable
           view={view}
           selectedPeriod={selected?.period}
           onSelectPeriod={setSelectedPeriod}
+          onInlineEdit={handleInlineEdit}
         />
         {selected && (
           <TaxPeriodDetail
@@ -409,15 +427,33 @@ export default function TaxDashboard(props: Props) {
   );
 }
 
+/* ────────────────────────────────────────────────────────────── */
+/* Tax Forms (shown on demand via "Captura manual" button)       */
+/* ────────────────────────────────────────────────────────────── */
+
+const ADJUSTMENT_KIND_BY_TAX: Record<TaxType, Array<{ id: TaxManualAdjustment['kind']; label: string }>> = {
+  IVA: [
+    { id: 'IVA_CAUSED', label: 'IVA causado' },
+    { id: 'IVA_CREDITABLE', label: 'IVA acreditable' },
+    { id: 'IVA_PAID', label: 'IVA pagado' },
+    { id: 'IVA_PAYABLE', label: 'IVA por pagar' },
+  ],
+  ISN: [{ id: 'ISN_OVERRIDE', label: 'Override ISN' }],
+  IMSS: [{ id: 'IMSS_MANUAL', label: 'IMSS manual' }],
+};
+
 function TaxForms({
   activePeriod,
   onAddAdjustment,
   onAddObligation,
+  onClose,
 }: {
   activePeriod: string;
   onAddAdjustment: (adjustment: TaxManualAdjustment) => void;
   onAddObligation: (obligation: TaxObligation) => void;
+  onClose: () => void;
 }) {
+  const [mode, setMode] = useState<'adjustment' | 'obligation'>('adjustment');
   const [taxType, setTaxType] = useState<TaxType>('IVA');
   const [kind, setKind] = useState<TaxManualAdjustment['kind']>('IVA_PAID');
   const [period, setPeriod] = useState(activePeriod);
@@ -468,65 +504,149 @@ function TaxForms({
 
   return (
     <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
-      <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Captura fiscal flexible</h2>
-        <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Ajustes manuales, overrides y obligaciones pendientes sin tocar JDE ni banco.</p>
+      <div className="flex items-center justify-between border-b border-[var(--gray-200)] px-4 py-3">
+        <div>
+          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Captura manual</h2>
+          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Ajustes, overrides y obligaciones sin tocar JDE ni banco.</p>
+        </div>
+        <button onClick={onClose} className="inline-flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--gray-100)]">
+          <X className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
+        </button>
       </div>
-      <div className="grid gap-3 px-4 py-3 lg:grid-cols-2">
-        <div className="grid gap-2 rounded-xl border border-[var(--gray-200)] p-3 md:grid-cols-[90px_110px_150px_130px_minmax(140px,1fr)_auto]">
-          <select value={taxType} onChange={(event) => setTaxType(event.target.value as TaxType)} className={taxInputClass}>
-            <option value="IVA">IVA</option>
-            <option value="ISN">ISN</option>
-            <option value="IMSS">IMSS</option>
-          </select>
-          <input value={period} onChange={(event) => setPeriod(event.target.value)} className={taxInputClass} placeholder="YYYY-MM" />
-          <select value={kind} onChange={(event) => setKind(event.target.value as TaxManualAdjustment['kind'])} className={taxInputClass}>
-            {ADJUSTMENT_KIND_BY_TAX[taxType].map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-          </select>
-          <input value={amount} onChange={(event) => setAmount(event.target.value)} type="number" min="0" step="0.01" className={`${taxInputClass} text-right tabular-nums`} placeholder="Monto" />
-          <input value={note} onChange={(event) => setNote(event.target.value)} className={taxInputClass} placeholder="Nota o fuente" />
-          <button onClick={addAdjustment} className={taxButtonClass}>
-            <Plus className="h-4 w-4" strokeWidth={1.5} />
-            Ajuste
-          </button>
-        </div>
-        <div className="grid gap-2 rounded-xl border border-[var(--gray-200)] p-3 md:grid-cols-[90px_110px_130px_130px_minmax(140px,1fr)_auto]">
-          <select value={obligationType} onChange={(event) => setObligationType(event.target.value as TaxType)} className={taxInputClass}>
-            <option value="IVA">IVA</option>
-            <option value="ISN">ISN</option>
-            <option value="IMSS">IMSS</option>
-          </select>
-          <input value={obligationPeriod} onChange={(event) => setObligationPeriod(event.target.value)} className={taxInputClass} placeholder="YYYY-MM" />
-          <input value={obligationAmount} onChange={(event) => setObligationAmount(event.target.value)} type="number" min="0" step="0.01" className={`${taxInputClass} text-right tabular-nums`} placeholder="Monto" />
-          <input value={obligationDueDate} onChange={(event) => setObligationDueDate(event.target.value)} type="date" className={taxInputClass} />
-          <input value={obligationLabel} onChange={(event) => setObligationLabel(event.target.value)} className={taxInputClass} placeholder="IMSS pendiente, convenio..." />
-          <button onClick={addObligation} className={taxButtonClass}>
-            <Plus className="h-4 w-4" strokeWidth={1.5} />
-            Obligación
-          </button>
-        </div>
+
+      <div className="border-b border-[var(--gray-200)] px-4 py-2">
+        <SegmentedControl
+          value={mode}
+          options={[
+            { id: 'adjustment', label: 'Ajuste fiscal' },
+            { id: 'obligation', label: 'Obligación nueva' },
+          ]}
+          onChange={setMode}
+        />
+      </div>
+
+      <div className="px-4 py-3">
+        {mode === 'adjustment' ? (
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="Impuesto">
+              <select value={taxType} onChange={(event) => setTaxType(event.target.value as TaxType)} className={taxInputClass}>
+                <option value="IVA">IVA</option>
+                <option value="ISN">ISN</option>
+                <option value="IMSS">IMSS</option>
+              </select>
+            </Field>
+            <Field label="Periodo">
+              <input value={period} onChange={(event) => setPeriod(event.target.value)} className={taxInputClass} placeholder="YYYY-MM" />
+            </Field>
+            <Field label="Tipo">
+              <select value={kind} onChange={(event) => setKind(event.target.value as TaxManualAdjustment['kind'])} className={taxInputClass}>
+                {ADJUSTMENT_KIND_BY_TAX[taxType].map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Monto">
+              <input value={amount} onChange={(event) => setAmount(event.target.value)} type="number" min="0" step="0.01" className={`${taxInputClass} text-right tabular-nums`} placeholder="$0.00" />
+            </Field>
+            <Field label="Nota">
+              <input value={note} onChange={(event) => setNote(event.target.value)} className={taxInputClass} placeholder="Opcional" />
+            </Field>
+            <button onClick={addAdjustment} disabled={!amount || Number(amount) <= 0} className={taxButtonClass}>
+              <Plus className="h-4 w-4" strokeWidth={1.5} />
+              Agregar
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="Impuesto">
+              <select value={obligationType} onChange={(event) => setObligationType(event.target.value as TaxType)} className={taxInputClass}>
+                <option value="IVA">IVA</option>
+                <option value="ISN">ISN</option>
+                <option value="IMSS">IMSS</option>
+              </select>
+            </Field>
+            <Field label="Periodo">
+              <input value={obligationPeriod} onChange={(event) => setObligationPeriod(event.target.value)} className={taxInputClass} placeholder="YYYY-MM" />
+            </Field>
+            <Field label="Monto">
+              <input value={obligationAmount} onChange={(event) => setObligationAmount(event.target.value)} type="number" min="0" step="0.01" className={`${taxInputClass} text-right tabular-nums`} placeholder="$0.00" />
+            </Field>
+            <Field label="Vencimiento">
+              <input value={obligationDueDate} onChange={(event) => setObligationDueDate(event.target.value)} type="date" className={taxInputClass} />
+            </Field>
+            <Field label="Etiqueta">
+              <input value={obligationLabel} onChange={(event) => setObligationLabel(event.target.value)} className={taxInputClass} placeholder="IMSS pendiente..." />
+            </Field>
+            <button onClick={addObligation} disabled={!obligationAmount || Number(obligationAmount) <= 0} className={taxButtonClass}>
+              <Plus className="h-4 w-4" strokeWidth={1.5} />
+              Agregar
+            </button>
+          </div>
+        )}
       </div>
     </section>
   );
 }
 
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────── */
+/* Tax Period Table — now with inline edit                       */
+/* ────────────────────────────────────────────────────────────── */
+
 function TaxPeriodTable({
   view,
   selectedPeriod,
   onSelectPeriod,
+  onInlineEdit,
 }: {
   view: TaxDashboardView;
   selectedPeriod?: string;
   onSelectPeriod: (period: string) => void;
+  onInlineEdit: (period: string, taxType: TaxType, kind: TaxManualAdjustment['kind'], amount: number) => void;
 }) {
+  const [editingCell, setEditingCell] = useState<{ period: string; field: 'iva' | 'isn' | 'imss' } | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  const startEdit = (period: string, field: 'iva' | 'isn' | 'imss', currentValue: number) => {
+    setEditingCell({ period, field });
+    setEditValue(String(Math.round(currentValue)));
+  };
+
+  const commitEdit = () => {
+    if (!editingCell) return;
+    const val = Number(editValue);
+    if (!Number.isFinite(val) || val < 0) {
+      setEditingCell(null);
+      return;
+    }
+    const kindMap: Record<string, { taxType: TaxType; kind: TaxManualAdjustment['kind'] }> = {
+      iva: { taxType: 'IVA', kind: 'IVA_PAYABLE' },
+      isn: { taxType: 'ISN', kind: 'ISN_OVERRIDE' },
+      imss: { taxType: 'IMSS', kind: 'IMSS_MANUAL' },
+    };
+    const target = kindMap[editingCell.field];
+    onInlineEdit(editingCell.period, target.taxType, target.kind, val);
+    setEditingCell(null);
+  };
+
+  const cancelEdit = () => setEditingCell(null);
+
   return (
     <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
         <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Obligaciones por periodo</h2>
-        <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">IVA, ISN e IMSS separados, con impacto en caja y estatus.</p>
+        <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+          Haz clic en un monto de IVA, ISN o IMSS para editarlo. Selecciona un periodo para ver su detalle.
+        </p>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[980px] text-[12px]">
+        <table className="w-full min-w-[900px] text-[12px]">
           <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
             <tr>
               <th className="px-4 py-2.5">Periodo</th>
@@ -550,9 +670,33 @@ function TaxPeriodTable({
                   style={{ background: active ? 'var(--gray-50)' : undefined }}
                 >
                   <td className="px-4 py-3 font-semibold text-[var(--gray-950)]">{period.period}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{fmtCurrency(period.ivaNet)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{fmtCurrency(period.isn)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{fmtCurrency(period.imss)}</td>
+                  <EditableCell
+                    value={period.ivaNet}
+                    editing={editingCell?.period === period.period && editingCell.field === 'iva'}
+                    editValue={editValue}
+                    onStartEdit={(e) => { e.stopPropagation(); startEdit(period.period, 'iva', period.ivaNet); }}
+                    onEditChange={setEditValue}
+                    onCommit={commitEdit}
+                    onCancel={cancelEdit}
+                  />
+                  <EditableCell
+                    value={period.isn}
+                    editing={editingCell?.period === period.period && editingCell.field === 'isn'}
+                    editValue={editValue}
+                    onStartEdit={(e) => { e.stopPropagation(); startEdit(period.period, 'isn', period.isn); }}
+                    onEditChange={setEditValue}
+                    onCommit={commitEdit}
+                    onCancel={cancelEdit}
+                  />
+                  <EditableCell
+                    value={period.imss}
+                    editing={editingCell?.period === period.period && editingCell.field === 'imss'}
+                    editValue={editValue}
+                    onStartEdit={(e) => { e.stopPropagation(); startEdit(period.period, 'imss', period.imss); }}
+                    onEditChange={setEditValue}
+                    onCommit={commitEdit}
+                    onCancel={cancelEdit}
+                  />
                   <td className="px-4 py-3 text-right font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(period.total)}</td>
                   <td className="px-4 py-3 text-[var(--gray-600)]">{fmtDate(period.dueDate)}</td>
                   <td className="px-4 py-3"><TaxStatusPill status={period.status} /></td>
@@ -572,6 +716,60 @@ function TaxPeriodTable({
   );
 }
 
+function EditableCell({
+  value,
+  editing,
+  editValue,
+  onStartEdit,
+  onEditChange,
+  onCommit,
+  onCancel,
+}: {
+  value: number;
+  editing: boolean;
+  editValue: string;
+  onStartEdit: (e: React.MouseEvent) => void;
+  onEditChange: (v: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  if (editing) {
+    return (
+      <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+        <input
+          autoFocus
+          type="number"
+          min="0"
+          step="1"
+          value={editValue}
+          onChange={(e) => onEditChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onCommit();
+            if (e.key === 'Escape') onCancel();
+          }}
+          onBlur={onCommit}
+          className="h-8 w-full rounded-lg border border-[var(--primary)] bg-white px-2 text-right text-[12px] tabular-nums text-[var(--gray-950)] outline-none"
+        />
+      </td>
+    );
+  }
+  return (
+    <td
+      className="group px-4 py-3 text-right tabular-nums"
+      onClick={onStartEdit}
+    >
+      <span className="inline-flex items-center gap-1">
+        {fmtCurrency(value)}
+        <Pencil className="h-3 w-3 text-[var(--gray-300)] opacity-0 transition-opacity group-hover:opacity-100" strokeWidth={1.5} />
+      </span>
+    </td>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────── */
+/* Tax Period Detail — improved with better source visibility    */
+/* ────────────────────────────────────────────────────────────── */
+
 function TaxPeriodDetail({
   period,
   detailTab,
@@ -585,27 +783,42 @@ function TaxPeriodDetail({
   onApprovePayment: (obligation: TaxObligation) => void;
   onUpdatePayment: (obligation: TaxObligation, paymentId: string, patch: Partial<TaxPaymentPlanItem>) => void;
 }) {
+  const sourceCount = (tab: DetailTab) => {
+    if (tab === 'iva') return period.iva.incomeLines.length + period.iva.expenseLines.length;
+    if (tab === 'isn') return period.payrollLines.length;
+    if (tab === 'imss') return period.imssLines.length;
+    return period.obligations.length;
+  };
+
   return (
     <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
         <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Detalle {period.period}</h2>
-        <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Drilldown de facturas, nómina, IMSS y pagos parciales.</p>
+        <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Origen de cada impuesto y plan de pagos.</p>
       </div>
+
+      {/* Summary mini-stats */}
+      <div className="grid grid-cols-3 gap-2 border-b border-[var(--gray-200)] px-4 py-3">
+        <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
+        <MiniStat label="ISN (3%)" value={fmtCurrency(period.isn)} />
+        <MiniStat label="IMSS" value={fmtCurrency(period.imss)} />
+      </div>
+
       <div className="border-b border-[var(--gray-200)] px-4 py-2">
         <SegmentedControl
           value={detailTab}
           options={[
-            { id: 'iva', label: 'IVA' },
-            { id: 'isn', label: 'ISN' },
-            { id: 'imss', label: 'IMSS' },
-            { id: 'payments', label: 'Pagos' },
+            { id: 'iva' as const, label: `IVA (${sourceCount('iva')})` },
+            { id: 'isn' as const, label: `ISN (${sourceCount('isn')})` },
+            { id: 'imss' as const, label: `IMSS (${sourceCount('imss')})` },
+            { id: 'payments' as const, label: `Pagos (${sourceCount('payments')})` },
           ]}
           onChange={onDetailTabChange}
         />
       </div>
       {detailTab === 'iva' && <IvaDetail iva={period.iva} />}
-      {detailTab === 'isn' && <SourceLines title={`Nómina pagada · base ${fmtCurrency(period.payrollBase)}`} lines={period.payrollLines} empty="Sin movimientos de nómina en el periodo." />}
-      {detailTab === 'imss' && <SourceLines title="Fuente IMSS" lines={period.imssLines} empty="Sin IMSS detectado en JDE/CXP; captura manualmente si aplica." />}
+      {detailTab === 'isn' && <IsnDetail period={period} />}
+      {detailTab === 'imss' && <ImssDetail period={period} />}
       {detailTab === 'payments' && (
         <PaymentPlanDetail
           obligations={period.obligations}
@@ -618,6 +831,8 @@ function TaxPeriodDetail({
 }
 
 function IvaDetail({ iva }: { iva: IvaPeriodDetail }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
   return (
     <div className="space-y-3 p-4">
       <div className="grid grid-cols-2 gap-2 text-[12px]">
@@ -628,46 +843,125 @@ function IvaDetail({ iva }: { iva: IvaPeriodDetail }) {
         <MiniStat label="IVA neto" value={fmtCurrency(iva.netIva)} />
         <MiniStat label={iva.payable > 0 ? 'Por pagar' : 'Saldo a favor'} value={fmtCurrency(iva.payable > 0 ? iva.payable : iva.balanceInFavor)} />
       </div>
-      <SourceLines title="Facturas cobradas que causan IVA" lines={iva.incomeLines} empty="Sin ingresos con IVA clasificado." />
-      <SourceLines title="Facturas pagadas que acreditan IVA" lines={iva.expenseLines} empty="Sin egresos acreditables clasificados." />
-      <SourceLines title={`Sin clasificar · ${fmtCompact(iva.unclassifiedIncome + iva.unclassifiedExpense)}`} lines={iva.unclassifiedLines} empty="Sin movimientos sin clasificar." />
+
+      <CollapsibleSourceLines
+        title={`Facturas cobradas (IVA causado) · ${iva.incomeLines.length}`}
+        lines={iva.incomeLines}
+        empty="Sin ingresos con IVA clasificado."
+        expanded={expanded === 'income'}
+        onToggle={() => setExpanded((p) => p === 'income' ? null : 'income')}
+      />
+      <CollapsibleSourceLines
+        title={`Facturas pagadas (IVA acreditable) · ${iva.expenseLines.length}`}
+        lines={iva.expenseLines}
+        empty="Sin egresos acreditables clasificados."
+        expanded={expanded === 'expense'}
+        onToggle={() => setExpanded((p) => p === 'expense' ? null : 'expense')}
+      />
+      {(iva.unclassifiedIncome > 0 || iva.unclassifiedExpense > 0) && (
+        <CollapsibleSourceLines
+          title={`Sin clasificar · ${fmtCompact(iva.unclassifiedIncome + iva.unclassifiedExpense)}`}
+          lines={iva.unclassifiedLines}
+          empty="Sin movimientos sin clasificar."
+          expanded={expanded === 'unclassified'}
+          onToggle={() => setExpanded((p) => p === 'unclassified' ? null : 'unclassified')}
+        />
+      )}
     </div>
   );
 }
 
-function SourceLines({ title, lines, empty }: { title: string; lines: TaxSourceLine[]; empty: string }) {
+function IsnDetail({ period }: { period: TaxPeriodSummary }) {
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="Base nómina pagada" value={fmtCurrency(period.payrollBase)} />
+        <MiniStat label="ISN (3%)" value={fmtCurrency(period.isn)} />
+      </div>
+      <CollapsibleSourceLines
+        title={`Movimientos de nómina · ${period.payrollLines.length}`}
+        lines={period.payrollLines}
+        empty="Sin movimientos de nómina en el periodo."
+        expanded
+        onToggle={() => {}}
+      />
+    </div>
+  );
+}
+
+function ImssDetail({ period }: { period: TaxPeriodSummary }) {
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="IMSS detectado" value={fmtCurrency(period.imss)} />
+        <MiniStat label="Movimientos" value={String(period.imssLines.length)} />
+      </div>
+      <CollapsibleSourceLines
+        title={`Fuente IMSS · ${period.imssLines.length}`}
+        lines={period.imssLines}
+        empty="Sin IMSS detectado en JDE/CXP; usa la tabla para capturar el monto manualmente."
+        expanded
+        onToggle={() => {}}
+      />
+    </div>
+  );
+}
+
+function CollapsibleSourceLines({
+  title,
+  lines,
+  empty,
+  expanded,
+  onToggle,
+}: {
+  title: string;
+  lines: TaxSourceLine[];
+  empty: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   return (
     <div className="rounded-xl border border-[var(--gray-200)]">
-      <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[11px] font-semibold text-[var(--gray-950)]">{title}</div>
-      <div className="max-h-[320px] overflow-auto">
-        {lines.length === 0 ? (
-          <div className="px-3 py-5 text-center text-[12px] text-[var(--gray-400)]">{empty}</div>
-        ) : (
-          <table className="w-full min-w-[560px] text-[11.5px]">
-            <thead className="text-left text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
-              <tr>
-                <th className="px-3 py-2">Documento</th>
-                <th className="px-3 py-2">Fecha</th>
-                <th className="px-3 py-2 text-right">Base</th>
-                <th className="px-3 py-2 text-right">IVA</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((line) => (
-                <tr key={`${line.movementId}-${line.date}`} className="border-t border-[var(--gray-100)]">
-                  <td className="px-3 py-2">
-                    <div className="truncate font-medium text-[var(--gray-950)]">{line.concept}</div>
-                    <div className="truncate text-[10.5px] text-[var(--gray-400)]">{line.counterpartyName ?? line.sourceSystem}</div>
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-[var(--gray-600)]">{fmtDate(line.date)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(line.taxBase)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{line.taxRate ? `${line.taxRate}% · ${fmtCurrency(line.taxAmount)}` : '—'}</td>
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-left"
+      >
+        {expanded
+          ? <ChevronDown className="h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />
+          : <ChevronRight className="h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />}
+        <span className="text-[11px] font-semibold text-[var(--gray-950)]">{title}</span>
+      </button>
+      {expanded && (
+        <div className="max-h-[320px] overflow-auto">
+          {lines.length === 0 ? (
+            <div className="px-3 py-5 text-center text-[12px] text-[var(--gray-400)]">{empty}</div>
+          ) : (
+            <table className="w-full min-w-[460px] text-[11.5px]">
+              <thead className="text-left text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
+                <tr>
+                  <th className="px-3 py-2">Documento</th>
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2 text-right">Base</th>
+                  <th className="px-3 py-2 text-right">IVA</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+              </thead>
+              <tbody>
+                {lines.map((line) => (
+                  <tr key={`${line.movementId}-${line.date}`} className="border-t border-[var(--gray-100)]">
+                    <td className="px-3 py-2">
+                      <div className="truncate font-medium text-[var(--gray-950)]">{line.concept}</div>
+                      <div className="truncate text-[10.5px] text-[var(--gray-400)]">{line.counterpartyName ?? line.sourceSystem}</div>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-[var(--gray-600)]">{fmtDate(line.date)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(line.taxBase)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{line.taxRate ? `${line.taxRate}% · ${fmtCurrency(line.taxAmount)}` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -747,6 +1041,10 @@ function PaymentPlanDetail({
   );
 }
 
+/* ────────────────────────────────────────────────────────────── */
+/* Shared UI components                                          */
+/* ────────────────────────────────────────────────────────────── */
+
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
@@ -824,4 +1122,4 @@ function addDays(date: string, days: number): string {
 }
 
 const taxInputClass = 'h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
-const taxButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]';
+const taxButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed';

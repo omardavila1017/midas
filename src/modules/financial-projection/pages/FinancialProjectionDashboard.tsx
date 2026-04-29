@@ -65,6 +65,7 @@ interface Props {
   legacyProposals?: Proposal[];
   legacyScenarios?: LegacyScenario[];
   legacyActiveScenarioId?: string | null;
+  onNavigateToTax?: () => void;
 }
 
 const GRANULARITY_LABELS: Record<ProjectionGranularity, string> = {
@@ -501,6 +502,7 @@ export default function FinancialProjectionDashboard(props: Props) {
       <CashFlowChart
         projection={activeProjection}
         baseProjection={activeProjection.scenarioId === baseProjection.scenarioId ? undefined : baseProjection}
+        onNavigateToTax={props.onNavigateToTax}
       />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1.2fr)]">
@@ -509,11 +511,17 @@ export default function FinancialProjectionDashboard(props: Props) {
           selectedAlert={selectedSupplierAlert}
           onSelect={setSelectedSupplierAlert}
         />
-        <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+        <section
+          className="rounded-2xl border border-[var(--gray-200)] bg-white transition-colors hover:border-[var(--gray-300)]"
+          style={{ cursor: props.onNavigateToTax ? 'pointer' : undefined }}
+          onClick={props.onNavigateToTax}
+        >
           <div className="flex items-start justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
             <div>
               <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Impuestos</h2>
-              <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">El cálculo y los pagos parciales viven en Proyección &gt; Impuestos.</p>
+              <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+                {props.onNavigateToTax ? 'Clic para abrir el módulo de impuestos.' : 'El cálculo y los pagos parciales viven en Proyección > Impuestos.'}
+              </p>
             </div>
             <div className="text-right text-[12px]">
               <div className="font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(taxView.totals.total)}</div>

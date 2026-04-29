@@ -46,13 +46,17 @@ describe('<TaxDashboard />', () => {
     expect(screen.getByRole('heading', { name: 'Impuestos' })).toBeTruthy();
     expect(screen.getByText('Obligaciones por periodo')).toBeTruthy();
 
-    const capture = screen.getByText('Captura fiscal flexible').closest('section');
+    fireEvent.click(screen.getByRole('button', { name: /Captura manual/i }));
+
+    const capture = screen.getByText('Captura manual', { selector: 'h2' }).closest('section');
     expect(capture).toBeTruthy();
     const panel = within(capture as HTMLElement);
 
-    fireEvent.change(panel.getAllByPlaceholderText('Monto')[1], { target: { value: '2500' } });
-    fireEvent.change(panel.getByPlaceholderText('IMSS pendiente, convenio...'), { target: { value: 'IMSS pendiente' } });
-    fireEvent.click(panel.getByRole('button', { name: /Obligación/i }));
+    fireEvent.click(panel.getByText('Obligación nueva'));
+
+    fireEvent.change(panel.getByPlaceholderText('$0.00'), { target: { value: '2500' } });
+    fireEvent.change(panel.getByPlaceholderText('IMSS pendiente...'), { target: { value: 'IMSS pendiente' } });
+    fireEvent.click(panel.getByRole('button', { name: /Agregar/i }));
 
     expect(screen.getByText(/IMSS pendiente capturada/i)).toBeTruthy();
     const stored = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
@@ -61,6 +65,25 @@ describe('<TaxDashboard />', () => {
       label: 'IMSS pendiente',
       totalAmount: 2500,
     });
+  });
+
+  it('allows inline editing of tax amounts in the period table', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={20_000}
+        legacyProposals={[]}
+        legacyScenarios={[]}
+      />,
+    );
+
+    expect(screen.getByText(/Haz clic en un monto/i)).toBeTruthy();
   });
 });
 
