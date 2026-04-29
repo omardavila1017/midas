@@ -149,7 +149,10 @@ describe('buildPairMatchedKeys', () => {
     expect(buildPairMatchedKeys(stmts).size).toBe(0);
   });
 
-  it('does NOT pair across different cias even if amount/day match', () => {
+  it('PAIRS across different cias when amount/day match (traspaso entre empresas del grupo)', () => {
+    // Todas las cuentas en `statements` pertenecen al grupo, así que un
+    // traspaso entre dos cias del mismo grupo es interno aunque las cias
+    // sean distintas.
     const stmts: BankAccountStatement[] = [
       acc('00011', '0190000001', [
         mov({ tipoMovimiento: 'CARGO', importe: 3_000_000 }),
@@ -158,6 +161,45 @@ describe('buildPairMatchedKeys', () => {
         mov({ tipoMovimiento: 'ABONO', importe: 3_000_000 }),
       ]),
     ];
+    expect(buildPairMatchedKeys(stmts).size).toBe(2);
+  });
+
+  it('PAIRS N-a-N cuando hay K CARGOs y K ABONOs del mismo monto/día en cuentas distintas', () => {
+    // Mismo día y mismo monto pero dos traspasos legítimos: 2 CARGOs en
+    // cuentas distintas + 2 ABONOs en cuentas distintas, sin solapamiento
+    // entre lados. Antes este caso se descartaba (cardinalidad != 2);
+    // ahora se marcan los 4.
+    const stmts: BankAccountStatement[] = [
+      acc('00011', '0190000001', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, referencia: 'R1' }),
+      ]),
+      acc('00011', '0190000002', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, referencia: 'R2' }),
+      ]),
+      acc('00011', '0190000003', [
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, referencia: 'R3' }),
+      ]),
+      acc('00011', '0190000004', [
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, referencia: 'R4' }),
+      ]),
+    ];
+    expect(buildPairMatchedKeys(stmts).size).toBe(4);
+  });
+
+  it('does NOT pair cuando una cuenta aparece en ambos lados (cargo+abono mismo día/monto)', () => {
+    // Si la cuenta A tiene CARGO y la cuenta A también tiene ABONO del
+    // mismo monto/día, hay solapamiento — no es un traspaso limpio.
+    const stmts: BankAccountStatement[] = [
+      acc('00011', '0190000001', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, referencia: 'R1' }),
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, referencia: 'R2' }),
+      ]),
+      acc('00011', '0190000002', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, referencia: 'R3' }),
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, referencia: 'R4' }),
+      ]),
+    ];
+    // Cargos: {01, 02}. Abonos: {01, 02}. Solapa → descarta.
     expect(buildPairMatchedKeys(stmts).size).toBe(0);
   });
 
