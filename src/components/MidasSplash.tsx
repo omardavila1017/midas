@@ -29,13 +29,14 @@ export default function MidasSplash({ visible, step, hasError, progress }: Midas
     if (!visible) setLeaving(true);
   }, [visible]);
 
-  const showProgressBar =
-    step === 'banks' && !!progress && progress.total > 0;
-  const progressPct = showProgressBar
+  const showProgressBar = step === 'banks';
+  const hasMeasurableProgress =
+    showProgressBar && !!progress && progress.total > 0;
+  const progressPct = hasMeasurableProgress
     ? Math.min(100, Math.max(0, (progress!.done / progress!.total) * 100))
     : 0;
 
-  const label = showProgressBar
+  const label = hasMeasurableProgress
     ? `Cargando año ${progress!.done}/${progress!.total}`
     : (hasError && STEP_LABEL_ERROR[step]) || STEP_LABEL[step];
 
@@ -109,8 +110,8 @@ export default function MidasSplash({ visible, step, hasError, progress }: Midas
             <div
               role="progressbar"
               aria-valuemin={0}
-              aria-valuemax={progress!.total}
-              aria-valuenow={progress!.done}
+              aria-valuemax={hasMeasurableProgress ? progress!.total : undefined}
+              aria-valuenow={hasMeasurableProgress ? progress!.done : undefined}
               style={{
                 width: 200,
                 height: 4,
@@ -125,7 +126,7 @@ export default function MidasSplash({ visible, step, hasError, progress }: Midas
                   height: '100%',
                   background: 'var(--shell-text)',
                   borderRadius: 999,
-                  transition: 'width 240ms var(--ease-smooth)',
+                  transition: 'width 360ms var(--ease-smooth)',
                 }}
               />
             </div>

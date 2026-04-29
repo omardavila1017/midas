@@ -616,6 +616,7 @@ export default function App() {
     setBankFetchStatus('ranging');
     setBankFetchProgress({ done: 0, total: 0 });
     let ranged = false;
+    let lastTotal = 0;
     try {
       const full = await fetchBankStatementsRange(
         yearStart,
@@ -624,6 +625,7 @@ export default function App() {
         {
           concurrency: 6,
           onProgress: (done, total) => {
+            lastTotal = total;
             setBankFetchProgress({ done, total });
           },
         },
@@ -639,6 +641,14 @@ export default function App() {
       }
     } catch {
       // Keep the last known state visible when the range refresh fails.
+    }
+
+    // Snap bar to 100% and wait for the CSS transition so the user sees the
+    // fill complete before the splash dismisses. Without this, fast JDE
+    // responses finish before the bar visually fills.
+    if (lastTotal > 0) {
+      setBankFetchProgress({ done: lastTotal, total: lastTotal });
+      await new Promise((r) => setTimeout(r, 420));
     }
 
     setBankFetchStatus('idle');
