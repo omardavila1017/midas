@@ -26,6 +26,7 @@ import OperatingProjection from './components/OperatingProjection';
 import FinancialProjectionDashboard from './modules/financial-projection/pages/FinancialProjectionDashboard';
 import FinancialPlanningDashboard from './modules/financial-planning/pages/FinancialPlanningDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
+import MidasSplash, { type BootStep } from './components/MidasSplash';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette from './components/CommandPalette';
@@ -172,6 +173,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('netflow');
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
+  // ── Boot splash state ──
+  const [bootStep, setBootStep] = useState<BootStep>('init');
+  const [isBooted, setIsBooted] = useState(false);
+  const [splashMounted, setSplashMounted] = useState(true);
+
   // ── JDE integration state ──
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companyGroups, setCompanyGroups] = useState<CompanyGroup[]>(() => loadCompanyGroups());
@@ -279,15 +285,28 @@ export default function App() {
     }
   }, []);
 
+  // Catalog bootstrap tracking — splash waits for both bundled CSVs to settle.
+  const [clientsCatalogDone, setClientsCatalogDone] = useState(false);
+  const [providersCatalogDone, setProvidersCatalogDone] = useState(false);
+  useEffect(() => {
+    if (clientsCatalogDone && providersCatalogDone) setCatalogLoaded(true);
+  }, [clientsCatalogDone, providersCatalogDone]);
+
   // Load clients from catalog if no clients exist yet
   useEffect(() => {
-    if (catalogLoaded || clients.length > 0) return;
-    fetchClientCatalog().then(loaded => {
-      if (loaded.length > 0) {
-        setClients(loaded);
-        setCatalogLoaded(true);
-      }
-    });
+    if (catalogLoaded || clients.length > 0) {
+      setClientsCatalogDone(true);
+      return;
+    }
+    fetchClientCatalog()
+      .then(loaded => {
+        if (loaded.length > 0) {
+          setClients(loaded);
+          setCatalogLoaded(true);
+        }
+      })
+      .catch(() => { /* deja la app boote igual */ })
+      .finally(() => setClientsCatalogDone(true));
   }, [catalogLoaded, clients.length]);
 
   // Load/merge providers from the bundled catalog. The local catalog includes
@@ -296,7 +315,8 @@ export default function App() {
   useEffect(() => {
     if (providerCatalogMerged.current) return;
     providerCatalogMerged.current = true;
-    fetchProviderCatalog().then((loaded) => {
+    fetchProviderCatalog()
+      .then((loaded) => {
       if (loaded.length === 0) return;
       setProviders((current) => {
         if (current.length === 0) return loaded;
@@ -349,7 +369,9 @@ export default function App() {
 
         return changed ? merged : current;
       });
-    });
+    })
+      .catch(() => { /* deja la app boote igual */ })
+      .finally(() => setProvidersCatalogDone(true));
   }, []);
 
   // Save to localStorage after changes. Debounce coalesces bursts, but we also
@@ -408,6 +430,44 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadCompanies(); }, [loadCompanies]);
+
+  // ── Boot orchestrator: drives splash step + dismiss when critical path ready ──
+  // Critical path: catalogs settled + JDE companies settled (success or error) +
+  // bank priming finished. CXP autofetch and bank ranging keep running in
+  // background — they're too slow to block the splash.
+  useEffect(() => {
+    if (isBooted) return;
+    if (!catalogLoaded) {
+      setBootStep('catalog');
+    } else if (companiesLoading) {
+      setBootStep('jde');
+    } else if (bankFetchStatus === 'priming') {
+      setBootStep('banks');
+    } else {
+      setBootStep('ready');
+    }
+
+    const catalogDone = catalogLoaded;
+    const companiesDone = !companiesLoading;
+    const bankPrimed = bankFetchStatus !== 'priming';
+    if (catalogDone && companiesDone && bankPrimed) {
+      const t = setTimeout(() => setIsBooted(true), 220);
+      return () => clearTimeout(t);
+    }
+  }, [catalogLoaded, companiesLoading, bankFetchStatus, isBooted]);
+
+  // Hard timeout — never trap the user behind the splash if JDE hangs.
+  useEffect(() => {
+    const t = setTimeout(() => setIsBooted(true), 8000);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Unmount splash after fade-out.
+  useEffect(() => {
+    if (!isBooted) return;
+    const t = setTimeout(() => setSplashMounted(false), 280);
+    return () => clearTimeout(t);
+  }, [isBooted]);
 
   // ── Auto-load CXP (antigüedad de saldos) en background al abrir el app ──
   // Se dispara una sola vez por sesión en cuanto tenemos el catálogo de
@@ -638,6 +698,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen" style={{ background: 'var(--background)' }}>
+      {splashMounted && (
+        <MidasSplash
+          visible={!isBooted}
+          step={bootStep}
+          hasError={!!companiesError}
+        />
+      )}
+      <div
+        style={{
+          opacity: isBooted ? 1 : 0,
+          transition: 'opacity 240ms var(--ease-smooth)',
+        }}
+        aria-hidden={!isBooted}
+      >
       {/* Skip link — keyboard-only shortcut to main content */}
       <a href="#main-content" className="skip-link">Saltar al contenido</a>
 
@@ -984,6 +1058,7 @@ export default function App() {
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
       />
+      </div>
     </div>
   );
 }
