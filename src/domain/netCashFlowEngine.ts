@@ -293,9 +293,21 @@ export function movementHashKey(
 
 /**
  * Recorre todos los movimientos y devuelve el Set de llaves que parecen ser
- * traspasos internos pareados por monto. Criterio: en (cia, fechaOperacion,
- * importe) hay exactamente 1 CARGO de cuenta A y 1 ABONO de cuenta B (A!=B)
- * y nada más en ese bucket. Cualquier otra cardinalidad se descarta.
+ * traspasos internos pareados por monto.
+ *
+ * Criterio: en (fechaOperacion, importe) — sin importar la cia — el bucket
+ * contiene K CARGOs y K ABONOs (mismo número de cada lado, K ≥ 1) y ninguna
+ * cuenta aparece simultáneamente como origen y destino. En ese caso se
+ * marcan TODOS los movimientos del bucket como pair-matched.
+ *
+ * Por qué se relajó respecto a la versión anterior:
+ *   - La cia ya no participa en la llave: todas las cuentas de `statements`
+ *     pertenecen al grupo, así que un CARGO en cia A y un ABONO en cia B
+ *     del mismo grupo es un traspaso interno legítimo.
+ *   - Se permite N-a-N (no sólo 1-a-1) para no perder días con varios
+ *     traspasos del mismo monto. La asimetría de conteos (p.ej. 2 CARGOs +
+ *     1 ABONO) sigue descartando el bucket completo, evitando confundir un
+ *     ingreso real con un traspaso.
  */
 export function buildPairMatchedKeys(
   statements: readonly BankAccountStatement[] | undefined,
@@ -318,7 +330,7 @@ export function buildPairMatchedKeys(
       if (!mov.fechaOperacion || !mov.tipoMovimiento) continue;
       const importe = Number(mov.importe);
       if (!Number.isFinite(importe) || importe <= 0) continue;
-      const bucketKey = `${cia}::${mov.fechaOperacion}::${importe}`;
+      const bucketKey = `${mov.fechaOperacion}::${importe}`;
       const list = buckets.get(bucketKey);
       const entry: Entry = {
         key: movementHashKey(cia, cuenta, mov),
@@ -331,14 +343,19 @@ export function buildPairMatchedKeys(
   }
 
   for (const list of buckets.values()) {
-    if (list.length !== 2) continue;
-    const [a, b] = list;
-    if (a.cuenta === b.cuenta) continue;
-    const hasAbono = a.tipo === 'ABONO' || b.tipo === 'ABONO';
-    const hasCargo = a.tipo === 'CARGO' || b.tipo === 'CARGO';
-    if (!(hasAbono && hasCargo)) continue;
-    out.add(a.key);
-    out.add(b.key);
+    if (list.length < 2) continue;
+    const cargos = list.filter(e => e.tipo === 'CARGO');
+    const abonos = list.filter(e => e.tipo === 'ABONO');
+    if (cargos.length === 0 || abonos.length === 0) continue;
+    if (cargos.length !== abonos.length) continue;
+    const cargoCuentas = new Set(cargos.map(e => e.cuenta));
+    const abonoCuentas = new Set(abonos.map(e => e.cuenta));
+    let overlap = false;
+    for (const c of cargoCuentas) {
+      if (abonoCuentas.has(c)) { overlap = true; break; }
+    }
+    if (overlap) continue;
+    for (const e of list) out.add(e.key);
   }
 
   return out;
