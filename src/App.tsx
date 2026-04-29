@@ -57,8 +57,8 @@ type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: string }[] = [
   { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes y proveedores' },
-  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo diario y bancos' },
-  { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, cobranza, CXP, pronóstico y escenarios' },
+  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo neto, CXP, cobranza y bancos' },
+  { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, pronóstico y escenarios' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
@@ -68,6 +68,8 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   ],
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
+    { id: 'cxp',         label: 'CXP',         icon: Receipt },
+    { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'bancos',      label: 'Bancos',      icon: Landmark },
   ],
   proyeccion: [
@@ -75,8 +77,6 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
     { id: 'financialPlanning', label: 'Planeación Financiera', icon: ClipboardList },
     { id: 'taxes', label: 'Impuestos', icon: Landmark },
-    { id: 'collections', label: 'Cobranza',    icon: HandCoins },
-    { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'operating',   label: 'Operativa',   icon: LineChart },
   ],
 };
@@ -84,9 +84,10 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos',
   netflow: 'operacion', bancos: 'operacion',
-  dashboard: 'proyeccion', collections: 'proyeccion',
+  cxp: 'operacion', collections: 'operacion',
+  dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
-  cxp: 'proyeccion', operating: 'proyeccion',
+  operating: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {

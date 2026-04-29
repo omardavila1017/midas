@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Client, CashFlowAssumptions, Frequency, CollectionEvent, ConfirmedPayment, eventKey } from '../domain/types';
 import { projectYear } from '../domain/collectionEngine';
+import { isBankHoliday } from '../domain/bankHolidays';
 import { isInternalTransfer, buildOwnAccountsIndex, buildOwnAccountDetector } from '../domain/netCashFlowEngine';
 import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
 import { CXPRecord } from '../domain/persistence';
@@ -682,6 +683,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             const dayTotal = dayEvents.reduce((s, e) => s + e.amount, 0);
             const intensity = dayTotal > 0 ? Math.max(0.08, Math.min(0.85, dayTotal / maxDayAmount)) : 0;
             const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
+            const isHoliday = isCurrentMonth && isBankHoliday(d);
             const isToday = iso === todayISO;
             const isSelected = selectedDay === iso;
             const isPast = iso < todayISO;
@@ -722,23 +724,31 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             return (
               <div
                 key={i}
-                className={`min-h-[84px] border-b border-r border-[var(--gray-200)]/30 p-1.5 cursor-pointer transition-colors duration-150
+                className={`min-h-[84px] border-b border-r border-[var(--gray-200)]/30 p-1.5 transition-colors duration-150
                   ${!isCurrentMonth ? 'bg-[var(--surface-alt)] opacity-30' : ''}
-                  ${isWeekend && isCurrentMonth ? 'bg-[var(--surface-alt)]' : ''}
+                  ${isWeekend && isCurrentMonth && !isHoliday ? 'bg-[var(--surface-alt)]' : ''}
                   ${isSelected ? 'ring-2 ring-[var(--primary)] ring-inset' : ''}
                   ${isToday && !isSelected ? 'ring-2 ring-[var(--success)] ring-inset' : ''}
-                  ${isCurrentMonth ? 'hover:bg-[var(--gray-50)]/60' : ''}
+                  ${isCurrentMonth && !isHoliday ? 'hover:bg-[var(--gray-50)]/60 cursor-pointer' : ''}
+                  ${isHoliday ? 'cursor-not-allowed' : ''}
                 `}
-                onClick={() => isCurrentMonth && setSelectedDay(isSelected ? null : iso)}
+                style={isHoliday && isCurrentMonth ? { backgroundColor: 'rgba(255, 159, 10, 0.12)' } : undefined}
+                title={isHoliday ? 'Día inhábil bancario' : undefined}
+                onClick={() => isCurrentMonth && !isHoliday && setSelectedDay(isSelected ? null : iso)}
               >
                 <div className="flex justify-between items-start">
                   <span className={`text-[12px] font-medium ${
                     isToday
                       ? 'bg-[var(--success)] text-white w-5 h-5 rounded-full flex items-center justify-center text-[11px] animate-pulse-ring'
-                      : isCurrentMonth ? 'text-[var(--gray-950)]' : 'text-[var(--gray-200)]'
+                      : isHoliday && isCurrentMonth
+                        ? 'text-[var(--warning)] line-through'
+                        : isCurrentMonth ? 'text-[var(--gray-950)]' : 'text-[var(--gray-200)]'
                   }`}>
                     {d.getUTCDate()}
                   </span>
+                  {isHoliday && isCurrentMonth && (
+                    <span className="text-[9px] uppercase tracking-wide font-semibold text-[var(--warning)] leading-none mt-0.5">Inhábil</span>
+                  )}
                   {dayEvents.length > 0 && (
                     <div className="flex items-center gap-0.5">
                       {allConfirmed && <Check className="w-3 h-3 text-[var(--success)]" />}

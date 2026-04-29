@@ -1,9 +1,11 @@
 import type {
+  CellOverride,
   ConfidenceBand,
   FinancialAdjustment,
   FinancialMovement,
   FinancialScenario,
   ForecastRun,
+  PlanningRow,
   ProjectionAlert,
   ProjectionBucket,
   ProjectionGranularity,
@@ -192,6 +194,100 @@ export function calculateScenarioProjection(
     scenarioId: scenario.id,
     name: scenario.name,
   });
+}
+
+export interface ApplyCellOverridesArgs {
+  buckets: ProjectionBucket[];
+  overrides: CellOverride[];
+  movements: FinancialMovement[];
+  rows: PlanningRow[];
+  granularity: ProjectionGranularity;
+  conceptKeyForMovement: (movement: FinancialMovement) => string;
+  asOfDate?: string;
+  initialCash?: number;
+}
+
+export function applyCellOverridesToBuckets(args: ApplyCellOverridesArgs): ProjectionBucket[] {
+  const { buckets, overrides, movements, rows, granularity, conceptKeyForMovement, asOfDate, initialCash } = args;
+  const filteredOverrides = overrides.filter((override) => override.granularity === granularity);
+  if (filteredOverrides.length === 0 && rows.length === 0) return buckets;
+
+  const overrideIndex = new Map<string, CellOverride>();
+  for (const override of filteredOverrides) {
+    overrideIndex.set(`${override.conceptKey}::${override.bucketKey}`, override);
+  }
+
+  const movementById = new Map<string, FinancialMovement>();
+  for (const movement of movements) movementById.set(movement.id, movement);
+
+  const recomputed = buckets.map((bucket) => {
+    const bucketMovements = bucket.movementIds
+      .map((id) => movementById.get(id))
+      .filter((value): value is FinancialMovement => Boolean(value));
+
+    const aggregateByConcept = new Map<string, number>();
+    for (const movement of bucketMovements) {
+      const key = conceptKeyForMovement(movement);
+      const current = aggregateByConcept.get(key) ?? 0;
+      aggregateByConcept.set(key, current + effectiveAmount(movement));
+    }
+
+    const isPast = asOfDate ? bucket.date < bucketKeyForDate(asOfDate, granularity) : false;
+
+    let inflows = 0;
+    let outflows = 0;
+
+    for (const row of rows) {
+      const aggregate = aggregateByConcept.get(row.conceptKey) ?? 0;
+      const override = !isPast ? overrideIndex.get(`${row.conceptKey}::${bucket.date}`) : undefined;
+      const value = override ? override.value : aggregate;
+      if (row.type === 'INFLOW') inflows += value;
+      else outflows += value;
+    }
+
+    for (const [conceptKey, aggregate] of aggregateByConcept.entries()) {
+      const known = rows.some((row) => row.conceptKey === conceptKey);
+      if (known) continue;
+      const sample = bucketMovements.find((movement) => conceptKeyForMovement(movement) === conceptKey);
+      if (!sample) continue;
+      if (sample.type === 'INFLOW') inflows += aggregate;
+      else outflows += aggregate;
+    }
+
+    const net = inflows - outflows;
+    return {
+      ...bucket,
+      inflows,
+      outflows,
+      net,
+    };
+  });
+
+  const opening = initialCash ?? buckets[0]?.openingCash ?? 0;
+  return recomputeRollingCash(recomputed, opening);
+}
+
+export function recomputeRollingCash(buckets: ProjectionBucket[], initialCash: number): ProjectionBucket[] {
+  let opening = initialCash;
+  return buckets.map((bucket) => {
+    const closing = opening + bucket.net;
+    const next: ProjectionBucket = {
+      ...bucket,
+      openingCash: opening,
+      closingCash: closing,
+      deficit: Math.max(0, bucket.minimumCash - closing),
+    };
+    opening = closing;
+    return next;
+  });
+}
+
+export function summarizeBucketsForScenario(
+  buckets: ProjectionBucket[],
+  movements: FinancialMovement[],
+  minimumCashRequired: number,
+): ProjectionSummary {
+  return summarizeProjection(buckets, movements, minimumCashRequired);
 }
 
 export function compareProjectionVsScenario(baseProjection: ForecastRun, scenarioProjection: ForecastRun): ScenarioComparison {
@@ -459,7 +555,7 @@ function splitDate(adjustment: FinancialAdjustment, baseDate: string, index: num
   return addDays(baseDate, step * index);
 }
 
-function buildBucketDates(startDate: string, endDate: string, granularity: ProjectionGranularity): string[] {
+export function buildBucketDates(startDate: string, endDate: string, granularity: ProjectionGranularity): string[] {
   const out: string[] = [];
   let cursor = bucketKeyForDate(startDate, granularity);
   while (cursor <= endDate) {
@@ -469,7 +565,7 @@ function buildBucketDates(startDate: string, endDate: string, granularity: Proje
   return out;
 }
 
-function bucketKeyForDate(date: string, granularity: ProjectionGranularity): string {
+export function bucketKeyForDate(date: string, granularity: ProjectionGranularity): string {
   if (granularity === 'daily') return date;
   if (granularity === 'monthly') return `${date.slice(0, 7)}-01`;
   const parsed = parseIso(date);
@@ -479,7 +575,7 @@ function bucketKeyForDate(date: string, granularity: ProjectionGranularity): str
   return toIso(parsed);
 }
 
-function bucketLabel(date: string, granularity: ProjectionGranularity): string {
+export function bucketLabel(date: string, granularity: ProjectionGranularity): string {
   if (granularity === 'daily') return date.slice(5);
   if (granularity === 'weekly') return `Sem ${date.slice(5)}`;
   return date.slice(0, 7);

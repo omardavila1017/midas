@@ -77,11 +77,7 @@ export function buildFinanceMockData(asOfDate = '2026-05-01'): FinanceMockData {
 
   const scenarios: FinancialScenario[] = [
     scenario('base', 'Escenario Base', 'BASE', [], 'APPROVED', true),
-    scenario('conservative', 'Escenario Conservador', 'CONSERVATIVE', ['adj-cobranza-baja', 'adj-patear-flexibles'], 'DRAFT'),
-    scenario('optimistic', 'Escenario Optimista', 'OPTIMISTIC', ['adj-adelantar-carrier', 'adj-ventas-upside'], 'DRAFT'),
-    scenario('crisis', 'Escenario Crisis', 'CRISIS', ['adj-cobranza-baja', 'adj-cancelar-capex', 'adj-linea-credito'], 'IN_REVIEW'),
-    scenario('liquidity', 'Escenario Liquidez', 'LIQUIDITY', ['adj-patear-flexibles', 'adj-split-iva', 'adj-linea-credito'], 'DRAFT'),
-    scenario('custom', 'Escenario Personalizado', 'CUSTOM', [], 'DRAFT'),
+    scenario('approved', 'Escenario Aprobado', 'APPROVED', [], 'APPROVED'),
   ];
 
   const adjustments: FinancialAdjustment[] = [

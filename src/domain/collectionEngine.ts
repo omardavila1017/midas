@@ -25,6 +25,7 @@ import {
   isoWeek,
   toISODate,
 } from './calendar';
+import { isNonOperatingDay } from './bankHolidays';
 
 const DAY_MS = 86_400_000;
 const AVG_DAYS_PER_MONTH = 30;
@@ -80,9 +81,12 @@ export function projectClientMonth(
     const theoretical = new Date(invoiceDate.getTime() + client.creditDays * DAY_MS);
 
     // Factoraje uses its own term from invoice date and ignores payment-day.
-    const real = client.factoraje
+    let real = client.factoraje
       ? new Date(invoiceDate.getTime() + assumptions.factorajeDays * DAY_MS)
       : resolveRealPaymentDate(theoretical, client.paymentDay, client.frequency);
+    // Ley de Transparencia: si el cobro cae en inhábil/fin de semana,
+    // el efectivo entra el siguiente día hábil.
+    while (isNonOperatingDay(real)) real = new Date(real.getTime() + DAY_MS);
 
     events.push({
       clientId: client.id,

@@ -70,8 +70,10 @@ export interface FinancialMovement {
   updatedAt: string;
 }
 
-export type FinancialScenarioKind = 'BASE' | 'CONSERVATIVE' | 'OPTIMISTIC' | 'CRISIS' | 'LIQUIDITY' | 'CUSTOM';
+export type FinancialScenarioKind = 'BASE' | 'APPROVED' | 'DRAFT';
 export type ApprovalStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'PUBLISHED' | 'EXECUTED';
+
+export const LEGACY_SCENARIO_KINDS = ['CONSERVATIVE', 'OPTIMISTIC', 'CRISIS', 'LIQUIDITY', 'CUSTOM'] as const;
 
 export interface FinancialScenario {
   id: string;
@@ -81,6 +83,7 @@ export interface FinancialScenario {
   adjustmentIds: string[];
   status: ApprovalStatus;
   isBase?: boolean;
+  parentScenarioId?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -233,6 +236,68 @@ export interface ForecastRun {
 }
 
 export type ProjectionGranularity = 'daily' | 'weekly' | 'monthly';
+
+export type CellOverrideMode = 'REPLACE' | 'DELTA';
+
+export interface CellOverride {
+  id: string;
+  scenarioId: string;
+  conceptKey: string;
+  granularity: ProjectionGranularity;
+  bucketKey: string;
+  type: FinancialMovementType;
+  mode: CellOverrideMode;
+  value: number;
+  previousAggregatedValue?: number;
+  note?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanningRow {
+  conceptKey: string;
+  label: string;
+  group: string;
+  type: FinancialMovementType;
+  category: FinancialMovementCategory;
+  subgroupLabel?: string;
+  isCustom?: boolean;
+}
+
+export interface PlanningCustomRow {
+  id: string;
+  scenarioId: string;
+  conceptKey: string;
+  label: string;
+  type: FinancialMovementType;
+  category: FinancialMovementCategory;
+  note?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ScenarioChangeKind =
+  | 'ADD_ROW'
+  | 'REMOVE_ROW'
+  | 'RENAME_ROW'
+  | 'EDIT_CELL'
+  | 'CLEAR_CELL'
+  | 'CREATE_DRAFT'
+  | 'DUPLICATE_DRAFT'
+  | 'MERGE_TO_APPROVED';
+
+export interface ScenarioChangeLogEntry {
+  id: string;
+  scenarioId: string;
+  kind: ScenarioChangeKind;
+  payload: Record<string, unknown>;
+  autoDescription: string;
+  userNote?: string;
+  createdBy: string;
+  createdAt: string;
+}
 
 export interface ScenarioComparison {
   scenarioId: string;

@@ -36,7 +36,7 @@ export function AdjustmentEditorPopover({
   onSave: (adjustment: FinancialAdjustment) => void;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
-  const [scenarioId, setScenarioId] = useState(defaultScenarioId ?? 'liquidity');
+  const [scenarioId, setScenarioId] = useState(defaultScenarioId ?? 'approved');
   const [type, setType] = useState<FinancialAdjustment['type']>('DATE_SHIFT');
   const [date, setDate] = useState('');
   const [amount, setAmount] = useState('');

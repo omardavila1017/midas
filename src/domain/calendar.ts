@@ -19,6 +19,7 @@
  */
 
 import { PaymentDayPattern, Frequency, DayOfWeek, NthOfMonth, WeekOfMonth } from './types';
+import { isNonOperatingDay } from './bankHolidays';
 
 // ---------------------------------------------------------------------------
 // Date helpers (UTC-safe; all inputs treated as calendar dates, no TZ drift)
@@ -138,12 +139,14 @@ export function resolveRealPaymentDate(
 ): Date {
   let cursor = toUTC(theoreticalDate);
   for (let i = 0; i <= MAX_SCAN_DAYS; i++) {
-    if (dateMatchesPattern(cursor, pattern)) return cursor;
+    if (dateMatchesPattern(cursor, pattern)) {
+      // Ley de Transparencia: si el día del patrón cae en inhábil/fin de
+      // semana, el pago se efectúa el siguiente día hábil.
+      while (isNonOperatingDay(cursor)) cursor = addDays(cursor, 1);
+      return cursor;
+    }
     cursor = addDays(cursor, 1);
   }
-  // Defensive fallback: return theoretical if no match (should never happen
-  // for well-formed patterns). Caller can treat large lag as a data-quality
-  // signal.
   return toUTC(theoreticalDate);
 }
 

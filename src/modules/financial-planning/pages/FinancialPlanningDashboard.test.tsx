@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import FinancialPlanningDashboard from './FinancialPlanningDashboard';
 import type { Budget } from '../../../domain/budget';
 import type { Client, CashFlowAssumptions } from '../../../domain/types';
@@ -26,8 +26,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('<FinancialPlanningDashboard /> altas manuales', () => {
-  it('captures a manual income in a freshly created scenario and persists it', () => {
+describe('<FinancialPlanningDashboard />', () => {
+  it('bootstraps Base + Aprobado on first mount and shows the workbench', () => {
     render(
       <FinancialPlanningDashboard
         companyCode="all"
@@ -41,27 +41,57 @@ describe('<FinancialPlanningDashboard /> altas manuales', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Nuevo escenario/i }));
+    expect(screen.getByText('Planeación Financiera')).toBeTruthy();
+    expect(screen.getAllByText('Escenario Base').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Escenario Aprobado').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /Nueva propuesta/i })).toBeTruthy();
+  });
 
-    const section = screen.getByText('Altas manuales').closest('section');
-    expect(section).toBeTruthy();
-    const panel = within(section as HTMLElement);
+  it('creates a draft when clicking "Nueva propuesta" and persists it', () => {
+    render(
+      <FinancialPlanningDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={10_000}
+      />,
+    );
 
-    fireEvent.change(panel.getByPlaceholderText(/Viaje especial/i), {
-      target: { value: 'Viaje especial Monterrey' },
-    });
-    fireEvent.change(panel.getByLabelText('Monto'), {
-      target: { value: '1500' },
-    });
-    fireEvent.click(panel.getByRole('button', { name: /Agregar/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Nueva propuesta/i }));
 
-    expect(panel.getByText('Viaje especial Monterrey')).toBeTruthy();
-    const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.manualEntries.v1') ?? '[]');
-    expect(stored[0]).toMatchObject({
-      name: 'Viaje especial Monterrey',
-      amount: 1500,
-    });
-    expect(stored[0].scenarioIds[0]).toMatch(/^scn-/);
+    const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
+    const drafts = stored.filter((scenario: { kind?: string }) => scenario.kind === 'DRAFT');
+    expect(drafts.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('purges legacy scenario kinds during bootstrap', () => {
+    localStorage.setItem(
+      'midas.financialPlanning.scenarios.v1',
+      JSON.stringify([
+        { id: 'legacy-c', kind: 'CONSERVATIVE', name: 'Conservador', adjustmentIds: [], status: 'DRAFT', createdBy: 'x', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      ]),
+    );
+
+    render(
+      <FinancialPlanningDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={10_000}
+      />,
+    );
+
+    const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
+    const surviving = stored.filter((scenario: { id: string }) => scenario.id === 'legacy-c');
+    expect(surviving.length).toBe(0);
   });
 });
 

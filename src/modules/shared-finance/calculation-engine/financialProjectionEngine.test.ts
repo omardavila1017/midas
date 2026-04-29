@@ -135,8 +135,8 @@ function adjustment(
 function scenarioModel(id: string): FinancialScenario {
   return {
     id,
-    name: 'Liquidity',
-    kind: 'LIQUIDITY',
+    name: 'Borrador test',
+    kind: 'DRAFT',
     adjustmentIds: [],
     status: 'DRAFT',
     createdBy: 'test',
