@@ -43,6 +43,10 @@ describe('<TaxDashboard />', () => {
 
     expect(screen.getByRole('heading', { name: 'Impuestos' })).toBeTruthy();
     expect(screen.getByText('Obligaciones por periodo')).toBeTruthy();
+    expect(screen.queryByText(/Escenario/i)).toBeNull();
+    expect(screen.queryByText(/Impacto caja/i)).toBeNull();
+    expect(screen.queryByText(/Cierre:/i)).toBeNull();
+    expect(screen.getByText(/Causado \(/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /Captura manual/i }));
 
@@ -80,6 +84,37 @@ describe('<TaxDashboard />', () => {
     );
 
     expect(screen.getByText(/Haz clic en un monto/i)).toBeTruthy();
+    expect(screen.getByText(/Pagos registrados/i)).toBeTruthy();
+  });
+
+  it('shows budget IVA creditable for February and persists editable rate overrides', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget({ dieselFeb: 1160 })}
+        startingBalance={20_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('2026-02'));
+    fireEvent.click(screen.getByRole('button', { name: /Acreditable/i }));
+
+    expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
+    const rate = screen.getByLabelText(/Tasa IVA Diésel presupuestado/i);
+    expect(rate).toBeTruthy();
+    fireEvent.change(rate, { target: { value: '8' } });
+
+    const stored = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
+    expect(stored.taxRateOverrides[0]).toMatchObject({
+      targetType: 'CONCEPT',
+      targetKey: 'DIESEL',
+      rate: 8,
+    });
   });
 });
 
@@ -91,7 +126,7 @@ const assumptions: CashFlowAssumptions = {
 
 function client(): Client {
   const monthlyBilling = Array.from({ length: 12 }, () => 0);
-  monthlyBilling[4] = 1160;
+  monthlyBilling[4] = 1000;
   return {
     id: 'client-1',
     name: 'Cliente IVA',
@@ -104,16 +139,24 @@ function client(): Client {
   };
 }
 
-function budget(): Budget {
+function budget(input: { dieselFeb?: number } = {}): Budget {
   const expenseTotal = Array.from({ length: 12 }, () => 0);
   expenseTotal[4] = 1000;
+  if (input.dieselFeb) expenseTotal[1] += input.dieselFeb;
+  const payroll = Array.from({ length: 12 }, () => 0);
+  payroll[4] = 1000;
+  const diesel = Array.from({ length: 12 }, () => 0);
+  diesel[1] = input.dieselFeb ?? 0;
   return {
     year: 2026,
     scale: 'pesos',
     incomeTotal: Array.from({ length: 12 }, () => 0),
     incomeByConcept: [],
     expenseTotal,
-    expenseByConcept: [{ concept: 'Nómina', monthly: expenseTotal }],
+    expenseByConcept: [
+      { concept: 'Nómina', monthly: payroll },
+      ...(input.dieselFeb ? [{ concept: 'Diésel', monthly: diesel }] : []),
+    ],
     uploadedAt: '2026-05-01T00:00:00Z',
   };
 }

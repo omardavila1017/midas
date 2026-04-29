@@ -266,7 +266,7 @@ function emitRawLines(
     ruleApplied: line.ruleApplied,
     taxTreatment: line.taxTreatment,
     taxRate: line.taxRate,
-    ...taxMetaFromGross(line.amount, line.taxRate),
+    ...scaleTaxMeta(line, line.amount),
     status: 'PROJECTED_BASE',
     lockState: line.lockState,
     comments: [line.comment],
@@ -296,6 +296,8 @@ interface RawLine {
   comment: string;
   taxTreatment?: FinancialMovement['taxTreatment'];
   taxRate?: FinancialTaxRate;
+  taxBaseAmount?: number;
+  taxAmount?: number;
 }
 
 /**
@@ -343,6 +345,7 @@ function collectInflowLines(
         if (event.amount <= 0) continue;
         const compliance = client.complianceRate ?? inputs.assumptions.globalCompliance ?? 1;
         const score = Math.round(55 + Math.min(40, compliance * 40));
+        const taxRate = client.ivaRate ?? 16;
         lines.push({
           id: `client:${client.id}:${event.realDate}:${evIdx++}`,
           amount: event.amount,
@@ -358,8 +361,10 @@ function collectInflowLines(
           forecastMethod: 'RULE',
           confidenceScore: score,
           lockState: 'UNLOCKED',
-          taxTreatment: client.ivaRate ? 'IVA_CAUSED' : 'UNCLASSIFIED',
-          taxRate: client.ivaRate,
+          taxTreatment: 'IVA_CAUSED',
+          taxRate,
+          taxBaseAmount: event.amount,
+          taxAmount: event.amount * (taxRate / 100),
           comment: `Evento proyectado por collectionEngine. Lag teórico ${event.lagDays} días.`,
         });
       }
@@ -396,7 +401,7 @@ function collectOutflowLines(
     if (compareYearMonth(date.slice(0, 7), todayYm) < 0) return;
     const provider = providerByName.get(normalize(record.nombre));
     const score = (record.edoPago ?? '').toUpperCase().includes('APROB') ? 90 : 76;
-    const taxRate = taxRateFromCxp(record.importeSubtotalPesos, record.importeImpuestosPesos);
+    const taxBreakdown = taxBreakdownFromCxp(record);
     lines.push({
       id: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`,
       amount: record.importePendientePesos,
@@ -415,8 +420,10 @@ function collectOutflowLines(
       forecastMethod: 'RULE',
       confidenceScore: score,
       lockState: provider?.flexibility === 'inamovible' ? 'LOCKED' : 'RESTRICTED',
-      taxTreatment: taxRate ? 'IVA_CREDITABLE' : 'UNCLASSIFIED',
-      taxRate,
+      taxTreatment: taxBreakdown.taxRate ? 'IVA_CREDITABLE' : 'UNCLASSIFIED',
+      taxRate: taxBreakdown.taxRate,
+      taxBaseAmount: taxBreakdown.taxBaseAmount,
+      taxAmount: taxBreakdown.taxAmount,
       comment: 'Factura abierta en JDE.',
     });
   });
@@ -433,21 +440,26 @@ function collectOutflowLines(
         // Día típico del concepto: nómina día 15/30, otros día 5 + offset
         // por concepto para esparcir las barras del chart semanal.
         const typicalDay = typicalDayForConcept(concept.concept, conceptIdx);
+        const category = budgetCategoryFor(concept.concept);
+        const taxMeta = budgetTaxMeta(concept.concept, amount);
         conceptIdx++;
         lines.push({
           id: `budget:${inputs.budget.year}:${monthIdx + 1}:${normalize(concept.concept)}`,
           amount,
           date: dateForDayOfMonth(month.yearMonth, typicalDay),
           concept: concept.concept,
-          category: budgetCategoryFor(concept.concept),
+          category,
           ruleApplied: 'Presupuesto anual',
           sourceSystem: 'FORECAST',
           forecastMethod: 'DRIVER',
           confidenceScore: 60,
           lockState: 'RESTRICTED',
-          taxTreatment: budgetCategoryFor(concept.concept) === 'PAYROLL' || budgetCategoryFor(concept.concept) === 'TAX'
+          taxTreatment: taxMeta ? 'IVA_CREDITABLE' : category === 'PAYROLL' || category === 'TAX' || category === 'DEBT'
             ? 'IVA_EXEMPT'
             : 'UNCLASSIFIED',
+          taxRate: taxMeta?.taxRate,
+          taxBaseAmount: taxMeta?.taxBaseAmount,
+          taxAmount: taxMeta?.taxAmount,
           comment: 'Línea del presupuesto, fechada al día típico del concepto.',
         });
       }
@@ -480,6 +492,9 @@ function balanceMonth({
 }: BalanceArgs): FinancialMovement[] {
   if (target <= 0) return [];
   if (lines.length === 0) {
+    const fallbackTaxMeta = fallbackCategory === 'OPEX' || fallbackCategory === 'CAPEX' || fallbackCategory === 'AP_PAYMENT'
+      ? grossToIvaTaxMeta(target, 16)
+      : undefined;
     return [{
       id: `canonical-${type.toLowerCase()}:${ym}`,
       sourceSystem: 'FORECAST',
@@ -495,7 +510,16 @@ function balanceMonth({
       confidenceBand: calculateConfidenceBand(65),
       forecastMethod: 'DRIVER',
       ruleApplied: fallbackRule,
-      taxTreatment: fallbackCategory === 'AR_COLLECTION' ? 'UNCLASSIFIED' : fallbackCategory === 'PAYROLL' || fallbackCategory === 'TAX' ? 'IVA_EXEMPT' : 'UNCLASSIFIED',
+      taxTreatment: fallbackTaxMeta
+        ? 'IVA_CREDITABLE'
+        : fallbackCategory === 'AR_COLLECTION'
+          ? 'UNCLASSIFIED'
+          : fallbackCategory === 'PAYROLL' || fallbackCategory === 'TAX' || fallbackCategory === 'DEBT'
+            ? 'IVA_EXEMPT'
+            : 'UNCLASSIFIED',
+      taxRate: fallbackTaxMeta?.taxRate,
+      taxBaseAmount: fallbackTaxMeta?.taxBaseAmount,
+      taxAmount: fallbackTaxMeta?.taxAmount,
       status: 'PROJECTED_BASE',
       lockState: 'RESTRICTED',
       comments: ['Sin desglose por catálogo en este mes; se usa el total del Dashboard.'],
@@ -540,7 +564,7 @@ function balanceMonth({
       ruleApplied: line.ruleApplied,
       taxTreatment: line.taxTreatment,
       taxRate: line.taxRate,
-      ...taxMetaFromGross(scaled, line.taxRate),
+      ...scaleTaxMeta(line, scaled),
       status: 'PROJECTED_BASE',
       lockState: line.lockState,
       comments: [line.comment],
@@ -575,7 +599,7 @@ function dateForDayOfMonth(yearMonth: string, day: number): string {
 
 function typicalDayForConcept(concept: string, fallbackIndex: number): number {
   const upper = concept.toUpperCase();
-  if (upper.includes('NOMINA') || upper.includes('NÓMINA') || upper.includes('SUELDOS')) {
+  if (upper.includes('NOMINA') || upper.includes('NÓMINA') || upper.includes('SUELDOS') || upper.includes('FINIQUITO')) {
     return 30; // último día del mes — el helper hace clamp a fin de mes.
   }
   if (upper.includes('IMPUESTO') || upper.includes('ISR') || upper.includes('IVA') || upper.includes('IMSS')) {
@@ -600,25 +624,67 @@ function normalize(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toUpperCase();
 }
 
-function taxRateFromCxp(subtotal: number, taxAmount: number): FinancialTaxRate | undefined {
-  if (!Number.isFinite(subtotal) || subtotal <= 0 || !Number.isFinite(taxAmount) || taxAmount <= 0) return undefined;
-  const pct = Math.round((taxAmount / subtotal) * 100);
+function taxBreakdownFromCxp(record: CXPRecord): {
+  taxRate?: FinancialTaxRate;
+  taxBaseAmount?: number;
+  taxAmount?: number;
+} {
+  const gross = positiveNumber(record.importeBrutoPesos);
+  const pending = positiveNumber(record.importePendientePesos);
+  const subtotal = positiveNumber(record.importeSubtotalPesos);
+  const tax = positiveNumber(record.importeImpuestosPesos);
+  if (pending <= 0) return {};
+  if (gross <= 0 || subtotal <= 0 || tax <= 0) return grossToIvaTaxMeta(pending, 16);
+  const scale = Math.min(1, pending / gross);
+  const taxBaseAmount = subtotal * scale;
+  const taxAmount = tax * scale;
+  const taxRate = taxRateFromAmounts(taxBaseAmount, taxAmount);
+  return taxRate ? { taxRate, taxBaseAmount, taxAmount } : grossToIvaTaxMeta(pending, 16);
+}
+
+function taxRateFromAmounts(base: number, taxAmount: number): FinancialTaxRate | undefined {
+  if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(taxAmount) || taxAmount <= 0) return undefined;
+  const pct = Math.round((taxAmount / base) * 100);
   if (Math.abs(pct - 16) <= 1) return 16;
   if (Math.abs(pct - 8) <= 1) return 8;
   return undefined;
 }
 
-function taxMetaFromGross(
-  grossAmount: number,
-  taxRate: FinancialTaxRate | undefined,
-): Pick<FinancialMovement, 'taxBaseAmount' | 'taxAmount'> {
-  if (!taxRate || taxRate <= 0) return {};
-  const divisor = 1 + taxRate / 100;
-  const taxBaseAmount = grossAmount / divisor;
+function budgetTaxMeta(
+  concept: string,
+  amount: number,
+): { taxRate: FinancialTaxRate; taxBaseAmount: number; taxAmount: number } | undefined {
+  const category = budgetCategoryFor(concept);
+  if (category !== 'OPEX' && category !== 'CAPEX') return undefined;
+  return grossToIvaTaxMeta(amount, 16);
+}
+
+function grossToIvaTaxMeta(
+  amount: number,
+  rate: 8 | 16,
+): { taxRate: FinancialTaxRate; taxBaseAmount: number; taxAmount: number } {
+  const taxBaseAmount = amount / (1 + rate / 100);
   return {
+    taxRate: rate,
     taxBaseAmount,
-    taxAmount: grossAmount - taxBaseAmount,
+    taxAmount: amount - taxBaseAmount,
   };
+}
+
+function scaleTaxMeta(
+  line: Pick<RawLine, 'amount' | 'taxBaseAmount' | 'taxAmount'>,
+  projectedAmount: number,
+): Pick<FinancialMovement, 'taxBaseAmount' | 'taxAmount'> {
+  if (line.taxBaseAmount == null || line.taxAmount == null || line.amount <= 0) return {};
+  const scale = projectedAmount / line.amount;
+  return {
+    taxBaseAmount: line.taxBaseAmount * scale,
+    taxAmount: line.taxAmount * scale,
+  };
+}
+
+function positiveNumber(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function paymentPatternLabel(client: Client): string {
@@ -634,9 +700,9 @@ function paymentPatternLabel(client: Client): string {
 
 function budgetCategoryFor(concept: string): FinancialMovementCategory {
   const upper = concept.toUpperCase();
-  if (upper.includes('NOMINA') || upper.includes('NÓMINA') || upper.includes('SUELDOS')) return 'PAYROLL';
+  if (upper.includes('NOMINA') || upper.includes('NÓMINA') || upper.includes('SUELDOS') || upper.includes('FINIQUITO')) return 'PAYROLL';
   if (upper.includes('IMPUESTO') || upper.includes('ISR') || upper.includes('IVA') || upper.includes('IMSS')) return 'TAX';
-  if (upper.includes('DEUDA') || upper.includes('PRESTAMO') || upper.includes('CREDITO')) return 'DEBT';
+  if (upper.includes('DEUDA') || upper.includes('PRESTAMO') || upper.includes('CREDITO') || upper.includes('PASIVO')) return 'DEBT';
   if (upper.includes('CAPEX') || upper.includes('INVERSION')) return 'CAPEX';
   return 'OPEX';
 }

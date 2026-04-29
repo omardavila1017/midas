@@ -91,6 +91,7 @@ const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
 export default function FinancialProjectionDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const monthStart = useMemo(() => `${today.slice(0, 7)}-01`, [today]);
+  const fiscalYearStart = useMemo(() => `${Number(today.slice(0, 4))}-01-01`, [today]);
   const yearEnd = useMemo(() => `${Number(today.slice(0, 4))}-12-31`, [today]);
 
   const [granularity, setGranularity] = useState<ProjectionGranularity>('weekly');
@@ -270,14 +271,19 @@ export default function FinancialProjectionDashboard(props: Props) {
 
   const taxView = useMemo(
     () => buildTaxDashboardView({
-      projection: activeProjection,
-      store: taxStore,
+      clients: props.clients,
       providers: props.providers,
+      assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
-      scenarioId: activeScenario.id,
+      budget: props.budget,
+      companyCode: props.companyCode,
+      startDate: fiscalYearStart,
+      endDate,
+      movements: activeProjection.movements,
+      store: taxStore,
       today,
     }),
-    [activeProjection, activeScenario.id, props.cxpRecords, props.providers, taxStore, today],
+    [activeProjection.movements, endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cxpRecords, props.providers, taxStore, today],
   );
   const supplierAlerts = useMemo(
     () => buildSupplierCriticalAlerts({

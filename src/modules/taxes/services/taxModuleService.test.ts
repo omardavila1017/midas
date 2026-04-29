@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { Budget } from '../../../domain/budget';
+import type { CXPRecord } from '../../../domain/persistence';
+import type { CashFlowAssumptions, Client } from '../../../domain/types';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, TaxObligation } from '../../shared-finance/types';
 import {
@@ -12,27 +15,26 @@ import {
 } from './taxModuleService';
 
 describe('taxModuleService', () => {
-  it('calculates IVA by 16% and 8% rates, creditable VAT, favor balance and unclassified movements', () => {
-    const projection = projectionFor([
-      movement('ar-16', 'INFLOW', 'AR_COLLECTION', '2026-05-05', 1160, {
-        taxTreatment: 'IVA_CAUSED',
-        taxRate: 16,
-      }),
-      movement('ar-8', 'INFLOW', 'AR_COLLECTION', '2026-05-06', 1080, {
-        taxTreatment: 'IVA_CAUSED',
-        taxRate: 8,
-      }),
-      movement('ap-16', 'OUTFLOW', 'AP_PAYMENT', '2026-05-07', 580, {
-        taxTreatment: 'IVA_CREDITABLE',
-        taxRate: 16,
-      }),
-      movement('manual-in', 'INFLOW', 'MANUAL', '2026-05-08', 500, {
-        taxTreatment: 'UNCLASSIFIED',
-      }),
-    ]);
-
+  it('calculates IVA from projected CXC and JDE CXP invoice fields', () => {
     const view = buildTaxDashboardView({
-      projection,
+      clients: [
+        client({ id: 'ar-16', name: 'Cliente 16', ivaRate: 16, mayBilling: 1000 }),
+        client({ id: 'ar-8', name: 'Cliente 8', ivaRate: 8, mayBilling: 1000 }),
+      ],
+      assumptions,
+      cxpRecords: [
+        cxpRecord({
+          noFactura: 'F-100',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 160,
+          importeBrutoPesos: 1160,
+          importePendientePesos: 1160,
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
     });
@@ -41,9 +43,179 @@ describe('taxModuleService', () => {
     expect(may.iva.incomeBase16).toBeCloseTo(1000);
     expect(may.iva.incomeBase8).toBeCloseTo(1000);
     expect(may.iva.ivaCaused).toBeCloseTo(240);
-    expect(may.iva.ivaCreditable).toBeCloseTo(80);
-    expect(may.iva.payable).toBeCloseTo(160);
-    expect(may.iva.unclassifiedIncome).toBe(500);
+    expect(may.iva.expenseBase16).toBeCloseTo(1000);
+    expect(may.iva.ivaCreditable).toBeCloseTo(160);
+    expect(may.iva.payable).toBeCloseTo(80);
+    expect(may.iva.incomeLines).toHaveLength(2);
+    expect(may.iva.expenseLines[0]).toMatchObject({
+      concept: 'Factura F-100 · Proveedor IVA',
+      taxRate: 16,
+    });
+  });
+
+  it('prorates partial CXP invoices and estimates unclear invoices under regimen 601', () => {
+    const view = buildTaxDashboardView({
+      cxpRecords: [
+        cxpRecord({
+          noFactura: 'F-PARTIAL',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 160,
+          importeBrutoPesos: 1160,
+          importePendientePesos: 580,
+        }),
+        cxpRecord({
+          noFactura: 'F-NOTAX',
+          fechaProgramacionPago: '2026-05-08',
+          importeSubtotalPesos: 500,
+          importeImpuestosPesos: 0,
+          importeBrutoPesos: 500,
+          importePendientePesos: 500,
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.expenseBase16).toBeCloseTo(500 + 500 / 1.16);
+    expect(may.iva.ivaCreditable).toBeCloseTo(80 + (500 - 500 / 1.16));
+    expect(may.iva.unclassifiedExpense).toBe(0);
+    expect(may.iva.expenseLines.some((line) => line.concept.includes('F-NOTAX'))).toBe(true);
+  });
+
+  it('estimates budget OPEX as IVA creditable under regimen 601', () => {
+    const view = buildTaxDashboardView({
+      budget: budget({
+        expenseConcepts: [
+          { concept: 'Diésel', may: 1160 },
+          { concept: 'Nómina', may: 1000 },
+          { concept: 'Impuestos', may: 500 },
+          { concept: 'Pasivos Financieros', may: 250 },
+        ],
+      }),
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.expenseBase16).toBeCloseTo(1000);
+    expect(may.iva.ivaCreditable).toBeCloseTo(160);
+    expect(may.iva.expenseLines).toHaveLength(1);
+    expect(may.iva.expenseLines[0].concept).toContain('Diésel');
+  });
+
+  it('fills periods without CXP from taxable budget without double-counting CXP months', () => {
+    const view = buildTaxDashboardView({
+      cxpRecords: [
+        cxpRecord({
+          noFactura: 'F-MAY',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 160,
+          importeBrutoPesos: 1160,
+          importePendientePesos: 1160,
+        }),
+      ],
+      budget: budget({
+        expenseConcepts: [
+          { concept: 'Diésel', monthly: { feb: 1160, may: 1160 } },
+        ],
+      }),
+      companyCode: 'all',
+      startDate: '2026-02-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const feb = view.periods.find((period) => period.period === '2026-02')!;
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(feb.iva.ivaCreditable).toBeCloseTo(160);
+    expect(feb.iva.expenseLines[0]).toMatchObject({ estimated: true, taxRate: 16 });
+    expect(may.iva.ivaCreditable).toBeCloseTo(160);
+    expect(may.iva.expenseLines).toHaveLength(1);
+  });
+
+  it('recalculates provider lines when a provider IVA override is set to 8%', () => {
+    const view = buildTaxDashboardView({
+      cxpRecords: [
+        cxpRecord({
+          noProveedor: 'P-FRONTERA',
+          noFactura: 'F-8',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 160,
+          importeBrutoPesos: 1160,
+          importePendientePesos: 1160,
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: {
+        ...defaultTaxStore(),
+        taxRateOverrides: [{
+          targetType: 'PROVIDER',
+          targetKey: 'P-FRONTERA',
+          rate: 8,
+          updatedAt: '2026-05-01T00:00:00.000Z',
+        }],
+      },
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.expenseBase8).toBeCloseTo(1160 / 1.08);
+    expect(may.iva.ivaCreditable8).toBeCloseTo(1160 - 1160 / 1.08);
+    expect(may.iva.expenseLines[0]).toMatchObject({
+      taxRate: 8,
+      rateSource: 'OVERRIDE',
+      rateTarget: { targetType: 'PROVIDER', targetKey: 'P-FRONTERA' },
+    });
+  });
+
+  it('places future projected CXC invoices in the projected collection period', () => {
+    const view = buildTaxDashboardView({
+      clients: [
+        client({ id: 'future', name: 'Cliente futuro', ivaRate: 16, mayBilling: 1000, creditDays: 40 }),
+      ],
+      assumptions,
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-07-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const june = view.periods.find((period) => period.period === '2026-06')!;
+    expect(june.iva.incomeBase16).toBeCloseTo(1000);
+    expect(june.iva.ivaCaused16).toBeCloseTo(160);
+    expect(june.iva.incomeLines[0].date).toBe('2026-06-10');
+  });
+
+  it('defaults projected CXC without explicit client IVA rate to 16%', () => {
+    const view = buildTaxDashboardView({
+      clients: [
+        client({ id: 'default-rate', name: 'Cliente default', ivaRate: undefined, mayBilling: 1000 }),
+      ],
+      assumptions,
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.incomeBase16).toBeCloseTo(1000);
+    expect(may.iva.ivaCaused16).toBeCloseTo(160);
+    expect(may.iva.unclassifiedIncome).toBe(0);
   });
 
   it('calculates ISN as 3% of payroll and supports manual override', () => {
@@ -62,6 +234,7 @@ describe('taxModuleService', () => {
         }),
       ],
       obligations: [],
+      taxRateOverrides: [],
       overdueBalance: 0,
     };
 
@@ -123,6 +296,91 @@ describe('taxModuleService', () => {
     expect(movements[0].status).toBe('APPROVED');
   });
 });
+
+const assumptions: CashFlowAssumptions = {
+  year: 2026,
+  globalCompliance: 1,
+  factorajeDays: 30,
+};
+
+function client(input: {
+  id: string;
+  name: string;
+  ivaRate?: 8 | 16;
+  mayBilling: number;
+  creditDays?: number;
+}): Client {
+  const monthlyBilling = Array.from({ length: 12 }, () => 0);
+  monthlyBilling[4] = input.mayBilling;
+  return {
+    id: input.id,
+    name: input.name,
+    paymentDay: { kind: 'ANY' },
+    frequency: 'Mensual',
+    creditDays: input.creditDays ?? 0,
+    monthlyBilling,
+    complianceRate: 1,
+    ivaRate: input.ivaRate,
+  };
+}
+
+function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    noProveedor: patch.noProveedor ?? 'P-1',
+    nombre: patch.nombre ?? 'Proveedor IVA',
+    noFactura: patch.noFactura ?? 'F-1',
+    fechaFactura: patch.fechaFactura ?? '2026-05-01',
+    fechaVence: patch.fechaVence ?? '2026-05-17',
+    fechaProgramacionPago: patch.fechaProgramacionPago ?? '2026-05-17',
+    diasVencida: patch.diasVencida ?? 0,
+    importeBrutoPesos: patch.importeBrutoPesos ?? 0,
+    importePendientePesos: patch.importePendientePesos ?? 0,
+    importeSubtotalPesos: patch.importeSubtotalPesos ?? 0,
+    importeImpuestosPesos: patch.importeImpuestosPesos ?? 0,
+    importeBrutoDolares: patch.importeBrutoDolares ?? 0,
+    importePendienteDolares: patch.importePendienteDolares ?? 0,
+    moneda: patch.moneda ?? 'MXN',
+    condPago: patch.condPago ?? '',
+    clasifica: patch.clasifica ?? '',
+    clasificacionProveedor: patch.clasificacionProveedor ?? '',
+    edoPago: patch.edoPago ?? '',
+    tipoCambio: patch.tipoCambio ?? 1,
+    porVencer: patch.porVencer ?? 0,
+    v1_30: patch.v1_30 ?? 0,
+    v31_60: patch.v31_60 ?? 0,
+    v61_90: patch.v61_90 ?? 0,
+    v91_120: patch.v91_120 ?? 0,
+    v121_150: patch.v121_150 ?? 0,
+    v151_180: patch.v151_180 ?? 0,
+    mas180: patch.mas180 ?? 0,
+  };
+}
+
+function budget(input: {
+  expenseConcepts: Array<{ concept: string; may?: number; monthly?: Partial<Record<'feb' | 'may', number>> }>;
+}): Budget {
+  const monthIndex: Record<'feb' | 'may', number> = { feb: 1, may: 4 };
+  const rows = input.expenseConcepts.map((item) => {
+    const monthly = Array.from({ length: 12 }, () => 0);
+    if (item.may != null) monthly[4] = item.may;
+    for (const [key, value] of Object.entries(item.monthly ?? {}) as Array<['feb' | 'may', number]>) {
+      monthly[monthIndex[key]] = value;
+    }
+    return { concept: item.concept, monthly };
+  });
+  return {
+    year: 2026,
+    scale: 'pesos',
+    incomeTotal: Array.from({ length: 12 }, () => 0),
+    incomeByConcept: [],
+    expenseTotal: Array.from({ length: 12 }, (_, index) =>
+      rows.reduce((sum, item) => sum + item.monthly[index], 0),
+    ),
+    expenseByConcept: rows,
+    uploadedAt: '2026-01-01T00:00:00.000Z',
+  };
+}
 
 function projectionFor(movements: FinancialMovement[]) {
   return calculateBaseProjection(movements, {

@@ -169,6 +169,8 @@ export interface Provider {
   flexibilityComment?: string;
   /** Maximum credit exposure approved for this provider. 0/undefined = not configured. */
   creditLimit?: number;
+  /** IVA rate applied to this provider's invoices when known. 8 = frontera norte, 16 = general. */
+  ivaRate?: 8 | 16;
   /** ISO date/time of the last provider data update. */
   lastUpdatedAt?: string;
   /** Área DTI si aplica (catálogo Proveedores Críticos TI). */
