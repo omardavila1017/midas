@@ -78,7 +78,7 @@ describe('<CollectionProjection />', () => {
     expect(screen.getByText(/Días promedio de lag/i)).toBeTruthy();
   });
 
-  it('cambia entre vistas Calendario / Por mes / Por cliente', () => {
+  it('cambia entre vistas Por mes / Por cliente desde el acordeón', () => {
     const clients = [makeClient()];
     render(
       <CollectionProjection
@@ -90,8 +90,11 @@ describe('<CollectionProjection />', () => {
         onUnconfirm={() => {}}
       />,
     );
-    // Default: Calendario → hay un botón "Exportar mes".
+    // Calendario siempre visible → hay un botón "Exportar mes".
     expect(screen.getByLabelText(/Exportar mes/i)).toBeTruthy();
+
+    // Abrir acordeón "Filtros y otras vistas".
+    fireEvent.click(screen.getByRole('button', { name: /Filtros y otras vistas/i }));
 
     fireEvent.click(screen.getByRole('button', { name: /Por mes/i }));
     expect(screen.getByText(/Entrada de efectivo por mes/i)).toBeTruthy();
@@ -115,6 +118,7 @@ describe('<CollectionProjection />', () => {
         onUnconfirm={() => {}}
       />,
     );
+    fireEvent.click(screen.getByRole('button', { name: /Filtros y otras vistas/i }));
     const search = screen.getByPlaceholderText(/Buscar cliente/i);
     fireEvent.change(search, { target: { value: 'Abarrotes' } });
     // Aparece "Limpiar filtros" cuando hay filtros activos.
@@ -155,6 +159,7 @@ describe('<CollectionProjection />', () => {
         onUnconfirm={() => {}}
       />,
     );
+    fireEvent.click(screen.getByRole('button', { name: /Filtros y otras vistas/i }));
     fireEvent.click(screen.getByRole('button', { name: /Por cliente/i }));
     const search = screen.getByPlaceholderText(/Buscar cliente/i);
     fireEvent.change(search, { target: { value: 'no-existe-nunca' } });

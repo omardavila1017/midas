@@ -1,18 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Client, CashFlowAssumptions, Frequency, CollectionEvent, ConfirmedPayment, eventKey } from '../domain/types';
 import { projectYear } from '../domain/collectionEngine';
-import {
-  extractPaymentEvents,
-  PaymentEvent,
-  isInternalTransfer,
-  buildOwnAccountsIndex,
-  buildOwnAccountDetector,
-} from '../domain/netCashFlowEngine';
+import { isInternalTransfer, buildOwnAccountsIndex, buildOwnAccountDetector } from '../domain/netCashFlowEngine';
 import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement } from '../services/jde';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox } from 'lucide-react';
+import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency } from '../formatters';
@@ -59,6 +53,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
   const [view, setView] = useState<ViewMode>('calendar');
   const [showSettings, setShowSettings] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const [activeMonth, setActiveMonth] = useState(() => defaultActiveMonth(assumptions.year));
 
   useEffect(() => {
@@ -79,11 +74,6 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   const events = useMemo(
     () => projectYear(filteredClients, assumptions),
     [filteredClients, assumptions],
-  );
-
-  const paymentEvents = useMemo(
-    () => extractPaymentEvents(cxpRecords).filter(p => p.date.startsWith(String(assumptions.year))),
-    [cxpRecords, assumptions.year],
   );
 
   const total = events.reduce((a, e) => a + e.amount, 0);
@@ -256,88 +246,103 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
         </div>
       )}
 
-      {/* ── Filters ───────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-2 items-center animate-card-in stagger-2">
-        <div className="relative flex-1 min-w-[240px] max-w-md">
-          <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Buscar cliente…"
-            className="input pl-9 w-full"
-          />
-        </div>
+      {/* ── Calendario (vista principal) ──────────────────── */}
+      <CalendarView
+        events={events}
+        clients={filteredClients}
+        year={assumptions.year}
+        month={activeMonth}
+        onMonthChange={setActiveMonth}
+        confirmedPayments={confirmedPayments}
+        onConfirm={onConfirm}
+        onUnconfirm={onUnconfirm}
+        bankStatements={bankStatements}
+      />
 
-        <div className="flex gap-1">
-          {FREQUENCIES.map(f => (
-            <Chip
-              key={f}
-              active={freqFilter.has(f)}
-              onClick={() => {
-                const next = new Set(freqFilter);
-                next.has(f) ? next.delete(f) : next.add(f);
-                setFreqFilter(next);
-              }}
-            >{f}</Chip>
-          ))}
-        </div>
-
-        <select
-          value={factorajeFilter}
-          onChange={e => setFactorajeFilter(e.target.value as FactorajeFilter)}
-          className="input text-[12px] h-8"
+      {/* ── Más vistas y filtros (colapsable) ─────────────── */}
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-6">
+        <button
+          onClick={() => setShowMore(!showMore)}
+          className="w-full flex items-center justify-between px-5 py-3 hover:bg-[var(--gray-50)]/50 transition-colors"
         >
-          <option value="all">Todos</option>
-          <option value="yes">Solo factoraje</option>
-          <option value="no">Sin factoraje</option>
-        </select>
+          <div className="flex items-center gap-2.5">
+            <SlidersHorizontal className="w-4 h-4 text-[var(--gray-400)]" />
+            <span className="text-[13px] font-semibold text-[var(--gray-950)]">Filtros y otras vistas</span>
+            {(query || freqFilter.size > 0 || factorajeFilter !== 'all') && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--primary-muted)] text-[var(--primary)] font-medium">
+                Filtros activos
+              </span>
+            )}
+          </div>
+          <ChevronDown className={`w-4 h-4 text-[var(--gray-400)] transition-transform ${showMore ? 'rotate-180' : ''}`} />
+        </button>
+        {showMore && (
+          <div className="px-5 pb-4 pt-1 space-y-4 animate-slide-down">
+            {/* Filtros */}
+            <div className="flex flex-wrap gap-2 items-center">
+              <div className="relative flex-1 min-w-[240px] max-w-md">
+                <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder="Buscar cliente…"
+                  className="input pl-9 w-full"
+                />
+              </div>
 
-        {(query || freqFilter.size > 0 || factorajeFilter !== 'all') && (
-          <button
-            onClick={() => { setQuery(''); setFreqFilter(new Set()); setFactorajeFilter('all'); }}
-            className="text-[12px] text-[var(--primary)] hover:underline px-2"
-          >
-            Limpiar filtros
-          </button>
+              <div className="flex gap-1">
+                {FREQUENCIES.map(f => (
+                  <Chip
+                    key={f}
+                    active={freqFilter.has(f)}
+                    onClick={() => {
+                      const next = new Set(freqFilter);
+                      next.has(f) ? next.delete(f) : next.add(f);
+                      setFreqFilter(next);
+                    }}
+                  >{f}</Chip>
+                ))}
+              </div>
+
+              <select
+                value={factorajeFilter}
+                onChange={e => setFactorajeFilter(e.target.value as FactorajeFilter)}
+                className="input text-[12px] h-8"
+              >
+                <option value="all">Todos</option>
+                <option value="yes">Solo factoraje</option>
+                <option value="no">Sin factoraje</option>
+              </select>
+
+              {(query || freqFilter.size > 0 || factorajeFilter !== 'all') && (
+                <button
+                  onClick={() => { setQuery(''); setFreqFilter(new Set()); setFactorajeFilter('all'); }}
+                  className="text-[12px] text-[var(--primary)] hover:underline px-2"
+                >
+                  Limpiar filtros
+                </button>
+              )}
+            </div>
+
+            {/* View toggle */}
+            <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[13px] w-fit">
+              <button
+                onClick={() => setView('month')}
+                className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'month' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
+              >Por mes</button>
+              <button
+                onClick={() => setView('client')}
+                className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'client' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
+              >Por cliente</button>
+            </nav>
+
+            {/* Vista alterna */}
+            <div key={view} className="animate-view-swap">
+              {view === 'month' && <MonthView events={events} total={total} />}
+              {view === 'client' && <ClientView events={events} clients={filteredClients} total={total} />}
+            </div>
+          </div>
         )}
-      </div>
-
-      {/* ── View toggle ───────────────────────────────────── */}
-      <div className="flex items-center justify-between animate-card-in stagger-3">
-        <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[13px]">
-          <button
-            onClick={() => setView('calendar')}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'calendar' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-          >Calendario</button>
-          <button
-            onClick={() => setView('month')}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'month' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-          >Por mes</button>
-          <button
-            onClick={() => setView('client')}
-            className={`px-4 py-1 rounded-full font-medium hover-press ${view === 'client' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-          >Por cliente</button>
-        </nav>
-      </div>
-
-      {/* ── Main view ─────────────────────────────────────── */}
-      <div key={view} className="animate-view-swap">
-        {view === 'calendar' && (
-          <CalendarView
-            events={events}
-            clients={filteredClients}
-            year={assumptions.year}
-            month={activeMonth}
-            onMonthChange={setActiveMonth}
-            confirmedPayments={confirmedPayments}
-            onConfirm={onConfirm}
-            onUnconfirm={onUnconfirm}
-            payments={paymentEvents}
-            bankStatements={bankStatements}
-          />
-        )}
-        {view === 'month' && <MonthView events={events} total={total} />}
-        {view === 'client' && <ClientView events={events} clients={filteredClients} total={total} />}
       </div>
 
       <DetailView events={events} clients={filteredClients} />
@@ -357,7 +362,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 //   Blue   = projected (future, not yet confirmed)
 //   Amber  = past-due (date already passed, not confirmed = didn't pay yet)
 // ---------------------------------------------------------------------------
-function CalendarView({ events, clients, year, month, onMonthChange, confirmedPayments, onConfirm, onUnconfirm, payments, bankStatements = [] }: {
+function CalendarView({ events, clients, year, month, onMonthChange, confirmedPayments, onConfirm, onUnconfirm, bankStatements = [] }: {
   events: CollectionEvent[];
   clients: Client[];
   year: number;
@@ -366,7 +371,6 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   confirmedPayments: ConfirmedPayment[];
   onConfirm: (p: ConfirmedPayment) => void;
   onUnconfirm: (key: string) => void;
-  payments: PaymentEvent[];
   bankStatements?: BankAccountStatement[];
 }) {
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
@@ -409,19 +413,6 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
     return map;
   }, [events, month]);
 
-  // Pagos by day for this month
-  const paymentsByDay = useMemo(() => {
-    const map: Record<string, PaymentEvent[]> = {};
-    for (const p of payments) {
-      const m = Number(p.date.slice(5, 7)) - 1;
-      if (m === month) {
-        if (!map[p.date]) map[p.date] = [];
-        map[p.date].push(p);
-      }
-    }
-    return map;
-  }, [payments, month]);
-
   // Weekly totals for this month
   const weeklyTotals = useMemo(() => {
     const weeks: Record<string, number> = {};
@@ -439,12 +430,6 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   const monthTotal = allMonthEvents.reduce((s, e) => s + e.amount, 0);
   const monthEvents = allMonthEvents.length;
   const uniqueClients = new Set(allMonthEvents.map(e => e.clientId)).size;
-  const monthPagos = Object.values(paymentsByDay).flat().reduce((s, p) => s + p.amount, 0);
-  const monthIva = allMonthEvents.reduce((s, e) => {
-    const rate = (byId.get(e.clientId)?.ivaRate ?? 16) / 100;
-    return s + (e.amount * rate) / (1 + rate);
-  }, 0);
-  const monthNeto = monthTotal - monthPagos;
 
   // Split: confirmed (real) vs projected
   const confirmedTotal = allMonthEvents
@@ -469,9 +454,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   );
 
   const selectedEvents = selectedDay ? (byDay[selectedDay] || []) : [];
-  const selectedPayments = selectedDay ? (paymentsByDay[selectedDay] || []) : [];
   const selectedTotal = selectedEvents.reduce((s, e) => s + e.amount, 0);
-  const selectedPagosTotal = selectedPayments.reduce((s, p) => s + p.amount, 0);
 
   const prevMonth = () => { onMonthChange(month <= 0 ? 11 : month - 1); };
   const nextMonth = () => { onMonthChange(month >= 11 ? 0 : month + 1); };
@@ -503,36 +486,6 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
   return (
     <div className="space-y-4">
-      {/* Secondary KPIs — only when there are payments */}
-      {monthPagos > 0 && (
-        <div className="grid grid-cols-3 gap-4 animate-card-in stagger-3">
-          <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-3 hover-lift">
-            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Pagos CXP del mes</div>
-            <AnimatedNumber
-              value={monthPagos}
-              format={fmtCurrency}
-              className="block text-lg font-semibold tabular-nums text-[var(--danger)] mt-0.5"
-            />
-          </div>
-          <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-3 hover-lift">
-            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Flujo neto</div>
-            <AnimatedNumber
-              value={monthNeto}
-              format={fmtCurrency}
-              className={`block text-lg font-semibold tabular-nums mt-0.5 ${monthNeto >= 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}
-            />
-          </div>
-          <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-3 hover-lift">
-            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">IVA cobrado (estimado)</div>
-            <AnimatedNumber
-              value={monthIva}
-              format={fmtCurrency}
-              className="block text-lg font-semibold tabular-nums text-[var(--primary)] mt-0.5"
-            />
-          </div>
-        </div>
-      )}
-
       {/* Month summary cards */}
       <div className="grid grid-cols-4 gap-4 animate-card-in stagger-4">
         <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
@@ -684,40 +637,38 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
         </div>
       )}
 
-      {/* Calendar header */}
-      <div className="flex items-center justify-between">
-        <button
-          onClick={prevMonth}
-          aria-label="Mes anterior"
-          className="p-2 rounded-lg hover:bg-[var(--gray-50)] transition-colors hover-press"
-        >
-          <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 19l-7-7 7-7" /></svg>
-        </button>
-        <h2 key={`${year}-${month}`} className="text-lg font-semibold text-[var(--gray-950)] flex items-center gap-2 animate-slide-down">
-          <CalendarRange className="w-4 h-4 text-[var(--gray-400)]" />
-          <span>{MONTH_NAMES[month]} {year}</span>
-        </h2>
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={handleExport}
-            title="Exportar mes"
-            aria-label="Exportar mes"
-            className="p-1.5 rounded-lg hover:bg-[var(--gray-50)] text-[var(--gray-400)] hover:text-[var(--gray-950)] transition-colors hover-press"
-          >
-            <Download className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={nextMonth}
-            aria-label="Mes siguiente"
-            className="p-2 rounded-lg hover:bg-[var(--gray-50)] transition-colors hover-press"
-          >
-            <svg className="w-5 h-5 text-[var(--gray-400)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5l7 7-7 7" /></svg>
-          </button>
-        </div>
-      </div>
-
-      {/* Calendar grid */}
+      {/* Calendar (header oscuro + grid en una sola card) */}
       <div key={`grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
+        <div className="flex items-center justify-between px-4 py-3 bg-[var(--gray-950)]">
+          <button
+            onClick={prevMonth}
+            aria-label="Mes anterior"
+            className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <h2 key={`${year}-${month}`} className="text-lg font-semibold text-white flex items-center gap-2 animate-slide-down">
+            <CalendarRange className="w-4 h-4 text-white/60" />
+            <span>{MONTH_NAMES[month]} {year}</span>
+          </h2>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleExport}
+              title="Exportar mes"
+              aria-label="Exportar mes"
+              className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={nextMonth}
+              aria-label="Mes siguiente"
+              className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-7 border-b border-[var(--gray-200)]/40">
           {DOW_HEADERS.map(d => (
             <div key={d} className="px-2 py-2 text-center text-[11px] font-medium text-[var(--gray-400)] bg-[var(--surface-alt)] uppercase tracking-wide">{d}</div>
@@ -728,8 +679,6 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             const iso = d.toISOString().slice(0, 10);
             const isCurrentMonth = d.getUTCMonth() === month;
             const dayEvents = byDay[iso] || [];
-            const dayPayments = paymentsByDay[iso] || [];
-            const dayPagosTotal = dayPayments.reduce((s, p) => s + p.amount, 0);
             const dayTotal = dayEvents.reduce((s, e) => s + e.amount, 0);
             const intensity = dayTotal > 0 ? Math.max(0.08, Math.min(0.85, dayTotal / maxDayAmount)) : 0;
             const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
@@ -800,23 +749,11 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                     </div>
                   )}
                 </div>
-                {dayTotal === 0 && dayPagosTotal > 0 && isCurrentMonth && (
-                  <div className="mt-1">
-                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums bg-[var(--danger)]/10 text-[var(--danger)]">
-                      −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmtCurrency(dayPagosTotal)}
-                    </div>
-                  </div>
-                )}
                 {dayTotal > 0 && isCurrentMonth && (
                   <div className="mt-1">
                     <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
                       {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmtCurrency(dayTotal)}
                     </div>
-                    {dayPagosTotal > 0 && (
-                      <div className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold tabular-nums mt-0.5 bg-[var(--danger)]/10 text-[var(--danger)]">
-                        −{dayPagosTotal >= 1_000_000 ? `${(dayPagosTotal / 1_000_000).toFixed(1)}M` : dayPagosTotal >= 1000 ? `${Math.round(dayPagosTotal / 1000)}K` : fmtCurrency(dayPagosTotal)}
-                      </div>
-                    )}
                     {someConfirmed && (
                       <div className="flex gap-0.5 mt-0.5">
                         <div className="h-1 rounded-full bg-[var(--success)] flex-1" style={{ flex: dayConfirmed.length }} />
@@ -841,39 +778,16 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
       </div>
 
       {/* Day detail panel */}
-      {selectedDay && (selectedEvents.length > 0 || selectedPayments.length > 0) && (
+      {selectedDay && selectedEvents.length > 0 && (
         <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 animate-slide-down">
           <div className="flex justify-between items-center mb-3">
             <h3 className="font-semibold text-[14px] text-[var(--gray-950)]">
               {new Date(selectedDay + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
             </h3>
-            <div className="flex gap-4 items-baseline">
-              {selectedTotal > 0 && <span className="text-[13px] tabular-nums text-[var(--success)]">+{fmtCurrency(selectedTotal)}</span>}
-              {selectedPagosTotal > 0 && <span className="text-[13px] tabular-nums text-[var(--danger)]">−{fmtCurrency(selectedPagosTotal)}</span>}
-              <span className={`text-lg font-semibold tabular-nums ${selectedTotal - selectedPagosTotal >= 0 ? 'text-[var(--primary)]' : 'text-[var(--danger)]'}`}>
-                {fmtCurrency(selectedTotal - selectedPagosTotal)}
-              </span>
-            </div>
+            <span className="text-lg font-semibold tabular-nums text-[var(--success)]">
+              +{fmtCurrency(selectedTotal)}
+            </span>
           </div>
-          {selectedPayments.length > 0 && (
-            <div className="mb-3">
-              <div className="text-[11px] uppercase tracking-wide text-[var(--danger)] mb-1.5">Pagos ({selectedPayments.length})</div>
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {selectedPayments.sort((a, b) => b.amount - a.amount).map((p, i) => (
-                  <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-[var(--danger)]/5 border border-[var(--danger)]/20">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[13px] font-medium text-[var(--gray-950)] truncate">{p.supplier}</div>
-                      <div className="text-[11px] text-[var(--gray-400)]">{p.classification}</div>
-                    </div>
-                    <div className="text-[13px] font-semibold tabular-nums text-[var(--danger)]">−{fmtCurrency(p.amount)}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {selectedEvents.length > 0 && selectedPayments.length > 0 && (
-            <div className="text-[11px] uppercase tracking-wide text-[var(--success)] mb-1.5">Cobros ({selectedEvents.length})</div>
-          )}
           <div className="space-y-1.5 max-h-72 overflow-y-auto">
             {selectedEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
               const c = byId.get(e.clientId);
