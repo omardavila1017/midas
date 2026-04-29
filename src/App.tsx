@@ -433,15 +433,16 @@ export default function App() {
 
   // ── Boot orchestrator: drives splash step + dismiss when critical path ready ──
   // Critical path: catalogs settled + JDE companies settled (success or error) +
-  // bank priming finished. CXP autofetch and bank ranging keep running in
-  // background — they're too slow to block the splash.
+  // bank priming AND year-to-date ranging finished (status === 'idle'). The
+  // splash shows a progress bar during ranging so the user sees concrete
+  // progress instead of an indeterminate spinner.
   useEffect(() => {
     if (isBooted) return;
     if (!catalogLoaded) {
       setBootStep('catalog');
     } else if (companiesLoading) {
       setBootStep('jde');
-    } else if (bankFetchStatus === 'priming') {
+    } else if (bankFetchStatus === 'priming' || bankFetchStatus === 'ranging') {
       setBootStep('banks');
     } else {
       setBootStep('ready');
@@ -449,8 +450,8 @@ export default function App() {
 
     const catalogDone = catalogLoaded;
     const companiesDone = !companiesLoading;
-    const bankPrimed = bankFetchStatus !== 'priming';
-    if (catalogDone && companiesDone && bankPrimed) {
+    const banksDone = bankFetchStatus === 'idle';
+    if (catalogDone && companiesDone && banksDone) {
       const t = setTimeout(() => setIsBooted(true), 220);
       return () => clearTimeout(t);
     }
@@ -458,7 +459,7 @@ export default function App() {
 
   // Hard timeout — never trap the user behind the splash if JDE hangs.
   useEffect(() => {
-    const t = setTimeout(() => setIsBooted(true), 8000);
+    const t = setTimeout(() => setIsBooted(true), 30000);
     return () => clearTimeout(t);
   }, []);
 
@@ -703,6 +704,7 @@ export default function App() {
           visible={!isBooted}
           step={bootStep}
           hasError={!!companiesError}
+          progress={bankFetchProgress}
         />
       )}
       <div
