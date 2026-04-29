@@ -296,10 +296,24 @@ function computePosition(anchor: DOMRect): { top: number; left: number } {
   if (left < POPOVER_MARGIN) left = POPOVER_MARGIN;
   if (left + POPOVER_WIDTH + POPOVER_MARGIN > vw) left = vw - POPOVER_WIDTH - POPOVER_MARGIN;
 
+  // Intentar debajo del anchor
   let top = anchor.bottom + POPOVER_MARGIN;
   if (top + POPOVER_EST_HEIGHT + POPOVER_MARGIN > vh) {
+    // Intentar arriba del anchor
     const above = anchor.top - POPOVER_EST_HEIGHT - POPOVER_MARGIN;
-    top = above >= POPOVER_MARGIN ? above : Math.max(POPOVER_MARGIN, vh - POPOVER_EST_HEIGHT - POPOVER_MARGIN);
+    if (above >= POPOVER_MARGIN) {
+      top = above;
+    } else {
+      // No cabe ni arriba ni abajo: centrar respecto al anchor,
+      // manteniéndolo dentro del viewport.
+      top = Math.max(
+        POPOVER_MARGIN,
+        Math.min(
+          anchor.top + anchor.height / 2 - POPOVER_EST_HEIGHT / 2,
+          vh - POPOVER_EST_HEIGHT - POPOVER_MARGIN,
+        ),
+      );
+    }
   }
   return { top, left };
 }

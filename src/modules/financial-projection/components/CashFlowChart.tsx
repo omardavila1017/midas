@@ -348,7 +348,7 @@ function CategoryRow({
   const pct = total > 0 ? (amount / total) * 100 : 0;
   const movements = category.movements.filter((m) => m.type === type);
   const supplierLines = useMemo(
-    () => (category.key === 'AP_PAYMENT' || category.key === 'TAX' || category.key === 'PAYROLL')
+    () => (category.key === 'AP_PAYMENT' || category.key === 'TAX' || category.key === 'PAYROLL' || category.key === 'AR_COLLECTION')
       ? buildSupplierLines(movements)
       : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps

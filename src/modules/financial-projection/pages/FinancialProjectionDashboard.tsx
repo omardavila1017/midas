@@ -490,21 +490,21 @@ export default function FinancialProjectionDashboard(props: Props) {
         >
           <div className="flex items-start justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
             <div>
-              <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Impuestos</h2>
+              <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Impuestos y Seguimiento Fiscal</h2>
               <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
-                {props.onNavigateToTax ? 'Clic para abrir el módulo de impuestos.' : 'El cálculo y los pagos parciales viven en Proyección > Impuestos.'}
+                {props.onNavigateToTax ? 'Clic para ver el desglose y plan de pagos.' : 'El cálculo y los pagos parciales viven en Proyección > Impuestos.'}
               </p>
             </div>
             <div className="text-right text-[12px]">
-              <div className="font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(taxView.totals.total)}</div>
-              <div className="text-[var(--gray-400)]">obligaciones visibles</div>
+              <div className="font-semibold tabular-nums text-[var(--danger)]">{fmtCurrency(taxView.totals.totalWithOverdue)}</div>
+              <div className="text-[var(--gray-400)]">Total Acumulado (Vencido + Nuevos)</div>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
-            <ScenarioMiniStat label="IVA" value={fmtCompact(taxView.totals.ivaNet)} tone={taxView.totals.ivaNet > 0 ? 'warning' : 'neutral'} />
-            <ScenarioMiniStat label="ISN" value={fmtCompact(taxView.totals.isn)} tone={taxView.totals.isn > 0 ? 'warning' : 'neutral'} />
-            <ScenarioMiniStat label="IMSS" value={fmtCompact(taxView.totals.imss)} tone={taxView.totals.imss > 0 ? 'danger' : 'neutral'} />
-            <ScenarioMiniStat label="Caja" value={fmtCompact(taxView.totals.cashImpact)} tone={taxView.totals.cashImpact > 0 ? 'danger' : 'neutral'} />
+            <ScenarioMiniStat label="Saldo Vencido" value={fmtCompact(taxView.overdueBalance)} tone="danger" />
+            <ScenarioMiniStat label="IVA Periodo" value={fmtCompact(taxView.totals.ivaNet)} tone={taxView.totals.ivaNet > 0 ? 'warning' : 'neutral'} />
+            <ScenarioMiniStat label="ISN/IMSS" value={fmtCompact(taxView.totals.isn + taxView.totals.imss)} tone="warning" />
+            <ScenarioMiniStat label="Impacto Caja" value={fmtCompact(taxView.totals.cashImpact)} tone={taxView.totals.cashImpact > 0 ? 'danger' : 'neutral'} />
           </div>
         </section>
       </div>
