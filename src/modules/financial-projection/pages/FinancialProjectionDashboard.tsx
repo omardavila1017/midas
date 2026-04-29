@@ -132,16 +132,20 @@ export default function FinancialProjectionDashboard(props: Props) {
   const sourceBaseScenario = source.scenarios.find((scenario) => scenario.isBase) ?? source.scenarios[0];
   const storedBaseScenario = storedScenarios.find((scenario) => scenario.isBase && !scenario.archivedAt);
   const baseScenario = storedBaseScenario ?? sourceBaseScenario;
+  const approvedScenario = useMemo(
+    () => storedScenarios.find((scenario) => scenario.kind === 'APPROVED' && !scenario.archivedAt),
+    [storedScenarios],
+  );
   const userScenarios = useMemo(
-    () => storedScenarios.filter((scenario) => !scenario.isBase && !scenario.archivedAt),
+    () => storedScenarios.filter((scenario) => !scenario.isBase && !scenario.archivedAt && scenario.kind !== 'APPROVED'),
     [storedScenarios],
   );
   const archivedBaseScenarios = storedScenarios.filter((scenario) => scenario.archivedAt);
   const scenarios = useMemo(
-    () => [baseScenario, ...userScenarios, ...archivedBaseScenarios],
-    [archivedBaseScenarios, baseScenario, userScenarios],
+    () => [baseScenario, ...(approvedScenario ? [approvedScenario] : []), ...userScenarios, ...archivedBaseScenarios],
+    [approvedScenario, archivedBaseScenarios, baseScenario, userScenarios],
   );
-  const [activeScenarioId, setActiveScenarioId] = useState(baseScenario.id);
+  const [activeScenarioId, setActiveScenarioId] = useState(approvedScenario?.id ?? baseScenario.id);
 
   useEffect(() => {
     if (!scenarios.some((scenario) => scenario.id === activeScenarioId)) {

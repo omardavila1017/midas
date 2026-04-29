@@ -159,12 +159,12 @@ describe('buildOperatingProjection', () => {
 
   it('reserves cash for mandatory fixed obligations before supplier payments', () => {
     const result = buildOperatingProjection({
-      startDate: '2026-05-01',
-      endDate: '2026-05-05',
+      startDate: '2026-06-05',
+      endDate: '2026-06-09',
       bankStatements: [bank({ saldoFinal: 1_000 })],
       clients: [],
       providers: [provider('PROVEEDOR FLEXIBLE', { risk: 'Bajo', flexibility: 'flexible' })],
-      agedBalances: [aged('PROVEEDOR FLEXIBLE', 1_000, '2026-05-01')],
+      agedBalances: [aged('PROVEEDOR FLEXIBLE', 1_000, '2026-06-05')],
       assumptions,
       fixedRules: [
         {
@@ -172,7 +172,7 @@ describe('buildOperatingProjection', () => {
           label: 'Crédito obligatorio',
           concept: 'Pasivos Financieros',
           amount: 800,
-          anchorDate: '2026-05-05',
+          anchorDate: '2026-06-09',
         },
       ],
     });
@@ -183,7 +183,7 @@ describe('buildOperatingProjection', () => {
     expect(firstDay.freeCash).toBeCloseTo(0, 4);
     expect(supplierPaid).toBeCloseTo(200, 4);
 
-    const paymentDay = result.days.find((day) => day.date === '2026-05-05');
+    const paymentDay = result.days.find((day) => day.date === '2026-06-09');
     expect(paymentDay).toBeTruthy();
     expect(paymentDay!.scheduledOutflows.reduce((sum, line) => sum + line.amount, 0)).toBeCloseTo(800, 4);
     expect(paymentDay!.unpaidScheduledAmount).toBeCloseTo(0, 4);
@@ -191,8 +191,8 @@ describe('buildOperatingProjection', () => {
 
   it('applies manual operating adjustments to projected cash', () => {
     const result = buildOperatingProjection({
-      startDate: '2026-05-01',
-      endDate: '2026-05-04',
+      startDate: '2026-06-05',
+      endDate: '2026-06-08',
       bankStatements: [bank({ saldoFinal: 1_000 })],
       clients: [],
       providers: [],
@@ -202,7 +202,7 @@ describe('buildOperatingProjection', () => {
       operatingAdjustments: [
         {
           id: 'manual-out',
-          date: '2026-05-01',
+          date: '2026-06-05',
           label: 'Pago manual',
           amount: 300,
           direction: 'outflow',
@@ -211,7 +211,7 @@ describe('buildOperatingProjection', () => {
         },
         {
           id: 'manual-in',
-          date: '2026-05-04',
+          date: '2026-06-08',
           label: 'Depósito manual',
           amount: 500,
           direction: 'inflow',
@@ -459,8 +459,8 @@ describe('buildOperatingProjection', () => {
 
   it('moves a projected collection with a scenario override', () => {
     const result = buildOperatingProjection({
-      startDate: '2026-05-01',
-      endDate: '2026-05-04',
+      startDate: '2026-06-01',
+      endDate: '2026-06-04',
       bankStatements: [bank({ saldoFinal: 0 })],
       clients: [clientMonthly('c1', 'Cliente Diario', 100)],
       providers: [],
@@ -469,31 +469,31 @@ describe('buildOperatingProjection', () => {
       fixedRules: [],
       collectionOverrides: [
         {
-          sourceKey: 'collection:c1:2026-05-01:2026-05-01',
-          date: '2026-05-04',
+          sourceKey: 'collection:c1:2026-06-01:2026-06-01',
+          date: '2026-06-04',
           amount: 100,
-          note: 'Cobro confirmado para lunes',
+          note: 'Cobro confirmado para jueves',
         },
       ],
     });
 
-    expect(result.days.find((day) => day.date === '2026-05-01')!.cashInflows).toHaveLength(0);
-    expect(result.days.find((day) => day.date === '2026-05-01')!.closingCash).toBeCloseTo(0, 4);
-    expect(result.days.find((day) => day.date === '2026-05-04')!.cashInflows).toEqual([
+    expect(result.days.find((day) => day.date === '2026-06-01')!.cashInflows).toHaveLength(0);
+    expect(result.days.find((day) => day.date === '2026-06-01')!.closingCash).toBeCloseTo(0, 4);
+    expect(result.days.find((day) => day.date === '2026-06-04')!.cashInflows).toEqual([
       expect.objectContaining({
-        sourceKey: 'collection:c1:2026-05-01:2026-05-01',
-        originalDate: '2026-05-01',
-        overrideNote: 'Cobro confirmado para lunes',
+        sourceKey: 'collection:c1:2026-06-01:2026-06-01',
+        originalDate: '2026-06-01',
+        overrideNote: 'Cobro confirmado para jueves',
         amount: 100,
       }),
     ]);
-    expect(result.days.find((day) => day.date === '2026-05-04')!.closingCash).toBeCloseTo(100, 4);
+    expect(result.days.find((day) => day.date === '2026-06-04')!.closingCash).toBeCloseTo(100, 4);
   });
 
   it('replaces projected collection amount with a scenario override', () => {
     const result = buildOperatingProjection({
-      startDate: '2026-05-01',
-      endDate: '2026-05-01',
+      startDate: '2026-06-01',
+      endDate: '2026-06-01',
       bankStatements: [bank({ saldoFinal: 0 })],
       clients: [clientMonthly('c1', 'Cliente Diario', 100)],
       providers: [],
@@ -502,8 +502,8 @@ describe('buildOperatingProjection', () => {
       fixedRules: [],
       collectionOverrides: [
         {
-          sourceKey: 'collection:c1:2026-05-01:2026-05-01',
-          date: '2026-05-01',
+          sourceKey: 'collection:c1:2026-06-01:2026-06-01',
+          date: '2026-06-01',
           amount: 250,
         },
       ],
@@ -541,8 +541,8 @@ describe('buildOperatingProjection', () => {
 
   it('moves a scheduled fixed outflow with a scenario override', () => {
     const result = buildOperatingProjection({
-      startDate: '2026-05-01',
-      endDate: '2026-05-04',
+      startDate: '2026-06-05',
+      endDate: '2026-06-08',
       bankStatements: [bank({ saldoFinal: 500 })],
       clients: [],
       providers: [],
@@ -554,30 +554,30 @@ describe('buildOperatingProjection', () => {
           label: 'Renta patio',
           concept: 'Gastos de Operación',
           amount: 300,
-          anchorDate: '2026-05-01',
+          anchorDate: '2026-06-05',
         },
       ],
       scheduledOutflowOverrides: [
         {
-          sourceKey: 'fixed:fixed-rent:2026-05-01',
-          date: '2026-05-04',
+          sourceKey: 'fixed:fixed-rent:2026-06-05',
+          date: '2026-06-08',
           amount: 300,
           note: 'Pateado al lunes',
         },
       ],
     });
 
-    expect(result.days.find((day) => day.date === '2026-05-01')!.scheduledOutflows).toHaveLength(0);
-    expect(result.days.find((day) => day.date === '2026-05-01')!.closingCash).toBeCloseTo(500, 4);
-    expect(result.days.find((day) => day.date === '2026-05-04')!.scheduledOutflows).toEqual([
+    expect(result.days.find((day) => day.date === '2026-06-05')!.scheduledOutflows).toHaveLength(0);
+    expect(result.days.find((day) => day.date === '2026-06-05')!.closingCash).toBeCloseTo(500, 4);
+    expect(result.days.find((day) => day.date === '2026-06-08')!.scheduledOutflows).toEqual([
       expect.objectContaining({
-        sourceKey: 'fixed:fixed-rent:2026-05-01',
-        originalDate: '2026-05-01',
+        sourceKey: 'fixed:fixed-rent:2026-06-05',
+        originalDate: '2026-06-05',
         overrideNote: 'Pateado al lunes',
         amount: 300,
       }),
     ]);
-    expect(result.days.find((day) => day.date === '2026-05-04')!.closingCash).toBeCloseTo(200, 4);
+    expect(result.days.find((day) => day.date === '2026-06-08')!.closingCash).toBeCloseTo(200, 4);
   });
 
   it('cancels a scheduled fixed outflow with a zero scenario override', () => {
@@ -658,7 +658,7 @@ function clientMonthly(id: string, name: string, amount: number): Client {
 
 function monthlyBilling(amount: number): number[] {
   const values = Array.from({ length: 12 }, () => 0);
-  values[4] = amount;
+  values[5] = amount;
   return values;
 }
 

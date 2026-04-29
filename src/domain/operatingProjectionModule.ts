@@ -35,6 +35,7 @@ import type {
   BankAccountStatement,
   BankStatementLine,
 } from '../services/jdeTypes';
+import { isNonOperatingDay } from './bankHolidays';
 
 const DAY_MS = 86_400_000;
 const DEFAULT_CREDIT_TARGET_RATIO = 0.8;
@@ -354,8 +355,7 @@ function normText(value: string | null | undefined): string {
 }
 
 function isBusinessDay(value: Date): boolean {
-  const day = value.getUTCDay();
-  return day >= 1 && day <= 5;
+  return !isNonOperatingDay(value);
 }
 
 function nextBusinessDay(value: Date): Date {
