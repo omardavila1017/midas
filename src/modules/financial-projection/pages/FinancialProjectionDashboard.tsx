@@ -303,10 +303,9 @@ export default function FinancialProjectionDashboard(props: Props) {
       store: taxStore,
       providers: props.providers,
       cxpRecords: props.cxpRecords,
-      scenarioId: activeScenarioId,
       today,
     }),
-    [activeRun, activeScenarioId, props.cxpRecords, props.providers, taxStore, today],
+    [activeRun, props.cxpRecords, props.providers, taxStore, today],
   );
   const supplierAlerts = useMemo(
     () => buildSupplierCriticalAlerts({

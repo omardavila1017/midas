@@ -24,7 +24,7 @@ describe('canonicalProjection IVA metadata', () => {
       asOfDate: '2026-04-22',
     });
 
-    const movement = canonical.movements.find((item) => item.category === 'AR_COLLECTION' && item.projectedDate === '2026-05-01');
+    const movement = canonical.movements.find((item) => item.category === 'AR_COLLECTION' && item.projectedDate === '2026-05-04');
     expect(movement).toBeTruthy();
     expect(movement?.projectedAmount).toBeCloseTo(1000);
     expect(movement?.taxRate).toBe(16);
