@@ -80,26 +80,34 @@ function buildSupplierLines(movements: FinancialMovement[]): SupplierLine[] {
 export function CashFlowChart({
   projection,
   baseProjection,
+  comparisonProjection,
   onNavigateToTax,
 }: {
   projection: ForecastRun;
   baseProjection?: ForecastRun;
+  comparisonProjection?: ForecastRun;
   onNavigateToTax?: () => void;
 }) {
   const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null);
 
-  const baseByDate = new Map(
-    baseProjection?.buckets.map((bucket) => [bucket.date, bucket.closingCash]) ?? [],
-  );
-  const data = projection.buckets.map((bucket) => ({
-    date: bucket.label,
-    rawDate: bucket.date,
-    entradas: bucket.inflows,
-    salidas: bucket.outflows,
-    caja: bucket.closingCash,
-    minimo: bucket.minimumCash,
-    base: baseByDate.get(bucket.date),
-  }));
+  const data = useMemo(() => {
+    const baseByDate = new Map(
+      baseProjection?.buckets.map((bucket) => [bucket.date, bucket.closingCash]) ?? [],
+    );
+    const comparisonByDate = new Map(
+      comparisonProjection?.buckets.map((bucket) => [bucket.date, bucket.closingCash]) ?? [],
+    );
+    return projection.buckets.map((bucket) => ({
+      date: bucket.label,
+      rawDate: bucket.date,
+      entradas: bucket.inflows,
+      salidas: bucket.outflows,
+      caja: bucket.closingCash,
+      minimo: bucket.minimumCash,
+      base: baseByDate.get(bucket.date),
+      comparison: comparisonByDate.get(bucket.date),
+    }));
+  }, [projection.buckets, baseProjection?.buckets, comparisonProjection?.buckets]);
 
   const selectedBucket = selectedBucketIdx != null ? projection.buckets[selectedBucketIdx] : null;
 
@@ -189,6 +197,17 @@ export function CashFlowChart({
                 stroke="var(--gray-400)"
                 strokeWidth={1.5}
                 strokeDasharray="4 4"
+                dot={false}
+              />
+            )}
+            {comparisonProjection && (
+              <Line
+                type="monotone"
+                dataKey="comparison"
+                name={`Comparación · ${comparisonProjection.name}`}
+                stroke="var(--warning)"
+                strokeWidth={1.5}
+                strokeDasharray="2 4"
                 dot={false}
               />
             )}

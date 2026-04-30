@@ -318,6 +318,7 @@ const BancosDashboard = ({
     return map;
   }, [companies]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [collapsedBanks, setCollapsedBanks] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [bancoFilter, setBancoFilter] = useState<string>('all');
   const [monedaFilter, setMonedaFilter] = useState<string>('all');
@@ -369,6 +370,17 @@ const BancosDashboard = ({
       return { ...acc, movimientos };
     });
   }, [accountsFiltered, searchTerm, tipoFilter]);
+
+  const accountsByBank = useMemo(() => {
+    type Acc = typeof accountsView[number];
+    const m = new Map<string, Acc[]>();
+    for (const acc of accountsView) {
+      const k = acc.nombreBanco || acc.banco || 'Sin banco';
+      const list = m.get(k);
+      if (list) list.push(acc); else m.set(k, [acc]);
+    }
+    return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [accountsView]);
 
   const bancoOptions = useMemo(
     () => Array.from(new Set(statements.map(s => s.nombreBanco ?? s.banco).filter(Boolean))).sort(),
@@ -607,7 +619,7 @@ const BancosDashboard = ({
       </div>
 
       {/* ── Query chip ── */}
-      <div className="flex items-center gap-2 text-[12px] text-[var(--gray-400)]">
+      <div className="inline-flex items-center gap-2 text-[12px] text-[var(--gray-500)] bg-white border border-[var(--gray-200)] rounded-full px-3 py-1 shadow-sm w-fit">
         <Calendar className="w-3.5 h-3.5" />
         <span>Estado al <span className="text-[var(--gray-950)] font-medium">{query.fechaEstadoCuenta}</span></span>
         <span className="text-[var(--gray-300)]">·</span>
@@ -627,51 +639,89 @@ const BancosDashboard = ({
             No hay cuentas con los filtros actuales.
           </div>
         ) : (
-          <div className="divide-y divide-[var(--gray-50)]">
-            {accountsView.map(acc => {
-              const key = `${acc.cia}::${acc.cuenta}::${acc.moneda}`;
-              const isExpanded = expanded === key;
-              const saldo = acc.saldoFinal ?? acc.saldoInicial ?? 0;
-              const displayName = acc.nombreBanco || acc.banco || 'Cuenta bancaria';
+          <div>
+            {accountsByBank.map(([bankName, accs], bankIdx) => {
+              const bankCollapsed = collapsedBanks.has(bankName);
+              const monedas = new Set(accs.map(a => a.moneda));
+              const sumSaldo = monedas.size === 1
+                ? accs.reduce((s, a) => s + (a.saldoFinal ?? a.saldoInicial ?? 0), 0)
+                : null;
+              const moneda = monedas.size === 1 ? accs[0].moneda : null;
               return (
-                <div key={key}>
+                <div key={bankName} className={bankIdx > 0 ? 'border-t border-[var(--gray-100)]' : ''}>
                   <button
-                    onClick={() => setExpanded(isExpanded ? null : key)}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[var(--surface-alt)] transition text-left"
+                    onClick={() => {
+                      setCollapsedBanks(prev => {
+                        const next = new Set(prev);
+                        if (next.has(bankName)) next.delete(bankName); else next.add(bankName);
+                        return next;
+                      });
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 bg-[var(--surface-alt)] hover:bg-[var(--gray-50)] transition text-left"
                   >
-                    {isExpanded
-                      ? <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" />
-                      : <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />}
-
-                    <div className="w-9 h-9 rounded-xl bg-[var(--gray-50)] flex items-center justify-center flex-shrink-0">
-                      <Landmark className="w-4 h-4 text-[var(--primary)]" />
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">
-                        {displayName}
-                        {acc.cuenta && <span className="text-[var(--gray-400)] font-normal ml-2">· {acc.cuenta}</span>}
-                      </p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
-                        {acc.cia && (
-                          <span className="text-[11px] text-[var(--gray-400)]">
-                            {ciaNameMap.get(acc.cia) ?? `Cia ${acc.cia}`}
-                          </span>
-                        )}
-                        <span className="text-[11px] text-[var(--gray-400)]">{acc.cia ? '· ' : ''}{acc.movimientos.length} mov.</span>
-                      </div>
-                    </div>
-
-                    <div className="text-right w-36">
-                      <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
+                    {bankCollapsed
+                      ? <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />
+                      : <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" />}
+                    <Landmark className="w-4 h-4 text-[var(--primary)] flex-shrink-0" />
+                    <p className="text-[13px] font-semibold text-[var(--gray-950)] truncate">
+                      {bankName}
+                      <span className="text-[var(--gray-400)] font-normal ml-2">({accs.length} cuenta{accs.length !== 1 ? 's' : ''})</span>
+                    </p>
+                    <div className="ml-auto text-right">
+                      {sumSaldo !== null && moneda && (
+                        <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(sumSaldo, moneda)}</p>
+                      )}
                       <p className="text-[10px] text-[var(--gray-400)]">
-                        {acc.saldoFinal !== undefined ? 'Saldo final' : acc.saldoInicial !== undefined ? 'Saldo inicial' : 'Sin saldo'}
+                        {accs.reduce((s, a) => s + a.movimientos.length, 0).toLocaleString()} mov.
                       </p>
                     </div>
                   </button>
 
-                  {isExpanded && <BancosMovimientos acc={acc} internalReasonOf={internalReasonOf} />}
+                  {!bankCollapsed && (
+                    <div className="divide-y divide-[var(--gray-50)]">
+                      {accs.map(acc => {
+                        const key = `${acc.cia}::${acc.cuenta}::${acc.moneda}`;
+                        const isExpanded = expanded === key;
+                        const saldo = acc.saldoFinal ?? acc.saldoInicial ?? 0;
+                        return (
+                          <div key={key}>
+                            <button
+                              onClick={() => setExpanded(isExpanded ? null : key)}
+                              className="w-full flex items-center gap-3 px-4 py-3 pl-10 hover:bg-[var(--surface-alt)] transition text-left"
+                            >
+                              {isExpanded
+                                ? <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" />
+                                : <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />}
+
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">
+                                  {acc.cuenta || 'Cuenta bancaria'}
+                                </p>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
+                                  {acc.cia && (
+                                    <span className="text-[11px] text-[var(--gray-400)]">
+                                      {ciaNameMap.get(acc.cia) ?? `Cia ${acc.cia}`}
+                                    </span>
+                                  )}
+                                  <span className="text-[11px] text-[var(--gray-400)]">{acc.cia ? '· ' : ''}{acc.movimientos.length} mov.</span>
+                                </div>
+                              </div>
+
+                              <div className="text-right w-36">
+                                <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
+                                <p className="text-[10px] text-[var(--gray-400)]">
+                                  {acc.saldoFinal !== undefined ? 'Saldo final' : acc.saldoInicial !== undefined ? 'Saldo inicial' : 'Sin saldo'}
+                                </p>
+                              </div>
+                            </button>
+
+                            {isExpanded && <BancosMovimientos acc={acc} internalReasonOf={internalReasonOf} />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -487,45 +487,47 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
   return (
     <div className="space-y-4">
-      {/* Month summary cards */}
-      <div className="grid grid-cols-4 gap-4 animate-card-in stagger-4">
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
+      {/* Month summary — compact strip */}
+      <div className="bg-white border border-[var(--gray-200)] rounded-xl p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
+        <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobranza total</div>
           <AnimatedNumber
             value={monthTotal}
             format={fmtCurrency}
-            className="block text-2xl font-semibold tabular-nums text-[var(--gray-950)] mt-1"
+            className="block text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
-          <div className="text-[12px] text-[var(--gray-400)] mt-0.5">{monthEvents} pagos · {uniqueClients} clientes</div>
+          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes</div>
         </div>
-        <div className="bg-white border border-[var(--success)]/40 rounded-xl p-4 hover-lift">
+        <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cobrado (real)</div>
           <AnimatedNumber
             value={confirmedTotal}
             format={fmtCurrency}
-            className="block text-2xl font-semibold tabular-nums text-[var(--success)] mt-1"
+            className="block text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5"
           />
-          <div className="text-[12px] text-[var(--gray-400)] mt-0.5">{confirmedCount} pagos confirmados</div>
+          <div className="text-[11px] text-[var(--gray-400)]">{confirmedCount} confirmados</div>
         </div>
-        <div className="bg-white border border-[var(--primary)]/30 rounded-xl p-4 hover-lift">
+        <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--primary)]">Proyectado</div>
           <AnimatedNumber
             value={projectedTotal}
             format={fmtCurrency}
-            className="block text-2xl font-semibold tabular-nums text-[var(--primary)] mt-1"
+            className="block text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5"
           />
-          <div className="text-[12px] text-[var(--gray-400)] mt-0.5">{monthEvents - confirmedCount} pendientes</div>
+          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents - confirmedCount} pendientes</div>
         </div>
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift">
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Avance</div>
-          <div className="text-2xl font-semibold tabular-nums text-[var(--gray-950)] mt-1">
-            {monthTotal > 0 ? (
-              <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
-            ) : (
-              '—'
-            )}
+        <div className="ml-auto min-w-[200px]">
+          <div className="flex items-baseline justify-between">
+            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Avance</div>
+            <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)]">
+              {monthTotal > 0 ? (
+                <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
+              ) : (
+                '—'
+              )}
+            </div>
           </div>
-          <div className="mt-1.5 h-2 bg-[var(--gray-50)] rounded-full overflow-hidden">
+          <div className="mt-1.5 h-1.5 bg-[var(--gray-50)] rounded-full overflow-hidden">
             <div
               className="h-full bg-[var(--success)] rounded-full"
               style={{ width: `${progressPct}%`, transition: 'width var(--motion-layout) var(--ease-smooth)' }}
