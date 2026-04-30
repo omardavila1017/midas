@@ -39,7 +39,7 @@ import {
   type AgedBalanceRecord,
 } from '../services/jde';
 import MonthDrilldown from './MonthDrilldown';
-import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
+import { type CashFlowTableRow } from './CashFlowTable';
 import PageHeader from './ui/PageHeader';
 
 interface DashboardProps {
@@ -600,115 +600,9 @@ const Dashboard: React.FC<DashboardProps> = ({
         onClose={() => setSelectedMonth(null)}
       />
 
-      {/* Monthly editable cash flow table — abajo del detalle del mes seleccionado.
-          Incluye botón para descargar todo el flujo como Excel. */}
-      <CashFlowTable
-        rows={tableRows}
-        overrides={overrides}
-        onOverridesChange={setOverrides}
-        title="Flujo de efectivo mensual"
-        subtitle="Ajusta manualmente el ingreso o egreso proyectado; la caja se recalcula al instante en el gráfico superior."
-        highlightYearMonth={selectedMonth}
-        onRowClick={(ym) => setSelectedMonth(ym)}
-        onDownloadExcel={() => downloadCashFlowExcel(chartData, minimumExpense)}
-      />
     </div>
   );
 };
-
-/** Descarga el flujo mensual como Excel con todas las columnas relevantes. */
-async function downloadCashFlowExcel(
-  chartData: Array<{
-    yearMonth: string;
-    realIncome: number;
-    projIncomeGap: number;
-    projIncomeTotal: number;
-    realExpense: number;
-    projExpenseGap: number;
-    projExpenseTotal: number;
-    gastoMinFloor: number;
-    realExpenseAboveFloor: number;
-    projExpenseGapAboveFloor: number;
-    monthlyFloor: number;
-    cashBase: number;
-    phase: 'past' | 'current' | 'future';
-  }>,
-  minimumExpense: { totalMonthly: number; providersMonthly: number; payrollMonthly: number },
-): Promise<void> {
-  const ExcelMod = await import('exceljs');
-  const ExcelRuntime = (((ExcelMod as unknown) as { default?: typeof ExcelMod }).default ?? ExcelMod);
-  const wb = new ExcelRuntime.Workbook();
-  wb.creator = 'Senda · Midas';
-  wb.created = new Date();
-
-  const ws = wb.addWorksheet('Flujo mensual', { views: [{ state: 'frozen', ySplit: 1 }] });
-  ws.columns = [
-    { header: 'Mes', key: 'mes', width: 12 },
-    { header: 'Fase', key: 'fase', width: 12 },
-    { header: 'Ingresos (real)', key: 'ingReal', width: 18, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Ingresos (proy.)', key: 'ingProy', width: 18, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Egresos (real)', key: 'egReal', width: 18, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Egresos (proy.)', key: 'egProy', width: 18, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Piso operativo', key: 'piso', width: 18, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Egreso total', key: 'egTotal', width: 18, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Flujo neto', key: 'neto', width: 18, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Caja final', key: 'caja', width: 18, style: { numFmt: '"$"#,##0.00' } },
-  ];
-  ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
-
-  const phaseLabel: Record<string, string> = {
-    past: 'Histórico',
-    current: 'En curso',
-    future: 'Proyectado',
-  };
-
-  for (const r of chartData) {
-    const ingResolved = r.realIncome > 0 ? r.realIncome : r.projIncomeTotal;
-    const egResolved = r.realExpense + r.projExpenseGap;
-    const row = ws.addRow({
-      mes: r.yearMonth,
-      fase: phaseLabel[r.phase] ?? r.phase,
-      ingReal: r.realIncome,
-      ingProy: r.projIncomeTotal,
-      egReal: r.realExpense,
-      egProy: r.projExpenseTotal,
-      piso: r.monthlyFloor,
-      egTotal: egResolved,
-      neto: ingResolved - egResolved,
-      caja: r.cashBase,
-    });
-    // Highlight piso operativo column in yellow
-    row.getCell('piso').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
-    row.getCell('piso').font = { color: { argb: 'FF92400E' }, bold: true };
-  }
-
-  // Hoja de resumen del piso operativo
-  const wsMin = wb.addWorksheet('Piso operativo');
-  wsMin.columns = [
-    { header: 'Concepto', key: 'concepto', width: 32 },
-    { header: 'Monto mensual', key: 'monto', width: 20, style: { numFmt: '"$"#,##0.00' } },
-    { header: 'Anualizado', key: 'anual', width: 20, style: { numFmt: '"$"#,##0.00' } },
-  ];
-  wsMin.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  wsMin.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
-  wsMin.addRow({ concepto: 'Proveedores de Operación', monto: minimumExpense.providersMonthly, anual: minimumExpense.providersMonthly * 12 });
-  wsMin.addRow({ concepto: 'Nómina + finiquitos', monto: minimumExpense.payrollMonthly, anual: minimumExpense.payrollMonthly * 12 });
-  const totalRow = wsMin.addRow({ concepto: 'TOTAL piso operativo', monto: minimumExpense.totalMonthly, anual: minimumExpense.totalMonthly * 12 });
-  totalRow.font = { bold: true };
-  totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
-
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `flujo-mensual-${new Date().toISOString().slice(0, 10)}.xlsx`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
 
 interface TooltipPayloadItem {
   dataKey: string;

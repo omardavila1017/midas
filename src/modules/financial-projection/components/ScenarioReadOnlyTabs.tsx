@@ -65,7 +65,7 @@ export function ScenarioReadOnlyTabs(props: ScenarioReadOnlyTabsProps) {
                 borderColor: active ? 'var(--primary)' : 'var(--gray-200)',
               }}
             >
-              <GitBranch className="h-3.5 w-3.5" strokeWidth={2} />
+              <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} />
               <span className="truncate max-w-[160px]">{draft.name}</span>
               {delta !== 0 && (
                 <span
@@ -112,7 +112,7 @@ function CoreTab({
         borderColor: active ? 'var(--gray-950)' : 'var(--gray-200)',
       }}
     >
-      <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+      <Icon className="h-3.5 w-3.5" strokeWidth={1.5} />
       <span className="truncate max-w-[160px]">{label}</span>
       <span
         className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"

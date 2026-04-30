@@ -66,10 +66,69 @@ export interface FinancialProjectionSourceData {
   hasData: boolean;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Module-level memo for `buildFinancialProjectionSourceData`. The canonical
+// projection iterates clients × months × CXP × budget through
+// `computeBaseCashFlow`, which is by far the heaviest piece of work in the
+// module — anywhere from 80–250ms on a real catalog. The dashboard's
+// `useMemo` only caches *per mount*, so navigating away from the tab and
+// back was paying the full cost again. This cache survives navigation and
+// component remounts; it lives for the lifetime of the JS module.
+//
+// Cache key folds in only the references that actually influence output —
+// the inputs are immutable arrays from the Midas storage layer, so identity
+// comparison is sufficient and avoids JSON.stringify on hot paths.
+// ─────────────────────────────────────────────────────────────────────────
+
+type CacheKey = string;
+const SOURCE_CACHE = new Map<CacheKey, FinancialProjectionSourceData>();
+const SOURCE_CACHE_LIMIT = 6;
+
+function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string): CacheKey {
+  // We mix array references via WeakRef-like identity sentinels: each
+  // unique array gets a stable id assigned the first time we see it. This
+  // is faster than JSON.stringify and avoids walking the data.
+  const ids = [
+    refId(input.bankStatements),
+    refId(input.clients),
+    refId(input.providers),
+    refId(input.cxpRecords),
+    refId(input.assumptions),
+    refId(input.budget),
+  ];
+  return [
+    input.companyCode,
+    asOfDate,
+    input.startingBalance,
+    ...ids,
+  ].join('|');
+}
+
+const REF_IDS = new WeakMap<object, number>();
+let nextRefId = 1;
+function refId(value: unknown): number | string {
+  if (value === null || value === undefined) return 'n';
+  if (typeof value !== 'object') return String(value);
+  const existing = REF_IDS.get(value as object);
+  if (existing !== undefined) return existing;
+  const id = nextRefId++;
+  REF_IDS.set(value as object, id);
+  return id;
+}
+
 export function buildFinancialProjectionSourceData(
   input: FinancialProjectionSourceInput,
 ): FinancialProjectionSourceData {
   const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const cacheKey = sourceCacheKey(input, asOfDate);
+  const cached = SOURCE_CACHE.get(cacheKey);
+  if (cached) {
+    // Refresh insertion order so frequently-used entries stay hot.
+    SOURCE_CACHE.delete(cacheKey);
+    SOURCE_CACHE.set(cacheKey, cached);
+    return cached;
+  }
+
   const canonicalInputs = {
     companyCode: input.companyCode,
     bankStatements: input.bankStatements,
@@ -92,7 +151,7 @@ export function buildFinancialProjectionSourceData(
   const customers = customerProfiles(input.clients, input.assumptions, asOfDate);
   const suppliers = supplierProfiles(input.providers, input.cxpRecords);
 
-  return {
+  const result: FinancialProjectionSourceData = {
     movements: canonical.movements,
     scenarios,
     adjustments: [],
@@ -102,6 +161,31 @@ export function buildFinancialProjectionSourceData(
     canonical,
     hasData,
   };
+  SOURCE_CACHE.set(cacheKey, result);
+  if (SOURCE_CACHE.size > SOURCE_CACHE_LIMIT) {
+    const oldest = SOURCE_CACHE.keys().next().value as CacheKey | undefined;
+    if (oldest !== undefined) SOURCE_CACHE.delete(oldest);
+  }
+  return result;
+}
+
+/**
+ * Cheap cache lookup that does NOT trigger the canonical projection build.
+ * Lets the dashboard render the chrome on the first commit while it knows
+ * whether it has to schedule heavy work or not.
+ */
+export function tryGetCachedFinancialProjectionSourceData(
+  input: FinancialProjectionSourceInput,
+): FinancialProjectionSourceData | null {
+  const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
+  return SOURCE_CACHE.get(sourceCacheKey(input, asOfDate)) ?? null;
+}
+
+/**
+ * Test/debug hook — clear the source cache. Not used at runtime.
+ */
+export function __clearProjectionSourceCache(): void {
+  SOURCE_CACHE.clear();
 }
 
 /**

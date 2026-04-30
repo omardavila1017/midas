@@ -51,12 +51,12 @@ export function AlertsPanel({ alerts, onSelect }: AlertsPanelProps) {
 
 function SeverityIcon({ severity }: { severity: ProjectionAlert['severity'] }) {
   if (severity === 'CRITICAL') {
-    return <AlertOctagon className="h-5 w-5 shrink-0 text-[var(--danger)]" strokeWidth={1.75} />;
+    return <AlertOctagon className="h-5 w-5 shrink-0 text-[var(--danger)]" strokeWidth={1.5} />;
   }
   if (severity === 'WARNING') {
-    return <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--warning)]" strokeWidth={1.75} />;
+    return <AlertTriangle className="h-5 w-5 shrink-0 text-[var(--warning)]" strokeWidth={1.5} />;
   }
-  return <Info className="h-5 w-5 shrink-0 text-[var(--gray-500)]" strokeWidth={1.75} />;
+  return <Info className="h-5 w-5 shrink-0 text-[var(--gray-500)]" strokeWidth={1.5} />;
 }
 
 function SeverityBadge({ severity }: { severity: ProjectionAlert['severity'] }) {

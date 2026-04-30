@@ -500,23 +500,25 @@ input:focus, select:focus, textarea:focus {
               border-color var(--motion-state) var(--ease-smooth);
 }
 
-.input {
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--gray-300);
-  border-radius: var(--radius-sm);
-  background: white;
-  font-size: 0.8125rem;
-  color: var(--gray-950);
-  transition: border-color var(--motion-state) var(--ease-smooth),
-              box-shadow var(--motion-state) var(--ease-smooth),
-              background-color var(--motion-state) var(--ease-smooth);
-}
-.input:hover {
-  border-color: var(--gray-400);
-}
-.input::placeholder {
-  color: var(--gray-400);
+@layer components {
+  .input {
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--gray-300);
+    border-radius: var(--radius-sm);
+    background: white;
+    font-size: 0.8125rem;
+    color: var(--gray-950);
+    transition: border-color var(--motion-state) var(--ease-smooth),
+                box-shadow var(--motion-state) var(--ease-smooth),
+                background-color var(--motion-state) var(--ease-smooth);
+  }
+  .input:hover {
+    border-color: var(--gray-400);
+  }
+  .input::placeholder {
+    color: var(--gray-400);
+  }
 }
 
 button, a {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong } from '../../../formatters';
 import {
@@ -29,7 +29,7 @@ interface MovementGroup {
   containsToday?: boolean;
 }
 
-export function MovementsTable(props: MovementsTableProps) {
+function MovementsTableImpl(props: MovementsTableProps) {
   const { movements, granularity, today, onSelectMovement } = props;
 
   const [search, setSearch] = useState('');
@@ -37,16 +37,33 @@ export function MovementsTable(props: MovementsTableProps) {
   const [groupBy, setGroupBy] = useState<MovementsGroupBy>('period');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
+  // The dashboard pre-sorts movements by date; we still pre-build a haystack
+  // string per movement so search filtering is O(n) without per-keystroke
+  // string concatenation. Deferred search keeps typing instant — the table
+  // updates in the next idle tick.
+  const deferredSearch = useDeferredValue(search);
+  const haystackByMovement = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of movements) {
+      map.set(m.id, `${m.counterpartyName ?? ''} ${m.concept} ${m.category}`.toLowerCase());
+    }
+    return map;
+  }, [movements]);
+
   const filtered = useMemo(() => {
-    return movements.filter((movement) => {
-      if (typeFilter !== 'ALL' && movement.type !== typeFilter) return false;
-      if (search) {
-        const haystack = `${movement.counterpartyName ?? ''} ${movement.concept} ${movement.category}`.toLowerCase();
-        if (!haystack.includes(search.toLowerCase())) return false;
+    const needle = deferredSearch.trim().toLowerCase();
+    if (!needle && typeFilter === 'ALL') return movements;
+    const result: FinancialMovement[] = [];
+    for (const movement of movements) {
+      if (typeFilter !== 'ALL' && movement.type !== typeFilter) continue;
+      if (needle) {
+        const haystack = haystackByMovement.get(movement.id);
+        if (!haystack || !haystack.includes(needle)) continue;
       }
-      return true;
-    }).sort((a, b) => effectiveMovementDate(a).localeCompare(effectiveMovementDate(b)));
-  }, [movements, typeFilter, search]);
+      result.push(movement);
+    }
+    return result;
+  }, [movements, typeFilter, deferredSearch, haystackByMovement]);
 
   const groups = useMemo(() => buildGroups(filtered, groupBy, granularity, today), [filtered, groupBy, granularity, today]);
 
@@ -158,6 +175,17 @@ export function MovementsTable(props: MovementsTableProps) {
   );
 }
 
+/**
+ * Memoized so re-rendering the dashboard (drill-drawer toggles, scenario
+ * tabs that share a cached run) doesn't re-process the filter pipeline.
+ */
+export const MovementsTable = memo(MovementsTableImpl, (prev, next) =>
+  prev.movements === next.movements
+  && prev.granularity === next.granularity
+  && prev.today === next.today
+  && prev.onSelectMovement === next.onSelectMovement,
+);
+
 function GroupRows({
   group,
   expanded,
@@ -183,8 +211,8 @@ function GroupRows({
         <td className="px-4 py-3">
           <div className="flex items-center gap-2">
             {expanded
-              ? <ChevronDown className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={2} />
-              : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={2} />}
+              ? <ChevronDown className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
+              : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />}
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-[var(--gray-950)]">{group.label}</span>

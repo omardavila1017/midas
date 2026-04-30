@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
 import type {
@@ -30,7 +30,7 @@ interface ConceptAggregate {
   contributingMovements: FinancialMovement[];
 }
 
-export function BucketDetailTable(props: BucketDetailTableProps) {
+function BucketDetailTableImpl(props: BucketDetailTableProps) {
   const {
     buckets,
     movements,
@@ -170,6 +170,22 @@ export function BucketDetailTable(props: BucketDetailTableProps) {
   );
 }
 
+/**
+ * Memoized table — re-renders only when the run shape, comparison run, or
+ * granularity actually changes. The dashboard's LRU cache feeds stable
+ * references, so toggling the drill-drawer or scenario tabs that share a
+ * cached run will skip this entire subtree.
+ */
+export const BucketDetailTable = memo(BucketDetailTableImpl, (prev, next) =>
+  prev.buckets === next.buckets
+  && prev.movements === next.movements
+  && prev.rows === next.rows
+  && prev.overrides === next.overrides
+  && prev.granularity === next.granularity
+  && prev.comparisonBuckets === next.comparisonBuckets
+  && prev.onSelectMovement === next.onSelectMovement,
+);
+
 function BucketRow({
   bucket,
   expanded,
@@ -203,8 +219,8 @@ function BucketRow({
         <td className="px-4 py-3">
           <div className="flex items-center gap-2">
             {expanded
-              ? <ChevronDown className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={2} />
-              : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={2} />}
+              ? <ChevronDown className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
+              : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />}
             <div>
               <div className="font-semibold text-[var(--gray-950)]">{bucket.label}</div>
               <div className="text-[10.5px] text-[var(--gray-400)]">{bucket.date}</div>
@@ -295,7 +311,7 @@ function ConceptBreakdown({
                 <td className="px-4 py-2.5 pl-10">
                   <div className="flex items-center gap-1.5">
                     {agg.hasOverride && (
-                      <Sparkles className="h-3 w-3 text-[var(--primary)]" strokeWidth={2} aria-label="Override de Planeación" />
+                      <Sparkles className="h-3 w-3 text-[var(--primary)]" strokeWidth={1.5} aria-label="Override de Planeación" />
                     )}
                     <span className="font-medium text-[var(--gray-950)]">{agg.rowLabel}</span>
                   </div>

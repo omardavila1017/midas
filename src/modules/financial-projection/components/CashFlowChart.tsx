@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import {
   Bar,
   CartesianGrid,
@@ -77,7 +77,7 @@ function buildSupplierLines(movements: FinancialMovement[]): SupplierLine[] {
     .sort((a, b) => b.amount - a.amount);
 }
 
-export function CashFlowChart({
+function CashFlowChartImpl({
   projection,
   baseProjection,
   comparisonProjection,
@@ -90,37 +90,64 @@ export function CashFlowChart({
 }) {
   const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null);
 
+  // At daily resolution we render ~365 bars in a few hundred px — individual
+  // bars become a fraction of a pixel wide and clicking a specific day is
+  // not a useful interaction. We disable the click target there both to
+  // avoid the misleading affordance and to skip the hover/click state work
+  // Recharts performs per-bar.
+  const interactiveBars = projection.buckets.length <= 56;
+
   const data = useMemo(() => {
-    const baseByDate = new Map(
-      baseProjection?.buckets.map((bucket) => [bucket.date, bucket.closingCash]) ?? [],
-    );
-    const comparisonByDate = new Map(
-      comparisonProjection?.buckets.map((bucket) => [bucket.date, bucket.closingCash]) ?? [],
-    );
-    return projection.buckets.map((bucket) => ({
-      date: bucket.label,
-      rawDate: bucket.date,
-      entradas: bucket.inflows,
-      salidas: bucket.outflows,
-      caja: bucket.closingCash,
-      minimo: bucket.minimumCash,
-      base: baseByDate.get(bucket.date),
-      comparison: comparisonByDate.get(bucket.date),
-    }));
+    // Build O(1) lookups for the optional series so the main loop stays a
+    // single pass over the active buckets.
+    const baseByDate = baseProjection?.buckets.length
+      ? new Map(baseProjection.buckets.map((bucket) => [bucket.date, bucket.closingCash]))
+      : null;
+    const comparisonByDate = comparisonProjection?.buckets.length
+      ? new Map(comparisonProjection.buckets.map((bucket) => [bucket.date, bucket.closingCash]))
+      : null;
+    const activeBuckets = projection.buckets;
+    const out = new Array(activeBuckets.length);
+    for (let i = 0; i < activeBuckets.length; i++) {
+      const bucket = activeBuckets[i];
+      out[i] = {
+        date: bucket.label,
+        rawDate: bucket.date,
+        entradas: bucket.inflows,
+        salidas: bucket.outflows,
+        caja: bucket.closingCash,
+        minimo: bucket.minimumCash,
+        base: baseByDate ? baseByDate.get(bucket.date) : undefined,
+        comparison: comparisonByDate ? comparisonByDate.get(bucket.date) : undefined,
+      };
+    }
+    return out;
   }, [projection.buckets, baseProjection?.buckets, comparisonProjection?.buckets]);
+
+  // Reset the open breakdown when the underlying buckets change shape (e.g.
+  // granularity flipped) — the previous index would point to the wrong row.
+  useEffect(() => {
+    setSelectedBucketIdx(null);
+  }, [projection.buckets]);
 
   const selectedBucket = selectedBucketIdx != null ? projection.buckets[selectedBucketIdx] : null;
 
   const breakdown = useMemo(() => {
     if (!selectedBucket) return null;
     const idSet = new Set(selectedBucket.movementIds);
-    const movements = projection.movements.filter((m) => idSet.has(m.id));
+    const movements: FinancialMovement[] = [];
+    for (const m of projection.movements) if (idSet.has(m.id)) movements.push(m);
     return buildCategoryBreakdown(movements);
   }, [selectedBucket, projection.movements]);
 
-  const handleBarClick = (_data: unknown, index: number) => {
-    setSelectedBucketIdx((prev) => (prev === index ? null : index));
-  };
+  const handleBarClick = useMemo(
+    () => interactiveBars
+      ? (_data: unknown, index: number) => {
+        setSelectedBucketIdx((prev) => (prev === index ? null : index));
+      }
+      : undefined,
+    [interactiveBars],
+  );
 
   return (
     <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
@@ -132,7 +159,7 @@ export function CashFlowChart({
           <p className="mt-1 text-[12px] text-[var(--gray-400)]">
             Entradas, salidas, cierre y caja mínima.
             {baseProjection ? ' La línea punteada es el escenario base.' : ' Vista del escenario base.'}
-            {' '}Haz clic en una barra para ver el desglose.
+            {interactiveBars ? ' Haz clic en una barra para ver el desglose.' : ''}
           </p>
         </div>
         <div className="text-right text-[12px] text-[var(--gray-400)]">
@@ -140,7 +167,12 @@ export function CashFlowChart({
         </div>
       </div>
       <div className="mt-4" style={{ height: 340 }}>
-        <ResponsiveContainer width="100%" height="100%">
+        {/* `debounce` rate-limits Recharts' resize storm during layout shifts
+            (the page has many collapsibles), which used to thrash the chart
+            on first mount. `isAnimationActive=false` on every series cuts
+            Recharts' default 1500ms enter animation — silky immediate paint
+            instead of a 1.5s cascade where each series re-tweens. */}
+        <ResponsiveContainer width="100%" height="100%" debounce={120}>
           <ComposedChart data={data} margin={{ top: 12, right: 18, bottom: 0, left: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
             <XAxis
@@ -156,6 +188,7 @@ export function CashFlowChart({
             <Tooltip
               formatter={(value: number, name: string) => [fmtCurrency(value), name]}
               labelFormatter={(_, payload) => payload?.[0]?.payload?.rawDate ?? ''}
+              isAnimationActive={false}
               contentStyle={{
                 border: '1px solid var(--gray-200)',
                 borderRadius: '10px',
@@ -167,18 +200,20 @@ export function CashFlowChart({
               dataKey="entradas"
               name="Ingresos"
               fill="var(--success)"
-              barSize={12}
-              radius={[4, 4, 0, 0]}
-              cursor="pointer"
+              barSize={interactiveBars ? 12 : 4}
+              radius={[3, 3, 0, 0]}
+              cursor={interactiveBars ? 'pointer' : 'default'}
+              isAnimationActive={false}
               onClick={handleBarClick}
             />
             <Bar
               dataKey="salidas"
               name="Egresos"
               fill="var(--danger)"
-              barSize={12}
-              radius={[4, 4, 0, 0]}
-              cursor="pointer"
+              barSize={interactiveBars ? 12 : 4}
+              radius={[3, 3, 0, 0]}
+              cursor={interactiveBars ? 'pointer' : 'default'}
+              isAnimationActive={false}
               onClick={handleBarClick}
             />
             <Line
@@ -188,6 +223,7 @@ export function CashFlowChart({
               stroke="#1d4ed8"
               strokeWidth={2.5}
               dot={false}
+              isAnimationActive={false}
             />
             {baseProjection && (
               <Line
@@ -198,6 +234,7 @@ export function CashFlowChart({
                 strokeWidth={1.5}
                 strokeDasharray="4 4"
                 dot={false}
+                isAnimationActive={false}
               />
             )}
             {comparisonProjection && (
@@ -209,6 +246,7 @@ export function CashFlowChart({
                 strokeWidth={1.5}
                 strokeDasharray="2 4"
                 dot={false}
+                isAnimationActive={false}
               />
             )}
             <ReferenceLine
@@ -237,6 +275,19 @@ export function CashFlowChart({
     </section>
   );
 }
+
+/**
+ * Custom equality keeps Recharts off the critical path: identity-compare the
+ * three `ForecastRun` slots and the navigation callback. The dashboard uses
+ * the LRU cache so identical inputs produce identical run references, which
+ * makes this check a single pointer compare in the common case.
+ */
+export const CashFlowChart = memo(CashFlowChartImpl, (prev, next) =>
+  prev.projection === next.projection
+  && prev.baseProjection === next.baseProjection
+  && prev.comparisonProjection === next.comparisonProjection
+  && prev.onNavigateToTax === next.onNavigateToTax,
+);
 
 function BreakdownPanel({
   bucket,

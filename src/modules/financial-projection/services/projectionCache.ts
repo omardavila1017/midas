@@ -1,0 +1,61 @@
+/**
+ * Lightweight LRU cache for ScenarioRun objects so the dashboard can switch
+ * between scenarios, comparison targets and granularities without re-running
+ * the full pipeline each time. Keys are stable strings derived from the
+ * inputs that actually influence a run (scenario id, granularity, content
+ * fingerprints of overrides / adjustments / movements). The cache only lives
+ * for the lifetime of the React tree — it's deliberately a module-level
+ * Map so a remount of the dashboard rebuilds it from scratch.
+ */
+
+const MAX_ENTRIES = 24;
+
+class LRU<K, V> {
+  private map = new Map<K, V>();
+
+  constructor(private readonly capacity: number) {}
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key);
+    if (value === undefined) return undefined;
+    // Refresh insertion order so frequently-used entries stay warm.
+    this.map.delete(key);
+    this.map.set(key, value);
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, value);
+    if (this.map.size > this.capacity) {
+      const oldest = this.map.keys().next().value as K | undefined;
+      if (oldest !== undefined) this.map.delete(oldest);
+    }
+  }
+}
+
+export const projectionRunCache = new LRU<string, unknown>(MAX_ENTRIES);
+
+export function cachedRun<T>(key: string, build: () => T): T {
+  const cached = projectionRunCache.get(key) as T | undefined;
+  if (cached !== undefined) return cached;
+  const fresh = build();
+  projectionRunCache.set(key, fresh as unknown);
+  return fresh;
+}
+
+export function fingerprintArray<T>(items: readonly T[], pick: (item: T) => string | number | undefined): string {
+  if (items.length === 0) return '0';
+  // Cheap fingerprint: length + xor-style folded hash of selected keys. Avoids
+  // JSON.stringify which is hot-path expensive for thousands of movements.
+  let hash = items.length;
+  for (let i = 0; i < items.length; i++) {
+    const value = pick(items[i]);
+    if (value === undefined) continue;
+    const s = String(value);
+    for (let j = 0; j < s.length; j++) {
+      hash = ((hash << 5) - hash + s.charCodeAt(j)) | 0;
+    }
+  }
+  return `${items.length}:${hash}`;
+}

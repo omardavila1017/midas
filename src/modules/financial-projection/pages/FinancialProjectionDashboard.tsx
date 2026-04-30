@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react';
 import {
   AlertTriangle,
   Banknote,
@@ -44,9 +44,14 @@ import { CollapsibleSection } from '../components/CollapsibleSection';
 import { BucketDetailTable } from '../components/BucketDetailTable';
 import { AlertsPanel } from '../components/AlertsPanel';
 import { MovementsTable } from '../components/MovementsTable';
+import { DeferredMount } from '../components/DeferredMount';
+import { ChartSkeleton, TableSkeleton } from '../components/SectionSkeletons';
+import { cachedRun, fingerprintArray } from '../services/projectionCache';
 import {
   buildFinancialProjectionSourceData,
   calculateInitialCash,
+  tryGetCachedFinancialProjectionSourceData,
+  type FinancialProjectionSourceData,
 } from '../services/financialProjectionService';
 import {
   loadManualPlanningEntries,
@@ -99,15 +104,20 @@ const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> =
  *   (sincroniza con Planeación).
  * - Layout: secciones colapsables persistidas en sessionStorage.
  * - Toda mutación se canaliza a Planeación.
+ *
+ * Mount strategy:
+ *   The canonical projection (`buildFinancialProjectionSourceData` →
+ *   `computeBaseCashFlow`) is the single most expensive thing this page
+ *   does — it iterates clients × months × CXP × budget. We outer-gate the
+ *   inner dashboard so the chrome (header, KPI placeholders, section
+ *   shells) paints in one frame and the heavy compute lands on the next
+ *   idle slot. Cache hits short-circuit the gating completely.
  */
 export default function FinancialProjectionDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
-  const yearStart = `${currentYear}-01-01`;
-  const yearEnd = `${currentYear}-12-31`;
 
-  const source = useMemo(
-    () => buildFinancialProjectionSourceData({ ...props, asOfDate: today }),
+  const cacheProbeInput = useMemo(
+    () => ({ ...props, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -121,6 +131,101 @@ export default function FinancialProjectionDashboard(props: Props) {
       today,
     ],
   );
+
+  // Cheap cache hit on first render → no warm-up frame, full UI synchronously.
+  const cachedSource = useMemo(
+    () => tryGetCachedFinancialProjectionSourceData(cacheProbeInput),
+    [cacheProbeInput],
+  );
+
+  const [source, setSource] = useState<FinancialProjectionSourceData | null>(cachedSource);
+
+  // If we don't have the source cached, schedule the canonical build for
+  // *after* the first paint so the user sees the chrome immediately.
+  useEffect(() => {
+    if (cachedSource) {
+      setSource(cachedSource);
+      return;
+    }
+    let cancelled = false;
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    });
+    const run = () => {
+      if (cancelled) return;
+      const built = buildFinancialProjectionSourceData(cacheProbeInput);
+      if (!cancelled) setSource(built);
+    };
+    if (typeof ric.requestIdleCallback === 'function') {
+      const id = ric.requestIdleCallback(run, { timeout: 200 });
+      return () => {
+        cancelled = true;
+        if (typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(id);
+      };
+    }
+    const id = window.setTimeout(run, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+    };
+  }, [cachedSource, cacheProbeInput]);
+
+  if (!source) {
+    return <ProjectionWarmupShell />;
+  }
+
+  return <ProjectionDashboardInner {...props} today={today} source={source} />;
+}
+
+/**
+ * Lightweight skeleton shown for the first paint when the canonical
+ * projection still needs to build. Mirrors the eventual layout (header,
+ * scenario tabs, KPI grid, chart card) so there's no shift.
+ */
+function ProjectionWarmupShell() {
+  return (
+    <div className="space-y-4 animate-page-in" aria-busy="true" aria-label="Calculando proyección">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="skeleton h-4 w-44 rounded opacity-60" />
+          <div className="skeleton mt-2 h-3 w-64 rounded opacity-50" />
+        </div>
+        <div className="skeleton h-10 w-48 rounded-xl opacity-50" />
+      </div>
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <div className="skeleton h-3 w-20 rounded opacity-50" />
+          <div className="skeleton h-9 w-32 rounded-xl opacity-50" />
+          <div className="skeleton h-9 w-32 rounded-xl opacity-50" />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {Array.from({ length: 4 }).map((_, idx) => (
+          <div key={idx} className="rounded-xl border border-[var(--gray-200)] bg-white p-4">
+            <div className="skeleton h-3 w-1/2 rounded opacity-50" />
+            <div className="skeleton mt-3 h-5 w-3/4 rounded opacity-60" />
+            <div className="skeleton mt-2 h-3 w-2/3 rounded opacity-40" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+        <div className="skeleton h-3 w-40 rounded opacity-50" />
+        <div className="skeleton mt-3 h-[280px] w-full rounded-xl opacity-50" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The actual dashboard logic. Receives the resolved `source` so the body
+ * never needs to deal with the warming-up state.
+ */
+function ProjectionDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
+  const { today, source } = props;
+  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
+  const yearStart = `${currentYear}-01-01`;
+  const yearEnd = `${currentYear}-12-31`;
 
   const [storedScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
   const [storedAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
@@ -145,9 +250,21 @@ export default function FinancialProjectionDashboard(props: Props) {
 
   const [activeScenarioId, setActiveScenarioId] = useState<string>(approvedScenario.id);
   const [comparisonScenarioId, setComparisonScenarioId] = useState<string | null>(null);
-  const [granularity, setGranularity] = useState<ProjectionGranularity>('monthly');
+  const [granularity, setGranularityState] = useState<ProjectionGranularity>('monthly');
   const [drillMovement, setDrillMovement] = useState<FinancialMovement | null>(null);
   const [drillAnchor, setDrillAnchor] = useState<DOMRect | null>(null);
+
+  // Granularity flips run inside a transition so React keeps the previous
+  // chart/tables on screen while the new data warms up — no stutter, no
+  // empty frames. `useDeferredValue` is still useful for the segmented
+  // control's pending hint (the displayed value lags slightly so the
+  // pending state has something to show against).
+  const [granularityPending, startGranularityTransition] = useTransition();
+  const deferredGranularity = useDeferredValue(granularity);
+  const setGranularity = useCallback((next: ProjectionGranularity) => {
+    if (next === granularity) return;
+    startGranularityTransition(() => setGranularityState(next));
+  }, [granularity]);
 
   useEffect(() => {
     if (!scenarios.some((s) => s.id === activeScenarioId)) {
@@ -192,82 +309,30 @@ export default function FinancialProjectionDashboard(props: Props) {
     return map;
   }, [scenarios]);
 
-  // Single pass that computes every projection used by the page in one memo.
-  // Reuses pre-indexed storage and scenario name lookups.
-  const projectionTargets = useMemo(() => {
-    const ids = new Set<string>([baseScenario.id, approvedScenario.id, activeScenarioId]);
-    if (comparisonScenarioId) ids.add(comparisonScenarioId);
-    for (const draft of drafts) ids.add(draft.id);
-    return Array.from(ids);
-  }, [baseScenario.id, approvedScenario.id, activeScenarioId, comparisonScenarioId, drafts]);
-
-  const projectionsByScenario = useMemo(() => {
-    const map = new Map<string, ScenarioRun>();
-    for (const scenarioId of projectionTargets) {
-      const scenarioName = scenarioNameById.get(scenarioId) ?? scenarioId;
-      const taxMovements = buildApprovedTaxPaymentMovements({
-        obligations: taxStore.obligations,
-        scenarioId,
-        startDate: yearStart,
-        endDate: yearEnd,
-        asOfDate: today,
-      });
-      const manualMovements = expandManualPlanningEntriesToMovements(manualEntries, {
-        scenarioId,
-        startDate: yearStart,
-        endDate: yearEnd,
-        asOfDate: today,
-      });
-      const adjustedMovements = applyAdjustmentsToMovements(
-        [...source.movements, ...manualMovements, ...taxMovements],
-        storedAdjustments,
-        scenarioId,
-      );
-      const rawProjection = calculateBaseProjection(adjustedMovements, {
-        startDate: yearStart,
-        endDate: yearEnd,
-        initialCash,
-        minimumCash,
-        granularity,
-        scenarioId,
-        name: scenarioName,
-      });
-      const scenarioCustomRows = customRowsByScenario.get(scenarioId) ?? [];
-      const scenarioOverrides = cellOverridesByScenario.get(scenarioId) ?? [];
-      const rows = buildPlanningRows({
-        movements: rawProjection.movements,
-        customRows: scenarioCustomRows,
-        overrides: scenarioOverrides,
-      });
-      const buckets = applyCellOverridesToBuckets({
-        buckets: rawProjection.buckets,
-        overrides: scenarioOverrides,
-        movements: rawProjection.movements,
-        rows,
-        granularity,
-        conceptKeyForMovement,
-        asOfDate: today,
-        initialCash,
-      });
-      map.set(scenarioId, {
-        ...rawProjection,
-        buckets,
-        summary: summarizeBucketsForScenario(buckets, rawProjection.movements, minimumCash),
-        rows,
-        overrides: scenarioOverrides,
-      });
-    }
-    return map;
+  // Stable fingerprint for the inputs that *every* run shares (movements,
+  // adjustments, manual entries, tax obligations). Computing this once lets
+  // us key the per-scenario LRU cache without re-hashing on every render.
+  const sharedInputsKey = useMemo(() => {
+    const movementsKey = fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount));
+    const adjustmentsKey = fingerprintArray(storedAdjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt);
+    const manualKey = fingerprintArray(manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? ''));
+    const taxKey = fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status);
+    return [
+      movementsKey,
+      adjustmentsKey,
+      manualKey,
+      taxKey,
+      yearStart,
+      yearEnd,
+      today,
+      initialCash,
+      minimumCash,
+    ].join('|');
   }, [
-    projectionTargets,
-    scenarioNameById,
     source.movements,
     storedAdjustments,
     manualEntries,
-    customRowsByScenario,
-    cellOverridesByScenario,
     taxStore.obligations,
-    granularity,
     yearStart,
     yearEnd,
     today,
@@ -275,17 +340,156 @@ export default function FinancialProjectionDashboard(props: Props) {
     minimumCash,
   ]);
 
-  const baseRun = projectionsByScenario.get(baseScenario.id)!;
-  const activeRun = projectionsByScenario.get(activeScenarioId) ?? baseRun;
-  const comparisonRun = comparisonScenarioId
-    ? (projectionsByScenario.get(comparisonScenarioId) ?? null)
-    : null;
+  // Build a single scenario run, hitting the LRU first. Custom rows /
+  // overrides are scenario-scoped so they fold into the cache key.
+  const buildRun = useMemo(() => {
+    return (scenarioId: string, gran: ProjectionGranularity): ScenarioRun => {
+      const scenarioName = scenarioNameById.get(scenarioId) ?? scenarioId;
+      const scenarioCustomRows = customRowsByScenario.get(scenarioId) ?? [];
+      const scenarioOverrides = cellOverridesByScenario.get(scenarioId) ?? [];
+      const customKey = fingerprintArray(scenarioCustomRows, (r) => r.id + ':' + (r.updatedAt ?? ''));
+      const overrideKey = fingerprintArray(scenarioOverrides, (o) => o.conceptKey + '@' + o.bucketKey + ':' + o.value);
+      const cacheKey = [
+        sharedInputsKey,
+        scenarioId,
+        gran,
+        customKey,
+        overrideKey,
+      ].join('||');
 
-  // Bucket columns for chart range info.
-  const bucketDates = useMemo(
-    () => buildBucketDates(yearStart, yearEnd, granularity),
-    [yearStart, yearEnd, granularity],
+      return cachedRun<ScenarioRun>(cacheKey, () => {
+        const taxMovements = buildApprovedTaxPaymentMovements({
+          obligations: taxStore.obligations,
+          scenarioId,
+          startDate: yearStart,
+          endDate: yearEnd,
+          asOfDate: today,
+        });
+        const manualMovements = expandManualPlanningEntriesToMovements(manualEntries, {
+          scenarioId,
+          startDate: yearStart,
+          endDate: yearEnd,
+          asOfDate: today,
+        });
+        const adjustedMovements = applyAdjustmentsToMovements(
+          [...source.movements, ...manualMovements, ...taxMovements],
+          storedAdjustments,
+          scenarioId,
+        );
+        const rawProjection = calculateBaseProjection(adjustedMovements, {
+          startDate: yearStart,
+          endDate: yearEnd,
+          initialCash,
+          minimumCash,
+          granularity: gran,
+          scenarioId,
+          name: scenarioName,
+        });
+        const rows = buildPlanningRows({
+          movements: rawProjection.movements,
+          customRows: scenarioCustomRows,
+          overrides: scenarioOverrides,
+        });
+        const buckets = applyCellOverridesToBuckets({
+          buckets: rawProjection.buckets,
+          overrides: scenarioOverrides,
+          movements: rawProjection.movements,
+          rows,
+          granularity: gran,
+          conceptKeyForMovement,
+          asOfDate: today,
+          initialCash,
+        });
+        return {
+          ...rawProjection,
+          buckets,
+          summary: summarizeBucketsForScenario(buckets, rawProjection.movements, minimumCash),
+          rows,
+          overrides: scenarioOverrides,
+        };
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    sharedInputsKey,
+    scenarioNameById,
+    customRowsByScenario,
+    cellOverridesByScenario,
+    source.movements,
+    storedAdjustments,
+    manualEntries,
+    taxStore.obligations,
+    yearStart,
+    yearEnd,
+    today,
+    initialCash,
+    minimumCash,
+  ]);
+
+  // Eager runs — only the ones the visible UI actually needs to paint:
+  // base (for the comparison line + tab labels), the active scenario, and
+  // the comparison scenario when one is selected. Drafts get evaluated
+  // lazily by `finalCashFor` so the tab strip can render without paying
+  // the full pipeline up front for every draft.
+  const baseRun = useMemo(
+    () => buildRun(baseScenario.id, deferredGranularity),
+    [buildRun, baseScenario.id, deferredGranularity],
   );
+  const activeRun = useMemo(
+    () => (activeScenarioId === baseScenario.id ? baseRun : buildRun(activeScenarioId, deferredGranularity)),
+    [buildRun, activeScenarioId, baseScenario.id, baseRun, deferredGranularity],
+  );
+  const comparisonRun = useMemo(() => {
+    if (!comparisonScenarioId) return null;
+    if (comparisonScenarioId === baseScenario.id) return baseRun;
+    if (comparisonScenarioId === activeScenarioId) return activeRun;
+    return buildRun(comparisonScenarioId, deferredGranularity);
+  }, [buildRun, comparisonScenarioId, baseScenario.id, baseRun, activeScenarioId, activeRun, deferredGranularity]);
+
+  // Bucket columns for chart range info — uses the deferred granularity so
+  // it stays consistent with the currently rendered runs.
+  const bucketDates = useMemo(
+    () => buildBucketDates(yearStart, yearEnd, deferredGranularity),
+    [yearStart, yearEnd, deferredGranularity],
+  );
+
+  // Pre-warm the *other* two granularities for the active scenario in idle
+  // time. Once the initial paint settles, we silently build the alternate
+  // weekly/daily runs and stash them in the LRU. Result: when the user
+  // actually flips the segmented control, it's a sub-millisecond cache hit
+  // instead of a 50–150ms compute. Cancellation prevents wasted work if
+  // the user changes scenario mid-warm.
+  useEffect(() => {
+    const others: ProjectionGranularity[] = ['monthly', 'weekly', 'daily']
+      .filter((g): g is ProjectionGranularity => g !== deferredGranularity);
+    let cancelled = false;
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    });
+    const handles: Array<number | ReturnType<typeof setTimeout>> = [];
+    others.forEach((gran, i) => {
+      const run = () => {
+        if (cancelled) return;
+        try { buildRun(activeScenarioId, gran); } catch { /* swallow — pre-warm is best-effort */ }
+      };
+      if (typeof ric.requestIdleCallback === 'function') {
+        handles.push(ric.requestIdleCallback(run, { timeout: 800 + i * 400 }));
+      } else {
+        handles.push(setTimeout(run, 200 + i * 200));
+      }
+    });
+    return () => {
+      cancelled = true;
+      handles.forEach((h) => {
+        if (typeof h === 'number' && typeof ric.cancelIdleCallback === 'function') {
+          ric.cancelIdleCallback(h);
+        } else if (typeof h !== 'number') {
+          clearTimeout(h);
+        }
+      });
+    };
+  }, [buildRun, activeScenarioId, deferredGranularity]);
 
   // KPIs.
   const summary = activeRun.summary;
@@ -293,8 +497,22 @@ export default function FinancialProjectionDashboard(props: Props) {
   const finalCashDelta = summary.finalCash - comparisonReference;
   const comparisonLabel = comparisonRun ? comparisonRun.name : baseRun.name;
 
-  const finalCashFor = (scenarioId: string): number =>
-    projectionsByScenario.get(scenarioId)?.summary.finalCash ?? 0;
+  // Tab strip needs final-cash deltas for *every* draft. We resolve those
+  // lazily through the same cache so unselected drafts only build when the
+  // tab strip actually paints them, and each lookup is O(1) afterwards.
+  const finalCashFor = useMemo(
+    () => (scenarioId: string): number => {
+      if (scenarioId === baseScenario.id) return baseRun.summary.finalCash;
+      if (scenarioId === activeScenarioId) return activeRun.summary.finalCash;
+      if (comparisonRun && scenarioId === comparisonRun.scenarioId) return comparisonRun.summary.finalCash;
+      try {
+        return buildRun(scenarioId, deferredGranularity).summary.finalCash;
+      } catch {
+        return 0;
+      }
+    },
+    [buildRun, baseScenario.id, baseRun, activeScenarioId, activeRun, comparisonRun, deferredGranularity],
+  );
 
   // Auxiliary computations.
   const taxView = useMemo(
@@ -325,14 +543,40 @@ export default function FinancialProjectionDashboard(props: Props) {
       .filter((movement) => {
         const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
         return date >= yearStart && date <= yearEnd;
+      })
+      .sort((a, b) => {
+        const da = a.actualDate ?? a.adjustedDate ?? a.projectedDate;
+        const db = b.actualDate ?? b.adjustedDate ?? b.projectedDate;
+        return da.localeCompare(db);
       }),
     [activeRun.movements, yearStart, yearEnd],
   );
 
-  const handleSelectMovement = (movement: FinancialMovement, anchor: DOMRect) => {
-    setDrillMovement(movement);
-    setDrillAnchor(anchor);
-  };
+  const handleSelectMovement = useMemo(
+    () => (movement: FinancialMovement, anchor: DOMRect) => {
+      setDrillMovement(movement);
+      setDrillAnchor(anchor);
+    },
+    [],
+  );
+
+  const handleCloseDrawer = useMemo(
+    () => () => {
+      setDrillMovement(null);
+      setDrillAnchor(null);
+    },
+    [],
+  );
+
+  const drawerInvoiceContext = useMemo(
+    () => ({
+      cxpRecords: props.cxpRecords,
+      clients: props.clients,
+      assumptions: props.assumptions,
+      budget: props.budget,
+    }),
+    [props.cxpRecords, props.clients, props.assumptions, props.budget],
+  );
 
   if (!source.hasData) {
     return (
@@ -353,6 +597,7 @@ export default function FinancialProjectionDashboard(props: Props) {
               value={granularity}
               options={GRANULARITY_OPTIONS}
               onChange={setGranularity}
+              pending={granularityPending}
             />
             <ComparisonControl
               scenarios={scenarios}
@@ -376,28 +621,28 @@ export default function FinancialProjectionDashboard(props: Props) {
         <KpiCard
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
-          icon={<Wallet className="w-4 h-4" />}
+          icon={<Wallet className="w-4 h-4" strokeWidth={1.5} />}
           color={tone(summary.finalCash, summary.minimumCashRequired)}
           sublabel={`${currentYear} · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
         />
         <KpiCard
           label="Días en déficit"
           value={String(summary.deficitDays)}
-          icon={<AlertIcon className="w-4 h-4" />}
+          icon={<AlertIcon className="w-4 h-4" strokeWidth={1.5} />}
           color={summary.deficitDays > 0 ? 'var(--danger)' : 'var(--success)'}
           sublabel={summary.maxRiskDate ? `Máx riesgo ${summary.maxRiskDate}` : 'Sin fecha crítica'}
         />
         <KpiCard
           label="Crédito requerido"
           value={fmtCurrency(summary.creditRequired)}
-          icon={<Banknote className="w-4 h-4" />}
+          icon={<Banknote className="w-4 h-4" strokeWidth={1.5} />}
           color={summary.creditRequired > 0 ? 'var(--warning)' : 'var(--gray-950)'}
           sublabel={`Ingresos ${fmtCompact(summary.totalInflows)} · egresos ${fmtCompact(summary.totalOutflows)}`}
         />
         <KpiCard
           label={`Δ vs ${comparisonLabel}`}
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
-          icon={<GitCompare className="w-4 h-4" />}
+          icon={<GitCompare className="w-4 h-4" strokeWidth={1.5} />}
           color={finalCashDelta > 0 ? 'var(--success)' : finalCashDelta < 0 ? 'var(--danger)' : 'var(--gray-950)'}
           sublabel={comparisonRun ? 'Comparación activa' : 'vs Base'}
         />
@@ -414,12 +659,14 @@ export default function FinancialProjectionDashboard(props: Props) {
         }
       >
         <div className="px-4 py-3">
-          <CashFlowChart
-            projection={activeRun}
-            baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
-            comparisonProjection={comparisonRun ?? undefined}
-            onNavigateToTax={props.onNavigateToTax}
-          />
+          <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
+            <CashFlowChart
+              projection={activeRun}
+              baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
+              comparisonProjection={comparisonRun ?? undefined}
+              onNavigateToTax={props.onNavigateToTax}
+            />
+          </DeferredMount>
         </div>
       </CollapsibleSection>
 
@@ -428,16 +675,19 @@ export default function FinancialProjectionDashboard(props: Props) {
         storageKey="proyeccion.section.bucket"
         description="Cada período se desglosa en conceptos de Planeación al expandir."
         count={activeRun.buckets.length}
+        lazy
       >
-        <BucketDetailTable
-          buckets={activeRun.buckets}
-          movements={activeRun.movements}
-          rows={activeRun.rows}
-          overrides={activeRun.overrides}
-          granularity={granularity}
-          comparisonBuckets={comparisonRun?.buckets}
-          onSelectMovement={handleSelectMovement}
-        />
+        <DeferredMount delayMs={140} fallback={<TableSkeleton rows={6} />}>
+          <BucketDetailTable
+            buckets={activeRun.buckets}
+            movements={activeRun.movements}
+            rows={activeRun.rows}
+            overrides={activeRun.overrides}
+            granularity={deferredGranularity}
+            comparisonBuckets={comparisonRun?.buckets}
+            onSelectMovement={handleSelectMovement}
+          />
+        </DeferredMount>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -445,21 +695,25 @@ export default function FinancialProjectionDashboard(props: Props) {
         storageKey="proyeccion.section.movements"
         description="Lista filtrable. Clic en una fila para ver factura y origen."
         count={tableMovements.length}
+        lazy
       >
-        <MovementsTable
-          movements={tableMovements}
-          granularity={granularity}
-          today={today}
-          onSelectMovement={handleSelectMovement}
-        />
+        <DeferredMount delayMs={220} fallback={<TableSkeleton rows={5} />}>
+          <MovementsTable
+            movements={tableMovements}
+            granularity={deferredGranularity}
+            today={today}
+            onSelectMovement={handleSelectMovement}
+          />
+        </DeferredMount>
       </CollapsibleSection>
 
       <CollapsibleSection
         title="Proveedores críticos"
         storageKey="proyeccion.section.suppliers"
         defaultOpen={false}
+        lazy
         count={supplierAlerts.length}
-        badge={supplierAlerts.some((alert) => alert.severity === 'CRITICAL') ? <ShieldAlert className="h-3.5 w-3.5 text-[var(--danger)]" /> : undefined}
+        badge={supplierAlerts.some((alert) => alert.severity === 'CRITICAL') ? <ShieldAlert className="h-3.5 w-3.5 text-[var(--danger)]" strokeWidth={1.5} /> : undefined}
         description="Estatus de pago consolidado: real, programado, manual o pendiente."
       >
         <SupplierAlertsList alerts={supplierAlerts} />
@@ -469,6 +723,7 @@ export default function FinancialProjectionDashboard(props: Props) {
         title="Impuestos"
         storageKey="proyeccion.section.taxes"
         defaultOpen={false}
+        lazy
         description="IVA neto, ISN, IMSS y total con saldo vencido."
         actions={props.onNavigateToTax ? (
           <button
@@ -492,6 +747,7 @@ export default function FinancialProjectionDashboard(props: Props) {
         title="Alertas"
         storageKey="proyeccion.section.alerts"
         defaultOpen={false}
+        lazy
         count={activeRun.alerts.length}
         badge={activeRun.alerts.some((alert) => alert.severity === 'CRITICAL')
           ? <span className="rounded-full bg-[var(--danger)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white">crítica</span>
@@ -504,13 +760,8 @@ export default function FinancialProjectionDashboard(props: Props) {
       <MovementDrillDownDrawer
         movement={drillMovement}
         anchor={drillAnchor}
-        onClose={() => { setDrillMovement(null); setDrillAnchor(null); }}
-        invoiceContext={{
-          cxpRecords: props.cxpRecords,
-          clients: props.clients,
-          assumptions: props.assumptions,
-          budget: props.budget,
-        }}
+        onClose={handleCloseDrawer}
+        invoiceContext={drawerInvoiceContext}
       />
     </div>
   );
@@ -520,13 +771,19 @@ function SegmentedControl<T extends string>({
   value,
   options,
   onChange,
+  pending = false,
 }: {
   value: T;
   options: Array<{ id: T; label: string }>;
   onChange: (next: T) => void;
+  /** Soft-pulses the active pill while a transition is computing the new view. */
+  pending?: boolean;
 }) {
   return (
-    <div className="inline-flex h-10 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5">
+    <div
+      className="inline-flex h-10 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5"
+      aria-busy={pending || undefined}
+    >
       {options.map((option) => {
         const active = option.id === value;
         return (
@@ -535,7 +792,7 @@ function SegmentedControl<T extends string>({
             type="button"
             onClick={() => onChange(option.id)}
             aria-pressed={active}
-            className="px-3 text-[12px] font-medium rounded-lg transition-colors"
+            className={`px-3 text-[12px] font-medium rounded-lg transition-colors ${active && pending ? 'animate-soft-pulse' : ''}`}
             style={{
               background: active ? 'white' : 'transparent',
               color: active ? 'var(--gray-950)' : 'var(--gray-500)',

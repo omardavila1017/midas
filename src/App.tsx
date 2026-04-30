@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
@@ -22,9 +22,13 @@ import CollectionProjection from './components/CollectionProjection';
 import Clients from './components/Clients';
 import CashFlowDetail from './components/CashFlowDetail';
 import OperatingProjection from './components/OperatingProjection';
-import FinancialProjectionDashboard from './modules/financial-projection/pages/FinancialProjectionDashboard';
-import FinancialPlanningDashboard from './modules/financial-planning/pages/FinancialPlanningDashboard';
-import TaxDashboard from './modules/taxes/pages/TaxDashboard';
+// Lazy-loaded so the projection module's Recharts + canonical engine is
+// not in the initial App bundle. This is the single largest chunk in the
+// build — keeping it out of first paint cuts the dashboard's first
+// interaction-time noticeably on cold loads.
+const FinancialProjectionDashboard = lazy(() => import('./modules/financial-projection/pages/FinancialProjectionDashboard'));
+const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
+const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootStep } from './components/MidasSplash';
 import { ActivityFeedPanel } from './components/ActivityFeed';
@@ -121,6 +125,39 @@ const DEMO_BANK_CONCEPTS = [
   'COBRO CROSS-BORDER LAREDO',
   'PAGO SEGURO INTERNACIONAL',
 ];
+/**
+ * Quiet placeholder shown while a lazy-loaded tab module is fetched. Matches
+ * the page chrome (header + KPI grid + section cards) so first paint after
+ * code-split is layout-stable. No spinner, no marketing copy — just the
+ * skeleton chassis the user is about to interact with.
+ */
+function LazyTabFallback({ label }: { label: string }) {
+  return (
+    <div className="space-y-4 animate-page-in" aria-busy="true" aria-label={`Cargando ${label}`}>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="skeleton h-4 w-44 rounded opacity-60" />
+          <div className="skeleton mt-2 h-3 w-64 rounded opacity-50" />
+        </div>
+        <div className="skeleton h-10 w-48 rounded-xl opacity-50" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {Array.from({ length: 4 }).map((_, idx) => (
+          <div key={idx} className="rounded-xl border border-[var(--gray-200)] bg-white p-4">
+            <div className="skeleton h-3 w-1/2 rounded opacity-50" />
+            <div className="skeleton mt-3 h-5 w-3/4 rounded opacity-60" />
+            <div className="skeleton mt-2 h-3 w-2/3 rounded opacity-40" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+        <div className="skeleton h-3 w-40 rounded opacity-50" />
+        <div className="skeleton mt-3 h-[280px] w-full rounded-xl opacity-50" />
+      </div>
+    </div>
+  );
+}
+
 function containsDemoBankData(statements: BankAccountStatement[] | undefined | null): boolean {
   if (!statements || statements.length === 0) return false;
   for (const acc of statements) {
@@ -905,41 +942,47 @@ export default function App() {
               />
             )}
             {activeTab === 'financialProjection' && (
-              <FinancialProjectionDashboard
-                companyCode={selectedCia}
-                bankStatements={bankStatements}
-                clients={clients}
-                providers={providers}
-                cxpRecords={cxpRecords}
-                assumptions={assumptions}
-                budget={budget}
-                startingBalance={effectiveStartingBalance}
-                onNavigateToTax={() => setActiveTab('taxes')}
-              />
+              <Suspense fallback={<LazyTabFallback label="Proyección Financiera" />}>
+                <FinancialProjectionDashboard
+                  companyCode={selectedCia}
+                  bankStatements={bankStatements}
+                  clients={clients}
+                  providers={providers}
+                  cxpRecords={cxpRecords}
+                  assumptions={assumptions}
+                  budget={budget}
+                  startingBalance={effectiveStartingBalance}
+                  onNavigateToTax={() => setActiveTab('taxes')}
+                />
+              </Suspense>
             )}
             {activeTab === 'financialPlanning' && (
-              <FinancialPlanningDashboard
-                companyCode={selectedCia}
-                bankStatements={bankStatements}
-                clients={clients}
-                providers={providers}
-                cxpRecords={cxpRecords}
-                assumptions={assumptions}
-                budget={budget}
-                startingBalance={effectiveStartingBalance}
-              />
+              <Suspense fallback={<LazyTabFallback label="Planeación Financiera" />}>
+                <FinancialPlanningDashboard
+                  companyCode={selectedCia}
+                  bankStatements={bankStatements}
+                  clients={clients}
+                  providers={providers}
+                  cxpRecords={cxpRecords}
+                  assumptions={assumptions}
+                  budget={budget}
+                  startingBalance={effectiveStartingBalance}
+                />
+              </Suspense>
             )}
             {activeTab === 'taxes' && (
-              <TaxDashboard
-                companyCode={selectedCia}
-                bankStatements={bankStatements}
-                clients={clients}
-                providers={providers}
-                cxpRecords={cxpRecords}
-                assumptions={assumptions}
-                budget={budget}
-                startingBalance={effectiveStartingBalance}
-              />
+              <Suspense fallback={<LazyTabFallback label="Impuestos" />}>
+                <TaxDashboard
+                  companyCode={selectedCia}
+                  bankStatements={bankStatements}
+                  clients={clients}
+                  providers={providers}
+                  cxpRecords={cxpRecords}
+                  assumptions={assumptions}
+                  budget={budget}
+                  startingBalance={effectiveStartingBalance}
+                />
+              </Suspense>
             )}
             {activeTab === 'operating' && (
               <OperatingProjection
