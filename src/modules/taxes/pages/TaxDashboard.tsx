@@ -17,49 +17,29 @@ import type { BankAccountStatement } from '../../../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
-import { CashFlowChart } from '../../financial-projection/components/CashFlowChart';
-import {
-  buildFinancialProjectionSourceData,
-  calculateInitialCash,
-} from '../../financial-projection/services/financialProjectionService';
-import {
-  applyAdjustmentsToMovements,
-  calculateBaseProjection,
-} from '../../shared-finance/calculation-engine/financialProjectionEngine';
+import { buildFinancialProjectionSourceData } from '../../financial-projection/services/financialProjectionService';
 import type {
-  FinancialAdjustment,
-  FinancialScenario,
-  ManualPlanningEntry,
-  ProjectionGranularity,
   TaxManualAdjustment,
   TaxObligation,
   TaxPaymentPlanItem,
   TaxType,
 } from '../../shared-finance/types';
 import {
-  expandManualPlanningEntriesToMovements,
-  loadManualPlanningEntries,
-} from '../../financial-planning/services/manualPlanningEntries';
-import {
-  loadPlanningAdjustments,
-  loadPlanningScenarios,
-} from '../../financial-planning/services/financialPlanningStorage';
-import {
   addTaxPaymentPlanItem,
-  buildApprovedTaxPaymentMovements,
   buildTaxDashboardView,
   createManualTaxObligation,
   createTaxManualAdjustment,
   defaultTaxStore,
   loadTaxStore,
   saveTaxStore,
-  suggestTaxPaymentDate,
   taxDueDate,
   updateTaxPaymentPlanItem,
+  upsertTaxRateOverride,
   upsertTaxObligation,
   type IvaPeriodDetail,
   type TaxDashboardView,
   type TaxPeriodSummary,
+  type TaxRateTarget,
   type TaxSourceLine,
   type TaxStore,
 } from '../services/taxModuleService';
@@ -77,6 +57,7 @@ interface Props {
 
 type RangePreset = '90d' | 'eoy';
 type DetailTab = 'iva' | 'isn' | 'imss' | 'payments';
+type IvaLineMode = 'caused' | 'creditable';
 
 const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
   { id: '90d', label: '90 días' },
@@ -85,11 +66,10 @@ const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
 
 export default function TaxDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const monthStart = useMemo(() => `${today.slice(0, 7)}-01`, [today]);
+  const fiscalYearStart = useMemo(() => `${Number(today.slice(0, 4))}-01-01`, [today]);
   const yearEnd = useMemo(() => `${Number(today.slice(0, 4))}-12-31`, [today]);
 
   const [preset, setPreset] = useState<RangePreset>('eoy');
-  const [granularity] = useState<ProjectionGranularity>('monthly');
   const endDate = useMemo(() => preset === 'eoy' ? yearEnd : addDays(today, 90), [preset, today, yearEnd]);
 
   const [taxStore, setTaxStore] = useState<TaxStore>(() => {
@@ -124,127 +104,22 @@ export default function TaxDashboard(props: Props) {
       today,
     ],
   );
-  const [storedScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
-  const [storedAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
-  const [manualEntries] = useState<ManualPlanningEntry[]>(() => loadManualPlanningEntries([]));
-
-  const sourceBaseScenario = source.scenarios.find((scenario) => scenario.isBase) ?? source.scenarios[0];
-  const storedBaseScenario = storedScenarios.find((scenario) => scenario.isBase && !scenario.archivedAt);
-  const baseScenario = storedBaseScenario ?? sourceBaseScenario;
-  const userScenarios = useMemo(
-    () => storedScenarios.filter((scenario) => !scenario.isBase && !scenario.archivedAt),
-    [storedScenarios],
-  );
-  const archivedBaseScenarios = storedScenarios.filter((scenario) => scenario.archivedAt);
-  const scenarios = useMemo(
-    () => [baseScenario, ...userScenarios, ...archivedBaseScenarios],
-    [archivedBaseScenarios, baseScenario, userScenarios],
-  );
-  const [activeScenarioId, setActiveScenarioId] = useState(baseScenario.id);
-
-  useEffect(() => {
-    if (!scenarios.some((scenario) => scenario.id === activeScenarioId)) {
-      setActiveScenarioId(scenarios[0]?.id ?? activeScenarioId);
-    }
-  }, [activeScenarioId, scenarios]);
-
-  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? baseScenario;
-
-  const baseSeedMovements = useMemo(() => {
-    const manual = expandManualPlanningEntriesToMovements(manualEntries, {
-      scenarioId: baseScenario.id,
-      startDate: monthStart,
-      endDate,
-      asOfDate: today,
-    });
-    const taxMovements = buildApprovedTaxPaymentMovements({
-      obligations: taxStore.obligations,
-      scenarioId: baseScenario.id,
-      startDate: monthStart,
-      endDate,
-      asOfDate: today,
-    });
-    return applyAdjustmentsToMovements(
-      [...source.movements, ...manual, ...taxMovements],
-      storedAdjustments,
-      baseScenario.id,
-    );
-  }, [baseScenario.id, endDate, manualEntries, monthStart, source.movements, storedAdjustments, taxStore.obligations, today]);
-
-  const baseProjection = useMemo(
-    () => calculateBaseProjection(baseSeedMovements, {
-      startDate: monthStart,
-      endDate,
-      initialCash: calculateInitialCash(props.bankStatements, props.startingBalance),
-      minimumCash: minimumCashFor(props),
-      granularity,
-      scenarioId: baseScenario.id,
-      name: baseScenario.name,
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, baseScenario.name, baseSeedMovements, endDate, granularity, monthStart, props.bankStatements, props.budget, props.startingBalance],
-  );
-
-  const activeAdjustments = useMemo<FinancialAdjustment[]>(
-    () => storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(activeScenario.id)),
-    [activeScenario.id, storedAdjustments],
-  );
-
-  const activeManualMovements = useMemo(
-    () => expandManualPlanningEntriesToMovements(manualEntries, {
-      scenarioId: activeScenario.id,
-      startDate: monthStart,
-      endDate,
-      asOfDate: today,
-    }),
-    [activeScenario.id, endDate, manualEntries, monthStart, today],
-  );
-
-  const activeProjection = useMemo(() => {
-    if (activeScenario.isBase) return baseProjection;
-    const taxMovements = buildApprovedTaxPaymentMovements({
-      obligations: taxStore.obligations,
-      scenarioId: activeScenario.id,
-      startDate: monthStart,
-      endDate,
-      asOfDate: today,
-    });
-    const seed = activeScenario.archivedAt
-      ? [...source.movements, ...activeManualMovements, ...taxMovements]
-      : [...baseProjection.movements, ...activeManualMovements, ...taxMovements];
-    const adjusted = applyAdjustmentsToMovements(seed, activeAdjustments, activeScenario.id);
-    return calculateBaseProjection(adjusted, {
-      startDate: monthStart,
-      endDate,
-      initialCash: baseProjection.buckets[0]?.openingCash ?? baseProjection.summary.currentCash,
-      minimumCash: baseProjection.summary.minimumCashRequired,
-      granularity,
-      scenarioId: activeScenario.id,
-      name: activeScenario.name,
-    });
-  }, [
-    activeAdjustments,
-    activeManualMovements,
-    activeScenario,
-    baseProjection,
-    endDate,
-    granularity,
-    monthStart,
-    source.movements,
-    taxStore.obligations,
-    today,
-  ]);
 
   const view = useMemo(
     () => buildTaxDashboardView({
-      projection: activeProjection,
-      store: taxStore,
+      clients: props.clients,
       providers: props.providers,
+      assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
-      scenarioId: activeScenario.id,
+      budget: props.budget,
+      companyCode: props.companyCode,
+      startDate: fiscalYearStart,
+      endDate,
+      movements: source.movements,
+      store: taxStore,
       today,
     }),
-    [activeProjection, activeScenario.id, props.cxpRecords, props.providers, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cxpRecords, props.providers, source.movements, taxStore, today],
   );
 
   useEffect(() => {
@@ -255,6 +130,13 @@ export default function TaxDashboard(props: Props) {
   }, [view.periods]);
 
   const selected = view.periods.find((period) => period.period === selectedPeriod) ?? view.periods[0];
+  const hasFiscalData = props.clients.length > 0
+    || props.cxpRecords.length > 0
+    || props.budget != null
+    || source.movements.length > 0
+    || taxStore.adjustments.length > 0
+    || taxStore.obligations.length > 0
+    || taxStore.overdueBalance > 0;
 
   const handleAddAdjustment = (adjustment: TaxManualAdjustment) => {
     setTaxStore((current) => ({ ...current, adjustments: [...current.adjustments, adjustment] }));
@@ -282,22 +164,29 @@ export default function TaxDashboard(props: Props) {
       .filter((payment) => payment.status === 'PAID')
       .reduce((sum, payment) => sum + payment.amount, 0));
     if (pending <= 0) return;
-    const suggestion = suggestTaxPaymentDate(activeProjection, obligation.dueDate, pending);
     const next = addTaxPaymentPlanItem({
       obligation,
-      date: suggestion?.date ?? obligation.dueDate,
+      date: obligation.dueDate < today ? today : obligation.dueDate,
       amount: pending,
       status: 'APPROVED',
-      scenarioId: activeScenario.id,
-      note: suggestion?.reason ?? 'Pago fiscal aprobado desde módulo de impuestos.',
+      note: 'Pago fiscal programado desde módulo de impuestos.',
     });
     setTaxStore((current) => upsertTaxObligation(current, next));
-    setStatusMessage(`Pago aprobado para ${obligation.taxType} ${obligation.period}.`);
+    setStatusMessage(`Pago fiscal programado para ${obligation.taxType} ${obligation.period}.`);
   };
 
   const handleUpdatePayment = (obligation: TaxObligation, paymentId: string, patch: Partial<TaxPaymentPlanItem>) => {
     const next = updateTaxPaymentPlanItem(obligation, paymentId, patch);
     setTaxStore((current) => upsertTaxObligation(current, next));
+  };
+
+  const handleUpdateTaxRate = (target: TaxRateTarget, rate: 8 | 16) => {
+    setTaxStore((current) => upsertTaxRateOverride(current, {
+      ...target,
+      rate,
+      updatedAt: new Date().toISOString(),
+    }));
+    setStatusMessage(`Tasa IVA actualizada a ${rate}%.`);
   };
 
   const resetView = () => {
@@ -307,12 +196,12 @@ export default function TaxDashboard(props: Props) {
     setShowAddForm(false);
   };
 
-  if (!source.hasData) {
+  if (!hasFiscalData) {
     return (
       <div className="space-y-5">
         <PageHeader title="Impuestos" />
         <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-10 text-center text-[12px] text-[var(--gray-500)]">
-          Carga bancos y al menos clientes, CXP o presupuesto para calcular obligaciones fiscales.
+          Carga clientes, CXP o captura una obligación manual para calcular el seguimiento fiscal.
         </div>
       </div>
     );
@@ -354,22 +243,8 @@ export default function TaxDashboard(props: Props) {
       <section className="rounded-2xl border border-[var(--gray-200)] bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <SegmentedControl label="Rango" value={preset} options={RANGE_PRESETS} onChange={setPreset} />
-          <label className="flex items-center gap-2">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Escenario</span>
-            <select
-              value={activeScenario.id}
-              onChange={(event) => setActiveScenarioId(event.target.value)}
-              className="h-9 min-w-[260px] rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
-            >
-              {scenarios.map((scenario) => (
-                <option key={scenario.id} value={scenario.id}>
-                  {scenario.name}{scenario.archivedAt ? ' · archivado' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
           <div className="ml-auto text-[12px] text-[var(--gray-500)]">
-            Régimen 601 · vencimiento semilla día 17
+            IVA por cobrado/pagado · vencimiento semilla día 17
           </div>
         </div>
       </section>
@@ -388,16 +263,11 @@ export default function TaxDashboard(props: Props) {
           balance={taxStore.overdueBalance}
           newPeriodTotal={view.totals.total}
           grossIncome={view.totals.grossIncome}
-          cashImpact={view.totals.cashImpact}
+          registeredPayments={view.totals.cashImpact}
           onChange={(amount) => setTaxStore((prev) => ({ ...prev, overdueBalance: Math.max(0, amount) }))}
         />
         <TaxTrajectoryChart view={view} />
       </section>
-
-      <CashFlowChart
-        projection={activeProjection}
-        baseProjection={activeProjection.scenarioId === baseProjection.scenarioId ? undefined : baseProjection}
-      />
 
       {showAddForm && (
         <TaxForms
@@ -421,6 +291,7 @@ export default function TaxDashboard(props: Props) {
             period={selected}
             detailTab={detailTab}
             onDetailTabChange={setDetailTab}
+            onUpdateTaxRate={handleUpdateTaxRate}
             onApprovePayment={handleApproveSuggestedPayment}
             onUpdatePayment={handleUpdatePayment}
           />
@@ -597,19 +468,19 @@ function OverdueBalanceSection({
   balance,
   newPeriodTotal,
   grossIncome,
-  cashImpact,
+  registeredPayments,
   onChange,
 }: {
   balance: number;
   newPeriodTotal: number;
   grossIncome: number;
-  cashImpact: number;
+  registeredPayments: number;
   onChange: (amount: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const runningTotal = balance + newPeriodTotal;
-  const netPending = runningTotal - cashImpact;
+  const netPending = runningTotal - registeredPayments;
   const benchmark8 = grossIncome * 0.08;
 
   const startEdit = () => {
@@ -768,7 +639,7 @@ function TaxPeriodTable({
               <th className="px-4 py-2.5 text-right">Total</th>
               <th className="px-4 py-2.5">Vencimiento</th>
               <th className="px-4 py-2.5">Estatus</th>
-              <th className="px-4 py-2.5 text-right">Impacto caja</th>
+              <th className="px-4 py-2.5 text-right">Pagos registrados</th>
             </tr>
           </thead>
           <tbody>
@@ -886,12 +757,14 @@ function TaxPeriodDetail({
   period,
   detailTab,
   onDetailTabChange,
+  onUpdateTaxRate,
   onApprovePayment,
   onUpdatePayment,
 }: {
   period: TaxPeriodSummary;
   detailTab: DetailTab;
   onDetailTabChange: (tab: DetailTab) => void;
+  onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
   onApprovePayment: (obligation: TaxObligation) => void;
   onUpdatePayment: (obligation: TaxObligation, paymentId: string, patch: Partial<TaxPaymentPlanItem>) => void;
 }) {
@@ -928,7 +801,7 @@ function TaxPeriodDetail({
           onChange={onDetailTabChange}
         />
       </div>
-      {detailTab === 'iva' && <IvaDetail iva={period.iva} />}
+      {detailTab === 'iva' && <IvaDetail iva={period.iva} onUpdateTaxRate={onUpdateTaxRate} />}
       {detailTab === 'isn' && <IsnDetail period={period} />}
       {detailTab === 'imss' && <ImssDetail period={period} />}
       {detailTab === 'payments' && (
@@ -942,43 +815,116 @@ function TaxPeriodDetail({
   );
 }
 
-function IvaDetail({ iva }: { iva: IvaPeriodDetail }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
+function IvaDetail({
+  iva,
+  onUpdateTaxRate,
+}: {
+  iva: IvaPeriodDetail;
+  onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
+}) {
+  const [mode, setMode] = useState<IvaLineMode>('caused');
+  const lines = mode === 'caused' ? iva.incomeLines : iva.expenseLines;
 
   return (
     <div className="space-y-3 p-4">
       <div className="grid grid-cols-2 gap-2 text-[12px]">
-        <MiniStat label="Ingresos IVA 16%" value={fmtCurrency(iva.incomeBase16)} />
-        <MiniStat label="Ingresos IVA 8%" value={fmtCurrency(iva.incomeBase8)} />
-        <MiniStat label="IVA causado" value={fmtCurrency(iva.ivaCaused)} />
-        <MiniStat label="IVA acreditable" value={fmtCurrency(iva.ivaCreditable)} />
+        <MiniStat label="Causado 16%" value={fmtCurrency(iva.ivaCaused16)} />
+        <MiniStat label="Causado 8%" value={fmtCurrency(iva.ivaCaused8)} />
+        <MiniStat label="Acreditable 16%" value={fmtCurrency(iva.ivaCreditable16)} />
+        <MiniStat label="Acreditable 8%" value={fmtCurrency(iva.ivaCreditable8)} />
         <MiniStat label="IVA neto" value={fmtCurrency(iva.netIva)} />
         <MiniStat label={iva.payable > 0 ? 'Por pagar' : 'Saldo a favor'} value={fmtCurrency(iva.payable > 0 ? iva.payable : iva.balanceInFavor)} />
       </div>
 
-      <CollapsibleSourceLines
-        title={`Facturas cobradas (IVA causado) · ${iva.incomeLines.length}`}
-        lines={iva.incomeLines}
-        empty="Sin ingresos con IVA clasificado."
-        expanded={expanded === 'income'}
-        onToggle={() => setExpanded((p) => p === 'income' ? null : 'income')}
+      <SegmentedControl
+        value={mode}
+        options={[
+          { id: 'caused' as const, label: `Causado (${iva.incomeLines.length})` },
+          { id: 'creditable' as const, label: `Acreditable (${iva.expenseLines.length})` },
+        ]}
+        onChange={setMode}
       />
-      <CollapsibleSourceLines
-        title={`Facturas pagadas (IVA acreditable) · ${iva.expenseLines.length}`}
-        lines={iva.expenseLines}
-        empty="Sin egresos acreditables clasificados."
-        expanded={expanded === 'expense'}
-        onToggle={() => setExpanded((p) => p === 'expense' ? null : 'expense')}
+
+      <IvaLinesTable
+        lines={lines}
+        empty={mode === 'caused' ? 'Sin facturas causadas en el periodo.' : 'Sin egresos acreditables en el periodo.'}
+        onUpdateTaxRate={onUpdateTaxRate}
       />
+
       {(iva.unclassifiedIncome > 0 || iva.unclassifiedExpense > 0) && (
-        <CollapsibleSourceLines
-          title={`Sin clasificar · ${fmtCompact(iva.unclassifiedIncome + iva.unclassifiedExpense)}`}
-          lines={iva.unclassifiedLines}
-          empty="Sin movimientos sin clasificar."
-          expanded={expanded === 'unclassified'}
-          onToggle={() => setExpanded((p) => p === 'unclassified' ? null : 'unclassified')}
-        />
+        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[11px] text-[var(--gray-500)]">
+          Sin clasificar: {fmtCurrency(iva.unclassifiedIncome + iva.unclassifiedExpense)}
+        </div>
       )}
+    </div>
+  );
+}
+
+function IvaLinesTable({
+  lines,
+  empty,
+  onUpdateTaxRate,
+}: {
+  lines: TaxSourceLine[];
+  empty: string;
+  onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--gray-200)]">
+      <div className="max-h-[360px] overflow-auto">
+        {lines.length === 0 ? (
+          <div className="px-3 py-8 text-center text-[12px] text-[var(--gray-400)]">{empty}</div>
+        ) : (
+          <table className="w-full min-w-[560px] text-[11.5px]">
+            <thead className="sticky top-0 bg-[var(--gray-50)] text-left text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
+              <tr>
+                <th className="px-3 py-2">Documento / concepto</th>
+                <th className="px-3 py-2">Fecha</th>
+                <th className="px-3 py-2 text-right">Base</th>
+                <th className="px-3 py-2">Tasa</th>
+                <th className="px-3 py-2 text-right">IVA</th>
+                <th className="px-3 py-2">Fuente</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((line) => (
+                <tr key={`${line.movementId}-${line.date}-${line.taxRate}`} className="border-t border-[var(--gray-100)]">
+                  <td className="px-3 py-2">
+                    <div className="max-w-[180px] truncate font-medium text-[var(--gray-950)]" title={line.concept}>{line.concept}</div>
+                    <div className="max-w-[180px] truncate text-[10.5px] text-[var(--gray-400)]" title={line.counterpartyName ?? line.sourceSystem}>
+                      {line.counterpartyName ?? line.sourceSystem}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-[var(--gray-600)]">{fmtDate(line.date)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(line.taxBase)}</td>
+                  <td className="px-3 py-2">
+                    <select
+                      aria-label={`Tasa IVA ${line.concept}`}
+                      value={line.taxRate === 8 ? 8 : 16}
+                      disabled={!line.rateTarget}
+                      onChange={(event) => {
+                        if (!line.rateTarget) return;
+                        onUpdateTaxRate(line.rateTarget, Number(event.target.value) as 8 | 16);
+                      }}
+                      className="h-8 rounded-lg border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-700)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
+                    >
+                      <option value={16}>16%</option>
+                      <option value={8}>8%</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(line.taxAmount)}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      <span className="rounded-full bg-[var(--gray-100)] px-2 py-0.5 text-[10px] font-medium text-[var(--gray-600)]">{line.sourceSystem}</span>
+                      {line.estimated && <span className="rounded-full bg-[var(--warning-muted)] px-2 py-0.5 text-[10px] font-medium text-[var(--warning)]">Estimado</span>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
@@ -1100,7 +1046,7 @@ function PaymentPlanDetail({
             </div>
             <button onClick={() => onApprovePayment(obligation)} className={taxButtonClass}>
               <CalendarDays className="h-4 w-4" strokeWidth={1.5} />
-              Aprobar pago
+              Programar pago
             </button>
           </div>
           {obligation.paymentPlan.length === 0 ? (
@@ -1217,14 +1163,6 @@ function SegmentedControl<T extends string>({
       </div>
     </div>
   );
-}
-
-function minimumCashFor(props: Props): number {
-  const fallback = 20_000_000;
-  if (!props.budget) return fallback;
-  const month = new Date().getUTCMonth();
-  const monthlyExpense = props.budget.expenseTotal?.[month] ?? 0;
-  return monthlyExpense > 0 ? Math.round(monthlyExpense * 0.3) : fallback;
 }
 
 function addDays(date: string, days: number): string {

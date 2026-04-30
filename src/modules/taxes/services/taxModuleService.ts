@@ -1,5 +1,7 @@
 import type { CXPRecord } from '../../../domain/persistence';
-import type { Provider } from '../../../domain/types';
+import { projectClientMonth } from '../../../domain/collectionEngine';
+import type { Budget } from '../../../domain/budget';
+import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type {
   FinancialMovement,
   ForecastRun,
@@ -20,13 +22,27 @@ export const TAX_STORE_KEY = 'midas.taxes.v1';
 const LEGACY_IVA_ADJUSTMENTS_KEY = 'midas.financialProjection.taxAdjustments.v1';
 const LEGACY_OPERATING_SCENARIOS_KEY = 'midas.operating.scenarios.v1';
 const ISN_RATE = 0.03;
+const REGIMEN_601_IVA_RATE = 16;
 
 export interface TaxStore {
   adjustments: TaxManualAdjustment[];
   obligations: TaxObligation[];
+  taxRateOverrides: TaxRateOverride[];
   /** Saldo vencido acumulado de impuestos (no cubierto por los periodos visibles). */
   overdueBalance: number;
   migratedAt?: string;
+}
+
+export type TaxRateOverrideTargetType = 'CLIENT' | 'PROVIDER' | 'CONCEPT';
+
+export interface TaxRateTarget {
+  targetType: TaxRateOverrideTargetType;
+  targetKey: string;
+}
+
+export interface TaxRateOverride extends TaxRateTarget {
+  rate: 8 | 16;
+  updatedAt: string;
 }
 
 export interface TaxSourceLine {
@@ -39,6 +55,9 @@ export interface TaxSourceLine {
   taxRate?: 0 | 8 | 16;
   taxAmount: number;
   sourceSystem: FinancialMovement['sourceSystem'];
+  rateTarget?: TaxRateTarget;
+  rateSource?: 'OVERRIDE' | 'CATALOG' | 'JDE' | 'DEFAULT';
+  estimated?: boolean;
 }
 
 export interface IvaPeriodDetail {
@@ -107,7 +126,7 @@ export interface TaxDashboardView {
 }
 
 export function defaultTaxStore(): TaxStore {
-  return { adjustments: [], obligations: [], overdueBalance: 0 };
+  return { adjustments: [], obligations: [], taxRateOverrides: [], overdueBalance: 0 };
 }
 
 export function loadTaxStore(fallback: TaxStore = defaultTaxStore()): TaxStore {
@@ -127,7 +146,12 @@ export function loadTaxStore(fallback: TaxStore = defaultTaxStore()): TaxStore {
 
 export function saveTaxStore(store: TaxStore): void {
   try {
-    if (store.adjustments.length === 0 && store.obligations.length === 0) {
+    if (
+      store.adjustments.length === 0
+      && store.obligations.length === 0
+      && store.taxRateOverrides.length === 0
+      && store.overdueBalance <= 0
+    ) {
       localStorage.removeItem(TAX_STORE_KEY);
       return;
     }
@@ -197,6 +221,23 @@ export function upsertTaxObligation(store: TaxStore, obligation: TaxObligation):
   return { ...store, obligations };
 }
 
+export function upsertTaxRateOverride(store: TaxStore, override: TaxRateOverride): TaxStore {
+  const normalized = {
+    ...override,
+    targetKey: normalizeTargetKey(override),
+  };
+  const taxRateOverrides = store.taxRateOverrides.some((item) =>
+    item.targetType === normalized.targetType && normalizeTargetKey(item) === normalized.targetKey,
+  )
+    ? store.taxRateOverrides.map((item) => (
+      item.targetType === normalized.targetType && normalizeTargetKey(item) === normalized.targetKey
+        ? normalized
+        : item
+    ))
+    : [...store.taxRateOverrides, normalized];
+  return { ...store, taxRateOverrides };
+}
+
 export function addTaxPaymentPlanItem(input: {
   obligation: TaxObligation;
   date: string;
@@ -244,22 +285,66 @@ export function updateTaxPaymentPlanItem(
 }
 
 export function buildTaxDashboardView(params: {
-  projection: ForecastRun;
-  store: TaxStore;
+  clients?: Client[];
   providers?: Provider[];
+  assumptions?: CashFlowAssumptions;
   cxpRecords?: CXPRecord[];
-  scenarioId?: string;
+  budget?: Budget | null;
+  companyCode?: string;
+  startDate?: string;
+  endDate?: string;
+  movements?: FinancialMovement[];
+  projection?: ForecastRun;
+  store: TaxStore;
   today: string;
 }): TaxDashboardView {
+  const startDate = params.startDate ?? params.projection?.startDate ?? `${params.today.slice(0, 7)}-01`;
+  const endDate = params.endDate ?? params.projection?.endDate ?? `${params.today.slice(0, 4)}-12-31`;
+  const movements = params.movements ?? params.projection?.movements ?? [];
   const byPeriod = new Map<string, TaxPeriodAccumulator>();
   const ensure = (period: string) => ensureAccumulator(byPeriod, period);
+  const rateContext = buildTaxRateContext(params.store, params.providers ?? []);
 
-  for (const movement of params.projection.movements) {
+  accumulateProjectedClientIva({
+    clients: params.clients ?? [],
+    assumptions: params.assumptions,
+    startDate,
+    endDate,
+    rateContext,
+    ensure,
+  });
+
+  const handledCxpKeys = accumulateCxpIva({
+    cxpRecords: params.cxpRecords ?? [],
+    companyCode: params.companyCode,
+    startDate,
+    endDate,
+    rateContext,
+    ensure,
+  });
+
+  accumulateMovementIvaFallback({
+    movements,
+    startDate,
+    endDate,
+    handledCxpKeys,
+    rateContext,
+    ensure,
+  });
+
+  accumulateBudgetIvaComplement({
+    budget: params.budget ?? null,
+    startDate,
+    endDate,
+    rateContext,
+    ensure,
+  });
+
+  for (const movement of movements) {
     const date = effectiveMovementDate(movement);
-    if (date < params.projection.startDate || date > params.projection.endDate) continue;
+    if (date < startDate || date > endDate) continue;
     const period = date.slice(0, 7);
     const row = ensure(period);
-    accumulateIva(row, movement);
     accumulateIsn(row, movement);
     accumulateImss(row, movement);
   }
@@ -287,7 +372,7 @@ export function buildTaxDashboardView(params: {
   const overdueBalance = params.store.overdueBalance;
   // Sumar también obligaciones vencidas de periodos ANTERIORES al rango visible.
   const pastPendingObligations = params.store.obligations
-    .filter((ob) => ob.period < params.projection.startDate.slice(0, 7) && ob.pendingAmount > 0)
+    .filter((ob) => ob.period < startDate.slice(0, 7) && ob.pendingAmount > 0)
     .reduce((sum, ob) => sum + ob.pendingAmount, 0);
 
   const totalOverdue = overdueBalance + pastPendingObligations;
@@ -365,24 +450,6 @@ export function taxDueDate(period: string): string {
   return new Date(Date.UTC(year, month, 17)).toISOString().slice(0, 10);
 }
 
-export function suggestTaxPaymentDate(
-  projection: ForecastRun,
-  dueDate: string,
-  amount: number,
-): { date: string; reason: string } | undefined {
-  const dueBucket = projection.buckets.find((bucket) => bucket.date >= dueDate);
-  if (dueBucket && dueBucket.closingCash - dueBucket.minimumCash >= amount) {
-    return { date: dueDate, reason: 'La caja proyectada cubre el pago fiscal en la fecha objetivo.' };
-  }
-  const candidate = projection.buckets.find((bucket) =>
-    bucket.date >= dueDate && bucket.closingCash - bucket.minimumCash >= amount,
-  );
-  if (candidate) return { date: candidate.date, reason: 'Primera fecha futura con caja libre suficiente.' };
-  const last = projection.buckets[projection.buckets.length - 1];
-  if (!last) return undefined;
-  return { date: last.date, reason: 'No hay caja suficiente en el horizonte visible; revisar al cierre.' };
-}
-
 interface TaxPeriodAccumulator {
   period: string;
   dueDate: string;
@@ -394,6 +461,7 @@ interface TaxPeriodAccumulator {
   expenseBase8: number;
   ivaCreditable16: number;
   ivaCreditable8: number;
+  creditableGross: number;
   manualIvaCaused: number;
   manualIvaCreditable: number;
   ivaPaid: number;
@@ -426,6 +494,7 @@ function ensureAccumulator(map: Map<string, TaxPeriodAccumulator>, period: strin
     expenseBase8: 0,
     ivaCreditable16: 0,
     ivaCreditable8: 0,
+    creditableGross: 0,
     manualIvaCaused: 0,
     manualIvaCreditable: 0,
     ivaPaid: 0,
@@ -446,49 +515,226 @@ function ensureAccumulator(map: Map<string, TaxPeriodAccumulator>, period: strin
   return next;
 }
 
-function accumulateIva(acc: TaxPeriodAccumulator, movement: FinancialMovement): void {
-  if (movement.category === 'TAX') return;
-  const treatment = normalizeTaxTreatment(movement.taxTreatment, movement);
-  const amount = effectiveAmount(movement);
-  const sourceLine = lineForMovement(movement);
+function accumulateProjectedClientIva({
+  clients,
+  assumptions,
+  startDate,
+  endDate,
+  rateContext,
+  ensure,
+}: {
+  clients: Client[];
+  assumptions?: CashFlowAssumptions;
+  startDate: string;
+  endDate: string;
+  rateContext: TaxRateContext;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  if (!assumptions || clients.length === 0) return;
+  const startYear = Number(startDate.slice(0, 4));
+  const endYear = Number(endDate.slice(0, 4));
+  let lineIndex = 0;
 
-  if (movement.type === 'INFLOW' && treatment === 'IVA_CAUSED') {
-    // Default a 16% cuando el movimiento no trae tasa explícita (Régimen 601).
-    const rate: 8 | 16 = movement.taxRate === 8 ? 8 : 16;
-    const { base, tax } = taxAmounts({ ...movement, taxRate: rate }, amount);
-    if (rate === 16) {
-      acc.incomeBase16 += base;
-      acc.ivaCaused16 += tax;
-    } else {
-      acc.incomeBase8 += base;
-      acc.ivaCaused8 += tax;
+  for (const client of clients) {
+    for (let year = startYear - 1; year <= endYear; year += 1) {
+      for (let month = 0; month < 12; month += 1) {
+        const events = projectClientMonth(client, year, month, { ...assumptions, year });
+        for (const event of events) {
+          if (event.realDate < startDate || event.realDate > endDate) continue;
+          if (event.amount <= 0) continue;
+          const target = clientRateTarget(client);
+          const resolution = resolveTaxRate(rateContext, target, client.ivaRate);
+          const rate = resolution.rate;
+          const line: TaxSourceLine = {
+            movementId: `cxc:${client.id}:${event.invoiceDate}:${event.realDate}:${lineIndex++}`,
+            date: event.realDate,
+            concept: `Factura proyectada ${client.name}`,
+            counterpartyName: client.name,
+            amount: rate ? event.amount * (1 + rate / 100) : event.amount,
+            taxBase: event.amount,
+            taxRate: rate,
+            taxAmount: rate ? event.amount * (rate / 100) : 0,
+            sourceSystem: 'FORECAST',
+            rateTarget: target,
+            rateSource: resolution.source,
+          };
+          const row = ensure(event.realDate.slice(0, 7));
+          if (rate === 16 || rate === 8) addIvaCaused(row, line, rate);
+          else {
+            row.unclassifiedIncome += event.amount;
+            row.unclassifiedLines.push(line);
+          }
+        }
+      }
     }
-    acc.incomeLines.push({ ...sourceLine, taxBase: base, taxRate: rate, taxAmount: tax });
-    return;
   }
+}
 
-  if (movement.type === 'OUTFLOW' && treatment === 'IVA_CREDITABLE') {
-    // Default a 16% cuando el movimiento no trae tasa explícita (Régimen 601).
-    const rate: 8 | 16 = movement.taxRate === 8 ? 8 : 16;
-    const { base, tax } = taxAmounts({ ...movement, taxRate: rate }, amount);
-    if (rate === 16) {
-      acc.expenseBase16 += base;
-      acc.ivaCreditable16 += tax;
-    } else {
-      acc.expenseBase8 += base;
-      acc.ivaCreditable8 += tax;
+function accumulateCxpIva({
+  cxpRecords,
+  companyCode,
+  startDate,
+  endDate,
+  rateContext,
+  ensure,
+}: {
+  cxpRecords: CXPRecord[];
+  companyCode?: string;
+  startDate: string;
+  endDate: string;
+  rateContext: TaxRateContext;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): Set<string> {
+  const handledKeys = new Set<string>();
+  cxpRecords.forEach((record, index) => {
+    if (companyCode && companyCode !== 'all' && record.cia !== companyCode) return;
+    const date = cleanIsoDate(record.fechaProgramacionPago)
+      ?? cleanIsoDate(record.fechaVence)
+      ?? cleanIsoDate(record.fechaFactura);
+    if (!date || date < startDate || date > endDate) return;
+
+    const target = providerRateTargetFromCxp(record);
+    const providerRate = providerCatalogRate(rateContext, record);
+    const overrideRate = overrideRateFor(rateContext, target);
+    const breakdown = cxpTaxBreakdown(record, overrideRate ?? undefined, providerRate);
+    if (breakdown.amount <= 0) return;
+    markCxpHandled(handledKeys, record, index);
+
+    const line: TaxSourceLine = {
+      movementId: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`,
+      date,
+      concept: `Factura ${record.noFactura || 'sin folio'} · ${record.nombre}`,
+      counterpartyName: record.nombre,
+      amount: breakdown.amount,
+      taxBase: breakdown.taxBase,
+      taxRate: breakdown.taxRate,
+      taxAmount: breakdown.taxAmount,
+      sourceSystem: 'JDE',
+      rateTarget: target,
+      rateSource: overrideRate ? 'OVERRIDE' : breakdown.rateSource,
+      estimated: breakdown.estimated,
+    };
+    const row = ensure(date.slice(0, 7));
+    if (breakdown.taxRate === 16 || breakdown.taxRate === 8) addIvaCreditable(row, line, breakdown.taxRate);
+    else {
+      row.unclassifiedExpense += breakdown.amount;
+      row.unclassifiedLines.push(line);
     }
-    acc.expenseLines.push({ ...sourceLine, taxBase: base, taxRate: rate, taxAmount: tax });
-    return;
-  }
+  });
+  return handledKeys;
+}
 
-  if (treatment === 'UNCLASSIFIED' && movement.type === 'INFLOW') {
-    acc.unclassifiedIncome += amount;
-    acc.unclassifiedLines.push(sourceLine);
-  } else if (treatment === 'UNCLASSIFIED' && movement.type === 'OUTFLOW') {
-    acc.unclassifiedExpense += amount;
-    acc.unclassifiedLines.push(sourceLine);
+function accumulateBudgetIvaComplement({
+  budget,
+  startDate,
+  endDate,
+  rateContext,
+  ensure,
+}: {
+  budget: Budget | null;
+  startDate: string;
+  endDate: string;
+  rateContext: TaxRateContext;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  if (!budget) return;
+  const startPeriod = startDate.slice(0, 7);
+  const endPeriod = endDate.slice(0, 7);
+  for (const concept of budget.expenseByConcept ?? []) {
+    const category = budgetCategoryForTax(concept.concept);
+    if (!isRegimen601CreditableCategory(category)) continue;
+    for (let month = 0; month < 12; month += 1) {
+      const amount = positiveNumber(concept.monthly?.[month] ?? 0);
+      if (amount <= 0) continue;
+      const period = `${budget.year}-${String(month + 1).padStart(2, '0')}`;
+      if (period < startPeriod || period > endPeriod) continue;
+      const row = ensure(period);
+      const complement = Math.max(0, amount - row.creditableGross);
+      if (complement <= 0.01) continue;
+      const date = dateForDayOfMonth(period, typicalDayForConcept(concept.concept, month));
+      const target = conceptRateTarget(concept.concept);
+      const resolution = resolveTaxRate(rateContext, target);
+      const breakdown = grossToIvaBreakdown(complement, resolution.rate);
+      addIvaCreditable(row, {
+        movementId: `budget-iva:${budget.year}:${month + 1}:${normalizeText(concept.concept)}`,
+        date,
+        concept: `${concept.concept} presupuestado`,
+        counterpartyName: 'Presupuesto',
+        amount: complement,
+        taxBase: breakdown.taxBase,
+        taxRate: resolution.rate,
+        taxAmount: breakdown.taxAmount,
+        sourceSystem: 'FORECAST',
+        rateTarget: target,
+        rateSource: resolution.source,
+        estimated: true,
+      }, resolution.rate);
+    }
   }
+}
+
+function accumulateMovementIvaFallback({
+  movements,
+  startDate,
+  endDate,
+  handledCxpKeys,
+  rateContext,
+  ensure,
+}: {
+  movements: FinancialMovement[];
+  startDate: string;
+  endDate: string;
+  handledCxpKeys: Set<string>;
+  rateContext: TaxRateContext;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  for (const movement of movements) {
+    if (movement.type !== 'OUTFLOW') continue;
+    const date = effectiveMovementDate(movement);
+    if (date < startDate || date > endDate) continue;
+    if (isHandledCxpMovement(movement, handledCxpKeys)) continue;
+
+    const breakdown = movementCreditableIvaBreakdown(movement, rateContext);
+    if (!breakdown) continue;
+
+    addIvaCreditable(ensure(date.slice(0, 7)), {
+      movementId: movement.id,
+      date,
+      concept: movement.concept,
+      counterpartyName: movement.counterpartyName,
+      amount: breakdown.amount,
+      taxBase: breakdown.taxBase,
+      taxRate: breakdown.taxRate,
+      taxAmount: breakdown.taxAmount,
+      sourceSystem: movement.sourceSystem,
+      rateTarget: breakdown.rateTarget,
+      rateSource: breakdown.rateSource,
+      estimated: movement.sourceSystem === 'FORECAST' && movement.id.startsWith('budget:'),
+    }, breakdown.taxRate);
+  }
+}
+
+function addIvaCaused(acc: TaxPeriodAccumulator, line: TaxSourceLine, rate: 8 | 16): void {
+  if (rate === 16) {
+    acc.incomeBase16 += line.taxBase;
+    acc.ivaCaused16 += line.taxAmount;
+  } else {
+    acc.incomeBase8 += line.taxBase;
+    acc.ivaCaused8 += line.taxAmount;
+  }
+  acc.incomeLines.push(line);
+}
+
+function addIvaCreditable(acc: TaxPeriodAccumulator, line: TaxSourceLine, rate: 8 | 16): void {
+  if (rate === 16) {
+    acc.expenseBase16 += line.taxBase;
+    acc.ivaCreditable16 += line.taxAmount;
+  } else {
+    acc.expenseBase8 += line.taxBase;
+    acc.ivaCreditable8 += line.taxAmount;
+  }
+  acc.creditableGross += line.amount;
+  acc.expenseLines.push(line);
 }
 
 function accumulateIsn(acc: TaxPeriodAccumulator, movement: FinancialMovement): void {
@@ -658,18 +904,305 @@ function paidAmount(plan: TaxPaymentPlanItem[]): number {
     .reduce((sum, payment) => sum + payment.amount, 0);
 }
 
-function taxAmounts(movement: FinancialMovement, amount: number): { base: number; tax: number } {
-  if (movement.taxBaseAmount != null && movement.taxAmount != null) {
-    const scale = movement.projectedAmount > 0 ? amount / movement.projectedAmount : 1;
+interface TaxRateContext {
+  overrides: Map<string, 8 | 16>;
+  providerRateByKey: Map<string, 8 | 16>;
+}
+
+function buildTaxRateContext(store: TaxStore, providers: Provider[]): TaxRateContext {
+  const overrides = new Map<string, 8 | 16>();
+  for (const override of store.taxRateOverrides) {
+    overrides.set(rateOverrideKey(override), override.rate);
+  }
+  const providerRateByKey = new Map<string, 8 | 16>();
+  for (const provider of providers) {
+    if (provider.ivaRate !== 8 && provider.ivaRate !== 16) continue;
+    if (provider.numProveedorJDE) {
+      providerRateByKey.set(rateOverrideKey({
+        targetType: 'PROVIDER',
+        targetKey: provider.numProveedorJDE,
+      }), provider.ivaRate);
+    }
+    providerRateByKey.set(rateOverrideKey(providerRateTarget(provider.name)), provider.ivaRate);
+  }
+  return { overrides, providerRateByKey };
+}
+
+function resolveTaxRate(
+  context: TaxRateContext,
+  target: TaxRateTarget,
+  catalogRate?: 8 | 16,
+): { rate: 8 | 16; source: TaxSourceLine['rateSource'] } {
+  const override = overrideRateFor(context, target);
+  if (override) return { rate: override, source: 'OVERRIDE' };
+  if (catalogRate === 8 || catalogRate === 16) return { rate: catalogRate, source: 'CATALOG' };
+  return { rate: REGIMEN_601_IVA_RATE, source: 'DEFAULT' };
+}
+
+function overrideRateFor(context: TaxRateContext, target: TaxRateTarget): 8 | 16 | undefined {
+  return context.overrides.get(rateOverrideKey(target));
+}
+
+function providerCatalogRate(context: TaxRateContext, record: CXPRecord): 8 | 16 | undefined {
+  return context.providerRateByKey.get(rateOverrideKey(providerRateTargetFromCxp(record)))
+    ?? context.providerRateByKey.get(rateOverrideKey(providerRateTarget(record.nombre)));
+}
+
+function providerCatalogRateForTarget(context: TaxRateContext, target: TaxRateTarget): 8 | 16 | undefined {
+  return context.providerRateByKey.get(rateOverrideKey(target));
+}
+
+function clientRateTarget(client: Client): TaxRateTarget {
+  return { targetType: 'CLIENT', targetKey: client.id };
+}
+
+function providerRateTarget(value: string): TaxRateTarget {
+  return { targetType: 'PROVIDER', targetKey: value };
+}
+
+function providerRateTargetFromCxp(record: CXPRecord): TaxRateTarget {
+  return providerRateTarget(record.noProveedor?.trim() || record.nombre);
+}
+
+function conceptRateTarget(concept: string): TaxRateTarget {
+  return { targetType: 'CONCEPT', targetKey: concept };
+}
+
+function rateTargetFromMovement(movement: FinancialMovement): TaxRateTarget | undefined {
+  if (movement.id.startsWith('budget:')) return conceptRateTarget(movement.concept);
+  if (movement.sourceSystem === 'JDE' || movement.category === 'AP_PAYMENT' || movement.counterpartyType === 'SUPPLIER') {
+    const key = movement.counterpartyId || movement.counterpartyName;
+    return key ? providerRateTarget(key) : undefined;
+  }
+  if (movement.category === 'OPEX' || movement.category === 'CAPEX') return conceptRateTarget(movement.concept);
+  return undefined;
+}
+
+function rateOverrideKey(target: TaxRateTarget): string {
+  return `${target.targetType}:${normalizeTargetKey(target)}`;
+}
+
+function normalizeTargetKey(target: TaxRateTarget): string {
+  return target.targetType === 'CLIENT'
+    ? target.targetKey.trim()
+    : normalizeText(target.targetKey);
+}
+
+function cxpTaxBreakdown(record: CXPRecord, overrideRate?: 8 | 16, providerRate?: 8 | 16): {
+  amount: number;
+  taxBase: number;
+  taxAmount: number;
+  taxRate?: 8 | 16;
+  rateSource?: TaxSourceLine['rateSource'];
+  estimated?: boolean;
+} {
+  const gross = positiveNumber(record.importeBrutoPesos);
+  const pending = positiveNumber(record.importePendientePesos);
+  const subtotal = positiveNumber(record.importeSubtotalPesos);
+  const tax = positiveNumber(record.importeImpuestosPesos);
+  if (pending <= 0) return { amount: 0, taxBase: 0, taxAmount: 0 };
+
+  if (overrideRate) {
     return {
-      base: Math.max(0, movement.taxBaseAmount * scale),
-      tax: Math.max(0, movement.taxAmount * scale),
+      amount: pending,
+      ...grossToIvaBreakdown(pending, overrideRate),
+      rateSource: 'OVERRIDE',
+      estimated: true,
     };
   }
-  const rate = movement.taxRate ?? 0;
-  if (rate <= 0) return { base: amount, tax: 0 };
-  const base = amount / (1 + rate / 100);
-  return { base, tax: amount - base };
+
+  if (gross <= 0 || subtotal <= 0 || tax <= 0) {
+    const fallbackRate = providerRate ?? REGIMEN_601_IVA_RATE;
+    return {
+      amount: pending,
+      ...grossToIvaBreakdown(pending, fallbackRate),
+      rateSource: providerRate ? 'CATALOG' : 'DEFAULT',
+      estimated: true,
+    };
+  }
+
+  const scale = Math.min(1, pending / gross);
+  const taxBase = subtotal * scale;
+  const taxAmount = tax * scale;
+  const taxRate = taxRateFromAmounts(taxBase, taxAmount);
+  if (taxRate) return { amount: pending, taxBase, taxAmount, taxRate, rateSource: 'JDE' };
+  const fallbackRate = providerRate ?? REGIMEN_601_IVA_RATE;
+  return {
+    amount: pending,
+    ...grossToIvaBreakdown(pending, fallbackRate),
+    rateSource: providerRate ? 'CATALOG' : 'DEFAULT',
+    estimated: true,
+  };
+}
+
+function taxRateFromAmounts(base: number, tax: number): 8 | 16 | undefined {
+  if (base <= 0 || tax <= 0) return undefined;
+  const percent = (tax / base) * 100;
+  if (Math.abs(percent - 16) <= 1) return 16;
+  if (Math.abs(percent - 8) <= 1) return 8;
+  return undefined;
+}
+
+function grossToIvaBreakdown(amount: number, rate: 8 | 16): { taxBase: number; taxAmount: number; taxRate: 8 | 16 } {
+  const taxBase = amount / (1 + rate / 100);
+  return {
+    taxBase,
+    taxAmount: amount - taxBase,
+    taxRate: rate,
+  };
+}
+
+function movementCreditableIvaBreakdown(movement: FinancialMovement, rateContext: TaxRateContext): {
+  amount: number;
+  taxBase: number;
+  taxAmount: number;
+  taxRate: 8 | 16;
+  rateTarget?: TaxRateTarget;
+  rateSource?: TaxSourceLine['rateSource'];
+} | undefined {
+  const amount = positiveNumber(effectiveAmount(movement));
+  if (amount <= 0) return undefined;
+  if (movement.taxTreatment === 'IVA_EXEMPT') return undefined;
+
+  const target = rateTargetFromMovement(movement);
+  const overrideRate = target ? overrideRateFor(rateContext, target) : undefined;
+  if (overrideRate) {
+    return {
+      amount,
+      ...grossToIvaBreakdown(amount, overrideRate),
+      rateTarget: target,
+      rateSource: 'OVERRIDE',
+    };
+  }
+
+  const explicitRate = movement.taxRate === 8 || movement.taxRate === 16 ? movement.taxRate : undefined;
+  if (movement.taxTreatment === 'IVA_CREDITABLE' && explicitRate) {
+    if (positiveNumber(movement.taxBaseAmount ?? 0) > 0 && positiveNumber(movement.taxAmount ?? 0) > 0) {
+      return {
+        amount,
+        taxBase: movement.taxBaseAmount ?? 0,
+        taxAmount: movement.taxAmount ?? 0,
+        taxRate: explicitRate,
+        rateTarget: target,
+        rateSource: 'JDE',
+      };
+    }
+    return { amount, ...grossToIvaBreakdown(amount, explicitRate), rateTarget: target, rateSource: 'JDE' };
+  }
+
+  const catalogRate = target?.targetType === 'PROVIDER'
+    ? providerCatalogRateForTarget(rateContext, target)
+    : undefined;
+  if (movement.taxTreatment === 'IVA_CREDITABLE') {
+    const rate = catalogRate ?? REGIMEN_601_IVA_RATE;
+    return {
+      amount,
+      ...grossToIvaBreakdown(amount, rate),
+      rateTarget: target,
+      rateSource: catalogRate ? 'CATALOG' : 'DEFAULT',
+    };
+  }
+
+  if (!isRegimen601CreditableMovement(movement)) return undefined;
+  const rate = catalogRate ?? REGIMEN_601_IVA_RATE;
+  return {
+    amount,
+    ...grossToIvaBreakdown(amount, rate),
+    rateTarget: target,
+    rateSource: catalogRate ? 'CATALOG' : 'DEFAULT',
+  };
+}
+
+function isRegimen601CreditableMovement(movement: FinancialMovement): boolean {
+  if (!isRegimen601CreditableCategory(movement.category)) return false;
+  const text = normalizeText(`${movement.concept} ${movement.counterpartyName ?? ''}`);
+  if (
+    text.includes('NOMINA')
+    || text.includes('SUELDO')
+    || text.includes('SALARIO')
+    || text.includes('FINIQUITO')
+    || text.includes('IMSS')
+    || text.includes('INFONAVIT')
+    || text.includes('ISR')
+    || text.includes('IMPUESTO')
+    || text.includes('TESORERIA')
+    || text.includes('SAT')
+    || text.includes('PRESTAMO')
+    || text.includes('CREDITO')
+    || text.includes('DEUDA')
+    || text.includes('PASIVO')
+  ) return false;
+  return true;
+}
+
+function isRegimen601CreditableCategory(category: FinancialMovement['category']): boolean {
+  return category === 'AP_PAYMENT' || category === 'OPEX' || category === 'CAPEX';
+}
+
+function budgetCategoryForTax(concept: string): FinancialMovement['category'] {
+  const upper = normalizeText(concept);
+  if (upper.includes('NOMINA') || upper.includes('SUELDOS') || upper.includes('FINIQUITO')) return 'PAYROLL';
+  if (upper.includes('IMPUESTO') || upper.includes('ISR') || upper.includes('IVA') || upper.includes('IMSS')) return 'TAX';
+  if (upper.includes('DEUDA') || upper.includes('PRESTAMO') || upper.includes('CREDITO') || upper.includes('PASIVO')) return 'DEBT';
+  if (upper.includes('CAPEX') || upper.includes('INVERSION')) return 'CAPEX';
+  return 'OPEX';
+}
+
+function typicalDayForConcept(concept: string, fallbackIndex: number): number {
+  const upper = normalizeText(concept);
+  if (upper.includes('NOMINA') || upper.includes('SUELDOS') || upper.includes('FINIQUITO')) return 30;
+  if (upper.includes('IMPUESTO') || upper.includes('ISR') || upper.includes('IVA') || upper.includes('IMSS')) return 17;
+  if (upper.includes('RENTA') || upper.includes('SEGURO')) return 5;
+  const days = [3, 8, 12, 18, 22, 26];
+  return days[fallbackIndex % days.length];
+}
+
+function dateForDayOfMonth(yearMonth: string, day: number): string {
+  const [year, month] = yearMonth.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const safeDay = Math.min(Math.max(1, day), lastDay);
+  return `${yearMonth}-${String(safeDay).padStart(2, '0')}`;
+}
+
+function markCxpHandled(keys: Set<string>, record: CXPRecord, index: number): void {
+  keys.add(`id:cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`);
+  if (record.noFactura) keys.add(`invoice:${normalizeText(record.cia)}:${normalizeText(record.noFactura)}`);
+  if (record.noFactura) keys.add(`invoice:any:${normalizeText(record.noFactura)}`);
+}
+
+function isHandledCxpMovement(movement: FinancialMovement, keys: Set<string>): boolean {
+  if (keys.has(`id:${movement.id}`)) return true;
+  if (movement.sourceSystem !== 'JDE') return false;
+  const invoice = movement.sourceObjectId ?? parseCxpInvoiceFromMovementId(movement.id);
+  if (!invoice) return false;
+  const company = movement.companyId ? normalizeText(movement.companyId) : 'any';
+  return keys.has(`invoice:${company}:${normalizeText(invoice)}`)
+    || keys.has(`invoice:any:${normalizeText(invoice)}`);
+}
+
+function parseCxpInvoiceFromMovementId(id: string): string | undefined {
+  if (!id.startsWith('cxp:')) return undefined;
+  const parts = id.split(':');
+  return parts[3] || undefined;
+}
+
+function positiveNumber(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function normalizeText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
+function cleanIsoDate(value?: string): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return isIsoDate(trimmed) ? trimmed : undefined;
 }
 
 function lineForMovement(movement: FinancialMovement): TaxSourceLine {
@@ -685,32 +1218,6 @@ function lineForMovement(movement: FinancialMovement): TaxSourceLine {
     taxAmount: movement.taxAmount ?? 0,
     sourceSystem: movement.sourceSystem,
   };
-}
-
-function normalizeTaxTreatment(
-  treatment: FinancialMovement['taxTreatment'] | 'TAXABLE_IVA' | undefined,
-  movement: FinancialMovement,
-): FinancialMovement['taxTreatment'] {
-  if (treatment === 'TAXABLE_IVA') return 'IVA_CAUSED';
-  if (treatment) return treatment;
-
-  // Excepciones explícitas (no generan IVA o se manejan por separado)
-  if (
-    movement.category === 'PAYROLL' ||
-    movement.category === 'TAX' ||
-    movement.category === 'DEBT' ||
-    movement.category === 'TRANSFER'
-  ) {
-    return 'IVA_EXEMPT';
-  }
-
-  // Regla general para Régimen 601:
-  // Cualquier ingreso (Inflow) que no sea deuda/transferencia se presume causado.
-  // Cualquier egreso (Outflow) que no sea nómina/impuesto se presume acreditable.
-  if (movement.type === 'INFLOW') return 'IVA_CAUSED';
-  if (movement.type === 'OUTFLOW') return 'IVA_CREDITABLE';
-
-  return 'UNCLASSIFIED';
 }
 
 function taxAuthorityName(taxType: TaxType): string {
@@ -729,6 +1236,9 @@ function normalizeTaxStore(value: unknown, fallback: TaxStore): TaxStore {
     obligations: Array.isArray(raw.obligations)
       ? raw.obligations.map(normalizeObligation).filter((item): item is TaxObligation => item !== null)
       : fallback.obligations,
+    taxRateOverrides: Array.isArray(raw.taxRateOverrides)
+      ? raw.taxRateOverrides.map(normalizeTaxRateOverride).filter((item): item is TaxRateOverride => item !== null)
+      : fallback.taxRateOverrides,
     overdueBalance: typeof raw.overdueBalance === 'number' && Number.isFinite(raw.overdueBalance)
       ? Math.max(0, raw.overdueBalance)
       : fallback.overdueBalance,
@@ -773,8 +1283,26 @@ function migrateLegacyTaxStore(): TaxStore {
   return {
     adjustments,
     obligations: dedupeObligations(obligations),
+    taxRateOverrides: [],
     overdueBalance: 0,
     migratedAt: adjustments.length > 0 || obligations.length > 0 ? new Date().toISOString() : undefined,
+  };
+}
+
+function normalizeTaxRateOverride(value: unknown): TaxRateOverride | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  const targetType = raw.targetType === 'CLIENT' || raw.targetType === 'PROVIDER' || raw.targetType === 'CONCEPT'
+    ? raw.targetType
+    : null;
+  const targetKey = typeof raw.targetKey === 'string' && raw.targetKey.trim() ? raw.targetKey : null;
+  const rate = raw.rate === 8 || raw.rate === 16 ? raw.rate : null;
+  if (!targetType || !targetKey || !rate) return null;
+  return {
+    targetType,
+    targetKey: normalizeTargetKey({ targetType, targetKey }),
+    rate,
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
   };
 }
 
