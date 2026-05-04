@@ -1,8 +1,10 @@
-// Genera public/presupuesto.csv con los mismos valores que emite
-// buildBudgetTemplateCsv() del dominio, para que el dashboard lo pueda
-// cargar automáticamente sin pasar por el uploader.
+// Genera public/presupuesto.csv con el flujo de mayo 2026 para que el
+// dashboard lo cargue automáticamente sin pasar por el uploader.
 //
 // Este script corre en Node puro (sin TS), se invoca con `node scripts/generate-budget-csv.mjs`.
+//
+// Fuente: /Users/paolo/Desktop/necesidad de flujo Mayo 2026 04.05.26.xlsx
+// Hoja base: "Plan de Flujo Ajustado"; cierre mensual: fila "Caja Final Mxn".
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -32,8 +34,7 @@ function fmtValueForCsv(pesos, factor) {
   const scaled = pesos / factor;
   const negative = scaled < 0;
   const abs = Math.abs(scaled);
-  const digits = abs >= 1000 ? 0 : 1;
-  const s = abs.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const s = abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
   const needsQuote = s.includes(',');
   const core = needsQuote ? `"${s}"` : s;
   return negative ? `(${core})` : core;
@@ -46,17 +47,23 @@ function row(label, values, factor) {
 
 const factor = scaleFactor(SCALE);
 
-const cajaInicial   = [376.4, 210.9, 164.8, 164.0, 36.0, 173.2, 274.0, 342.8, 525.1, 772.8, 990.6, 846.3].map((v) => v * MM);
-const ingresosTotal = [290.7, 253.5, 343.3, 288.5, 325.4, 380.8, 324.6, 415.1, 344.4, 329.9, 420.5, 365.4].map((v) => v * MM);
-const nomina        = [82.3, 80.1, 94.4, 77.0, 86.0, 89.5, 77.2, 95.9, 72.1, 77.2, 95.9, 111.2].map((v) => v * MM);
-const finiquitos    = [6.7, 5.5, 7.2, 4.6, 3.7, 3.7, 3.0, 3.5, 2.8, 2.8, 3.5, 2.8].map((v) => v * MM);
-const diesel        = [59.9, 49.4, 66.8, 58.3, 64.7, 80.9, 64.7, 80.9, 64.7, 64.7, 80.9, 64.7].map((v) => v * MM);
-const gas           = [3.4, 6.4, 5.9, 5.8, 5.2, 6.5, 5.2, 6.5, 5.2, 5.2, 6.5, 5.2].map((v) => v * MM);
-const lubri         = [5.4, 2.1, 1.8, 3.8, 5.1, 6.4, 5.1, 6.4, 5.1, 5.1, 6.4, 5.1].map((v) => v * MM);
-const impuestos     = [50.7, 14.8, 25.3, 27.3, 62.5, 27.5, 51.5, 14.5, 51.5, 14.5, 51.5, 154.5].map((v) => v * MM);
-const gastosOp      = [47.2, 57.8, 78.1, 43.5, 61.4, 67.5, 60.9, 92.0, 59.4, 59.9, 91.5, 59.9].map((v) => v * MM);
+const cajaInicial   = [76.31531, 84.355879, 36.978986, 53.151053, 41.00915, 18.450778, 73.357256, 4.94028, 16.237168, 64.17287, 12.712694, 14.463955].map((v) => v * MM);
+const cajaFinalPlan = [84.355879, 36.978986, 53.151053, 41.00915, 18.450778, 73.357256, 4.94028, 16.237168, 64.17287, 12.712694, 14.463955, 67.212907].map((v) => v * MM);
+const ingresosTotal = [290.659137, 253.480686, 343.300154, 282.151754, 349.54324, 380.804902, 324.595028, 329.042434, 430.380668, 329.923957, 329.247512, 456.616817].map((v) => v * MM);
+const nomina        = [82.338284, 80.089234, 94.351781, 78.144421, 85.993874, 89.473874, 77.201874, 77.201874, 90.776049, 77.201874, 77.321874, 139.744577].map((v) => v * MM);
+const finiquitos    = [6.725399, 5.53828, 7.239512, 5.125377, 4.256212, 4.686109, 3.895906, 3.49229, 4.051014, 3.49229, 3.351014, 4.077777].map((v) => v * MM);
+const diesel        = [51.048235, 40.936897, 59.150619, 52.11396, 60.4, 68, 54.4, 54.4, 68, 54.4, 54.4, 68].map((v) => v * MM);
+const gas           = [3.439098, 6.374311, 5.87172, 4.268475, 5.188, 6.485, 5.188, 5.188, 6.485, 5.188, 5.188, 6.485].map((v) => v * MM);
+const lubri         = [5.441633, 2.054016, 1.811769, 1.450369, 5.12, 6.4, 5.12, 5.12, 6.4, 5.12, 5.12, 6.4].map((v) => v * MM);
+const impuestos     = [50.690934, 14.822174, 25.321892, 27.361047, 62.5, 27.5, 81.5, 54.5, 81.5, 74.5, 61.5, 54.5].map((v) => v * MM);
+const gastosOp      = [47.16007, 57.838345, 78.102966, 27.573743, 88.763189, 67.830323, 64.851993, 73.843993, 74.47014, 61.699991, 73.177991, 76.50314].map((v) => v * MM);
 const capex         = [0, 0, 0, 0, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2].map((v) => v * MM);
-const pasivosFin    = [41.5, 98.5, 51.9, 98.2, 45.6, 51.7, 93.3, 58.6, 28.8, 92.4, 62.3, 26.0].map((v) => v * MM);
+const gastosAsesores = [2.925967, 3.125487, 2.963132, 0.0406, 9.079967, 1.16, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1].map((v) => v * MM);
+const proyectos     = [0.523912, 0.521137, 0.687332, 0.128136, 0.124, 0.124, 0.124, 0.124, 0.124, 0.124, 0.124, 0.124].map((v) => v * MM);
+const planPago      = [1.332413, 1.076603, 1.599284, 0.041988, 2.103, 2.356, 2.122, 2.14, 2.41, 1.94, 1.84, 2.56].map((v) => v * MM);
+const pasivosFin    = [41.532624, 98.458229, 51.928081, 98.045542, 48.373371, 51.683118, 97.308231, 40.43539, 46.928762, 96.417979, 44.173371, 44.173371].map((v) => v * MM);
+// Ajusta enero-marzo para que el encadenado coincida con "Caja Final Mxn".
+const ajusteReservas = [-10.54, -9.977135, -1.9, 0, 0, 0, 0, 0, 0, 0, 0, 0].map((v) => v * MM);
 
 const expenseRows = [
   { label: 'Nómina', values: nomina },
@@ -67,22 +74,22 @@ const expenseRows = [
   { label: 'Impuestos', values: impuestos },
   { label: 'Gastos de Operación', values: gastosOp },
   { label: 'CAPEX', values: capex },
+  { label: 'Gastos Asesores: CM y fiscal', values: gastosAsesores },
+  { label: 'Proyectos', values: proyectos },
+  { label: 'Plan de Pago', values: planPago },
   { label: 'Pasivos Financieros', values: pasivosFin },
+  { label: 'Ajuste reservas y financiamiento', values: ajusteReservas },
 ];
 
 const totalEgresos = new Array(12).fill(0).map((_, i) =>
   expenseRows.reduce((s, r) => s + r.values[i], 0),
 );
 const flujoNeto = ingresosTotal.map((v, i) => v - totalEgresos[i]);
-const cajaFinal = [];
-for (let i = 0; i < 12; i++) {
-  const prev = i === 0 ? cajaInicial[0] : cajaFinal[i - 1];
-  cajaFinal.push(prev + flujoNeto[i]);
-}
+const cajaFinal = cajaFinalPlan;
 
 const title = `Presupuesto ${YEAR} — Resumen Mensual`;
 const scaleLine = `Cifras en ${scaleLabel(SCALE)} (MXN)`;
-const scopeLine = `Todas las compañías`;
+const scopeLine = `Todas las compañías — necesidad de flujo Mayo 2026 04.05.26`;
 const monthsHeader = ['Concepto', ...MONTH_HEADERS, 'Total Año'].join(',');
 const commasForEmpty = ','.repeat(MONTH_HEADERS.length + 1);
 

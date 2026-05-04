@@ -430,6 +430,17 @@ export default function App() {
             lastUpdatedAt: catalogProvider.lastUpdatedAt,
             dtiArea: catalogProvider.dtiArea ?? existing.provider.dtiArea,
             dtiCriticidad: catalogProvider.dtiCriticidad ?? existing.provider.dtiCriticidad,
+            clasificacionAlberto: catalogProvider.clasificacionAlberto,
+            clasificacionAlbertoRaw: catalogProvider.clasificacionAlbertoRaw,
+            clasificacionAutomatica: catalogProvider.clasificacionAutomatica,
+            score: catalogProvider.score,
+            scoreCriterios: catalogProvider.scoreCriterios,
+            numProveedorJDE: catalogProvider.numProveedorJDE ?? existing.provider.numProveedorJDE,
+            frecuenciaHistorica: catalogProvider.frecuenciaHistorica,
+            montoPromedioPago: catalogProvider.montoPromedioPago,
+            numPagos2025: catalogProvider.numPagos2025,
+            montoTotal2025: catalogProvider.montoTotal2025,
+            gastoMinimoMensual: catalogProvider.gastoMinimoMensual,
           };
 
           if (JSON.stringify(nextProvider) !== JSON.stringify(existing.provider)) {
