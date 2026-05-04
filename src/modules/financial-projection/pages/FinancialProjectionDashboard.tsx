@@ -11,6 +11,8 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
+import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import {
   applyAdjustmentsToMovements,
@@ -83,6 +85,8 @@ interface Props {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  cobranzaReconciliation?: RealReconciliationResult;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -125,6 +129,8 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.clients,
       props.providers,
       props.cxpRecords,
+      props.cobranzaRecords,
+      props.cobranzaReconciliation,
       props.assumptions,
       props.budget,
       props.startingBalance,
@@ -571,11 +577,12 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const drawerInvoiceContext = useMemo(
     () => ({
       cxpRecords: props.cxpRecords,
+      cobranzaRecords: props.cobranzaRecords ?? [],
       clients: props.clients,
       assumptions: props.assumptions,
       budget: props.budget,
     }),
-    [props.cxpRecords, props.clients, props.assumptions, props.budget],
+    [props.cxpRecords, props.cobranzaRecords, props.clients, props.assumptions, props.budget],
   );
 
   if (!source.hasData) {

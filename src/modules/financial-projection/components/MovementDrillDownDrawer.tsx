@@ -16,6 +16,7 @@ import type {
   Client,
   CollectionEvent,
 } from '../../../domain/types';
+import type { CobranzaRecord } from '../../../services/jdeTypes';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 
 const POPOVER_WIDTH = 480;
@@ -37,6 +38,7 @@ const POPOVER_EST_HEIGHT = 620;
  */
 export interface InvoiceContext {
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
@@ -264,6 +266,19 @@ function InvoiceDetailSection({
   }
 
   if (movement.category === 'AR_COLLECTION') {
+    const cxcRecords = findCobranzaRecords(context.cobranzaRecords ?? [], movement);
+    if (cxcRecords.length > 0) {
+      return (
+        <SectionCard title={cxcRecords.length === 1 ? 'Factura CXC JDE' : `Facturas CXC JDE (${cxcRecords.length})`}>
+          <div className="divide-y divide-[var(--gray-100)]">
+            {cxcRecords.map((record, idx) => (
+              <CobranzaRecordRow key={`${record.cia}-${record.noFactura}-${idx}`} record={record} />
+            ))}
+          </div>
+        </SectionCard>
+      );
+    }
+
     const events = computeRelatedCollectionEvents(context, movement);
     if (events.length === 0) {
       return (
@@ -321,6 +336,49 @@ function InvoiceDetailSection({
   }
 
   return null;
+}
+
+function CobranzaRecordRow({ record }: { record: CobranzaRecord }) {
+  const overdue = (record.diasVencida ?? 0) > 0;
+  return (
+    <div className="px-3 py-2.5 space-y-1.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+            <FileText className="h-3.5 w-3.5 text-[var(--gray-500)]" strokeWidth={1.75} />
+            <span className="truncate">Factura {record.noFactura || 'sin folio'}</span>
+          </div>
+          <div className="text-[11px] text-[var(--gray-500)]">{record.nombreCliente || 'Cliente sin nombre'}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">
+            {fmtCurrency(record.importePendientePesos)}
+          </div>
+          <div className="text-[10px] text-[var(--gray-400)]">
+            Pendiente · {record.moneda || 'MXN'}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1 text-[11px]">
+        <Row label="Cliente" value={record.noCliente || '—'} compact />
+        <Row label="Empresa" value={record.cia || '—'} compact />
+        <Row label="Emisión" value={fmtSafeDate(record.fechaFactura)} compact />
+        <Row label="Vencimiento" value={fmtSafeDate(record.fechaVence)} compact />
+        <Row label="Cobro JDE" value={fmtSafeDate(record.fechaCobro)} compact />
+        <Row
+          label="Días vencida"
+          value={String(record.diasVencida ?? 0)}
+          compact
+          accentColor={overdue ? 'var(--danger)' : undefined}
+        />
+        <Row label="Cond. pago" value={record.condPago || '—'} compact />
+        <Row label="Estatus" value={record.estatus || '—'} compact />
+        <Row label="Importe bruto" value={fmtCurrency(record.importeBrutoPesos)} compact />
+        <Row label="Saldo pendiente" value={fmtCurrency(record.importePendientePesos)} compact accent />
+      </div>
+    </div>
+  );
 }
 
 function CxpRecordRow({ record }: { record: CXPRecord }) {
@@ -528,6 +586,17 @@ function findCxpRecords(records: CXPRecord[], movement: FinancialMovement): CXPR
   );
   if (exact.length > 0) return exact;
   // Fallback: si la empresa no coincidió, devolvemos cualquier match por folio.
+  return records.filter((record) => record.noFactura === movement.sourceObjectId);
+}
+
+function findCobranzaRecords(records: CobranzaRecord[], movement: FinancialMovement): CobranzaRecord[] {
+  if (!movement.sourceObjectId) return [];
+  const exact = records.filter(
+    (record) =>
+      record.noFactura === movement.sourceObjectId
+      && (!movement.companyId || record.cia === movement.companyId),
+  );
+  if (exact.length > 0) return exact;
   return records.filter((record) => record.noFactura === movement.sourceObjectId);
 }
 

@@ -150,6 +150,7 @@ export function calendarEventMatchesSourceFilter(
 export function buildCollectionCalendar(input: BuildCollectionCalendarInput): BuildCollectionCalendarResult {
   const { clients, assumptions, cobranzaRecords, reconciliation } = input;
   const events: CollectionCalendarEvent[] = [];
+  const clientLookup = buildClientLookup(clients);
   const matchByFactura = new Map<string, RealReconciliationMatch>();
   for (const match of reconciliation.matches) {
     matchByFactura.set(facturaKey(match.cia, match.noFactura), match);
@@ -168,12 +169,12 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     }
   }
 
-  const clientMatchByFactura = new Map<string, ClientMatch | null>();
+  const clientMatchByFactura = new Map<string, CollectionCalendarClientMatch | null>();
   const cxcCoverageByClientMonth = new Map<string, Set<string>>();
 
   for (const record of cobranzaRecords) {
     const key = facturaKey(record.cia, record.noFactura);
-    const clientMatch = findClientForCobranza(record, clients);
+    const clientMatch = findClientForCobranza(record, clientLookup);
     clientMatchByFactura.set(key, clientMatch);
     if (clientMatch && record.fechaFactura) {
       addCoveredMonth(cxcCoverageByClientMonth, clientMatch.client.id, record.fechaFactura.slice(0, 7));
@@ -202,7 +203,7 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
   for (const projected of projectYear(clients, assumptions)) {
     const coveredMonths = cxcCoverageByClientMonth.get(projected.clientId);
     if (coveredMonths?.has(projected.invoiceDate.slice(0, 7))) continue;
-    const client = clients.find(c => c.id === projected.clientId);
+    const client = clientLookup.byId.get(projected.clientId);
     events.push(eventFromProjection(projected, client));
   }
 
@@ -292,7 +293,7 @@ function eventFromJdePaid(record: CobranzaRecord): CollectionCalendarEvent {
 
 function eventFromPendingRule(
   record: CobranzaRecord,
-  clientMatch: ClientMatch,
+  clientMatch: CollectionCalendarClientMatch,
   assumptions: CashFlowAssumptions,
 ): CollectionCalendarEvent {
   const resolved = resolveCobranzaRuleDate(record, clientMatch.client, assumptions);
@@ -399,14 +400,53 @@ function sourceRank(source: CollectionCalendarEventSource): number {
   return idx >= 0 ? idx : SOURCE_ORDER.length;
 }
 
-interface ClientMatch {
+export interface CollectionCalendarClientMatch {
   client: Client;
   confidence: number;
 }
 
-function findClientForCobranza(record: CobranzaRecord, clients: Client[]): ClientMatch | null {
-  let best: ClientMatch | null = null;
+export interface CollectionCalendarClientLookup {
+  byId: Map<string, Client>;
+  byDigits: Map<string, Client[]>;
+  byToken: Map<string, Client[]>;
+}
+
+export function buildClientLookup(clients: Client[]): CollectionCalendarClientLookup {
+  const byId = new Map<string, Client>();
+  const byDigits = new Map<string, Client[]>();
+  const byToken = new Map<string, Client[]>();
   for (const client of clients) {
+    byId.set(client.id, client);
+    const digits = onlyDigits(client.id);
+    if (digits) addClientLookup(byDigits, digits, client);
+    for (const value of [client.name, client.legalName, client.commercialGroupName]) {
+      for (const token of significantTokens(normalizeClientText(value ?? ''))) {
+        addClientLookup(byToken, token, client);
+      }
+    }
+  }
+  return { byId, byDigits, byToken };
+}
+
+function addClientLookup(map: Map<string, Client[]>, key: string, client: Client): void {
+  const list = map.get(key) ?? [];
+  if (!list.some(c => c.id === client.id)) list.push(client);
+  map.set(key, list);
+}
+
+export function findClientForCobranza(
+  record: CobranzaRecord,
+  lookup: CollectionCalendarClientLookup,
+): CollectionCalendarClientMatch | null {
+  const candidateMap = new Map<string, Client>();
+  const noCliente = onlyDigits(record.noCliente);
+  for (const client of lookup.byDigits.get(noCliente) ?? []) candidateMap.set(client.id, client);
+  for (const token of significantTokens(normalizeClientText(record.nombreCliente))) {
+    for (const client of lookup.byToken.get(token) ?? []) candidateMap.set(client.id, client);
+  }
+  const candidates = candidateMap.size > 0 ? Array.from(candidateMap.values()) : Array.from(lookup.byId.values());
+  let best: CollectionCalendarClientMatch | null = null;
+  for (const client of candidates) {
     const confidence = clientMatchConfidence(record, client);
     if (confidence < 0.62) continue;
     if (!best || confidence > best.confidence) {
@@ -469,7 +509,7 @@ function addCoveredMonth(map: Map<string, Set<string>>, clientId: string, yearMo
   map.set(clientId, set);
 }
 
-function resolveCobranzaRuleDate(
+export function resolveCobranzaRuleDate(
   record: CobranzaRecord,
   client: Client,
   assumptions: CashFlowAssumptions,
@@ -497,7 +537,7 @@ function resolveCobranzaRuleDate(
   };
 }
 
-function clientRuleLabel(client: Client): string {
+export function clientRuleLabel(client: Client): string {
   const payment = client.paymentDayRaw || client.paymentDay.kind;
   return `${client.frequency} · ${client.creditDays}d credito · ${payment}${client.factoraje ? ' · factoraje' : ''}`;
 }

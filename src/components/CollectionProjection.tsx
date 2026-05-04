@@ -9,6 +9,8 @@ import {
   type RealReconciliationMatch,
   type RealReconciliationResult,
   type MatchTier as RealMatchTier,
+  type ReconciliationReviewCandidate,
+  type RealReconciliationBankCoverage,
 } from '../domain/realReconciliationEngine';
 import {
   buildCollectionCalendar,
@@ -78,6 +80,9 @@ interface Props {
   onRefreshCobranza?: () => void;
   /** Indica si un refresh está en curso para deshabilitar el botón. */
   cobranzaRefreshing?: boolean;
+  /** Carga bancos sólo para el rango visible de cobranza y mergea al cache. */
+  onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
+  bankCoverageLoading?: boolean;
   /**
    * Cía seleccionada globalmente (header del shell). Cuando viene un valor
    * distinto a 'all', el CobranzaRealView abre filtrado por esa cía;
@@ -85,6 +90,12 @@ interface Props {
    * global del app.
    */
   selectedCia?: string;
+}
+
+interface EnsureBankCoverageRequest {
+  from: string;
+  to: string;
+  ciaFilter?: string[];
 }
 
 type ViewMode = 'month' | 'client' | 'calendar';
@@ -107,7 +118,7 @@ function defaultActiveMonth(year: number): number {
   return now.getFullYear() === year ? now.getMonth() : 0;
 }
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -229,6 +240,8 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           onRefresh={onRefreshCobranza}
           refreshing={!!cobranzaRefreshing}
           defaultCia={selectedCia}
+          onEnsureBankCoverage={onEnsureBankCoverage}
+          bankCoverageLoading={!!bankCoverageLoading}
         />
       ) : (
       <>
@@ -1387,9 +1400,15 @@ function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: st
 function CobranzaRealCalendar({
   calendar,
   ciaFilter,
+  bankCoverage,
+  onEnsureBankCoverage,
+  bankCoverageLoading,
 }: {
   calendar: BuildCollectionCalendarResult;
   ciaFilter: string;
+  bankCoverage?: RealReconciliationBankCoverage;
+  onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
+  bankCoverageLoading?: boolean;
 }) {
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth());
@@ -1427,6 +1446,19 @@ function CobranzaRealCalendar({
 
   const firstDay = new Date(Date.UTC(year, month, 1));
   const lastDay = new Date(Date.UTC(year, month + 1, 0));
+  const visibleFrom = firstDay.toISOString().slice(0, 10);
+  const visibleTo = lastDay.toISOString().slice(0, 10);
+  const loadedDateSet = useMemo(
+    () => new Set(bankCoverage?.loadedDates ?? []),
+    [bankCoverage],
+  );
+  const loadedInMonth = useMemo(
+    () => (bankCoverage?.loadedDates ?? []).filter(date => date >= visibleFrom && date <= visibleTo).length,
+    [bankCoverage, visibleFrom, visibleTo],
+  );
+  const monthDayCount = lastDay.getUTCDate();
+  const coveragePct = monthDayCount > 0 ? loadedInMonth / monthDayCount : 0;
+  const coverageWeak = loadedDateSet.size === 0 || coveragePct < 0.4;
   const startPad = (firstDay.getUTCDay() + 6) % 7;
   const days: Date[] = [];
   for (let i = -startPad; i < lastDay.getUTCDate() + (7 - ((lastDay.getUTCDay() + 6) % 7 + 1) % 7); i++) {
@@ -1542,6 +1574,30 @@ function CobranzaRealCalendar({
             </button>
           ))}
         </div>
+        {onEnsureBankCoverage && coverageWeak && (
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-[var(--warning,_#f59e0b)]/30 bg-[var(--warning-muted,_#fef3c7)] px-3 py-2 text-[12px]">
+            <AlertTriangle className="w-4 h-4 text-[var(--warning,_#b45309)] flex-shrink-0" />
+            <div className="min-w-0">
+              <div className="font-medium text-[var(--gray-950)]">Cobertura bancaria parcial del mes visible</div>
+              <div className="text-[var(--gray-500)]">
+                {loadedInMonth} de {monthDayCount} días con movimientos cargados. Cargar sólo este rango mejora el cruce sin traer todo el año.
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                void onEnsureBankCoverage({
+                  from: visibleFrom,
+                  to: visibleTo,
+                  ciaFilter: ciaFilter === 'all' ? undefined : [ciaFilter],
+                });
+              }}
+              disabled={bankCoverageLoading}
+              className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-lg bg-[var(--gray-950)] text-white text-[12px] font-medium disabled:opacity-50"
+            >
+              {bankCoverageLoading ? 'Cargando…' : 'Cargar bancos del mes'}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="p-4">
@@ -1904,9 +1960,12 @@ function BankBadge({ match }: { match?: RealReconciliationMatch }) {
   }
   if (match.status === 'cobrada-banco') {
     const tierLabel: Record<RealMatchTier, string> = {
+      'invoice-reference': 'Factura ref.',
+      'customer-reference': 'Cliente ref.',
       exact: 'Exacto',
       tolerance: '±0.5%',
       subset: `Subset ×${match.subsetSize ?? 2}`,
+      'multi-abono': `Multi ×${match.bankMovements?.length ?? 2}`,
     };
     const tier = match.matchTier ?? 'exact';
     return (
@@ -1914,6 +1973,19 @@ function BankBadge({ match }: { match?: RealReconciliationMatch }) {
         <CheckCircle2 className="w-3 h-3" />
         {match.bankDate ? match.bankDate.slice(0, 10) : '—'}
         <span className="text-[10px] opacity-70 ml-0.5">{tierLabel[tier]}</span>
+      </span>
+    );
+  }
+  if (match.reviewStatus === 'review') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning,_#b45309)] text-[11px] font-medium"
+        title={match.matchReason}
+      >
+        <HelpCircle className="w-3 h-3" /> Por revisar
+        {typeof match.confidence === 'number' && (
+          <span className="text-[10px] opacity-70 ml-0.5">{Math.round(match.confidence * 100)}%</span>
+        )}
       </span>
     );
   }
@@ -1928,6 +2000,62 @@ function BankBadge({ match }: { match?: RealReconciliationMatch }) {
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] text-[11px]">
       <AlertTriangle className="w-3 h-3" /> Pendiente
     </span>
+  );
+}
+
+function ReviewCandidatesPanel({ candidates }: { candidates: ReconciliationReviewCandidate[] }) {
+  const top = candidates.slice(0, 6);
+  if (top.length === 0) return null;
+  const totalAmount = top.reduce((sum, c) => sum + c.movement.importe, 0);
+  return (
+    <div className="bg-white border border-[var(--warning,_#f59e0b)]/30 rounded-xl overflow-hidden">
+      <div className="px-4 py-3 bg-[var(--warning-muted,_#fef3c7)] border-b border-[var(--warning,_#f59e0b)]/20 flex items-center gap-2">
+        <HelpCircle className="w-4 h-4 text-[var(--warning,_#b45309)]" />
+        <div>
+          <div className="text-[13px] font-semibold text-[var(--gray-950)]">Cruces por revisar</div>
+          <div className="text-[11px] text-[var(--gray-500)]">
+            {candidates.length} abono{candidates.length !== 1 ? 's' : ''} candidato{candidates.length !== 1 ? 's' : ''}; no cuentan como banco cruzado hasta confirmarse.
+          </div>
+        </div>
+        <div className="ml-auto text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(totalAmount)}</div>
+      </div>
+      <div className="divide-y divide-[var(--gray-100)]">
+        {top.map(candidate => {
+          const best = candidate.candidateFacturas[0];
+          return (
+            <div key={candidate.movement.movementKey} className="px-4 py-3 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_auto] gap-3 text-[12px]">
+              <div>
+                <div className="font-medium text-[var(--gray-950)] tabular-nums">
+                  {candidate.movement.fechaOperacion} · {fmtCurrency(candidate.movement.importe)}
+                </div>
+                <div className="text-[11px] text-[var(--gray-500)] truncate" title={candidate.movement.concepto}>
+                  {candidate.movement.cia} · {candidate.movement.cuenta} · {candidate.movement.concepto || 'Sin concepto'}
+                </div>
+                <code className="text-[10px] text-[var(--gray-400)]">{candidate.movement.referencia || 'Sin referencia'}</code>
+              </div>
+              <div>
+                <div className="font-medium text-[var(--gray-950)] truncate" title={best?.nombreCliente}>
+                  {best ? `${best.nombreCliente} · Fact. ${best.noFactura}` : 'Sin candidato'}
+                </div>
+                <div className="text-[11px] text-[var(--gray-500)]">
+                  {candidate.matchReason}
+                </div>
+              </div>
+              <div className="text-right tabular-nums">
+                <span className="inline-flex px-2 py-0.5 rounded-md bg-[var(--gray-100)] text-[var(--gray-600)] text-[11px]">
+                  {best ? `${Math.round(best.confidence * 100)}%` : '—'}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {candidates.length > top.length && (
+        <div className="px-4 py-2 text-[11px] text-[var(--gray-400)] bg-[var(--surface-alt)]">
+          Mostrando {top.length} de {candidates.length}; exporta CSV para revisar el resto.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1963,6 +2091,8 @@ function CobranzaRealView({
   onRefresh,
   refreshing,
   defaultCia,
+  onEnsureBankCoverage,
+  bankCoverageLoading,
 }: {
   clients: Client[];
   assumptions: CashFlowAssumptions;
@@ -1976,6 +2106,8 @@ function CobranzaRealView({
   onRefresh?: () => void;
   refreshing?: boolean;
   defaultCia?: string;
+  onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
+  bankCoverageLoading?: boolean;
 }) {
   // Default del filtro local: si el global selectedCia es una cía válida
   // (no 'all'), arrancamos filtrados por esa cía. Si después el usuario
@@ -1989,7 +2121,7 @@ function CobranzaRealView({
   }, [defaultCia]);
   const [estatusFilter, setEstatusFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
-  const [crossFilter, setCrossFilter] = useState<'all' | 'matched' | 'pending'>('all');
+  const [crossFilter, setCrossFilter] = useState<'all' | 'matched' | 'review' | 'pending'>('all');
 
   // ── Motor de cruce (Fase 2/3) ──────────────────────────────────────────
   // Default: usar el resultado pre-computado de App.tsx. Si por alguna razón
@@ -2065,8 +2197,10 @@ function CobranzaRealView({
       if (crossFilter !== 'all') {
         const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
         const matched = m?.status === 'cobrada-banco';
+        const review = m?.reviewStatus === 'review';
         if (crossFilter === 'matched' && !matched) return false;
-        if (crossFilter === 'pending' && matched) return false;
+        if (crossFilter === 'review' && !review) return false;
+        if (crossFilter === 'pending' && (matched || review)) return false;
       }
       if (query) {
         const q = query.toLowerCase();
@@ -2179,6 +2313,11 @@ function CobranzaRealView({
                 <span className="text-[12px] text-[var(--gray-400)] ml-2">
                   {reconciliation.summary.abonosFacturaCobrada} / {reconciliation.summary.totalAbonos} abonos
                 </span>
+                {reconciliation.reviewCandidates.length > 0 && (
+                  <span className="text-[12px] text-[var(--warning,_#b45309)] ml-2">
+                    {reconciliation.reviewCandidates.length} por revisar
+                  </span>
+                )}
               </div>
             </div>
           );
@@ -2198,6 +2337,8 @@ function CobranzaRealView({
           </div>
         )}
       </div>
+
+      <ReviewCandidatesPanel candidates={reconciliation.reviewCandidates} />
 
       {/* Filtros */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex flex-wrap gap-2 items-center">
@@ -2238,12 +2379,13 @@ function CobranzaRealView({
         {bankStatements.length > 0 && (
           <select
             value={crossFilter}
-            onChange={e => setCrossFilter(e.target.value as 'all' | 'matched' | 'pending')}
+            onChange={e => setCrossFilter(e.target.value as 'all' | 'matched' | 'review' | 'pending')}
             className="input text-[12px] h-8"
           >
             <option value="all">Todas (cruce)</option>
             <option value="matched">Solo cruzadas con banco</option>
-            <option value="pending">Solo pendientes / sin cruce</option>
+            <option value="review">Solo por revisar</option>
+            <option value="pending">Solo sin datos / sin cruce</option>
           </select>
         )}
 
@@ -2284,6 +2426,8 @@ function CobranzaRealView({
                 ReglaAplicada: calendarEvent?.ruleApplied ?? '',
                 MotivoFecha: calendarEvent?.dateReason ?? '',
                 EstatusCruce: m?.status ?? 'pendiente',
+                RevisionCruce: m?.reviewStatus ?? 'unmatched',
+                MotivoCruce: m?.matchReason ?? '',
                 BancoMatch: m?.matchTier ?? '',
                 ConfianzaCruce: (m?.confidence ?? calendarEvent?.confidence)
                   ? `${((m?.confidence ?? calendarEvent?.confidence ?? 0) * 100).toFixed(0)}%`
@@ -2293,6 +2437,7 @@ function CobranzaRealView({
                 MontoBanco: m?.bankAmount ?? '',
                 CuentaBanco: m?.bankAccount ?? '',
                 ConceptoBanco: m?.bankConcept ?? '',
+                MovimientosBanco: m?.bankMovements?.length ?? '',
                 SubsetID: m?.subsetGroupId ?? '',
               };
             });
@@ -2316,6 +2461,9 @@ function CobranzaRealView({
       <CobranzaRealCalendar
         calendar={collectionCalendar}
         ciaFilter={ciaFilter}
+        bankCoverage={reconciliation.bankCoverage}
+        onEnsureBankCoverage={onEnsureBankCoverage}
+        bankCoverageLoading={bankCoverageLoading}
       />
 
       {/* Aging por cliente — Top 20 con mayor saldo abierto */}

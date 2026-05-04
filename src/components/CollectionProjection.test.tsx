@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import CollectionProjection from './CollectionProjection';
 import type { Client, CashFlowAssumptions } from '../domain/types';
-import type { CobranzaRecord } from '../services/jdeTypes';
+import type { BankAccountStatement, CobranzaRecord } from '../services/jdeTypes';
 import { downloadFile } from '../utils/export';
 
 vi.mock('../utils/export', async () => {
@@ -66,6 +66,32 @@ function makeCobranzaRecord(overrides: Partial<CobranzaRecord> = {}): CobranzaRe
     condPago: '30',
     estatus: 'PENDIENTE',
     tipoCambio: 1,
+    ...overrides,
+  };
+}
+
+function makeBankStatement(overrides: Partial<BankAccountStatement> = {}): BankAccountStatement {
+  return {
+    cia: '00011',
+    banco: 'BANAMEX',
+    nombreBanco: 'BANAMEX',
+    cuenta: '12345',
+    moneda: 'MXN',
+    fechaEstadoCuenta: isoForCurrentMonthDay(15),
+    movimientos: [
+      {
+        cia: '00011',
+        banco: 'BANAMEX',
+        nombreBanco: 'BANAMEX',
+        cuenta: '12345',
+        moneda: 'MXN',
+        fechaOperacion: isoForCurrentMonthDay(15),
+        referencia: 'SPEI-1',
+        concepto: 'TRANSFERENCIA SPEI',
+        tipoMovimiento: 'ABONO',
+        importe: 2500,
+      },
+    ],
     ...overrides,
   };
 }
@@ -274,6 +300,55 @@ describe('<CollectionProjection />', () => {
     expect(screen.getAllByText(/JDE cobrado/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/JDE reporta Fecha_Pago/i)).toBeTruthy();
     expect(screen.getByText(/Fecha confirmada por JDE/i)).toBeTruthy();
+  });
+
+  it('muestra cruces por revisar sin contarlos como banco cruzado', () => {
+    render(
+      <CollectionProjection
+        clients={[makeClient({ id: 'x', name: 'Cliente X' })]}
+        assumptions={{ ...ASSUMPTIONS, year: new Date().getFullYear() }}
+        onAssumptionsChange={() => {}}
+        confirmedPayments={[]}
+        onConfirm={() => {}}
+        onUnconfirm={() => {}}
+        companies={[{ cia: '00011', nombre: 'Senda Demo' }]}
+        cobranzaRecords={[makeCobranzaRecord({ nombreCliente: 'Cliente sin identidad fuerte' })]}
+        cobranzaLoadedCias={{ '00011': new Date().toISOString() }}
+        bankStatements={[makeBankStatement()]}
+        selectedCia="00011"
+      />,
+    );
+
+    expect(screen.getByText(/Cruces por revisar/i)).toBeTruthy();
+    expect(screen.getByText(/no cuentan como banco cruzado/i)).toBeTruthy();
+    expect(screen.getAllByText(/Por revisar/i).length).toBeGreaterThan(0);
+  });
+
+  it('permite cargar bancos sólo del rango visible', () => {
+    const ensure = vi.fn();
+    render(
+      <CollectionProjection
+        clients={[makeClient()]}
+        assumptions={{ ...ASSUMPTIONS, year: new Date().getFullYear() }}
+        onAssumptionsChange={() => {}}
+        confirmedPayments={[]}
+        onConfirm={() => {}}
+        onUnconfirm={() => {}}
+        companies={[{ cia: '00011', nombre: 'Senda Demo' }]}
+        cobranzaRecords={[makeCobranzaRecord()]}
+        cobranzaLoadedCias={{ '00011': new Date().toISOString() }}
+        bankStatements={[]}
+        selectedCia="00011"
+        onEnsureBankCoverage={ensure}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Cargar bancos del mes/i }));
+    expect(ensure).toHaveBeenCalledWith(expect.objectContaining({
+      from: expect.stringMatching(/^\d{4}-\d{2}-01$/),
+      to: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      ciaFilter: ['00011'],
+    }));
   });
 
   it('exporta CSV de cobranza con columnas del calendario unificado', () => {

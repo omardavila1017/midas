@@ -64,9 +64,62 @@ const DAY_MS = 86_400_000;
 
 // ── Tipos públicos ─────────────────────────────────────────────────────────
 
-export type MatchTier = 'exact' | 'tolerance' | 'subset';
+export type MatchTier =
+  | 'invoice-reference'
+  | 'customer-reference'
+  | 'exact'
+  | 'tolerance'
+  | 'subset'
+  | 'multi-abono';
 export type FacturaStatus = 'cobrada-banco' | 'cobrada-jde-sin-banco' | 'pendiente';
 export type AbonoStatus = 'factura-cobrada' | 'cobranza-sin-factura' | 'no-cobranza';
+export type ReviewStatus = 'auto' | 'review' | 'unmatched';
+
+export interface BankMovementSnapshot {
+  movementKey: string;
+  cia: string;
+  cuenta: string;
+  fechaOperacion: string;
+  importe: number;
+  concepto: string;
+  referencia: string;
+  banco?: string;
+  nombreBanco?: string;
+}
+
+export interface ReconciliationCandidateFactura {
+  cia: string;
+  noFactura: string;
+  noCliente: string;
+  nombreCliente: string;
+  importeBruto: number;
+  importePendiente: number;
+  fechaFactura: string;
+  fechaVence: string;
+  confidence: number;
+  matchTier: MatchTier;
+  matchReason: string;
+}
+
+export interface ReconciliationReviewCandidate {
+  movement: BankMovementSnapshot;
+  candidateFacturas: ReconciliationCandidateFactura[];
+  matchReason: string;
+}
+
+export interface RealReconciliationBankCoverage {
+  loadedDates: string[];
+  from?: string;
+  to?: string;
+  totalMovements: number;
+  totalAbonos: number;
+}
+
+export interface RealReconciliationTimings {
+  totalMs: number;
+  indexMs: number;
+  matchMs: number;
+}
 
 /** Resultado del cruce, una entrada por factura. */
 export interface RealReconciliationMatch {
@@ -91,6 +144,10 @@ export interface RealReconciliationMatch {
   matchTier?: MatchTier;
   /** Confianza 0..1 — útil para ordenar y mostrar warnings. */
   confidence?: number;
+  /** Auto = cruce aplicado; review = candidato visible pero no aplicado. */
+  reviewStatus: ReviewStatus;
+  /** Explicación corta de por qué se cruzó o por qué quedó para revisión. */
+  matchReason?: string;
 
   /** Datos del movimiento bancario que cubrió la factura. */
   bankRef?: string;
@@ -99,6 +156,8 @@ export interface RealReconciliationMatch {
   bankConcept?: string;
   bankAccount?: string;
   bankCia?: string;
+  /** Movimientos que cubren la factura. 1 para match normal, N para multi-abono. */
+  bankMovements?: BankMovementSnapshot[];
 
   /** Si la factura es parte de un subset (un solo ABONO cubre varias). */
   subsetGroupId?: string;
@@ -121,6 +180,9 @@ export interface AbonoEnrichment {
     nombreCliente: string;
     importeBruto: number;
   }>;
+  /** Facturas candidatas cuando el ABONO no alcanzó confianza para auto-cruce. */
+  candidateFacturas?: ReconciliationCandidateFactura[];
+  matchReason?: string;
 
   /** Datos básicos del ABONO para que el caller no tenga que cruzar. */
   cia: string;
@@ -176,6 +238,12 @@ export interface RealReconciliationResult {
   abonoEnrichments: AbonoEnrichment[];
   /** Métricas top-level para KPIs. */
   summary: RealReconciliationSummary;
+  /** Candidatos que operación puede revisar sin inflar los ingresos reales. */
+  reviewCandidates: ReconciliationReviewCandidate[];
+  /** Cobertura observada de movimientos bancarios cargados. */
+  bankCoverage: RealReconciliationBankCoverage;
+  /** Métricas de duración del engine para detectar regresiones. */
+  timingsMs: RealReconciliationTimings;
 }
 
 // ── Helpers internos ───────────────────────────────────────────────────────
@@ -243,7 +311,13 @@ function computeConfidence(
   daysDelta: number,
   windowDays: number,
 ): number {
-  const baseByTier = tier === 'exact' ? 1.0 : tier === 'tolerance' ? 0.85 : 0.7;
+  const baseByTier =
+    tier === 'invoice-reference' ? 0.99 :
+    tier === 'customer-reference' ? 0.93 :
+    tier === 'exact' ? 0.86 :
+    tier === 'tolerance' ? 0.74 :
+    tier === 'multi-abono' ? 0.92 :
+    0.9;
   // Penalización por monto: 0% diff → 1, 0.5% → ~0.5
   const amountFactor = Math.max(0, 1 - amountDiffPct / AMOUNT_TOLERANCE_PCT);
   // Penalización por días: 0d → 1, fuera de ventana → 0
@@ -251,6 +325,10 @@ function computeConfidence(
   // Confidence = base * (0.7 amount + 0.3 date)
   const c = baseByTier * (0.7 * amountFactor + 0.3 * dateFactor);
   return Math.max(0, Math.min(1, c));
+}
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
 /** Selecciona el monto base de la factura para matching y la moneda alterna. */
@@ -290,47 +368,6 @@ function normalizeName(s: string): string {
     .replace(/[^A-Z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-/**
- * Match entre un ABONO y un cliente:
- *   - Si el `concepto` del ABONO contiene el `noCliente` o un fragmento del
- *     `nombreCliente` (≥3 palabras significativas), es compatible.
- *   - Si no hay match textual, todavía aceptamos cuando es la única factura
- *     candidata por monto+fecha (último recurso, marca confidence menor).
- *
- * NOTA: el match textual es un BOOST de confianza, no un requisito duro.
- * Bancos a veces ponen solo "TRANSFERENCIA SPEI" en el concepto y dejan
- * el monto y la fecha hablar.
- */
-function abonoMencionaCliente(abono: BankStatementLine, record: CobranzaRecord): boolean {
-  const concepto = normalizeName(abono.concepto || '');
-  const referencia = normalizeName(abono.referencia || '');
-  const haystack = `${concepto} ${referencia}`;
-
-  // 1. noCliente exacto (palabra-frontera). Cuidado: noCliente "1234" coincidiría
-  //    accidentalmente con cualquier referencia de 4 dígitos. Solo si tiene
-  //    longitud ≥4 y no es 100% numérico de 4 dígitos.
-  const noCliente = (record.noCliente || '').trim();
-  if (noCliente.length >= 5) {
-    const re = new RegExp(`\\b${noCliente.replace(/[^A-Z0-9]/g, '')}\\b`);
-    if (re.test(haystack)) return true;
-  }
-
-  // 2. Token significativo del nombre (longitud ≥4 letras, no genérico).
-  const stopwords = new Set([
-    'SA', 'CV', 'SAB', 'SAPI', 'SC', 'AC', 'RL', 'DE', 'EL', 'LA', 'LOS', 'LAS',
-    'DEL', 'Y', 'E', 'O', 'SR', 'SRA', 'COMPANIA', 'COMPANIAS', 'GRUPO',
-    'CLIENTE', 'CORPORATIVO', 'INTERNACIONAL', 'NACIONAL',
-  ]);
-  const tokens = normalizeName(record.nombreCliente || '')
-    .split(' ')
-    .filter(t => t.length >= 4 && !stopwords.has(t));
-
-  for (const t of tokens) {
-    if (haystack.includes(t)) return true;
-  }
-  return false;
 }
 
 // ── Subset-sum acotado ────────────────────────────────────────────────────
@@ -386,6 +423,320 @@ function searchK<T extends { bruto: number }>(
   return null;
 }
 
+// ── Índices de candidatos ─────────────────────────────────────────────────
+
+const AUTO_CONFIDENCE_THRESHOLD = 0.9;
+const REVIEW_CONFIDENCE_THRESHOLD = 0.58;
+const AMOUNT_BUCKET_SIZE = 1; // pesos redondeados; luego se valida al centavo/tolerancia.
+const MAX_REVIEW_CANDIDATES_PER_ABONO = 4;
+
+type TargetKind = 'bruto' | 'pagado' | 'pendiente';
+
+interface FacturaTarget {
+  id: string;
+  record: CobranzaRecord;
+  facturaKey: string;
+  clienteKey: string;
+  amount: number;
+  kind: TargetKind;
+  refDate: string;
+  windowDays: number;
+}
+
+interface CandidateEvaluation {
+  target: FacturaTarget;
+  tier: MatchTier;
+  confidence: number;
+  daysDelta: number;
+  amountDiffPct: number;
+  exact: boolean;
+  reason: string;
+}
+
+interface IndexedFacturas {
+  targetsByAmount: Map<string, FacturaTarget[]>;
+  targetsByFactura: Map<string, FacturaTarget[]>;
+  targetsByCliente: Map<string, FacturaTarget[]>;
+  invoiceRefs: Map<string, Set<string>>;
+  customerRefs: Map<string, Set<string>>;
+  customerTokens: Map<string, Set<string>>;
+}
+
+interface UnmatchedAbono {
+  line: BankStatementLine;
+  movementKey: string;
+  enrichment: AbonoEnrichment;
+  strongClienteKeys: Set<string>;
+}
+
+function indexKey(cia: string, moneda: string): string {
+  return `${cia || '(sin cia)'}::${(moneda || 'MXN').toUpperCase()}`;
+}
+
+function scopedKey(cia: string, moneda: string, value: string): string {
+  return `${indexKey(cia, moneda)}::${value}`;
+}
+
+function amountBucket(value: number): number {
+  return Math.round(value / AMOUNT_BUCKET_SIZE);
+}
+
+function normalizeCode(value: string): string {
+  return normalizeName(value).replace(/[^A-Z0-9]/g, '');
+}
+
+function significantNameTokens(value: string): string[] {
+  const stopwords = new Set([
+    'SA', 'CV', 'SAB', 'SAPI', 'SC', 'AC', 'RL', 'DE', 'EL', 'LA', 'LOS', 'LAS',
+    'DEL', 'Y', 'E', 'O', 'SR', 'SRA', 'COMPANIA', 'COMPANIAS', 'GRUPO',
+    'CLIENTE', 'CORPORATIVO', 'INTERNACIONAL', 'NACIONAL', 'SERVICIOS',
+    'TRANSPORTES', 'MEXICO',
+  ]);
+  return normalizeName(value)
+    .split(' ')
+    .filter(t => t.length >= 4 && !stopwords.has(t));
+}
+
+function addToSetMap(map: Map<string, Set<string>>, key: string, value: string): void {
+  const set = map.get(key) ?? new Set<string>();
+  set.add(value);
+  map.set(key, set);
+}
+
+function addToListMap<T>(map: Map<string, T[]>, key: string, value: T): void {
+  const list = map.get(key) ?? [];
+  list.push(value);
+  map.set(key, list);
+}
+
+function buildFacturaIndexes(facturas: CobranzaRecord[]): IndexedFacturas {
+  const targetsByAmount = new Map<string, FacturaTarget[]>();
+  const targetsByFactura = new Map<string, FacturaTarget[]>();
+  const targetsByCliente = new Map<string, FacturaTarget[]>();
+  const invoiceRefs = new Map<string, Set<string>>();
+  const customerRefs = new Map<string, Set<string>>();
+  const customerTokens = new Map<string, Set<string>>();
+
+  for (const r of facturas) {
+    const moneda = (r.moneda || 'MXN').toUpperCase();
+    const facturaKey = `${r.cia}::${r.noFactura}`;
+    const clienteKey = `${r.cia}::${r.noCliente}`;
+    const invoiceRef = normalizeCode(r.noFactura);
+    if (invoiceRef.length >= 4) addToSetMap(invoiceRefs, scopedKey(r.cia, moneda, invoiceRef), facturaKey);
+    const customerRef = normalizeCode(r.noCliente);
+    if (customerRef.length >= 4) addToSetMap(customerRefs, scopedKey(r.cia, moneda, customerRef), clienteKey);
+    for (const token of significantNameTokens(r.nombreCliente)) {
+      addToSetMap(customerTokens, scopedKey(r.cia, moneda, token), clienteKey);
+    }
+
+    const { bruto, pendiente } = selectFacturaImporte(r, moneda === 'USD');
+    const pagado = bruto - pendiente;
+    const targets: Array<{ amount: number; kind: TargetKind }> = [{ amount: bruto, kind: 'bruto' }];
+    if (pagado > 0 && Math.abs(pagado - bruto) > 0.01) targets.push({ amount: pagado, kind: 'pagado' });
+    if (pendiente > 0 && Math.abs(pendiente - bruto) > 0.01) targets.push({ amount: pendiente, kind: 'pendiente' });
+
+    for (const target of targets) {
+      if (target.amount <= 0) continue;
+      const refDate = r.fechaCobro || r.fechaVence;
+      if (!refDate) continue;
+      const entry: FacturaTarget = {
+        id: `${facturaKey}::${target.kind}`,
+        record: r,
+        facturaKey,
+        clienteKey,
+        amount: target.amount,
+        kind: target.kind,
+        refDate,
+        windowDays: r.fechaCobro ? COBRO_WINDOW_DAYS : DATE_WINDOW_DAYS,
+      };
+      addToListMap(targetsByFactura, facturaKey, entry);
+      addToListMap(targetsByCliente, clienteKey, entry);
+      addToListMap(targetsByAmount, `${indexKey(r.cia, moneda)}::${amountBucket(target.amount)}`, entry);
+    }
+  }
+
+  return { targetsByAmount, targetsByFactura, targetsByCliente, invoiceRefs, customerRefs, customerTokens };
+}
+
+function textNeedles(abono: BankStatementLine): {
+  normalized: string;
+  compact: string;
+  tokens: string[];
+} {
+  const normalized = normalizeName(`${abono.concepto || ''} ${abono.referencia || ''}`);
+  const compact = normalized.replace(/[^A-Z0-9]/g, '');
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  return { normalized, compact, tokens };
+}
+
+function candidateFacturaKeysFromText(
+  indexes: IndexedFacturas,
+  abono: BankStatementLine,
+): Set<string> {
+  const { normalized, compact, tokens } = textNeedles(abono);
+  const moneda = (abono.moneda || 'MXN').toUpperCase();
+  const out = new Set<string>();
+  const invoiceLike = new Set<string>();
+  for (const match of normalized.matchAll(/\b[A-Z]{1,5}\s*-?\s*\d{3,}\b/g)) {
+    invoiceLike.add(normalizeCode(match[0]));
+  }
+  for (const token of tokens) {
+    const clean = normalizeCode(token);
+    if (clean.length >= 5) invoiceLike.add(clean);
+  }
+
+  for (const ref of invoiceLike) {
+    const keys = indexes.invoiceRefs.get(scopedKey(abono.cia, moneda, ref));
+    for (const key of keys ?? []) out.add(key);
+    if (compact.includes(ref)) {
+      const compactKeys = indexes.invoiceRefs.get(scopedKey(abono.cia, moneda, ref));
+      for (const key of compactKeys ?? []) out.add(key);
+    }
+  }
+  return out;
+}
+
+function candidateClienteKeysFromText(
+  indexes: IndexedFacturas,
+  abono: BankStatementLine,
+): Set<string> {
+  const { tokens } = textNeedles(abono);
+  const moneda = (abono.moneda || 'MXN').toUpperCase();
+  const out = new Set<string>();
+
+  for (const token of tokens) {
+    const clean = normalizeCode(token);
+    if (clean.length >= 4 && /^\d+$/.test(clean)) {
+      for (const key of indexes.customerRefs.get(scopedKey(abono.cia, moneda, clean)) ?? []) out.add(key);
+    }
+    if (clean.length >= 4 && !/^\d+$/.test(clean)) {
+      const keys = indexes.customerTokens.get(scopedKey(abono.cia, moneda, clean));
+      // Conservador: un token de nombre sólo identifica cliente si es único
+      // dentro de esa cía/moneda. Tokens compartidos como "NORTE" ayudan a
+      // revisión vía monto, pero no elevan a auto-cruce.
+      if (keys?.size === 1) {
+        for (const key of keys) out.add(key);
+      }
+    }
+  }
+  return out;
+}
+
+function amountCandidates(
+  indexes: IndexedFacturas,
+  abono: BankStatementLine,
+): FacturaTarget[] {
+  const moneda = (abono.moneda || 'MXN').toUpperCase();
+  const base = indexKey(abono.cia, moneda);
+  const bucket = amountBucket(abono.importe);
+  const tol = Math.ceil(amountTolerance(abono.importe) / AMOUNT_BUCKET_SIZE) + 1;
+  const out: FacturaTarget[] = [];
+  for (let i = bucket - tol; i <= bucket + tol; i++) {
+    out.push(...(indexes.targetsByAmount.get(`${base}::${i}`) ?? []));
+  }
+  return out;
+}
+
+function evaluateTarget(
+  target: FacturaTarget,
+  abono: BankStatementLine,
+  identity: 'invoice' | 'customer' | 'none',
+): CandidateEvaluation | null {
+  if (!mismaMoneda(target.record, abono)) return null;
+  const exact = importesCoinciden(target.amount, abono.importe, true);
+  const tolerated = !exact && importesCoinciden(target.amount, abono.importe, false);
+  if (!exact && !tolerated) return null;
+
+  const daysDelta = daysBetween(target.refDate, abono.fechaOperacion);
+  if (Math.abs(daysDelta) > target.windowDays) return null;
+
+  const amountDiffPct = Math.abs(target.amount - abono.importe) / Math.max(target.amount, 1);
+  const tier: MatchTier =
+    identity === 'invoice' ? 'invoice-reference' :
+    identity === 'customer' ? 'customer-reference' :
+    exact ? 'exact' :
+    'tolerance';
+  let confidence = computeConfidence(tier, amountDiffPct, daysDelta, target.windowDays);
+
+  if (identity === 'invoice') confidence = Math.max(confidence, exact ? 0.98 : 0.92);
+  else if (identity === 'customer') confidence = Math.max(confidence, exact ? 0.93 : 0.9);
+  else confidence = Math.min(confidence, exact ? 0.86 : 0.78);
+
+  const reason =
+    identity === 'invoice' ? `Referencia bancaria contiene factura ${target.record.noFactura}.` :
+    identity === 'customer' ? `Referencia/concepto menciona cliente ${target.record.noCliente || target.record.nombreCliente}.` :
+    exact ? 'Monto exacto y fecha en ventana; sin identidad fuerte de cliente.' :
+    'Monto dentro de tolerancia y fecha en ventana; sin identidad fuerte de cliente.';
+
+  return { target, tier, confidence, daysDelta, amountDiffPct, exact, reason };
+}
+
+function movementSnapshot(abono: BankStatementLine): BankMovementSnapshot {
+  return {
+    movementKey: bankMovementKey(abono),
+    cia: abono.cia,
+    cuenta: abono.cuenta,
+    fechaOperacion: abono.fechaOperacion,
+    importe: abono.importe,
+    concepto: abono.concepto,
+    referencia: abono.referencia,
+    banco: abono.banco,
+    nombreBanco: abono.nombreBanco,
+  };
+}
+
+function candidateFromEvaluation(ev: CandidateEvaluation): ReconciliationCandidateFactura {
+  const r = ev.target.record;
+  return {
+    cia: r.cia,
+    noFactura: r.noFactura,
+    noCliente: r.noCliente,
+    nombreCliente: r.nombreCliente,
+    importeBruto: r.importeBrutoPesos,
+    importePendiente: r.importePendientePesos,
+    fechaFactura: r.fechaFactura,
+    fechaVence: r.fechaVence,
+    confidence: ev.confidence,
+    matchTier: ev.tier,
+    matchReason: ev.reason,
+  };
+}
+
+function buildBankCoverage(bankStatements: BankAccountStatement[], abonos: BankStatementLine[]): RealReconciliationBankCoverage {
+  const loadedDates = new Set<string>();
+  let totalMovements = 0;
+  for (const account of bankStatements) {
+    for (const mov of account.movimientos) {
+      totalMovements++;
+      if (mov.fechaOperacion) loadedDates.add(mov.fechaOperacion);
+    }
+  }
+  const dates = Array.from(loadedDates).sort();
+  return {
+    loadedDates: dates,
+    from: dates[0],
+    to: dates[dates.length - 1],
+    totalMovements,
+    totalAbonos: abonos.length,
+  };
+}
+
+function searchBankSubset(
+  abonos: UnmatchedAbono[],
+  target: number,
+): UnmatchedAbono[] | null {
+  const tol = amountTolerance(target);
+  const usable = abonos
+    .filter(a => a.line.importe > 0 && a.line.importe <= target + tol)
+    .sort((a, b) => b.line.importe - a.line.importe)
+    .map(a => ({ ...a, bruto: a.line.importe }));
+  for (let size = 2; size <= SUBSET_MAX_INVOICES; size++) {
+    const found = searchK(usable, size, target, tol);
+    if (found) return found;
+  }
+  return null;
+}
+
 // ── Motor principal ───────────────────────────────────────────────────────
 
 export interface RealReconcileOptions {
@@ -410,6 +761,7 @@ export function reconcileRealCollections(
   bankStatements: BankAccountStatement[],
   options: RealReconcileOptions = {},
 ): RealReconciliationResult {
+  const startedAt = nowMs();
   const { ciaFilter, enableUSD = true } = options;
 
   // ── 1. Filtrar facturas relevantes (con saldo abierto Y cia permitida) ──
@@ -419,6 +771,7 @@ export function reconcileRealCollections(
   });
 
   // ── 2. Pool de ABONOs (descartar traspasos internos) ──
+  const indexStartedAt = nowMs();
   const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
   const pairedKeys = buildPairMatchedKeys(bankStatements);
   const abonos: BankStatementLine[] = [];
@@ -453,7 +806,7 @@ export function reconcileRealCollections(
   // monto.
   abonos.sort((a, b) => a.fechaOperacion.localeCompare(b.fechaOperacion));
 
-  // ── 3. Agrupar facturas por (cia, noCliente) para búsqueda rápida ──
+  // ── 3. Agrupar e indexar facturas por identidad + monto ───────────────
   const facturasPorCliente = new Map<string, CobranzaRecord[]>();
   const facturaState = new Map<string, RealReconciliationMatch>();
   for (const r of facturas) {
@@ -477,14 +830,20 @@ export function reconcileRealCollections(
       status: r.importePendientePesos > 0
         ? 'pendiente'
         : 'cobrada-jde-sin-banco',
+      reviewStatus: 'unmatched',
     });
   }
+  const indexes = buildFacturaIndexes(facturas);
+  const indexMs = nowMs() - indexStartedAt;
 
   // ── 4. Set de facturas ya consumidas por algún ABONO ──
   const consumedFactura = new Set<string>(); // `${cia}::${noFactura}`
+  const consumedAbono = new Set<string>();
   const enrichments: AbonoEnrichment[] = [];
+  const unmatchedAbonos: UnmatchedAbono[] = [];
 
   // ── 5. Iterar ABONOs y buscar matches ──
+  const matchStartedAt = nowMs();
   let subsetCounter = 0;
   for (const abono of abonos) {
     const moneda = (abono.moneda || 'MXN').toUpperCase();
@@ -501,153 +860,95 @@ export function reconcileRealCollections(
       referencia: abono.referencia,
     };
 
-    // Identificar candidatos por cía. Si el ABONO viene sin cia, intentar
-    // contra TODAS las cías presentes en facturas — es raro pero pasa.
-    const cias = abono.cia ? [abono.cia] : Array.from(new Set(facturas.map(f => f.cia)));
+    const invoiceFacturaKeys = candidateFacturaKeysFromText(indexes, abono);
+    const strongClienteKeys = candidateClienteKeysFromText(indexes, abono);
 
-    type BestMatch = { tier: MatchTier; record: CobranzaRecord; daysDelta: number; confidence: number };
-    type BestSubset = { records: CobranzaRecord[]; cia: string; daysDelta: number; confidence: number };
-    let bestMatch: BestMatch | null = null;
-    let bestSubset: BestSubset | null = null;
+    const evaluations = new Map<string, CandidateEvaluation>();
+    const addEvaluation = (target: FacturaTarget, identity: 'invoice' | 'customer' | 'none') => {
+      if (consumedFactura.has(target.facturaKey)) return;
+      const ev = evaluateTarget(target, abono, identity);
+      if (!ev) return;
+      const current = evaluations.get(target.id);
+      if (!current || ev.confidence > current.confidence) evaluations.set(target.id, ev);
+    };
 
-    for (const cia of cias) {
-      // 5.a — Iterar candidatos por cliente, priorizando los que el ABONO
-      // menciona textualmente.
-      const clientesEnCia = new Set<string>();
-      for (const [k] of facturasPorCliente) {
-        if (k.startsWith(`${cia}::`)) clientesEnCia.add(k);
-      }
+    for (const facturaKey of invoiceFacturaKeys) {
+      for (const target of indexes.targetsByFactura.get(facturaKey) ?? []) addEvaluation(target, 'invoice');
+    }
+    for (const clienteKey of strongClienteKeys) {
+      for (const target of indexes.targetsByCliente.get(clienteKey) ?? []) addEvaluation(target, 'customer');
+    }
+    for (const target of amountCandidates(indexes, abono)) {
+      const identity = invoiceFacturaKeys.has(target.facturaKey)
+        ? 'invoice'
+        : strongClienteKeys.has(target.clienteKey)
+          ? 'customer'
+          : 'none';
+      addEvaluation(target, identity);
+    }
 
-      for (const clienteKey of clientesEnCia) {
-        const clienteFacturas = facturasPorCliente.get(clienteKey)!;
+    const ranked = Array.from(evaluations.values()).sort((a, b) => {
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      if (a.exact !== b.exact) return a.exact ? -1 : 1;
+      return Math.abs(a.daysDelta) - Math.abs(b.daysDelta);
+    });
+
+    let bestMatch = ranked.find(ev => ev.confidence >= AUTO_CONFIDENCE_THRESHOLD) ?? null;
+    let bestSubset: { records: CobranzaRecord[]; confidence: number; reason: string } | null = null;
+
+    if (!bestMatch) {
+      for (const clienteKey of strongClienteKeys) {
+        const clienteFacturas = (facturasPorCliente.get(clienteKey) ?? []).filter(r => !consumedFactura.has(`${r.cia}::${r.noFactura}`));
+        if (clienteFacturas.length < 2) continue;
         const sample = clienteFacturas[0];
         if (!mismaMoneda(sample, abono)) continue;
-
-        const facturasAbiertas = clienteFacturas.filter(r => {
-          const fk = `${r.cia}::${r.noFactura}`;
-          return !consumedFactura.has(fk);
-        });
-        if (facturasAbiertas.length === 0) continue;
-
-        const mencion = abonoMencionaCliente(abono, sample);
-
-        // Capa 1 + 2: match individual
-        for (const r of facturasAbiertas) {
-          const { bruto, pendiente } = selectFacturaImporte(r, useUSD);
-          // Targets a probar:
-          //   • bruto: factura cobrada al 100% en un solo ABONO (caso normal).
-          //   • bruto − pendiente: factura con pago parcial previo (saldo
-          //     restante todavía abierto). Solo aplica cuando 0<pendiente<bruto.
-          //   • pendiente: ABONO futuro que cubrirá el saldo restante (raro,
-          //     pero útil cuando JDE aún no actualiza después del cobro).
-          const pagado = bruto - pendiente;
-          const targets: number[] = [bruto];
-          if (pagado > 0 && Math.abs(pagado - bruto) > 0.01) targets.push(pagado);
-          if (pendiente > 0 && Math.abs(pendiente - bruto) > 0.01) targets.push(pendiente);
-          for (const target of targets) {
-            if (target <= 0) continue;
-
-            const exact = importesCoinciden(target, abono.importe, true);
-            const tolerated = !exact && importesCoinciden(target, abono.importe, false);
-            if (!exact && !tolerated) continue;
-
-            // Ventana de fecha — usar fechaCobro si existe, sino fechaVence.
-            const refDate = r.fechaCobro || r.fechaVence;
-            if (!refDate) continue;
-            const daysDelta = daysBetween(refDate, abono.fechaOperacion);
-            const window = r.fechaCobro ? COBRO_WINDOW_DAYS : DATE_WINDOW_DAYS;
-            if (Math.abs(daysDelta) > window) continue;
-
-            const tier: MatchTier = exact ? 'exact' : 'tolerance';
-            const amountDiffPct = Math.abs(target - abono.importe) / Math.max(target, 1);
-            let confidence = computeConfidence(tier, amountDiffPct, daysDelta, window);
-            // Boost por mención textual.
-            if (mencion) confidence = Math.min(1, confidence + 0.1);
-
-            if (!bestMatch || confidence > bestMatch.confidence) {
-              bestMatch = { tier, record: r, daysDelta, confidence };
-            }
-          }
-        }
-      }
-
-      // 5.b — Si capa 1/2 no produjo nada, intentar subset-sum por cliente.
-      if (!bestMatch) {
-        for (const clienteKey of clientesEnCia) {
-          const clienteFacturas = facturasPorCliente.get(clienteKey)!;
-          const sample = clienteFacturas[0];
-          if (!mismaMoneda(sample, abono)) continue;
-
-          const facturasAbiertas = clienteFacturas.filter(r => {
-            const fk = `${r.cia}::${r.noFactura}`;
-            return !consumedFactura.has(fk);
-          });
-          if (facturasAbiertas.length < 2) continue;
-
-          const mencion = abonoMencionaCliente(abono, sample);
-          // Para subset-sum priorizamos cuando hay mención textual; sin
-          // mención el riesgo de falso positivo es alto.
-          if (!mencion) continue;
-
-          const subset = findSubset(facturasAbiertas, abono.importe, useUSD);
-          if (!subset) continue;
-
-          // Validar fecha: la factura más vieja del subset debe estar dentro
-          // de la ventana ±DATE_WINDOW_DAYS de la fecha del ABONO.
-          const fechas = subset.map(r => r.fechaCobro || r.fechaVence).filter(Boolean);
-          if (fechas.length === 0) continue;
-          const closestDelta = fechas
-            .map(f => Math.abs(daysBetween(f, abono.fechaOperacion)))
-            .reduce((min, d) => Math.min(min, d), Number.POSITIVE_INFINITY);
-          if (closestDelta > DATE_WINDOW_DAYS) continue;
-
-          const sumBruto = subset.reduce(
-            (s, r) => s + selectFacturaImporte(r, useUSD).bruto,
-            0,
-          );
-          const amountDiffPct = Math.abs(sumBruto - abono.importe) / Math.max(sumBruto, 1);
-          const confidence = Math.min(
-            1,
-            computeConfidence('subset', amountDiffPct, closestDelta, DATE_WINDOW_DAYS) + 0.1,
-          );
-
-          if (!bestSubset || confidence > bestSubset.confidence) {
-            bestSubset = { records: subset, cia, daysDelta: closestDelta, confidence };
-          }
+        const subset = findSubset(clienteFacturas, abono.importe, useUSD);
+        if (!subset) continue;
+        const fechas = subset.map(r => r.fechaCobro || r.fechaVence).filter(Boolean);
+        if (fechas.length === 0) continue;
+        const closestDelta = fechas
+          .map(f => Math.abs(daysBetween(f, abono.fechaOperacion)))
+          .reduce((min, d) => Math.min(min, d), Number.POSITIVE_INFINITY);
+        if (closestDelta > DATE_WINDOW_DAYS) continue;
+        const sumBruto = subset.reduce((s, r) => s + selectFacturaImporte(r, useUSD).bruto, 0);
+        const amountDiffPct = Math.abs(sumBruto - abono.importe) / Math.max(sumBruto, 1);
+        const confidence = Math.max(0.9, computeConfidence('subset', amountDiffPct, closestDelta, DATE_WINDOW_DAYS));
+        if (!bestSubset || confidence > bestSubset.confidence) {
+          bestSubset = {
+            records: subset,
+            confidence,
+            reason: `Un ABONO cubre ${subset.length} facturas del mismo cliente identificado en banco.`,
+          };
         }
       }
     }
 
-    // ── Aplicar el mejor resultado ──
-    // NOTA TS: el control-flow analyzer de TS 5.5 narrowea `bestMatch` a
-    // `never` después de los bucles anidados — un known issue cuando el
-    // mismo `let` se asigna y se usa en condicionales dentro de cierres.
-    // Forzamos la forma con `as` para sortearlo (la lógica del runtime
-    // sigue siendo correcta).
-    const mb = bestMatch as BestMatch | null;
-    const sb = bestSubset as BestSubset | null;
-    if (mb) {
-      const r: CobranzaRecord = mb.record;
-      const tier = mb.tier;
-      const daysDelta = mb.daysDelta;
-      const confidence = mb.confidence;
+    if (bestMatch) {
+      const r: CobranzaRecord = bestMatch.target.record;
+      const tier = bestMatch.tier;
+      const confidence = bestMatch.confidence;
       const facturaKey = `${r.cia}::${r.noFactura}`;
       consumedFactura.add(facturaKey);
+      consumedAbono.add(enrichment.movementKey);
       const m = facturaState.get(facturaKey);
       if (m) {
         m.status = 'cobrada-banco';
         m.matchTier = tier;
         m.confidence = confidence;
+        m.reviewStatus = 'auto';
+        m.matchReason = bestMatch.reason;
         m.bankRef = abono.referencia;
         m.bankAmount = abono.importe;
         m.bankDate = abono.fechaOperacion;
         m.bankConcept = abono.concepto;
         m.bankAccount = abono.cuenta;
         m.bankCia = abono.cia;
+        m.bankMovements = [movementSnapshot(abono)];
       }
       enrichment.status = 'factura-cobrada';
       enrichment.matchTier = tier;
       enrichment.confidence = confidence;
+      enrichment.matchReason = bestMatch.reason;
       enrichment.facturas = [{
         cia: r.cia,
         noFactura: r.noFactura,
@@ -655,29 +956,31 @@ export function reconcileRealCollections(
         nombreCliente: r.nombreCliente,
         importeBruto: r.importeBrutoPesos,
       }];
-      // daysDelta no se persiste por factura en esta fase; útil en logs.
-      void daysDelta;
-    } else if (sb) {
+    } else if (bestSubset) {
       const subsetGroupId = `subset-${++subsetCounter}`;
       const consumed: Array<{
         cia: string; noFactura: string; noCliente: string; nombreCliente: string; importeBruto: number;
       }> = [];
-      for (const r of sb.records) {
+      consumedAbono.add(enrichment.movementKey);
+      for (const r of bestSubset.records) {
         const facturaKey = `${r.cia}::${r.noFactura}`;
         consumedFactura.add(facturaKey);
         const m = facturaState.get(facturaKey);
         if (m) {
           m.status = 'cobrada-banco';
           m.matchTier = 'subset';
-          m.confidence = sb.confidence;
+          m.confidence = bestSubset.confidence;
+          m.reviewStatus = 'auto';
+          m.matchReason = bestSubset.reason;
           m.bankRef = abono.referencia;
           m.bankAmount = abono.importe;
           m.bankDate = abono.fechaOperacion;
           m.bankConcept = abono.concepto;
           m.bankAccount = abono.cuenta;
           m.bankCia = abono.cia;
+          m.bankMovements = [movementSnapshot(abono)];
           m.subsetGroupId = subsetGroupId;
-          m.subsetSize = sb.records.length;
+          m.subsetSize = bestSubset.records.length;
         }
         consumed.push({
           cia: r.cia,
@@ -689,12 +992,129 @@ export function reconcileRealCollections(
       }
       enrichment.status = 'factura-cobrada';
       enrichment.matchTier = 'subset';
-      enrichment.confidence = sb.confidence;
+      enrichment.confidence = bestSubset.confidence;
+      enrichment.matchReason = bestSubset.reason;
       enrichment.facturas = consumed;
+    } else {
+      const reviews = ranked
+        .filter(ev => ev.confidence >= REVIEW_CONFIDENCE_THRESHOLD)
+        .slice(0, MAX_REVIEW_CANDIDATES_PER_ABONO)
+        .map(candidateFromEvaluation);
+      if (reviews.length > 0) {
+        enrichment.candidateFacturas = reviews;
+        enrichment.matchReason = reviews[0].matchReason;
+      }
+      unmatchedAbonos.push({
+        line: abono,
+        movementKey: enrichment.movementKey,
+        enrichment,
+        strongClienteKeys,
+      });
     }
     // status default 'cobranza-sin-factura' ya fue puesto al iniciar.
 
     enrichments.push(enrichment);
+  }
+
+  // ── 5.c Multi-abono: varios abonos del mismo cliente cubren una factura ──
+  for (const r of facturas) {
+    const facturaKey = `${r.cia}::${r.noFactura}`;
+    if (consumedFactura.has(facturaKey)) continue;
+    const clienteKey = `${r.cia}::${r.noCliente}`;
+    const moneda = (r.moneda || 'MXN').toUpperCase();
+    const useUSD = enableUSD && moneda === 'USD';
+    const { bruto, pendiente } = selectFacturaImporte(r, useUSD);
+    const targets = [bruto];
+    if (pendiente > 0 && Math.abs(pendiente - bruto) > 0.01) targets.push(pendiente);
+    const refDate = r.fechaCobro || r.fechaVence;
+    if (!refDate) continue;
+
+    const candidateAbonos = unmatchedAbonos.filter(entry => {
+      if (consumedAbono.has(entry.movementKey)) return false;
+      if (entry.line.cia !== r.cia) return false;
+      if ((entry.line.moneda || 'MXN').toUpperCase() !== moneda) return false;
+      if (!entry.strongClienteKeys.has(clienteKey)) return false;
+      return Math.abs(daysBetween(refDate, entry.line.fechaOperacion)) <= DATE_WINDOW_DAYS;
+    });
+    if (candidateAbonos.length < 2) continue;
+
+    for (const target of targets) {
+      const subset = searchBankSubset(candidateAbonos, target);
+      if (!subset) continue;
+      const total = subset.reduce((s, entry) => s + entry.line.importe, 0);
+      const amountDiffPct = Math.abs(total - target) / Math.max(target, 1);
+      const confidence = Math.max(0.9, computeConfidence('multi-abono', amountDiffPct, 0, DATE_WINDOW_DAYS));
+      const reason = `${subset.length} ABONOs del mismo cliente cubren la factura.`;
+      const snapshots = subset.map(entry => movementSnapshot(entry.line));
+      const state = facturaState.get(facturaKey);
+      if (state) {
+        state.status = 'cobrada-banco';
+        state.matchTier = 'multi-abono';
+        state.confidence = confidence;
+        state.reviewStatus = 'auto';
+        state.matchReason = reason;
+        state.bankRef = subset.map(entry => entry.line.referencia).filter(Boolean).join(' + ');
+        state.bankAmount = total;
+        state.bankDate = subset.map(entry => entry.line.fechaOperacion).sort()[0];
+        state.bankConcept = reason;
+        state.bankAccount = subset.map(entry => entry.line.cuenta).filter(Boolean).join(' + ');
+        state.bankCia = r.cia;
+        state.bankMovements = snapshots;
+      }
+      consumedFactura.add(facturaKey);
+      for (const entry of subset) {
+        consumedAbono.add(entry.movementKey);
+        entry.enrichment.status = 'factura-cobrada';
+        entry.enrichment.matchTier = 'multi-abono';
+        entry.enrichment.confidence = confidence;
+        entry.enrichment.matchReason = reason;
+        entry.enrichment.candidateFacturas = undefined;
+        entry.enrichment.facturas = [{
+          cia: r.cia,
+          noFactura: r.noFactura,
+          noCliente: r.noCliente,
+          nombreCliente: r.nombreCliente,
+          importeBruto: r.importeBrutoPesos,
+        }];
+      }
+      break;
+    }
+  }
+
+  const reviewCandidates: ReconciliationReviewCandidate[] = [];
+  for (const enrichment of enrichments) {
+    if (enrichment.status !== 'cobranza-sin-factura' || !enrichment.candidateFacturas?.length) continue;
+    const candidates = enrichment.candidateFacturas.filter(c => {
+      const state = facturaState.get(`${c.cia}::${c.noFactura}`);
+      return state?.status !== 'cobrada-banco';
+    });
+    if (candidates.length === 0) {
+      enrichment.candidateFacturas = undefined;
+      continue;
+    }
+    enrichment.candidateFacturas = candidates;
+    for (const c of candidates) {
+      const state = facturaState.get(`${c.cia}::${c.noFactura}`);
+      if (state && state.reviewStatus !== 'auto') {
+        state.reviewStatus = 'review';
+        state.confidence = Math.max(state.confidence ?? 0, c.confidence);
+        state.matchTier = c.matchTier;
+        state.matchReason = c.matchReason;
+      }
+    }
+    reviewCandidates.push({
+      movement: {
+        movementKey: enrichment.movementKey,
+        cia: enrichment.cia,
+        cuenta: enrichment.cuenta,
+        fechaOperacion: enrichment.fechaOperacion,
+        importe: enrichment.importe,
+        concepto: enrichment.concepto,
+        referencia: enrichment.referencia,
+      },
+      candidateFacturas: candidates,
+      matchReason: enrichment.matchReason ?? candidates[0].matchReason,
+    });
   }
 
   // ── 6. Construir summary ──
@@ -759,7 +1179,21 @@ export function reconcileRealCollections(
     ciaBreakdown,
   };
 
-  return { matches, abonoEnrichments: enrichments, summary };
+  const matchMs = nowMs() - matchStartedAt;
+  const totalMs = nowMs() - startedAt;
+
+  return {
+    matches,
+    abonoEnrichments: enrichments,
+    summary,
+    reviewCandidates,
+    bankCoverage: buildBankCoverage(bankStatements, abonos),
+    timingsMs: {
+      totalMs,
+      indexMs,
+      matchMs,
+    },
+  };
 }
 
 // ── Lookups útiles para la UI ──────────────────────────────────────────────

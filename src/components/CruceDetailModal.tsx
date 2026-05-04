@@ -28,15 +28,21 @@ import type {
 } from '../domain/realReconciliationEngine';
 
 const TIER_LABEL: Record<MatchTier, string> = {
+  'invoice-reference': 'Referencia a factura',
+  'customer-reference': 'Referencia a cliente',
   exact: 'Exacto al céntimo',
   tolerance: 'Con tolerancia ±0.5%',
   subset: 'Subset (varias facturas)',
+  'multi-abono': 'Varios abonos',
 };
 
 const TIER_COLOR: Record<MatchTier, string> = {
+  'invoice-reference': 'var(--success)',
+  'customer-reference': 'var(--success)',
   exact: 'var(--success)',
   tolerance: 'var(--warning, #d97706)',
   subset: 'var(--primary)',
+  'multi-abono': 'var(--primary)',
 };
 
 export type CruceDetailMode =

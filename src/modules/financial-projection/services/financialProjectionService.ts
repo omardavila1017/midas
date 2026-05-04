@@ -19,7 +19,9 @@
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
+import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import type { BankAccountStatement } from '../../../services/jde';
+import type { CobranzaRecord } from '../../../services/jdeTypes';
 import {
   buildCanonicalProjection,
   hasSufficientCanonicalData,
@@ -40,6 +42,14 @@ export interface FinancialProjectionSourceInput {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  /**
+   * Resultado del cruce JDE ↔ banco. Cuando se pasa, las facturas con
+   * `match.status === 'cobrada-banco'` no se vuelven a proyectar como
+   * cobro pendiente. Forma parte del cache key: cuando el worker emite
+   * un nuevo cruce, la proyección se recalcula automáticamente.
+   */
+  cobranzaReconciliation?: RealReconciliationResult;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -62,7 +72,7 @@ export interface FinancialProjectionSourceData {
   taxes: TaxObligation[];
   /** Resultado canónico subyacente (mensual + bridge). */
   canonical: CanonicalProjectionResult;
-  /** True cuando hay banco + (clientes/CXP/budget). */
+  /** True cuando hay banco o CXC JDE suficiente para proyectar flujo. */
   hasData: boolean;
 }
 
@@ -93,6 +103,8 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.clients),
     refId(input.providers),
     refId(input.cxpRecords),
+    refId(input.cobranzaRecords),
+    refId(input.cobranzaReconciliation),
     refId(input.assumptions),
     refId(input.budget),
   ];
@@ -135,6 +147,8 @@ export function buildFinancialProjectionSourceData(
     clients: input.clients,
     providers: input.providers,
     cxpRecords: input.cxpRecords,
+    cobranzaRecords: input.cobranzaRecords ?? [],
+    cobranzaReconciliation: input.cobranzaReconciliation,
     assumptions: input.assumptions,
     budget: input.budget,
     startingBalance: input.startingBalance,

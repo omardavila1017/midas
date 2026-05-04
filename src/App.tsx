@@ -46,7 +46,7 @@ import {
   Bell, ClipboardList, BarChart3,
   type LucideIcon,
 } from 'lucide-react';
-import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS } from './domain/companyGroups';
+import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
 import type { Budget } from './domain/budget';
 import { parseBudgetCsv } from './domain/budget';
 import { loadBudget, saveBudget } from './domain/budgetPersistence';
@@ -61,13 +61,27 @@ import {
   type RealReconciliationMatch,
   type RealReconciliationResult,
 } from './domain/realReconciliationEngine';
+import type { RealReconciliationWorkerResponse } from './workers/realReconciliationWorkerTypes';
 
 const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
 const STORE_SAVE_DEBOUNCE_MS = 900;
 const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
-const RECONCILIATION_TABS = new Set<TabId>(['dashboard', 'collections', 'bancos']);
+// Tabs que dependen del cruce JDE↔banco para mostrar números correctos.
+// Proyección / Planeación / Impuestos consumen `cobranzaReconciliation`
+// vía `buildFinancialProjectionSourceData` para no doblar facturas
+// CXC ya cobradas. Si no se calcula al entrar a esos tabs, el primer
+// render de la proyección queda con cobranza inflada hasta que el
+// usuario regresa a Cobranza/Bancos/Dashboard.
+const RECONCILIATION_TABS = new Set<TabId>([
+  'dashboard',
+  'collections',
+  'bancos',
+  'financialProjection',
+  'financialPlanning',
+  'taxes',
+]);
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
@@ -204,6 +218,17 @@ function emptyRealReconciliationResult(): RealReconciliationResult {
       pctFacturasCruzadas: 0,
       ciaBreakdown: [],
     },
+    reviewCandidates: [],
+    bankCoverage: {
+      loadedDates: [],
+      totalMovements: 0,
+      totalAbonos: 0,
+    },
+    timingsMs: {
+      totalMs: 0,
+      indexMs: 0,
+      matchMs: 0,
+    },
   };
 }
 
@@ -238,6 +263,12 @@ type IdleWindow = Window & {
   requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number;
   cancelIdleCallback?: (id: number) => void;
 };
+
+interface EnsureBankCoverageRequest {
+  from: string;
+  to: string;
+  ciaFilter?: string[];
+}
 
 function scheduleIdleTask(callback: () => void, timeout = 2000): () => void {
   if (typeof window === 'undefined') {
@@ -393,6 +424,15 @@ export default function App() {
   );
   const shouldComputeCobranzaReconciliation =
     cobranzaRecords.length > 0 && RECONCILIATION_TABS.has(activeTab);
+  const activeReconciliationCias = useMemo(() => {
+    if (selectedCia === 'all') return undefined;
+    const allCias = companies.filter(c => c.activa !== false).map(c => c.cia);
+    const resolved = resolveActiveCias(selectedCia, companyGroups, allCias);
+    return resolved.length > 0 ? resolved : undefined;
+  }, [selectedCia, companies, companyGroups]);
+  const activeReconciliationCiaKey = activeReconciliationCias?.join('|') ?? 'all';
+  const reconciliationWorkerRef = useRef<Worker | null>(null);
+  const reconciliationJobRef = useRef(0);
   useEffect(() => {
     if (cobranzaRecords.length === 0) {
       setCobranzaReconciliation(emptyRealReconciliationResult());
@@ -401,20 +441,62 @@ export default function App() {
     if (!shouldComputeCobranzaReconciliation) return;
 
     let cancelled = false;
+    const jobId = ++reconciliationJobRef.current;
     const cancelIdle = scheduleIdleTask(() => {
-      void import('./domain/realReconciliationEngine')
-        .then(({ reconcileRealCollections }) => {
-          if (cancelled) return;
-          const result = reconcileRealCollections(cobranzaRecords, bankStatements);
-          if (!cancelled) setCobranzaReconciliation(result);
+      const runFallback = () => {
+        void import('./domain/realReconciliationEngine')
+          .then(({ reconcileRealCollections }) => {
+            if (cancelled || reconciliationJobRef.current !== jobId) return;
+            const result = reconcileRealCollections(cobranzaRecords, bankStatements, {
+              ciaFilter: activeReconciliationCias?.length ? new Set(activeReconciliationCias) : undefined,
+            });
+            if (!cancelled && reconciliationJobRef.current === jobId) setCobranzaReconciliation(result);
+          });
+      };
+
+      if (typeof Worker === 'undefined') {
+        runFallback();
+        return;
+      }
+
+      try {
+        if (!reconciliationWorkerRef.current) {
+          reconciliationWorkerRef.current = new Worker(
+            new URL('./workers/realReconciliation.worker.ts', import.meta.url),
+            { type: 'module' },
+          );
+        }
+        const worker = reconciliationWorkerRef.current;
+        worker.onmessage = (event: MessageEvent<RealReconciliationWorkerResponse>) => {
+          if (cancelled || event.data.jobId !== reconciliationJobRef.current) return;
+          if (event.data.result) setCobranzaReconciliation(event.data.result);
+          else runFallback();
+        };
+        worker.onerror = () => {
+          if (!cancelled && reconciliationJobRef.current === jobId) runFallback();
+        };
+        worker.postMessage({
+          jobId,
+          cobranzaRecords,
+          bankStatements,
+          ciaFilter: activeReconciliationCias,
         });
+      } catch {
+        runFallback();
+      }
     }, 1500);
 
     return () => {
       cancelled = true;
       cancelIdle();
     };
-  }, [cobranzaRecords, bankStatements, shouldComputeCobranzaReconciliation]);
+  }, [cobranzaRecords, bankStatements, shouldComputeCobranzaReconciliation, activeReconciliationCiaKey]);
+  useEffect(() => {
+    return () => {
+      reconciliationWorkerRef.current?.terminate();
+      reconciliationWorkerRef.current = null;
+    };
+  }, []);
   const cobranzaFacturaIndex = useMemo(
     () => buildFacturaIndex(cobranzaReconciliation.matches),
     [cobranzaReconciliation],
@@ -430,6 +512,7 @@ export default function App() {
   const [bankFetchProgress, setBankFetchProgress] = useState<
     { done: number; total: number } | null
   >(null);
+  const [bankCoverageLoading, setBankCoverageLoading] = useState(false);
 
   // Caja inicial fija — decisión de negocio, no editable por el usuario.
   const effectiveStartingBalance = FIXED_STARTING_BALANCE;
@@ -967,6 +1050,33 @@ export default function App() {
     return { primed, ranged };
   }, [bankJdeStatements, bankLastQuery, bankSupplementalStatements.length]);
 
+  const ensureBankCoverageForCollections = useCallback(async ({
+    from,
+    to,
+    ciaFilter,
+  }: EnsureBankCoverageRequest) => {
+    setBankCoverageLoading(true);
+    const defaultFormat: BankStatementFormat = 'SWIFT';
+    try {
+      const fetched = await fetchBankStatementsRange(from, to, defaultFormat, {
+        concurrency: 6,
+      });
+      const scoped = ciaFilter?.length
+        ? fetched.filter(statement => ciaFilter.includes(statement.cia))
+        : fetched;
+      if (scoped.length > 0) {
+        setBankJdeStatements(prev => mergeBankStatements(prev, scoped));
+        setBankLastQuery({
+          fechaEstadoCuenta: to,
+          formatoElectronico: defaultFormat,
+          hasUploadedSantander: bankSupplementalStatements.length > 0,
+        });
+      }
+    } finally {
+      setBankCoverageLoading(false);
+    }
+  }, [bankSupplementalStatements.length]);
+
   useEffect(() => {
     (async () => {
       // Sólo prime corto de JDE al boot. El backfill completo es manual para
@@ -1233,6 +1343,8 @@ export default function App() {
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
+                  cobranzaRecords={cobranzaRecords}
+                  cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
                   budget={budget}
                   startingBalance={effectiveStartingBalance}
@@ -1248,6 +1360,8 @@ export default function App() {
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
+                  cobranzaRecords={cobranzaRecords}
+                  cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
                   budget={budget}
                   startingBalance={effectiveStartingBalance}
@@ -1262,6 +1376,8 @@ export default function App() {
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
+                  cobranzaRecords={cobranzaRecords}
+                  cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
                   budget={budget}
                   startingBalance={effectiveStartingBalance}
@@ -1314,6 +1430,8 @@ export default function App() {
                   onRefreshCobranza={refreshCobranza}
                   cobranzaRefreshing={cobranzaRefreshing}
                   selectedCia={selectedCia}
+                  onEnsureBankCoverage={ensureBankCoverageForCollections}
+                  bankCoverageLoading={bankCoverageLoading}
                 />
               </Suspense>
             )}

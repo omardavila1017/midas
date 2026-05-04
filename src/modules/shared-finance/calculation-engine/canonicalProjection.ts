@@ -35,10 +35,26 @@ import { computeBaseCashFlow } from '../../../components/Dashboard';
 import type { ComputeInputs } from '../../../components/Dashboard';
 import { compareYearMonth, toYearMonth } from '../../../domain/cashFlowEngine';
 import { projectClientMonth } from '../../../domain/collectionEngine';
+import { isNonOperatingDay } from '../../../domain/bankHolidays';
+import {
+  buildClientLookup,
+  clientRuleLabel,
+  findClientForCobranza,
+  resolveCobranzaRuleDate,
+  type CollectionCalendarClientMatch,
+} from '../../../domain/collectionCalendarEngine';
+import {
+  buildOwnAccountDetector,
+  buildOwnAccountsIndex,
+  buildPairMatchedKeys,
+  classifyMovement,
+} from '../../../domain/netCashFlowEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { Client, Provider, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
+import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
   FinancialMovement,
@@ -46,12 +62,22 @@ import type {
   FinancialTaxRate,
 } from '../types';
 
+const DAY_MS = 86_400_000;
+
 export interface CanonicalProjectionInputs {
   companyCode: string;
   bankStatements: BankAccountStatement[];
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  /**
+   * Resultado del cruce JDE ↔ banco. Cuando se pasa, las facturas con
+   * `match.status === 'cobrada-banco'` no se vuelven a proyectar como
+   * cobro pendiente — el dinero ya está en los movimientos bancarios
+   * históricos. Sin esto la suma anual queda doblada.
+   */
+  cobranzaReconciliation?: RealReconciliationResult;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -135,6 +161,17 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   const out: FinancialMovement[] = [];
   const todayYm = toYearMonth(inputs.asOfDate);
   const monthlyByYm = new Map(monthly.map((m) => [m.yearMonth, m]));
+  const inflowContext = buildInflowContext(inputs);
+
+  // Mismo contexto de clasificación que `buildHistoricalMonths` del
+  // Dashboard. Sin esto los traspasos internos (TRASPASO REF, RFCs del
+  // grupo, pares CARGO/ABONO simétricos) se emitían como FinancialMovement
+  // y la suma de movements[] no empataba con monthly[] — la gráfica de
+  // Caja proyectada inflaba ingresos y egresos por igual.
+  const ownAccountDetector = buildOwnAccountDetector(
+    buildOwnAccountsIndex(inputs.bankStatements),
+  );
+  const pairedKeys = buildPairMatchedKeys(inputs.bankStatements);
 
   // 1) Histórico bancario — los mismos números que sumó el Dashboard.
   for (const statement of inputs.bankStatements) {
@@ -147,6 +184,17 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       const ym = (line.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;
       if (!monthlyByYm.has(ym)) continue;
+      // Filtra traspasos internos antes de emitir el FinancialMovement —
+      // mismo criterio que el Dashboard. Movimientos clasificados como
+      // 'internal' nunca llegan a la tabla, gráfica ni drilldowns.
+      if (
+        classifyMovement(
+          line,
+          { ownAccountDetector, pairedKeys },
+          statement.cia,
+          statement.cuenta,
+        ).kind === 'internal'
+      ) continue;
       out.push({
         id: `bank:${statement.cia}:${statement.cuenta}:${line.referencia ?? ''}:${line.fechaOperacion}:${out.length}`,
         sourceSystem: 'BANK',
@@ -182,12 +230,11 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   //    suma de `projectedAmount` empate con el total canónico.
   const futureMonths = monthly.filter((m) => !m.isHistorical);
   for (const month of futureMonths) {
-    const inflowLines = collectInflowLines(month, inputs, todayYm);
-    out.push(...balanceMonth({
+    const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
+    out.push(...balanceInflowMonth({
       lines: inflowLines,
       target: month.income,
       ym: month.yearMonth,
-      type: 'INFLOW',
       asOfDate: inputs.asOfDate,
       fallbackCategory: 'AR_COLLECTION',
       fallbackConcept: `Cobranza proyectada ${month.yearMonth}`,
@@ -218,7 +265,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   const currentYm = todayYm;
   const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
   if (currentHistorical) {
-    const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm)
+    const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
       .filter((line) => line.date > inputs.asOfDate);
     out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
 
@@ -298,14 +345,46 @@ interface RawLine {
   taxRate?: FinancialTaxRate;
   taxBaseAmount?: number;
   taxAmount?: number;
+  amountLocked?: boolean;
+}
+
+interface InflowContext {
+  cxcRecords: CobranzaRecord[];
+  cxcCoverageByClientMonth: Map<string, Set<string>>;
+  clientMatchByFactura: Map<string, CollectionCalendarClientMatch | null>;
+}
+
+function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
+  const clientLookup = buildClientLookup(inputs.clients);
+  const cxcRecords = filterCobranzaByCompany(inputs.cobranzaRecords ?? [], inputs.companyCode);
+  const cxcCoverageByClientMonth = new Map<string, Set<string>>();
+  const clientMatchByFactura = new Map<string, CollectionCalendarClientMatch | null>();
+
+  for (const record of cxcRecords) {
+    const match = findClientForCobranza(record, clientLookup);
+    clientMatchByFactura.set(cxcFacturaKey(record), match);
+    if (match && record.fechaFactura) {
+      addCoveredMonth(cxcCoverageByClientMonth, match.client.id, record.fechaFactura.slice(0, 7));
+    }
+  }
+
+  return {
+    cxcRecords,
+    cxcCoverageByClientMonth,
+    clientMatchByFactura,
+  };
 }
 
 /**
- * Inflows: usa `projectClientMonth` para CADA cliente del catálogo en el
- * mes objetivo. Cada evento tiene `realDate` que respeta:
+ * Inflows: primero mete facturas CXC abiertas de JDE a valor nominal y
+ * luego completa el resto del mes con `projectClientMonth` para clientes.
+ * Cada evento tiene fecha real que respeta:
  *   - frecuencia (semanal, quincenal, mensual, contado)
  *   - días de crédito del cliente
  *   - patrón de pago (DOM, DOW, etc.) o factoraje
+ *
+ * Las facturas CXC emitidas bloquean su monto y cubren el ciclo del cliente
+ * para no duplicar la misma venta como forecast genérico.
  * Esto produce muchos puntos en distintos días → la vista semanal/diaria
  * se ve poblada en lugar de un solo bloque a mediados de mes.
  */
@@ -313,11 +392,11 @@ function collectInflowLines(
   month: CanonicalMonthlyPoint,
   inputs: CanonicalProjectionInputs,
   _todayYm: string,
+  context: InflowContext,
 ): RawLine[] {
-  if (inputs.clients.length === 0) return [];
   const [year, mNum] = month.yearMonth.split('-').map(Number);
   const targetMonthIdx = mNum - 1;
-  const lines: RawLine[] = [];
+  const lines: RawLine[] = collectCxcInflowLines(month, inputs, context);
 
   // Necesitamos buscar un poco hacia atrás: facturas emitidas el mes
   // anterior pueden cobrarse en el mes objetivo (créditos cortos).
@@ -333,8 +412,11 @@ function collectInflowLines(
   });
 
   for (const client of inputs.clients) {
+    const coveredMonths = context.cxcCoverageByClientMonth.get(client.id);
     let evIdx = 0;
     for (const scan of monthsToScan) {
+      const invoiceYm = `${scan.year}-${String(scan.monthIdx + 1).padStart(2, '0')}`;
+      if (coveredMonths?.has(invoiceYm)) continue;
       const events = projectClientMonth(client, scan.year, scan.monthIdx, {
         ...inputs.assumptions,
         year: scan.year,
@@ -369,6 +451,83 @@ function collectInflowLines(
         });
       }
     }
+  }
+
+  return lines;
+}
+
+function collectCxcInflowLines(
+  month: CanonicalMonthlyPoint,
+  inputs: CanonicalProjectionInputs,
+  context: InflowContext,
+): RawLine[] {
+  if (context.cxcRecords.length === 0) return [];
+  const lines: RawLine[] = [];
+  const seen = new Set<string>();
+  // Facturas que el reconciliation engine ya cruzó al céntimo con un
+  // ABONO bancario: el dinero ya está en los movimientos históricos del
+  // banco. Si las re-proyectamos, queda doblada. Sólo las descartamos
+  // cuando el cruce fue automático (status='cobrada-banco'); facturas en
+  // revisión manual o sin cruce siguen como pendiente proyectada.
+  const cobradaBancoKeys = buildCobradaBancoKeySet(inputs.cobranzaReconciliation);
+
+  for (const record of context.cxcRecords) {
+    if (record.importePendientePesos <= 0) continue;
+    const key = cxcFacturaKey(record);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (cobradaBancoKeys.has(key)) continue;
+
+    const clientMatch = context.clientMatchByFactura.get(key) ?? null;
+    const resolved = clientMatch
+      ? resolveCobranzaRuleDate(record, clientMatch.client, inputs.assumptions)
+      : null;
+    const rawDate = resolved?.calendarDate
+      ?? cleanDate(record.fechaVence)
+      ?? cleanDate(record.fechaFactura)
+      ?? inputs.asOfDate;
+    const dateInfo = moveOpenReceivableIntoProjection(rawDate, inputs.asOfDate);
+    if (dateInfo.date.slice(0, 7) !== month.yearMonth) continue;
+
+    const taxMeta = cxcTaxMeta(record, clientMatch?.client);
+    const confidenceScore = clientMatch
+      ? Math.round(Math.min(92, 72 + clientMatch.confidence * 18))
+      : 62;
+    const dateReason = resolved
+      ? resolved.reason
+      : record.fechaVence
+        ? 'Sin regla confiable; se usa vencimiento JDE.'
+        : 'Sin regla confiable; se usa fecha de factura JDE.';
+
+    lines.push({
+      id: `cxc:${record.cia}:${record.noCliente}:${record.noFactura}`,
+      amount: record.importePendientePesos,
+      date: dateInfo.date,
+      concept: `Factura CXC ${record.noFactura || 'sin folio'} · ${record.nombreCliente || 'Cliente sin nombre'}`,
+      category: 'AR_COLLECTION',
+      companyId: record.cia,
+      counterpartyId: clientMatch?.client.id ?? record.noCliente,
+      counterpartyName: record.nombreCliente || clientMatch?.client.name,
+      counterpartyType: 'CUSTOMER',
+      ruleApplied: clientMatch ? clientRuleLabel(clientMatch.client) : 'Fecha vencimiento JDE',
+      sourceSystem: 'JDE',
+      sourceObjectId: record.noFactura,
+      issueDate: cleanDate(record.fechaFactura),
+      dueDate: cleanDate(record.fechaVence),
+      forecastMethod: 'RULE',
+      confidenceScore,
+      lockState: 'RESTRICTED',
+      taxTreatment: 'IVA_CAUSED',
+      taxRate: taxMeta.taxRate,
+      taxBaseAmount: taxMeta.taxBaseAmount,
+      taxAmount: taxMeta.taxAmount,
+      comment: [
+        'Factura CXC abierta en JDE; se proyecta sólo el saldo pendiente.',
+        dateReason,
+        dateInfo.moved ? 'La fecha esperada ya venció; se agenda al siguiente día operativo de la proyección.' : '',
+      ].filter(Boolean).join(' '),
+      amountLocked: true,
+    });
   }
 
   return lines;
@@ -480,6 +639,34 @@ interface BalanceArgs {
   fallbackRule: string;
 }
 
+function balanceInflowMonth({
+  lines,
+  target,
+  ym,
+  asOfDate,
+  fallbackCategory,
+  fallbackConcept,
+  fallbackRule,
+}: Omit<BalanceArgs, 'type'>): FinancialMovement[] {
+  const locked = lines.filter((line) => line.amountLocked);
+  const flexible = lines.filter((line) => !line.amountLocked);
+  const lockedSum = locked.reduce((sum, line) => sum + line.amount, 0);
+  const out = emitRawLines(locked, 'INFLOW', asOfDate);
+  const remainingTarget = Math.max(0, target - lockedSum);
+
+  out.push(...balanceMonth({
+    lines: flexible,
+    target: remainingTarget,
+    ym,
+    type: 'INFLOW',
+    asOfDate,
+    fallbackCategory,
+    fallbackConcept,
+    fallbackRule,
+  }));
+  return out;
+}
+
 function balanceMonth({
   lines,
   target,
@@ -576,8 +763,14 @@ function balanceMonth({
 }
 
 export function hasSufficientCanonicalData(inputs: CanonicalProjectionInputs): boolean {
-  if (inputs.bankStatements.length === 0) return false;
-  if (inputs.budget === null && inputs.clients.length === 0 && inputs.cxpRecords.length === 0) {
+  const cobranzaRecords = inputs.cobranzaRecords ?? [];
+  if (inputs.bankStatements.length === 0 && cobranzaRecords.length === 0) return false;
+  if (
+    inputs.budget === null
+    && inputs.clients.length === 0
+    && inputs.cxpRecords.length === 0
+    && cobranzaRecords.length === 0
+  ) {
     return false;
   }
   return true;
@@ -620,8 +813,73 @@ function cleanDate(value?: string): string | undefined {
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : undefined;
 }
 
+function filterCobranzaByCompany(records: CobranzaRecord[], companyCode: string): CobranzaRecord[] {
+  if (companyCode === 'all' || !companyCode) return records;
+  return records.filter((record) => record.cia === companyCode);
+}
+
+function cxcFacturaKey(record: CobranzaRecord): string {
+  return `${record.cia}::${record.noFactura}`;
+}
+
+/**
+ * Set de facturas que el reconciliation engine ya cruzó automáticamente
+ * con un ABONO bancario. Sólo el estado 'cobrada-banco' bloquea la
+ * proyección. 'cobrada-jde-sin-banco' o 'pendiente' pasan derecho:
+ * el cobro aún no aparece en el banco, así que la CXC pendiente sigue
+ * siendo el mejor estimado para la trayectoria de caja.
+ */
+function buildCobradaBancoKeySet(
+  reconciliation: RealReconciliationResult | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!reconciliation) return out;
+  for (const match of reconciliation.matches) {
+    if (match.status !== 'cobrada-banco') continue;
+    out.add(`${match.cia}::${match.noFactura}`);
+  }
+  return out;
+}
+
+function addCoveredMonth(map: Map<string, Set<string>>, clientId: string, yearMonth: string): void {
+  const set = map.get(clientId) ?? new Set<string>();
+  set.add(yearMonth);
+  map.set(clientId, set);
+}
+
+function moveOpenReceivableIntoProjection(
+  rawDate: string,
+  asOfDate: string,
+): { date: string; moved: boolean } {
+  const safeDate = cleanDate(rawDate) ?? asOfDate;
+  if (safeDate > asOfDate) return { date: safeDate, moved: false };
+
+  let next = parseIsoDate(asOfDate);
+  next = new Date(next.getTime() + DAY_MS);
+  while (isNonOperatingDay(next)) next = new Date(next.getTime() + DAY_MS);
+  return { date: dateToIso(next), moved: true };
+}
+
+function parseIsoDate(value: string): Date {
+  const safe = cleanDate(value) ?? new Date().toISOString().slice(0, 10);
+  const [year, month, day] = safe.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function dateToIso(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
 function normalize(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function cxcTaxMeta(
+  record: CobranzaRecord,
+  client?: Client,
+): { taxRate: FinancialTaxRate; taxBaseAmount: number; taxAmount: number } {
+  const rate = client?.ivaRate === 8 ? 8 : 16;
+  return grossToIvaTaxMeta(record.importePendientePesos, rate);
 }
 
 function taxBreakdownFromCxp(record: CXPRecord): {
