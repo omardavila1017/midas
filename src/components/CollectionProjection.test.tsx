@@ -2,6 +2,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import CollectionProjection from './CollectionProjection';
 import type { Client, CashFlowAssumptions } from '../domain/types';
+import type { CobranzaRecord } from '../services/jdeTypes';
+import { downloadFile } from '../utils/export';
+
+vi.mock('../utils/export', async () => {
+  const actual = await vi.importActual<typeof import('../utils/export')>('../utils/export');
+  return {
+    ...actual,
+    downloadFile: vi.fn(),
+  };
+});
 
 function stubMatchMedia() {
   Object.defineProperty(window, 'matchMedia', {
@@ -38,9 +48,75 @@ function makeClient(overrides: Partial<Client> = {}): Client {
   };
 }
 
+function makeCobranzaRecord(overrides: Partial<CobranzaRecord> = {}): CobranzaRecord {
+  return {
+    cia: '00011',
+    noCliente: '9001',
+    nombreCliente: 'Cliente Demo',
+    noFactura: 'F-100',
+    fechaFactura: '2026-05-01',
+    fechaVence: '2026-05-31',
+    fechaCobro: '',
+    diasVencida: 0,
+    importeBrutoPesos: 2500,
+    importePendientePesos: 2500,
+    importeBrutoDolares: 0,
+    importePendienteDolares: 0,
+    moneda: 'MXN',
+    condPago: '30',
+    estatus: 'PENDIENTE',
+    tipoCambio: 1,
+    ...overrides,
+  };
+}
+
+function isoForCurrentMonthDay(day: number): string {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(day).padStart(2, '0'),
+  ].join('-');
+}
+
+function renderRealCobranzaView() {
+  const currentYear = new Date().getFullYear();
+  const jdeDate = isoForCurrentMonthDay(15);
+  const records = [
+    makeCobranzaRecord({
+      noFactura: 'F-JDE',
+      fechaFactura: isoForCurrentMonthDay(1),
+      fechaVence: isoForCurrentMonthDay(28),
+      fechaCobro: jdeDate,
+      importePendientePesos: 0,
+      estatus: 'PAGADA',
+    }),
+  ];
+  render(
+    <CollectionProjection
+      clients={[
+        makeClient({ id: '9001', name: 'Cliente Demo' }),
+        makeClient({ id: 'proy-1', name: 'Cliente Proyectado', monthlyBilling: new Array(12).fill(5000) }),
+      ]}
+      assumptions={{ ...ASSUMPTIONS, year: currentYear }}
+      onAssumptionsChange={() => {}}
+      confirmedPayments={[]}
+      onConfirm={() => {}}
+      onUnconfirm={() => {}}
+      companies={[{ cia: '00011', nombre: 'Senda Demo' }]}
+      cobranzaRecords={records}
+      cobranzaLoadedCias={{ '00011': `${jdeDate}T12:00:00.000Z` }}
+      bankStatements={[]}
+      selectedCia="00011"
+    />,
+  );
+  return { jdeDate };
+}
+
 describe('<CollectionProjection />', () => {
   beforeEach(() => {
     stubMatchMedia();
+    vi.clearAllMocks();
   });
 
   it('muestra un empty state cuando no hay clientes', () => {
@@ -164,5 +240,55 @@ describe('<CollectionProjection />', () => {
     const search = screen.getByPlaceholderText(/Buscar cliente/i);
     fireEvent.change(search, { target: { value: 'no-existe-nunca' } });
     expect(screen.getByText(/Sin datos con los filtros actuales/i)).toBeTruthy();
+  });
+
+  it('muestra el calendario unico con filtros por fuente y colores operativos', () => {
+    renderRealCobranzaView();
+
+    expect(screen.getByRole('button', { name: /^Todas$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Real banco$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Banco sin CXC$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^JDE$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^CXC pendiente$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Proyectado$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Sin regla$/i })).toBeTruthy();
+  });
+
+  it('filtra JDE contra proyectado en el calendario combinado', () => {
+    const { jdeDate } = renderRealCobranzaView();
+
+    fireEvent.click(screen.getByRole('button', { name: /^JDE$/i }));
+    expect(screen.getByRole('button', { name: new RegExp(`${jdeDate}: 1 evento`) })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Proyectado$/i }));
+    expect(screen.getByRole('button', { name: new RegExp(`${jdeDate}: 0 eventos`) })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /: [1-9]\d* evento/ }).length).toBeGreaterThan(0);
+  });
+
+  it('al hacer click en un evento muestra fuente, estado y regla aplicada', () => {
+    const { jdeDate } = renderRealCobranzaView();
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`${jdeDate}: 1 evento`) }));
+
+    expect(screen.getByText(/Fuente del dato/i)).toBeTruthy();
+    expect(screen.getAllByText(/JDE cobrado/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/JDE reporta Fecha_Pago/i)).toBeTruthy();
+    expect(screen.getByText(/Fecha confirmada por JDE/i)).toBeTruthy();
+  });
+
+  it('exporta CSV de cobranza con columnas del calendario unificado', () => {
+    const mockedDownloadFile = vi.mocked(downloadFile);
+    renderRealCobranzaView();
+
+    fireEvent.click(screen.getByRole('button', { name: /Exportar CSV/i }));
+
+    expect(mockedDownloadFile).toHaveBeenCalledTimes(1);
+    const csv = mockedDownloadFile.mock.calls[0][0];
+    expect(csv).toContain('FuenteDato');
+    expect(csv).toContain('FechaCalendario');
+    expect(csv).toContain('EstadoCalendario');
+    expect(csv).toContain('ReglaAplicada');
+    expect(csv).toContain('MotivoFecha');
+    expect(csv).toContain('JDE cobrado');
   });
 });

@@ -246,6 +246,45 @@ describe('reconcileRealCollections — subset-sum (capa 3)', () => {
 });
 
 describe('reconcileRealCollections — sin match', () => {
+  it('excluye ABONOs que son traspasos internos pareados CARGO/ABONO entre cuentas propias', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'F-INTERNA',
+      noCliente: 'C-1',
+      nombreCliente: 'CLIENTE',
+      importeBrutoPesos: 3000000,
+    });
+    const cargo = makeAbono({
+      cia: '00011',
+      cuenta: '0190000001',
+      fechaOperacion: '2026-02-01',
+      importe: 3000000,
+      tipoMovimiento: 'CARGO',
+      concepto: 'MOVIMIENTO ENTRE CUENTAS',
+      referencia: 'T-1',
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '0190000002',
+      fechaOperacion: '2026-02-01',
+      importe: 3000000,
+      concepto: 'MOVIMIENTO ENTRE CUENTAS',
+      referencia: 'T-2',
+    });
+
+    const result = reconcileRealCollections(
+      [factura],
+      [
+        makeAccount({ cia: '00011', cuenta: '0190000001', movimientos: [cargo] }),
+        makeAccount({ cia: '00011', cuenta: '0190000002', movimientos: [abono] }),
+      ],
+    );
+
+    expect(result.summary.totalAbonos).toBe(0);
+    expect(result.summary.abonosTraspasoInterno).toBe(1);
+    expect(result.matches[0].status).toBe('pendiente');
+  });
+
   it('factura sin ABONO queda pendiente', () => {
     const factura = makeFactura({
       cia: '00011',

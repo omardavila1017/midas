@@ -41,9 +41,10 @@
 
 import type { BankAccountStatement, BankStatementLine, CobranzaRecord } from '../services/jdeTypes';
 import {
-  isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildPairMatchedKeys,
+  classifyMovement,
 } from './netCashFlowEngine';
 
 // ── Configuración ──────────────────────────────────────────────────────────
@@ -419,17 +420,32 @@ export function reconcileRealCollections(
 
   // ── 2. Pool de ABONOs (descartar traspasos internos) ──
   const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
+  const pairedKeys = buildPairMatchedKeys(bankStatements);
   const abonos: BankStatementLine[] = [];
   let abonosTraspasoInterno = 0;
   for (const account of bankStatements) {
     if (ciaFilter && !ciaFilter.has(account.cia)) continue;
     for (const mov of account.movimientos) {
-      if (mov.tipoMovimiento !== 'ABONO') continue;
-      if (isInternalTransfer(mov, detector)) {
+      const line: BankStatementLine = {
+        ...mov,
+        cia: mov.cia || account.cia,
+        banco: mov.banco || account.banco,
+        nombreBanco: mov.nombreBanco || account.nombreBanco,
+        cuenta: mov.cuenta || account.cuenta,
+        moneda: mov.moneda || account.moneda,
+      };
+      if (line.tipoMovimiento !== 'ABONO') continue;
+      const classification = classifyMovement(
+        line,
+        { ownAccountDetector: detector, pairedKeys },
+        account.cia,
+        account.cuenta,
+      );
+      if (classification.kind === 'internal') {
         abonosTraspasoInterno++;
         continue;
       }
-      abonos.push(mov);
+      abonos.push(line);
     }
   }
   // Orden cronológico — ABONO más antiguo primero. Evita que un ABONO

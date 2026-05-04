@@ -60,9 +60,13 @@ import {
   reconcileRealCollections,
   buildAbonoIndex,
   buildFacturaIndex,
+  type RealReconciliationResult,
 } from './domain/realReconciliationEngine';
 
 const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
+const STORE_SAVE_DEBOUNCE_MS = 900;
+const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
+const RECONCILIATION_TABS = new Set<TabId>(['dashboard', 'collections', 'bancos']);
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
@@ -176,6 +180,67 @@ function containsDemoBankData(statements: BankAccountStatement[] | undefined | n
     }
   }
   return false;
+}
+
+function emptyRealReconciliationResult(): RealReconciliationResult {
+  return {
+    matches: [],
+    abonoEnrichments: [],
+    summary: {
+      totalFacturas: 0,
+      facturasCobradasBanco: 0,
+      facturasCobradasJdeSinBanco: 0,
+      facturasPendientes: 0,
+      totalSaldoBruto: 0,
+      totalSaldoPendiente: 0,
+      totalCobradoBanco: 0,
+      totalAbonos: 0,
+      totalAbonoMonto: 0,
+      abonosFacturaCobrada: 0,
+      abonosSinFactura: 0,
+      abonosTraspasoInterno: 0,
+      pctAbonosCruzados: 0,
+      pctFacturasCruzadas: 0,
+      ciaBreakdown: [],
+    },
+  };
+}
+
+function isFreshTimestamp(value: string | undefined, ttlMs: number): boolean {
+  if (!value) return false;
+  const ts = new Date(value).getTime();
+  if (!Number.isFinite(ts)) return false;
+  return Date.now() - ts < ttlMs;
+}
+
+type IdleWindow = Window & {
+  requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number;
+  cancelIdleCallback?: (id: number) => void;
+};
+
+function scheduleIdleTask(callback: () => void, timeout = 2000): () => void {
+  if (typeof window === 'undefined') {
+    callback();
+    return () => {};
+  }
+  const idleWindow = window as IdleWindow;
+  let cancelled = false;
+  if (idleWindow.requestIdleCallback) {
+    const id = idleWindow.requestIdleCallback(() => {
+      if (!cancelled) callback();
+    }, { timeout });
+    return () => {
+      cancelled = true;
+      idleWindow.cancelIdleCallback?.(id);
+    };
+  }
+  const id = window.setTimeout(() => {
+    if (!cancelled) callback();
+  }, 0);
+  return () => {
+    cancelled = true;
+    window.clearTimeout(id);
+  };
 }
 
 export default function App() {
@@ -299,15 +364,32 @@ export default function App() {
     [bankJdeStatements, bankSupplementalStatements],
   );
   // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
-  // Lo computamos UNA sola vez aquí y lo pasamos a CollectionProjection,
-  // Bancos y Dashboard. Evita recomputar el motor (subset-sum + filtros
-  // textuales) cada vez que el usuario cambia de pestaña o aplica un
-  // filtro local. Memo invalida solo cuando cambian las facturas reales o
-  // los movimientos bancarios — es estable bajo navegación normal.
-  const cobranzaReconciliation = useMemo(
-    () => reconcileRealCollections(cobranzaRecords, bankStatements),
-    [cobranzaRecords, bankStatements],
+  // Es un motor pesado (texto + subset-sum), así que no corre durante render.
+  // Lo diferimos a idle y sólo cuando una pestaña lo necesita; así cargar JDE
+  // no congela la plataforma ni bloquea el primer paint.
+  const [cobranzaReconciliation, setCobranzaReconciliation] = useState<RealReconciliationResult>(
+    () => emptyRealReconciliationResult(),
   );
+  const shouldComputeCobranzaReconciliation =
+    cobranzaRecords.length > 0 && RECONCILIATION_TABS.has(activeTab);
+  useEffect(() => {
+    if (cobranzaRecords.length === 0) {
+      setCobranzaReconciliation(emptyRealReconciliationResult());
+      return;
+    }
+    if (!shouldComputeCobranzaReconciliation) return;
+
+    let cancelled = false;
+    const cancelIdle = scheduleIdleTask(() => {
+      const result = reconcileRealCollections(cobranzaRecords, bankStatements);
+      if (!cancelled) setCobranzaReconciliation(result);
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
+  }, [cobranzaRecords, bankStatements, shouldComputeCobranzaReconciliation]);
   const cobranzaFacturaIndex = useMemo(
     () => buildFacturaIndex(cobranzaReconciliation.matches),
     [cobranzaReconciliation],
@@ -469,8 +551,14 @@ export default function App() {
       lastSaved: new Date().toISOString(),
     };
     latestStoreRef.current = snapshot;
-    const timer = setTimeout(() => saveStore(snapshot), 200);
-    return () => clearTimeout(timer);
+    let cancelIdle: (() => void) | null = null;
+    const timer = window.setTimeout(() => {
+      cancelIdle = scheduleIdleTask(() => saveStore(snapshot), 2500);
+    }, STORE_SAVE_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      cancelIdle?.();
+    };
   }, [
     providers, clients,
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
@@ -597,7 +685,7 @@ export default function App() {
   //      dupliquen filas.
   //   4. Errores agregados a `cobranzaError` para que la pestaña Cobranza
   //      pueda surfacerlos al usuario (antes se silenciaban).
-  const refreshCobranza = useCallback(async () => {
+  const refreshCobranza = useCallback(async (force = true) => {
     if (companies.length === 0) {
       setCobranzaError('No hay compañías cargadas todavía. Espera a que /empresas responda.');
       return;
@@ -607,6 +695,10 @@ export default function App() {
       setCobranzaError('No hay compañías activas en el catálogo.');
       return;
     }
+    const ciasToFetch = force
+      ? activeCias
+      : activeCias.filter(cia => !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS));
+    if (ciasToFetch.length === 0) return;
 
     setCobranzaRefreshing(true);
     setCobranzaError(null);
@@ -619,33 +711,49 @@ export default function App() {
 
     const errors: string[] = [];
     let totalRecords = 0;
-    for (const cia of activeCias) {
-      try {
-        const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
-        const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
-        setCobranzaRecords(prev => [...prev.filter(r => r.cia !== cia), ...stamped]);
-        setCobranzaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
-        totalRecords += stamped.length;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        errors.push(`${cia}: ${msg}`);
+    const fetchedRecords: CobranzaRecord[] = [];
+    const fetchedCias: string[] = [];
+    const fetchedTimestamps: Record<string, string> = {};
+    try {
+      for (const cia of ciasToFetch) {
+        try {
+          const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
+          const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
+          fetchedRecords.push(...stamped);
+          fetchedCias.push(cia);
+          fetchedTimestamps[cia] = new Date().toISOString();
+          totalRecords += stamped.length;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`${cia}: ${msg}`);
+        }
       }
-    }
 
-    if (errors.length > 0) {
-      setCobranzaError(`Errores en ${errors.length}/${activeCias.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
-    } else if (totalRecords === 0) {
-      setCobranzaError(`Todas las ${activeCias.length} cías respondieron VACÍO. Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
+      if (fetchedCias.length > 0) {
+        const fetchedSet = new Set(fetchedCias);
+        setCobranzaRecords(prev => [
+          ...prev.filter(r => !fetchedSet.has(r.cia)),
+          ...fetchedRecords,
+        ]);
+        setCobranzaLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
+      }
+
+      if (errors.length > 0) {
+        setCobranzaError(`Errores en ${errors.length}/${ciasToFetch.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
+      } else if (totalRecords === 0) {
+        setCobranzaError(`Todas las ${ciasToFetch.length} cías consultadas respondieron VACÍO. Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
+      }
+    } finally {
+      setCobranzaRefreshing(false);
     }
-    setCobranzaRefreshing(false);
-  }, [companies]);
+  }, [companies, cobranzaLoadedCias]);
 
   const cobranzaAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cobranzaAutoFetchDone.current) return;
     if (companies.length === 0) return;
     cobranzaAutoFetchDone.current = true;
-    refreshCobranza();
+    refreshCobranza(false);
   }, [companies, refreshCobranza]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)

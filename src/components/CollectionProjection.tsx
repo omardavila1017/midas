@@ -10,6 +10,15 @@ import {
   type RealReconciliationResult,
   type MatchTier as RealMatchTier,
 } from '../domain/realReconciliationEngine';
+import {
+  buildCollectionCalendar,
+  calendarEventMatchesSourceFilter,
+  COLLECTION_CALENDAR_SOURCE_LABELS,
+  type BuildCollectionCalendarResult,
+  type CollectionCalendarEvent,
+  type CollectionCalendarEventSource,
+  type CollectionCalendarSourceFilter,
+} from '../domain/collectionCalendarEngine';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement, CobranzaRecord } from '../services/jde';
 import { MONTHS } from '../types';
@@ -208,6 +217,8 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           de % cruzado y el aging por cliente. */}
       {sourceMode === 'real' ? (
         <CobranzaRealView
+          clients={clients}
+          assumptions={assumptions}
           records={cobranzaRecords}
           loadedCias={cobranzaLoadedCias}
           companies={companies}
@@ -1269,102 +1280,154 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+const COLLECTION_CALENDAR_FILTERS: Array<{ id: CollectionCalendarSourceFilter; label: string }> = [
+  { id: 'all', label: 'Todas' },
+  { id: 'bank', label: 'Real banco' },
+  { id: 'bank_unmatched', label: 'Banco sin CXC' },
+  { id: 'jde', label: 'JDE' },
+  { id: 'cxc', label: 'CXC pendiente' },
+  { id: 'projected', label: 'Proyectado' },
+  { id: 'unruled', label: 'Sin regla' },
+];
+
+const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
+  color: string;
+  rgb: string;
+  textClass: string;
+  borderClass: string;
+}> = {
+  BANK_MATCHED: {
+    color: '#10b981',
+    rgb: '16,185,129',
+    textClass: 'text-[var(--success)]',
+    borderClass: 'border-[var(--success)]/30',
+  },
+  BANK_UNMATCHED: {
+    color: '#f59e0b',
+    rgb: '245,158,11',
+    textClass: 'text-[var(--warning,_#d97706)]',
+    borderClass: 'border-[var(--warning,_#f59e0b)]/30',
+  },
+  JDE_PAID_UNMATCHED: {
+    color: '#2563eb',
+    rgb: '37,99,235',
+    textClass: 'text-[var(--primary)]',
+    borderClass: 'border-[var(--primary)]/30',
+  },
+  CXC_RULED_PENDING: {
+    color: '#7c3aed',
+    rgb: '124,58,237',
+    textClass: 'text-[#6d28d9]',
+    borderClass: 'border-[#7c3aed]/30',
+  },
+  PROJECTED_CLIENT_RULE: {
+    color: '#64748b',
+    rgb: '100,116,139',
+    textClass: 'text-[var(--gray-500)]',
+    borderClass: 'border-[var(--gray-300)]',
+  },
+  CXC_UNRULED_PENDING: {
+    color: '#ef4444',
+    rgb: '239,68,68',
+    textClass: 'text-[var(--danger)]',
+    borderClass: 'border-[var(--danger)]/30',
+  },
+};
+
+function CollectionSourceBadge({ source }: { source: CollectionCalendarEventSource }) {
+  const style = COLLECTION_CALENDAR_SOURCE_STYLES[source];
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border bg-white text-[11px] font-medium ${style.textClass} ${style.borderClass}`}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: style.color }} />
+      {COLLECTION_CALENDAR_SOURCE_LABELS[source]}
+    </span>
+  );
+}
+
+function dominantCollectionSource(events: CollectionCalendarEvent[]): CollectionCalendarEventSource | null {
+  const totals = new Map<CollectionCalendarEventSource, number>();
+  for (const event of events) {
+    totals.set(event.source, (totals.get(event.source) ?? 0) + event.amount);
+  }
+  let dominant: CollectionCalendarEventSource | null = null;
+  let max = 0;
+  for (const [source, amount] of totals) {
+    if (amount > max) {
+      dominant = source;
+      max = amount;
+    }
+  }
+  return dominant;
+}
+
+function collectionSourceAmount(
+  events: CollectionCalendarEvent[],
+  predicate: (source: CollectionCalendarEventSource) => boolean,
+): number {
+  return events
+    .filter(event => predicate(event.source))
+    .reduce((sum, event) => sum + event.amount, 0);
+}
+
+function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: string): boolean {
+  if (ciaFilter === 'all') return true;
+  // Las proyecciones vienen del catalogo de clientes y no siempre tienen cia
+  // JDE; se mantienen visibles para que el calendario futuro no desaparezca
+  // al filtrar una compania.
+  if (event.source === 'PROJECTED_CLIENT_RULE') return true;
+  return event.cia === ciaFilter;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
-// CobranzaRealCalendar — Calendario de ingresos reales (ABONOs ↔ cobranza)
+// CobranzaRealCalendar — calendario unico de banco + JDE + CXC + proyeccion.
 //
-// Vista principal del modo "Real". Muestra el mes activo en grid Lun-Dom
-// con cada día coloreado por el monto total recibido. Click en un día
-// abre un panel lateral con la lista de ABONOs y, cuando aplica, las
-// facturas JDE que ese ABONO cobró.
-//
-// Filtros:
-//   - ciaFilter (heredado del padre): aplica al mismo set de ABONOs.
-//   - traspasos internos: ya excluidos por el motor.
-//
-// Heat coloring:
-//   - Tonos de verde de claro a oscuro proporcional al monto del día.
-//   - Un día sin abonos queda blanco.
-//
-// Las facturas se identifican vía `abonoEnrichmentIndex` indirecto: la
-// `reconciliation` contiene `abonoEnrichments[]` con la lista de facturas
-// que cubrió cada ABONO (1 para match individual, 2-4 para subset).
+// El input ya viene normalizado por `collectionCalendarEngine`; esta vista
+// solo filtra, pinta barras por fuente y expone el drill-down operativo.
 // ─────────────────────────────────────────────────────────────────────────
 function CobranzaRealCalendar({
-  bankStatements,
-  reconciliation,
+  calendar,
   ciaFilter,
 }: {
-  bankStatements: BankAccountStatement[];
-  reconciliation: RealReconciliationResult;
+  calendar: BuildCollectionCalendarResult;
   ciaFilter: string;
 }) {
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [sourceFilter, setSourceFilter] = useState<CollectionCalendarSourceFilter>('all');
 
-  // Indexar enrichments por movement key para lookup O(1).
-  const enrichmentByMovementKey = useMemo(() => {
-    const m = new Map<string, typeof reconciliation.abonoEnrichments[number]>();
-    for (const e of reconciliation.abonoEnrichments) m.set(e.movementKey, e);
-    return m;
-  }, [reconciliation.abonoEnrichments]);
-
-  // Recolectar todos los ABONOs no-internos del mes (los traspasos internos
-  // ya están excluidos en el enrichmentIndex; pero aquí filtramos a partir
-  // de los enrichments para mostrar exactamente lo que el motor consideró).
-  const monthAbonos = useMemo(() => {
+  const monthEvents = useMemo(() => {
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}`;
-    const list: Array<{
-      key: string;
-      cia: string;
-      cuenta: string;
-      fecha: string;
-      importe: number;
-      concepto: string;
-      referencia: string;
-      facturas: NonNullable<typeof reconciliation.abonoEnrichments[number]['facturas']>;
-      matched: boolean;
-      matchTier?: typeof reconciliation.abonoEnrichments[number]['matchTier'];
-    }> = [];
-    for (const e of reconciliation.abonoEnrichments) {
-      if (!e.fechaOperacion.startsWith(prefix)) continue;
-      if (ciaFilter !== 'all' && e.cia && e.cia !== ciaFilter) continue;
-      list.push({
-        key: e.movementKey,
-        cia: e.cia,
-        cuenta: e.cuenta,
-        fecha: e.fechaOperacion,
-        importe: e.importe,
-        concepto: e.concepto,
-        referencia: e.referencia,
-        facturas: e.facturas ?? [],
-        matched: e.status === 'factura-cobrada',
-        matchTier: e.matchTier,
-      });
-    }
-    return list;
-  }, [reconciliation.abonoEnrichments, year, month, ciaFilter]);
+    return calendar.events.filter(event => {
+      if (!event.date.startsWith(prefix)) return false;
+      if (!collectionEventMatchesCia(event, ciaFilter)) return false;
+      if (sourceFilter === 'all' && event.source === 'BANK_UNMATCHED') return false;
+      return calendarEventMatchesSourceFilter(event, sourceFilter);
+    });
+  }, [calendar.events, year, month, ciaFilter, sourceFilter]);
 
-  // Bucket por día.
   const byDay = useMemo(() => {
-    const map = new Map<string, typeof monthAbonos>();
-    for (const a of monthAbonos) {
-      const list = map.get(a.fecha) ?? [];
-      list.push(a);
-      map.set(a.fecha, list);
+    const map = new Map<string, CollectionCalendarEvent[]>();
+    for (const event of monthEvents) {
+      const list = map.get(event.date) ?? [];
+      list.push(event);
+      map.set(event.date, list);
     }
     return map;
-  }, [monthAbonos]);
+  }, [monthEvents]);
 
-  const totalMes = monthAbonos.reduce((s, a) => s + a.importe, 0);
-  const matchedMes = monthAbonos.filter(a => a.matched).reduce((s, a) => s + a.importe, 0);
-  const pctMes = totalMes > 0 ? (matchedMes / totalMes) * 100 : 0;
-  void enrichmentByMovementKey; // reservado para drill-down futuro
+  const totalMes = monthEvents.reduce((s, event) => s + event.amount, 0);
+  const bankTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_MATCHED');
+  const bankUnmatchedTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_UNMATCHED');
+  const jdeTotal = collectionSourceAmount(monthEvents, source => source === 'JDE_PAID_UNMATCHED');
+  const cxcTotal = collectionSourceAmount(monthEvents, source => source === 'CXC_RULED_PENDING' || source === 'CXC_UNRULED_PENDING');
+  const projectedTotal = collectionSourceAmount(monthEvents, source => source === 'PROJECTED_CLIENT_RULE');
+  const matchedBankTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_MATCHED');
+  const pctMes = bankTotal > 0 ? (matchedBankTotal / bankTotal) * 100 : 0;
 
-  // Calendar grid (Lun-Sun).
   const firstDay = new Date(Date.UTC(year, month, 1));
   const lastDay = new Date(Date.UTC(year, month + 1, 0));
-  const startPad = (firstDay.getUTCDay() + 6) % 7; // 0=Lunes
+  const startPad = (firstDay.getUTCDay() + 6) % 7;
   const days: Date[] = [];
   for (let i = -startPad; i < lastDay.getUTCDate() + (7 - ((lastDay.getUTCDay() + 6) % 7 + 1) % 7); i++) {
     days.push(new Date(Date.UTC(year, month, i + 1)));
@@ -1372,7 +1435,7 @@ function CobranzaRealCalendar({
   while (days.length % 7 !== 0) days.push(new Date(Date.UTC(year, month, days.length - startPad + 1)));
 
   const maxDayMonto = Math.max(
-    ...Array.from(byDay.values()).map(list => list.reduce((s, a) => s + a.importe, 0)),
+    ...Array.from(byDay.values()).map(list => list.reduce((s, event) => s + event.amount, 0)),
     1,
   );
 
@@ -1393,13 +1456,15 @@ function CobranzaRealCalendar({
     timeZone: 'UTC',
   });
 
-  const selectedAbonos = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
-  const selectedTotal = selectedAbonos.reduce((s, a) => s + a.importe, 0);
-  const selectedMatched = selectedAbonos.filter(a => a.matched).length;
+  const selectedEvents = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
+  const selectedTotal = selectedEvents.reduce((s, event) => s + event.amount, 0);
+
+  useEffect(() => {
+    if (selectedDay && !byDay.has(selectedDay)) setSelectedDay(null);
+  }, [selectedDay, byDay]);
 
   return (
     <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
-      {/* Header: navegador y resumen del mes */}
       <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-3 flex-wrap">
         <div className="flex items-center gap-1">
           <button
@@ -1420,51 +1485,94 @@ function CobranzaRealCalendar({
         <span className="text-[14px] font-semibold text-[var(--gray-950)] capitalize">
           {monthLabel}
         </span>
-        <div className="ml-auto flex items-center gap-6 text-[12px]">
+        <div className="ml-auto flex items-center gap-5 text-[12px] flex-wrap">
           <div>
-            <span className="text-[var(--gray-400)]">Ingresos del mes: </span>
-            <span className="font-semibold text-[var(--success)] tabular-nums">{fmtCurrency(totalMes)}</span>
+            <span className="text-[var(--gray-400)]">Total CXC: </span>
+            <span className="font-semibold text-[var(--gray-950)] tabular-nums">{fmtCurrency(totalMes)}</span>
           </div>
           <div>
-            <span className="text-[var(--gray-400)]">Cruzado: </span>
-            <span className={`font-semibold tabular-nums ${pctMes >= 95 ? 'text-[var(--success)]' : pctMes >= 70 ? 'text-[var(--warning,_#d97706)]' : 'text-[var(--danger)]'}`}>
-              {pctMes.toFixed(1)}%
-            </span>
+            <span className="text-[var(--gray-400)]">Real banco: </span>
+            <span className="font-semibold text-[var(--success)] tabular-nums">{fmtCurrency(bankTotal)}</span>
+          </div>
+          {(bankUnmatchedTotal > 0 || sourceFilter === 'bank_unmatched') && (
+            <div>
+              <span className="text-[var(--gray-400)]">Banco sin CXC: </span>
+              <span className="font-semibold text-[var(--warning,_#d97706)] tabular-nums">{fmtCurrency(bankUnmatchedTotal)}</span>
+            </div>
+          )}
+          <div>
+            <span className="text-[var(--gray-400)]">JDE: </span>
+            <span className="font-semibold text-[var(--primary)] tabular-nums">{fmtCurrency(jdeTotal)}</span>
           </div>
           <div>
-            <span className="text-[var(--gray-400)]">Abonos: </span>
-            <span className="font-semibold text-[var(--gray-950)] tabular-nums">{monthAbonos.length}</span>
+            <span className="text-[var(--gray-400)]">CXC: </span>
+            <span className="font-semibold text-[#6d28d9] tabular-nums">{fmtCurrency(cxcTotal)}</span>
           </div>
+          <div>
+            <span className="text-[var(--gray-400)]">Proyectado: </span>
+            <span className="font-semibold text-[var(--gray-600)] tabular-nums">{fmtCurrency(projectedTotal)}</span>
+          </div>
+          {bankTotal > 0 && (
+            <div>
+              <span className="text-[var(--gray-400)]">Cruzado banco: </span>
+              <span className={`font-semibold tabular-nums ${pctMes >= 95 ? 'text-[var(--success)]' : pctMes >= 70 ? 'text-[var(--warning,_#d97706)]' : 'text-[var(--danger)]'}`}>
+                {pctMes.toFixed(1)}%
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Grid del calendario */}
+      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-white">
+        <div className="flex flex-wrap gap-1.5" aria-label="Filtrar fuente de calendario">
+          {COLLECTION_CALENDAR_FILTERS.map(filter => (
+            <button
+              key={filter.id}
+              onClick={() => {
+                setSourceFilter(filter.id);
+                setSelectedDay(null);
+              }}
+              className={`px-3 h-8 rounded-full text-[12px] font-medium border transition-colors ${
+                sourceFilter === filter.id
+                  ? 'bg-[var(--gray-950)] text-white border-[var(--gray-950)]'
+                  : 'bg-white text-[var(--gray-500)] border-[var(--gray-200)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]'
+              }`}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="p-4">
-        {/* Headers Lun-Dom */}
         <div className="grid grid-cols-7 gap-1 mb-1">
-          {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
+          {DOW_HEADERS.map(d => (
             <div key={d} className="text-[10px] uppercase text-center text-[var(--gray-400)] font-semibold py-1">{d}</div>
           ))}
         </div>
-        {/* Day cells */}
         <div className="grid grid-cols-7 gap-1">
           {days.map((d, i) => {
             const inMonth = d.getUTCMonth() === month;
             const iso = d.toISOString().slice(0, 10);
-            const dayAbonos = byDay.get(iso) ?? [];
-            const dayTotal = dayAbonos.reduce((s, a) => s + a.importe, 0);
-            const dayMatched = dayAbonos.filter(a => a.matched).length;
+            const dayEvents = byDay.get(iso) ?? [];
+            const dayTotal = dayEvents.reduce((s, event) => s + event.amount, 0);
             const isSelected = selectedDay === iso;
-            // Heat: 0..1 proporcional al maxDayMonto. Verde claro → oscuro.
             const heat = dayTotal / maxDayMonto;
-            const bg = dayTotal > 0
-              ? `rgba(16, 185, 129, ${0.08 + heat * 0.5})` // emerald-500 with alpha
-              : 'transparent';
+            const dominantSource = dominantCollectionSource(dayEvents);
+            const sourceStyle = dominantSource ? COLLECTION_CALENDAR_SOURCE_STYLES[dominantSource] : null;
+            const bg = sourceStyle && dayTotal > 0 ? `rgba(${sourceStyle.rgb}, ${0.07 + heat * 0.33})` : 'transparent';
+            const sourceBreakdown = Array.from(
+              dayEvents.reduce((map, event) => {
+                map.set(event.source, (map.get(event.source) ?? 0) + 1);
+                return map;
+              }, new Map<CollectionCalendarEventSource, number>()),
+            );
             return (
               <button
                 key={i}
-                onClick={() => setSelectedDay(isSelected ? null : iso)}
+                onClick={() => dayEvents.length > 0 && setSelectedDay(isSelected ? null : iso)}
                 disabled={!inMonth}
+                aria-label={`${iso}: ${dayEvents.length} evento${dayEvents.length !== 1 ? 's' : ''}${dayTotal > 0 ? ` por ${fmtCurrency(dayTotal)}` : ''}`}
                 className={`
                   relative aspect-square rounded-md border text-left p-1.5 flex flex-col justify-between
                   ${inMonth ? 'border-[var(--gray-200)]' : 'border-transparent opacity-30'}
@@ -1477,8 +1585,8 @@ function CobranzaRealCalendar({
                   <span className={`text-[11px] tabular-nums ${inMonth ? 'text-[var(--gray-950)] font-medium' : 'text-[var(--gray-300)]'}`}>
                     {d.getUTCDate()}
                   </span>
-                  {dayAbonos.length > 0 && (
-                    <span className="text-[9px] text-[var(--gray-500)] tabular-nums">{dayAbonos.length}</span>
+                  {dayEvents.length > 0 && (
+                    <span className="text-[9px] text-[var(--gray-500)] tabular-nums">{dayEvents.length}</span>
                   )}
                 </div>
                 {dayTotal > 0 && (
@@ -1486,19 +1594,20 @@ function CobranzaRealCalendar({
                     {fmtCompact(dayTotal)}
                   </div>
                 )}
-                {dayAbonos.length > 0 && (
+                {sourceBreakdown.length > 0 && (
                   <div className="flex items-center gap-0.5">
-                    {dayMatched === dayAbonos.length && dayAbonos.length > 0 ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" title={`${dayMatched} cruzados`} />
-                    ) : dayMatched > 0 ? (
-                      <>
-                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" title={`${dayMatched} cruzados`} />
-                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning,_#f59e0b)]" title={`${dayAbonos.length - dayMatched} sin factura`} />
-                      </>
-                    ) : (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning,_#f59e0b)]" title="Ningún abono cruzó" />
-                    )}
+                    {sourceBreakdown.slice(0, 5).map(([source, count]) => (
+                      <span
+                        key={source}
+                        className="w-1.5 h-1.5 rounded-full"
+                        style={{ backgroundColor: COLLECTION_CALENDAR_SOURCE_STYLES[source].color }}
+                        title={`${COLLECTION_CALENDAR_SOURCE_LABELS[source]}: ${count}`}
+                      />
+                    ))}
                   </div>
+                )}
+                {sourceStyle && (
+                  <div className="absolute left-0 right-0 bottom-0 h-1 rounded-b-md" style={{ backgroundColor: sourceStyle.color }} />
                 )}
               </button>
             );
@@ -1506,7 +1615,6 @@ function CobranzaRealCalendar({
         </div>
       </div>
 
-      {/* Panel del día seleccionado */}
       {selectedDay && (
         <div className="border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)]">
           <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
@@ -1514,7 +1622,7 @@ function CobranzaRealCalendar({
               {new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
             </span>
             <span className="text-[11px] text-[var(--gray-500)]">
-              {selectedAbonos.length} abono{selectedAbonos.length !== 1 ? 's' : ''} · {fmtCurrency(selectedTotal)} · {selectedMatched} con factura
+              {selectedEvents.length} evento{selectedEvents.length !== 1 ? 's' : ''} · {fmtCurrency(selectedTotal)}
             </span>
             <button
               onClick={() => setSelectedDay(null)}
@@ -1527,53 +1635,65 @@ function CobranzaRealCalendar({
             <table className="w-full text-[12px]">
               <thead className="text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
                 <tr>
-                  <th className="text-left px-3 py-2">Cía / Cuenta</th>
-                  <th className="text-left px-3 py-2">Concepto</th>
-                  <th className="text-left px-3 py-2">Referencia</th>
+                  <th className="text-left px-3 py-2">Fuente del dato</th>
+                  <th className="text-left px-3 py-2">Cliente / factura</th>
+                  <th className="text-left px-3 py-2">Fecha / regla</th>
+                  <th className="text-left px-3 py-2">Origen / cruce</th>
                   <th className="text-right px-3 py-2">Importe</th>
-                  <th className="text-left px-3 py-2">Cruce</th>
                 </tr>
               </thead>
               <tbody>
-                {selectedAbonos.map(a => (
-                  <tr key={a.key} className="border-t border-[var(--gray-100)]">
+                {selectedEvents.map(event => (
+                  <tr key={event.id} className="border-t border-[var(--gray-100)]">
                     <td className="px-3 py-2">
-                      <div className="text-[var(--gray-950)] tabular-nums">{a.cia || '—'}</div>
-                      <div className="text-[10px] text-[var(--gray-400)] tabular-nums">{a.cuenta}</div>
-                    </td>
-                    <td className="px-3 py-2 max-w-[260px] truncate" title={a.concepto}>
-                      {a.concepto || '—'}
+                      <CollectionSourceBadge source={event.source} />
+                      <div className="text-[10px] text-[var(--gray-400)] mt-1">{event.statusLabel}</div>
                     </td>
                     <td className="px-3 py-2">
-                      <code className="font-mono text-[11px] text-[var(--gray-500)]">{a.referencia || '—'}</code>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--success)]">
-                      {fmtCurrency(a.importe)}
+                      <div className="font-medium text-[var(--gray-950)] truncate max-w-[260px]" title={event.clientName}>
+                        {event.clientName}
+                      </div>
+                      <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
+                        {event.cia ? `${event.cia} · ` : ''}
+                        {event.noCliente ? `#${event.noCliente}` : event.clientId ?? 'Sin cliente'}
+                        {event.noFactura ? ` · Fact. ${event.noFactura}` : ''}
+                      </div>
+                      {event.facturas.length > 1 && (
+                        <div className="text-[10px] text-[var(--gray-400)] mt-0.5">
+                          {event.facturas.length} facturas cruzadas
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2">
-                      {a.matched && a.facturas.length > 0 ? (
+                      <div className="tabular-nums text-[var(--gray-950)]">{event.date}</div>
+                      <div className="text-[10px] text-[var(--gray-500)] max-w-[300px]">{event.dateReason}</div>
+                      <div className="text-[10px] text-[var(--gray-400)] max-w-[300px]">{event.ruleApplied}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      {event.bank ? (
                         <div className="space-y-0.5">
-                          {a.facturas.slice(0, 3).map((f, i) => (
-                            <div key={i} className="flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3 text-[var(--success)] flex-shrink-0" />
-                              <span className="text-[11px] text-[var(--gray-950)] tabular-nums">{f.noFactura}</span>
-                              <span className="text-[10px] text-[var(--gray-400)] truncate max-w-[180px]" title={f.nombreCliente}>· {f.nombreCliente}</span>
-                            </div>
-                          ))}
-                          {a.facturas.length > 3 && (
-                            <div className="text-[10px] text-[var(--gray-400)]">+{a.facturas.length - 3} factura{a.facturas.length - 3 !== 1 ? 's' : ''} más</div>
+                          <div className="text-[var(--gray-950)] tabular-nums">{event.bank.cia} · {event.bank.cuenta}</div>
+                          <div className="text-[10px] text-[var(--gray-400)] max-w-[260px] truncate" title={event.bank.concepto}>{event.bank.concepto || 'Sin concepto'}</div>
+                          <code className="font-mono text-[10px] text-[var(--gray-500)]">{event.bank.referencia || 'Sin referencia'}</code>
+                          {typeof event.confidence === 'number' && (
+                            <div className="text-[10px] text-[var(--gray-400)]">Confianza {(event.confidence * 100).toFixed(0)}%</div>
                           )}
                         </div>
+                      ) : event.projected ? (
+                        <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura CXC emitida.</span>
+                      ) : event.source === 'JDE_PAID_UNMATCHED' ? (
+                        <span className="text-[11px] text-[var(--gray-500)]">JDE reporta Fecha_Pago; no se requiere banco cargado.</span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--warning,_#d97706)]">
-                          <AlertTriangle className="w-3 h-3" /> Sin factura
-                        </span>
+                        <span className="text-[11px] text-[var(--gray-500)]">Factura CXC pendiente.</span>
                       )}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--gray-950)]">
+                      {fmtCurrency(event.amount)}
                     </td>
                   </tr>
                 ))}
-                {selectedAbonos.length === 0 && (
-                  <tr><td colSpan={5} className="text-center text-[11px] text-[var(--gray-400)] py-6">Sin abonos este día.</td></tr>
+                {selectedEvents.length === 0 && (
+                  <tr><td colSpan={5} className="text-center text-[11px] text-[var(--gray-400)] py-6">Sin cobranza este día.</td></tr>
                 )}
               </tbody>
             </table>
@@ -1831,6 +1951,8 @@ function BankBadge({ match }: { match?: RealReconciliationMatch }) {
 // los datos de JDE son los esperados.
 // ─────────────────────────────────────────────────────────────────────────
 function CobranzaRealView({
+  clients,
+  assumptions,
   records,
   loadedCias,
   companies,
@@ -1842,6 +1964,8 @@ function CobranzaRealView({
   refreshing,
   defaultCia,
 }: {
+  clients: Client[];
+  assumptions: CashFlowAssumptions;
   records: CobranzaRecord[];
   loadedCias: Record<string, string>;
   companies: { cia: string; nombre: string }[];
@@ -1885,6 +2009,36 @@ function CobranzaRealView({
     }
     return m;
   }, [externalFacturaIndex, reconciliation.matches]);
+  const collectionCalendar = useMemo(
+    () => buildCollectionCalendar({
+      clients,
+      assumptions,
+      cobranzaRecords: records,
+      reconciliation,
+    }),
+    [clients, assumptions, records, reconciliation],
+  );
+  const calendarEventByFactura = useMemo(() => {
+    const priority: Record<CollectionCalendarEventSource, number> = {
+      BANK_MATCHED: 0,
+      BANK_UNMATCHED: 1,
+      JDE_PAID_UNMATCHED: 2,
+      CXC_RULED_PENDING: 3,
+      CXC_UNRULED_PENDING: 4,
+      PROJECTED_CLIENT_RULE: 5,
+    };
+    const map = new Map<string, CollectionCalendarEvent>();
+    for (const event of collectionCalendar.events) {
+      for (const factura of event.facturas) {
+        const key = `${factura.cia}::${factura.noFactura}`;
+        const previous = map.get(key);
+        if (!previous || priority[event.source] < priority[previous.source]) {
+          map.set(key, event);
+        }
+      }
+    }
+    return map;
+  }, [collectionCalendar.events]);
 
   const ciaName = useMemo(() => {
     const m = new Map<string, string>();
@@ -2110,6 +2264,7 @@ function CobranzaRealView({
           onClick={() => {
             const rows = filtered.map(r => {
               const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
+              const calendarEvent = calendarEventByFactura.get(`${r.cia}::${r.noFactura}`);
               return {
                 Cia: r.cia,
                 Cliente: r.nombreCliente,
@@ -2123,9 +2278,16 @@ function CobranzaRealView({
                 PendienteMXN: r.importePendientePesos,
                 Moneda: r.moneda,
                 EstatusJDE: r.estatus,
+                FuenteDato: calendarEvent ? COLLECTION_CALENDAR_SOURCE_LABELS[calendarEvent.source] : '',
+                FechaCalendario: calendarEvent?.date ?? '',
+                EstadoCalendario: calendarEvent?.statusLabel ?? '',
+                ReglaAplicada: calendarEvent?.ruleApplied ?? '',
+                MotivoFecha: calendarEvent?.dateReason ?? '',
                 EstatusCruce: m?.status ?? 'pendiente',
                 BancoMatch: m?.matchTier ?? '',
-                ConfianzaCruce: m?.confidence ? `${(m.confidence * 100).toFixed(0)}%` : '',
+                ConfianzaCruce: (m?.confidence ?? calendarEvent?.confidence)
+                  ? `${((m?.confidence ?? calendarEvent?.confidence ?? 0) * 100).toFixed(0)}%`
+                  : '',
                 FechaBanco: m?.bankDate ?? '',
                 RefBanco: m?.bankRef ?? '',
                 MontoBanco: m?.bankAmount ?? '',
@@ -2152,8 +2314,7 @@ function CobranzaRealView({
           calendar view de la versión proyectada cuando estamos en modo
           Real. */}
       <CobranzaRealCalendar
-        bankStatements={bankStatements}
-        reconciliation={reconciliation}
+        calendar={collectionCalendar}
         ciaFilter={ciaFilter}
       />
 
