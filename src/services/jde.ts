@@ -22,6 +22,8 @@ import {
   BankStatementLine,
   BankStatementRequest,
   BankStatementFormat,
+  CobranzaRecord,
+  CobranzaRequest,
   Company,
 } from './jdeTypes';
 
@@ -559,6 +561,57 @@ export async function fetchCompanies(config: JdeClientConfig = {}): Promise<Comp
   return unwrapList(raw).map(mapCompany).filter(c => c.cia);
 }
 
+// ───────────────────────────────────────────────────────────────
+// 4. Cobranza (CXC)
+// ───────────────────────────────────────────────────────────────
+
+function mapCobranza(raw: RawRecord): CobranzaRecord {
+  return {
+    cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company'])),
+    noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
+    nombreCliente:           toStr(pick(raw, ['nombreCliente', 'nombre_cliente', 'nombre', 'razonSocial', 'razon_social', 'customerName'])),
+    noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura', 'invoice', 'invoiceNo'])),
+    fechaFactura:            toStr(pick(raw, ['fechaFactura', 'fecha_factura', 'fechaEmision', 'fecha_emision'])),
+    fechaVence:              toStr(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento', 'fecha_vencimiento', 'dueDate'])),
+    fechaCobro:              toStr(pick(raw, ['fechaCobro', 'fecha_cobro', 'fechaProgramacionCobro', 'fechaProgCobro', 'fechaCobrado'])),
+    diasVencida:             toNum(pick(raw, ['diasVencida', 'dias_vencida', 'diasVencido', 'dias_vencido'])),
+    importeBrutoPesos:       toNum(pick(raw, ['importeBrutoPesos', 'importe_bruto_pesos', 'importeBruto', 'monto', 'amount'])),
+    importePendientePesos:   toNum(pick(raw, ['importePendientePesos', 'importe_pendiente_pesos', 'importePendiente', 'saldoPendiente'])),
+    importeBrutoDolares:     toNum(pick(raw, ['importeBrutoDolares', 'importe_bruto_dolares'])),
+    importePendienteDolares: toNum(pick(raw, ['importePendienteDolares', 'importe_pendiente_dolares'])),
+    moneda:                  toStr(pick(raw, ['moneda', 'currency'])),
+    condPago:                toStr(pick(raw, ['condPago', 'cond_pago', 'condicionPago'])),
+    estatus:                 toStr(pick(raw, ['estatus', 'estado', 'edoCobro', 'edo_cobro', 'status'])),
+    tipoCambio:              toNum(pick(raw, ['tipoCambio', 'tipo_cambio', 'tc'])),
+    raw,
+  };
+}
+
+/**
+ * POST /v1/erp/tesoreria/cobranza
+ *
+ * Retorna las facturas de cobranza (CXC) abiertas/históricas para la
+ * compañía indicada en el rango de fechas dado.
+ *
+ * Body de ejemplo (compartido por el equipo JDE el 2026-05-01):
+ *   { "cia": "00011,", "fechaInicial": null, "fechaFinal": "2026-04-29" }
+ *
+ * Notas:
+ *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
+ *     compañías llamar en serie y mergear.
+ *   • `fechaInicial: null` trae todo el histórico hasta `fechaFinal`.
+ *   • El token productivo lo inyecta server-side la Vercel Function
+ *     (api/jde/[...path].ts) leyendo `JDE_TOKEN`. En dev local, usa
+ *     `VITE_JDE_TOKEN`.
+ */
+export async function fetchCobranza(
+  req: CobranzaRequest,
+  config: JdeClientConfig = {},
+): Promise<CobranzaRecord[]> {
+  const raw = await jdeClient.post<unknown>('/cobranza', req, config);
+  return unwrapList(raw).map(mapCobranza);
+}
+
 // Re-exports convenientes
 export type {
   AgedBalanceRecord,
@@ -568,6 +621,8 @@ export type {
   BankStatementRequest,
   BankStatementFormat,
   BankMovementType,
+  CobranzaRecord,
+  CobranzaRequest,
   Company,
 } from './jdeTypes';
 export { JdeApiError } from './jdeTypes';

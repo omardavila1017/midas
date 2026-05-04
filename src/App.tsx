@@ -8,9 +8,11 @@ import {
   fetchBankStatements,
   fetchBankStatementsRange,
   fetchAgedBalances,
+  fetchCobranza,
   type Company,
   type BankAccountStatement,
   type BankStatementFormat,
+  type CobranzaRecord,
 } from './services/jde';
 import Dashboard from './components/Dashboard';
 
@@ -204,6 +206,12 @@ export default function App() {
 
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
+  // Cobranza (CXC) — endpoint /v1/erp/tesoreria/cobranza, liberado a
+  // producción 2026-05-01. Mismo patrón que cxpRecords: cache en localStorage
+  // a través de MidasStore (v7), refresh secuencial por cia, último año
+  // (fechaInicial = hoy - 365d).
+  const [cobranzaRecords, setCobranzaRecords] = useState<CobranzaRecord[]>([]);
+  const [cobranzaLoadedCias, setCobranzaLoadedCias] = useState<Record<string, string>>({});
   const [cashFlowOverrides, setCashFlowOverrides] = useState<CashFlowOverrides>({});
   const [activeTab, setActiveTab] = useState<TabId>('netflow');
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -311,6 +319,8 @@ export default function App() {
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
       if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
       if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
+      if (stored.cobranzaRecords?.length) setCobranzaRecords(stored.cobranzaRecords);
+      if (stored.cobranzaLoadedCias) setCobranzaLoadedCias(stored.cobranzaLoadedCias);
       if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
@@ -414,6 +424,7 @@ export default function App() {
     const snapshot: MidasStore = {
       providers, clients,
       assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+      cobranzaRecords, cobranzaLoadedCias,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
@@ -423,6 +434,7 @@ export default function App() {
   }, [
     providers, clients,
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+    cobranzaRecords, cobranzaLoadedCias,
     cashFlowOverrides,
   ]);
 
@@ -526,6 +538,54 @@ export default function App() {
         } catch {
           // Silent: si ninguna compañía carga, el empty state de CXP
           // deja al usuario "Consultar todas" o subir CSV manualmente.
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [companies]);
+
+  // ── Auto-load Cobranza (CXC) en background al abrir el app ──────────────
+  // Endpoint: POST /v1/erp/tesoreria/cobranza (productivo desde 2026-05-01).
+  //
+  // Estrategia (idéntica a CXP):
+  //   1. Una llamada por compañía activa, secuencial — JDE revienta en
+  //      paralelo igual que /antiguedadsaldos.
+  //   2. Rango: últimos 365 días (fechaInicial = hoy - 365). Suficiente para
+  //      conciliar el año fiscal con bancos sin traer histórico completo.
+  //   3. Cache por (cia, noFactura): cada respuesta reemplaza solo los
+  //      registros de esa cia para que reintentos de un día a otro no
+  //      dupliquen filas.
+  //   4. Errores silenciados — el dashboard de cobranza muestra empty state
+  //      por compañía y deja al usuario refrescar manual.
+  const cobranzaAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (cobranzaAutoFetchDone.current) return;
+    if (companies.length === 0) return;
+    const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
+    if (activeCias.length === 0) return;
+    cobranzaAutoFetchDone.current = true;
+
+    // Rango: últimos 12 meses respecto a hoy.
+    const today = new Date();
+    const fechaFinal = today.toISOString().slice(0, 10);
+    const yearAgo = new Date(today);
+    yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
+    const fechaInicial = yearAgo.toISOString().slice(0, 10);
+
+    let cancelled = false;
+    (async () => {
+      for (const cia of activeCias) {
+        if (cancelled) return;
+        try {
+          const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
+          if (cancelled) return;
+          // Forzamos cia explícita por si el response no la trae poblada.
+          const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
+          setCobranzaRecords(prev => [...prev.filter(r => r.cia !== cia), ...stamped]);
+          setCobranzaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+        } catch {
+          // Silent — la pestaña Cobranza muestra empty state por compañía
+          // y deja al usuario el botón de refresh manual.
         }
       }
     })();
@@ -870,6 +930,7 @@ export default function App() {
                 const json = exportStore({
                   providers, clients,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
+                  cobranzaRecords, cobranzaLoadedCias,
                   cashFlowOverrides,
                   lastSaved: new Date().toISOString(),
                 });
@@ -1017,6 +1078,8 @@ export default function App() {
                 cxpRecords={cxpRecords}
                 bankStatements={bankStatements}
                 companies={companies}
+                cobranzaRecords={cobranzaRecords}
+                cobranzaLoadedCias={cobranzaLoadedCias}
               />
             )}
             {activeTab === 'providers' && (

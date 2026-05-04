@@ -30,5 +30,8 @@
     "typescript": "^5.5.2",
     "vite": "^5.3.1",
     "vitest": "^2.1.8"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-arm64-gnu": "^4.60.2"
   }
 }

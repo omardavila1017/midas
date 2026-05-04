@@ -4,10 +4,15 @@ import { projectYear } from '../domain/collectionEngine';
 import { isBankHoliday } from '../domain/bankHolidays';
 import { isInternalTransfer, buildOwnAccountsIndex, buildOwnAccountDetector } from '../domain/netCashFlowEngine';
 import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
+import {
+  reconcileRealCollections,
+  type RealReconciliationMatch,
+  type MatchTier as RealMatchTier,
+} from '../domain/realReconciliationEngine';
 import { CXPRecord } from '../domain/persistence';
-import type { BankAccountStatement } from '../services/jde';
+import type { BankAccountStatement, CobranzaRecord } from '../services/jde';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal } from 'lucide-react';
+import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, FileSpreadsheet } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency } from '../formatters';
@@ -34,10 +39,31 @@ interface Props {
   cxpRecords?: CXPRecord[];
   bankStatements?: BankAccountStatement[];
   companies?: { cia: string; nombre: string }[];
+  /**
+   * CXC real proveniente de POST /v1/erp/tesoreria/cobranza. Cada registro es
+   * una factura abierta o reciente (últimos 12 meses). Cuando llega vacío,
+   * la pestaña sigue funcionando en modo Proyectada y la sección "Real (JDE)"
+   * muestra empty state.
+   */
+  cobranzaRecords?: CobranzaRecord[];
+  /**
+   * ISO timestamp por compañía del último fetch exitoso de /cobranza. Hoy
+   * solo se usa para mostrar "Actualizado hace X" en la vista raw; en fases
+   * posteriores alimentará el indicador de staleness.
+   */
+  cobranzaLoadedCias?: Record<string, string>;
 }
 
 type ViewMode = 'month' | 'client' | 'calendar';
 type FactorajeFilter = 'all' | 'yes' | 'no';
+/**
+ * Toggle nivel-página: la pestaña sirve dos modos.
+ *   - 'projected': la lógica histórica (calendario, calc. heurístico).
+ *   - 'real':      lectura directa de /cobranza (CXC JDE) — fase 1 muestra
+ *                  tabla raw para validar shape; fase 2/3 traerá la UI rica
+ *                  con cruces a bancos.
+ */
+type SourceMode = 'projected' | 'real';
 
 const FREQUENCIES: Frequency[] = ['Semanal', 'Quincenal', 'Mensual', 'Contado'];
 const DOW_HEADERS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -48,7 +74,7 @@ function defaultActiveMonth(year: number): number {
   return now.getFullYear() === year ? now.getMonth() : 0;
 }
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [] }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaLoadedCias = {} }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -56,6 +82,12 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   const [showSettings, setShowSettings] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [activeMonth, setActiveMonth] = useState(() => defaultActiveMonth(assumptions.year));
+  // Default a 'real' cuando hay datos JDE, 'projected' si no — para que el
+  // primer abrir la pestaña muestre lo más cercano a la realidad sin
+  // requerir clic. El usuario puede saltar entre ambos siempre.
+  const [sourceMode, setSourceMode] = useState<SourceMode>(() =>
+    cobranzaRecords.length > 0 ? 'real' : 'projected',
+  );
 
   useEffect(() => {
     setActiveMonth(defaultActiveMonth(assumptions.year));
@@ -119,7 +151,44 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
 
   return (
     <div className="space-y-5 animate-page-in">
-      <PageHeader title="Proyección de cobranza" />
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <PageHeader title="Proyección de cobranza" />
+        {/* Toggle Real (JDE) / Proyectada — solo se muestra cuando hay al
+            menos algún registro de cobranza JDE en cache. Si nunca llegó
+            data, escondemos el toggle para no confundir; el usuario sigue
+            viendo la pestaña proyectada como antes. */}
+        {cobranzaRecords.length > 0 && (
+          <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[12px] border border-[var(--gray-200)]/60">
+            <button
+              onClick={() => setSourceMode('real')}
+              className={`px-3.5 py-1.5 rounded-full font-medium hover-press flex items-center gap-1.5 ${sourceMode === 'real' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
+            >
+              <Database className="w-3.5 h-3.5" /> Real (JDE)
+            </button>
+            <button
+              onClick={() => setSourceMode('projected')}
+              className={`px-3.5 py-1.5 rounded-full font-medium hover-press flex items-center gap-1.5 ${sourceMode === 'projected' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
+            >
+              <CalendarRange className="w-3.5 h-3.5" /> Proyectada
+            </button>
+          </nav>
+        )}
+      </div>
+
+      {/* ── Vista Real (JDE) — Fase 1: tabla raw ──────────
+          Esta vista muestra los registros tal como llegan del API para
+          validar el shape antes de construir el dashboard rico. Cuando el
+          motor de cruce contra bancos esté listo (Fase 2), aquí va el KPI
+          de % cruzado y el aging por cliente. */}
+      {sourceMode === 'real' ? (
+        <CobranzaRealView
+          records={cobranzaRecords}
+          loadedCias={cobranzaLoadedCias}
+          companies={companies}
+          bankStatements={bankStatements}
+        />
+      ) : (
+      <>
 
       {/* ── Summary strip ─────────────────────────────────── */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 animate-card-in stagger-1 hover-lift">
@@ -347,6 +416,9 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       </div>
 
       <DetailView events={events} clients={filteredClients} />
+
+      </>
+      )}
     </div>
   );
 }
@@ -1162,5 +1234,292 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CobranzaRealView — Fase 1
+//
+// Vista mínima funcional que confirma que el endpoint /cobranza está
+// respondiendo y que el shape se mapea bien. Por ahora solo:
+//   - KPIs agregados (saldo total, total facturas, % vencido).
+//   - Filtro por compañía y por estatus.
+//   - Tabla con la fila completa de CobranzaRecord.
+//
+// Lo intencionalmente NO está aquí (queda para Fase 2/3):
+//   - Cruce contra movimientos bancarios (ABONO).
+//   - Aging buckets visuales.
+//   - Drill-down por cliente / factura.
+//   - Export a CSV con info de banco.
+//
+// El UI rico vendrá una vez el motor `realReconciliationEngine.ts`
+// produzca los matches; mientras, esta tabla deja al equipo validar que
+// los datos de JDE son los esperados.
+// ─────────────────────────────────────────────────────────────────────────
+function CobranzaRealView({
+  records,
+  loadedCias,
+  companies,
+  bankStatements,
+}: {
+  records: CobranzaRecord[];
+  loadedCias: Record<string, string>;
+  companies: { cia: string; nombre: string }[];
+  bankStatements: BankAccountStatement[];
+}) {
+  const [ciaFilter, setCiaFilter] = useState<string>('all');
+  const [estatusFilter, setEstatusFilter] = useState<string>('all');
+  const [query, setQuery] = useState('');
+  const [crossFilter, setCrossFilter] = useState<'all' | 'matched' | 'pending'>('all');
+
+  // ── Motor de cruce (Fase 2) ────────────────────────────────────────────
+  // Cruzar facturas reales contra ABONOs bancarios. Devuelve un match por
+  // factura; lo indexamos por (cia, noFactura) para lookup O(1) en la tabla.
+  const reconciliation = useMemo(
+    () => reconcileRealCollections(records, bankStatements),
+    [records, bankStatements],
+  );
+  const matchByFactura = useMemo(() => {
+    const m = new Map<string, RealReconciliationMatch>();
+    for (const x of reconciliation.matches) {
+      m.set(`${x.cia}::${x.noFactura}`, x);
+    }
+    return m;
+  }, [reconciliation.matches]);
+
+  const ciaName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of companies) m.set(c.cia, c.nombre);
+    return m;
+  }, [companies]);
+
+  const allCias = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of records) if (r.cia) set.add(r.cia);
+    return Array.from(set).sort();
+  }, [records]);
+
+  const allEstatus = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of records) if (r.estatus) set.add(r.estatus);
+    return Array.from(set).sort();
+  }, [records]);
+
+  const filtered = useMemo(() => {
+    return records.filter(r => {
+      if (ciaFilter !== 'all' && r.cia !== ciaFilter) return false;
+      if (estatusFilter !== 'all' && r.estatus !== estatusFilter) return false;
+      if (crossFilter !== 'all') {
+        const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
+        const matched = m?.status === 'cobrada-banco';
+        if (crossFilter === 'matched' && !matched) return false;
+        if (crossFilter === 'pending' && matched) return false;
+      }
+      if (query) {
+        const q = query.toLowerCase();
+        if (
+          !r.nombreCliente.toLowerCase().includes(q) &&
+          !r.noFactura.toLowerCase().includes(q) &&
+          !r.noCliente.toLowerCase().includes(q)
+        ) return false;
+      }
+      return true;
+    });
+  }, [records, ciaFilter, estatusFilter, crossFilter, query, matchByFactura]);
+
+  // ── KPIs ──
+  const totalSaldo = filtered.reduce((s, r) => s + (r.importePendientePesos || 0), 0);
+  const totalBruto = filtered.reduce((s, r) => s + (r.importeBrutoPesos || 0), 0);
+  const vencidoSaldo = filtered
+    .filter(r => r.diasVencida > 0)
+    .reduce((s, r) => s + (r.importePendientePesos || 0), 0);
+  const pctVencido = totalSaldo > 0 ? (vencidoSaldo / totalSaldo) * 100 : 0;
+
+  // Cuándo se actualizó la cia más reciente (si hay alguna)
+  const lastUpdate = useMemo(() => {
+    const ts = Object.values(loadedCias)
+      .map(s => new Date(s).getTime())
+      .filter(n => Number.isFinite(n));
+    if (ts.length === 0) return null;
+    return new Date(Math.max(...ts));
+  }, [loadedCias]);
+
+  if (records.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-xl">
+        <div className="w-14 h-14 rounded-2xl bg-[var(--primary-muted)] flex items-center justify-center mb-3">
+          <Database className="w-6 h-6 text-[var(--primary)]" />
+        </div>
+        <h3 className="text-base font-semibold text-[var(--gray-950)]">Sin cobranza JDE cargada</h3>
+        <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-md">
+          La carga arranca al boot del app y va compañía por compañía.
+          Si no aparece nada después de un par de minutos, revisa el token y
+          el endpoint /cobranza en la consola.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* KPIs */}
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 flex-wrap">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo CXC pendiente</div>
+          <AnimatedNumber
+            value={totalSaldo}
+            format={fmtCurrency}
+            className="block text-2xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+          />
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Importe bruto facturado</div>
+          <AnimatedNumber
+            value={totalBruto}
+            format={fmtCurrency}
+            className="block text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5"
+          />
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Vencido (% del saldo)</div>
+          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
+            <span className={pctVencido > 30 ? 'text-[var(--danger)]' : pctVencido > 10 ? 'text-[var(--warning)]' : 'text-[var(--success)]'}>
+              {pctVencido.toFixed(1)}%
+            </span>
+            <span className="text-[12px] text-[var(--gray-400)] ml-2">
+              {fmtCurrency(vencidoSaldo)}
+            </span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Facturas</div>
+          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
+            {filtered.length.toLocaleString('es-MX')}
+            {filtered.length !== records.length && (
+              <span className="text-[var(--gray-400)] text-[13px]"> / {records.length.toLocaleString('es-MX')}</span>
+            )}
+          </div>
+        </div>
+        {lastUpdate && (
+          <div className="ml-auto text-[11px] text-[var(--gray-400)]">
+            Actualizado: {lastUpdate.toLocaleString('es-MX')}
+          </div>
+        )}
+      </div>
+
+      {/* Filtros */}
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1 min-w-[240px] max-w-md">
+          <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Cliente, factura, número…"
+            className="input pl-9 w-full"
+          />
+        </div>
+
+        <select
+          value={ciaFilter}
+          onChange={e => setCiaFilter(e.target.value)}
+          className="input text-[12px] h-8"
+        >
+          <option value="all">Todas las compañías</option>
+          {allCias.map(cia => (
+            <option key={cia} value={cia}>
+              {cia} · {ciaName.get(cia) ?? '—'}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={estatusFilter}
+          onChange={e => setEstatusFilter(e.target.value)}
+          className="input text-[12px] h-8"
+        >
+          <option value="all">Todos los estatus</option>
+          {allEstatus.map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+
+        {(query || ciaFilter !== 'all' || estatusFilter !== 'all') && (
+          <button
+            onClick={() => { setQuery(''); setCiaFilter('all'); setEstatusFilter('all'); }}
+            className="text-[12px] text-[var(--primary)] hover:underline px-2"
+          >
+            Limpiar
+          </button>
+        )}
+      </div>
+
+      {/* Tabla raw */}
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
+          <FileSpreadsheet className="w-4 h-4 text-[var(--gray-400)]" />
+          <span className="text-[13px] font-semibold text-[var(--gray-950)]">Facturas (CXC)</span>
+          <span className="text-[11px] text-[var(--gray-400)] ml-auto">
+            Vista raw — Fase 1. El cruce con bancos llega en Fase 2.
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-3 py-2">Cía</th>
+                <th className="text-left px-3 py-2">Cliente</th>
+                <th className="text-left px-3 py-2">Factura</th>
+                <th className="text-left px-3 py-2">F. emisión</th>
+                <th className="text-left px-3 py-2">F. vencimiento</th>
+                <th className="text-right px-3 py-2">Días venc.</th>
+                <th className="text-right px-3 py-2">Bruto MXN</th>
+                <th className="text-right px-3 py-2">Pendiente MXN</th>
+                <th className="text-left px-3 py-2">Moneda</th>
+                <th className="text-left px-3 py-2">Estatus</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.slice(0, 500).map((r, idx) => (
+                <tr
+                  key={`${r.cia}-${r.noFactura}-${idx}`}
+                  className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
+                >
+                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">{r.cia}</td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-[var(--gray-950)]">{r.nombreCliente || '—'}</div>
+                    {r.noCliente && (
+                      <div className="text-[10px] text-[var(--gray-400)] tabular-nums">#{r.noCliente}</div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums">{r.noFactura || '—'}</td>
+                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
+                    {r.fechaFactura ? r.fechaFactura.slice(0, 10) : '—'}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
+                    {r.fechaVence ? r.fechaVence.slice(0, 10) : '—'}
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${r.diasVencida > 0 ? 'text-[var(--danger)] font-medium' : 'text-[var(--gray-400)]'}`}>
+                    {r.diasVencida}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {fmtCurrency(r.importeBrutoPesos)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">
+                    {fmtCurrency(r.importePendientePesos)}
+                  </td>
+                  <td className="px-3 py-2 text-[var(--gray-500)]">{r.moneda || '—'}</td>
+                  <td className="px-3 py-2 text-[var(--gray-500)]">{r.estatus || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length > 500 && (
+            <div className="px-4 py-2 text-[11px] text-[var(--gray-400)] border-t border-[var(--gray-100)] bg-[var(--surface-alt)]">
+              Mostrando 500 de {filtered.length.toLocaleString('es-MX')} — usa los filtros para acotar.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

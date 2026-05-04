@@ -5,6 +5,7 @@
  *   1. POST /antiguedadsaldos  → CXP / aging buckets
  *   2. POST /bancos            → Estados de cuenta bancarios
  *   3. GET  /empresas          → Catálogo de compañías
+ *   4. POST /cobranza          → Cobranza (CXC) por compañía y rango
  *
  * Los shapes normalizados están alineados con los tipos ya usados en la
  * aplicación (p.ej. CXPRecord en components/CXP.tsx) para que los datos
@@ -149,6 +150,66 @@ export interface Company {
   monedaBase?: string;
   /** Si está activa para operaciones. */
   activa?: boolean;
+}
+
+// ───────────────────────────────────────────────────────────────
+// 4. Cobranza (CXC)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Request body para POST /cobranza.
+ *
+ * El equipo JDE liberó este endpoint en producción (2026-05-01). Body de
+ * referencia compartido por ellos:
+ *   {
+ *     "cia": "00011,",          // código de compañía (acepta trailing coma)
+ *     "fechaInicial": null,      // null = sin límite inferior
+ *     "fechaFinal": "2026-04-29" // ISO YYYY-MM-DD
+ *   }
+ *
+ * Notas:
+ *   • `fechaInicial` puede ser null para traer todo el histórico hasta la
+ *     fecha final (mismo patrón que /antiguedadsaldos).
+ *   • Como en /antiguedadsaldos, una compañía por request — para múltiples
+ *     companias hay que llamar secuencial y mergear.
+ */
+export interface CobranzaRequest {
+  /** Código de compañía JDE (p.ej. "00011"). */
+  cia: string;
+  /** Fecha inicial inclusive (YYYY-MM-DD) o null para sin límite inferior. */
+  fechaInicial: string | null;
+  /** Fecha final inclusive (YYYY-MM-DD). */
+  fechaFinal: string;
+}
+
+/**
+ * Registro normalizado de cobranza (CXC).
+ *
+ * Forma tolerante: el API está recién liberado y los nombres exactos de
+ * campos pueden variar. El mapper en jde.ts intenta varios alias y deja
+ * los campos como strings/números seguros. Conserva además el raw record
+ * para poder inspeccionar campos no mapeados desde la UI durante el
+ * shakedown.
+ */
+export interface CobranzaRecord {
+  cia: string;
+  noCliente: string;
+  nombreCliente: string;
+  noFactura: string;
+  fechaFactura: string;
+  fechaVence: string;
+  fechaCobro: string;
+  diasVencida: number;
+  importeBrutoPesos: number;
+  importePendientePesos: number;
+  importeBrutoDolares: number;
+  importePendienteDolares: number;
+  moneda: string;
+  condPago: string;
+  estatus: string;
+  tipoCambio: number;
+  /** Registro original devuelto por el API, útil para depurar campos nuevos. */
+  raw?: Record<string, unknown>;
 }
 
 // ───────────────────────────────────────────────────────────────
