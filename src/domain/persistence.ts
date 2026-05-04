@@ -177,8 +177,22 @@ function normalizeStore(raw: unknown): MidasStore {
 
   // Cobranza (CXC) — v7+. v6 payloads simply lack these keys and fall back to
   // empty defaults, which lets the auto-fetch effect populate them on boot.
+  // Importante: si el record cargado trae `raw` (heredado de un cache de
+  // antes del fix de crash), lo eliminamos al cargar para que el siguiente
+  // save no vuelva a persistirlo. Esto cura los browsers de los usuarios
+  // que ya tenían un store inflado en localStorage.
   const cobranzaRecords = Array.isArray(o.cobranzaRecords)
-    ? (o.cobranzaRecords.filter((r) => !!r && typeof r === 'object') as CobranzaRecord[])
+    ? (o.cobranzaRecords
+        .filter((r) => !!r && typeof r === 'object')
+        .map((r) => {
+          const rec = r as Record<string, unknown>;
+          if ('raw' in rec) {
+            const { raw: _drop, ...rest } = rec;
+            void _drop;
+            return rest as unknown as CobranzaRecord;
+          }
+          return r as CobranzaRecord;
+        }) as CobranzaRecord[])
     : [];
   const cobranzaLoadedCias: Record<string, string> = {};
   if (o.cobranzaLoadedCias && typeof o.cobranzaLoadedCias === 'object') {

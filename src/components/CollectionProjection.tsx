@@ -7,6 +7,7 @@ import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch,
 import {
   reconcileRealCollections,
   type RealReconciliationMatch,
+  type RealReconciliationResult,
   type MatchTier as RealMatchTier,
 } from '../domain/realReconciliationEngine';
 import { CXPRecord } from '../domain/persistence';
@@ -15,7 +16,7 @@ import { MONTHS } from '../types';
 import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, FileSpreadsheet } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
-import { fmtCurrency } from '../formatters';
+import { fmtCurrency, fmtCompact } from '../formatters';
 import AnimatedNumber from './ui/AnimatedNumber';
 import PageHeader from './ui/PageHeader';
 
@@ -52,6 +53,29 @@ interface Props {
    * posteriores alimentará el indicador de staleness.
    */
   cobranzaLoadedCias?: Record<string, string>;
+  /**
+   * Resultado pre-computado del cruce cobranza ↔ bancos. App.tsx lo
+   * memoiza una vez y lo pasa a todas las pestañas que lo consumen
+   * (Cobranza, Bancos, Dashboard) — así evitamos recomputar el motor
+   * cuando el usuario navega o cambia filtros locales que no tocan los
+   * inputs del motor.
+   */
+  cobranzaReconciliation?: RealReconciliationResult;
+  /** Lookup pre-construido (cia::noFactura) → match. */
+  cobranzaFacturaIndex?: Map<string, RealReconciliationMatch>;
+  /** Mensaje de error del último auto/manual fetch de cobranza, si lo hay. */
+  cobranzaError?: string | null;
+  /** Trigger un refetch manual de /cobranza para todas las cías activas. */
+  onRefreshCobranza?: () => void;
+  /** Indica si un refresh está en curso para deshabilitar el botón. */
+  cobranzaRefreshing?: boolean;
+  /**
+   * Cía seleccionada globalmente (header del shell). Cuando viene un valor
+   * distinto a 'all', el CobranzaRealView abre filtrado por esa cía;
+   * cuando es 'all' muestra todas. Esto sincroniza el filtro local con el
+   * global del app.
+   */
+  selectedCia?: string;
 }
 
 type ViewMode = 'month' | 'client' | 'calendar';
@@ -74,7 +98,7 @@ function defaultActiveMonth(year: number): number {
   return now.getFullYear() === year ? now.getMonth() : 0;
 }
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaLoadedCias = {} }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -153,11 +177,13 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
     <div className="space-y-5 animate-page-in">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <PageHeader title="Proyección de cobranza" />
-        {/* Toggle Real (JDE) / Proyectada — solo se muestra cuando hay al
-            menos algún registro de cobranza JDE en cache. Si nunca llegó
-            data, escondemos el toggle para no confundir; el usuario sigue
-            viendo la pestaña proyectada como antes. */}
-        {cobranzaRecords.length > 0 && (
+        {/* Toggle Real (JDE) / Proyectada.
+            Antes solo se mostraba cuando había registros de cobranza en
+            cache, lo que ocultaba el caso "JDE devolvió vacío". Ahora se
+            muestra siempre que haya catálogo de compañías cargado, para
+            que el usuario pueda entrar al modo Real, ver el error y
+            disparar un refresh manual. */}
+        {(companies.length > 0 || cobranzaRecords.length > 0) && (
           <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[12px] border border-[var(--gray-200)]/60">
             <button
               onClick={() => setSourceMode('real')}
@@ -186,6 +212,12 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           loadedCias={cobranzaLoadedCias}
           companies={companies}
           bankStatements={bankStatements}
+          reconciliation={cobranzaReconciliation}
+          facturaIndex={cobranzaFacturaIndex}
+          error={cobranzaError ?? null}
+          onRefresh={onRefreshCobranza}
+          refreshing={!!cobranzaRefreshing}
+          defaultCia={selectedCia}
         />
       ) : (
       <>
@@ -1238,6 +1270,548 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// CobranzaRealCalendar — Calendario de ingresos reales (ABONOs ↔ cobranza)
+//
+// Vista principal del modo "Real". Muestra el mes activo en grid Lun-Dom
+// con cada día coloreado por el monto total recibido. Click en un día
+// abre un panel lateral con la lista de ABONOs y, cuando aplica, las
+// facturas JDE que ese ABONO cobró.
+//
+// Filtros:
+//   - ciaFilter (heredado del padre): aplica al mismo set de ABONOs.
+//   - traspasos internos: ya excluidos por el motor.
+//
+// Heat coloring:
+//   - Tonos de verde de claro a oscuro proporcional al monto del día.
+//   - Un día sin abonos queda blanco.
+//
+// Las facturas se identifican vía `abonoEnrichmentIndex` indirecto: la
+// `reconciliation` contiene `abonoEnrichments[]` con la lista de facturas
+// que cubrió cada ABONO (1 para match individual, 2-4 para subset).
+// ─────────────────────────────────────────────────────────────────────────
+function CobranzaRealCalendar({
+  bankStatements,
+  reconciliation,
+  ciaFilter,
+}: {
+  bankStatements: BankAccountStatement[];
+  reconciliation: RealReconciliationResult;
+  ciaFilter: string;
+}) {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [month, setMonth] = useState(() => new Date().getMonth());
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  // Indexar enrichments por movement key para lookup O(1).
+  const enrichmentByMovementKey = useMemo(() => {
+    const m = new Map<string, typeof reconciliation.abonoEnrichments[number]>();
+    for (const e of reconciliation.abonoEnrichments) m.set(e.movementKey, e);
+    return m;
+  }, [reconciliation.abonoEnrichments]);
+
+  // Recolectar todos los ABONOs no-internos del mes (los traspasos internos
+  // ya están excluidos en el enrichmentIndex; pero aquí filtramos a partir
+  // de los enrichments para mostrar exactamente lo que el motor consideró).
+  const monthAbonos = useMemo(() => {
+    const prefix = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const list: Array<{
+      key: string;
+      cia: string;
+      cuenta: string;
+      fecha: string;
+      importe: number;
+      concepto: string;
+      referencia: string;
+      facturas: NonNullable<typeof reconciliation.abonoEnrichments[number]['facturas']>;
+      matched: boolean;
+      matchTier?: typeof reconciliation.abonoEnrichments[number]['matchTier'];
+    }> = [];
+    for (const e of reconciliation.abonoEnrichments) {
+      if (!e.fechaOperacion.startsWith(prefix)) continue;
+      if (ciaFilter !== 'all' && e.cia && e.cia !== ciaFilter) continue;
+      list.push({
+        key: e.movementKey,
+        cia: e.cia,
+        cuenta: e.cuenta,
+        fecha: e.fechaOperacion,
+        importe: e.importe,
+        concepto: e.concepto,
+        referencia: e.referencia,
+        facturas: e.facturas ?? [],
+        matched: e.status === 'factura-cobrada',
+        matchTier: e.matchTier,
+      });
+    }
+    return list;
+  }, [reconciliation.abonoEnrichments, year, month, ciaFilter]);
+
+  // Bucket por día.
+  const byDay = useMemo(() => {
+    const map = new Map<string, typeof monthAbonos>();
+    for (const a of monthAbonos) {
+      const list = map.get(a.fecha) ?? [];
+      list.push(a);
+      map.set(a.fecha, list);
+    }
+    return map;
+  }, [monthAbonos]);
+
+  const totalMes = monthAbonos.reduce((s, a) => s + a.importe, 0);
+  const matchedMes = monthAbonos.filter(a => a.matched).reduce((s, a) => s + a.importe, 0);
+  const pctMes = totalMes > 0 ? (matchedMes / totalMes) * 100 : 0;
+  void enrichmentByMovementKey; // reservado para drill-down futuro
+
+  // Calendar grid (Lun-Sun).
+  const firstDay = new Date(Date.UTC(year, month, 1));
+  const lastDay = new Date(Date.UTC(year, month + 1, 0));
+  const startPad = (firstDay.getUTCDay() + 6) % 7; // 0=Lunes
+  const days: Date[] = [];
+  for (let i = -startPad; i < lastDay.getUTCDate() + (7 - ((lastDay.getUTCDay() + 6) % 7 + 1) % 7); i++) {
+    days.push(new Date(Date.UTC(year, month, i + 1)));
+  }
+  while (days.length % 7 !== 0) days.push(new Date(Date.UTC(year, month, days.length - startPad + 1)));
+
+  const maxDayMonto = Math.max(
+    ...Array.from(byDay.values()).map(list => list.reduce((s, a) => s + a.importe, 0)),
+    1,
+  );
+
+  const prevMonth = () => {
+    if (month === 0) { setYear(year - 1); setMonth(11); }
+    else setMonth(month - 1);
+    setSelectedDay(null);
+  };
+  const nextMonth = () => {
+    if (month === 11) { setYear(year + 1); setMonth(0); }
+    else setMonth(month + 1);
+    setSelectedDay(null);
+  };
+
+  const monthLabel = new Date(Date.UTC(year, month, 1)).toLocaleDateString('es-MX', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+
+  const selectedAbonos = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
+  const selectedTotal = selectedAbonos.reduce((s, a) => s + a.importe, 0);
+  const selectedMatched = selectedAbonos.filter(a => a.matched).length;
+
+  return (
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
+      {/* Header: navegador y resumen del mes */}
+      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={prevMonth}
+            className="w-7 h-7 rounded-md hover:bg-white border border-[var(--gray-200)] flex items-center justify-center text-[var(--gray-500)]"
+            aria-label="Mes anterior"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            onClick={nextMonth}
+            className="w-7 h-7 rounded-md hover:bg-white border border-[var(--gray-200)] flex items-center justify-center text-[var(--gray-500)]"
+            aria-label="Mes siguiente"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+        <span className="text-[14px] font-semibold text-[var(--gray-950)] capitalize">
+          {monthLabel}
+        </span>
+        <div className="ml-auto flex items-center gap-6 text-[12px]">
+          <div>
+            <span className="text-[var(--gray-400)]">Ingresos del mes: </span>
+            <span className="font-semibold text-[var(--success)] tabular-nums">{fmtCurrency(totalMes)}</span>
+          </div>
+          <div>
+            <span className="text-[var(--gray-400)]">Cruzado: </span>
+            <span className={`font-semibold tabular-nums ${pctMes >= 95 ? 'text-[var(--success)]' : pctMes >= 70 ? 'text-[var(--warning,_#d97706)]' : 'text-[var(--danger)]'}`}>
+              {pctMes.toFixed(1)}%
+            </span>
+          </div>
+          <div>
+            <span className="text-[var(--gray-400)]">Abonos: </span>
+            <span className="font-semibold text-[var(--gray-950)] tabular-nums">{monthAbonos.length}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Grid del calendario */}
+      <div className="p-4">
+        {/* Headers Lun-Dom */}
+        <div className="grid grid-cols-7 gap-1 mb-1">
+          {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
+            <div key={d} className="text-[10px] uppercase text-center text-[var(--gray-400)] font-semibold py-1">{d}</div>
+          ))}
+        </div>
+        {/* Day cells */}
+        <div className="grid grid-cols-7 gap-1">
+          {days.map((d, i) => {
+            const inMonth = d.getUTCMonth() === month;
+            const iso = d.toISOString().slice(0, 10);
+            const dayAbonos = byDay.get(iso) ?? [];
+            const dayTotal = dayAbonos.reduce((s, a) => s + a.importe, 0);
+            const dayMatched = dayAbonos.filter(a => a.matched).length;
+            const isSelected = selectedDay === iso;
+            // Heat: 0..1 proporcional al maxDayMonto. Verde claro → oscuro.
+            const heat = dayTotal / maxDayMonto;
+            const bg = dayTotal > 0
+              ? `rgba(16, 185, 129, ${0.08 + heat * 0.5})` // emerald-500 with alpha
+              : 'transparent';
+            return (
+              <button
+                key={i}
+                onClick={() => setSelectedDay(isSelected ? null : iso)}
+                disabled={!inMonth}
+                className={`
+                  relative aspect-square rounded-md border text-left p-1.5 flex flex-col justify-between
+                  ${inMonth ? 'border-[var(--gray-200)]' : 'border-transparent opacity-30'}
+                  ${isSelected ? 'ring-2 ring-[var(--primary)] border-[var(--primary)]' : 'hover:border-[var(--primary)]'}
+                  ${dayTotal > 0 ? 'cursor-pointer' : 'cursor-default'}
+                `}
+                style={{ backgroundColor: bg }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-[11px] tabular-nums ${inMonth ? 'text-[var(--gray-950)] font-medium' : 'text-[var(--gray-300)]'}`}>
+                    {d.getUTCDate()}
+                  </span>
+                  {dayAbonos.length > 0 && (
+                    <span className="text-[9px] text-[var(--gray-500)] tabular-nums">{dayAbonos.length}</span>
+                  )}
+                </div>
+                {dayTotal > 0 && (
+                  <div className="text-[10px] tabular-nums font-semibold text-[var(--gray-950)] truncate">
+                    {fmtCompact(dayTotal)}
+                  </div>
+                )}
+                {dayAbonos.length > 0 && (
+                  <div className="flex items-center gap-0.5">
+                    {dayMatched === dayAbonos.length && dayAbonos.length > 0 ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" title={`${dayMatched} cruzados`} />
+                    ) : dayMatched > 0 ? (
+                      <>
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" title={`${dayMatched} cruzados`} />
+                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning,_#f59e0b)]" title={`${dayAbonos.length - dayMatched} sin factura`} />
+                      </>
+                    ) : (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning,_#f59e0b)]" title="Ningún abono cruzó" />
+                    )}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Panel del día seleccionado */}
+      {selectedDay && (
+        <div className="border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)]">
+          <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
+            <span className="text-[13px] font-semibold text-[var(--gray-950)]">
+              {new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </span>
+            <span className="text-[11px] text-[var(--gray-500)]">
+              {selectedAbonos.length} abono{selectedAbonos.length !== 1 ? 's' : ''} · {fmtCurrency(selectedTotal)} · {selectedMatched} con factura
+            </span>
+            <button
+              onClick={() => setSelectedDay(null)}
+              className="ml-auto text-[12px] text-[var(--primary)] hover:underline"
+            >
+              Cerrar
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead className="text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
+                <tr>
+                  <th className="text-left px-3 py-2">Cía / Cuenta</th>
+                  <th className="text-left px-3 py-2">Concepto</th>
+                  <th className="text-left px-3 py-2">Referencia</th>
+                  <th className="text-right px-3 py-2">Importe</th>
+                  <th className="text-left px-3 py-2">Cruce</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedAbonos.map(a => (
+                  <tr key={a.key} className="border-t border-[var(--gray-100)]">
+                    <td className="px-3 py-2">
+                      <div className="text-[var(--gray-950)] tabular-nums">{a.cia || '—'}</div>
+                      <div className="text-[10px] text-[var(--gray-400)] tabular-nums">{a.cuenta}</div>
+                    </td>
+                    <td className="px-3 py-2 max-w-[260px] truncate" title={a.concepto}>
+                      {a.concepto || '—'}
+                    </td>
+                    <td className="px-3 py-2">
+                      <code className="font-mono text-[11px] text-[var(--gray-500)]">{a.referencia || '—'}</code>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--success)]">
+                      {fmtCurrency(a.importe)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {a.matched && a.facturas.length > 0 ? (
+                        <div className="space-y-0.5">
+                          {a.facturas.slice(0, 3).map((f, i) => (
+                            <div key={i} className="flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-[var(--success)] flex-shrink-0" />
+                              <span className="text-[11px] text-[var(--gray-950)] tabular-nums">{f.noFactura}</span>
+                              <span className="text-[10px] text-[var(--gray-400)] truncate max-w-[180px]" title={f.nombreCliente}>· {f.nombreCliente}</span>
+                            </div>
+                          ))}
+                          {a.facturas.length > 3 && (
+                            <div className="text-[10px] text-[var(--gray-400)]">+{a.facturas.length - 3} factura{a.facturas.length - 3 !== 1 ? 's' : ''} más</div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--warning,_#d97706)]">
+                          <AlertTriangle className="w-3 h-3" /> Sin factura
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {selectedAbonos.length === 0 && (
+                  <tr><td colSpan={5} className="text-center text-[11px] text-[var(--gray-400)] py-6">Sin abonos este día.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ClientAgingTable — Top clientes con saldo abierto
+//
+// Aging por cliente (no por factura): agrupa las facturas filtradas por
+// cliente, calcula el saldo total + buckets de antigüedad (por vencer,
+// 1-30, 31-60, 61-90, 90+), y muestra el % cruzado con banco para cada
+// cliente. Las top 20 facturas individuales siguen visibles abajo en la
+// tabla raw — esta tabla es para el primer scan visual.
+//
+// Cuando hay datos de bancos cargados, también muestra una columna
+// "Cobrado banco" con el porcentaje de facturas del cliente que cruzaron
+// — si un cliente tiene 4 facturas y 3 cruzaron, dice "75%".
+// ─────────────────────────────────────────────────────────────────────────
+function ClientAgingTable({
+  records,
+  matchByFactura,
+  bankActive,
+}: {
+  records: CobranzaRecord[];
+  matchByFactura: Map<string, RealReconciliationMatch>;
+  bankActive: boolean;
+}) {
+  // Agrupar por cliente. Usamos `${cia}::${noCliente}` para no fusionar el
+  // mismo cliente entre dos compañías (caso real: HOMEX puede facturar a
+  // Senda Norte y Senda Sur — son dos cuentas diferentes en JDE).
+  const aging = useMemo(() => {
+    type Bucket = { saldo: number; bruto: number };
+    type Aging = {
+      key: string;
+      cia: string;
+      noCliente: string;
+      nombreCliente: string;
+      saldoTotal: number;
+      brutoTotal: number;
+      facturasTotal: number;
+      facturasCobradas: number;
+      porVencer: Bucket;
+      v1_30: Bucket;
+      v31_60: Bucket;
+      v61_90: Bucket;
+      mas90: Bucket;
+    };
+    const map = new Map<string, Aging>();
+    for (const r of records) {
+      const key = `${r.cia}::${r.noCliente}`;
+      let a = map.get(key);
+      if (!a) {
+        a = {
+          key, cia: r.cia, noCliente: r.noCliente, nombreCliente: r.nombreCliente,
+          saldoTotal: 0, brutoTotal: 0, facturasTotal: 0, facturasCobradas: 0,
+          porVencer: { saldo: 0, bruto: 0 },
+          v1_30: { saldo: 0, bruto: 0 },
+          v31_60: { saldo: 0, bruto: 0 },
+          v61_90: { saldo: 0, bruto: 0 },
+          mas90: { saldo: 0, bruto: 0 },
+        };
+        map.set(key, a);
+      }
+      a.saldoTotal += r.importePendientePesos;
+      a.brutoTotal += r.importeBrutoPesos;
+      a.facturasTotal += 1;
+      const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
+      if (m?.status === 'cobrada-banco') a.facturasCobradas += 1;
+
+      const bucket = r.diasVencida <= 0 ? a.porVencer
+        : r.diasVencida <= 30 ? a.v1_30
+        : r.diasVencida <= 60 ? a.v31_60
+        : r.diasVencida <= 90 ? a.v61_90
+        : a.mas90;
+      bucket.saldo += r.importePendientePesos;
+      bucket.bruto += r.importeBrutoPesos;
+    }
+    return Array.from(map.values()).sort((a, b) => b.saldoTotal - a.saldoTotal);
+  }, [records, matchByFactura]);
+
+  const top = aging.slice(0, 20);
+  const restoSaldo = aging.slice(20).reduce((s, a) => s + a.saldoTotal, 0);
+
+  if (top.length === 0) return null;
+
+  const maxSaldo = Math.max(...top.map(a => a.saldoTotal), 1);
+
+  return (
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
+        <Banknote className="w-4 h-4 text-[var(--gray-400)]" />
+        <span className="text-[13px] font-semibold text-[var(--gray-950)]">
+          Top {Math.min(20, aging.length)} clientes — antigüedad de saldo
+        </span>
+        {aging.length > 20 && (
+          <span className="text-[11px] text-[var(--gray-400)] ml-auto">
+            +{aging.length - 20} clientes más · {fmtCurrency(restoSaldo)}
+          </span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-3 py-2">Cliente</th>
+              <th className="text-right px-3 py-2">Saldo</th>
+              <th className="text-left px-3 py-2 w-32">Distribución</th>
+              <th className="text-right px-3 py-2">Por vencer</th>
+              <th className="text-right px-3 py-2">1–30</th>
+              <th className="text-right px-3 py-2">31–60</th>
+              <th className="text-right px-3 py-2">61–90</th>
+              <th className="text-right px-3 py-2">90+</th>
+              <th className="text-right px-3 py-2">Facturas</th>
+              {bankActive && <th className="text-right px-3 py-2">Cruzadas</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {top.map((a) => {
+              // Mini barra apilada con los 5 buckets — solo % relativos al saldoTotal.
+              const seg = (b: number) => a.saldoTotal > 0 ? (b / a.saldoTotal) * 100 : 0;
+              const widthPct = (a.saldoTotal / maxSaldo) * 100;
+              return (
+                <tr
+                  key={a.key}
+                  className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
+                >
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-[var(--gray-950)] truncate max-w-[280px]" title={a.nombreCliente}>
+                      {a.nombreCliente || '—'}
+                    </div>
+                    <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
+                      {a.cia} · #{a.noCliente}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold">
+                    {fmtCurrency(a.saldoTotal)}
+                  </td>
+                  <td className="px-3 py-2">
+                    {/* Barra apilada: verde "por vencer" + amarillos progresivos. */}
+                    <div className="w-full h-2 bg-[var(--gray-100)] rounded-full overflow-hidden flex" style={{ width: `${Math.max(20, widthPct)}%` }}>
+                      <div className="h-full bg-[var(--success)]" style={{ width: `${seg(a.porVencer.saldo)}%` }} />
+                      <div className="h-full bg-[var(--warning,_#f59e0b)] opacity-60" style={{ width: `${seg(a.v1_30.saldo)}%` }} />
+                      <div className="h-full bg-[var(--warning,_#f59e0b)] opacity-80" style={{ width: `${seg(a.v31_60.saldo)}%` }} />
+                      <div className="h-full bg-[var(--danger)] opacity-70" style={{ width: `${seg(a.v61_90.saldo)}%` }} />
+                      <div className="h-full bg-[var(--danger)]" style={{ width: `${seg(a.mas90.saldo)}%` }} />
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--success)]">
+                    {a.porVencer.saldo > 0 ? fmtCurrency(a.porVencer.saldo) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--warning,_#b45309)]">
+                    {a.v1_30.saldo > 0 ? fmtCurrency(a.v1_30.saldo) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--warning,_#b45309)]">
+                    {a.v31_60.saldo > 0 ? fmtCurrency(a.v31_60.saldo) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)]">
+                    {a.v61_90.saldo > 0 ? fmtCurrency(a.v61_90.saldo) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)] font-semibold">
+                    {a.mas90.saldo > 0 ? fmtCurrency(a.mas90.saldo) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-500)]">
+                    {a.facturasTotal}
+                  </td>
+                  {bankActive && (
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {a.facturasTotal > 0
+                        ? <span className={a.facturasCobradas / a.facturasTotal >= 0.8 ? 'text-[var(--success)]' : 'text-[var(--gray-500)]'}>
+                            {Math.round((a.facturasCobradas / a.facturasTotal) * 100)}%
+                          </span>
+                        : '—'}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pill que resume el cruce de una factura contra bancos.
+ *
+ * Estados:
+ *   - cobrada-banco (matched): verde, muestra fecha y monto del ABONO.
+ *     Si fue parte de un subset (un ABONO pagó N facturas) lo indica.
+ *   - cobrada-jde-sin-banco: gris, factura ya cobrada en JDE pero sin
+ *     ABONO equivalente — caso normal cuando el ABONO está fuera de la
+ *     ventana de últimos 12 meses.
+ *   - pendiente: ámbar tenue.
+ *
+ * El tier (exact / tolerance / subset) se muestra como sufijo cuando hay
+ * match — el usuario sabe si fue un cruce limpio o si tuvo que aplicar
+ * tolerancia.
+ */
+function BankBadge({ match }: { match?: RealReconciliationMatch }) {
+  if (!match) {
+    return <span className="text-[10px] text-[var(--gray-300)]">—</span>;
+  }
+  if (match.status === 'cobrada-banco') {
+    const tierLabel: Record<RealMatchTier, string> = {
+      exact: 'Exacto',
+      tolerance: '±0.5%',
+      subset: `Subset ×${match.subsetSize ?? 2}`,
+    };
+    const tier = match.matchTier ?? 'exact';
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--success-muted,_#dcfce7)] text-[var(--success)] text-[11px] font-medium">
+        <CheckCircle2 className="w-3 h-3" />
+        {match.bankDate ? match.bankDate.slice(0, 10) : '—'}
+        <span className="text-[10px] opacity-70 ml-0.5">{tierLabel[tier]}</span>
+      </span>
+    );
+  }
+  if (match.status === 'cobrada-jde-sin-banco') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--gray-100)] text-[var(--gray-500)] text-[11px]">
+        <Check className="w-3 h-3" /> JDE (sin abono)
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] text-[11px]">
+      <AlertTriangle className="w-3 h-3" /> Pendiente
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // CobranzaRealView — Fase 1
 //
 // Vista mínima funcional que confirma que el endpoint /cobranza está
@@ -1261,31 +1835,56 @@ function CobranzaRealView({
   loadedCias,
   companies,
   bankStatements,
+  reconciliation: externalReconciliation,
+  facturaIndex: externalFacturaIndex,
+  error,
+  onRefresh,
+  refreshing,
+  defaultCia,
 }: {
   records: CobranzaRecord[];
   loadedCias: Record<string, string>;
   companies: { cia: string; nombre: string }[];
   bankStatements: BankAccountStatement[];
+  reconciliation?: RealReconciliationResult;
+  facturaIndex?: Map<string, RealReconciliationMatch>;
+  error?: string | null;
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  defaultCia?: string;
 }) {
-  const [ciaFilter, setCiaFilter] = useState<string>('all');
+  // Default del filtro local: si el global selectedCia es una cía válida
+  // (no 'all'), arrancamos filtrados por esa cía. Si después el usuario
+  // cambia el global, sincronizamos también.
+  const [ciaFilter, setCiaFilter] = useState<string>(
+    defaultCia && defaultCia !== 'all' ? defaultCia : 'all',
+  );
+  useEffect(() => {
+    if (defaultCia && defaultCia !== 'all') setCiaFilter(defaultCia);
+    else if (defaultCia === 'all') setCiaFilter('all');
+  }, [defaultCia]);
   const [estatusFilter, setEstatusFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
   const [crossFilter, setCrossFilter] = useState<'all' | 'matched' | 'pending'>('all');
 
-  // ── Motor de cruce (Fase 2) ────────────────────────────────────────────
-  // Cruzar facturas reales contra ABONOs bancarios. Devuelve un match por
-  // factura; lo indexamos por (cia, noFactura) para lookup O(1) en la tabla.
-  const reconciliation = useMemo(
-    () => reconcileRealCollections(records, bankStatements),
-    [records, bankStatements],
+  // ── Motor de cruce (Fase 2/3) ──────────────────────────────────────────
+  // Default: usar el resultado pre-computado de App.tsx. Si por alguna razón
+  // no llegó (renders aislados, tests, embed externo) caemos a un cómputo
+  // local — la pestaña debe seguir funcionando aunque el padre no haya
+  // cableado la prop.
+  const localReconciliation = useMemo(
+    () => externalReconciliation ?? reconcileRealCollections(records, bankStatements),
+    [externalReconciliation, records, bankStatements],
   );
+  const reconciliation = localReconciliation;
   const matchByFactura = useMemo(() => {
+    if (externalFacturaIndex) return externalFacturaIndex;
     const m = new Map<string, RealReconciliationMatch>();
     for (const x of reconciliation.matches) {
       m.set(`${x.cia}::${x.noFactura}`, x);
     }
     return m;
-  }, [reconciliation.matches]);
+  }, [externalFacturaIndex, reconciliation.matches]);
 
   const ciaName = useMemo(() => {
     const m = new Map<string, string>();
@@ -1351,11 +1950,27 @@ function CobranzaRealView({
           <Database className="w-6 h-6 text-[var(--primary)]" />
         </div>
         <h3 className="text-base font-semibold text-[var(--gray-950)]">Sin cobranza JDE cargada</h3>
-        <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-md">
-          La carga arranca al boot del app y va compañía por compañía.
-          Si no aparece nada después de un par de minutos, revisa el token y
-          el endpoint /cobranza en la consola.
-        </p>
+        {error ? (
+          <p className="text-[13px] text-[var(--danger)] mt-1 max-w-md">
+            {error}
+          </p>
+        ) : (
+          <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-md">
+            La carga arranca al boot del app y va compañía por compañía.
+            Si no aparece nada después de un par de minutos, presiona Reintentar
+            y abre la consola (DevTools → Console) para ver los logs con prefijo
+            <code className="font-mono mx-1">[cobranza]</code>.
+          </p>
+        )}
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary)]/90 disabled:opacity-50"
+          >
+            {refreshing ? 'Reintentando…' : 'Reintentar carga'}
+          </button>
+        )}
       </div>
     );
   }
@@ -1391,6 +2006,29 @@ function CobranzaRealView({
             </span>
           </div>
         </div>
+        {/* KPI principal de Fase 2: % cruzado con bancos.
+            - Verde >= 95%: cobranza altamente reconciliada.
+            - Ámbar 70-95%: hueco probable, revisar abonos sin factura.
+            - Rojo  < 70%:  algo está mal (token, fechas, mapeo). */}
+        {bankStatements.length > 0 && (() => {
+          const pctCruzado = reconciliation.summary.pctAbonosCruzados * 100;
+          const pctColor = pctCruzado >= 95
+            ? 'text-[var(--success)]'
+            : pctCruzado >= 70
+              ? 'text-[var(--warning)]'
+              : 'text-[var(--danger)]';
+          return (
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobranza cruzada con banco</div>
+              <div className="text-xl font-medium tabular-nums mt-0.5">
+                <span className={pctColor}>{pctCruzado.toFixed(1)}%</span>
+                <span className="text-[12px] text-[var(--gray-400)] ml-2">
+                  {reconciliation.summary.abonosFacturaCobrada} / {reconciliation.summary.totalAbonos} abonos
+                </span>
+              </div>
+            </div>
+          );
+        })()}
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Facturas</div>
           <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
@@ -1443,15 +2081,88 @@ function CobranzaRealView({
           ))}
         </select>
 
-        {(query || ciaFilter !== 'all' || estatusFilter !== 'all') && (
+        {bankStatements.length > 0 && (
+          <select
+            value={crossFilter}
+            onChange={e => setCrossFilter(e.target.value as 'all' | 'matched' | 'pending')}
+            className="input text-[12px] h-8"
+          >
+            <option value="all">Todas (cruce)</option>
+            <option value="matched">Solo cruzadas con banco</option>
+            <option value="pending">Solo pendientes / sin cruce</option>
+          </select>
+        )}
+
+        {(query || ciaFilter !== 'all' || estatusFilter !== 'all' || crossFilter !== 'all') && (
           <button
-            onClick={() => { setQuery(''); setCiaFilter('all'); setEstatusFilter('all'); }}
+            onClick={() => { setQuery(''); setCiaFilter('all'); setEstatusFilter('all'); setCrossFilter('all'); }}
             className="text-[12px] text-[var(--primary)] hover:underline px-2"
           >
             Limpiar
           </button>
         )}
+
+        {/* Export del cruce — incluye TODAS las columnas de la factura más
+            las del banco cuando hay match. Ideal para mandar a contabilidad
+            o reconciliar manualmente lo que el motor no cruzó. Respeta los
+            filtros actuales: solo se exporta lo que se ve. */}
+        <button
+          onClick={() => {
+            const rows = filtered.map(r => {
+              const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
+              return {
+                Cia: r.cia,
+                Cliente: r.nombreCliente,
+                NoCliente: r.noCliente,
+                Factura: r.noFactura,
+                FechaFactura: (r.fechaFactura || '').slice(0, 10),
+                FechaVence: (r.fechaVence || '').slice(0, 10),
+                FechaCobroJDE: (r.fechaCobro || '').slice(0, 10),
+                DiasVencida: r.diasVencida,
+                BrutoMXN: r.importeBrutoPesos,
+                PendienteMXN: r.importePendientePesos,
+                Moneda: r.moneda,
+                EstatusJDE: r.estatus,
+                EstatusCruce: m?.status ?? 'pendiente',
+                BancoMatch: m?.matchTier ?? '',
+                ConfianzaCruce: m?.confidence ? `${(m.confidence * 100).toFixed(0)}%` : '',
+                FechaBanco: m?.bankDate ?? '',
+                RefBanco: m?.bankRef ?? '',
+                MontoBanco: m?.bankAmount ?? '',
+                CuentaBanco: m?.bankAccount ?? '',
+                ConceptoBanco: m?.bankConcept ?? '',
+                SubsetID: m?.subsetGroupId ?? '',
+              };
+            });
+            const stamp = new Date().toISOString().slice(0, 10);
+            downloadFile(toCSV(rows), `cobranza-cruce-${stamp}.csv`);
+          }}
+          className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+          disabled={filtered.length === 0}
+          title="Exporta lo visible con todas las columnas de cruce."
+        >
+          <Download className="w-3.5 h-3.5" />
+          Exportar CSV ({filtered.length.toLocaleString('es-MX')})
+        </button>
       </div>
+
+      {/* Calendario real — ABONOs bancarios cruzados con cobranza JDE.
+          Esta es la vista principal: ver de un vistazo qué entró cada día,
+          en qué cuenta, y si cruzó con alguna factura JDE. Reemplaza la
+          calendar view de la versión proyectada cuando estamos en modo
+          Real. */}
+      <CobranzaRealCalendar
+        bankStatements={bankStatements}
+        reconciliation={reconciliation}
+        ciaFilter={ciaFilter}
+      />
+
+      {/* Aging por cliente — Top 20 con mayor saldo abierto */}
+      <ClientAgingTable
+        records={filtered}
+        matchByFactura={matchByFactura}
+        bankActive={bankStatements.length > 0}
+      />
 
       {/* Tabla raw */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
@@ -1459,7 +2170,9 @@ function CobranzaRealView({
           <FileSpreadsheet className="w-4 h-4 text-[var(--gray-400)]" />
           <span className="text-[13px] font-semibold text-[var(--gray-950)]">Facturas (CXC)</span>
           <span className="text-[11px] text-[var(--gray-400)] ml-auto">
-            Vista raw — Fase 1. El cruce con bancos llega en Fase 2.
+            {bankStatements.length > 0
+              ? `Cruce activo · ${reconciliation.summary.facturasCobradasBanco} cobradas con banco`
+              : 'Sube/carga estados de cuenta para activar el cruce.'}
           </span>
         </div>
         <div className="overflow-x-auto">
@@ -1476,41 +2189,52 @@ function CobranzaRealView({
                 <th className="text-right px-3 py-2">Pendiente MXN</th>
                 <th className="text-left px-3 py-2">Moneda</th>
                 <th className="text-left px-3 py-2">Estatus</th>
+                {bankStatements.length > 0 && (
+                  <th className="text-left px-3 py-2">Banco</th>
+                )}
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, 500).map((r, idx) => (
-                <tr
-                  key={`${r.cia}-${r.noFactura}-${idx}`}
-                  className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
-                >
-                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">{r.cia}</td>
-                  <td className="px-3 py-2">
-                    <div className="font-medium text-[var(--gray-950)]">{r.nombreCliente || '—'}</div>
-                    {r.noCliente && (
-                      <div className="text-[10px] text-[var(--gray-400)] tabular-nums">#{r.noCliente}</div>
+              {filtered.slice(0, 500).map((r, idx) => {
+                const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
+                return (
+                  <tr
+                    key={`${r.cia}-${r.noFactura}-${idx}`}
+                    className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
+                  >
+                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">{r.cia}</td>
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-[var(--gray-950)]">{r.nombreCliente || '—'}</div>
+                      {r.noCliente && (
+                        <div className="text-[10px] text-[var(--gray-400)] tabular-nums">#{r.noCliente}</div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">{r.noFactura || '—'}</td>
+                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
+                      {r.fechaFactura ? r.fechaFactura.slice(0, 10) : '—'}
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
+                      {r.fechaVence ? r.fechaVence.slice(0, 10) : '—'}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${r.diasVencida > 0 ? 'text-[var(--danger)] font-medium' : 'text-[var(--gray-400)]'}`}>
+                      {r.diasVencida}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {fmtCurrency(r.importeBrutoPesos)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums font-medium">
+                      {fmtCurrency(r.importePendientePesos)}
+                    </td>
+                    <td className="px-3 py-2 text-[var(--gray-500)]">{r.moneda || '—'}</td>
+                    <td className="px-3 py-2 text-[var(--gray-500)]">{r.estatus || '—'}</td>
+                    {bankStatements.length > 0 && (
+                      <td className="px-3 py-2">
+                        <BankBadge match={m} />
+                      </td>
                     )}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums">{r.noFactura || '—'}</td>
-                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
-                    {r.fechaFactura ? r.fechaFactura.slice(0, 10) : '—'}
-                  </td>
-                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
-                    {r.fechaVence ? r.fechaVence.slice(0, 10) : '—'}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${r.diasVencida > 0 ? 'text-[var(--danger)] font-medium' : 'text-[var(--gray-400)]'}`}>
-                    {r.diasVencida}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {fmtCurrency(r.importeBrutoPesos)}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">
-                    {fmtCurrency(r.importePendientePesos)}
-                  </td>
-                  <td className="px-3 py-2 text-[var(--gray-500)]">{r.moneda || '—'}</td>
-                  <td className="px-3 py-2 text-[var(--gray-500)]">{r.estatus || '—'}</td>
-                </tr>
-              ))}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {filtered.length > 500 && (

@@ -154,6 +154,18 @@ export interface RealReconciliationSummary {
 
   /** KPI secundario: % de facturas (con saldo > 0) que cruzan a banco. */
   pctFacturasCruzadas: number;
+
+  /**
+   * Desglose por compañía — útil para diagnosticar 0% de cruce. Permite
+   * ver de un vistazo si una cía tiene facturas pero no abonos (o
+   * viceversa), o si la cia está en distintos formatos en cada lado.
+   */
+  ciaBreakdown: Array<{
+    cia: string;
+    facturas: number;
+    abonos: number;
+    matches: number;
+  }>;
 }
 
 export interface RealReconciliationResult {
@@ -182,9 +194,22 @@ export function bankMovementKey(mov: BankStatementLine): string {
   ].join('|');
 }
 
+/**
+ * Días entre dos fechas (b − a). Robusto contra cadenas con time component:
+ * acepta "YYYY-MM-DD" y también "YYYY-MM-DDTHH:mm:ss" (lo que devuelve JDE).
+ *
+ * Antes appendaba "T12:00:00Z" a la cadena cruda; eso producía
+ * "2025-05-12T00:00:00T12:00:00Z" cuando la fecha ya traía time, y
+ * `Date()` regresaba NaN, lo cual rompía silenciosamente cualquier cruce
+ * basado en ventana temporal.
+ */
 function daysBetween(a: string, b: string): number {
-  const da = new Date(a + 'T12:00:00Z').getTime();
-  const db = new Date(b + 'T12:00:00Z').getTime();
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  // Normalizar a YYYY-MM-DD descartando cualquier time component.
+  const ad = a.length >= 10 ? a.slice(0, 10) : a;
+  const bd = b.length >= 10 ? b.slice(0, 10) : b;
+  const da = new Date(ad + 'T12:00:00Z').getTime();
+  const db = new Date(bd + 'T12:00:00Z').getTime();
   if (!Number.isFinite(da) || !Number.isFinite(db)) return Number.POSITIVE_INFINITY;
   return Math.round((db - da) / DAY_MS);
 }
@@ -493,8 +518,17 @@ export function reconcileRealCollections(
         // Capa 1 + 2: match individual
         for (const r of facturasAbiertas) {
           const { bruto, pendiente } = selectFacturaImporte(r, useUSD);
-          // Probar bruto y pendiente como targets posibles.
-          for (const target of [bruto, pendiente]) {
+          // Targets a probar:
+          //   • bruto: factura cobrada al 100% en un solo ABONO (caso normal).
+          //   • bruto − pendiente: factura con pago parcial previo (saldo
+          //     restante todavía abierto). Solo aplica cuando 0<pendiente<bruto.
+          //   • pendiente: ABONO futuro que cubrirá el saldo restante (raro,
+          //     pero útil cuando JDE aún no actualiza después del cobro).
+          const pagado = bruto - pendiente;
+          const targets: number[] = [bruto];
+          if (pagado > 0 && Math.abs(pagado - bruto) > 0.01) targets.push(pagado);
+          if (pendiente > 0 && Math.abs(pendiente - bruto) > 0.01) targets.push(pendiente);
+          for (const target of targets) {
             if (target <= 0) continue;
 
             const exact = importesCoinciden(target, abono.importe, true);
@@ -664,6 +698,31 @@ export function reconcileRealCollections(
   // Las que ya estaban cerradas en JDE no cuentan (no había nada que cruzar).
   const facturasConSaldo = matches.filter(m => m.importePendiente > 0 || m.status === 'cobrada-banco');
 
+  // Breakdown por cia para debugging — mostramos cuántas facturas y abonos
+  // hay por cia y cuántos matches resultaron.
+  const ciaCounts = new Map<string, { facturas: number; abonos: number; matches: number }>();
+  for (const f of facturas) {
+    const c = f.cia || '(sin cia)';
+    const cur = ciaCounts.get(c) ?? { facturas: 0, abonos: 0, matches: 0 };
+    cur.facturas++;
+    ciaCounts.set(c, cur);
+  }
+  for (const a of abonos) {
+    const c = a.cia || '(sin cia)';
+    const cur = ciaCounts.get(c) ?? { facturas: 0, abonos: 0, matches: 0 };
+    cur.abonos++;
+    ciaCounts.set(c, cur);
+  }
+  for (const m of cobradas) {
+    const c = m.cia || '(sin cia)';
+    const cur = ciaCounts.get(c) ?? { facturas: 0, abonos: 0, matches: 0 };
+    cur.matches++;
+    ciaCounts.set(c, cur);
+  }
+  const ciaBreakdown = Array.from(ciaCounts.entries())
+    .map(([cia, v]) => ({ cia, ...v }))
+    .sort((a, b) => (b.facturas + b.abonos) - (a.facturas + a.abonos));
+
   const summary: RealReconciliationSummary = {
     totalFacturas: matches.length,
     facturasCobradasBanco: cobradas.length,
@@ -681,6 +740,7 @@ export function reconcileRealCollections(
     pctFacturasCruzadas: facturasConSaldo.length > 0
       ? cobradas.length / facturasConSaldo.length
       : 0,
+    ciaBreakdown,
   };
 
   return { matches, abonoEnrichments: enrichments, summary };

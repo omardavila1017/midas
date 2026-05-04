@@ -61,17 +61,28 @@ function toStr(v: unknown): string {
 /**
  * Normaliza el campo `cia` de la respuesta JDE.
  *
- * El API a veces devuelve solo el código ("00011") y a veces el código
- * concatenado con el nombre de la compañía ("00011 - SERVICIO INDUSTRIAL
- * REGIOMONTANO"). Para poder agrupar/filtrar registros por compañía, aquí
- * extraemos siempre el código puro (primeros caracteres antes de espacio
- * o guión) y hacemos pad a 5 dígitos si es numérico.
+ * El API regresa la cia en varias formas según el endpoint:
+ *   - "00011"                                  → /empresas, /antiguedadsaldos
+ *   - "00011 - SERVICIO INDUSTRIAL REGIOMONTANO"→ /antiguedadsaldos en algunos casos
+ *   - "00011,"                                  → /cobranza (la coma proviene del
+ *                                                request body que el equipo JDE
+ *                                                comparte como ejemplo y aparece
+ *                                                eco en algunas respuestas).
+ *
+ * Para poder agrupar/filtrar registros por compañía hay que reducir todos
+ * estos a un código canónico de 5 dígitos. Estrategia:
+ *   1. Tomar la PRIMERA secuencia de dígitos consecutivos de la cadena.
+ *      Esto cubre los tres casos sin bifurcarnos por cada formato.
+ *   2. Pad a 5 dígitos.
+ *   3. Si no hay dígitos (raro, p.ej. cia="MX"), devolver el head limpio.
  */
 function normalizeCia(v: unknown): string {
   const raw = toStr(v);
   if (!raw) return '';
-  const head = raw.split(/[\s-]/)[0].trim();
-  if (/^\d+$/.test(head)) return head.padStart(5, '0');
+  const digitMatch = raw.match(/\d+/);
+  if (digitMatch) return digitMatch[0].padStart(5, '0');
+  // Sin dígitos: caer al patrón antiguo (split por espacio/guion/coma).
+  const head = raw.split(/[\s\-,]/)[0].trim();
   return head;
 }
 
@@ -565,25 +576,150 @@ export async function fetchCompanies(config: JdeClientConfig = {}): Promise<Comp
 // 4. Cobranza (CXC)
 // ───────────────────────────────────────────────────────────────
 
+/**
+ * Mapper de un registro CXC del API JDE de Cobranza.
+ *
+ * Shape real de la respuesta productiva (validado 2026-05-03 con un dump
+ * compartido por el equipo de tesorería):
+ *
+ *   {
+ *     "Cia": "00001",
+ *     "No_Cliente": 99999988,                               // number
+ *     "Nombre_Cliente": "RITA PRADO VAZQUEZ           ",    // padded con espacios
+ *     "RFC": "PAVR7405221A9       ",
+ *     "Factura": "RI-85022",
+ *     "Dias_Credito": "1  ",
+ *     "Fecha_Factura": "2025-05-05T00:00:00",
+ *     "Fecha_Vencimiento": "2025-05-06T00:00:00",
+ *     "Fecha_Pago": "2025-05-12T00:00:00",                 // ← cobrada efectiva
+ *     "Fecha_Contable": "2025-05-05T00:00:00",
+ *     "Dias_Fecha_Vencimiento_vs_Fecha_Pago": 6,           // solo cuando ya cobrada
+ *     "TasaFiscal": "EXTO           ",
+ *     "SubTotal": 1155.44,
+ *     "Importe_IVA": 0,
+ *     "Importe_RETENCION": 0,
+ *     "Importe_Factura": 1155.44,                           // ← gross (Sub + IVA − RET)
+ *     "Importe_Pendiente": 0,                                // ← saldo abierto
+ *     "UUID_Fiscal": "..."
+ *   }
+ *
+ * Notas operativas:
+ *   - El API NO devuelve `moneda` ni `tipoCambio` — todos los importes son
+ *     MXN según el equipo. Asumimos default MXN; si en el futuro liberan
+ *     facturas USD, agregamos el alias.
+ *   - El API NO devuelve un `estatus` textual, pero se puede derivar:
+ *     pendiente > 0 → "PENDIENTE", pendiente == 0 + Fecha_Pago set →
+ *     "COBRADA", caso raro pendiente==0 sin Fecha_Pago → "CANCELADA".
+ *   - `Dias_Fecha_Vencimiento_vs_Fecha_Pago` solo está poblado cuando la
+ *     factura ya fue cobrada en JDE. Para facturas pendientes computamos
+ *     `today − fechaVencimiento` localmente.
+ */
 function mapCobranza(raw: RawRecord): CobranzaRecord {
+  // ── Importes ── el campo "Importe_Factura" es el gross final (subtotal +
+  // IVA − retenciones). Es lo que se compara contra el ABONO bancario
+  // cuando la factura está pagada al 100%. Mantenemos también pendiente
+  // como saldo abierto.
+  const importeBrutoPesos = toNum(
+    pick(raw, [
+      'importeBrutoPesos', 'importe_bruto_pesos', 'importeBruto',
+      'importe_factura', 'Importe_Factura', // ← shape real del API
+      'monto', 'amount',
+    ]),
+  );
+  const importePendientePesos = toNum(
+    pick(raw, [
+      'importePendientePesos', 'importe_pendiente_pesos', 'importePendiente',
+      'importe_pendiente', 'Importe_Pendiente', // ← shape real del API
+      'saldoPendiente', 'saldo_pendiente',
+    ]),
+  );
+
+  // ── Fechas ──
+  // El API devuelve ISO con time ("2025-05-12T00:00:00"). Recortamos a
+  // YYYY-MM-DD porque el resto del app trabaja con day-precision y
+  // appendear "T12:00:00Z" sobre una cadena que YA tiene una T producía
+  // un Date inválido (NaN) que rompía ventanas de fecha en el motor de
+  // cruce.
+  const trimDate = (v: unknown): string => {
+    const s = toStr(v);
+    if (!s) return '';
+    return s.length >= 10 ? s.slice(0, 10) : s;
+  };
+  const fechaFactura = trimDate(pick(raw, ['fechaFactura', 'fecha_factura', 'Fecha_Factura', 'fechaEmision', 'fecha_emision']));
+  const fechaVence = trimDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento', 'fecha_vencimiento', 'Fecha_Vencimiento', 'dueDate']));
+  // Fecha de pago efectiva — JDE la llama Fecha_Pago. Para nosotros es el
+  // ancla de cruce más tight (±5 días) cuando la factura ya está cobrada.
+  const fechaCobro = trimDate(pick(raw, [
+    'fechaCobro', 'fecha_cobro',
+    'fecha_pago', 'Fecha_Pago', // ← shape real del API
+    'fechaProgramacionCobro', 'fechaProgCobro', 'fechaCobrado',
+  ]));
+
+  // ── Días vencida ──
+  // El API regresa `Dias_Fecha_Vencimiento_vs_Fecha_Pago` solo cuando la
+  // factura ya fue cobrada (=positivo si se pagó tarde). Para facturas
+  // pendientes ese campo es null y debemos computar `today − fechaVence`
+  // localmente para que el aging por buckets funcione.
+  const diasVencidaApi = toNum(
+    pick(raw, [
+      'diasVencida', 'dias_vencida', 'diasVencido', 'dias_vencido',
+      'dias_fecha_vencimiento_vs_fecha_pago', 'Dias_Fecha_Vencimiento_vs_Fecha_Pago',
+    ]),
+  );
+  let diasVencida = diasVencidaApi;
+  if (importePendientePesos > 0 && fechaVence) {
+    // factura pendiente: días vencida = hoy − fechaVencimiento
+    const hoy = new Date();
+    const venc = new Date(fechaVence);
+    if (!Number.isNaN(venc.getTime())) {
+      const ms = hoy.getTime() - venc.getTime();
+      diasVencida = Math.max(0, Math.round(ms / 86_400_000));
+    }
+  } else if (importePendientePesos === 0 && diasVencidaApi <= 0) {
+    // factura cobrada a tiempo: el campo del API es 0 o negativo, dejarlo así.
+    diasVencida = diasVencidaApi;
+  }
+
+  // ── Estatus derivado ──
+  const estatusApi = toStr(pick(raw, ['estatus', 'estado', 'edoCobro', 'edo_cobro', 'status']));
+  const estatus = estatusApi
+    || (importePendientePesos > 0
+      ? 'PENDIENTE'
+      : fechaCobro
+        ? 'COBRADA'
+        : 'CANCELADA');
+
+  // ── Moneda ── el API actual no la devuelve; default MXN.
+  const moneda = toStr(pick(raw, ['moneda', 'currency'])) || 'MXN';
+
+  // ── Condición de pago ──
+  // El API la trae como "Dias_Credito" (string con padding tipo "30 ").
+  // toStr ya hace trim. Si no viene, dejamos vacío.
+  const condPago = toStr(pick(raw, ['condPago', 'cond_pago', 'condicionPago', 'dias_credito', 'Dias_Credito']));
+
   return {
-    cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company'])),
-    noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
-    nombreCliente:           toStr(pick(raw, ['nombreCliente', 'nombre_cliente', 'nombre', 'razonSocial', 'razon_social', 'customerName'])),
-    noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura', 'invoice', 'invoiceNo'])),
-    fechaFactura:            toStr(pick(raw, ['fechaFactura', 'fecha_factura', 'fechaEmision', 'fecha_emision'])),
-    fechaVence:              toStr(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento', 'fecha_vencimiento', 'dueDate'])),
-    fechaCobro:              toStr(pick(raw, ['fechaCobro', 'fecha_cobro', 'fechaProgramacionCobro', 'fechaProgCobro', 'fechaCobrado'])),
-    diasVencida:             toNum(pick(raw, ['diasVencida', 'dias_vencida', 'diasVencido', 'dias_vencido'])),
-    importeBrutoPesos:       toNum(pick(raw, ['importeBrutoPesos', 'importe_bruto_pesos', 'importeBruto', 'monto', 'amount'])),
-    importePendientePesos:   toNum(pick(raw, ['importePendientePesos', 'importe_pendiente_pesos', 'importePendiente', 'saldoPendiente'])),
+    cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),
+    noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'No_Cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
+    nombreCliente:           toStr(pick(raw, ['nombreCliente', 'nombre_cliente', 'Nombre_Cliente', 'nombre', 'razonSocial', 'razon_social', 'customerName'])),
+    noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura', 'Factura', 'invoice', 'invoiceNo'])),
+    fechaFactura,
+    fechaVence,
+    fechaCobro,
+    diasVencida,
+    importeBrutoPesos,
+    importePendientePesos,
     importeBrutoDolares:     toNum(pick(raw, ['importeBrutoDolares', 'importe_bruto_dolares'])),
     importePendienteDolares: toNum(pick(raw, ['importePendienteDolares', 'importe_pendiente_dolares'])),
-    moneda:                  toStr(pick(raw, ['moneda', 'currency'])),
-    condPago:                toStr(pick(raw, ['condPago', 'cond_pago', 'condicionPago'])),
-    estatus:                 toStr(pick(raw, ['estatus', 'estado', 'edoCobro', 'edo_cobro', 'status'])),
+    moneda,
+    condPago,
+    estatus,
     tipoCambio:              toNum(pick(raw, ['tipoCambio', 'tipo_cambio', 'tc'])),
-    raw,
+    // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
+    // campos cada una, el JSON.stringify del store excedía el quota de
+    // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se
+    // necesita inspeccionar el raw para debug, se puede activar bajo flag
+    // dev (env VITE_COBRANZA_KEEP_RAW=1) o leerlo desde el log
+    // `[cobranza] sample raw record` en la consola.
   };
 }
 
@@ -595,6 +731,12 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  *
  * Body de ejemplo (compartido por el equipo JDE el 2026-05-01):
  *   { "cia": "00011,", "fechaInicial": null, "fechaFinal": "2026-04-29" }
+ *
+ * IMPORTANTE — coma trailing en `cia`:
+ *   El equipo JDE compartió el body con la cia terminando en coma. No es
+ *   un typo: replicamos exactamente ese formato porque al menos un usuario
+ *   reportó respuesta vacía cuando se enviaba "00011" sin coma. Por
+ *   seguridad, si el caller manda la cia sin coma, se la agregamos aquí.
  *
  * Notas:
  *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
@@ -608,9 +750,44 @@ export async function fetchCobranza(
   req: CobranzaRequest,
   config: JdeClientConfig = {},
 ): Promise<CobranzaRecord[]> {
-  const raw = await jdeClient.post<unknown>('/cobranza', req, config);
-  return unwrapList(raw).map(mapCobranza);
+  // Forzar la coma trailing en cia para mimetizar exactamente el body que
+  // JDE compartió. El normalizer del response (`normalizeCia`) ya extrae
+  // dígitos sin importar puntuación, así que no contamina los registros
+  // mapeados.
+  const ciaWithComma = req.cia.endsWith(',') ? req.cia : `${req.cia},`;
+  const body: CobranzaRequest = { ...req, cia: ciaWithComma };
+
+  const raw = await jdeClient.post<unknown>('/cobranza', body, config);
+  const list = unwrapList(raw);
+
+  // Log de diagnóstico — la primera vez que esta función responde con N
+  // registros, mostramos el primero en la consola para que el equipo pueda
+  // validar el shape contra el mapper. No es ruido permanente: solo se
+  // imprime una vez por sesión gracias al flag global.
+  if (typeof window !== 'undefined' && !cobranzaShapeLogged) {
+    cobranzaShapeLogged = true;
+    // eslint-disable-next-line no-console
+    console.info(
+      `[cobranza] ${list.length} registros para cia=${ciaWithComma} entre ${req.fechaInicial ?? '∞'} y ${req.fechaFinal}`,
+    );
+    if (list.length > 0) {
+      // eslint-disable-next-line no-console
+      console.info('[cobranza] sample raw record:', list[0]);
+      // eslint-disable-next-line no-console
+      console.info('[cobranza] sample mapped record:', mapCobranza(list[0]));
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[cobranza] respuesta VACÍA. Posibles causas: (1) sin permisos del token para esta cia, (2) sin facturas en el rango, (3) body no aceptado por JDE.',
+      );
+    }
+  }
+
+  return list.map(mapCobranza);
 }
+
+// Flag para que el log de shape solo aparezca una vez por sesión.
+let cobranzaShapeLogged = false;
 
 // Re-exports convenientes
 export type {

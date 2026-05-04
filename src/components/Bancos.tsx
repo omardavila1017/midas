@@ -35,6 +35,10 @@ import {
   type InternalReason,
 } from '../domain/netCashFlowEngine';
 import {
+  bankMovementKey,
+  type AbonoEnrichment,
+} from '../domain/realReconciliationEngine';
+import {
   attachImportedStatementsToKnownCompanies,
   mergeBankStatements,
   type BankQueryState,
@@ -56,6 +60,13 @@ interface BancosProps {
   lastQuery: BankQueryState | null;
   onLastQueryChange: (q: BankQueryState | null) => void;
   companies?: { cia: string; nombre: string }[];
+  /**
+   * Mapa pre-construido de bankMovementKey(mov) → AbonoEnrichment, viene
+   * memoizado desde App.tsx tras correr el motor de cruce con cobranza.
+   * Cuando llega vacío o `undefined`, los badges no se muestran y la
+   * pestaña sigue funcionando como antes.
+   */
+  abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
 }
 
 type BancosView = 'form' | 'dashboard';
@@ -296,6 +307,7 @@ const BancosDashboard = ({
   uploadingFile,
   refreshError,
   companies = [],
+  abonoEnrichmentIndex,
 }: {
   statements: BankAccountStatement[];
   query: BankQueryState;
@@ -308,6 +320,7 @@ const BancosDashboard = ({
   uploadingFile: boolean;
   refreshError: string | null;
   companies?: { cia: string; nombre: string }[];
+  abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
 }) => {
   const santanderInputRef = useRef<HTMLInputElement | null>(null);
   const refreshBlockedReason = 'Este dataset viene solo de archivo Santander. Para actualizarlo desde JDE, primero corre una consulta.';
@@ -716,7 +729,13 @@ const BancosDashboard = ({
                               </div>
                             </button>
 
-                            {isExpanded && <BancosMovimientos acc={acc} internalReasonOf={internalReasonOf} />}
+                            {isExpanded && (
+                              <BancosMovimientos
+                                acc={acc}
+                                internalReasonOf={internalReasonOf}
+                                abonoEnrichmentIndex={abonoEnrichmentIndex}
+                              />
+                            )}
                           </div>
                         );
                       })}
@@ -739,9 +758,11 @@ const BancosDashboard = ({
 const BancosMovimientos = ({
   acc,
   internalReasonOf,
+  abonoEnrichmentIndex,
 }: {
   acc: BankAccountStatement & { movimientos: BankStatementLine[] };
   internalReasonOf: (cia: string, cuenta: string, mov: BankStatementLine) => InternalReason | null;
+  abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
 }) => {
   if (acc.movimientos.length === 0) {
     return (
@@ -796,6 +817,13 @@ const BancosMovimientos = ({
               const importColor = isInternal
                 ? 'text-[var(--gray-400)] line-through'
                 : isCargo ? 'text-[var(--danger)]' : 'text-[var(--success)]';
+
+              // ── Cobranza enrichment ──
+              // Solo aplica a ABONOs que NO sean traspaso interno; los CARGOs
+              // siguen rumbos de pago de proveedor que no se cruzan acá.
+              const enrichment = !isInternal && m.tipoMovimiento === 'ABONO' && abonoEnrichmentIndex
+                ? abonoEnrichmentIndex.get(bankMovementKey(m))
+                : undefined;
               return (
                 <tr key={i} className={`border-b border-[var(--gray-50)] ${rowMuted}`} title={isInternal ? tooltip : undefined}>
                   <td className="py-1.5 text-[var(--gray-500)] whitespace-nowrap">{m.fechaOperacion}</td>
@@ -805,6 +833,24 @@ const BancosMovimientos = ({
                     {isInternal && (
                       <span className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold align-middle">
                         Interno
+                      </span>
+                    )}
+                    {enrichment?.status === 'factura-cobrada' && enrichment.facturas && enrichment.facturas.length > 0 && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--success-muted)] text-[var(--success)] font-semibold align-middle"
+                        title={enrichment.facturas
+                          .map(f => `${f.cia} · ${f.noFactura} · ${f.nombreCliente}`)
+                          .join('\n')}
+                      >
+                        ✓ Factura{enrichment.facturas.length > 1 ? `s ×${enrichment.facturas.length}` : ` ${enrichment.facturas[0].noFactura}`}
+                      </span>
+                    )}
+                    {enrichment?.status === 'cobranza-sin-factura' && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] font-semibold align-middle"
+                        title="ABONO no cruzó con ninguna factura JDE — probable anticipo o factura fuera del rango cargado."
+                      >
+                        Sin factura
                       </span>
                     )}
                   </td>
@@ -866,6 +912,7 @@ const Bancos = ({
   lastQuery,
   onLastQueryChange,
   companies = [],
+  abonoEnrichmentIndex,
 }: BancosProps) => {
   const [view, setView] = useState<BancosView>(
     statements.length > 0 && lastQuery ? 'dashboard' : 'form'
@@ -982,6 +1029,7 @@ const Bancos = ({
       uploadingFile={uploadingFile}
       refreshError={refreshError}
       companies={companies}
+      abonoEnrichmentIndex={abonoEnrichmentIndex}
     />
   );
 };

@@ -56,6 +56,11 @@ import {
   type BankQueryState,
 } from './domain/bankStatements';
 import { SANTANDER_FILE_FORMAT } from './domain/santanderCsv';
+import {
+  reconcileRealCollections,
+  buildAbonoIndex,
+  buildFacturaIndex,
+} from './domain/realReconciliationEngine';
 
 const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
 
@@ -212,6 +217,12 @@ export default function App() {
   // (fechaInicial = hoy - 365d).
   const [cobranzaRecords, setCobranzaRecords] = useState<CobranzaRecord[]>([]);
   const [cobranzaLoadedCias, setCobranzaLoadedCias] = useState<Record<string, string>>({});
+  // Status del auto/manual fetch de cobranza — se muestra en la pestaña
+  // Cobranza para que el usuario sepa qué pasó si la lista llega vacía.
+  // Antes los errores eran silenciados y resultaba imposible diagnosticar
+  // 0% de cruce sin abrir DevTools.
+  const [cobranzaError, setCobranzaError] = useState<string | null>(null);
+  const [cobranzaRefreshing, setCobranzaRefreshing] = useState(false);
   const [cashFlowOverrides, setCashFlowOverrides] = useState<CashFlowOverrides>({});
   const [activeTab, setActiveTab] = useState<TabId>('netflow');
   const [catalogLoaded, setCatalogLoaded] = useState(false);
@@ -286,6 +297,24 @@ export default function App() {
   const bankStatements = useMemo(
     () => mergeBankStatements(bankJdeStatements, bankSupplementalStatements),
     [bankJdeStatements, bankSupplementalStatements],
+  );
+  // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
+  // Lo computamos UNA sola vez aquí y lo pasamos a CollectionProjection,
+  // Bancos y Dashboard. Evita recomputar el motor (subset-sum + filtros
+  // textuales) cada vez que el usuario cambia de pestaña o aplica un
+  // filtro local. Memo invalida solo cuando cambian las facturas reales o
+  // los movimientos bancarios — es estable bajo navegación normal.
+  const cobranzaReconciliation = useMemo(
+    () => reconcileRealCollections(cobranzaRecords, bankStatements),
+    [cobranzaRecords, bankStatements],
+  );
+  const cobranzaFacturaIndex = useMemo(
+    () => buildFacturaIndex(cobranzaReconciliation.matches),
+    [cobranzaReconciliation],
+  );
+  const cobranzaAbonoIndex = useMemo(
+    () => buildAbonoIndex(cobranzaReconciliation.abonoEnrichments),
+    [cobranzaReconciliation],
   );
   // UI status for the auto/manual bank refresh — shown as a pill in Flujo Neto.
   const [bankFetchStatus, setBankFetchStatus] = useState<
@@ -544,7 +573,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, [companies]);
 
-  // ── Auto-load Cobranza (CXC) en background al abrir el app ──────────────
+  // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /v1/erp/tesoreria/cobranza (productivo desde 2026-05-01).
   //
   // Estrategia (idéntica a CXP):
@@ -555,42 +584,58 @@ export default function App() {
   //   3. Cache por (cia, noFactura): cada respuesta reemplaza solo los
   //      registros de esa cia para que reintentos de un día a otro no
   //      dupliquen filas.
-  //   4. Errores silenciados — el dashboard de cobranza muestra empty state
-  //      por compañía y deja al usuario refrescar manual.
-  const cobranzaAutoFetchDone = useRef(false);
-  useEffect(() => {
-    if (cobranzaAutoFetchDone.current) return;
-    if (companies.length === 0) return;
+  //   4. Errores agregados a `cobranzaError` para que la pestaña Cobranza
+  //      pueda surfacerlos al usuario (antes se silenciaban).
+  const refreshCobranza = useCallback(async () => {
+    if (companies.length === 0) {
+      setCobranzaError('No hay compañías cargadas todavía. Espera a que /empresas responda.');
+      return;
+    }
     const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
-    if (activeCias.length === 0) return;
-    cobranzaAutoFetchDone.current = true;
+    if (activeCias.length === 0) {
+      setCobranzaError('No hay compañías activas en el catálogo.');
+      return;
+    }
 
-    // Rango: últimos 12 meses respecto a hoy.
+    setCobranzaRefreshing(true);
+    setCobranzaError(null);
+
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
     const yearAgo = new Date(today);
     yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
     const fechaInicial = yearAgo.toISOString().slice(0, 10);
 
-    let cancelled = false;
-    (async () => {
-      for (const cia of activeCias) {
-        if (cancelled) return;
-        try {
-          const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
-          if (cancelled) return;
-          // Forzamos cia explícita por si el response no la trae poblada.
-          const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
-          setCobranzaRecords(prev => [...prev.filter(r => r.cia !== cia), ...stamped]);
-          setCobranzaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
-        } catch {
-          // Silent — la pestaña Cobranza muestra empty state por compañía
-          // y deja al usuario el botón de refresh manual.
-        }
+    const errors: string[] = [];
+    let totalRecords = 0;
+    for (const cia of activeCias) {
+      try {
+        const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
+        const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
+        setCobranzaRecords(prev => [...prev.filter(r => r.cia !== cia), ...stamped]);
+        setCobranzaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+        totalRecords += stamped.length;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`${cia}: ${msg}`);
       }
-    })();
-    return () => { cancelled = true; };
+    }
+
+    if (errors.length > 0) {
+      setCobranzaError(`Errores en ${errors.length}/${activeCias.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
+    } else if (totalRecords === 0) {
+      setCobranzaError(`Todas las ${activeCias.length} cías respondieron VACÍO. Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
+    }
+    setCobranzaRefreshing(false);
   }, [companies]);
+
+  const cobranzaAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (cobranzaAutoFetchDone.current) return;
+    if (companies.length === 0) return;
+    cobranzaAutoFetchDone.current = true;
+    refreshCobranza();
+  }, [companies, refreshCobranza]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
@@ -1000,6 +1045,7 @@ export default function App() {
                 budget={budget}
                 onOpenFlow={() => setActiveTab('financialPlanning')}
                 startingBalance={effectiveStartingBalance}
+                cobranzaReconciliation={cobranzaReconciliation}
               />
             )}
             {activeTab === 'financialProjection' && (
@@ -1080,6 +1126,12 @@ export default function App() {
                 companies={companies}
                 cobranzaRecords={cobranzaRecords}
                 cobranzaLoadedCias={cobranzaLoadedCias}
+                cobranzaReconciliation={cobranzaReconciliation}
+                cobranzaFacturaIndex={cobranzaFacturaIndex}
+                cobranzaError={cobranzaError}
+                onRefreshCobranza={refreshCobranza}
+                cobranzaRefreshing={cobranzaRefreshing}
+                selectedCia={selectedCia}
               />
             )}
             {activeTab === 'providers' && (
@@ -1118,6 +1170,7 @@ export default function App() {
                 lastQuery={bankLastQuery}
                 onLastQueryChange={setBankLastQuery}
                 companies={companies}
+                abonoEnrichmentIndex={cobranzaAbonoIndex}
               />
             )}
             {activeTab === 'netflow' && (

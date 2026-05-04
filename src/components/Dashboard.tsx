@@ -38,6 +38,7 @@ import {
   type BankAccountStatement,
   type AgedBalanceRecord,
 } from '../services/jde';
+import type { RealReconciliationResult } from '../domain/realReconciliationEngine';
 import MonthDrilldown from './MonthDrilldown';
 import { type CashFlowTableRow } from './CashFlowTable';
 import PageHeader from './ui/PageHeader';
@@ -53,6 +54,12 @@ interface DashboardProps {
   onOpenFlow: () => void;
   /** Caja inicial fija por decisión de negocio — se muestra pero no se edita. */
   startingBalance: number;
+  /**
+   * Resultado pre-computado del cruce cobranza ↔ bancos. Cuando llega
+   * (con datos reales JDE + bancos cargados), el dashboard muestra el
+   * KPI "Cobranza cruzada" arriba; si no, ese KPI no aparece.
+   */
+  cobranzaReconciliation?: RealReconciliationResult;
 }
 
 const CHART_COLORS = {
@@ -96,6 +103,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   companyCode, bankStatements, clients, providers, cxpRecords, assumptions,
   budget, onOpenFlow,
   startingBalance,
+  cobranzaReconciliation,
 }) => {
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -485,6 +493,15 @@ const Dashboard: React.FC<DashboardProps> = ({
           criticalCount={minimumExpense.criticalCount}
         />
       </div>
+
+      {/* KPI cobranza ↔ bancos.
+          Solo aparece cuando hay datos de cobranza JDE Y estados de cuenta
+          cargados (caso normal después del boot). El semáforo (verde/ámbar/
+          rojo) replica el de la pestaña Cobranza para que el escaneo
+          matutino sea consistente. */}
+      {cobranzaReconciliation && cobranzaReconciliation.summary.totalAbonos > 0 && (
+        <CobranzaKpiCard reconciliation={cobranzaReconciliation} onOpenFlow={onOpenFlow} />
+      )}
 
       {/* Cash chart */}
       <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
@@ -1033,5 +1050,163 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   }
   return { base: months, baseline, projection };
 }
+
+/**
+ * Tarjeta de KPI para Cobranza ↔ Bancos.
+ *
+ * Muestra:
+ *   - Saldo CXC pendiente (suma de importePendientePesos del cruce).
+ *   - % de ABONOs bancarios cruzados con factura JDE (KPI principal).
+ *   - Conteos de facturas cobradas con banco vs pendientes.
+ *   - Click → enlaza a la pestaña Cobranza para drill-down.
+ *
+ * Color semáforo: verde ≥95%, ámbar ≥70%, rojo <70%.
+ */
+const CobranzaKpiCard: React.FC<{
+  reconciliation: RealReconciliationResult;
+  onOpenFlow: () => void;
+}> = ({ reconciliation, onOpenFlow }) => {
+  void onOpenFlow; // reservado para drill-down en una iteración futura
+  const [showDiagnose, setShowDiagnose] = useState(false);
+  const s = reconciliation.summary;
+  const pct = s.pctAbonosCruzados * 100;
+  // Detectar el caso "no hay cobranza cargada" — el KPI no debe pintar
+  // rojo cuando simplemente no hay nada que cruzar todavía.
+  const sinCobranza = s.totalFacturas === 0;
+  const tierColor = sinCobranza
+    ? 'var(--gray-400)'
+    : pct >= 95
+      ? 'var(--success)'
+      : pct >= 70
+        ? 'var(--warning, #d97706)'
+        : 'var(--danger)';
+  const tierBg = sinCobranza
+    ? 'var(--gray-50)'
+    : pct >= 95
+      ? 'var(--success-muted)'
+      : pct >= 70
+        ? 'var(--warning-muted, #fef3c7)'
+        : 'var(--danger-muted)';
+
+  // Diagnóstico: cias que aparecen solo en facturas o solo en abonos.
+  // Es el indicador #1 de mismatch de formato/permisos entre los dos
+  // endpoints — la cia "00011" no cruza con "00011," ni con "11" ni
+  // con "00011 - SERVICIO".
+  const ciasSoloFacturas = s.ciaBreakdown.filter(c => c.facturas > 0 && c.abonos === 0);
+  const ciasSoloAbonos = s.ciaBreakdown.filter(c => c.abonos > 0 && c.facturas === 0);
+  const tieneAlerta = !sinCobranza && pct < 70 && (ciasSoloFacturas.length > 0 || ciasSoloAbonos.length > 0);
+
+  return (
+    <div
+      className="rounded-xl border-2 p-4"
+      style={{
+        borderColor: tierColor,
+        backgroundColor: tierBg,
+      }}
+    >
+      <div className="flex items-stretch gap-6 flex-wrap">
+        <div className="flex-1 min-w-[200px]">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-500)' }}>
+              Cobranza cruzada con banco
+            </p>
+          </div>
+          <p className="text-[28px] font-semibold tabular-nums leading-tight mt-1" style={{ color: tierColor }}>
+            {sinCobranza ? '—' : `${pct.toFixed(1)}%`}
+          </p>
+          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
+            {sinCobranza
+              ? 'Sin cobranza JDE cargada · revisa la pestaña Cobranza'
+              : `${s.abonosFacturaCobrada} de ${s.totalAbonos} abonos · ${s.abonosSinFactura} sin factura`}
+          </p>
+        </div>
+
+        <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
+          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-500)' }}>
+            Saldo CXC pendiente
+          </p>
+          <p className="text-[20px] font-semibold tabular-nums leading-tight mt-1" style={{ color: 'var(--gray-950)' }}>
+            {fmtCurrency(s.totalSaldoPendiente)}
+          </p>
+          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
+            {s.facturasPendientes.toLocaleString('es-MX')} facturas pendientes ·
+            &nbsp;{s.facturasCobradasBanco.toLocaleString('es-MX')} ya cobradas
+          </p>
+        </div>
+
+        <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
+          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-500)' }}>
+            Cobrado vs banco (período)
+          </p>
+          <p className="text-[20px] font-semibold tabular-nums leading-tight mt-1" style={{ color: 'var(--success)' }}>
+            {fmtCurrency(s.totalCobradoBanco)}
+          </p>
+          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
+            {s.abonosTraspasoInterno > 0
+              ? `${s.abonosTraspasoInterno} traspasos internos descartados`
+              : 'sin traspasos internos detectados'}
+          </p>
+        </div>
+      </div>
+
+      {/* Diagnose link — solo cuando algo no está cuadrando. */}
+      {(tieneAlerta || (!sinCobranza && pct === 0)) && (
+        <div className="mt-3 pt-3 border-t border-[var(--gray-200)]/60">
+          <button
+            onClick={() => setShowDiagnose(v => !v)}
+            className="text-[12px] text-[var(--primary)] hover:underline flex items-center gap-1"
+          >
+            {showDiagnose ? '▾' : '▸'} Diagnosticar bajo cruce
+          </button>
+          {showDiagnose && (
+            <div className="mt-2 text-[11px] space-y-2">
+              {ciasSoloFacturas.length > 0 && (
+                <div>
+                  <span className="font-semibold text-[var(--danger)]">Cías con facturas pero sin abonos:</span>{' '}
+                  {ciasSoloFacturas.map(c => `${c.cia} (${c.facturas} fac)`).join(', ')}
+                  <div className="text-[var(--gray-500)] mt-0.5">
+                    → Revisa que los estados de cuenta de esas cías estén cargados en la pestaña Bancos.
+                  </div>
+                </div>
+              )}
+              {ciasSoloAbonos.length > 0 && (
+                <div>
+                  <span className="font-semibold text-[var(--danger)]">Cías con abonos pero sin facturas:</span>{' '}
+                  {ciasSoloAbonos.map(c => `${c.cia} (${c.abonos} ab)`).join(', ')}
+                  <div className="text-[var(--gray-500)] mt-0.5">
+                    → /cobranza no devolvió data para esas cías. Revisa permisos del token productivo en JDE.
+                  </div>
+                </div>
+              )}
+              <div className="pt-1 border-t border-[var(--gray-200)]/60">
+                <span className="font-semibold">Breakdown completo:</span>
+                <table className="w-full text-[11px] mt-1">
+                  <thead className="text-[var(--gray-400)]">
+                    <tr>
+                      <th className="text-left">Cía</th>
+                      <th className="text-right">Facturas</th>
+                      <th className="text-right">Abonos</th>
+                      <th className="text-right">Cruzados</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {s.ciaBreakdown.map(c => (
+                      <tr key={c.cia}>
+                        <td className="tabular-nums">{c.cia}</td>
+                        <td className="text-right tabular-nums">{c.facturas}</td>
+                        <td className="text-right tabular-nums">{c.abonos}</td>
+                        <td className="text-right tabular-nums">{c.matches}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default Dashboard;
