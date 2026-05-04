@@ -14,20 +14,20 @@ import {
   type BankStatementFormat,
   type CobranzaRecord,
 } from './services/jde';
-import Dashboard from './components/Dashboard';
 
 const FIXED_STARTING_BALANCE = 76_300_000;
-import CXP from './components/CXP';
-import Bancos from './components/Bancos';
-import Providers from './components/Providers';
-import CollectionProjection from './components/CollectionProjection';
-import Clients from './components/Clients';
-import CashFlowDetail from './components/CashFlowDetail';
-import OperatingProjection from './components/OperatingProjection';
 // Lazy-loaded so the projection module's Recharts + canonical engine is
 // not in the initial App bundle. This is the single largest chunk in the
 // build — keeping it out of first paint cuts the dashboard's first
 // interaction-time noticeably on cold loads.
+const Providers = lazy(() => import('./components/Providers'));
+const Clients = lazy(() => import('./components/Clients'));
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const CashFlowDetail = lazy(() => import('./components/CashFlowDetail'));
+const CXP = lazy(() => import('./components/CXP'));
+const Bancos = lazy(() => import('./components/Bancos'));
+const CollectionProjection = lazy(() => import('./components/CollectionProjection'));
+const OperatingProjection = lazy(() => import('./components/OperatingProjection'));
 const FinancialProjectionDashboard = lazy(() => import('./modules/financial-projection/pages/FinancialProjectionDashboard'));
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
@@ -57,15 +57,16 @@ import {
 } from './domain/bankStatements';
 import { SANTANDER_FILE_FORMAT } from './domain/santanderCsv';
 import {
-  reconcileRealCollections,
-  buildAbonoIndex,
-  buildFacturaIndex,
+  type AbonoEnrichment,
+  type RealReconciliationMatch,
   type RealReconciliationResult,
 } from './domain/realReconciliationEngine';
 
 const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
 const STORE_SAVE_DEBOUNCE_MS = 900;
+const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
+const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const RECONCILIATION_TABS = new Set<TabId>(['dashboard', 'collections', 'bancos']);
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
@@ -204,6 +205,26 @@ function emptyRealReconciliationResult(): RealReconciliationResult {
       ciaBreakdown: [],
     },
   };
+}
+
+function buildFacturaIndex(
+  matches: RealReconciliationMatch[],
+): Map<string, RealReconciliationMatch> {
+  const map = new Map<string, RealReconciliationMatch>();
+  for (const m of matches) {
+    map.set(`${m.cia}::${m.noFactura}`, m);
+  }
+  return map;
+}
+
+function buildAbonoIndex(
+  enrichments: AbonoEnrichment[],
+): Map<string, AbonoEnrichment> {
+  const map = new Map<string, AbonoEnrichment>();
+  for (const e of enrichments) {
+    map.set(e.movementKey, e);
+  }
+  return map;
 }
 
 function isFreshTimestamp(value: string | undefined, ttlMs: number): boolean {
@@ -381,8 +402,12 @@ export default function App() {
 
     let cancelled = false;
     const cancelIdle = scheduleIdleTask(() => {
-      const result = reconcileRealCollections(cobranzaRecords, bankStatements);
-      if (!cancelled) setCobranzaReconciliation(result);
+      void import('./domain/realReconciliationEngine')
+        .then(({ reconcileRealCollections }) => {
+          if (cancelled) return;
+          const result = reconcileRealCollections(cobranzaRecords, bankStatements);
+          if (!cancelled) setCobranzaReconciliation(result);
+        });
     }, 1500);
 
     return () => {
@@ -603,9 +628,8 @@ export default function App() {
 
   // ── Boot orchestrator: drives splash step + dismiss when critical path ready ──
   // Critical path: catalogs settled + JDE companies settled (success or error) +
-  // bank priming AND year-to-date ranging finished (status === 'idle'). The
-  // splash shows a progress bar during ranging so the user sees concrete
-  // progress instead of an indeterminate spinner.
+  // short bank priming finished (status === 'idle'). Heavy JDE ranges and CXC
+  // reconciliation now run on demand so the user can enter the app sooner.
   useEffect(() => {
     if (isBooted) return;
     if (!catalogLoaded) {
@@ -652,25 +676,35 @@ export default function App() {
     if (companies.length === 0) return;
     const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
     if (activeCias.length === 0) return;
+    const ciasToFetch = activeCias.filter(cia => !isFreshTimestamp(cxpLoadedCias[cia], CXP_AUTO_REFRESH_TTL_MS));
+    if (ciasToFetch.length === 0) return;
     cxpAutoFetchDone.current = true;
     let cancelled = false;
     (async () => {
-      for (const cia of activeCias) {
+      const fetchedRecords: CXPRecord[] = [];
+      const fetchedCias: string[] = [];
+      const fetchedTimestamps: Record<string, string> = {};
+      for (const cia of ciasToFetch) {
         if (cancelled) return;
         try {
           const data = await fetchAgedBalances({ cia });
           if (cancelled) return;
           const stamped = (data as CXPRecord[]).map(r => ({ ...r, cia }));
-          setCxpRecords(prev => [...prev.filter(r => r.cia !== cia), ...stamped]);
-          setCxpLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+          fetchedRecords.push(...stamped);
+          fetchedCias.push(cia);
+          fetchedTimestamps[cia] = new Date().toISOString();
         } catch {
           // Silent: si ninguna compañía carga, el empty state de CXP
           // deja al usuario "Consultar todas" o subir CSV manualmente.
         }
       }
+      if (cancelled || fetchedCias.length === 0) return;
+      const fetchedSet = new Set(fetchedCias);
+      setCxpRecords(prev => [...prev.filter(r => !fetchedSet.has(r.cia)), ...fetchedRecords]);
+      setCxpLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
     })();
     return () => { cancelled = true; };
-  }, [companies]);
+  }, [companies, cxpLoadedCias]);
 
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /v1/erp/tesoreria/cobranza (productivo desde 2026-05-01).
@@ -751,10 +785,11 @@ export default function App() {
   const cobranzaAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cobranzaAutoFetchDone.current) return;
+    if (!RECONCILIATION_TABS.has(activeTab)) return;
     if (companies.length === 0) return;
     cobranzaAutoFetchDone.current = true;
     refreshCobranza(false);
-  }, [companies, refreshCobranza]);
+  }, [activeTab, companies, refreshCobranza]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
@@ -770,14 +805,32 @@ export default function App() {
 
   // Persist bank statements + last query
   useEffect(() => {
-    try { localStorage.setItem('midas.bankStatements.v2', JSON.stringify(bankJdeStatements)); }
-    catch { /* quota or serialization issue; ignore */ }
+    let cancelIdle: (() => void) | null = null;
+    const timer = window.setTimeout(() => {
+      cancelIdle = scheduleIdleTask(() => {
+        try { localStorage.setItem('midas.bankStatements.v2', JSON.stringify(bankJdeStatements)); }
+        catch { /* quota or serialization issue; ignore */ }
+      }, 2500);
+    }, BANK_STORAGE_SAVE_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      cancelIdle?.();
+    };
   }, [bankJdeStatements]);
   useEffect(() => {
-    try {
-      if (bankSupplementalStatements.length > 0) localStorage.setItem('midas.bankSupplementalStatements.v1', JSON.stringify(bankSupplementalStatements));
-      else localStorage.removeItem('midas.bankSupplementalStatements.v1');
-    } catch { /* ignore */ }
+    let cancelIdle: (() => void) | null = null;
+    const timer = window.setTimeout(() => {
+      cancelIdle = scheduleIdleTask(() => {
+        try {
+          if (bankSupplementalStatements.length > 0) localStorage.setItem('midas.bankSupplementalStatements.v1', JSON.stringify(bankSupplementalStatements));
+          else localStorage.removeItem('midas.bankSupplementalStatements.v1');
+        } catch { /* ignore */ }
+      }, 2500);
+    }, BANK_STORAGE_SAVE_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      cancelIdle?.();
+    };
   }, [bankSupplementalStatements]);
   useEffect(() => {
     if (bankJdeStatements.length === 0 || bankSupplementalStatements.length === 0) return;
@@ -797,21 +850,14 @@ export default function App() {
     } catch { /* ignore */ }
   }, [bankLastQuery]);
 
-  // ── JDE: fetch bank statements on mount ──
-  // Estrategia:
-  //   1. Si NO hay nada cacheado, hacer un "prime" rápido de 1 día para
-  //      poblar la UI al instante (hoy o últimos 5 días hábiles).
-  //   2. SIEMPRE hacer backfill año-a-la-fecha (Ene 1 → hoy) en background,
-  //      incluso si ya hay data cacheada — el cache típicamente es una foto
-  //      de 1 día de sesiones pasadas y eso es precisamente lo que el usuario
-  //      NO quiere para Flujo Neto. El range fetch mergea por (cia, cuenta,
-  //      moneda) y reemplaza el state completo al terminar.
-  //   3. Único escape: si el cache YA cubre >= 30 días distintos y la última
-  //      query fue de hoy, consideramos que ya está fresco y nos saltamos.
-  //   4. Si JDE está inalcanzable y no hay cache, cargamos demo data.
-  // Refresh helper — extracted so the fetch effect and any manual
-  // refresh button can share the same code path.
-  const refreshBankStatementsRange = useCallback(async (force: boolean = false) => {
+  // ── JDE: fetch bank statements ──
+  // Boot sólo hace prime corto. El backfill año-a-la-fecha queda para refresh
+  // manual; hacerlo automáticamente congelaba la app por red + renders +
+  // persistencia de un dataset grande.
+  const refreshBankStatementsRange = useCallback(async (
+    force: boolean = false,
+    includeRange: boolean = false,
+  ) => {
     const today = new Date().toISOString().slice(0, 10);
     const yearStart = `${new Date().getUTCFullYear()}-01-01`;
     const defaultFormat: BankStatementFormat = 'SWIFT';
@@ -827,7 +873,7 @@ export default function App() {
         bankLastQuery?.fechaEstadoCuenta === today &&
         distinctDates.size >= 30;
       if (cacheIsFresh) {
-        return { primed: true, ranged: true };
+        return { primed: true, ranged: includeRange };
       }
     }
 
@@ -866,11 +912,18 @@ export default function App() {
       }
     }
 
+    if (!includeRange) {
+      setBankFetchStatus('idle');
+      setBankFetchProgress(null);
+      return { primed, ranged: false };
+    }
+
     // ── Step 2: Backfill año-a-la-fecha ──
     setBankFetchStatus('ranging');
     setBankFetchProgress({ done: 0, total: 0 });
     let ranged = false;
     let lastTotal = 0;
+    let lastProgressPaint = 0;
     try {
       const full = await fetchBankStatementsRange(
         yearStart,
@@ -880,7 +933,11 @@ export default function App() {
           concurrency: 6,
           onProgress: (done, total) => {
             lastTotal = total;
-            setBankFetchProgress({ done, total });
+            const now = performance.now();
+            if (done === total || now - lastProgressPaint > 250) {
+              lastProgressPaint = now;
+              setBankFetchProgress({ done, total });
+            }
           },
         },
       );
@@ -912,10 +969,9 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      // Sólo intentamos el refresh real de JDE. Si falla, la app se queda
-      // sin datos de bancos — preferimos vacío antes que inyectar demo data
-      // ficticia que ensucia los meses previos del flujo.
-      await refreshBankStatementsRange(false);
+      // Sólo prime corto de JDE al boot. El backfill completo es manual para
+      // evitar que el arranque bloquee la plataforma.
+      await refreshBankStatementsRange(false, false);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1154,18 +1210,20 @@ export default function App() {
         <div key={pageKey} className="animate-page-in">
           <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
             {activeTab === 'dashboard' && (
-              <Dashboard
-                companyCode={selectedCia}
-                bankStatements={bankStatements}
-                clients={clients}
-                providers={providers}
-                cxpRecords={cxpRecords}
-                assumptions={assumptions}
-                budget={budget}
-                onOpenFlow={() => setActiveTab('financialPlanning')}
-                startingBalance={effectiveStartingBalance}
-                cobranzaReconciliation={cobranzaReconciliation}
-              />
+              <Suspense fallback={<LazyTabFallback label="Dashboard" />}>
+                <Dashboard
+                  companyCode={selectedCia}
+                  bankStatements={bankStatements}
+                  clients={clients}
+                  providers={providers}
+                  cxpRecords={cxpRecords}
+                  assumptions={assumptions}
+                  budget={budget}
+                  onOpenFlow={() => setActiveTab('financialPlanning')}
+                  startingBalance={effectiveStartingBalance}
+                  cobranzaReconciliation={cobranzaReconciliation}
+                />
+              </Suspense>
             )}
             {activeTab === 'financialProjection' && (
               <Suspense fallback={<LazyTabFallback label="Proyección Financiera" />}>
@@ -1211,100 +1269,114 @@ export default function App() {
               </Suspense>
             )}
             {activeTab === 'operating' && (
-              <OperatingProjection
-                companyCode={selectedCia}
-                bankStatements={bankStatements}
-                clients={clients}
-                providers={providers}
-                cxpRecords={cxpRecords}
-                assumptions={assumptions}
-                budget={budget}
-              />
+              <Suspense fallback={<LazyTabFallback label="Operativa" />}>
+                <OperatingProjection
+                  companyCode={selectedCia}
+                  bankStatements={bankStatements}
+                  clients={clients}
+                  providers={providers}
+                  cxpRecords={cxpRecords}
+                  assumptions={assumptions}
+                  budget={budget}
+                />
+              </Suspense>
             )}
             {activeTab === 'clients' && (
-              <Clients
-                clients={clients}
-                assumptions={assumptions}
-                confirmedPayments={confirmedPayments}
-                onReplace={setClients}
-                onAdd={addClient}
-                onUpdate={updateClient}
-                onDelete={deleteClient}
-              />
+              <Suspense fallback={<LazyTabFallback label="Clientes" />}>
+                <Clients
+                  clients={clients}
+                  assumptions={assumptions}
+                  confirmedPayments={confirmedPayments}
+                  onReplace={setClients}
+                  onAdd={addClient}
+                  onUpdate={updateClient}
+                  onDelete={deleteClient}
+                />
+              </Suspense>
             )}
             {activeTab === 'collections' && (
-              <CollectionProjection
-                clients={clients}
-                assumptions={assumptions}
-                onAssumptionsChange={setAssumptions}
-                confirmedPayments={confirmedPayments}
-                onConfirm={confirmPayment}
-                onUnconfirm={unconfirmPayment}
-                cxpRecords={cxpRecords}
-                bankStatements={bankStatements}
-                companies={companies}
-                cobranzaRecords={cobranzaRecords}
-                cobranzaLoadedCias={cobranzaLoadedCias}
-                cobranzaReconciliation={cobranzaReconciliation}
-                cobranzaFacturaIndex={cobranzaFacturaIndex}
-                cobranzaError={cobranzaError}
-                onRefreshCobranza={refreshCobranza}
-                cobranzaRefreshing={cobranzaRefreshing}
-                selectedCia={selectedCia}
-              />
+              <Suspense fallback={<LazyTabFallback label="Cobranza" />}>
+                <CollectionProjection
+                  clients={clients}
+                  assumptions={assumptions}
+                  onAssumptionsChange={setAssumptions}
+                  confirmedPayments={confirmedPayments}
+                  onConfirm={confirmPayment}
+                  onUnconfirm={unconfirmPayment}
+                  cxpRecords={cxpRecords}
+                  bankStatements={bankStatements}
+                  companies={companies}
+                  cobranzaRecords={cobranzaRecords}
+                  cobranzaLoadedCias={cobranzaLoadedCias}
+                  cobranzaReconciliation={cobranzaReconciliation}
+                  cobranzaFacturaIndex={cobranzaFacturaIndex}
+                  cobranzaError={cobranzaError}
+                  onRefreshCobranza={refreshCobranza}
+                  cobranzaRefreshing={cobranzaRefreshing}
+                  selectedCia={selectedCia}
+                />
+              </Suspense>
             )}
             {activeTab === 'providers' && (
-              <Providers
-                providers={providers}
-                cxpRecords={cxpRecords}
-                onReplace={setProviders}
-                onAdd={addProvider}
-                onUpdate={updateProvider}
-                onDelete={deleteProvider}
-              />
+              <Suspense fallback={<LazyTabFallback label="Proveedores" />}>
+                <Providers
+                  providers={providers}
+                  cxpRecords={cxpRecords}
+                  onReplace={setProviders}
+                  onAdd={addProvider}
+                  onUpdate={updateProvider}
+                  onDelete={deleteProvider}
+                />
+              </Suspense>
             )}
             {activeTab === 'cxp' && (
-              <CXP
-                records={cxpRecords}
-                loadedCias={cxpLoadedCias}
-                companies={companies}
-                selectedCia={selectedCia}
-                providers={providers}
-                clients={clients}
-                assumptions={assumptions}
-                bankStatements={bankStatements}
-                budget={budget}
-                onMergeCia={mergeCxpForCia}
-                onReplaceAll={replaceAllCxp}
-                onReset={resetCxp}
-              />
+              <Suspense fallback={<LazyTabFallback label="CXP" />}>
+                <CXP
+                  records={cxpRecords}
+                  loadedCias={cxpLoadedCias}
+                  companies={companies}
+                  selectedCia={selectedCia}
+                  providers={providers}
+                  clients={clients}
+                  assumptions={assumptions}
+                  bankStatements={bankStatements}
+                  budget={budget}
+                  onMergeCia={mergeCxpForCia}
+                  onReplaceAll={replaceAllCxp}
+                  onReset={resetCxp}
+                />
+              </Suspense>
             )}
             {activeTab === 'bancos' && (
-              <Bancos
-                selectedCia={selectedCia}
-                statements={bankStatements}
-                supplementalStatements={bankSupplementalStatements}
-                onJdeStatementsChange={setBankJdeStatements}
-                onSupplementalStatementsChange={setBankSupplementalStatements}
-                lastQuery={bankLastQuery}
-                onLastQueryChange={setBankLastQuery}
-                companies={companies}
-                abonoEnrichmentIndex={cobranzaAbonoIndex}
-              />
+              <Suspense fallback={<LazyTabFallback label="Bancos" />}>
+                <Bancos
+                  selectedCia={selectedCia}
+                  statements={bankStatements}
+                  supplementalStatements={bankSupplementalStatements}
+                  onJdeStatementsChange={setBankJdeStatements}
+                  onSupplementalStatementsChange={setBankSupplementalStatements}
+                  lastQuery={bankLastQuery}
+                  onLastQueryChange={setBankLastQuery}
+                  companies={companies}
+                  abonoEnrichmentIndex={cobranzaAbonoIndex}
+                />
+              </Suspense>
             )}
             {activeTab === 'netflow' && (
-              <CashFlowDetail
-                clients={clients}
-                cxpRecords={cxpRecords}
-                assumptions={assumptions}
-                confirmedPayments={confirmedPayments}
-                bankStatements={bankStatements}
-                companies={companies}
-                bankFetchStatus={bankFetchStatus}
-                bankFetchProgress={bankFetchProgress}
-                onRefreshBanks={() => refreshBankStatementsRange(true)}
-                startingBalance={effectiveStartingBalance}
-              />
+              <Suspense fallback={<LazyTabFallback label="Flujo Neto" />}>
+                <CashFlowDetail
+                  clients={clients}
+                  cxpRecords={cxpRecords}
+                  assumptions={assumptions}
+                  confirmedPayments={confirmedPayments}
+                  bankStatements={bankStatements}
+                  companies={companies}
+                  bankFetchStatus={bankFetchStatus}
+                  bankFetchProgress={bankFetchProgress}
+                  onRefreshBanks={() => refreshBankStatementsRange(true, true)}
+                  startingBalance={effectiveStartingBalance}
+                />
+              </Suspense>
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}
           </ErrorBoundary>
