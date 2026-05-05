@@ -53,6 +53,25 @@ export interface MinimumExpenseSummary {
 }
 
 /**
+ * Filtra las filas de nómina/finiquitos del presupuesto deduplicando por concepto.
+ * El parser de presupuesto preserva filas con el mismo concepto cuando aparecen
+ * dos veces en el CSV (por error de captura, copiar/pegar, etc). Sumar duplicados
+ * en el piso operativo infla el total Nx, lo que se vio como un "bug de unidad"
+ * cuando la cifra mensual termina cerca del ingreso mensual real.
+ */
+function payrollRows(budget: Budget): Array<{ concept: string; monthly: number[] }> {
+  const seen = new Map<string, { concept: string; monthly: number[] }>();
+  for (const row of budget.expenseByConcept) {
+    const concept = (row.concept || '').toUpperCase();
+    if (!concept.includes('NOMINA') && !concept.includes('NÓMINA') && !concept.includes('FINIQUITO')) continue;
+    const key = concept.trim();
+    if (seen.has(key)) continue;
+    seen.set(key, row);
+  }
+  return Array.from(seen.values());
+}
+
+/**
  * Promedio mensual de nómina + finiquitos del presupuesto. Estos egresos son
  * obligatorios por ley/contrato — son piso operativo igual que los proveedores
  * críticos, pero se manejan aparte porque NO son proveedores (son empleados).
@@ -60,13 +79,10 @@ export interface MinimumExpenseSummary {
 function computePayrollMonthlyFromBudget(budget?: Budget | null): number {
   if (!budget) return 0;
   let total = 0;
-  for (const row of budget.expenseByConcept) {
-    const concept = (row.concept || '').toUpperCase();
-    if (concept.includes('NOMINA') || concept.includes('NÓMINA') || concept.includes('FINIQUITO')) {
-      // Promedio mensual del año
-      const sum = row.monthly.reduce((s, v) => s + (v || 0), 0);
-      total += sum / 12;
-    }
+  for (const row of payrollRows(budget)) {
+    // Promedio mensual del año
+    const sum = row.monthly.reduce((s, v) => s + (v || 0), 0);
+    total += sum / 12;
   }
   return total;
 }
@@ -80,11 +96,8 @@ export function payrollForMonth(budget: Budget | null | undefined, monthIndex: n
   if (!budget) return 0;
   if (monthIndex < 0 || monthIndex > 11) return 0;
   let total = 0;
-  for (const row of budget.expenseByConcept) {
-    const concept = (row.concept || '').toUpperCase();
-    if (concept.includes('NOMINA') || concept.includes('NÓMINA') || concept.includes('FINIQUITO')) {
-      total += row.monthly[monthIndex] ?? 0;
-    }
+  for (const row of payrollRows(budget)) {
+    total += row.monthly[monthIndex] ?? 0;
   }
   return total;
 }

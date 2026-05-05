@@ -1121,7 +1121,7 @@ const CXPDashboard = ({
           </div>
 
           {/* Two columns: Tipo proveedor + Top Proveedores */}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-7">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-5">
             {/* Provider Type Donut */}
             <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
               <div className="flex items-center justify-between mb-3">

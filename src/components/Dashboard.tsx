@@ -152,15 +152,44 @@ const Dashboard: React.FC<DashboardProps> = ({
   // Antes el Dashboard pasaba por `evaluateCashFlow` (motor de Simulación) con
   // un array vacío de propuestas. Tras eliminar el módulo de Simulación basta
   // con derivar el shape consumido por la UI directamente desde la base.
-  const evaluated = useMemo(() => ({
-    months: base.map((m) => ({
+  // Rellenamos con meses-cero los huecos del año natural para que el chart
+  // mensual cubra Ene–Dic incluso cuando no hay datos bancarios para algunos
+  // meses (típico cuando el primer estado de cuenta arranca en abril).
+  const evaluated = useMemo(() => {
+    const mapped = base.map((m) => ({
       yearMonth: m.yearMonth,
       isHistorical: m.isHistorical,
       baseIncome: m.income,
       baseExpense: m.expense,
       baseClosingCash: m.closingCash,
-    })),
-  }), [base]);
+    }));
+    if (mapped.length === 0) return { months: mapped };
+    const presentYears = new Set(mapped.map((m) => m.yearMonth.slice(0, 4)));
+    presentYears.add(String(new Date().getFullYear()));
+    const byYm = new Map(mapped.map((m) => [m.yearMonth, m]));
+    const filled: typeof mapped = [];
+    let lastClosing = 0;
+    const years = Array.from(presentYears).sort();
+    for (const y of years) {
+      for (let mo = 1; mo <= 12; mo++) {
+        const ym = `${y}-${String(mo).padStart(2, '0')}`;
+        const existing = byYm.get(ym);
+        if (existing) {
+          lastClosing = existing.baseClosingCash;
+          filled.push(existing);
+        } else {
+          filled.push({
+            yearMonth: ym,
+            isHistorical: false,
+            baseIncome: 0,
+            baseExpense: 0,
+            baseClosingCash: lastClosing,
+          });
+        }
+      }
+    }
+    return { months: filled };
+  }, [base]);
 
   const currentYear = new Date().getFullYear();
   const currentYm = toYearMonth(today);

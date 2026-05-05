@@ -265,13 +265,14 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           />
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Clientes</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Clientes en cartera</div>
           <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
             <AnimatedNumber value={filteredClients.length} format={(n) => Math.round(n).toString()} />
             {filteredClients.length !== clients.length && (
               <span className="text-[var(--gray-400)] text-[13px]"> / {clients.length}</span>
             )}
           </div>
+          <div className="text-[11px] text-[var(--gray-400)]">Activos en el catálogo</div>
         </div>
         <div className="ml-auto">
           <button
@@ -624,7 +625,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             format={fmtCurrency}
             className="block text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
-          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes</div>
+          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes con pagos</div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cobrado (real)</div>

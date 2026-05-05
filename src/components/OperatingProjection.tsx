@@ -1970,8 +1970,10 @@ export default function OperatingProjection({
             <RulePill icon={CalendarDays} label="Cobranza diaria + drilldown" />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-[var(--gray-950)]">Proyección operativa</h1>
-            <p className="mt-1 text-[13px] text-[var(--gray-400)]">
+            <h1 className="text-2xl font-bold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              Proyección operativa
+            </h1>
+            <p className="mt-1 text-[13px]" style={{ color: 'var(--gray-600)' }}>
               Muestra de dónde entra el efectivo, en qué se usa y cuánto queda apartado para pagos obligatorios.
             </p>
           </div>
@@ -1996,8 +1998,17 @@ export default function OperatingProjection({
         <MetricCard label="Caja final proyectada" value={projection.summary.endingCash} tone={projection.summary.endingCash >= 0 ? 'success' : 'danger'} />
         <MetricCard label="Mínimo requerido" value={effectiveMinimumCash} tone="warning" />
         <MetricCard label="Déficit / excedente" value={cashGap} tone={cashGap >= 0 ? 'success' : 'danger'} />
-        <MetricCard label="Pagos críticos" value={criticalUpcomingPayments.length} tone={criticalUpcomingPayments.length > 0 ? 'warning' : 'success'} subvalue={fmtCurrency(criticalUpcomingPayments.reduce((sum, item) => sum + item.remainingAmount, 0))} />
-        <MetricCard label="Confianza" value={projectionConfidence.score} tone={projectionConfidence.score >= 80 ? 'success' : projectionConfidence.score >= 60 ? 'warning' : 'danger'} displayValue={projectionConfidence.label} subvalue={projectionConfidence.detail} />
+        <MetricCard
+          label="Pagos críticos"
+          value={criticalUpcomingPayments.reduce((sum, item) => sum + item.remainingAmount, 0)}
+          tone={criticalUpcomingPayments.length > 0 ? 'warning' : 'success'}
+          subvalue={`${criticalUpcomingPayments.length} pago${criticalUpcomingPayments.length === 1 ? '' : 's'} · ${fmtCurrency(criticalUpcomingPayments.reduce((sum, item) => sum + item.remainingAmount, 0))}`}
+        />
+        {/* Confianza usa neutral / warning en vez de danger:
+            el rojo ya señala valores monetarios negativos en las tarjetas
+            vecinas (Déficit, Caja final). Una "Baja" confianza no es una
+            pérdida — es ruido en el dato — y debe distinguirse visualmente. */}
+        <MetricCard label="Confianza" value={projectionConfidence.score} tone={projectionConfidence.score >= 80 ? 'success' : 'warning'} displayValue={projectionConfidence.label} subvalue={projectionConfidence.detail} />
       </section>
 
       <TreasuryActionPanel
