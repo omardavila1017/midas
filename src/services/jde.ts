@@ -22,6 +22,9 @@ import {
   BankStatementLine,
   BankStatementRequest,
   BankStatementFormat,
+  CobranzaPayment,
+  CobranzaPaymentApplication,
+  CobranzaPaymentRequest,
   CobranzaRecord,
   CobranzaRequest,
   Company,
@@ -56,6 +59,19 @@ function toNum(v: unknown): number {
 function toStr(v: unknown): string {
   if (v === null || v === undefined) return '';
   return String(v).trim();
+}
+
+function trimIsoDate(v: unknown): string {
+  const s = toStr(v);
+  if (!s) return '';
+  return s.length >= 10 ? s.slice(0, 10) : s;
+}
+
+export function normalizeInvoiceRef(value: unknown): string {
+  return toStr(value)
+    .toUpperCase()
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\s+/g, '');
 }
 
 /**
@@ -224,6 +240,20 @@ function parseConcepto(inf1: unknown, inf2: unknown): string {
  *   InF_ADI_1, InF_ADI_2, InF_ADI_3, Codigo_Categoria_33..38, DESC033..038
  */
 function mapBankLine(raw: RawRecord): BankStatementLine {
+  const gsaid = toStr(pick(raw, ['gsaid', 'GSAID']));
+  const cuentaContable = toStr(pick(raw, ['Cuenta_Contable', 'cuenta_contable']));
+  const cuentaBancos = toStr(pick(raw, ['Cuenta_Bancos', 'cuenta_bancos']));
+  const nombreCuentaContable = toStr(pick(raw, ['Nombre_cuenta_Contable', 'nombre_cuenta_contable']));
+  const fechaEstadoCuentaRaw = trimIsoDate(pick(raw, ['Fecha_Estado_Cuenta', 'fecha_estado_cuenta']));
+  const tipoCuentaBancos = toStr(pick(raw, ['tipo_Cuenta_Bancos', 'Tipo_Cuenta_Bancos', 'tipoCuentaBancos']));
+  const desc039 = toStr(pick(raw, ['DESC039', 'desc039']));
+  const desc036 = toStr(pick(raw, ['DESC036', 'desc036', 'moneda', 'currency']));
+  const codigoTransaccionBanco = toStr(pick(raw, ['Codigo_Transaccion_banco', 'codigo_transaccion_banco']));
+  const referenciaCliente = toStr(pick(raw, ['Referencia_Cliente', 'referencia_cliente']));
+  const infAdi1 = toStr(pick(raw, ['InF_ADI_1', 'INF_ADI_1', 'infAdi1']));
+  const infAdi2 = toStr(pick(raw, ['InF_ADI_2', 'INF_ADI_2', 'infAdi2']));
+  const infAdi3 = toStr(pick(raw, ['InF_ADI_3', 'INF_ADI_3', 'infAdi3']));
+
   // ── Importe ──
   const importeRaw = toNum(
     pick(raw, ['Importe', 'importe', 'monto', 'amount']),
@@ -257,32 +287,32 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
 
   // ── Empresa ── derivada de Cuenta_Contable (BU → cia con padding)
   const ciaExplicit = toStr(pick(raw, ['cia', 'compania']));
-  const cia = ciaExplicit || extractCiaFromCuentaContable(pick(raw, ['Cuenta_Contable', 'cuenta_contable']));
+  const cia = ciaExplicit || extractCiaFromCuentaContable(cuentaContable);
 
   // ── Banco ── nombre extraído de Nombre_cuenta_Contable + tipo de cuenta (DESC039)
   const nombreBancoRaw = toStr(
-    pick(raw, ['Nombre_cuenta_Contable', 'nombreBanco', 'nombre_banco', 'bankName']),
+    nombreCuentaContable || pick(raw, ['nombreBanco', 'nombre_banco', 'bankName']),
   );
   const bankNameOnly = extractBankName(nombreBancoRaw);
-  const tipoCuenta = toStr(pick(raw, ['DESC039']));
+  const tipoCuenta = desc039;
   const nombreBanco = bankNameOnly
     ? (tipoCuenta ? `${bankNameOnly} · ${tipoCuenta}` : bankNameOnly)
     : (tipoCuenta || undefined);
 
   // ── Cuenta bancaria ──
   const cuenta = toStr(
-    pick(raw, ['Cuenta_Bancos', 'cuenta', 'numeroCuenta', 'numero_cuenta', 'account']),
+    cuentaBancos || pick(raw, ['cuenta', 'numeroCuenta', 'numero_cuenta', 'account']),
   );
 
   // ── Concepto (parsing inteligente de InF_ADI) ──
   const concepto = parseConcepto(
-    pick(raw, ['InF_ADI_1']),
-    pick(raw, ['InF_ADI_2']),
+    infAdi1,
+    infAdi2,
   );
 
   // ── Referencia ──
   const referencia = toStr(
-    pick(raw, ['Referencia_Cliente', 'referencia', 'folio', 'reference']),
+    referenciaCliente || pick(raw, ['referencia', 'folio', 'reference']),
   );
 
   // ── Banco ── usamos el nombre extraído como código también (no hay campo banco dedicado en JDE)
@@ -291,7 +321,7 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
   );
 
   // ── Moneda ── JDE no la devuelve explícitamente; inferimos de categorías si posible
-  const descMoneda = toStr(pick(raw, ['DESC036', 'moneda', 'currency']));
+  const descMoneda = desc036;
   const moneda = descMoneda.includes('M.N.') || descMoneda.includes('MXN') ? 'MXN'
     : descMoneda.includes('USD') || descMoneda.includes('DLS') || descMoneda.includes('Dólar') ? 'USD'
     : descMoneda || 'MXN';
@@ -309,6 +339,19 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
     tipoMovimiento,
     importe: absImporte,
     saldo: undefined, // saldos se manejan a nivel de cuenta, no por línea
+    gsaid,
+    cuentaContable,
+    cuentaBancos,
+    nombreCuentaContable,
+    fechaEstadoCuenta: fechaEstadoCuentaRaw,
+    tipoCuentaBancos,
+    desc039,
+    desc036,
+    codigoTransaccionBanco,
+    referenciaCliente,
+    infAdi1,
+    infAdi2,
+    infAdi3,
   };
 }
 
@@ -348,6 +391,12 @@ function groupByAccount(
           cuenta: l.cuenta,
           moneda: l.moneda,
           fechaEstadoCuenta,
+          cuentaContable: l.cuentaContable,
+          cuentaBancos: l.cuentaBancos,
+          nombreCuentaContable: l.nombreCuentaContable,
+          tipoCuentaBancos: l.tipoCuentaBancos,
+          desc039: l.desc039,
+          desc036: l.desc036,
           movimientos: [],
         },
         saldoInicial: si !== undefined && si !== null ? toNum(si) : undefined,
@@ -506,6 +555,12 @@ export async function fetchBankStatementsRange(
           fechaEstadoCuenta: s.fechaEstadoCuenta,
           saldoInicial: s.saldoInicial,
           saldoFinal: s.saldoFinal,
+          cuentaContable: s.cuentaContable,
+          cuentaBancos: s.cuentaBancos,
+          nombreCuentaContable: s.nombreCuentaContable,
+          tipoCuentaBancos: s.tipoCuentaBancos,
+          desc039: s.desc039,
+          desc036: s.desc036,
           movimientos: [],
         };
         merged.set(key, acc);
@@ -525,6 +580,12 @@ export async function fetchBankStatementsRange(
         if (s.saldoFinal !== undefined) acc.saldoFinal = s.saldoFinal;
         // Keep the most recent human-readable bank label too.
         if (s.nombreBanco) acc.nombreBanco = s.nombreBanco;
+        if (s.cuentaContable) acc.cuentaContable = s.cuentaContable;
+        if (s.cuentaBancos) acc.cuentaBancos = s.cuentaBancos;
+        if (s.nombreCuentaContable) acc.nombreCuentaContable = s.nombreCuentaContable;
+        if (s.tipoCuentaBancos) acc.tipoCuentaBancos = s.tipoCuentaBancos;
+        if (s.desc039) acc.desc039 = s.desc039;
+        if (s.desc036) acc.desc036 = s.desc036;
       }
 
       const seenSet = seen.get(key)!;
@@ -640,20 +701,16 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
   // appendear "T12:00:00Z" sobre una cadena que YA tiene una T producía
   // un Date inválido (NaN) que rompía ventanas de fecha en el motor de
   // cruce.
-  const trimDate = (v: unknown): string => {
-    const s = toStr(v);
-    if (!s) return '';
-    return s.length >= 10 ? s.slice(0, 10) : s;
-  };
-  const fechaFactura = trimDate(pick(raw, ['fechaFactura', 'fecha_factura', 'Fecha_Factura', 'fechaEmision', 'fecha_emision']));
-  const fechaVence = trimDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento', 'fecha_vencimiento', 'Fecha_Vencimiento', 'dueDate']));
+  const fechaFactura = trimIsoDate(pick(raw, ['fechaFactura', 'fecha_factura', 'Fecha_Factura', 'fechaEmision', 'fecha_emision']));
+  const fechaVence = trimIsoDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento', 'fecha_vencimiento', 'Fecha_Vencimiento', 'dueDate']));
   // Fecha de pago efectiva — JDE la llama Fecha_Pago. Para nosotros es el
   // ancla de cruce más tight (±5 días) cuando la factura ya está cobrada.
-  const fechaCobro = trimDate(pick(raw, [
+  const fechaCobro = trimIsoDate(pick(raw, [
     'fechaCobro', 'fecha_cobro',
     'fecha_pago', 'Fecha_Pago', // ← shape real del API
     'fechaProgramacionCobro', 'fechaProgCobro', 'fechaCobrado',
   ]));
+  const fechaContable = trimIsoDate(pick(raw, ['fechaContable', 'fecha_contable', 'Fecha_Contable']));
 
   // ── Días vencida ──
   // El API regresa `Dias_Fecha_Vencimiento_vs_Fecha_Pago` solo cuando la
@@ -701,10 +758,12 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),
     noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'No_Cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
     nombreCliente:           toStr(pick(raw, ['nombreCliente', 'nombre_cliente', 'Nombre_Cliente', 'nombre', 'razonSocial', 'razon_social', 'customerName'])),
+    rfc:                     toStr(pick(raw, ['rfc', 'RFC'])),
     noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura', 'Factura', 'invoice', 'invoiceNo'])),
     fechaFactura,
     fechaVence,
     fechaCobro,
+    fechaContable,
     diasVencida,
     importeBrutoPesos,
     importePendientePesos,
@@ -714,6 +773,11 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     condPago,
     estatus,
     tipoCambio:              toNum(pick(raw, ['tipoCambio', 'tipo_cambio', 'tc'])),
+    tasaFiscal:              toStr(pick(raw, ['tasaFiscal', 'TasaFiscal', 'tasa_fiscal'])),
+    subTotal:                toNum(pick(raw, ['subTotal', 'SubTotal', 'sub_total'])),
+    importeIVA:              toNum(pick(raw, ['importeIVA', 'Importe_IVA', 'importe_iva'])),
+    importeRetencion:        toNum(pick(raw, ['importeRetencion', 'Importe_RETENCION', 'importe_retencion'])),
+    uuidFiscal:              toStr(pick(raw, ['uuidFiscal', 'UUID_Fiscal', 'uuid_fiscal'])),
     // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
     // campos cada una, el JSON.stringify del store excedía el quota de
     // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se
@@ -786,6 +850,99 @@ export async function fetchCobranza(
   return list.map(mapCobranza);
 }
 
+// ───────────────────────────────────────────────────────────────
+// 5. Indicadores de Cobranza (recibos / aplicaciones)
+// ───────────────────────────────────────────────────────────────
+
+function mapCobranzaPaymentApplication(raw: RawRecord, idPago: string, cia: string): CobranzaPaymentApplication | null {
+  const noFactura = toStr(pick(raw, [
+    'No Factura', 'No_Factura', 'noFactura', 'no_factura', 'factura',
+  ]));
+  if (!noFactura) return null;
+
+  return {
+    idPago,
+    cia,
+    fechaAplicacion: trimIsoDate(pick(raw, ['Fecha aplicacion', 'Fecha_aplicacion', 'fechaAplicacion', 'fecha_aplicacion'])),
+    noCliente: toStr(pick(raw, ['No Cliente', 'No_Cliente', 'noCliente', 'no_cliente'])),
+    cliente: toStr(pick(raw, ['Cliente', 'cliente'])),
+    tipoDocto: toStr(pick(raw, ['Tipo Docto', 'Tipo_Docto', 'tipoDocto', 'tipo_docto'])),
+    noFactura,
+    noFacturaNormalizada: normalizeInvoiceRef(noFactura),
+    fechaFactura: trimIsoDate(pick(raw, ['Fecha Factura', 'Fecha_Factura', 'fechaFactura', 'fecha_factura'])),
+    fechaVencimiento: trimIsoDate(pick(raw, ['Fecha vencimiento', 'Fecha_Vencimiento', 'fechaVencimiento', 'fecha_vencimiento'])),
+    diasAntiguedadFafv: toNum(pick(raw, ['Dias Antiguedad FAFV', 'Dias_Antiguedad_FAFV', 'diasAntiguedadFafv'])),
+    importeCobrado: toNum(pick(raw, ['Importe Cobrado', 'Importe_Cobrado', 'importeCobrado', 'importe_cobrado'])),
+    importeOriginalFactura: toNum(pick(raw, ['Importe Original Factura', 'Importe_Original_Factura', 'importeOriginalFactura'])),
+    importePteFactura: toNum(pick(raw, ['Importe Pte Factura', 'Importe_Pte_Factura', 'importePteFactura'])),
+    tasaIva: toStr(pick(raw, ['tasa iva', 'tasa_iva', 'tasaIva', 'Tasa_IVA'])),
+    importeIvaFacturaOriginal: toNum(pick(raw, [
+      'Importe Iva Factura original',
+      'Importe_Iva_Factura_original',
+      'importeIvaFacturaOriginal',
+      'importe_iva_factura_original',
+    ])),
+  };
+}
+
+function mapCobranzaPaymentHeader(rows: RawRecord[], idPago: string, ciaFallback: string): CobranzaPayment {
+  const header = rows.reduce((best, row) => {
+    const current = toNum(pick(row, ['Importe Recibo', 'Importe_Recibo', 'importeRecibo', 'importe_recibo']));
+    const previous = toNum(pick(best, ['Importe Recibo', 'Importe_Recibo', 'importeRecibo', 'importe_recibo']));
+    return current > previous ? row : best;
+  }, rows[0]);
+  const cia = normalizeCia(pick(header, ['CIA', 'Cia', 'cia', 'compania'])) || ciaFallback;
+
+  return {
+    idPago,
+    cia,
+    fechaCobro: trimIsoDate(pick(header, ['Fecha Cobro', 'Fecha_Cobro', 'fechaCobro', 'fecha_cobro'])),
+    fechaContable: trimIsoDate(pick(header, ['Fecha Contable', 'Fecha_Contable', 'fechaContable', 'fecha_contable'])),
+    cuentaBancaria: toStr(pick(header, ['cta bancaria', 'cta_bancaria', 'cuentaBancaria', 'cuenta_bancaria'])),
+    banco: toStr(pick(header, ['Banco', 'banco'])),
+    noRecibo: toStr(pick(header, ['No Recibo', 'No_Recibo', 'noRecibo', 'no_recibo'])),
+    importeRecibo: toNum(pick(header, ['Importe Recibo', 'Importe_Recibo', 'importeRecibo', 'importe_recibo'])),
+    pendienteAplicar: toNum(pick(header, ['Pendiente de Aplicar', 'Pendiente_de_Aplicar', 'pendienteAplicar'])),
+    noCliente: toStr(pick(header, ['No Cliente', 'No_Cliente', 'noCliente', 'no_cliente'])),
+    cliente: toStr(pick(header, ['Cliente', 'cliente'])),
+    noBatch: toStr(pick(header, ['no batch', 'no_batch', 'noBatch', 'No_Batch'])),
+    tipoCambio: toNum(pick(header, ['tipo cambio', 'tipo_cambio', 'tipoCambio'])),
+    applications: rows
+      .map(row => mapCobranzaPaymentApplication(row, idPago, cia))
+      .filter((app): app is CobranzaPaymentApplication => app !== null),
+  };
+}
+
+export function normalizeCobranzaPayments(rows: Record<string, unknown>[], ciaFallback = ''): CobranzaPayment[] {
+  const groups = new Map<string, RawRecord[]>();
+  for (const row of rows) {
+    const idPago = toStr(pick(row, ['Id Pago', 'Id_Pago', 'idPago', 'id_pago']));
+    if (!idPago) continue;
+    const list = groups.get(idPago) ?? [];
+    list.push(row);
+    groups.set(idPago, list);
+  }
+
+  return Array.from(groups.entries())
+    .map(([idPago, group]) => mapCobranzaPaymentHeader(group, idPago, ciaFallback))
+    .filter(payment => payment.fechaCobro && payment.cuentaBancaria && payment.importeRecibo > 0)
+    .sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro) || a.idPago.localeCompare(b.idPago));
+}
+
+/**
+ * POST /v1/erp/tesoreria/indicadorescobranza
+ *
+ * Reporte de pagos/recibos y aplicaciones de cobranza. La respuesta plana se
+ * normaliza a un pago por `Id Pago`, con sus facturas aplicadas anidadas.
+ */
+export async function fetchIndicadoresCobranza(
+  req: CobranzaPaymentRequest,
+  config: JdeClientConfig = {},
+): Promise<CobranzaPayment[]> {
+  const raw = await jdeClient.post<unknown>('/indicadorescobranza', req, config);
+  return normalizeCobranzaPayments(unwrapList(raw), req.cia);
+}
+
 // Flag para que el log de shape solo aparezca una vez por sesión.
 let cobranzaShapeLogged = false;
 
@@ -798,6 +955,9 @@ export type {
   BankStatementRequest,
   BankStatementFormat,
   BankMovementType,
+  CobranzaPayment,
+  CobranzaPaymentApplication,
+  CobranzaPaymentRequest,
   CobranzaRecord,
   CobranzaRequest,
   Company,

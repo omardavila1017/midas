@@ -39,7 +39,7 @@
  *     "pendiente" si el saldo no coincide. Caso edge raro en Senda.
  */
 
-import type { BankAccountStatement, BankStatementLine, CobranzaRecord } from '../services/jdeTypes';
+import type { BankAccountStatement, BankStatementLine, CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
 import {
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
@@ -65,6 +65,9 @@ const DAY_MS = 86_400_000;
 // ── Tipos públicos ─────────────────────────────────────────────────────────
 
 export type MatchTier =
+  | 'payment-confirmed-ref'
+  | 'payment-auto-unique'
+  | 'payment-ambiguous'
   | 'invoice-reference'
   | 'customer-reference'
   | 'exact'
@@ -158,6 +161,10 @@ export interface RealReconciliationMatch {
   bankCia?: string;
   /** Movimientos que cubren la factura. 1 para match normal, N para multi-abono. */
   bankMovements?: BankMovementSnapshot[];
+  /** Id Pago de IndicadoresCobranza cuando el match viene por recibo. */
+  idPago?: string;
+  noRecibo?: string;
+  paymentMatchStatus?: 'CONFIRMED_REF' | 'AUTO_UNIQUE' | 'AMBIGUOUS';
 
   /** Si la factura es parte de un subset (un solo ABONO cubre varias). */
   subsetGroupId?: string;
@@ -180,6 +187,9 @@ export interface AbonoEnrichment {
     nombreCliente: string;
     importeBruto: number;
   }>;
+  idPago?: string;
+  noRecibo?: string;
+  paymentMatchStatus?: 'CONFIRMED_REF' | 'AUTO_UNIQUE' | 'AMBIGUOUS';
   /** Facturas candidatas cuando el ABONO no alcanzó confianza para auto-cruce. */
   candidateFacturas?: ReconciliationCandidateFactura[];
   matchReason?: string;
@@ -211,6 +221,11 @@ export interface RealReconciliationSummary {
   abonosFacturaCobrada: number;
   abonosSinFactura: number;
   abonosTraspasoInterno: number;
+  totalPagosIndicadores?: number;
+  pagosConciliadosBanco?: number;
+  pagosSinBanco?: number;
+  pagosMultiFactura?: number;
+  montoPagosMultiFacturaConciliado?: number;
 
   /** KPI principal: % de ABONOs que tienen una factura JDE asociada. */
   pctAbonosCruzados: number;
@@ -312,6 +327,9 @@ function computeConfidence(
   windowDays: number,
 ): number {
   const baseByTier =
+    tier === 'payment-confirmed-ref' ? 0.99 :
+    tier === 'payment-auto-unique' ? 0.94 :
+    tier === 'payment-ambiguous' ? 0.55 :
     tier === 'invoice-reference' ? 0.99 :
     tier === 'customer-reference' ? 0.93 :
     tier === 'exact' ? 0.86 :
@@ -483,6 +501,48 @@ function amountBucket(value: number): number {
 
 function normalizeCode(value: string): string {
   return normalizeName(value).replace(/[^A-Z0-9]/g, '');
+}
+
+function amountCents(value: number): number {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100);
+}
+
+function paymentMatchKey(cuenta: string, fecha: string, importe: number): string {
+  return `${cuenta.trim()}::${fecha}::${amountCents(importe)}`;
+}
+
+function bankCuentaContable(line: BankStatementLine): string {
+  return (line.cuentaContable || line.cuenta || '').trim();
+}
+
+function bankReferenceText(line: BankStatementLine): string {
+  return normalizeCode([
+    line.gsaid,
+    line.referencia,
+    line.referenciaCliente,
+    line.concepto,
+    line.infAdi1,
+    line.infAdi2,
+    line.infAdi3,
+    line.codigoTransaccionBanco,
+  ].filter(Boolean).join(' '));
+}
+
+function reciboTokens(noRecibo: string): string[] {
+  const tokens = new Set<string>();
+  const compact = normalizeCode(noRecibo);
+  if (/^\d{4,}$/.test(compact)) tokens.add(compact.replace(/^0+/, '') || '0');
+  for (const match of noRecibo.matchAll(/\d{4,}/g)) {
+    const token = match[0];
+    if (token === '2024' || token === '2025' || token === '2026') continue;
+    tokens.add(token.replace(/^0+/, '') || '0');
+  }
+  return Array.from(tokens).filter(token => token.length >= 4);
+}
+
+function bankContainsNoRecibo(line: BankStatementLine, noRecibo: string): boolean {
+  const text = bankReferenceText(line);
+  return reciboTokens(noRecibo).some(token => text.includes(token));
 }
 
 function significantNameTokens(value: string): string[] {
@@ -750,6 +810,8 @@ export interface RealReconcileOptions {
    * Default true.
    */
   enableUSD?: boolean;
+  /** Pagos/recibos de IndicadoresCobranza para conciliación banco → recibo → facturas. */
+  cobranzaPayments?: CobranzaPayment[];
 }
 
 /**
@@ -762,7 +824,7 @@ export function reconcileRealCollections(
   options: RealReconcileOptions = {},
 ): RealReconciliationResult {
   const startedAt = nowMs();
-  const { ciaFilter, enableUSD = true } = options;
+  const { ciaFilter, enableUSD = true, cobranzaPayments = [] } = options;
 
   // ── 1. Filtrar facturas relevantes (con saldo abierto Y cia permitida) ──
   const facturas = cobranzaRecords.filter(r => {
@@ -809,12 +871,14 @@ export function reconcileRealCollections(
   // ── 3. Agrupar e indexar facturas por identidad + monto ───────────────
   const facturasPorCliente = new Map<string, CobranzaRecord[]>();
   const facturaState = new Map<string, RealReconciliationMatch>();
+  const facturaKeyByNormalized = new Map<string, string>();
   for (const r of facturas) {
     const key = `${r.cia}::${r.noCliente}`;
     if (!facturasPorCliente.has(key)) facturasPorCliente.set(key, []);
     facturasPorCliente.get(key)!.push(r);
 
     const facturaKey = `${r.cia}::${r.noFactura}`;
+    facturaKeyByNormalized.set(`${r.cia}::${normalizeCode(r.noFactura)}`, facturaKey);
     facturaState.set(facturaKey, {
       cia: r.cia,
       noFactura: r.noFactura,
@@ -833,12 +897,23 @@ export function reconcileRealCollections(
       reviewStatus: 'unmatched',
     });
   }
+  const scopedPayments = cobranzaPayments.filter(payment => !ciaFilter || ciaFilter.has(payment.cia));
+  const paymentsByBankKey = new Map<string, CobranzaPayment[]>();
+  for (const payment of scopedPayments) {
+    if (!payment.cuentaBancaria || !payment.fechaCobro || payment.importeRecibo <= 0) continue;
+    addToListMap(
+      paymentsByBankKey,
+      paymentMatchKey(payment.cuentaBancaria, payment.fechaCobro, payment.importeRecibo),
+      payment,
+    );
+  }
   const indexes = buildFacturaIndexes(facturas);
   const indexMs = nowMs() - indexStartedAt;
 
   // ── 4. Set de facturas ya consumidas por algún ABONO ──
   const consumedFactura = new Set<string>(); // `${cia}::${noFactura}`
   const consumedAbono = new Set<string>();
+  const consumedPayment = new Set<string>();
   const enrichments: AbonoEnrichment[] = [];
   const unmatchedAbonos: UnmatchedAbono[] = [];
 
@@ -859,6 +934,75 @@ export function reconcileRealCollections(
       concepto: abono.concepto,
       referencia: abono.referencia,
     };
+
+    const paymentCandidates = (paymentsByBankKey.get(
+      paymentMatchKey(bankCuentaContable(abono), abono.fechaOperacion, abono.importe),
+    ) ?? []).filter(payment => !consumedPayment.has(payment.idPago));
+    const refPayment = paymentCandidates.find(payment => bankContainsNoRecibo(abono, payment.noRecibo));
+    const selectedPayment = refPayment ?? (paymentCandidates.length === 1 ? paymentCandidates[0] : null);
+    if (selectedPayment) {
+      const confirmedByRef = selectedPayment === refPayment;
+      const matchStatus = confirmedByRef ? 'CONFIRMED_REF' : 'AUTO_UNIQUE';
+      const tier: MatchTier = confirmedByRef ? 'payment-confirmed-ref' : 'payment-auto-unique';
+      const confidence = confirmedByRef ? 0.99 : 0.94;
+      const reason = confirmedByRef
+        ? `Banco cruza con Id Pago ${selectedPayment.idPago} y No Recibo ${selectedPayment.noRecibo}.`
+        : `Banco cruza con Id Pago ${selectedPayment.idPago} por cuenta contable, fecha e importe únicos.`;
+      const paidFacturas: AbonoEnrichment['facturas'] = [];
+
+      consumedPayment.add(selectedPayment.idPago);
+      consumedAbono.add(enrichment.movementKey);
+      for (const app of selectedPayment.applications) {
+        const facturaKey = facturaKeyByNormalized.get(`${app.cia || selectedPayment.cia}::${normalizeCode(app.noFactura)}`);
+        const state = facturaKey ? facturaState.get(facturaKey) : undefined;
+        if (!facturaKey || !state) continue;
+        consumedFactura.add(facturaKey);
+        state.status = 'cobrada-banco';
+        state.matchTier = tier;
+        state.confidence = confidence;
+        state.reviewStatus = 'auto';
+        state.matchReason = reason;
+        state.bankRef = abono.referencia;
+        state.bankAmount = app.importeCobrado || selectedPayment.importeRecibo;
+        state.bankDate = abono.fechaOperacion;
+        state.bankConcept = abono.concepto;
+        state.bankAccount = abono.cuenta;
+        state.bankCia = abono.cia;
+        state.bankMovements = [movementSnapshot(abono)];
+        state.idPago = selectedPayment.idPago;
+        state.noRecibo = selectedPayment.noRecibo;
+        state.paymentMatchStatus = matchStatus;
+        paidFacturas.push({
+          cia: state.cia,
+          noFactura: state.noFactura,
+          noCliente: state.noCliente,
+          nombreCliente: state.nombreCliente,
+          importeBruto: app.importeCobrado || state.importeBruto,
+        });
+      }
+
+      enrichment.status = paidFacturas.length > 0 ? 'factura-cobrada' : 'cobranza-sin-factura';
+      enrichment.matchTier = tier;
+      enrichment.confidence = confidence;
+      enrichment.matchReason = paidFacturas.length > 0
+        ? reason
+        : `${reason} No se encontró factura CXC correspondiente en /cobranza.`;
+      enrichment.facturas = paidFacturas.length > 0 ? paidFacturas : undefined;
+      enrichment.idPago = selectedPayment.idPago;
+      enrichment.noRecibo = selectedPayment.noRecibo;
+      enrichment.paymentMatchStatus = matchStatus;
+      enrichments.push(enrichment);
+      continue;
+    }
+
+    if (paymentCandidates.length > 1) {
+      enrichment.matchTier = 'payment-ambiguous';
+      enrichment.confidence = 0.55;
+      enrichment.matchReason = `${paymentCandidates.length} Id Pago comparten cuenta, fecha e importe; requiere revisión.`;
+      enrichment.paymentMatchStatus = 'AMBIGUOUS';
+      enrichments.push(enrichment);
+      continue;
+    }
 
     const invoiceFacturaKeys = candidateFacturaKeysFromText(indexes, abono);
     const strongClienteKeys = candidateClienteKeysFromText(indexes, abono);
@@ -1129,6 +1273,10 @@ export function reconcileRealCollections(
   const totalAbonoMonto = abonos.reduce((s, m) => s + m.importe, 0);
   const abonosFacturaCobrada = enrichments.filter(e => e.status === 'factura-cobrada').length;
   const abonosSinFactura = enrichments.filter(e => e.status === 'cobranza-sin-factura').length;
+  const pagosMultiFactura = scopedPayments.filter(payment => payment.applications.length > 1);
+  const montoPagosMultiFacturaConciliado = pagosMultiFactura
+    .filter(payment => consumedPayment.has(payment.idPago))
+    .reduce((sum, payment) => sum + payment.importeRecibo, 0);
 
   // Para el % de facturas cruzadas, denominador = facturas con saldo > 0.
   // Las que ya estaban cerradas en JDE no cuentan (no había nada que cruzar).
@@ -1172,6 +1320,11 @@ export function reconcileRealCollections(
     abonosFacturaCobrada,
     abonosSinFactura,
     abonosTraspasoInterno,
+    totalPagosIndicadores: scopedPayments.length,
+    pagosConciliadosBanco: consumedPayment.size,
+    pagosSinBanco: Math.max(0, scopedPayments.length - consumedPayment.size),
+    pagosMultiFactura: pagosMultiFactura.length,
+    montoPagosMultiFacturaConciliado,
     pctAbonosCruzados: abonos.length > 0 ? abonosFacturaCobrada / abonos.length : 0,
     pctFacturasCruzadas: facturasConSaldo.length > 0
       ? cobradas.length / facturasConSaldo.length

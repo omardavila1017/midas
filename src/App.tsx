@@ -9,9 +9,11 @@ import {
   fetchBankStatementsRange,
   fetchAgedBalances,
   fetchCobranza,
+  fetchIndicadoresCobranza,
   type Company,
   type BankAccountStatement,
   type BankStatementFormat,
+  type CobranzaPayment,
   type CobranzaRecord,
 } from './services/jde';
 
@@ -330,10 +332,12 @@ export default function App() {
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
   // Cobranza (CXC) — endpoint /v1/erp/tesoreria/cobranza, liberado a
   // producción 2026-05-01. Mismo patrón que cxpRecords: cache en localStorage
-  // a través de MidasStore (v7), refresh secuencial por cia, último año
+  // a través de MidasStore (v8), refresh secuencial por cia, último año
   // (fechaInicial = hoy - 365d).
   const [cobranzaRecords, setCobranzaRecords] = useState<CobranzaRecord[]>([]);
   const [cobranzaLoadedCias, setCobranzaLoadedCias] = useState<Record<string, string>>({});
+  const [cobranzaPayments, setCobranzaPayments] = useState<CobranzaPayment[]>([]);
+  const [cobranzaPaymentsLoadedCias, setCobranzaPaymentsLoadedCias] = useState<Record<string, string>>({});
   // Status del auto/manual fetch de cobranza — se muestra en la pestaña
   // Cobranza para que el usuario sepa qué pasó si la lista llega vacía.
   // Antes los errores eran silenciados y resultaba imposible diagnosticar
@@ -449,6 +453,7 @@ export default function App() {
             if (cancelled || reconciliationJobRef.current !== jobId) return;
             const result = reconcileRealCollections(cobranzaRecords, bankStatements, {
               ciaFilter: activeReconciliationCias?.length ? new Set(activeReconciliationCias) : undefined,
+              cobranzaPayments,
             });
             if (!cancelled && reconciliationJobRef.current === jobId) setCobranzaReconciliation(result);
           });
@@ -478,6 +483,7 @@ export default function App() {
         worker.postMessage({
           jobId,
           cobranzaRecords,
+          cobranzaPayments,
           bankStatements,
           ciaFilter: activeReconciliationCias,
         });
@@ -490,7 +496,7 @@ export default function App() {
       cancelled = true;
       cancelIdle();
     };
-  }, [cobranzaRecords, bankStatements, shouldComputeCobranzaReconciliation, activeReconciliationCiaKey]);
+  }, [cobranzaRecords, cobranzaPayments, bankStatements, shouldComputeCobranzaReconciliation, activeReconciliationCiaKey]);
   useEffect(() => {
     return () => {
       reconciliationWorkerRef.current?.terminate();
@@ -540,6 +546,8 @@ export default function App() {
       if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
       if (stored.cobranzaRecords?.length) setCobranzaRecords(stored.cobranzaRecords);
       if (stored.cobranzaLoadedCias) setCobranzaLoadedCias(stored.cobranzaLoadedCias);
+      if (stored.cobranzaPayments?.length) setCobranzaPayments(stored.cobranzaPayments);
+      if (stored.cobranzaPaymentsLoadedCias) setCobranzaPaymentsLoadedCias(stored.cobranzaPaymentsLoadedCias);
       if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
@@ -655,6 +663,7 @@ export default function App() {
       providers, clients,
       assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
       cobranzaRecords, cobranzaLoadedCias,
+      cobranzaPayments, cobranzaPaymentsLoadedCias,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
@@ -671,6 +680,7 @@ export default function App() {
     providers, clients,
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
     cobranzaRecords, cobranzaLoadedCias,
+    cobranzaPayments, cobranzaPaymentsLoadedCias,
     cashFlowOverrides,
   ]);
 
@@ -814,7 +824,10 @@ export default function App() {
     }
     const ciasToFetch = force
       ? activeCias
-      : activeCias.filter(cia => !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS));
+      : activeCias.filter(cia =>
+        !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
+        || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
+      );
     if (ciasToFetch.length === 0) return;
 
     setCobranzaRefreshing(true);
@@ -829,8 +842,11 @@ export default function App() {
     const errors: string[] = [];
     let totalRecords = 0;
     const fetchedRecords: CobranzaRecord[] = [];
+    const fetchedPayments: CobranzaPayment[] = [];
     const fetchedCias: string[] = [];
+    const fetchedPaymentCias: string[] = [];
     const fetchedTimestamps: Record<string, string> = {};
+    const fetchedPaymentTimestamps: Record<string, string> = {};
     try {
       for (const cia of ciasToFetch) {
         try {
@@ -844,6 +860,16 @@ export default function App() {
           const msg = e instanceof Error ? e.message : String(e);
           errors.push(`${cia}: ${msg}`);
         }
+        try {
+          const payments = await fetchIndicadoresCobranza({ cia, fechaInicial, fechaFinal });
+          const stampedPayments = payments.map(p => ({ ...p, cia: p.cia || cia }));
+          fetchedPayments.push(...stampedPayments);
+          fetchedPaymentCias.push(cia);
+          fetchedPaymentTimestamps[cia] = new Date().toISOString();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`${cia} indicadores: ${msg}`);
+        }
       }
 
       if (fetchedCias.length > 0) {
@@ -854,6 +880,14 @@ export default function App() {
         ]);
         setCobranzaLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
       }
+      if (fetchedPaymentCias.length > 0) {
+        const fetchedSet = new Set(fetchedPaymentCias);
+        setCobranzaPayments(prev => [
+          ...prev.filter(p => !fetchedSet.has(p.cia)),
+          ...fetchedPayments,
+        ]);
+        setCobranzaPaymentsLoadedCias(prev => ({ ...prev, ...fetchedPaymentTimestamps }));
+      }
 
       if (errors.length > 0) {
         setCobranzaError(`Errores en ${errors.length}/${ciasToFetch.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
@@ -863,7 +897,7 @@ export default function App() {
     } finally {
       setCobranzaRefreshing(false);
     }
-  }, [companies, cobranzaLoadedCias]);
+  }, [companies, cobranzaLoadedCias, cobranzaPaymentsLoadedCias]);
 
   const cobranzaAutoFetchDone = useRef(false);
   useEffect(() => {
@@ -1261,6 +1295,7 @@ export default function App() {
                   providers, clients,
                   assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
                   cobranzaRecords, cobranzaLoadedCias,
+                  cobranzaPayments, cobranzaPaymentsLoadedCias,
                   cashFlowOverrides,
                   lastSaved: new Date().toISOString(),
                 });
@@ -1344,6 +1379,7 @@ export default function App() {
                   providers={providers}
                   cxpRecords={cxpRecords}
                   cobranzaRecords={cobranzaRecords}
+                  cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
                   budget={budget}
@@ -1377,6 +1413,7 @@ export default function App() {
                   providers={providers}
                   cxpRecords={cxpRecords}
                   cobranzaRecords={cobranzaRecords}
+                  cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
                   budget={budget}

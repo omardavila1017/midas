@@ -11,7 +11,7 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import {
@@ -86,6 +86,7 @@ interface Props {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  cobranzaPayments?: CobranzaPayment[];
   cobranzaReconciliation?: RealReconciliationResult;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
@@ -130,6 +131,7 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.providers,
       props.cxpRecords,
       props.cobranzaRecords,
+      props.cobranzaPayments,
       props.cobranzaReconciliation,
       props.assumptions,
       props.budget,
@@ -527,9 +529,10 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       store: taxStore,
       providers: props.providers,
       cxpRecords: props.cxpRecords,
+      cobranzaPayments: props.cobranzaPayments,
       today,
     }),
-    [activeRun, props.cxpRecords, props.providers, taxStore, today],
+    [activeRun, props.cobranzaPayments, props.cxpRecords, props.providers, taxStore, today],
   );
   const supplierAlerts = useMemo(
     () => buildSupplierCriticalAlerts({

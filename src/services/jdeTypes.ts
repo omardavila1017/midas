@@ -6,6 +6,7 @@
  *   2. POST /bancos            → Estados de cuenta bancarios
  *   3. GET  /empresas          → Catálogo de compañías
  *   4. POST /cobranza          → Cobranza (CXC) por compañía y rango
+ *   5. POST /indicadorescobranza → Pagos/recibos y aplicaciones CXC
  *
  * Los shapes normalizados están alineados con los tipos ya usados en la
  * aplicación (p.ej. CXPRecord en components/CXP.tsx) para que los datos
@@ -116,6 +117,30 @@ export interface BankStatementLine {
   importe: number;
   /** Saldo contable al cierre del movimiento, si el banco lo reporta. */
   saldo?: number;
+  /** Identificador raw del estado/movimiento en JDE. */
+  gsaid?: string;
+  /** Cuenta contable JDE, p.ej. "11.1020.0011302"; llave para IndicadoresCobranza. */
+  cuentaContable?: string;
+  /** Cuenta bancaria raw de JDE antes de trim/normalización. */
+  cuentaBancos?: string;
+  /** Nombre raw de la cuenta contable de JDE. */
+  nombreCuentaContable?: string;
+  /** Fecha raw de estado de cuenta que devuelve JDE. */
+  fechaEstadoCuenta?: string;
+  /** Tipo raw de cuenta bancaria. */
+  tipoCuentaBancos?: string;
+  /** Descripción de tipo/cuenta bancaria. */
+  desc039?: string;
+  /** Descripción de moneda/categoría 36. */
+  desc036?: string;
+  /** Código de transacción bancaria raw. */
+  codigoTransaccionBanco?: string;
+  /** Referencia de cliente raw. */
+  referenciaCliente?: string;
+  /** Campos adicionales raw de JDE usados para trazabilidad y conciliación. */
+  infAdi1?: string;
+  infAdi2?: string;
+  infAdi3?: string;
 }
 
 /**
@@ -132,6 +157,12 @@ export interface BankAccountStatement {
   fechaEstadoCuenta: string;
   saldoInicial?: number;
   saldoFinal?: number;
+  cuentaContable?: string;
+  cuentaBancos?: string;
+  nombreCuentaContable?: string;
+  tipoCuentaBancos?: string;
+  desc039?: string;
+  desc036?: string;
   movimientos: BankStatementLine[];
 }
 
@@ -195,10 +226,12 @@ export interface CobranzaRecord {
   cia: string;
   noCliente: string;
   nombreCliente: string;
+  rfc?: string;
   noFactura: string;
   fechaFactura: string;
   fechaVence: string;
   fechaCobro: string;
+  fechaContable?: string;
   diasVencida: number;
   importeBrutoPesos: number;
   importePendientePesos: number;
@@ -208,8 +241,59 @@ export interface CobranzaRecord {
   condPago: string;
   estatus: string;
   tipoCambio: number;
+  tasaFiscal?: string;
+  subTotal?: number;
+  importeIVA?: number;
+  importeRetencion?: number;
+  uuidFiscal?: string;
   /** Registro original devuelto por el API, útil para depurar campos nuevos. */
   raw?: Record<string, unknown>;
+}
+
+// ───────────────────────────────────────────────────────────────
+// 5. Indicadores de Cobranza (recibos / aplicaciones)
+// ───────────────────────────────────────────────────────────────
+
+export interface CobranzaPaymentRequest {
+  cia: string;
+  fechaInicial: string | null;
+  fechaFinal: string;
+}
+
+export interface CobranzaPaymentApplication {
+  idPago: string;
+  cia: string;
+  fechaAplicacion: string;
+  noCliente: string;
+  cliente: string;
+  tipoDocto: string;
+  noFactura: string;
+  noFacturaNormalizada: string;
+  fechaFactura: string;
+  fechaVencimiento: string;
+  diasAntiguedadFafv: number;
+  importeCobrado: number;
+  importeOriginalFactura: number;
+  importePteFactura: number;
+  tasaIva: string;
+  importeIvaFacturaOriginal: number;
+}
+
+export interface CobranzaPayment {
+  idPago: string;
+  cia: string;
+  fechaCobro: string;
+  fechaContable: string;
+  cuentaBancaria: string;
+  banco: string;
+  noRecibo: string;
+  importeRecibo: number;
+  pendienteAplicar: number;
+  noCliente: string;
+  cliente: string;
+  noBatch: string;
+  tipoCambio: number;
+  applications: CobranzaPaymentApplication[];
 }
 
 // ───────────────────────────────────────────────────────────────

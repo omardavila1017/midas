@@ -2,6 +2,7 @@ import type { CXPRecord } from '../../../domain/persistence';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
+import type { CobranzaPayment } from '../../../services/jdeTypes';
 import type {
   FinancialMovement,
   ForecastRun,
@@ -289,6 +290,7 @@ export function buildTaxDashboardView(params: {
   providers?: Provider[];
   assumptions?: CashFlowAssumptions;
   cxpRecords?: CXPRecord[];
+  cobranzaPayments?: CobranzaPayment[];
   budget?: Budget | null;
   companyCode?: string;
   startDate?: string;
@@ -305,6 +307,14 @@ export function buildTaxDashboardView(params: {
   const ensure = (period: string) => ensureAccumulator(byPeriod, period);
   const rateContext = buildTaxRateContext(params.store, params.providers ?? []);
 
+  const realIvaPeriods = accumulateCobranzaPaymentIva({
+    payments: params.cobranzaPayments ?? [],
+    companyCode: params.companyCode,
+    startDate,
+    endDate,
+    ensure,
+  });
+
   accumulateProjectedClientIva({
     clients: params.clients ?? [],
     assumptions: params.assumptions,
@@ -312,6 +322,7 @@ export function buildTaxDashboardView(params: {
     endDate,
     rateContext,
     ensure,
+    skipPeriods: realIvaPeriods,
   });
 
   const handledCxpKeys = accumulateCxpIva({
@@ -515,6 +526,54 @@ function ensureAccumulator(map: Map<string, TaxPeriodAccumulator>, period: strin
   return next;
 }
 
+function accumulateCobranzaPaymentIva({
+  payments,
+  companyCode,
+  startDate,
+  endDate,
+  ensure,
+}: {
+  payments: CobranzaPayment[];
+  companyCode?: string;
+  startDate: string;
+  endDate: string;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): Set<string> {
+  const periods = new Set<string>();
+  for (const payment of payments) {
+    if (companyCode && companyCode !== 'all' && payment.cia !== companyCode) continue;
+    for (const app of payment.applications) {
+      const date = cleanIsoDate(payment.fechaCobro) ?? cleanIsoDate(app.fechaAplicacion);
+      if (!date || date < startDate || date > endDate) continue;
+      const amount = positiveNumber(app.importeCobrado);
+      if (amount <= 0) continue;
+      const original = positiveNumber(app.importeOriginalFactura);
+      const originalIva = positiveNumber(app.importeIvaFacturaOriginal);
+      const taxAmount = original > 0 && originalIva > 0
+        ? originalIva * Math.min(1, amount / original)
+        : 0;
+      const taxRate = taxRateFromIndicator(app.tasaIva, amount, taxAmount);
+      if (taxRate !== 16 && taxRate !== 8) continue;
+      const taxBase = Math.max(0, amount - taxAmount);
+      const line: TaxSourceLine = {
+        movementId: `cxc-payment:${payment.cia}:${payment.idPago}:${app.noFacturaNormalizada}`,
+        date,
+        concept: `Cobro ${payment.idPago} · Factura ${app.noFactura || 's/n'}`,
+        counterpartyName: app.cliente || payment.cliente,
+        amount,
+        taxBase,
+        taxRate,
+        taxAmount,
+        sourceSystem: 'JDE',
+        rateSource: 'JDE',
+      };
+      addIvaCaused(ensure(date.slice(0, 7)), line, taxRate);
+      periods.add(date.slice(0, 7));
+    }
+  }
+  return periods;
+}
+
 function accumulateProjectedClientIva({
   clients,
   assumptions,
@@ -522,6 +581,7 @@ function accumulateProjectedClientIva({
   endDate,
   rateContext,
   ensure,
+  skipPeriods,
 }: {
   clients: Client[];
   assumptions?: CashFlowAssumptions;
@@ -529,6 +589,7 @@ function accumulateProjectedClientIva({
   endDate: string;
   rateContext: TaxRateContext;
   ensure: (period: string) => TaxPeriodAccumulator;
+  skipPeriods?: Set<string>;
 }): void {
   if (!assumptions || clients.length === 0) return;
   const startYear = Number(startDate.slice(0, 4));
@@ -541,6 +602,7 @@ function accumulateProjectedClientIva({
         const events = projectClientMonth(client, year, month, { ...assumptions, year });
         for (const event of events) {
           if (event.realDate < startDate || event.realDate > endDate) continue;
+          if (skipPeriods?.has(event.realDate.slice(0, 7))) continue;
           if (event.amount <= 0) continue;
           const target = clientRateTarget(client);
           const resolution = resolveTaxRate(rateContext, target, client.ivaRate);
@@ -1040,6 +1102,14 @@ function taxRateFromAmounts(base: number, tax: number): 8 | 16 | undefined {
   const percent = (tax / base) * 100;
   if (Math.abs(percent - 16) <= 1) return 16;
   if (Math.abs(percent - 8) <= 1) return 8;
+  return undefined;
+}
+
+function taxRateFromIndicator(value: string, amount: number, taxAmount: number): 8 | 16 | undefined {
+  const text = normalizeText(value);
+  if (text.includes('IVA16') || text.includes('16')) return 16;
+  if (text.includes('IVA8') || text.includes('8')) return 8;
+  if (taxAmount > 0) return taxRateFromAmounts(Math.max(0, amount - taxAmount), taxAmount);
   return undefined;
 }
 

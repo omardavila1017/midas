@@ -3,6 +3,8 @@ import { reconcileRealCollections } from './realReconciliationEngine';
 import type {
   BankAccountStatement,
   BankStatementLine,
+  CobranzaPayment,
+  CobranzaPaymentApplication,
   CobranzaRecord,
 } from '../services/jdeTypes';
 
@@ -54,6 +56,38 @@ function makeAccount(p: {
     saldoInicial: 0,
     saldoFinal: 0,
     movimientos: p.movimientos,
+  };
+}
+
+function makePayment(p: Partial<CobranzaPayment> & Pick<CobranzaPayment, 'idPago' | 'cia' | 'fechaCobro' | 'cuentaBancaria' | 'noRecibo' | 'importeRecibo'>): CobranzaPayment {
+  return {
+    fechaContable: p.fechaContable ?? p.fechaCobro,
+    banco: p.banco ?? 'BANAMEX',
+    pendienteAplicar: p.pendienteAplicar ?? 0,
+    noCliente: p.noCliente ?? 'C-9001',
+    cliente: p.cliente ?? 'CLIENTE',
+    noBatch: p.noBatch ?? 'B-1',
+    tipoCambio: p.tipoCambio ?? 1,
+    applications: p.applications ?? [],
+    ...p,
+  };
+}
+
+function makeApplication(p: Partial<CobranzaPaymentApplication> & Pick<CobranzaPaymentApplication, 'idPago' | 'cia' | 'noFactura' | 'importeCobrado'>): CobranzaPaymentApplication {
+  return {
+    fechaAplicacion: p.fechaAplicacion ?? '2026-02-01',
+    noCliente: p.noCliente ?? 'C-9001',
+    cliente: p.cliente ?? 'CLIENTE',
+    tipoDocto: p.tipoDocto ?? 'RI',
+    noFacturaNormalizada: p.noFacturaNormalizada ?? p.noFactura.toUpperCase().replace(/\s*-\s*/g, '-').replace(/\s+/g, ''),
+    fechaFactura: p.fechaFactura ?? '2026-01-01',
+    fechaVencimiento: p.fechaVencimiento ?? '2026-02-01',
+    diasAntiguedadFafv: p.diasAntiguedadFafv ?? 0,
+    importeOriginalFactura: p.importeOriginalFactura ?? p.importeCobrado,
+    importePteFactura: p.importePteFactura ?? 0,
+    tasaIva: p.tasaIva ?? 'IVA16',
+    importeIvaFacturaOriginal: p.importeIvaFacturaOriginal ?? 0,
+    ...p,
   };
 }
 
@@ -328,6 +362,167 @@ describe('reconcileRealCollections — multi-abono', () => {
     expect(result.matches[0].matchTier).toBe('multi-abono');
     expect(result.matches[0].bankMovements).toHaveLength(2);
     expect(result.summary.abonosFacturaCobrada).toBe(2);
+  });
+});
+
+describe('reconcileRealCollections — IndicadoresCobranza', () => {
+  it('cruza banco → recibo por cuenta, fecha, importe y No Recibo; después distribuye a 2 facturas', () => {
+    const f1 = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-90829',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1160,
+    });
+    const f2 = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-90830',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 580,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '000123',
+      cuentaContable: '11.1020.0011302',
+      fechaOperacion: '2026-02-10',
+      importe: 1740,
+      referencia: 'SPEI',
+      infAdi1: 'PAGO RECIBO RI-90829',
+    });
+    const payment = makePayment({
+      idPago: 'PAY-1',
+      cia: '00011',
+      fechaCobro: '2026-02-10',
+      cuentaBancaria: '11.1020.0011302',
+      noRecibo: 'RI - 90829',
+      importeRecibo: 1740,
+      applications: [
+        makeApplication({ idPago: 'PAY-1', cia: '00011', noFactura: 'RI - 90829', importeCobrado: 1160 }),
+        makeApplication({ idPago: 'PAY-1', cia: '00011', noFactura: 'RI-90830', importeCobrado: 580 }),
+      ],
+    });
+
+    const result = reconcileRealCollections(
+      [f1, f2],
+      [makeAccount({ cia: '00011', cuenta: '000123', movimientos: [abono] })],
+      { cobranzaPayments: [payment] },
+    );
+
+    expect(result.matches).toHaveLength(2);
+    expect(result.matches.every(match => match.status === 'cobrada-banco')).toBe(true);
+    expect(result.matches.every(match => match.matchTier === 'payment-confirmed-ref')).toBe(true);
+    expect(result.matches.every(match => match.paymentMatchStatus === 'CONFIRMED_REF')).toBe(true);
+    expect(result.matches.map(match => match.idPago)).toEqual(['PAY-1', 'PAY-1']);
+    expect(result.abonoEnrichments[0]).toMatchObject({
+      status: 'factura-cobrada',
+      matchTier: 'payment-confirmed-ref',
+      idPago: 'PAY-1',
+      noRecibo: 'RI - 90829',
+      paymentMatchStatus: 'CONFIRMED_REF',
+    });
+    expect(result.abonoEnrichments[0].facturas).toHaveLength(2);
+    expect(result.summary.totalPagosIndicadores).toBe(1);
+    expect(result.summary.pagosConciliadosBanco).toBe(1);
+    expect(result.summary.pagosMultiFactura).toBe(1);
+    expect(result.summary.montoPagosMultiFacturaConciliado).toBe(1740);
+  });
+
+  it('cruza automáticamente cuando cuenta, fecha e importe identifican un único Id Pago aunque el banco no traiga No Recibo', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-100',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '000123',
+      cuentaContable: '11.1020.0011302',
+      fechaOperacion: '2026-02-10',
+      importe: 1000,
+      concepto: 'TRANSFERENCIA SPEI',
+    });
+    const payment = makePayment({
+      idPago: 'PAY-UNIQUE',
+      cia: '00011',
+      fechaCobro: '2026-02-10',
+      cuentaBancaria: '11.1020.0011302',
+      noRecibo: 'RI-100',
+      importeRecibo: 1000,
+      applications: [
+        makeApplication({ idPago: 'PAY-UNIQUE', cia: '00011', noFactura: 'RI-100', importeCobrado: 1000 }),
+      ],
+    });
+
+    const result = reconcileRealCollections(
+      [factura],
+      [makeAccount({ cia: '00011', cuenta: '000123', movimientos: [abono] })],
+      { cobranzaPayments: [payment] },
+    );
+
+    expect(result.matches[0].status).toBe('cobrada-banco');
+    expect(result.matches[0].matchTier).toBe('payment-auto-unique');
+    expect(result.matches[0].paymentMatchStatus).toBe('AUTO_UNIQUE');
+    expect(result.abonoEnrichments[0].paymentMatchStatus).toBe('AUTO_UNIQUE');
+  });
+
+  it('deja en revisión cuando dos Id Pago tienen la misma cuenta, fecha e importe', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-AMB',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '000123',
+      cuentaContable: '11.1020.0011302',
+      fechaOperacion: '2026-02-10',
+      importe: 1000,
+      concepto: 'TRANSFERENCIA SPEI',
+    });
+    const payments = [
+      makePayment({
+        idPago: 'PAY-A',
+        cia: '00011',
+        fechaCobro: '2026-02-10',
+        cuentaBancaria: '11.1020.0011302',
+        noRecibo: 'RI-101',
+        importeRecibo: 1000,
+        applications: [
+          makeApplication({ idPago: 'PAY-A', cia: '00011', noFactura: 'RI-AMB', importeCobrado: 1000 }),
+        ],
+      }),
+      makePayment({
+        idPago: 'PAY-B',
+        cia: '00011',
+        fechaCobro: '2026-02-10',
+        cuentaBancaria: '11.1020.0011302',
+        noRecibo: 'RI-102',
+        importeRecibo: 1000,
+        applications: [
+          makeApplication({ idPago: 'PAY-B', cia: '00011', noFactura: 'RI-AMB', importeCobrado: 1000 }),
+        ],
+      }),
+    ];
+
+    const result = reconcileRealCollections(
+      [factura],
+      [makeAccount({ cia: '00011', cuenta: '000123', movimientos: [abono] })],
+      { cobranzaPayments: payments },
+    );
+
+    expect(result.matches[0].status).toBe('pendiente');
+    expect(result.abonoEnrichments[0]).toMatchObject({
+      status: 'cobranza-sin-factura',
+      matchTier: 'payment-ambiguous',
+      paymentMatchStatus: 'AMBIGUOUS',
+    });
+    expect(result.summary.pagosConciliadosBanco).toBe(0);
+    expect(result.summary.pagosSinBanco).toBe(2);
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
+import type { CobranzaPayment } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, TaxObligation } from '../../shared-finance/types';
 import {
@@ -218,6 +219,88 @@ describe('taxModuleService', () => {
     expect(may.iva.unclassifiedIncome).toBe(0);
   });
 
+  it('calculates caused IVA from real Cobranza payment applications with partial payments', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-PARTIAL',
+          fechaCobro: '2026-05-10',
+          importeRecibo: 580,
+          applications: [{
+            noFactura: 'RI-100',
+            importeCobrado: 580,
+            importeOriginalFactura: 1160,
+            importeIvaFacturaOriginal: 160,
+            tasaIva: 'IVA16',
+          }],
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.incomeBase16).toBeCloseTo(500);
+    expect(may.iva.ivaCaused16).toBeCloseTo(80);
+    expect(may.iva.ivaCaused).toBeCloseTo(80);
+    expect(may.iva.incomeLines[0]).toMatchObject({
+      concept: 'Cobro PAY-PARTIAL · Factura RI-100',
+      sourceSystem: 'JDE',
+      rateSource: 'JDE',
+    });
+  });
+
+  it('sums multi-invoice caused IVA by period and ignores exempt applications', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-MULTI',
+          fechaCobro: '2026-05-12',
+          importeRecibo: 2740,
+          applications: [
+            {
+              noFactura: 'RI-16',
+              importeCobrado: 1160,
+              importeOriginalFactura: 1160,
+              importeIvaFacturaOriginal: 160,
+              tasaIva: 'IVA16',
+            },
+            {
+              noFactura: 'RI-8',
+              importeCobrado: 1080,
+              importeOriginalFactura: 1080,
+              importeIvaFacturaOriginal: 80,
+              tasaIva: 'IVA8',
+            },
+            {
+              noFactura: 'RI-EXENTO',
+              importeCobrado: 500,
+              importeOriginalFactura: 500,
+              importeIvaFacturaOriginal: 0,
+              tasaIva: 'EXENTO',
+            },
+          ],
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.incomeBase16).toBeCloseTo(1000);
+    expect(may.iva.ivaCaused16).toBeCloseTo(160);
+    expect(may.iva.incomeBase8).toBeCloseTo(1000);
+    expect(may.iva.ivaCaused8).toBeCloseTo(80);
+    expect(may.iva.ivaCaused).toBeCloseTo(240);
+    expect(may.iva.incomeLines).toHaveLength(2);
+  });
+
   it('calculates ISN as 3% of payroll and supports manual override', () => {
     const projection = projectionFor([
       movement('payroll', 'OUTFLOW', 'PAYROLL', '2026-06-15', 1000, {
@@ -321,6 +404,53 @@ function client(input: {
     monthlyBilling,
     complianceRate: 1,
     ivaRate: input.ivaRate,
+  };
+}
+
+function cobranzaPayment(input: {
+  idPago: string;
+  fechaCobro: string;
+  importeRecibo: number;
+  applications: Array<{
+    noFactura: string;
+    importeCobrado: number;
+    importeOriginalFactura: number;
+    importeIvaFacturaOriginal: number;
+    tasaIva: string;
+  }>;
+}): CobranzaPayment {
+  return {
+    idPago: input.idPago,
+    cia: '00011',
+    fechaCobro: input.fechaCobro,
+    fechaContable: input.fechaCobro,
+    cuentaBancaria: '11.1020.0011302',
+    banco: 'BANAMEX',
+    noRecibo: input.idPago,
+    importeRecibo: input.importeRecibo,
+    pendienteAplicar: 0,
+    noCliente: 'C-9001',
+    cliente: 'Cliente IVA',
+    noBatch: 'B-1',
+    tipoCambio: 1,
+    applications: input.applications.map((app) => ({
+      idPago: input.idPago,
+      cia: '00011',
+      fechaAplicacion: input.fechaCobro,
+      noCliente: 'C-9001',
+      cliente: 'Cliente IVA',
+      tipoDocto: 'RI',
+      noFactura: app.noFactura,
+      noFacturaNormalizada: app.noFactura,
+      fechaFactura: '2026-05-01',
+      fechaVencimiento: '2026-05-31',
+      diasAntiguedadFafv: 0,
+      importeCobrado: app.importeCobrado,
+      importeOriginalFactura: app.importeOriginalFactura,
+      importePteFactura: 0,
+      tasaIva: app.tasaIva,
+      importeIvaFacturaOriginal: app.importeIvaFacturaOriginal,
+    })),
   };
 }
 

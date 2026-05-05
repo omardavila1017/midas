@@ -1960,6 +1960,9 @@ function BankBadge({ match }: { match?: RealReconciliationMatch }) {
   }
   if (match.status === 'cobrada-banco') {
     const tierLabel: Record<RealMatchTier, string> = {
+      'payment-confirmed-ref': 'Recibo ref.',
+      'payment-auto-unique': 'Recibo',
+      'payment-ambiguous': 'Recibo rev.',
       'invoice-reference': 'Factura ref.',
       'customer-reference': 'Cliente ref.',
       exact: 'Exacto',

@@ -28,6 +28,9 @@ import type {
 } from '../domain/realReconciliationEngine';
 
 const TIER_LABEL: Record<MatchTier, string> = {
+  'payment-confirmed-ref': 'Recibo confirmado',
+  'payment-auto-unique': 'Recibo automático',
+  'payment-ambiguous': 'Recibo ambiguo',
   'invoice-reference': 'Referencia a factura',
   'customer-reference': 'Referencia a cliente',
   exact: 'Exacto al céntimo',
@@ -37,6 +40,9 @@ const TIER_LABEL: Record<MatchTier, string> = {
 };
 
 const TIER_COLOR: Record<MatchTier, string> = {
+  'payment-confirmed-ref': 'var(--success)',
+  'payment-auto-unique': 'var(--success)',
+  'payment-ambiguous': 'var(--warning, #d97706)',
   'invoice-reference': 'var(--success)',
   'customer-reference': 'var(--success)',
   exact: 'var(--success)',

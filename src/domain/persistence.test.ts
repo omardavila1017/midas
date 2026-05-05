@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { saveStore, loadStore, importStore, exportStore, getDefaultStore, clearStore } from './persistence';
 
-describe('persistence v6', () => {
+describe('persistence v8', () => {
   beforeEach(() => {
     clearStore();
   });
@@ -53,7 +53,7 @@ describe('persistence v6', () => {
     expect(loaded!.clients).toHaveLength(1);
     expect(loaded!.cashFlowOverrides['2026-05']).toEqual({ income: 1000 });
     expect(localStorage.getItem('midas-v5')).toBeNull();
-    expect(localStorage.getItem('midas-v6')).not.toBeNull();
+    expect(localStorage.getItem('midas-v8')).not.toBeNull();
   });
 
   it('migrates legacy v4 store: keeps clients/providers, drops everything simulation-y', () => {

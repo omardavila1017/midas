@@ -44,6 +44,12 @@ export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAc
           fechaEstadoCuenta: statement.fechaEstadoCuenta,
           saldoInicial: statement.saldoInicial,
           saldoFinal: statement.saldoFinal,
+          cuentaContable: statement.cuentaContable,
+          cuentaBancos: statement.cuentaBancos,
+          nombreCuentaContable: statement.nombreCuentaContable,
+          tipoCuentaBancos: statement.tipoCuentaBancos,
+          desc039: statement.desc039,
+          desc036: statement.desc036,
           movimientos: [],
         };
         merged.set(key, acc);
@@ -62,6 +68,12 @@ export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAc
         if (statement.saldoFinal !== undefined) acc.saldoFinal = statement.saldoFinal;
         if (statement.nombreBanco) acc.nombreBanco = statement.nombreBanco;
         if (statement.banco) acc.banco = statement.banco;
+        if (statement.cuentaContable) acc.cuentaContable = statement.cuentaContable;
+        if (statement.cuentaBancos) acc.cuentaBancos = statement.cuentaBancos;
+        if (statement.nombreCuentaContable) acc.nombreCuentaContable = statement.nombreCuentaContable;
+        if (statement.tipoCuentaBancos) acc.tipoCuentaBancos = statement.tipoCuentaBancos;
+        if (statement.desc039) acc.desc039 = statement.desc039;
+        if (statement.desc036) acc.desc036 = statement.desc036;
       }
 
       const seen = seenMovements.get(key)!;

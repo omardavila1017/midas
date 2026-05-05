@@ -14,7 +14,7 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
@@ -53,6 +53,7 @@ interface Props {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  cobranzaPayments?: CobranzaPayment[];
   cobranzaReconciliation?: RealReconciliationResult;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
@@ -117,6 +118,7 @@ export default function TaxDashboard(props: Props) {
       providers: props.providers,
       assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
+      cobranzaPayments: props.cobranzaPayments,
       budget: props.budget,
       companyCode: props.companyCode,
       startDate: fiscalYearStart,
@@ -125,7 +127,7 @@ export default function TaxDashboard(props: Props) {
       store: taxStore,
       today,
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cxpRecords, props.providers, source.movements, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpRecords, props.providers, source.movements, taxStore, today],
   );
 
   useEffect(() => {

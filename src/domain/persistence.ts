@@ -1,5 +1,8 @@
 /**
- * Persistence layer for Midas — v7.
+ * Persistence layer for Midas — v8.
+ *
+ * v8 adds IndicadoresCobranza payments (recibos/aplicaciones) as the
+ * bridge between bank deposits and CXC invoices.
  *
  * v7 adds CXC support (cobranza) alongside the existing CXP records. The
  * cobranza endpoint (POST /v1/erp/tesoreria/cobranza) was liberated to
@@ -14,20 +17,21 @@
  * cash-flow overrides).
  *
  * Migrations:
- *   - midas-v6 → midas-v7: ADD cobranzaRecords / cobranzaLoadedCias as empty
- *     defaults. Existing v6 stores load fine — `normalizeStore` defaults the
- *     new arrays to empty.
- *   - midas-v5 → midas-v7: drop proposals/scenarios/activeScenarioId, keep
- *     the rest as-is.
- *   - flowsense-v5 → midas-v7: same shape rebrand, dropping the simulation
- *     fields.
- *   - flowsense-v1..v4 → midas-v7: incompatible simulation models; keep only
+ *   - midas-v7 → midas-v8: ADD cobranzaPayments /
+ *     cobranzaPaymentsLoadedCias as empty defaults.
+ *   - midas-v6 → midas-v8: ADD cobranzaRecords/cobranzaLoadedCias and
+ *     cobranzaPayments/cobranzaPaymentsLoadedCias as empty defaults.
+ *   - midas-v5 → midas-v8: drop proposals/scenarios/activeScenarioId, keep
+ *     the rest as-is and add the new cobranza caches.
+ *   - flowsense-v5 → midas-v8: same shape rebrand, dropping the simulation
+ *     fields and adding cobranza caches.
+ *   - flowsense-v1..v4 → midas-v8: incompatible simulation models; keep only
  *     the catalog/CXP/assumptions data.
  */
 
 import { CashFlowOverrides } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
-import type { CobranzaRecord } from '../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
 
 export interface CXPRecord {
   cia: string;
@@ -79,15 +83,22 @@ export interface MidasStore {
    * that were just refreshed in another browser tab.
    */
   cobranzaLoadedCias: Record<string, string>;
+  /**
+   * Pagos/recibos de IndicadoresCobranza, agrupados por Id Pago. Se usan
+   * como capa intermedia banco → recibo → facturas.
+   */
+  cobranzaPayments: CobranzaPayment[];
+  /** Per-cia ISO timestamp del último refresh exitoso de IndicadoresCobranza. */
+  cobranzaPaymentsLoadedCias: Record<string, string>;
   cashFlowOverrides: CashFlowOverrides;
   lastSaved: string;
 }
 
-const STORE_VERSION = 7;
-const STORAGE_KEY = 'midas-v7';
-// v6 lives at the same shape minus the cobranza fields — `normalizeStore`
-// defaults them to empty arrays, so v6 payloads load transparently.
-const SAME_SCHEMA_LEGACY_KEYS = ['midas-v6', 'midas-v5', 'flowsense-v5'];
+const STORE_VERSION = 8;
+const STORAGE_KEY = 'midas-v8';
+// v5-v7 live at compatible shapes minus newer cobranza fields — `normalizeStore`
+// defaults them to empty arrays, so those payloads load transparently.
+const SAME_SCHEMA_LEGACY_KEYS = ['midas-v7', 'midas-v6', 'midas-v5', 'flowsense-v5'];
 const LEGACY_KEYS = ['flowsense-v4', 'flowsense-v3', 'flowsense-v2', 'flowsense-v1'];
 
 function isoNow(): string {
@@ -108,6 +119,8 @@ export function getDefaultStore(): MidasStore {
     cxpLoadedCias: {},
     cobranzaRecords: [],
     cobranzaLoadedCias: {},
+    cobranzaPayments: [],
+    cobranzaPaymentsLoadedCias: {},
     cashFlowOverrides: {},
     lastSaved: isoNow(),
   };
@@ -175,8 +188,8 @@ function normalizeStore(raw: unknown): MidasStore {
     }
   }
 
-  // Cobranza (CXC) — v7+. v6 payloads simply lack these keys and fall back to
-  // empty defaults, which lets the auto-fetch effect populate them on boot.
+  // Cobranza (CXC) — v7+. Older payloads simply lack these keys and fall back
+  // to empty defaults, which lets the auto-fetch effect populate them on boot.
   // Importante: si el record cargado trae `raw` (heredado de un cache de
   // antes del fix de crash), lo eliminamos al cargar para que el siguiente
   // save no vuelva a persistirlo. Esto cura los browsers de los usuarios
@@ -200,6 +213,15 @@ function normalizeStore(raw: unknown): MidasStore {
       if (typeof val === 'string') cobranzaLoadedCias[k] = val;
     }
   }
+  const cobranzaPayments = Array.isArray(o.cobranzaPayments)
+    ? (o.cobranzaPayments.filter((r) => !!r && typeof r === 'object') as CobranzaPayment[])
+    : [];
+  const cobranzaPaymentsLoadedCias: Record<string, string> = {};
+  if (o.cobranzaPaymentsLoadedCias && typeof o.cobranzaPaymentsLoadedCias === 'object') {
+    for (const [k, val] of Object.entries(o.cobranzaPaymentsLoadedCias as Record<string, unknown>)) {
+      if (typeof val === 'string') cobranzaPaymentsLoadedCias[k] = val;
+    }
+  }
 
   return {
     providers,
@@ -209,6 +231,8 @@ function normalizeStore(raw: unknown): MidasStore {
     cxpLoadedCias,
     cobranzaRecords,
     cobranzaLoadedCias,
+    cobranzaPayments,
+    cobranzaPaymentsLoadedCias,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
     assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
     lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,
@@ -255,24 +279,27 @@ export function loadStore(): MidasStore | null {
     // fallthrough
   }
 
-  // Same-shape migrations — el normalizer ya rellena los campos nuevos de v7
-  // (cobranzaRecords/cobranzaLoadedCias) con defaults vacíos, así que basta
-  // con re-guardar bajo la nueva clave y limpiar la vieja.
+  // Same-shape migrations — el normalizer ya rellena los campos nuevos
+  // (cobranzaRecords/cobranzaLoadedCias y cobranzaPayments/
+  // cobranzaPaymentsLoadedCias) con defaults vacíos, así que basta con
+  // re-guardar bajo la nueva clave y limpiar la vieja.
   //
-  //   midas-v6 → midas-v7: solo agregamos cobranza (no se descarta nada).
-  //   midas-v5 / flowsense-v5 → midas-v7: descartar propuestas/escenarios
-  //     legacy (`normalizeStore` los ignora) y agregar cobranza vacía.
+  //   midas-v6/v7 → midas-v8: solo agregamos caches de cobranza faltantes.
+  //   midas-v5 / flowsense-v5 → midas-v8: descartar propuestas/escenarios
+  //     legacy (`normalizeStore` los ignora) y agregar caches vacíos.
   for (const legacyKey of SAME_SCHEMA_LEGACY_KEYS) {
     try {
       const raw = localStorage.getItem(legacyKey);
       if (!raw) continue;
       const payload = JSON.parse(raw) as { version?: number; data?: unknown };
       if (payload && typeof payload === 'object' && payload.data !== undefined) {
-        const isV6 = legacyKey === 'midas-v6';
+        const dropsLegacySimulation = legacyKey === 'midas-v5' || legacyKey === 'flowsense-v5';
         // eslint-disable-next-line no-console
         console.info(
           `[persistence] migrando ${legacyKey} → ${STORAGE_KEY}` +
-            (isV6 ? '; agregando cobranza vacía.' : '; descartando propuestas/escenarios legacy.'),
+            (dropsLegacySimulation
+              ? '; descartando propuestas/escenarios legacy.'
+              : '; agregando caches de cobranza faltantes.'),
         );
         const migrated = normalizeStore(payload.data);
         saveStore(migrated);

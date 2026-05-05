@@ -5,10 +5,11 @@ import type {
 } from './realReconciliationWorkerTypes';
 
 self.onmessage = (event: MessageEvent<RealReconciliationWorkerRequest>) => {
-  const { jobId, cobranzaRecords, bankStatements, ciaFilter } = event.data;
+  const { jobId, cobranzaRecords, cobranzaPayments, bankStatements, ciaFilter } = event.data;
   try {
     const result = reconcileRealCollections(cobranzaRecords, bankStatements, {
       ciaFilter: ciaFilter?.length ? new Set(ciaFilter) : undefined,
+      cobranzaPayments,
     });
     const response: RealReconciliationWorkerResponse = { jobId, result };
     self.postMessage(response);
