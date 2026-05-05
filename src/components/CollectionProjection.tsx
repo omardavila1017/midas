@@ -1435,14 +1435,15 @@ function CobranzaRealCalendar({
     return map;
   }, [monthEvents]);
 
+  // Totales por fuente. La KPI strip estilo legacy solo muestra
+  // BANK_MATCHED (Real banco) y JDE+CXC (pendiente). BANK_UNMATCHED y
+  // PROYECTADO siguen reflejados en el calendario por color/dot pero ya
+  // no necesitan acumular un total — la fila inline de seis números
+  // que vivía aquí migró a la KPI strip de cuatro bloques.
   const totalMes = monthEvents.reduce((s, event) => s + event.amount, 0);
   const bankTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_MATCHED');
-  const bankUnmatchedTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_UNMATCHED');
   const jdeTotal = collectionSourceAmount(monthEvents, source => source === 'JDE_PAID_UNMATCHED');
   const cxcTotal = collectionSourceAmount(monthEvents, source => source === 'CXC_RULED_PENDING' || source === 'CXC_UNRULED_PENDING');
-  const projectedTotal = collectionSourceAmount(monthEvents, source => source === 'PROJECTED_CLIENT_RULE');
-  const matchedBankTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_MATCHED');
-  const pctMes = bankTotal > 0 ? (matchedBankTotal / bankTotal) * 100 : 0;
 
   const firstDay = new Date(Date.UTC(year, month, 1));
   const lastDay = new Date(Date.UTC(year, month + 1, 0));
@@ -1495,128 +1496,218 @@ function CobranzaRealCalendar({
     if (selectedDay && !byDay.has(selectedDay)) setSelectedDay(null);
   }, [selectedDay, byDay]);
 
+  // ── Métricas derivadas para la KPI strip estilo legacy ─────────────────
+  // El legacy original mostraba (Total / Cobrado / Proyectado / % Avance).
+  // Aquí adaptamos a las cuatro fuentes del modelo nuevo:
+  //   1. Total CXC          — todo lo agregado por el calendar engine.
+  //   2. Real banco         — BANK_MATCHED (entró al banco y cruzó factura).
+  //   3. JDE + CXC pendiente — JDE_PAID_UNMATCHED + CXC_RULED_PENDING +
+  //      CXC_UNRULED_PENDING. Es la cobranza que JDE/CXC reconoce pero
+  //      todavía no aparece cruzada con banco.
+  //   4. % Cruzado banco    — qué fracción de la cobranza esperada
+  //      (BANK + JDE + CXC) ya cobró por banco. Excluye PROYECTADO porque
+  //      no es factura emitida.
+  const pendingTotal = jdeTotal + cxcTotal;
+  const expectedThisMonth = bankTotal + pendingTotal;
+  const progressPct = expectedThisMonth > 0
+    ? (bankTotal / expectedThisMonth) * 100
+    : 0;
+  const eventCount = monthEvents.length;
+  const uniqueClientCount = useMemo(() => {
+    const set = new Set<string>();
+    for (const event of monthEvents) {
+      const key = event.clientId
+        ?? `${event.cia ?? ''}::${event.noCliente ?? ''}`;
+      set.add(key);
+    }
+    return set.size;
+  }, [monthEvents]);
+
+  // Totales semanales (lunes-domingo). Replica el bloque "Cobranza
+  // semanal" del calendario legacy. Si el mes no tiene eventos
+  // visibles la sección no se renderiza.
+  const weeklyTotals = useMemo(() => {
+    const weeks: Record<string, number> = {};
+    for (const [date, evts] of byDay.entries()) {
+      const d = new Date(date + 'T12:00:00');
+      const weekStart = new Date(d);
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+      const key = weekStart.toISOString().slice(0, 10);
+      weeks[key] = (weeks[key] ?? 0) + evts.reduce((s, e) => s + e.amount, 0);
+    }
+    return weeks;
+  }, [byDay]);
+
+  const todayISO = new Date().toISOString().slice(0, 10);
+
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-1">
+    <div className="space-y-4">
+      {/* ── KPI strip estilo legacy ────────────────────────────
+          Cuatro bloques: Total CXC, Real banco, JDE+CXC pendiente,
+          % Cruzado banco con barra de avance. La fila inline de seis
+          totales que vivía aquí migró a esta estructura para que el
+          primer scan visual sea idéntico al calendario legacy. */}
+      <div className="bg-white border border-[var(--gray-200)] rounded-xl p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Total CXC</div>
+          <AnimatedNumber
+            value={totalMes}
+            format={fmtCurrency}
+            className="block text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+          />
+          <div className="text-[11px] text-[var(--gray-400)]">
+            {eventCount} evento{eventCount !== 1 ? 's' : ''} · {uniqueClientCount} cliente{uniqueClientCount !== 1 ? 's' : ''}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--success)]">Real banco</div>
+          <AnimatedNumber
+            value={bankTotal}
+            format={fmtCurrency}
+            className="block text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5"
+          />
+          <div className="text-[11px] text-[var(--gray-400)]">cruzado con banco</div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--primary)]">JDE + CXC pendiente</div>
+          <AnimatedNumber
+            value={pendingTotal}
+            format={fmtCurrency}
+            className="block text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5"
+          />
+          <div className="text-[11px] text-[var(--gray-400)]">JDE pago + factura abierta</div>
+        </div>
+        <div className="ml-auto min-w-[200px]">
+          <div className="flex items-baseline justify-between">
+            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Cruzado banco</div>
+            <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)]">
+              {expectedThisMonth > 0 ? (
+                <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
+              ) : (
+                '—'
+              )}
+            </div>
+          </div>
+          <div className="mt-1.5 h-1.5 bg-[var(--gray-50)] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-[var(--success)] rounded-full"
+              style={{ width: `${progressPct}%`, transition: 'width var(--motion-layout) var(--ease-smooth)' }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ── Calendario (header oscuro + chips + grid + detalle) ──
+          Una sola card con la cabecera navy del legacy, la fila de
+          chips de fuente con estilo legacy (primary cuando activo),
+          el grid de celdas verticales y el panel de detalle. */}
+      <div key={`real-grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
+        <div className="flex items-center justify-between px-4 py-3 bg-[var(--gray-950)]">
           <button
             onClick={prevMonth}
-            className="w-7 h-7 rounded-md hover:bg-white border border-[var(--gray-200)] flex items-center justify-center text-[var(--gray-500)]"
             aria-label="Mes anterior"
+            className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
-            <ChevronLeft className="w-4 h-4" />
+            <ChevronLeft className="w-5 h-5" />
           </button>
+          <h2 key={`${year}-${month}`} className="text-lg font-semibold text-white flex items-center gap-2 capitalize animate-slide-down">
+            <CalendarRange className="w-4 h-4 text-white/60" />
+            <span>{monthLabel}</span>
+          </h2>
           <button
             onClick={nextMonth}
-            className="w-7 h-7 rounded-md hover:bg-white border border-[var(--gray-200)] flex items-center justify-center text-[var(--gray-500)]"
             aria-label="Mes siguiente"
+            className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
-            <ChevronRight className="w-4 h-4" />
+            <ChevronRight className="w-5 h-5" />
           </button>
         </div>
-        <span className="text-[14px] font-semibold text-[var(--gray-950)] capitalize">
-          {monthLabel}
-        </span>
-        <div className="ml-auto flex items-center gap-5 text-[12px] flex-wrap">
-          <div>
-            <span className="text-[var(--gray-400)]">Total CXC: </span>
-            <span className="font-semibold text-[var(--gray-950)] tabular-nums">{fmtCurrency(totalMes)}</span>
-          </div>
-          <div>
-            <span className="text-[var(--gray-400)]">Real banco: </span>
-            <span className="font-semibold text-[var(--success)] tabular-nums">{fmtCurrency(bankTotal)}</span>
-          </div>
-          {(bankUnmatchedTotal > 0 || sourceFilter === 'bank_unmatched') && (
-            <div>
-              <span className="text-[var(--gray-400)]">Banco sin CXC: </span>
-              <span className="font-semibold text-[var(--warning,_#d97706)] tabular-nums">{fmtCurrency(bankUnmatchedTotal)}</span>
-            </div>
-          )}
-          <div>
-            <span className="text-[var(--gray-400)]">JDE: </span>
-            <span className="font-semibold text-[var(--primary)] tabular-nums">{fmtCurrency(jdeTotal)}</span>
-          </div>
-          <div>
-            <span className="text-[var(--gray-400)]">CXC: </span>
-            <span className="font-semibold text-[#6d28d9] tabular-nums">{fmtCurrency(cxcTotal)}</span>
-          </div>
-          <div>
-            <span className="text-[var(--gray-400)]">Proyectado: </span>
-            <span className="font-semibold text-[var(--gray-600)] tabular-nums">{fmtCurrency(projectedTotal)}</span>
-          </div>
-          {bankTotal > 0 && (
-            <div>
-              <span className="text-[var(--gray-400)]">Cruzado banco: </span>
-              <span className={`font-semibold tabular-nums ${pctMes >= 95 ? 'text-[var(--success)]' : pctMes >= 70 ? 'text-[var(--warning,_#d97706)]' : 'text-[var(--danger)]'}`}>
-                {pctMes.toFixed(1)}%
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
 
-      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-white">
-        <div className="flex flex-wrap gap-1.5" aria-label="Filtrar fuente de calendario">
-          {COLLECTION_CALENDAR_FILTERS.map(filter => (
-            <button
-              key={filter.id}
-              onClick={() => {
-                setSourceFilter(filter.id);
-                setSelectedDay(null);
-              }}
-              className={`px-3 h-8 rounded-full text-[12px] font-medium border transition-colors ${
-                sourceFilter === filter.id
-                  ? 'bg-[var(--gray-950)] text-white border-[var(--gray-950)]'
-                  : 'bg-white text-[var(--gray-500)] border-[var(--gray-200)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]'
-              }`}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
-        {onEnsureBankCoverage && coverageWeak && (
-          <div className="mt-3 flex items-center gap-3 rounded-lg border border-[var(--warning,_#f59e0b)]/30 bg-[var(--warning-muted,_#fef3c7)] px-3 py-2 text-[12px]">
-            <AlertTriangle className="w-4 h-4 text-[var(--warning,_#b45309)] flex-shrink-0" />
-            <div className="min-w-0">
-              <div className="font-medium text-[var(--gray-950)]">Cobertura bancaria parcial del mes visible</div>
-              <div className="text-[var(--gray-500)]">
-                {loadedInMonth} de {monthDayCount} días con movimientos cargados. Cargar sólo este rango mejora el cruce sin traer todo el año.
+        {/* Chips de fuente — usan el patrón redondo del Chip legacy.
+            Sus aria-labels y nombres accesibles se conservan exactos
+            (Todas / Real banco / Banco sin CXC / JDE / CXC pendiente
+            / Proyectado / Sin regla) porque CollectionProjection.test
+            los matchea por getByRole('button', { name: ... }). */}
+        <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-white">
+          <div className="flex flex-wrap gap-1.5" aria-label="Filtrar fuente de calendario">
+            {COLLECTION_CALENDAR_FILTERS.map(filter => {
+              const active = sourceFilter === filter.id;
+              return (
+                <button
+                  key={filter.id}
+                  onClick={() => {
+                    setSourceFilter(filter.id);
+                    setSelectedDay(null);
+                  }}
+                  className={`px-3 h-8 rounded-full text-[12px] font-medium border transition-colors hover-press ${
+                    active
+                      ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                      : 'bg-white text-[var(--gray-400)] border-[var(--gray-200)] hover:text-[var(--gray-950)]'
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              );
+            })}
+          </div>
+          {onEnsureBankCoverage && coverageWeak && (
+            <div className="mt-3 flex items-center gap-3 rounded-lg border border-[var(--warning,_#f59e0b)]/30 bg-[var(--warning-muted,_#fef3c7)] px-3 py-2 text-[12px]">
+              <AlertTriangle className="w-4 h-4 text-[var(--warning,_#b45309)] flex-shrink-0" />
+              <div className="min-w-0">
+                <div className="font-medium text-[var(--gray-950)]">Cobertura bancaria parcial del mes visible</div>
+                <div className="text-[var(--gray-500)]">
+                  {loadedInMonth} de {monthDayCount} días con movimientos cargados. Cargar sólo este rango mejora el cruce sin traer todo el año.
+                </div>
               </div>
+              <button
+                onClick={() => {
+                  void onEnsureBankCoverage({
+                    from: visibleFrom,
+                    to: visibleTo,
+                    ciaFilter: ciaFilter === 'all' ? undefined : [ciaFilter],
+                  });
+                }}
+                disabled={bankCoverageLoading}
+                className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-lg bg-[var(--gray-950)] text-white text-[12px] font-medium disabled:opacity-50"
+              >
+                {bankCoverageLoading ? 'Cargando…' : 'Cargar bancos del mes'}
+              </button>
             </div>
-            <button
-              onClick={() => {
-                void onEnsureBankCoverage({
-                  from: visibleFrom,
-                  to: visibleTo,
-                  ciaFilter: ciaFilter === 'all' ? undefined : [ciaFilter],
-                });
-              }}
-              disabled={bankCoverageLoading}
-              className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-lg bg-[var(--gray-950)] text-white text-[12px] font-medium disabled:opacity-50"
-            >
-              {bankCoverageLoading ? 'Cargando…' : 'Cargar bancos del mes'}
-            </button>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
 
-      <div className="p-4">
-        <div className="grid grid-cols-7 gap-1 mb-1">
+        {/* Cabecera de días de la semana — fondo surface-alt como legacy */}
+        <div className="grid grid-cols-7 border-b border-[var(--gray-200)]/40">
           {DOW_HEADERS.map(d => (
-            <div key={d} className="text-[10px] uppercase text-center text-[var(--gray-400)] font-semibold py-1">{d}</div>
+            <div key={d} className="px-2 py-2 text-center text-[11px] font-medium text-[var(--gray-400)] bg-[var(--surface-alt)] uppercase tracking-wide">{d}</div>
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-1">
+
+        {/* Grid de días — celdas verticales min-h-[84px] tipo agenda
+            (NO aspect-square). Mantiene aria-label, breakdown de
+            fuente con dots y tinte por fuente dominante. */}
+        <div className="grid grid-cols-7">
           {days.map((d, i) => {
             const inMonth = d.getUTCMonth() === month;
             const iso = d.toISOString().slice(0, 10);
             const dayEvents = byDay.get(iso) ?? [];
             const dayTotal = dayEvents.reduce((s, event) => s + event.amount, 0);
             const isSelected = selectedDay === iso;
+            const isToday = iso === todayISO;
+            const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
             const heat = dayTotal / maxDayMonto;
             const dominantSource = dominantCollectionSource(dayEvents);
             const sourceStyle = dominantSource ? COLLECTION_CALENDAR_SOURCE_STYLES[dominantSource] : null;
-            const bg = sourceStyle && dayTotal > 0 ? `rgba(${sourceStyle.rgb}, ${0.07 + heat * 0.33})` : 'transparent';
+            // Pill: fondo coloreado por la fuente dominante con
+            // intensidad proporcional al monto, igual que el legacy
+            // hace con confirmado/proyectado.
+            let pillBg = 'transparent';
+            let pillFg = 'var(--gray-950)';
+            if (sourceStyle && dayTotal > 0) {
+              const intensity = Math.max(0.18, Math.min(0.88, heat + 0.12));
+              pillBg = `rgba(${sourceStyle.rgb}, ${intensity})`;
+              pillFg = intensity > 0.5 ? 'white' : sourceStyle.color;
+            }
             const sourceBreakdown = Array.from(
               dayEvents.reduce((map, event) => {
                 map.set(event.source, (map.get(event.source) ?? 0) + 1);
@@ -1629,29 +1720,42 @@ function CobranzaRealCalendar({
                 onClick={() => dayEvents.length > 0 && setSelectedDay(isSelected ? null : iso)}
                 disabled={!inMonth}
                 aria-label={`${iso}: ${dayEvents.length} evento${dayEvents.length !== 1 ? 's' : ''}${dayTotal > 0 ? ` por ${fmtCurrency(dayTotal)}` : ''}`}
-                className={`
-                  relative aspect-square rounded-md border text-left p-1.5 flex flex-col justify-between
-                  ${inMonth ? 'border-[var(--gray-200)]' : 'border-transparent opacity-30'}
-                  ${isSelected ? 'ring-2 ring-[var(--primary)] border-[var(--primary)]' : 'hover:border-[var(--primary)]'}
-                  ${dayTotal > 0 ? 'cursor-pointer' : 'cursor-default'}
+                className={`min-h-[84px] border-b border-r border-[var(--gray-200)]/30 p-1.5 text-left transition-colors duration-150 flex flex-col
+                  ${!inMonth ? 'bg-[var(--surface-alt)] opacity-30' : ''}
+                  ${isWeekend && inMonth ? 'bg-[var(--surface-alt)]' : ''}
+                  ${isSelected ? 'ring-2 ring-[var(--primary)] ring-inset' : ''}
+                  ${isToday && !isSelected ? 'ring-2 ring-[var(--success)] ring-inset' : ''}
+                  ${inMonth && dayEvents.length > 0 ? 'hover:bg-[var(--gray-50)]/60 cursor-pointer' : 'cursor-default'}
                 `}
-                style={{ backgroundColor: bg }}
               >
-                <div className="flex items-center justify-between">
-                  <span className={`text-[11px] tabular-nums ${inMonth ? 'text-[var(--gray-950)] font-medium' : 'text-[var(--gray-300)]'}`}>
+                <div className="flex justify-between items-start">
+                  <span className={`text-[12px] font-medium ${
+                    isToday && inMonth
+                      ? 'bg-[var(--success)] text-white w-5 h-5 rounded-full flex items-center justify-center text-[11px]'
+                      : inMonth ? 'text-[var(--gray-950)]' : 'text-[var(--gray-200)]'
+                  }`}>
                     {d.getUTCDate()}
                   </span>
                   {dayEvents.length > 0 && (
-                    <span className="text-[9px] text-[var(--gray-500)] tabular-nums">{dayEvents.length}</span>
+                    <span className="text-[10px] text-[var(--gray-400)] tabular-nums">{dayEvents.length}</span>
                   )}
                 </div>
-                {dayTotal > 0 && (
-                  <div className="text-[10px] tabular-nums font-semibold text-[var(--gray-950)] truncate">
-                    {fmtCompact(dayTotal)}
+                {dayTotal > 0 && inMonth && (
+                  <div className="mt-1">
+                    <div
+                      className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums inline-block"
+                      style={{ backgroundColor: pillBg, color: pillFg }}
+                    >
+                      {dayTotal >= 1_000_000
+                        ? `${(dayTotal / 1_000_000).toFixed(1)}M`
+                        : dayTotal >= 1000
+                          ? `${Math.round(dayTotal / 1000)}K`
+                          : fmtCompact(dayTotal)}
+                    </div>
                   </div>
                 )}
-                {sourceBreakdown.length > 0 && (
-                  <div className="flex items-center gap-0.5">
+                {sourceBreakdown.length > 0 && inMonth && (
+                  <div className="flex items-center gap-0.5 mt-auto pt-1">
                     {sourceBreakdown.slice(0, 5).map(([source, count]) => (
                       <span
                         key={source}
@@ -1662,97 +1766,127 @@ function CobranzaRealCalendar({
                     ))}
                   </div>
                 )}
-                {sourceStyle && (
-                  <div className="absolute left-0 right-0 bottom-0 h-1 rounded-b-md" style={{ backgroundColor: sourceStyle.color }} />
-                )}
               </button>
             );
           })}
         </div>
+
+        {/* Detalle del día — mismo card, look legacy */}
+        {selectedDay && (
+          <div className="border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)] animate-slide-down">
+            <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
+              <span className="text-[13px] font-semibold text-[var(--gray-950)] capitalize">
+                {new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
+              </span>
+              <span className="text-[11px] text-[var(--gray-500)]">
+                {selectedEvents.length} evento{selectedEvents.length !== 1 ? 's' : ''} · {fmtCurrency(selectedTotal)}
+              </span>
+              <button
+                onClick={() => setSelectedDay(null)}
+                className="ml-auto text-[12px] text-[var(--primary)] hover:underline"
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead className="text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
+                  <tr>
+                    <th className="text-left px-3 py-2">Fuente del dato</th>
+                    <th className="text-left px-3 py-2">Cliente / factura</th>
+                    <th className="text-left px-3 py-2">Fecha / regla</th>
+                    <th className="text-left px-3 py-2">Origen / cruce</th>
+                    <th className="text-right px-3 py-2">Importe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedEvents.map(event => (
+                    <tr key={event.id} className="border-t border-[var(--gray-100)]">
+                      <td className="px-3 py-2">
+                        <CollectionSourceBadge source={event.source} />
+                        <div className="text-[10px] text-[var(--gray-400)] mt-1">{event.statusLabel}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-[var(--gray-950)] truncate max-w-[260px]" title={event.clientName}>
+                          {event.clientName}
+                        </div>
+                        <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
+                          {event.cia ? `${event.cia} · ` : ''}
+                          {event.noCliente ? `#${event.noCliente}` : event.clientId ?? 'Sin cliente'}
+                          {event.noFactura ? ` · Fact. ${event.noFactura}` : ''}
+                        </div>
+                        {event.facturas.length > 1 && (
+                          <div className="text-[10px] text-[var(--gray-400)] mt-0.5">
+                            {event.facturas.length} facturas cruzadas
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="tabular-nums text-[var(--gray-950)]">{event.date}</div>
+                        <div className="text-[10px] text-[var(--gray-500)] max-w-[300px]">{event.dateReason}</div>
+                        <div className="text-[10px] text-[var(--gray-400)] max-w-[300px]">{event.ruleApplied}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        {event.bank ? (
+                          <div className="space-y-0.5">
+                            <div className="text-[var(--gray-950)] tabular-nums">{event.bank.cia} · {event.bank.cuenta}</div>
+                            <div className="text-[10px] text-[var(--gray-400)] max-w-[260px] truncate" title={event.bank.concepto}>{event.bank.concepto || 'Sin concepto'}</div>
+                            <code className="font-mono text-[10px] text-[var(--gray-500)]">{event.bank.referencia || 'Sin referencia'}</code>
+                            {typeof event.confidence === 'number' && (
+                              <div className="text-[10px] text-[var(--gray-400)]">Confianza {(event.confidence * 100).toFixed(0)}%</div>
+                            )}
+                          </div>
+                        ) : event.projected ? (
+                          <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura CXC emitida.</span>
+                        ) : event.source === 'JDE_PAID_UNMATCHED' ? (
+                          <span className="text-[11px] text-[var(--gray-500)]">JDE reporta Fecha_Pago; no se requiere banco cargado.</span>
+                        ) : (
+                          <span className="text-[11px] text-[var(--gray-500)]">Factura CXC pendiente.</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--gray-950)]">
+                        {fmtCurrency(event.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                  {selectedEvents.length === 0 && (
+                    <tr><td colSpan={5} className="text-center text-[11px] text-[var(--gray-400)] py-6">Sin cobranza este día.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
-      {selectedDay && (
-        <div className="border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)]">
-          <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-            <span className="text-[13px] font-semibold text-[var(--gray-950)]">
-              {new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </span>
-            <span className="text-[11px] text-[var(--gray-500)]">
-              {selectedEvents.length} evento{selectedEvents.length !== 1 ? 's' : ''} · {fmtCurrency(selectedTotal)}
-            </span>
-            <button
-              onClick={() => setSelectedDay(null)}
-              className="ml-auto text-[12px] text-[var(--primary)] hover:underline"
-            >
-              Cerrar
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12px]">
-              <thead className="text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
-                <tr>
-                  <th className="text-left px-3 py-2">Fuente del dato</th>
-                  <th className="text-left px-3 py-2">Cliente / factura</th>
-                  <th className="text-left px-3 py-2">Fecha / regla</th>
-                  <th className="text-left px-3 py-2">Origen / cruce</th>
-                  <th className="text-right px-3 py-2">Importe</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedEvents.map(event => (
-                  <tr key={event.id} className="border-t border-[var(--gray-100)]">
-                    <td className="px-3 py-2">
-                      <CollectionSourceBadge source={event.source} />
-                      <div className="text-[10px] text-[var(--gray-400)] mt-1">{event.statusLabel}</div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-[var(--gray-950)] truncate max-w-[260px]" title={event.clientName}>
-                        {event.clientName}
-                      </div>
-                      <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
-                        {event.cia ? `${event.cia} · ` : ''}
-                        {event.noCliente ? `#${event.noCliente}` : event.clientId ?? 'Sin cliente'}
-                        {event.noFactura ? ` · Fact. ${event.noFactura}` : ''}
-                      </div>
-                      {event.facturas.length > 1 && (
-                        <div className="text-[10px] text-[var(--gray-400)] mt-0.5">
-                          {event.facturas.length} facturas cruzadas
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="tabular-nums text-[var(--gray-950)]">{event.date}</div>
-                      <div className="text-[10px] text-[var(--gray-500)] max-w-[300px]">{event.dateReason}</div>
-                      <div className="text-[10px] text-[var(--gray-400)] max-w-[300px]">{event.ruleApplied}</div>
-                    </td>
-                    <td className="px-3 py-2">
-                      {event.bank ? (
-                        <div className="space-y-0.5">
-                          <div className="text-[var(--gray-950)] tabular-nums">{event.bank.cia} · {event.bank.cuenta}</div>
-                          <div className="text-[10px] text-[var(--gray-400)] max-w-[260px] truncate" title={event.bank.concepto}>{event.bank.concepto || 'Sin concepto'}</div>
-                          <code className="font-mono text-[10px] text-[var(--gray-500)]">{event.bank.referencia || 'Sin referencia'}</code>
-                          {typeof event.confidence === 'number' && (
-                            <div className="text-[10px] text-[var(--gray-400)]">Confianza {(event.confidence * 100).toFixed(0)}%</div>
-                          )}
-                        </div>
-                      ) : event.projected ? (
-                        <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura CXC emitida.</span>
-                      ) : event.source === 'JDE_PAID_UNMATCHED' ? (
-                        <span className="text-[11px] text-[var(--gray-500)]">JDE reporta Fecha_Pago; no se requiere banco cargado.</span>
-                      ) : (
-                        <span className="text-[11px] text-[var(--gray-500)]">Factura CXC pendiente.</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--gray-950)]">
-                      {fmtCurrency(event.amount)}
-                    </td>
-                  </tr>
-                ))}
-                {selectedEvents.length === 0 && (
-                  <tr><td colSpan={5} className="text-center text-[11px] text-[var(--gray-400)] py-6">Sin cobranza este día.</td></tr>
-                )}
-              </tbody>
-            </table>
+      {/* Cobranza semanal — réplica del bloque del calendario legacy.
+          Lunes-domingo, ordenado por fecha. Solo se muestra cuando
+          hay eventos en el mes para no dejar una card vacía. */}
+      {Object.keys(weeklyTotals).length > 0 && (
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 animate-card-in">
+          <h3 className="text-[13px] font-semibold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
+          <div className="space-y-2">
+            {Object.entries(weeklyTotals)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([week, weekTotal], i) => {
+                const pct = totalMes ? (weekTotal / totalMes) * 100 : 0;
+                const delay = `${i * 60}ms`;
+                return (
+                  <div key={week} className="grid grid-cols-[90px_1fr_100px_50px] items-center gap-3 animate-slide-up" style={{ animationDelay: delay }}>
+                    <span className="text-[12px] text-[var(--gray-400)]">
+                      Sem. {new Date(week + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
+                    </span>
+                    <div className="h-5 bg-[var(--gray-50)] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-[var(--primary)] rounded-full animate-progress-fill"
+                        style={{ width: `${Math.min(100, pct)}%`, animationDelay: delay }}
+                      />
+                    </div>
+                    <span className="text-[13px] font-medium tabular-nums text-right">{fmtCurrency(weekTotal)}</span>
+                    <span className="text-[11px] text-[var(--gray-400)] text-right">{pct.toFixed(0)}%</span>
+                  </div>
+                );
+              })}
           </div>
         </div>
       )}
