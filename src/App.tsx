@@ -63,6 +63,10 @@ import {
   type RealReconciliationMatch,
   type RealReconciliationResult,
 } from './domain/realReconciliationEngine';
+import {
+  applyManualConfirmations,
+  useConfirmedReviewKeys,
+} from './domain/reconciliationConfirmations';
 import type { RealReconciliationWorkerResponse } from './workers/realReconciliationWorkerTypes';
 
 const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
@@ -423,8 +427,13 @@ export default function App() {
   // Es un motor pesado (texto + subset-sum), así que no corre durante render.
   // Lo diferimos a idle y sólo cuando una pestaña lo necesita; así cargar JDE
   // no congela la plataforma ni bloquea el primer paint.
-  const [cobranzaReconciliation, setCobranzaReconciliation] = useState<RealReconciliationResult>(
+  const [rawCobranzaReconciliation, setCobranzaReconciliation] = useState<RealReconciliationResult>(
     () => emptyRealReconciliationResult(),
+  );
+  const confirmedReviewKeys = useConfirmedReviewKeys();
+  const cobranzaReconciliation = useMemo(
+    () => applyManualConfirmations(rawCobranzaReconciliation, confirmedReviewKeys),
+    [rawCobranzaReconciliation, confirmedReviewKeys],
   );
   const shouldComputeCobranzaReconciliation =
     cobranzaRecords.length > 0 && RECONCILIATION_TABS.has(activeTab);
