@@ -265,13 +265,14 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           />
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Clientes</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Clientes en cartera</div>
           <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
             <AnimatedNumber value={filteredClients.length} format={(n) => Math.round(n).toString()} />
             {filteredClients.length !== clients.length && (
               <span className="text-[var(--gray-400)] text-[13px]"> / {clients.length}</span>
             )}
           </div>
+          <div className="text-[11px] text-[var(--gray-400)]">Activos en el catálogo</div>
         </div>
         <div className="ml-auto">
           <button
@@ -624,7 +625,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             format={fmtCurrency}
             className="block text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
-          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes</div>
+          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes con pagos</div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cobrado (real)</div>
@@ -1518,8 +1519,8 @@ function CobranzaRealCalendar({
           {monthLabel}
         </span>
         <div className="ml-auto flex items-center gap-5 text-[12px] flex-wrap">
-          <div>
-            <span className="text-[var(--gray-400)]">Total CXC: </span>
+          <div title="Suma de todos los eventos del mes (cobrados + por cobrar + proyectados).">
+            <span className="text-[var(--gray-400)]">Cobranza total mes: </span>
             <span className="font-semibold text-[var(--gray-950)] tabular-nums">{fmtCurrency(totalMes)}</span>
           </div>
           <div>
@@ -1532,12 +1533,12 @@ function CobranzaRealCalendar({
               <span className="font-semibold text-[var(--warning,_#d97706)] tabular-nums">{fmtCurrency(bankUnmatchedTotal)}</span>
             </div>
           )}
-          <div>
-            <span className="text-[var(--gray-400)]">JDE: </span>
+          <div title="Facturas marcadas como cobradas en JDE pero todavía sin abono bancario asociado.">
+            <span className="text-[var(--gray-400)]">JDE pagadas: </span>
             <span className="font-semibold text-[var(--primary)] tabular-nums">{fmtCurrency(jdeTotal)}</span>
           </div>
-          <div>
-            <span className="text-[var(--gray-400)]">CXC: </span>
+          <div title="Saldo CXC pendiente (mismo cálculo que el KPI de la cabecera, filtrado al mes en curso).">
+            <span className="text-[var(--gray-400)]">CXC pendiente: </span>
             <span className="font-semibold text-[#6d28d9] tabular-nums">{fmtCurrency(cxcTotal)}</span>
           </div>
           <div>

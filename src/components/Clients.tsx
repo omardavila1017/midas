@@ -27,6 +27,7 @@ import {
   Check,
 } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
+import { fmtSmart } from '../formatters';
 import PageHeader from './ui/PageHeader';
 
 /**
@@ -141,6 +142,29 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
       })
       .filter(Boolean) as ClientGroupNode[];
   }, [hierarchy, query]);
+
+  const filteredAggregates = useMemo(() => {
+    let groups = 0;
+    let accounts = 0;
+    let annual = 0;
+    let iva = 0;
+    let receivable = 0;
+    let pendingInvoices = 0;
+    for (const group of filteredGroups) {
+      groups += 1;
+      receivable += group.projectedReceivable;
+      pendingInvoices += group.pendingInvoices;
+      for (const account of group.accounts) {
+        accounts += 1;
+        const sum = account.client.monthlyBilling.reduce((s, v) => s + v, 0);
+        annual += sum;
+        iva += sum * ((account.client.ivaRate ?? 16) / 100);
+      }
+    }
+    return { groups, accounts, annual, iva, receivable, pendingInvoices };
+  }, [filteredGroups]);
+
+  const isFiltered = query.trim().length > 0;
 
   const selectedClients = useMemo(
     () => clients.filter(client => selectedIds.has(client.id)),
@@ -339,9 +363,26 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
       {issues.length > 0 && <div className="animate-slide-down"><IssuesPanel issues={issues} onDismiss={() => setIssues([])} /></div>}
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
-        <SummaryMetric icon={Users} label="Grupos comerciales" value={hierarchy.length} sub={`${clients.length} cuentas`} />
-        <SummaryMetric icon={Building2} label="Ventas anuales" value={fmt(totalAnnual)} sub={`IVA estimado ${fmt(totalIva)}`} />
-        <SummaryMetric icon={AlertTriangle} label="Por cobrar proyectado" value={fmt(totalReceivable)} sub={`${totalPendingInvoices} eventos pendientes`} />
+        <SummaryMetric
+          icon={Users}
+          label="Grupos comerciales"
+          value={isFiltered ? filteredAggregates.groups : hierarchy.length}
+          sub={isFiltered
+            ? `${filteredAggregates.accounts} de ${clients.length} cuentas`
+            : `${clients.length} cuentas`}
+        />
+        <SummaryMetric
+          icon={Building2}
+          label="Ventas anuales"
+          value={fmt(isFiltered ? filteredAggregates.annual : totalAnnual)}
+          sub={`IVA estimado ${fmt(isFiltered ? filteredAggregates.iva : totalIva)}${isFiltered ? ' · vista filtrada' : ''}`}
+        />
+        <SummaryMetric
+          icon={AlertTriangle}
+          label="Por cobrar proyectado"
+          value={fmt(isFiltered ? filteredAggregates.receivable : totalReceivable)}
+          sub={`${isFiltered ? filteredAggregates.pendingInvoices : totalPendingInvoices} eventos pendientes${isFiltered ? ' · vista filtrada' : ''}`}
+        />
         <SummaryMetric icon={Check} label="Correcciones manuales" value={clients.filter(c => c.commercialGroupName).length} sub="cuentas con grupo fijo" />
       </div>
 
@@ -1081,5 +1122,5 @@ function Td({ children, className = '' }: { children?: ReactNode; className?: st
   return <td className={`px-4 py-2.5 text-[var(--gray-950)] ${className}`}>{children}</td>;
 }
 function fmt(n: number): string {
-  return n.toLocaleString('es-MX', { maximumFractionDigits: 0 });
+  return fmtSmart(n);
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { CashFlowAssumptions } from '../domain/types';
 import {
   aggregateWeekly,
@@ -14,6 +14,8 @@ import {
 import type { BankAccountStatement } from '../services/jde';
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
   TrendingUp,
   TrendingDown,
@@ -272,6 +274,7 @@ export default function CashFlowDetail({
           totalBankSaldo={totalBankSaldo}
           totalBankAbonos={totalBankAbonos}
           totalBankCargos={totalBankCargos}
+          activeDays={daily.length}
           ciaNameMap={ciaNameMap}
           bankFetchStatus={bankFetchStatus}
           bankFetchProgress={bankFetchProgress}
@@ -416,23 +419,21 @@ function KpiCard({
 
 function BankSummaryCard({
   bankStatements, totalBankSaldo, totalBankAbonos, totalBankCargos,
+  activeDays,
   ciaNameMap, bankFetchStatus, bankFetchProgress, onRefreshBanks,
 }: {
   bankStatements: BankAccountStatement[];
   totalBankSaldo: number;
   totalBankAbonos: number;
   totalBankCargos: number;
+  activeDays: number;
   ciaNameMap: Map<string, string>;
   bankFetchStatus: 'idle' | 'priming' | 'ranging';
   bankFetchProgress: { done: number; total: number } | null;
   onRefreshBanks?: () => void;
 }) {
-  // Días únicos cubiertos por movimientos
-  const diasCubiertos = useMemo(() => {
-    const s = new Set<string>();
-    for (const acc of bankStatements) for (const mov of acc.movimientos) s.add(mov.fechaOperacion);
-    return s.size;
-  }, [bankStatements]);
+  // Mismo conteo que la vista Diario: días con movimiento real (excluye traspasos internos).
+  const diasCubiertos = activeDays;
 
   const empresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
   const fechaCorte = bankStatements[0]?.fechaEstadoCuenta;
@@ -494,25 +495,99 @@ function BankSummaryCard({
       {/* Lista de empresas — fila dedicada con scroll horizontal para no
           romper el grid cuando son muchas. */}
       {empresas.length > 0 && (
-        <div className={`px-5 py-3 border-t ${T.border} bg-[var(--surface-alt)]`}>
-          <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin">
-            <span className={`text-[11px] font-medium uppercase tracking-wide ${T.textMuted} flex-shrink-0`}>
-              Activas
-            </span>
-            <div className="flex items-center gap-1.5 flex-nowrap">
-              {empresas.map(cia => (
-                <span
-                  key={cia}
-                  className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-md bg-white border ${T.border} text-[11px] font-medium ${T.textMuted} whitespace-nowrap`}
-                >
-                  {ciaNameMap.get(cia) ?? `Cia ${cia}`}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
+        <CompanyChipsRow empresas={empresas} ciaNameMap={ciaNameMap} />
       )}
     </section>
+  );
+}
+
+function CompanyChipsRow({
+  empresas,
+  ciaNameMap,
+}: {
+  empresas: string[];
+  ciaNameMap: Map<string, string>;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+
+  const updateAffordance = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanLeft(el.scrollLeft > 4);
+    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+
+  useEffect(() => {
+    updateAffordance();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', updateAffordance, { passive: true });
+    const ro = new ResizeObserver(updateAffordance);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener('scroll', updateAffordance);
+      ro.disconnect();
+    };
+  }, [empresas.length]);
+
+  const scrollBy = (delta: number) => {
+    scrollRef.current?.scrollBy({ left: delta, behavior: 'smooth' });
+  };
+
+  return (
+    <div className={`px-5 py-3 border-t ${T.border} bg-[var(--surface-alt)]`}>
+      <div className="flex items-center gap-2">
+        <span className={`text-[11px] font-medium uppercase tracking-wide ${T.textMuted} flex-shrink-0`}>
+          Activas
+        </span>
+        <div className="relative flex-1 min-w-0">
+          {canLeft && (
+            <>
+              <button
+                type="button"
+                onClick={() => scrollBy(-180)}
+                aria-label="Ver empresas anteriores"
+                className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white border ${T.border} shadow-sm ${T.textMuted} hover:text-[var(--card-foreground)]`}
+              >
+                <ChevronLeft size={12} strokeWidth={1.5} />
+              </button>
+              <div className="pointer-events-none absolute left-0 top-0 h-full w-8 bg-gradient-to-r from-[var(--surface-alt)] to-transparent" />
+            </>
+          )}
+          <div
+            ref={scrollRef}
+            className="flex items-center gap-1.5 flex-nowrap overflow-x-auto scrollbar-thin scroll-smooth"
+          >
+            {empresas.map(cia => (
+              <span
+                key={cia}
+                className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-md bg-white border ${T.border} text-[11px] font-medium ${T.textMuted} whitespace-nowrap`}
+              >
+                {ciaNameMap.get(cia) ?? `Cia ${cia}`}
+              </span>
+            ))}
+          </div>
+          {canRight && (
+            <>
+              <div className="pointer-events-none absolute right-0 top-0 h-full w-8 bg-gradient-to-l from-[var(--surface-alt)] to-transparent" />
+              <button
+                type="button"
+                onClick={() => scrollBy(180)}
+                aria-label="Ver más empresas"
+                className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white border ${T.border} shadow-sm ${T.textMuted} hover:text-[var(--card-foreground)]`}
+              >
+                <ChevronRight size={12} strokeWidth={1.5} />
+              </button>
+            </>
+          )}
+        </div>
+        <span className={`text-[11px] ${T.textMuted} flex-shrink-0`}>
+          {empresas.length} empresa{empresas.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+    </div>
   );
 }
 
