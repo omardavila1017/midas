@@ -13,6 +13,12 @@ import {
   type RealReconciliationBankCoverage,
 } from '../domain/realReconciliationEngine';
 import {
+  applyManualConfirmations,
+  confirmReviewKeys,
+  reviewCandidateKeysAboveThreshold,
+  useConfirmedReviewKeys,
+} from '../domain/reconciliationConfirmations';
+import {
   buildCollectionCalendar,
   calendarEventMatchesSourceFilter,
   COLLECTION_CALENDAR_SOURCE_LABELS,
@@ -2141,13 +2147,27 @@ function BankBadge({ match }: { match?: RealReconciliationMatch }) {
   );
 }
 
-function ReviewCandidatesPanel({ candidates }: { candidates: ReconciliationReviewCandidate[] }) {
+function ReviewCandidatesPanel({
+  candidates,
+  reconciliation,
+}: {
+  candidates: ReconciliationReviewCandidate[];
+  reconciliation: RealReconciliationResult;
+}) {
   const top = candidates.slice(0, 6);
   if (top.length === 0) return null;
   const totalAmount = top.reduce((sum, c) => sum + c.movement.importe, 0);
+  const highConfidenceKeys = useMemo(
+    () => reviewCandidateKeysAboveThreshold(reconciliation, 0.85),
+    [reconciliation],
+  );
+  const handleBulkConfirm = () => {
+    if (highConfidenceKeys.length === 0) return;
+    confirmReviewKeys(highConfidenceKeys);
+  };
   return (
     <div className="bg-white border border-[var(--warning,_#f59e0b)]/30 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 bg-[var(--warning-muted,_#fef3c7)] border-b border-[var(--warning,_#f59e0b)]/20 flex items-center gap-2">
+      <div className="px-4 py-3 bg-[var(--warning-muted,_#fef3c7)] border-b border-[var(--warning,_#f59e0b)]/20 flex flex-wrap items-center gap-2">
         <HelpCircle className="w-4 h-4 text-[var(--warning,_#b45309)]" />
         <div>
           <div className="text-[13px] font-semibold text-[var(--gray-950)]">Cruces por revisar</div>
@@ -2155,7 +2175,20 @@ function ReviewCandidatesPanel({ candidates }: { candidates: ReconciliationRevie
             {candidates.length} abono{candidates.length !== 1 ? 's' : ''} candidato{candidates.length !== 1 ? 's' : ''}; no cuentan como banco cruzado hasta confirmarse.
           </div>
         </div>
-        <div className="ml-auto text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(totalAmount)}</div>
+        <div className="ml-auto flex items-center gap-3">
+          {highConfidenceKeys.length > 0 && (
+            <button
+              type="button"
+              onClick={handleBulkConfirm}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--primary,_#1d4ed8)] text-white text-[11px] font-semibold hover:opacity-90 transition-opacity"
+              title="Confirma los cruces con confianza ≥ 85% y los suma al cruce real."
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Confirmar {highConfidenceKeys.length} cruce{highConfidenceKeys.length === 1 ? '' : 's'} ≥ 85%
+            </button>
+          )}
+          <div className="text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(totalAmount)}</div>
+        </div>
       </div>
       <div className="divide-y divide-[var(--gray-100)]">
         {top.map(candidate => {
@@ -2266,10 +2299,14 @@ function CobranzaRealView({
   // no llegó (renders aislados, tests, embed externo) caemos a un cómputo
   // local — la pestaña debe seguir funcionando aunque el padre no haya
   // cableado la prop.
-  const localReconciliation = useMemo(
-    () => externalReconciliation ?? reconcileRealCollections(records, bankStatements),
-    [externalReconciliation, records, bankStatements],
-  );
+  const confirmedReviewKeys = useConfirmedReviewKeys();
+  const localReconciliation = useMemo(() => {
+    // `externalReconciliation` ya viene con confirmaciones aplicadas desde
+    // App.tsx; el fallback local debe aplicarlas también para no divergir.
+    if (externalReconciliation) return externalReconciliation;
+    const raw = reconcileRealCollections(records, bankStatements);
+    return applyManualConfirmations(raw, confirmedReviewKeys);
+  }, [externalReconciliation, records, bankStatements, confirmedReviewKeys]);
   const reconciliation = localReconciliation;
   const matchByFactura = useMemo(() => {
     if (externalFacturaIndex) return externalFacturaIndex;
@@ -2476,7 +2513,7 @@ function CobranzaRealView({
         )}
       </div>
 
-      <ReviewCandidatesPanel candidates={reconciliation.reviewCandidates} />
+      <ReviewCandidatesPanel candidates={reconciliation.reviewCandidates} reconciliation={reconciliation} />
 
       {/* Filtros */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex flex-wrap gap-2 items-center">
