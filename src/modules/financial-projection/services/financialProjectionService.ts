@@ -203,22 +203,36 @@ export function __clearProjectionSourceCache(): void {
 }
 
 /**
- * Caja inicial canónica — mismo dato que usa el Dashboard. Antes este
- * helper sumaba `saldoFinal` de las cuentas (que no es la caja inicial:
- * es la caja al cierre de cada cuenta), y se desviaba completamente del
- * Dashboard. Ahora simplemente expone la caja inicial congruente con el
- * resto del producto.
+ * Caja inicial canónica — misma prioridad que `computeBaseCashFlow` del
+ * Dashboard:
+ *   1. `startingBalance` numérico (override manual del usuario)
+ *   2. `budget.openingCash[0]` (caja inicial declarada en el presupuesto)
+ *   3. Σ saldoInicial de los estados de cuenta de la compañía activa
+ *
+ * Antes este helper ignoraba `startingBalance` y `budget.openingCash`, y
+ * además sumaba el saldoInicial de TODAS las cuentas sin filtrar por
+ * `companyCode`. Eso inflaba la caja proyectada de Trayectoria de caja
+ * cuando el usuario tenía una sola compañía seleccionada o un override
+ * manual de caja inicial — la línea de caja en Caja proyectada no empataba
+ * con el Flujo mensual del Dashboard.
  */
 export function calculateInitialCash(
   bankStatements: BankAccountStatement[],
-  fallback: number,
+  startingBalance: number | undefined,
+  options?: { companyCode?: string; budget?: Budget | null },
 ): number {
-  if (bankStatements.length === 0) return fallback;
-  const sumSaldoInicial = bankStatements.reduce(
+  if (typeof startingBalance === 'number') return startingBalance;
+  const budgetOpening = options?.budget?.openingCash?.[0];
+  if (typeof budgetOpening === 'number') return budgetOpening;
+  const companyCode = options?.companyCode;
+  const filtered = !companyCode || companyCode === 'all'
+    ? bankStatements
+    : bankStatements.filter((s) => s.cia === companyCode);
+  if (filtered.length === 0) return startingBalance ?? 0;
+  return filtered.reduce(
     (sum, statement) => sum + (statement.saldoInicial ?? 0),
     0,
   );
-  return sumSaldoInicial > 0 ? sumSaldoInicial : fallback;
 }
 
 function defaultScenarios(asOfDate: string): FinancialScenario[] {

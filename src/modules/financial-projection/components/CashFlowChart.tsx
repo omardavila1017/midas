@@ -32,6 +32,13 @@ interface SupplierLine {
   count: number;
 }
 
+function isRealMovement(movement: FinancialMovement): boolean {
+  return movement.status === 'REAL'
+    || movement.status === 'EXECUTED'
+    || movement.sourceSystem === 'BANK'
+    || Boolean(movement.actualDate);
+}
+
 function buildCategoryBreakdown(movements: FinancialMovement[]): CategoryBreakdown[] {
   const map = new Map<string, { inflows: number; outflows: number; movements: FinancialMovement[] }>();
   for (const m of movements) {
@@ -106,15 +113,39 @@ function CashFlowChartImpl({
     const comparisonByDate = comparisonProjection?.buckets.length
       ? new Map(comparisonProjection.buckets.map((bucket) => [bucket.date, bucket.closingCash]))
       : null;
+    const movementById = new Map<string, FinancialMovement>();
+    for (const m of projection.movements) movementById.set(m.id, m);
     const activeBuckets = projection.buckets;
     const out = new Array(activeBuckets.length);
     for (let i = 0; i < activeBuckets.length; i++) {
       const bucket = activeBuckets[i];
+      // Split bucket totals into real vs projected so the chart can render
+      // solid bars for what already happened and striped bars for what's
+      // still forecast — same convention as Flujo mensual on the Dashboard.
+      // Mes en curso queda mixto: días pasados ya están como BANK/REAL,
+      // días por venir entran como PROJECTED_BASE.
+      let realInflows = 0;
+      let realOutflows = 0;
+      for (const id of bucket.movementIds) {
+        const movement = movementById.get(id);
+        if (!movement) continue;
+        const amount = effectiveAmount(movement);
+        if (isRealMovement(movement)) {
+          if (movement.type === 'INFLOW') realInflows += amount;
+          else realOutflows += amount;
+        }
+      }
+      const realInflowsClamped = Math.min(realInflows, bucket.inflows);
+      const realOutflowsClamped = Math.min(realOutflows, bucket.outflows);
       out[i] = {
         date: bucket.label,
         rawDate: bucket.date,
-        entradas: bucket.inflows,
-        salidas: bucket.outflows,
+        entradasReal: realInflowsClamped,
+        entradasProy: Math.max(0, bucket.inflows - realInflowsClamped),
+        salidasReal: realOutflowsClamped,
+        salidasProy: Math.max(0, bucket.outflows - realOutflowsClamped),
+        entradasTotal: bucket.inflows,
+        salidasTotal: bucket.outflows,
         caja: bucket.closingCash,
         minimo: bucket.minimumCash,
         base: baseByDate ? baseByDate.get(bucket.date) : undefined,
@@ -122,7 +153,7 @@ function CashFlowChartImpl({
       };
     }
     return out;
-  }, [projection.buckets, baseProjection?.buckets, comparisonProjection?.buckets]);
+  }, [projection.buckets, projection.movements, baseProjection?.buckets, comparisonProjection?.buckets]);
 
   // Reset the open breakdown when the underlying buckets change shape (e.g.
   // granularity flipped) — the previous index would point to the wrong row.
@@ -157,7 +188,7 @@ function CashFlowChartImpl({
             Caja proyectada
           </h2>
           <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-            Entradas, salidas, cierre y caja mínima.
+            Barra sólida = real · Barra rayada = proyectado.
             {baseProjection ? ' La línea punteada es el escenario base.' : ' Vista del escenario base.'}
             {interactiveBars ? ' Haz clic en una barra para ver el desglose.' : ''}
           </p>
@@ -166,6 +197,21 @@ function CashFlowChartImpl({
           {projection.startDate} → {projection.endDate}
         </div>
       </div>
+      {/* Patrones SVG para las barras proyectadas — convenio idéntico al
+          chart de Flujo mensual del Dashboard: relleno sólido = real,
+          relleno rayado = proyectado. */}
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
+        <defs>
+          <pattern id="cfcHatchIncome" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill="#ecfdf5" />
+            <line x1="0" y1="0" x2="0" y2="6" stroke="#10b981" strokeWidth="2.5" />
+          </pattern>
+          <pattern id="cfcHatchExpense" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill="#fef2f2" />
+            <line x1="0" y1="0" x2="0" y2="6" stroke="#ef4444" strokeWidth="2.5" />
+          </pattern>
+        </defs>
+      </svg>
       <div className="mt-4" style={{ height: 340 }}>
         {/* `debounce` rate-limits Recharts' resize storm during layout shifts
             (the page has many collapsibles), which used to thrash the chart
@@ -197,9 +243,23 @@ function CashFlowChartImpl({
             />
             <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
             <Bar
-              dataKey="entradas"
-              name="Ingresos"
-              fill="var(--success)"
+              dataKey="entradasReal"
+              stackId="entradas"
+              name="Ingresos (real)"
+              fill="#059669"
+              barSize={interactiveBars ? 12 : 4}
+              radius={[0, 0, 0, 0]}
+              cursor={interactiveBars ? 'pointer' : 'default'}
+              isAnimationActive={false}
+              onClick={handleBarClick}
+            />
+            <Bar
+              dataKey="entradasProy"
+              stackId="entradas"
+              name="Ingresos (proy.)"
+              fill="url(#cfcHatchIncome)"
+              stroke="#10b981"
+              strokeWidth={1}
               barSize={interactiveBars ? 12 : 4}
               radius={[3, 3, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}
@@ -207,9 +267,23 @@ function CashFlowChartImpl({
               onClick={handleBarClick}
             />
             <Bar
-              dataKey="salidas"
-              name="Egresos"
-              fill="var(--danger)"
+              dataKey="salidasReal"
+              stackId="salidas"
+              name="Egresos (real)"
+              fill="#dc2626"
+              barSize={interactiveBars ? 12 : 4}
+              radius={[0, 0, 0, 0]}
+              cursor={interactiveBars ? 'pointer' : 'default'}
+              isAnimationActive={false}
+              onClick={handleBarClick}
+            />
+            <Bar
+              dataKey="salidasProy"
+              stackId="salidas"
+              name="Egresos (proy.)"
+              fill="url(#cfcHatchExpense)"
+              stroke="#ef4444"
+              strokeWidth={1}
               barSize={interactiveBars ? 12 : 4}
               radius={[3, 3, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}

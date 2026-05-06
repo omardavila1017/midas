@@ -254,24 +254,54 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     }));
   }
 
-  // 3) Mes en curso (histórico parcial). El canónico de este mes ya
-  //    refleja sólo lo que pasó realmente en el banco, por lo que
-  //    `balanceMonth` no aplica (no hay un "target" futuro contra el
-  //    cual escalar). Emitimos las líneas de catálogo cuya fecha cae
-  //    DESPUÉS de hoy como PROJECTED_BASE sin escalar — son los
-  //    movimientos esperados para los días que aún faltan del mes.
-  //    Sin esto el usuario sólo ve los confirmados del banco y queda
-  //    ciego al resto del mes.
+  // 3) Mes en curso (histórico parcial). Días pasados ya están como
+  //    REAL desde el banco; el resto del mes se escala al presupuesto
+  //    para que la proyección empate con el chart "Flujo mensual" del
+  //    Dashboard, que muestra `proyectado = budget(mes) - real(mes)`.
+  //    Sin escalar (emitRawLines crudo), el catálogo CXC/CXP suele
+  //    sumar muchísimo menos que el budget y el usuario ve un mes en
+  //    curso enano respecto al Dashboard.
   const currentYm = todayYm;
   const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
   if (currentHistorical) {
+    const monthIndex = Number(currentYm.slice(5, 7)) - 1;
+    const budgetIncome = inputs.budget?.incomeTotal?.[monthIndex] ?? 0;
+    const budgetExpense = inputs.budget?.expenseTotal?.[monthIndex] ?? 0;
+    const remainingIncome = Math.max(0, budgetIncome - currentHistorical.income);
+    const remainingExpense = Math.max(0, budgetExpense - currentHistorical.expense);
+
     const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
       .filter((line) => line.date > inputs.asOfDate);
-    out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
+    if (remainingIncome > 0) {
+      out.push(...balanceInflowMonth({
+        lines: inflowLines,
+        target: remainingIncome,
+        ym: currentYm,
+        asOfDate: inputs.asOfDate,
+        fallbackCategory: 'AR_COLLECTION',
+        fallbackConcept: `Cobranza proyectada ${currentYm} (resto del mes)`,
+        fallbackRule: 'Presupuesto del mes en curso menos cobranza real',
+      }));
+    } else {
+      out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
+    }
 
     const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm)
       .filter((line) => line.date > inputs.asOfDate);
-    out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
+    if (remainingExpense > 0) {
+      out.push(...balanceMonth({
+        lines: outflowLines,
+        target: remainingExpense,
+        ym: currentYm,
+        type: 'OUTFLOW',
+        asOfDate: inputs.asOfDate,
+        fallbackCategory: 'OPEX',
+        fallbackConcept: `Egresos proyectados ${currentYm} (resto del mes)`,
+        fallbackRule: 'Presupuesto del mes en curso menos egresos reales',
+      }));
+    } else {
+      out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
+    }
   }
 
   return out;

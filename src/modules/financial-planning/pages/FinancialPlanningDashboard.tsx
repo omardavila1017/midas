@@ -236,8 +236,11 @@ export default function FinancialPlanningDashboard(props: Props) {
   const canEditCommitments = activeScenario.kind !== 'BASE' && !activeScenario.archivedAt;
 
   const initialCash = useMemo(
-    () => calculateInitialCash(props.bankStatements, props.startingBalance),
-    [props.bankStatements, props.startingBalance],
+    () => calculateInitialCash(props.bankStatements, props.startingBalance, {
+      companyCode: props.companyCode,
+      budget: props.budget,
+    }),
+    [props.bankStatements, props.startingBalance, props.companyCode, props.budget],
   );
   const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
 
