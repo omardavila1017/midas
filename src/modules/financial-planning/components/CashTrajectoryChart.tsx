@@ -50,6 +50,9 @@ function formatMonthTick(yearMonth: string): string {
 const TOOLTIP_SERIES: Record<string, { label: string; color: string }> = {
   base: { label: 'Caja base', color: '#475569' },
   forecast: { label: 'Caja escenario', color: '#0f172a' },
+  'Caja base': { label: 'Caja base', color: '#475569' },
+  'Caja escenario': { label: 'Caja escenario', color: '#0f172a' },
+  'Caja final': { label: 'Caja final', color: '#0f172a' },
   deltaAbove: { label: 'Δ positivo', color: '#16a34a' },
   deltaBelow: { label: 'Δ negativo', color: '#dc2626' },
 };
@@ -226,7 +229,7 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
         aria-label="Trayectoria de la caja: línea base vs escenario activo por mes"
       >
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 16, right: 24, left: 8, bottom: 8 }}>
+          <ComposedChart data={chartData} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
             <XAxis
               dataKey="yearMonth"
@@ -251,6 +254,22 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
             <Legend
               wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
               iconType="plainline"
+              payload={
+                hasBaseline
+                  ? [
+                      { value: 'Caja base', type: 'plainline', id: 'base', color: COLOR.base, payload: { strokeDasharray: '4 4' } },
+                      { value: 'Caja escenario', type: 'plainline', id: 'forecast', color: COLOR.forecast, payload: { strokeDasharray: '0' } },
+                      ...(minimumCash > 0
+                        ? [{ value: 'Caja mínima', type: 'plainline' as const, id: 'min', color: COLOR.warning, payload: { strokeDasharray: '3 3' } }]
+                        : []),
+                    ]
+                  : [
+                      { value: 'Caja final', type: 'plainline', id: 'forecast', color: COLOR.forecast, payload: { strokeDasharray: '0' } },
+                      ...(minimumCash > 0
+                        ? [{ value: 'Caja mínima', type: 'plainline' as const, id: 'min', color: COLOR.warning, payload: { strokeDasharray: '3 3' } }]
+                        : []),
+                    ]
+              }
             />
 
             {hasBaseline && (
@@ -300,10 +319,12 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
                 stroke={COLOR.warning}
                 strokeDasharray="3 3"
                 label={{
-                  value: 'Caja mínima',
-                  position: 'right',
+                  value: `Caja mínima · ${fmtCompact(minimumCash)}`,
+                  position: 'insideTopRight',
                   fill: COLOR.warning,
                   fontSize: 10,
+                  fontWeight: 600,
+                  offset: 6,
                 }}
               />
             )}

@@ -347,15 +347,32 @@ export function buildPairMatchedKeys(
     const cargos = list.filter(e => e.tipo === 'CARGO');
     const abonos = list.filter(e => e.tipo === 'ABONO');
     if (cargos.length === 0 || abonos.length === 0) continue;
-    if (cargos.length !== abonos.length) continue;
-    const cargoCuentas = new Set(cargos.map(e => e.cuenta));
-    const abonoCuentas = new Set(abonos.map(e => e.cuenta));
-    let overlap = false;
-    for (const c of cargoCuentas) {
-      if (abonoCuentas.has(c)) { overlap = true; break; }
+
+    // Greedy pairing across distinct cuentas. Permite cardinalidad asimétrica
+    // (K CARGOs + N ABONOs, K ≠ N): se parean min(K,N) movimientos siempre
+    // que cada par esté en cuentas distintas. El sobrante queda como real.
+    // Orden determinista por (cuenta, key) para que la elección de cuáles
+    // se marcan no dependa del orden de iteración.
+    const sortedCargos = [...cargos].sort((a, b) =>
+      a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
+    );
+    const sortedAbonos = [...abonos].sort((a, b) =>
+      a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
+    );
+    const usedAbono = new Set<number>();
+    for (const cargo of sortedCargos) {
+      let matchedIdx = -1;
+      for (let i = 0; i < sortedAbonos.length; i++) {
+        if (usedAbono.has(i)) continue;
+        if (sortedAbonos[i].cuenta === cargo.cuenta) continue;
+        matchedIdx = i;
+        break;
+      }
+      if (matchedIdx === -1) continue;
+      usedAbono.add(matchedIdx);
+      out.add(cargo.key);
+      out.add(sortedAbonos[matchedIdx].key);
     }
-    if (overlap) continue;
-    for (const e of list) out.add(e.key);
   }
 
   return out;
