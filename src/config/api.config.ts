@@ -20,12 +20,16 @@
  *   quedaba "cargando" sin datos en producción.
  */
 const DEFAULT_JDE_BASE_URL = '/api/jde';
+const DEFAULT_JDE_INDICADORES_BASE_URL = '/api/jde-indicadores';
 
 export const apiConfig = {
   jde: {
     baseUrl: import.meta.env.VITE_JDE_BASE_URL || DEFAULT_JDE_BASE_URL,
     authValue: import.meta.env.VITE_JDE_TOKEN ?? '',
     environment: import.meta.env.VITE_JDE_ENVIRONMENT ?? 'DV920',
+  },
+  jdeIndicadores: {
+    baseUrl: import.meta.env.VITE_JDE_INDICADORES_BASE_URL || DEFAULT_JDE_INDICADORES_BASE_URL,
   },
   cognos: {
     baseUrl: import.meta.env.VITE_COGNOS_BASE_URL ?? '',

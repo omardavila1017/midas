@@ -487,6 +487,7 @@ function reconciliationResult(matches: RealReconciliationMatch[]): RealReconcili
   return {
     matches,
     abonoEnrichments: [],
+    paymentReconciliations: [],
     reviewCandidates: [],
     summary: {
       totalFacturas: matches.length,

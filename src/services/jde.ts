@@ -15,6 +15,7 @@
  */
 
 import { jdeClient, JdeClientConfig } from './jdeClient';
+import { apiConfig } from '../config/api.config';
 import {
   AgedBalanceRecord,
   AgedBalanceRequest,
@@ -930,7 +931,7 @@ export function normalizeCobranzaPayments(rows: Record<string, unknown>[], ciaFa
 }
 
 /**
- * POST /v1/erp/tesoreria/indicadorescobranza
+ * POST /CobranzaIndicadores vía proxy separado `/api/jde-indicadores`.
  *
  * Reporte de pagos/recibos y aplicaciones de cobranza. La respuesta plana se
  * normaliza a un pago por `Id Pago`, con sus facturas aplicadas anidadas.
@@ -939,7 +940,10 @@ export async function fetchIndicadoresCobranza(
   req: CobranzaPaymentRequest,
   config: JdeClientConfig = {},
 ): Promise<CobranzaPayment[]> {
-  const raw = await jdeClient.post<unknown>('/indicadorescobranza', req, config);
+  const raw = await jdeClient.post<unknown>('/CobranzaIndicadores', req, {
+    ...config,
+    baseUrl: config.baseUrl ?? apiConfig.jdeIndicadores.baseUrl,
+  });
   return normalizeCobranzaPayments(unwrapList(raw), req.cia);
 }
 

@@ -270,7 +270,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     const remainingExpense = Math.max(0, budgetExpense - currentHistorical.expense);
 
     const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
-      .filter((line) => line.date > inputs.asOfDate);
+      .filter((line) => line.date >= inputs.asOfDate);
     if (remainingIncome > 0) {
       out.push(...balanceInflowMonth({
         lines: inflowLines,
@@ -286,7 +286,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     }
 
     const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm)
-      .filter((line) => line.date > inputs.asOfDate);
+      .filter((line) => line.date >= inputs.asOfDate);
     if (remainingExpense > 0) {
       out.push(...balanceMonth({
         lines: outflowLines,

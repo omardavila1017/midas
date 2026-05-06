@@ -50,11 +50,11 @@ import {
 // ── Configuración ──────────────────────────────────────────────────────────
 
 /** Tolerancia en monto para cobertura "tolerancia" y "subset". */
-const AMOUNT_TOLERANCE_PCT = 0.005; // 0.5%
+const AMOUNT_TOLERANCE_PCT = 0.02; // 2% — covers bank fees, rounding, minor IVA diffs
 /** Tolerancia absoluta mínima — un ABONO de $100 debe poder ajustar ±$1. */
 const AMOUNT_TOLERANCE_MIN_ABS = 1;
 /** Máximo de facturas en una combinación subset-sum. */
-const SUBSET_MAX_INVOICES = 4;
+const SUBSET_MAX_INVOICES = 6;
 /** Ventana de fecha alrededor de fechaVence (±N días) — capa 1/2. */
 const DATE_WINDOW_DAYS = 60;
 /** Ventana de fecha alrededor de fechaCobro cuando ya viene del ERP (±N días). */
@@ -77,6 +77,7 @@ export type MatchTier =
 export type FacturaStatus = 'cobrada-banco' | 'cobrada-jde-sin-banco' | 'pendiente';
 export type AbonoStatus = 'factura-cobrada' | 'cobranza-sin-factura' | 'no-cobranza';
 export type ReviewStatus = 'auto' | 'review' | 'unmatched';
+export type PaymentReconciliationStatus = 'CONFIRMED_REF' | 'AUTO_UNIQUE' | 'AMBIGUOUS' | 'UNMATCHED';
 
 export interface BankMovementSnapshot {
   movementKey: string;
@@ -164,7 +165,7 @@ export interface RealReconciliationMatch {
   /** Id Pago de IndicadoresCobranza cuando el match viene por recibo. */
   idPago?: string;
   noRecibo?: string;
-  paymentMatchStatus?: 'CONFIRMED_REF' | 'AUTO_UNIQUE' | 'AMBIGUOUS';
+  paymentMatchStatus?: Exclude<PaymentReconciliationStatus, 'UNMATCHED'>;
 
   /** Si la factura es parte de un subset (un solo ABONO cubre varias). */
   subsetGroupId?: string;
@@ -189,7 +190,7 @@ export interface AbonoEnrichment {
   }>;
   idPago?: string;
   noRecibo?: string;
-  paymentMatchStatus?: 'CONFIRMED_REF' | 'AUTO_UNIQUE' | 'AMBIGUOUS';
+  paymentMatchStatus?: Exclude<PaymentReconciliationStatus, 'UNMATCHED'>;
   /** Facturas candidatas cuando el ABONO no alcanzó confianza para auto-cruce. */
   candidateFacturas?: ReconciliationCandidateFactura[];
   matchReason?: string;
@@ -201,6 +202,49 @@ export interface AbonoEnrichment {
   importe: number;
   concepto: string;
   referencia: string;
+}
+
+export interface PaymentApplicationReconciliation {
+  cia: string;
+  noFactura: string;
+  noFacturaNormalizada: string;
+  noCliente: string;
+  cliente: string;
+  tipoDocto: string;
+  fechaAplicacion: string;
+  fechaFactura: string;
+  fechaVencimiento: string;
+  importeCobrado: number;
+  importeOriginalFactura: number;
+  importePteFactura: number;
+  tasaIva: string;
+  importeIvaFacturaOriginal: number;
+  ivaCausadoProporcional: number;
+  facturaStatus?: FacturaStatus;
+}
+
+export interface PaymentReconciliation {
+  idPago: string;
+  cia: string;
+  fechaCobro: string;
+  fechaContable: string;
+  cuentaBancaria: string;
+  banco: string;
+  noRecibo: string;
+  importeRecibo: number;
+  pendienteAplicar: number;
+  noCliente: string;
+  cliente: string;
+  noBatch: string;
+  tipoCambio: number;
+  applicationCount: number;
+  importeAplicado: number;
+  status: PaymentReconciliationStatus;
+  matchTier?: MatchTier;
+  confidence?: number;
+  matchReason?: string;
+  bankMovement?: BankMovementSnapshot;
+  applications: PaymentApplicationReconciliation[];
 }
 
 export interface RealReconciliationSummary {
@@ -224,6 +268,7 @@ export interface RealReconciliationSummary {
   totalPagosIndicadores?: number;
   pagosConciliadosBanco?: number;
   pagosSinBanco?: number;
+  pagosAmbiguos?: number;
   pagosMultiFactura?: number;
   montoPagosMultiFacturaConciliado?: number;
 
@@ -251,6 +296,8 @@ export interface RealReconciliationResult {
   matches: RealReconciliationMatch[];
   /** Una entrada por ABONO bancario (después de filtrar internos). */
   abonoEnrichments: AbonoEnrichment[];
+  /** Una entrada por Id Pago de IndicadoresCobranza. */
+  paymentReconciliations: PaymentReconciliation[];
   /** Métricas top-level para KPIs. */
   summary: RealReconciliationSummary;
   /** Candidatos que operación puede revisar sin inflar los ingresos reales. */
@@ -332,8 +379,8 @@ function computeConfidence(
     tier === 'payment-ambiguous' ? 0.55 :
     tier === 'invoice-reference' ? 0.99 :
     tier === 'customer-reference' ? 0.93 :
-    tier === 'exact' ? 0.86 :
-    tier === 'tolerance' ? 0.74 :
+    tier === 'exact' ? 0.92 :
+    tier === 'tolerance' ? 0.82 :
     tier === 'multi-abono' ? 0.92 :
     0.9;
   // Penalización por monto: 0% diff → 1, 0.5% → ~0.5
@@ -443,8 +490,8 @@ function searchK<T extends { bruto: number }>(
 
 // ── Índices de candidatos ─────────────────────────────────────────────────
 
-const AUTO_CONFIDENCE_THRESHOLD = 0.9;
-const REVIEW_CONFIDENCE_THRESHOLD = 0.58;
+const AUTO_CONFIDENCE_THRESHOLD = 0.75;
+const REVIEW_CONFIDENCE_THRESHOLD = 0.50;
 const AMOUNT_BUCKET_SIZE = 1; // pesos redondeados; luego se valida al centavo/tolerancia.
 const MAX_REVIEW_CANDIDATES_PER_ABONO = 4;
 
@@ -485,6 +532,14 @@ interface UnmatchedAbono {
   movementKey: string;
   enrichment: AbonoEnrichment;
   strongClienteKeys: Set<string>;
+}
+
+interface PaymentMatchMeta {
+  status: PaymentReconciliationStatus;
+  matchTier?: MatchTier;
+  confidence?: number;
+  matchReason?: string;
+  bankMovement?: BankMovementSnapshot;
 }
 
 function indexKey(cia: string, moneda: string): string {
@@ -688,11 +743,27 @@ function amountCandidates(
 ): FacturaTarget[] {
   const moneda = (abono.moneda || 'MXN').toUpperCase();
   const base = indexKey(abono.cia, moneda);
-  const bucket = amountBucket(abono.importe);
-  const tol = Math.ceil(amountTolerance(abono.importe) / AMOUNT_BUCKET_SIZE) + 1;
+  // Search for the bank amount AND IVA variants (bank might show
+  // IVA-inclusive while factura is subtotal, or vice versa).
+  const ivaRate = 0.16;
+  const searchAmounts = [
+    abono.importe,
+    abono.importe / (1 + ivaRate),
+    abono.importe * (1 + ivaRate),
+  ];
+  const seen = new Set<string>();
   const out: FacturaTarget[] = [];
-  for (let i = bucket - tol; i <= bucket + tol; i++) {
-    out.push(...(indexes.targetsByAmount.get(`${base}::${i}`) ?? []));
+  for (const amt of searchAmounts) {
+    const bucket = amountBucket(amt);
+    const tol = Math.ceil(amountTolerance(amt) / AMOUNT_BUCKET_SIZE) + 1;
+    for (let i = bucket - tol; i <= bucket + tol; i++) {
+      for (const target of indexes.targetsByAmount.get(`${base}::${i}`) ?? []) {
+        if (!seen.has(target.id)) {
+          seen.add(target.id);
+          out.push(target);
+        }
+      }
+    }
   }
   return out;
 }
@@ -703,14 +774,38 @@ function evaluateTarget(
   identity: 'invoice' | 'customer' | 'none',
 ): CandidateEvaluation | null {
   if (!mismaMoneda(target.record, abono)) return null;
-  const exact = importesCoinciden(target.amount, abono.importe, true);
-  const tolerated = !exact && importesCoinciden(target.amount, abono.importe, false);
-  if (!exact && !tolerated) return null;
 
   const daysDelta = daysBetween(target.refDate, abono.fechaOperacion);
   if (Math.abs(daysDelta) > target.windowDays) return null;
 
-  const amountDiffPct = Math.abs(target.amount - abono.importe) / Math.max(target.amount, 1);
+  // Try IVA variants: base amount, with IVA (16%), without IVA.
+  // JDE may report subtotal while bank shows IVA-inclusive, or vice versa.
+  const ivaRate = target.record.importeIVA && target.record.subTotal && target.record.subTotal > 0
+    ? target.record.importeIVA / target.record.subTotal
+    : 0.16;
+  const amountVariants = [
+    target.amount,
+    target.amount * (1 + ivaRate),
+    target.amount / (1 + ivaRate),
+  ];
+
+  let bestAmount = target.amount;
+  let exact = false;
+  let tolerated = false;
+  for (const variant of amountVariants) {
+    if (importesCoinciden(variant, abono.importe, true)) {
+      exact = true;
+      bestAmount = variant;
+      break;
+    }
+    if (!tolerated && importesCoinciden(variant, abono.importe, false)) {
+      tolerated = true;
+      bestAmount = variant;
+    }
+  }
+  if (!exact && !tolerated) return null;
+
+  const amountDiffPct = Math.abs(bestAmount - abono.importe) / Math.max(bestAmount, 1);
   const tier: MatchTier =
     identity === 'invoice' ? 'invoice-reference' :
     identity === 'customer' ? 'customer-reference' :
@@ -720,13 +815,14 @@ function evaluateTarget(
 
   if (identity === 'invoice') confidence = Math.max(confidence, exact ? 0.98 : 0.92);
   else if (identity === 'customer') confidence = Math.max(confidence, exact ? 0.93 : 0.9);
-  else confidence = Math.min(confidence, exact ? 0.86 : 0.78);
+  else confidence = Math.min(confidence, exact ? 0.92 : 0.82);
 
+  const ivaNote = bestAmount !== target.amount ? ' (ajuste IVA)' : '';
   const reason =
-    identity === 'invoice' ? `Referencia bancaria contiene factura ${target.record.noFactura}.` :
-    identity === 'customer' ? `Referencia/concepto menciona cliente ${target.record.noCliente || target.record.nombreCliente}.` :
-    exact ? 'Monto exacto y fecha en ventana; sin identidad fuerte de cliente.' :
-    'Monto dentro de tolerancia y fecha en ventana; sin identidad fuerte de cliente.';
+    identity === 'invoice' ? `Referencia bancaria contiene factura ${target.record.noFactura}${ivaNote}.` :
+    identity === 'customer' ? `Referencia/concepto menciona cliente ${target.record.noCliente || target.record.nombreCliente}${ivaNote}.` :
+    exact ? `Monto exacto y fecha en ventana${ivaNote}; sin identidad fuerte de cliente.` :
+    `Monto dentro de tolerancia y fecha en ventana${ivaNote}; sin identidad fuerte de cliente.`;
 
   return { target, tier, confidence, daysDelta, amountDiffPct, exact, reason };
 }
@@ -742,6 +838,72 @@ function movementSnapshot(abono: BankStatementLine): BankMovementSnapshot {
     referencia: abono.referencia,
     banco: abono.banco,
     nombreBanco: abono.nombreBanco,
+  };
+}
+
+function paymentApplicationView(
+  app: CobranzaPayment['applications'][number],
+  payment: CobranzaPayment,
+  facturaState: Map<string, RealReconciliationMatch>,
+  facturaKeyByNormalized: Map<string, string>,
+): PaymentApplicationReconciliation {
+  const appCia = app.cia || payment.cia;
+  const facturaKey = facturaKeyByNormalized.get(`${appCia}::${normalizeCode(app.noFactura)}`);
+  const state = facturaKey ? facturaState.get(facturaKey) : undefined;
+  const original = Math.max(0, app.importeOriginalFactura || 0);
+  const ivaOriginal = Math.max(0, app.importeIvaFacturaOriginal || 0);
+  const ratio = original > 0 ? Math.min(1, Math.max(0, app.importeCobrado / original)) : 0;
+  return {
+    cia: appCia,
+    noFactura: app.noFactura,
+    noFacturaNormalizada: app.noFacturaNormalizada,
+    noCliente: app.noCliente,
+    cliente: app.cliente,
+    tipoDocto: app.tipoDocto,
+    fechaAplicacion: app.fechaAplicacion,
+    fechaFactura: app.fechaFactura,
+    fechaVencimiento: app.fechaVencimiento,
+    importeCobrado: app.importeCobrado,
+    importeOriginalFactura: app.importeOriginalFactura,
+    importePteFactura: app.importePteFactura,
+    tasaIva: app.tasaIva,
+    importeIvaFacturaOriginal: app.importeIvaFacturaOriginal,
+    ivaCausadoProporcional: ivaOriginal * ratio,
+    facturaStatus: state?.status,
+  };
+}
+
+function paymentReconciliationView(
+  payment: CobranzaPayment,
+  meta: PaymentMatchMeta | undefined,
+  facturaState: Map<string, RealReconciliationMatch>,
+  facturaKeyByNormalized: Map<string, string>,
+): PaymentReconciliation {
+  const applications = payment.applications.map(app =>
+    paymentApplicationView(app, payment, facturaState, facturaKeyByNormalized),
+  );
+  return {
+    idPago: payment.idPago,
+    cia: payment.cia,
+    fechaCobro: payment.fechaCobro,
+    fechaContable: payment.fechaContable,
+    cuentaBancaria: payment.cuentaBancaria,
+    banco: payment.banco,
+    noRecibo: payment.noRecibo,
+    importeRecibo: payment.importeRecibo,
+    pendienteAplicar: payment.pendienteAplicar,
+    noCliente: payment.noCliente,
+    cliente: payment.cliente,
+    noBatch: payment.noBatch,
+    tipoCambio: payment.tipoCambio,
+    applicationCount: applications.length,
+    importeAplicado: applications.reduce((sum, app) => sum + app.importeCobrado, 0),
+    status: meta?.status ?? 'UNMATCHED',
+    matchTier: meta?.matchTier,
+    confidence: meta?.confidence,
+    matchReason: meta?.matchReason,
+    bankMovement: meta?.bankMovement,
+    applications,
   };
 }
 
@@ -898,6 +1060,7 @@ export function reconcileRealCollections(
     });
   }
   const scopedPayments = cobranzaPayments.filter(payment => !ciaFilter || ciaFilter.has(payment.cia));
+  const paymentMatchMeta = new Map<string, PaymentMatchMeta>();
   const paymentsByBankKey = new Map<string, CobranzaPayment[]>();
   for (const payment of scopedPayments) {
     if (!payment.cuentaBancaria || !payment.fechaCobro || payment.importeRecibo <= 0) continue;
@@ -951,6 +1114,13 @@ export function reconcileRealCollections(
       const paidFacturas: AbonoEnrichment['facturas'] = [];
 
       consumedPayment.add(selectedPayment.idPago);
+      paymentMatchMeta.set(selectedPayment.idPago, {
+        status: matchStatus,
+        matchTier: tier,
+        confidence,
+        matchReason: reason,
+        bankMovement: movementSnapshot(abono),
+      });
       consumedAbono.add(enrichment.movementKey);
       for (const app of selectedPayment.applications) {
         const facturaKey = facturaKeyByNormalized.get(`${app.cia || selectedPayment.cia}::${normalizeCode(app.noFactura)}`);
@@ -1000,6 +1170,17 @@ export function reconcileRealCollections(
       enrichment.confidence = 0.55;
       enrichment.matchReason = `${paymentCandidates.length} Id Pago comparten cuenta, fecha e importe; requiere revisión.`;
       enrichment.paymentMatchStatus = 'AMBIGUOUS';
+      for (const payment of paymentCandidates) {
+        if (!paymentMatchMeta.has(payment.idPago)) {
+          paymentMatchMeta.set(payment.idPago, {
+            status: 'AMBIGUOUS',
+            matchTier: 'payment-ambiguous',
+            confidence: 0.55,
+            matchReason: enrichment.matchReason,
+            bankMovement: movementSnapshot(abono),
+          });
+        }
+      }
       enrichments.push(enrichment);
       continue;
     }
@@ -1041,28 +1222,49 @@ export function reconcileRealCollections(
     let bestSubset: { records: CobranzaRecord[]; confidence: number; reason: string } | null = null;
 
     if (!bestMatch) {
-      for (const clienteKey of strongClienteKeys) {
+      const triedClienteKeys = new Set<string>();
+      const trySubsetForCliente = (
+        clienteKey: string,
+        identified: boolean,
+      ): { records: CobranzaRecord[]; confidence: number; reason: string } | null => {
+        if (triedClienteKeys.has(clienteKey)) return null;
+        triedClienteKeys.add(clienteKey);
         const clienteFacturas = (facturasPorCliente.get(clienteKey) ?? []).filter(r => !consumedFactura.has(`${r.cia}::${r.noFactura}`));
-        if (clienteFacturas.length < 2) continue;
+        if (clienteFacturas.length < 2) return null;
         const sample = clienteFacturas[0];
-        if (!mismaMoneda(sample, abono)) continue;
+        if (!mismaMoneda(sample, abono)) return null;
         const subset = findSubset(clienteFacturas, abono.importe, useUSD);
-        if (!subset) continue;
+        if (!subset) return null;
         const fechas = subset.map(r => r.fechaCobro || r.fechaVence).filter(Boolean);
-        if (fechas.length === 0) continue;
+        if (fechas.length === 0) return null;
         const closestDelta = fechas
           .map(f => Math.abs(daysBetween(f, abono.fechaOperacion)))
           .reduce((min, d) => Math.min(min, d), Number.POSITIVE_INFINITY);
-        if (closestDelta > DATE_WINDOW_DAYS) continue;
+        if (closestDelta > DATE_WINDOW_DAYS) return null;
         const sumBruto = subset.reduce((s, r) => s + selectFacturaImporte(r, useUSD).bruto, 0);
         const amountDiffPct = Math.abs(sumBruto - abono.importe) / Math.max(sumBruto, 1);
-        const confidence = Math.max(0.9, computeConfidence('subset', amountDiffPct, closestDelta, DATE_WINDOW_DAYS));
-        if (!bestSubset || confidence > bestSubset.confidence) {
-          bestSubset = {
-            records: subset,
-            confidence,
-            reason: `Un ABONO cubre ${subset.length} facturas del mismo cliente identificado en banco.`,
-          };
+        const confidence = Math.max(identified ? 0.9 : 0.8, computeConfidence('subset', amountDiffPct, closestDelta, DATE_WINDOW_DAYS));
+        return {
+          records: subset,
+          confidence,
+          reason: identified
+            ? `Un ABONO cubre ${subset.length} facturas del mismo cliente identificado en banco.`
+            : `Un ABONO cubre ${subset.length} facturas del mismo cliente (${sample.nombreCliente.trim()}).`,
+        };
+      };
+
+      for (const clienteKey of strongClienteKeys) {
+        const result = trySubsetForCliente(clienteKey, true);
+        if (result && (!bestSubset || result.confidence > bestSubset.confidence)) {
+          bestSubset = result;
+        }
+      }
+
+      if (!bestSubset && abono.importe >= 10000) {
+        for (const [clienteKey] of facturasPorCliente) {
+          if (!clienteKey.startsWith(`${abono.cia}::`)) continue;
+          const result = trySubsetForCliente(clienteKey, false);
+          if (result) { bestSubset = result; break; }
         }
       }
     }
@@ -1273,9 +1475,17 @@ export function reconcileRealCollections(
   const totalAbonoMonto = abonos.reduce((s, m) => s + m.importe, 0);
   const abonosFacturaCobrada = enrichments.filter(e => e.status === 'factura-cobrada').length;
   const abonosSinFactura = enrichments.filter(e => e.status === 'cobranza-sin-factura').length;
-  const pagosMultiFactura = scopedPayments.filter(payment => payment.applications.length > 1);
+  const paymentReconciliations = scopedPayments
+    .map(payment => paymentReconciliationView(payment, paymentMatchMeta.get(payment.idPago), facturaState, facturaKeyByNormalized))
+    .sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro) || a.idPago.localeCompare(b.idPago));
+  const pagosConciliadosBanco = paymentReconciliations.filter(payment =>
+    payment.status === 'CONFIRMED_REF' || payment.status === 'AUTO_UNIQUE',
+  );
+  const pagosAmbiguos = paymentReconciliations.filter(payment => payment.status === 'AMBIGUOUS');
+  const pagosSinBanco = paymentReconciliations.filter(payment => payment.status === 'UNMATCHED');
+  const pagosMultiFactura = paymentReconciliations.filter(payment => payment.applicationCount > 1);
   const montoPagosMultiFacturaConciliado = pagosMultiFactura
-    .filter(payment => consumedPayment.has(payment.idPago))
+    .filter(payment => payment.status === 'CONFIRMED_REF' || payment.status === 'AUTO_UNIQUE')
     .reduce((sum, payment) => sum + payment.importeRecibo, 0);
 
   // Para el % de facturas cruzadas, denominador = facturas con saldo > 0.
@@ -1321,8 +1531,9 @@ export function reconcileRealCollections(
     abonosSinFactura,
     abonosTraspasoInterno,
     totalPagosIndicadores: scopedPayments.length,
-    pagosConciliadosBanco: consumedPayment.size,
-    pagosSinBanco: Math.max(0, scopedPayments.length - consumedPayment.size),
+    pagosConciliadosBanco: pagosConciliadosBanco.length,
+    pagosSinBanco: pagosSinBanco.length,
+    pagosAmbiguos: pagosAmbiguos.length,
     pagosMultiFactura: pagosMultiFactura.length,
     montoPagosMultiFacturaConciliado,
     pctAbonosCruzados: abonos.length > 0 ? abonosFacturaCobrada / abonos.length : 0,
@@ -1338,6 +1549,7 @@ export function reconcileRealCollections(
   return {
     matches,
     abonoEnrichments: enrichments,
+    paymentReconciliations,
     summary,
     reviewCandidates,
     bankCoverage: buildBankCoverage(bankStatements, abonos),

@@ -501,24 +501,14 @@ function calculateRiskAlerts(buckets: ProjectionBucket[], movements: FinancialMo
   return alerts;
 }
 
-function countDeficitDaysFromMovements(movements: FinancialMovement[]): number {
-  const perDay = new Map<string, { inflows: number; outflows: number }>();
-  for (const movement of movements) {
-    if (movement.status === 'CANCELLED') continue;
-    const date = effectiveMovementDate(movement);
-    if (!date) continue;
-    const key = date.slice(0, 10);
-    const amount = effectiveAmount(movement);
-    const entry = perDay.get(key) ?? { inflows: 0, outflows: 0 };
-    if (movement.type === 'INFLOW') entry.inflows += amount;
-    else entry.outflows += amount;
-    perDay.set(key, entry);
+function bucketDaySpan(bucket: ProjectionBucket, index: number, buckets: ProjectionBucket[]): number {
+  const next = buckets[index + 1];
+  if (next) {
+    const a = parseIso(bucket.date);
+    const b = parseIso(next.date);
+    return Math.max(1, Math.round((b.getTime() - a.getTime()) / 86_400_000));
   }
-  let count = 0;
-  for (const { inflows, outflows } of perDay.values()) {
-    if (outflows > inflows) count += 1;
-  }
-  return count;
+  return 1;
 }
 
 function summarizeProjection(
@@ -548,7 +538,7 @@ function summarizeProjection(
     projectedCash30: bucketForDay(30)?.closingCash ?? lastBucket?.closingCash ?? 0,
     projectedCash90: bucketForDay(90)?.closingCash ?? lastBucket?.closingCash ?? 0,
     minimumCashRequired,
-    deficitDays: countDeficitDaysFromMovements(movements),
+    deficitDays: buckets.reduce((sum, bucket, i) => sum + (bucket.deficit > 0 ? bucketDaySpan(bucket, i, buckets) : 0), 0),
     largestUpcomingInflow,
     largestUpcomingOutflow,
     averageConfidence: movements.length === 0

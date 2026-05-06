@@ -12,6 +12,6 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    exclude: [...configDefaults.exclude, 'tests-e2e/**'],
+    exclude: [...configDefaults.exclude, '.claude/**', 'tests-e2e/**', '**/tests-e2e/**'],
   },
 });

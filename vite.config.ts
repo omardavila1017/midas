@@ -9,6 +9,7 @@ import path from 'path'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const jdeUpstream = env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tesoreria'
+  const jdeIndicadoresUpstream = env.VITE_JDE_INDICADORES_UPSTREAM || 'http://srv-desarrollo:90/JDEdwards'
 
   // Extraemos el pathname del upstream para reescribir el prefix /api/jde
   // hacia la ruta correcta del host productivo (ej. /v1/erp/tesoreria).
@@ -18,6 +19,15 @@ export default defineConfig(({ mode }) => {
     const u = new URL(jdeUpstream)
     upstreamOrigin = u.origin
     upstreamPath = u.pathname.replace(/\/+$/, '')
+  } catch {
+    // Si no es una URL absoluta, dejamos el string tal cual (fallback dev local).
+  }
+  let indicadoresOrigin = jdeIndicadoresUpstream
+  let indicadoresPath = ''
+  try {
+    const u = new URL(jdeIndicadoresUpstream)
+    indicadoresOrigin = u.origin
+    indicadoresPath = u.pathname.replace(/\/+$/, '')
   } catch {
     // Si no es una URL absoluta, dejamos el string tal cual (fallback dev local).
   }
@@ -38,6 +48,12 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
           rewrite: (p) => p.replace(/^\/api\/jde/, upstreamPath),
+        },
+        '/api/jde-indicadores': {
+          target: indicadoresOrigin,
+          changeOrigin: true,
+          secure: false,
+          rewrite: (p) => p.replace(/^\/api\/jde-indicadores/, indicadoresPath),
         },
       },
     },

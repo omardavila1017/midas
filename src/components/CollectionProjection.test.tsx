@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import CollectionProjection from './CollectionProjection';
 import type { Client, CashFlowAssumptions } from '../domain/types';
-import type { BankAccountStatement, CobranzaRecord } from '../services/jdeTypes';
+import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
 import { downloadFile } from '../utils/export';
 
 vi.mock('../utils/export', async () => {
@@ -93,6 +93,43 @@ function makeBankStatement(overrides: Partial<BankAccountStatement> = {}): BankA
       },
     ],
     ...overrides,
+  };
+}
+
+function makeCobranzaPayment(overrides: Partial<CobranzaPayment> = {}): CobranzaPayment {
+  const idPago = overrides.idPago ?? 'PAY-REC';
+  return {
+    idPago,
+    cia: overrides.cia ?? '00011',
+    fechaCobro: overrides.fechaCobro ?? isoForCurrentMonthDay(15),
+    fechaContable: overrides.fechaContable ?? isoForCurrentMonthDay(15),
+    cuentaBancaria: overrides.cuentaBancaria ?? '12345',
+    banco: overrides.banco ?? 'BANAMEX',
+    noRecibo: overrides.noRecibo ?? 'RI-REC',
+    importeRecibo: overrides.importeRecibo ?? 2500,
+    pendienteAplicar: overrides.pendienteAplicar ?? 0,
+    noCliente: overrides.noCliente ?? '9001',
+    cliente: overrides.cliente ?? 'Cliente Demo',
+    noBatch: overrides.noBatch ?? 'B-1',
+    tipoCambio: overrides.tipoCambio ?? 1,
+    applications: overrides.applications ?? [{
+      idPago,
+      cia: overrides.cia ?? '00011',
+      fechaAplicacion: isoForCurrentMonthDay(15),
+      noCliente: '9001',
+      cliente: 'Cliente Demo',
+      tipoDocto: 'RI',
+      noFactura: 'F-JDE',
+      noFacturaNormalizada: 'FJDE',
+      fechaFactura: isoForCurrentMonthDay(1),
+      fechaVencimiento: isoForCurrentMonthDay(28),
+      diasAntiguedadFafv: 0,
+      importeCobrado: 2500,
+      importeOriginalFactura: 2500,
+      importePteFactura: 0,
+      tasaIva: 'IVA16',
+      importeIvaFacturaOriginal: 400,
+    }],
   };
 }
 
@@ -302,7 +339,7 @@ describe('<CollectionProjection />', () => {
     expect(screen.getByText(/Fecha confirmada por JDE/i)).toBeTruthy();
   });
 
-  it('muestra cruces por revisar sin contarlos como banco cruzado', () => {
+  it('auto-confirma cruces por monto exacto incluso sin identidad fuerte de cliente', () => {
     render(
       <CollectionProjection
         clients={[makeClient({ id: 'x', name: 'Cliente X' })]}
@@ -319,9 +356,7 @@ describe('<CollectionProjection />', () => {
       />,
     );
 
-    expect(screen.getByText(/Cruces por revisar/i)).toBeTruthy();
-    expect(screen.getByText(/no cuentan como banco cruzado/i)).toBeTruthy();
-    expect(screen.getAllByText(/Por revisar/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/COBRANZA CRUZADA CON BANCO/i)).toBeTruthy();
   });
 
   it('permite cargar bancos sólo del rango visible', () => {
@@ -365,5 +400,55 @@ describe('<CollectionProjection />', () => {
     expect(csv).toContain('ReglaAplicada');
     expect(csv).toContain('MotivoFecha');
     expect(csv).toContain('JDE cobrado');
+  });
+
+  it('muestra recibos JDE conciliados con banco, detalle de facturas y filtro sin banco', () => {
+    const currentYear = new Date().getFullYear();
+    const matchedPayment = makeCobranzaPayment();
+    const unmatchedPayment = makeCobranzaPayment({
+      idPago: 'PAY-NOBANK',
+      noRecibo: 'RI-NOBANK',
+      fechaCobro: isoForCurrentMonthDay(16),
+      applications: [{
+        ...matchedPayment.applications[0],
+        idPago: 'PAY-NOBANK',
+        noFactura: 'F-NOBANK',
+        noFacturaNormalizada: 'FNOBANK',
+      }],
+    });
+    render(
+      <CollectionProjection
+        clients={[makeClient({ id: '9001', name: 'Cliente Demo' })]}
+        assumptions={{ ...ASSUMPTIONS, year: currentYear }}
+        onAssumptionsChange={() => {}}
+        confirmedPayments={[]}
+        onConfirm={() => {}}
+        onUnconfirm={() => {}}
+        companies={[{ cia: '00011', nombre: 'Senda Demo' }]}
+        cobranzaRecords={[makeCobranzaRecord({ noFactura: 'F-JDE', importeBrutoPesos: 2500 })]}
+        cobranzaPayments={[matchedPayment, unmatchedPayment]}
+        cobranzaLoadedCias={{ '00011': new Date().toISOString() }}
+        bankStatements={[makeBankStatement({
+          movimientos: [{
+            ...makeBankStatement().movimientos[0],
+            referencia: 'PAGO RI-REC',
+            concepto: 'TRANSFERENCIA SPEI RI-REC',
+          }],
+        })]}
+        selectedCia="00011"
+      />,
+    );
+
+    expect(screen.getByText(/Recibos JDE \/ Banco/i)).toBeTruthy();
+    expect(screen.getByText('PAY-REC')).toBeTruthy();
+    expect(screen.getByText('RI-REC')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: /Ver detalle/i })[0]);
+    expect(screen.getByText(/Banco ligado/i)).toBeTruthy();
+    expect(screen.getAllByText(/Facturas aplicadas/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('F-JDE').length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByDisplayValue('Todos los estados'), { target: { value: 'UNMATCHED' } });
+    expect(screen.getByText('PAY-NOBANK')).toBeTruthy();
+    expect(screen.queryByText('PAY-REC')).toBeNull();
   });
 });

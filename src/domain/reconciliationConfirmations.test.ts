@@ -67,6 +67,7 @@ function buildResult(): RealReconciliationResult {
   return {
     matches: [match],
     abonoEnrichments: [enrichment],
+    paymentReconciliations: [],
     reviewCandidates: [review],
     bankCoverage: { loadedDates: [], totalMovements: 1, totalAbonos: 1 },
     timingsMs: { totalMs: 0, indexMs: 0, matchMs: 0 },

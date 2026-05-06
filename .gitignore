@@ -49,4 +49,4 @@ _rebuild_backup/
 # Impeccable skills — installed from pbakaus/impeccable via `npx skills add`.
 # Regenerable from skills-lock.json, no need to vendor the SKILL.md files.
 .agents/
-.claude/skills/
+.claude/
