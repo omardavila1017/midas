@@ -100,6 +100,9 @@ export type ManualPlanningCategory =
   | 'MANUAL_OUTFLOW'
   | 'SUPPLIER_PAYMENT'
   | 'TAX_PAYMENT'
+  | 'PAYROLL'
+  | 'CAPEX'
+  | 'OPEX'
   | 'OTHER';
 
 export type ManualPlanningRecurrence = 'ONE_TIME' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'QUARTERLY';
@@ -114,6 +117,8 @@ export interface ManualPlanningEntry {
   startDate: string;
   endDate?: string;
   recurrence: ManualPlanningRecurrence;
+  companyId?: string;
+  businessUnitId?: string;
   counterpartyName?: string;
   description?: string;
   taxTreatment: FinancialTaxTreatment;
@@ -121,6 +126,10 @@ export interface ManualPlanningEntry {
   taxBaseAmount?: number;
   taxAmount?: number;
   status: 'DRAFT' | 'APPROVED';
+  replacedBySourceSystem?: FinancialSourceSystem;
+  replacedBySourceObjectId?: string;
+  replacedAt?: string;
+  replacementNote?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

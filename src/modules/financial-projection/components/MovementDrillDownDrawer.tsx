@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { FileText, X } from 'lucide-react';
 import { fmtCurrency, fmtDate, fmtPctInt } from '../../../formatters';
 import {
@@ -55,11 +55,13 @@ export function MovementDrillDownDrawer({
   anchor,
   onClose,
   invoiceContext,
+  quickActions,
 }: {
   movement: FinancialMovement | null;
   anchor: DOMRect | null;
   onClose: () => void;
   invoiceContext?: InvoiceContext;
+  quickActions?: ReactNode;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -166,6 +168,15 @@ export function MovementDrillDownDrawer({
             caller pasa el contexto (catálogos, CXP y presupuesto). */}
         {invoiceContext && (
           <InvoiceDetailSection movement={movement} context={invoiceContext} />
+        )}
+
+        {quickActions && (
+          <div className="rounded-lg border border-[var(--gray-200)] p-3">
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+              Ajustes rápidos
+            </div>
+            {quickActions}
+          </div>
         )}
 
         <div className="rounded-lg border border-[var(--gray-200)]">

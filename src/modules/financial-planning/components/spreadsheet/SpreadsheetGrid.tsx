@@ -30,6 +30,7 @@ export interface SpreadsheetGridProps {
   onClearCell: (conceptKey: string, bucketKey: string) => void;
   onAddRow: (type: FinancialMovementType) => void;
   onClickRow?: (conceptKey: string) => void;
+  onInspectCell?: (conceptKey: string, bucketKey: string) => void;
   onReadOnlyAttempt?: () => void;
 }
 
@@ -51,6 +52,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     onClearCell,
     onAddRow,
     onClickRow,
+    onInspectCell,
     onReadOnlyAttempt,
   } = props;
 
@@ -257,6 +259,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             onClick={() => {
               setSelection({ rowIndex, colIndex });
               setIsEditing(false);
+              onInspectCell?.(row.conceptKey, column.key);
               if (isReadOnly) onReadOnlyAttempt?.();
             }}
             onDoubleClick={() => {

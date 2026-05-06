@@ -146,7 +146,7 @@ function MovementsTableImpl(props: MovementsTableProps) {
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px] text-[13px]">
+          <table className="w-full min-w-[1120px] text-[13px]">
             <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
               <tr>
                 <th className="px-4 py-2.5 w-[40%]">Grupo</th>
@@ -260,6 +260,9 @@ function GroupRows({
                     <th className="px-4 py-2">Tipo</th>
                     <th className="px-4 py-2">Contraparte</th>
                     <th className="px-4 py-2">Concepto</th>
+                    <th className="px-4 py-2 text-right">Score</th>
+                    <th className="px-4 py-2">Límite original</th>
+                    <th className="px-4 py-2">Pago estimado</th>
                     <th className="px-4 py-2 text-right">Monto</th>
                     <th className="px-4 py-2">Estado</th>
                     <th className="px-4 py-2"></th>
@@ -304,6 +307,15 @@ function GroupRows({
                           {movement.ruleApplied ?? movement.category}
                         </div>
                       </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-[var(--gray-950)] whitespace-nowrap">
+                        {movement.confidenceScore}
+                      </td>
+                      <td className="px-4 py-2.5 tabular-nums text-[var(--gray-700)] whitespace-nowrap">
+                        {movement.dueDate ?? movement.projectedDate}
+                      </td>
+                      <td className="px-4 py-2.5 tabular-nums text-[var(--gray-700)] whitespace-nowrap">
+                        {effectiveMovementDate(movement)}
+                      </td>
                       <td className="px-4 py-2.5 text-right tabular-nums font-medium text-[var(--gray-950)] whitespace-nowrap">
                         {fmtCurrency(effectiveAmount(movement))}
                       </td>
@@ -320,7 +332,7 @@ function GroupRows({
                   ))}
                   {hiddenCount > 0 && (
                     <tr className="border-t border-[var(--gray-100)]">
-                      <td colSpan={7} className="px-4 py-3 pl-10">
+                      <td colSpan={10} className="px-4 py-3 pl-10">
                         <button
                           type="button"
                           onClick={(event) => {

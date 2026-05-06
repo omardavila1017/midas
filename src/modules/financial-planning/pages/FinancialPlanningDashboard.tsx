@@ -15,6 +15,7 @@ import {
   buildBucketDates,
   calculateBaseProjection,
   effectiveAmount,
+  effectiveMovementDate,
   summarizeBucketsForScenario,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
@@ -24,6 +25,7 @@ import type {
   FinancialMovementCategory,
   FinancialMovementType,
   FinancialScenario,
+  ForecastRun,
   ManualPlanningEntry,
   PlanningCustomRow,
   ProjectionGranularity,
@@ -34,16 +36,20 @@ import { ScenarioTabs } from '../components/ScenarioTabs';
 import { ChangeLogDrawer } from '../components/ChangeLogDrawer';
 import { MergeDialog } from '../components/MergeDialog';
 import { AddRowPopover } from '../components/AddRowPopover';
+import { ExpectedCommitmentsPanel } from '../components/ExpectedCommitmentsPanel';
+import { DailyOperatingFlowTable, SupplierPaymentDecisionTable } from '../components/SupplierPaymentDecisionViews';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
 import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
 import { buildFinancialProjectionSourceData, calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
 import { buildApprovedTaxPaymentMovements, defaultTaxStore, loadTaxStore } from '../../taxes/services/taxModuleService';
 import {
+  createManualPlanningEntry,
   expandManualPlanningEntriesToMovements,
   loadManualPlanningEntries,
   saveManualPlanningEntries,
 } from '../services/manualPlanningEntries';
+import type { ExpectedCommitmentDraft } from '../services/expectedCommitments';
 import {
   loadPlanningAdjustments,
   loadPlanningAudit,
@@ -66,6 +72,10 @@ import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../
 import { conceptKeyForMovement, buildPlanningRows } from '../services/planningRowTaxonomy';
 import { applyMerge, buildMergeDiff, type MergeDiffEntry } from '../services/scenarioMerge';
 import { createNewDraft, duplicateDraft } from '../services/scenarioDuplicate';
+import {
+  scheduleSupplierPaymentsByScore,
+  type SupplierPaymentPlan,
+} from '../services/supplierPaymentSchedule';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 
@@ -83,6 +93,9 @@ interface Props {
 }
 
 const USER = 'tesoreria@senda.local';
+type PlanningView = 'matrix' | 'commitments';
+type PlanningScenarioRun = ForecastRun & { supplierPlan: SupplierPaymentPlan };
+type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
 
 export default function FinancialPlanningDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -164,12 +177,14 @@ export default function FinancialPlanningDashboard(props: Props) {
 
   const [activeScenarioId, setActiveScenarioId] = useState<string>(() => APPROVED_SCENARIO_ID);
   const [granularity, setGranularity] = useState<ProjectionGranularity>('monthly');
+  const [planningView, setPlanningView] = useState<PlanningView>('matrix');
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [mergeOpen, setMergeOpen] = useState<string | null>(null);
   const [addRowFor, setAddRowFor] = useState<FinancialMovementType | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [detailMovement, setDetailMovement] = useState<FinancialMovement | null>(null);
   const [detailAnchor, setDetailAnchor] = useState<DOMRect | null>(null);
+  const [selectedCell, setSelectedCell] = useState<SelectedPlanningCell>(null);
 
   useEffect(() => {
     if (!scenarios.some((s) => s.id === activeScenarioId && !s.archivedAt)) {
@@ -185,6 +200,7 @@ export default function FinancialPlanningDashboard(props: Props) {
 
   const activeScenario = scenarios.find((s) => s.id === activeScenarioId) ?? approvedScenario;
   const isReadOnly = activeScenario.kind !== 'DRAFT';
+  const canEditCommitments = activeScenario.kind !== 'BASE' && !activeScenario.archivedAt;
 
   const initialCash = useMemo(
     () => calculateInitialCash(props.bankStatements, props.startingBalance),
@@ -192,7 +208,7 @@ export default function FinancialPlanningDashboard(props: Props) {
   );
   const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
 
-  const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean) => {
+  const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
     const taxMovements = buildApprovedTaxPaymentMovements({
       obligations: taxStore.obligations,
       scenarioId,
@@ -210,7 +226,16 @@ export default function FinancialPlanningDashboard(props: Props) {
       : [];
     const movementsBeforeAdjust = [...source.movements, ...manualMovements, ...taxMovements];
     const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
-    return calculateBaseProjection(adjustedMovements, {
+    const supplierSchedule = scheduleSupplierPaymentsByScore({
+      movements: adjustedMovements,
+      providers: props.providers,
+      startDate: yearStart,
+      endDate: yearEnd,
+      initialCash,
+      minimumCash,
+      scenarioId,
+    });
+    const projection = calculateBaseProjection(supplierSchedule.movements, {
       startDate: yearStart,
       endDate: yearEnd,
       initialCash,
@@ -219,25 +244,26 @@ export default function FinancialPlanningDashboard(props: Props) {
       scenarioId,
       name: scenarios.find((s) => s.id === scenarioId)?.name ?? scenarioId,
     });
+    return { ...projection, supplierPlan: supplierSchedule.plan };
   };
 
   // Approved baseline used for diff reference.
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today],
+    [approvedScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today],
+    [baseScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers],
   );
 
   const activeRunRaw = useMemo(
     () => buildScenarioRun(activeScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today],
+    [activeScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers],
   );
 
   const activeOverrides = useMemo(
@@ -273,6 +299,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       ...activeRunRaw,
       buckets,
       summary: summarizeBucketsForScenario(buckets, activeRunRaw.movements, minimumCash),
+      supplierPlan: activeRunRaw.supplierPlan,
     };
   }, [activeRunRaw, activeOverrides, rows, granularity, today, initialCash, minimumCash]);
 
@@ -303,6 +330,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       ...approvedRun,
       buckets,
       summary: summarizeBucketsForScenario(buckets, approvedRun.movements, minimumCash),
+      supplierPlan: approvedRun.supplierPlan,
     };
   }, [approvedRun, approvedOverrides, customRows, approvedScenario.id, granularity, today, initialCash, minimumCash]);
 
@@ -457,6 +485,189 @@ export default function FinancialPlanningDashboard(props: Props) {
     setStatusMessage(`Fila "${row.label}" agregada.`);
   };
 
+  const selectedCellMovements = useMemo(() => {
+    if (!selectedCell) return [];
+    return activeRun.movements
+      .filter((movement) =>
+        conceptKeyForMovement(movement) === selectedCell.conceptKey
+        && bucketKeyForDate(effectiveMovementDate(movement), granularity) === selectedCell.bucketKey,
+      )
+      .sort((a, b) => effectiveMovementDate(a).localeCompare(effectiveMovementDate(b)));
+  }, [activeRun.movements, granularity, selectedCell]);
+
+  const ensureCanEditCommitments = (): boolean => {
+    if (canEditCommitments) return true;
+    setStatusMessage('Escenario Base es solo lectura. Activa Aprobado o una propuesta para capturar compromisos.');
+    return false;
+  };
+
+  const handleCreateExpectedCommitment = (input: ExpectedCommitmentDraft) => {
+    if (!ensureCanEditCommitments()) return;
+    const entry = createManualPlanningEntry({
+      scenarioIds: [activeScenarioId],
+      type: 'OUTFLOW',
+      category: input.category,
+      name: input.name,
+      amount: input.amount,
+      startDate: input.startDate,
+      recurrence: input.recurrence,
+      companyId: input.companyId,
+      description: 'Compromiso esperado capturado en Planeación.',
+      status: activeScenario.kind === 'APPROVED' ? 'APPROVED' : 'DRAFT',
+      createdBy: USER,
+    });
+    setManualEntries((current) => [...current, entry]);
+    setChangeLog((current) => [
+      newChangeLogEntry({
+        scenarioId: activeScenarioId,
+        kind: 'ADD_ROW',
+        autoDescription: `Compromiso esperado agregado: ${entry.name}.`,
+        payload: { manualEntryId: entry.id, amount: entry.amount, date: entry.startDate, category: entry.category },
+        createdBy: USER,
+      }),
+      ...current,
+    ]);
+    setStatusMessage(`Compromiso "${entry.name}" agregado.`);
+  };
+
+  const handleBulkCreateExpectedCommitments = (inputs: ExpectedCommitmentDraft[]) => {
+    if (!ensureCanEditCommitments() || inputs.length === 0) return;
+    const entries = inputs.map((input) => createManualPlanningEntry({
+      scenarioIds: [activeScenarioId],
+      type: 'OUTFLOW',
+      category: input.category,
+      name: input.name,
+      amount: input.amount,
+      startDate: input.startDate,
+      recurrence: input.recurrence,
+      companyId: input.companyId,
+      description: 'Compromiso esperado capturado por pegado desde Excel.',
+      status: activeScenario.kind === 'APPROVED' ? 'APPROVED' : 'DRAFT',
+      createdBy: USER,
+    }));
+    setManualEntries((current) => [...current, ...entries]);
+    setChangeLog((current) => [
+      newChangeLogEntry({
+        scenarioId: activeScenarioId,
+        kind: 'ADD_ROW',
+        autoDescription: `${entries.length} compromisos esperados agregados por captura masiva.`,
+        payload: {
+          manualEntryIds: entries.map((entry) => entry.id),
+          totalAmount: entries.reduce((sum, entry) => sum + entry.amount, 0),
+        },
+        createdBy: USER,
+      }),
+      ...current,
+    ]);
+    setStatusMessage(`${entries.length} compromisos esperados agregados.`);
+  };
+
+  const handleUpdateExpectedCommitment = (entryId: string, input: ExpectedCommitmentDraft) => {
+    if (!ensureCanEditCommitments()) return;
+    const now = new Date().toISOString();
+    setManualEntries((current) => current.map((entry) => (
+      entry.id === entryId
+        ? {
+          ...entry,
+          type: 'OUTFLOW',
+          category: input.category,
+          name: input.name,
+          amount: input.amount,
+          startDate: input.startDate,
+          recurrence: input.recurrence,
+          companyId: input.companyId,
+          taxTreatment: taxTreatmentForCommitment(input.category),
+          updatedAt: now,
+        }
+        : entry
+    )));
+    setChangeLog((current) => [
+      newChangeLogEntry({
+        scenarioId: activeScenarioId,
+        kind: 'EDIT_CELL',
+        autoDescription: `Compromiso esperado actualizado: ${input.name}.`,
+        payload: { manualEntryId: entryId, amount: input.amount, date: input.startDate, category: input.category },
+        createdBy: USER,
+      }),
+      ...current,
+    ]);
+    setStatusMessage(`Compromiso "${input.name}" actualizado.`);
+  };
+
+  const handleDeleteExpectedCommitment = (entryId: string) => {
+    if (!ensureCanEditCommitments()) return;
+    const entry = manualEntries.find((item) => item.id === entryId);
+    if (!entry) return;
+    if (!confirm(`¿Eliminar "${entry.name}"?`)) return;
+    setManualEntries((current) => current.filter((item) => item.id !== entryId));
+    setChangeLog((current) => [
+      newChangeLogEntry({
+        scenarioId: activeScenarioId,
+        kind: 'REMOVE_ROW',
+        autoDescription: `Compromiso esperado eliminado: ${entry.name}.`,
+        payload: { manualEntryId: entry.id },
+        createdBy: USER,
+      }),
+      ...current,
+    ]);
+    setStatusMessage(`Compromiso "${entry.name}" eliminado.`);
+  };
+
+  const handleToggleExpectedCommitment = (entryId: string, enabled: boolean) => {
+    if (!ensureCanEditCommitments()) return;
+    const entry = manualEntries.find((item) => item.id === entryId);
+    if (!entry || entry.replacedAt) return;
+    const now = new Date().toISOString();
+    setManualEntries((current) => current.map((item) => {
+      if (item.id !== entryId) return item;
+      const ids = new Set(item.scenarioIds);
+      if (enabled) ids.add(activeScenarioId);
+      else ids.delete(activeScenarioId);
+      return { ...item, scenarioIds: Array.from(ids), updatedAt: now };
+    }));
+    setChangeLog((current) => [
+      newChangeLogEntry({
+        scenarioId: activeScenarioId,
+        kind: enabled ? 'ADD_ROW' : 'REMOVE_ROW',
+        autoDescription: `${enabled ? 'Activaste' : 'Desactivaste'} compromiso esperado: ${entry.name}.`,
+        payload: { manualEntryId: entry.id, enabled },
+        createdBy: USER,
+      }),
+      ...current,
+    ]);
+  };
+
+  const handleMarkExpectedCommitmentReplaced = (entryId: string) => {
+    if (!ensureCanEditCommitments()) return;
+    const entry = manualEntries.find((item) => item.id === entryId);
+    if (!entry || entry.replacedAt) return;
+    if (!confirm(`¿Marcar "${entry.name}" como reemplazado por origen real?`)) return;
+    const now = new Date().toISOString();
+    setManualEntries((current) => current.map((item) => (
+      item.id === entryId
+        ? {
+          ...item,
+          replacedBySourceSystem: item.category === 'PAYROLL' ? 'PAYROLL' : 'JDE',
+          replacedBySourceObjectId: item.replacedBySourceObjectId ?? `real:${item.id}`,
+          replacedAt: now,
+          replacementNote: 'Marcado desde Compromisos esperados para evitar duplicidad con origen real.',
+          updatedAt: now,
+        }
+        : item
+    )));
+    setChangeLog((current) => [
+      newChangeLogEntry({
+        scenarioId: activeScenarioId,
+        kind: 'CLEAR_CELL',
+        autoDescription: `Compromiso esperado reemplazado por origen real: ${entry.name}.`,
+        payload: { manualEntryId: entry.id },
+        createdBy: USER,
+      }),
+      ...current,
+    ]);
+    setStatusMessage(`"${entry.name}" quedó marcado como reemplazado.`);
+  };
+
   const handleCreateDraft = () => {
     const { newScenario, seedEntry } = createNewDraft({ approved: approvedScenario, user: USER });
     setStoredScenarios((current) => [...current, newScenario]);
@@ -566,6 +777,7 @@ export default function FinancialPlanningDashboard(props: Props) {
     setStoredScenarios(result.scenarios);
     setCellOverrides(result.cellOverrides);
     setCustomRows(result.customRows);
+    setManualEntries(result.manualEntries);
     setChangeLog(result.changeLog);
     if (result.auditEvents.length > 0) {
       const previous = loadPlanningAudit([]);
@@ -606,14 +818,24 @@ export default function FinancialPlanningDashboard(props: Props) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <SegmentedFilter
-              value={granularity}
-              onChange={setGranularity}
+              value={planningView}
+              onChange={setPlanningView}
               options={[
-                { value: 'monthly', label: 'Mes' },
-                { value: 'weekly', label: 'Sem' },
-                { value: 'daily', label: 'Día' },
+                { value: 'matrix', label: 'Matriz' },
+                { value: 'commitments', label: 'Compromisos' },
               ]}
             />
+            {planningView === 'matrix' && (
+              <SegmentedFilter
+                value={granularity}
+                onChange={setGranularity}
+                options={[
+                  { value: 'monthly', label: 'Mes' },
+                  { value: 'weekly', label: 'Sem' },
+                  { value: 'daily', label: 'Día' },
+                ]}
+              />
+            )}
             <button
               type="button"
               onClick={() => setDrawerOpen((open) => !open)}
@@ -690,34 +912,84 @@ export default function FinancialPlanningDashboard(props: Props) {
         />
       </div>
 
-      <div className="grid gap-3" style={{ gridTemplateColumns: drawerOpen ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)' }}>
-        <SpreadsheetGrid
-          rows={rows}
-          columns={columns}
-          granularity={granularity}
-          isReadOnly={isReadOnly}
-          asOfDate={today}
-          baseValueFor={baseValueFor}
-          overrideFor={overrideFor}
-          totalsFor={totalsForKind}
-          onCommitCell={handleCommitCell}
-          onClearCell={handleClearCell}
-          onAddRow={handleAddRow}
-          onClickRow={() => { /* drill-down hook if needed */ }}
-          onReadOnlyAttempt={() => setStatusMessage('Solo lectura. Crea una propuesta para editar.')}
-        />
-        <ChangeLogDrawer
-          open={drawerOpen}
-          scenarioName={activeScenario.name}
-          entries={draftEntries}
-          onClose={() => setDrawerOpen(false)}
-        />
-      </div>
+      {planningView === 'commitments' ? (
+        <div className="grid gap-3" style={{ gridTemplateColumns: drawerOpen ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)' }}>
+          <ExpectedCommitmentsPanel
+            entries={manualEntries}
+            activeScenarioId={activeScenarioId}
+            activeScenarioName={activeScenario.name}
+            canEdit={canEditCommitments}
+            defaultCompanyId={props.companyCode !== 'all' ? props.companyCode : undefined}
+            today={today}
+            onCreate={handleCreateExpectedCommitment}
+            onBulkCreate={handleBulkCreateExpectedCommitments}
+            onUpdate={handleUpdateExpectedCommitment}
+            onDelete={handleDeleteExpectedCommitment}
+            onToggleScenario={handleToggleExpectedCommitment}
+            onMarkReplaced={handleMarkExpectedCommitmentReplaced}
+          />
+          <ChangeLogDrawer
+            open={drawerOpen}
+            scenarioName={activeScenario.name}
+            entries={draftEntries}
+            onClose={() => setDrawerOpen(false)}
+          />
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-3" style={{ gridTemplateColumns: drawerOpen ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)' }}>
+            <SpreadsheetGrid
+              rows={rows}
+              columns={columns}
+              granularity={granularity}
+              isReadOnly={isReadOnly}
+              asOfDate={today}
+              baseValueFor={baseValueFor}
+              overrideFor={overrideFor}
+              totalsFor={totalsForKind}
+              onCommitCell={handleCommitCell}
+              onClearCell={handleClearCell}
+              onAddRow={handleAddRow}
+              onClickRow={(conceptKey) => setSelectedCell({ conceptKey, bucketKey: columns.find((column) => column.isCurrent)?.key ?? columns[0]?.key ?? yearStart })}
+              onInspectCell={(conceptKey, bucketKey) => setSelectedCell({ conceptKey, bucketKey })}
+              onReadOnlyAttempt={() => setStatusMessage('Solo lectura. Crea una propuesta para editar.')}
+            />
+            {drawerOpen && selectedCell ? (
+              <PlanningCellDetailPanel
+                movements={selectedCellMovements}
+                scenarioName={activeScenario.name}
+                bucketLabel={engineBucketLabel(selectedCell.bucketKey, granularity)}
+                onSelectMovement={(movement) => {
+                  setDetailMovement(movement);
+                  setDetailAnchor(null);
+                }}
+                onClose={() => setSelectedCell(null)}
+              />
+            ) : (
+              <ChangeLogDrawer
+                open={drawerOpen}
+                scenarioName={activeScenario.name}
+                entries={draftEntries}
+                onClose={() => setDrawerOpen(false)}
+              />
+            )}
+          </div>
 
-      <CashTrajectoryChart
-        projection={activeRun}
-        baseProjection={activeScenario.kind === 'BASE' ? undefined : approvedRunWithOverrides}
-      />
+          <CashTrajectoryChart
+            projection={activeRun}
+            baseProjection={activeScenario.kind === 'BASE' ? undefined : approvedRunWithOverrides}
+          />
+
+          <SupplierPaymentDecisionTable
+            plan={activeRun.supplierPlan}
+            comparisonPlan={activeScenario.kind === 'APPROVED' ? null : approvedRunWithOverrides.supplierPlan}
+            scenarioName={activeScenario.name}
+            comparisonName={activeScenario.kind === 'APPROVED' ? undefined : approvedScenario.name}
+          />
+
+          <DailyOperatingFlowTable rows={activeRun.supplierPlan.dailyRows} />
+        </>
+      )}
 
       {addRowFor && (
         <AddRowPopover
@@ -787,6 +1059,99 @@ function SegmentedFilter<T extends string>({
       })}
     </div>
   );
+}
+
+function PlanningCellDetailPanel({
+  movements,
+  scenarioName,
+  bucketLabel,
+  onSelectMovement,
+  onClose,
+}: {
+  movements: FinancialMovement[];
+  scenarioName: string;
+  bucketLabel: string;
+  onSelectMovement: (movement: FinancialMovement) => void;
+  onClose: () => void;
+}) {
+  const inflows = movements.filter((movement) => movement.type === 'INFLOW');
+  const outflows = movements.filter((movement) => movement.type === 'OUTFLOW');
+  const total = movements.reduce((sum, movement) => sum + effectiveAmount(movement), 0);
+  return (
+    <aside className="rounded-2xl border border-[var(--gray-200)] bg-white">
+      <header className="flex items-start justify-between border-b border-[var(--gray-200)] px-4 py-3">
+        <div>
+          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Detalle de celda</h3>
+          <p className="mt-1 text-[11px] text-[var(--gray-500)]">{scenarioName} · {bucketLabel}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[11px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)]"
+        >
+          Cerrar
+        </button>
+      </header>
+      <div className="grid grid-cols-3 gap-2 border-b border-[var(--gray-200)] p-3">
+        <MiniStat label="Ingresos" value={String(inflows.length)} />
+        <MiniStat label="Egresos" value={String(outflows.length)} />
+        <MiniStat label="Total" value={fmtCompact(total)} />
+      </div>
+      <div className="max-h-[480px] overflow-auto p-3">
+        {movements.length === 0 ? (
+          <div className="rounded-xl bg-[var(--gray-50)] px-3 py-8 text-center text-[12px] text-[var(--gray-400)]">
+            No hay movimientos ligados a esta celda.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {movements.map((movement) => (
+              <button
+                key={movement.id}
+                type="button"
+                onClick={() => onSelectMovement(movement)}
+                className="w-full rounded-xl border border-[var(--gray-200)] bg-white p-3 text-left hover:bg-[var(--gray-50)]"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[12px] font-semibold text-[var(--gray-950)]">
+                      {movement.counterpartyName ?? movement.concept}
+                    </div>
+                    <div className="mt-0.5 truncate text-[10.5px] text-[var(--gray-500)]">
+                      {movement.sourceSystem} · {movement.category} · {movement.sourceObjectId ?? 'sin documento'}
+                    </div>
+                  </div>
+                  <div className="text-right text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">
+                    {fmtCompact(effectiveAmount(movement))}
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[10.5px] text-[var(--gray-500)]">
+                  <span>Original: {movement.dueDate ?? movement.projectedDate}</span>
+                  <span>Estimado: {effectiveMovementDate(movement)}</span>
+                  <span>Score: {movement.confidenceScore}</span>
+                  <span>{movement.status}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-[var(--gray-200)] px-2 py-2">
+      <div className="text-[9px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</div>
+      <div className="mt-0.5 text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{value}</div>
+    </div>
+  );
+}
+
+function taxTreatmentForCommitment(category: ExpectedCommitmentDraft['category']) {
+  if (category === 'PAYROLL') return 'IVA_EXEMPT';
+  if (category === 'CAPEX' || category === 'OPEX') return 'IVA_CREDITABLE';
+  return 'UNCLASSIFIED';
 }
 
 function minimumCashFor(props: Props): number {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import FinancialPlanningDashboard from './FinancialPlanningDashboard';
 import type { Budget } from '../../../domain/budget';
 import type { Client, CashFlowAssumptions } from '../../../domain/types';
@@ -92,6 +92,41 @@ describe('<FinancialPlanningDashboard />', () => {
     const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
     const surviving = stored.filter((scenario: { id: string }) => scenario.id === 'legacy-c');
     expect(surviving.length).toBe(0);
+  });
+
+  it('creates expected commitments from the Planning commitments view', async () => {
+    render(
+      <FinancialPlanningDashboard
+        companyCode="00001"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={10_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Compromisos/i }));
+    fireEvent.change(screen.getByLabelText('Concepto'), { target: { value: 'Nómina semanal' } });
+    fireEvent.change(screen.getByLabelText('Monto'), { target: { value: '150000' } });
+    fireEvent.change(screen.getByLabelText('Fecha'), { target: { value: '2026-05-22' } });
+    fireEvent.change(screen.getByLabelText('Recurrencia'), { target: { value: 'WEEKLY' } });
+    fireEvent.click(screen.getByRole('button', { name: /Agregar compromiso/i }));
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.manualEntries.v1') ?? '[]');
+      expect(stored).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'Nómina semanal',
+          category: 'PAYROLL',
+          companyId: '00001',
+          scenarioIds: ['approved'],
+          status: 'APPROVED',
+        }),
+      ]));
+    });
   });
 });
 

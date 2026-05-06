@@ -114,6 +114,7 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerDtiCriticidad?: 'Alta' | 'Media' | 'Baja';
   providerLastPaymentDate?: string;
   providerLastPaymentAmount?: number;
+  providerScore?: number;
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
   alerts: CxpAlert[];
@@ -369,6 +370,7 @@ function enrichCxpRecord(
     providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,
     providerLastPaymentDate: catalog.lastPayment?.ultimaFecha,
     providerLastPaymentAmount: catalog.lastPayment?.ultimoMonto,
+    providerScore: provider?.score,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
     alerts: [],
@@ -1355,7 +1357,9 @@ const CXPDashboard = ({
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">F. Factura</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Vence</th>
                               <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Días</th>
+                              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Score</th>
                               <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Pendiente</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Fecha plan</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold pl-3">Mon.</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Cond. Pago</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Prioridad</th>
@@ -1380,7 +1384,9 @@ const CXPDashboard = ({
                                     {r.diasVencida}
                                   </span>
                                 </td>
+                                <td className="py-1.5 text-right font-mono font-semibold text-[var(--gray-950)]">{r.providerScore ?? '—'}</td>
                                 <td className="py-1.5 text-right font-mono font-medium text-[var(--gray-950)]">{fmtFull(r.importePendientePesos)}</td>
+                                <td className="py-1.5 text-[var(--gray-500)]">{dueDateForRecord(r) ?? '-'}</td>
                                 <td className="py-1.5 pl-3 text-[var(--gray-400)]">{r.moneda}</td>
                                 <td className="py-1.5 text-[var(--gray-400)]">{r.condPago}</td>
                                 <td className="py-1.5">
@@ -1643,8 +1649,10 @@ function TriageDetailTable({
               <th className="px-4 py-2 text-left font-medium">Proveedor</th>
               <th className="px-4 py-2 text-left font-medium">Causa</th>
               <th className="px-4 py-2 text-right font-medium">Días</th>
+              <th className="px-4 py-2 text-right font-medium">Score</th>
               <th className="px-4 py-2 text-right font-medium">Monto</th>
               <th className="px-4 py-2 text-left font-medium">Vence</th>
+              <th className="px-4 py-2 text-left font-medium">Fecha plan</th>
             </tr>
           </thead>
           <tbody>
@@ -1666,7 +1674,9 @@ function TriageDetailTable({
                   </div>
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-[var(--gray-950)]">{record.diasVencida}</td>
+                <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{record.providerScore ?? '—'}</td>
                 <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmtFull(record.importePendientePesos)}</td>
+                <td className="px-4 py-2 text-[var(--gray-500)]">{record.fechaVence || '-'}</td>
                 <td className="px-4 py-2 text-[var(--gray-500)]">{dueDateForRecord(record) ?? '-'}</td>
               </tr>
             ))}
@@ -1800,8 +1810,8 @@ function InvoiceDetailPanel({
           <div className="grid grid-cols-2 gap-3">
             <DetailMetric label="Pendiente" value={fmtFull(record.importePendientePesos)} />
             <DetailMetric label="Días vencida" value={`${record.diasVencida}d`} />
-            <DetailMetric label="Vence" value={dueDateForRecord(record) ?? '-'} />
-            <DetailMetric label="Moneda" value={record.moneda || '-'} />
+            <DetailMetric label="Score proveedor" value={record.providerScore != null ? String(record.providerScore) : '—'} />
+            <DetailMetric label="Fecha plan" value={dueDateForRecord(record) ?? '-'} />
           </div>
 
           <DetailSection title="Causa de triage">
@@ -1821,6 +1831,7 @@ function InvoiceDetailPanel({
             <DetailGrid rows={[
               ['Tipo', record.providerType],
               ['Riesgo', record.providerRisk],
+              ['Score', record.providerScore != null ? String(record.providerScore) : 'Sin score'],
               ['Flexibilidad', flexibilityLabel(record.providerFlexibility)],
               ['Fecha último pago proveedor', lastPaymentDate],
               ['Monto último pago proveedor', lastPaymentAmount],
@@ -1836,7 +1847,8 @@ function InvoiceDetailPanel({
               ['Proveedor #', record.noProveedor || '-'],
               ['Fecha factura', record.fechaFactura || '-'],
               ['Fecha vencimiento', record.fechaVence || '-'],
-              ['Fecha programada', record.fechaProgramacionPago || '-'],
+              ['Fecha programada JDE', record.fechaProgramacionPago || '-'],
+              ['Fecha usada por planeación', dueDateForRecord(record) ?? '-'],
               ['Condición de pago', record.condPago || '-'],
               ['Subtotal', fmtFull(record.importeSubtotalPesos)],
               ['IVA / impuestos', fmtFull(record.importeImpuestosPesos)],
