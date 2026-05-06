@@ -3,7 +3,7 @@ import { RefreshCw, Send, X } from 'lucide-react';
 import { MidasAvatar } from './MidasAvatar';
 import { MidasMessageBubble } from './MidasMessageBubble';
 import { useMidasChat } from '../hooks/useMidasChat';
-import { isGeminiConfigured } from '../services/geminiClient';
+import { isOpenAIConfigured } from '../services/openaiClient';
 import type { MidasContext, MidasProposalSuggestion } from '../types';
 
 interface Props {
@@ -30,7 +30,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
     scenarioId,
     buildContext,
   });
-  const configured = isGeminiConfigured();
+  const configured = isOpenAIConfigured();
 
   useEffect(() => {
     if (!open) return;
@@ -97,7 +97,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
           <div className="rounded-[var(--radius)] border border-[var(--warning,#E5B441)]/40 bg-[#FFFCF1] p-3 text-[12px] text-[var(--gray-800)]">
             <div className="font-bold text-[#8C6618]">MIDAS no configurado</div>
             <p className="mt-1">
-              Falta <code className="rounded bg-white px-1">VITE_GEMINI_API_KEY</code> en el archivo{' '}
+              Falta <code className="rounded bg-white px-1">VITE_OPENAI_API_KEY</code> en el archivo{' '}
               <code className="rounded bg-white px-1">.env</code>. Reinicia el servidor después de configurarla.
             </p>
           </div>
@@ -161,7 +161,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
                 handleSubmit(e);
               }
             }}
-            placeholder={configured ? 'Pregunta a MIDAS...' : 'Configura VITE_GEMINI_API_KEY'}
+            placeholder={configured ? 'Pregunta a MIDAS...' : 'Configura VITE_OPENAI_API_KEY'}
             disabled={!configured || pending}
             rows={1}
             className="min-h-[36px] max-h-[120px] flex-1 resize-none rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#E5B441] focus:ring-2 focus:ring-[#E5B441]/20 disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
