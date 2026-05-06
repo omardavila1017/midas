@@ -17,7 +17,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
-import { computeMinimumOperatingExpense, floorForMonth } from '../domain/operatingProjectionMinimumExpense';
+import { computeMinimumOperatingExpense, floorForMonth } from '../domain/minimumOperatingExpense';
 import type { CXPRecord } from '../domain/persistence';
 import type { Budget } from '../domain/budget';
 import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
@@ -438,7 +438,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             <StartingBalanceDisplay value={startingBalance} />
             <button
               onClick={onOpenFlow}
-              className="flex items-center gap-2 h-10 px-4 rounded-xl bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
+              className="flex items-center gap-2 h-10 px-4 rounded-[var(--radius)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)]"
             >
               <LineChartIcon className="w-4 h-4" strokeWidth={1.5} />
               Abrir Planeación
@@ -448,7 +448,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       />
 
       {!hasRealData && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-[var(--warning-muted)]">
+        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-[var(--warning-muted)]">
           <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: 'var(--warning)' }} />
           <p className="text-[12px]" style={{ color: 'var(--gray-700)' }}>
             No hay estados de cuenta cargados. Ve a Flujo Neto y haz refresh para traer datos reales desde JDE.
@@ -456,7 +456,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
       {error && (
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-[var(--danger)]/10">
+        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-[var(--danger)]/10">
           <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: 'var(--danger)' }} />
           <p className="text-[12px]" style={{ color: 'var(--gray-700)' }}>
             Error al cargar Antigüedad de Saldos: {error}
@@ -533,8 +533,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       )}
 
       {/* Cash chart */}
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
-        <h2 className="text-[15px] font-semibold tracking-tight mb-1" style={{ color: 'var(--gray-950)' }}>
+      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
+        <h2 className="text-[15px] font-bold tracking-tight mb-1" style={{ color: 'var(--gray-950)' }}>
           Flujo mensual
         </h2>
         <p className="text-[11px] mb-4" style={{ color: 'var(--gray-400)' }}>
@@ -623,7 +623,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 type="monotone"
                 dataKey="cashBase"
                 stroke={CHART_COLORS.cash}
-                strokeWidth={2.5}
+                strokeWidth={1.5}
                 dot={{ r: 2 }}
                 name="Caja Final"
               />
@@ -719,7 +719,7 @@ const OverrunMarkers: React.FC<any> = (props) => {
         y1={y}
         y2={y}
         stroke={CHART_COLORS.incomePattern}
-        strokeWidth={2}
+        strokeWidth={1.5}
         strokeDasharray="3 3"
       />,
     );
@@ -737,7 +737,7 @@ const OverrunMarkers: React.FC<any> = (props) => {
         y1={y}
         y2={y}
         stroke={CHART_COLORS.expensePattern}
-        strokeWidth={2}
+        strokeWidth={1.5}
         strokeDasharray="3 3"
       />,
     );
@@ -757,8 +757,8 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
     phase === 'current' ? 'En curso (real + proy.)' :
     phase === 'future' ? 'Proyectado' : '';
   return (
-    <div className="rounded-lg border border-[var(--gray-200)] bg-white shadow-sm px-3 py-2 text-[12px]">
-      <p className="font-semibold mb-0.5" style={{ color: 'var(--gray-950)' }}>{fmtYearMonthLong(ym)}</p>
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white shadow-sm px-3 py-2 text-[12px]">
+      <p className="font-bold mb-0.5" style={{ color: 'var(--gray-950)' }}>{fmtYearMonthLong(ym)}</p>
       {phaseText && <p className="text-[11px] mb-1.5" style={{ color: 'var(--gray-400)' }}>{phaseText}</p>}
       <ul className="space-y-0.5">
         {payload
@@ -812,7 +812,7 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
 
 const StartingBalanceDisplay: React.FC<{ value: number }> = ({ value }) => (
   <div
-    className="flex items-center gap-2 h-10 px-3 rounded-xl border border-[var(--gray-200)] bg-white"
+    className="flex items-center gap-2 h-10 px-3 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white"
     title="Caja inicial fija por decisión de negocio."
   >
     <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Caja inicial</span>
@@ -836,14 +836,14 @@ const KpiCard: React.FC<{
   sublabel?: string;
   breakdown?: KpiBreakdownItem[];
 }> = ({ label, value, icon, color, sublabel, breakdown }) => (
-  <div className="rounded-xl border border-[var(--gray-200)] bg-white p-4 flex flex-col">
+  <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4 flex flex-col">
     <div className="flex items-center justify-between mb-2">
-      <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+      <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
         {label}
       </p>
       <span style={{ color }}>{icon}</span>
     </div>
-    <p className="text-[20px] font-semibold tabular-nums leading-tight" style={{ color }}>
+    <p className="text-[20px] font-bold tabular-nums leading-tight" style={{ color }}>
       {fmtCurrency(value)}
     </p>
     {sublabel && (
@@ -881,7 +881,7 @@ const MinimumExpenseKpi: React.FC<{
   criticalCount: number;
 }> = ({ monthly, annual, providersMonthly, payrollMonthly, criticalCount }) => (
   <div
-    className="relative overflow-hidden rounded-xl border-2 border-yellow-300 bg-yellow-50 p-4"
+    className="relative overflow-hidden rounded-[var(--radius)] border-2 border-yellow-300 bg-yellow-50 p-4"
     style={{
       backgroundImage: `repeating-linear-gradient(
         45deg,
@@ -894,14 +894,14 @@ const MinimumExpenseKpi: React.FC<{
     title="Piso operativo: proveedores de Operación + nómina/finiquitos. Es el monto que necesitas cubrir cada mes para no afectar operación."
   >
     <div className="flex items-center justify-between mb-2">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-yellow-800">
+      <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-yellow-800">
         Gasto mín. operativo
       </p>
       <span className="text-yellow-700">
         <ShieldAlert className="w-4 h-4" />
       </span>
     </div>
-    <p className="text-[20px] font-semibold tabular-nums text-yellow-900 leading-tight">
+    <p className="text-[20px] font-bold tabular-nums text-yellow-900 leading-tight">
       {fmtCurrency(monthly)}
       <span className="text-[11px] font-normal text-yellow-800/80 ml-1">/ mes</span>
     </p>
@@ -1127,7 +1127,7 @@ const CobranzaKpiCard: React.FC<{
 
   return (
     <div
-      className="rounded-xl border-2 p-4"
+      className="rounded-[var(--radius)] border-2 p-4"
       style={{
         borderColor: tierColor,
         backgroundColor: tierBg,
@@ -1136,11 +1136,11 @@ const CobranzaKpiCard: React.FC<{
       <div className="flex items-stretch gap-6 flex-wrap">
         <div className="flex-1 min-w-[200px]">
           <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-500)' }}>
+            <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
               Cobranza cruzada con banco
             </p>
           </div>
-          <p className="text-[28px] font-semibold tabular-nums leading-tight mt-1" style={{ color: tierColor }}>
+          <p className="text-[28px] font-bold tabular-nums leading-tight mt-1" style={{ color: tierColor }}>
             {sinCobranza ? '—' : `${pct.toFixed(1)}%`}
           </p>
           <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
@@ -1151,10 +1151,10 @@ const CobranzaKpiCard: React.FC<{
         </div>
 
         <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
-          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-500)' }}>
+          <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
             Saldo CXC pendiente
           </p>
-          <p className="text-[20px] font-semibold tabular-nums leading-tight mt-1" style={{ color: 'var(--gray-950)' }}>
+          <p className="text-[20px] font-bold tabular-nums leading-tight mt-1" style={{ color: 'var(--gray-950)' }}>
             {fmtCurrency(s.totalSaldoPendiente)}
           </p>
           <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
@@ -1164,10 +1164,10 @@ const CobranzaKpiCard: React.FC<{
         </div>
 
         <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
-          <p className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-500)' }}>
+          <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
             Cobrado vs banco (período)
           </p>
-          <p className="text-[20px] font-semibold tabular-nums leading-tight mt-1" style={{ color: 'var(--success)' }}>
+          <p className="text-[20px] font-bold tabular-nums leading-tight mt-1" style={{ color: 'var(--success)' }}>
             {fmtCurrency(s.totalCobradoBanco)}
           </p>
           <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
@@ -1191,7 +1191,7 @@ const CobranzaKpiCard: React.FC<{
             <div className="mt-2 text-[11px] space-y-2">
               {ciasSoloFacturas.length > 0 && (
                 <div>
-                  <span className="font-semibold text-[var(--danger)]">Cías con facturas pero sin abonos:</span>{' '}
+                  <span className="font-bold text-[var(--danger)]">Cías con facturas pero sin abonos:</span>{' '}
                   {ciasSoloFacturas.map(c => `${c.cia} (${c.facturas} fac)`).join(', ')}
                   <div className="text-[var(--gray-500)] mt-0.5">
                     → Revisa que los estados de cuenta de esas cías estén cargados en la pestaña Bancos.
@@ -1200,7 +1200,7 @@ const CobranzaKpiCard: React.FC<{
               )}
               {ciasSoloAbonos.length > 0 && (
                 <div>
-                  <span className="font-semibold text-[var(--danger)]">Cías con abonos pero sin facturas:</span>{' '}
+                  <span className="font-bold text-[var(--danger)]">Cías con abonos pero sin facturas:</span>{' '}
                   {ciasSoloAbonos.map(c => `${c.cia} (${c.abonos} ab)`).join(', ')}
                   <div className="text-[var(--gray-500)] mt-0.5">
                     → /cobranza no devolvió data para esas cías. Revisa permisos del token productivo en JDE.
@@ -1208,7 +1208,7 @@ const CobranzaKpiCard: React.FC<{
                 </div>
               )}
               <div className="pt-1 border-t border-[var(--gray-200)]/60">
-                <span className="font-semibold">Breakdown completo:</span>
+                <span className="font-bold">Breakdown completo:</span>
                 <table className="w-full text-[11px] mt-1">
                   <thead className="text-[var(--gray-400)]">
                     <tr>

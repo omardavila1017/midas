@@ -144,7 +144,7 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
 
   if (chartData.length === 0) {
     return (
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
+      <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
         <div
           role="status"
           aria-live="polite"
@@ -162,10 +162,10 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
   }
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
         <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">
             Trayectoria de la caja
           </h2>
           <p className="mt-1 text-[12px] text-[var(--gray-400)]">
@@ -181,39 +181,39 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
 
       <div className="grid grid-cols-3 gap-6 pb-4 mb-2 border-b border-[var(--gray-100)]">
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+          <p className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
             Caja base (fin)
           </p>
           <AnimatedNumber
             value={finalBase}
             format={fmtCurrency}
-            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            className="block text-[15px] font-bold tabular-nums mt-0.5"
             style={{ color: 'var(--gray-700)' }}
           />
         </div>
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+          <p className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
             Caja escenario (fin)
           </p>
           <AnimatedNumber
             value={finalForecast}
             format={fmtCurrency}
-            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            className="block text-[15px] font-bold tabular-nums mt-0.5"
             style={{ color: 'var(--gray-950)' }}
           />
         </div>
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+          <p className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
             Δ vs base
           </p>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-[15px] font-semibold tabular-nums" style={{ color: deltaColor }}>
+            <span className="text-[15px] font-bold tabular-nums" style={{ color: deltaColor }}>
               {deltaSign}
             </span>
             <AnimatedNumber
               value={Math.abs(delta)}
               format={fmtCurrency}
-              className="text-[15px] font-semibold tabular-nums"
+              className="text-[15px] font-bold tabular-nums"
               style={{ color: deltaColor }}
             />
           </div>

@@ -72,10 +72,10 @@ export function ProjectionTable({
   });
 
   return (
-    <section className="rounded-xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
         <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">
             Movimientos proyectados
           </h2>
           <p className="mt-1 text-[12px] text-[var(--gray-500)]">
@@ -86,7 +86,7 @@ export function ProjectionTable({
           <div className="flex flex-col gap-1">
             <label
               htmlFor="projection-search"
-              className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]"
+              className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]"
             >
               Buscar
             </label>
@@ -95,7 +95,7 @@ export function ProjectionTable({
               value={filters.search}
               onChange={(event) => onFiltersChange({ ...filters, search: event.target.value })}
               placeholder="Contraparte o concepto"
-              className="h-10 w-[240px] rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
+              className="h-10 w-[240px] rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
             />
           </div>
           <div className="w-[180px]">
@@ -118,7 +118,7 @@ export function ProjectionTable({
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[960px] text-[13px]">
-          <thead className="bg-[var(--gray-50)] text-left text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <thead className="bg-[var(--gray-50)] text-left text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             <tr>
               <th className="px-4 py-2.5">Fecha</th>
               <th className="px-4 py-2.5">Tipo</th>
@@ -188,7 +188,7 @@ export function ProjectionTable({
                           const rect = event.currentTarget.getBoundingClientRect();
                           onSelectMovement(movement, rect);
                         }}
-                        className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+                        className="inline-flex h-8 items-center gap-1 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
                       >
                         <Eye className="h-3.5 w-3.5" strokeWidth={1.5} />
                         Ver detalle

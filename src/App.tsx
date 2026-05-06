@@ -29,7 +29,6 @@ const CashFlowDetail = lazy(() => import('./components/CashFlowDetail'));
 const CXP = lazy(() => import('./components/CXP'));
 const Bancos = lazy(() => import('./components/Bancos'));
 const CollectionProjection = lazy(() => import('./components/CollectionProjection'));
-const OperatingProjection = lazy(() => import('./components/OperatingProjection'));
 const FinancialProjectionDashboard = lazy(() => import('./modules/financial-projection/pages/FinancialProjectionDashboard'));
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
@@ -37,11 +36,12 @@ import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootStep } from './components/MidasSplash';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
-import CommandPalette from './components/CommandPalette';
+import CommandPalette, { type CommandPaletteAction } from './components/CommandPalette';
+import { loadPlanningScenarios, loadPlanningAdjustments } from './modules/financial-planning/services/financialPlanningStorage';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
   LayoutDashboard,
-  Users, UserSquare, Download, LineChart,
+  Users, UserSquare, Download,
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
   HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
@@ -113,7 +113,6 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
     { id: 'financialPlanning', label: 'Planeación Financiera', icon: ClipboardList },
     { id: 'taxes', label: 'Impuestos', icon: Landmark },
-    { id: 'operating',   label: 'Operativa',   icon: LineChart },
   ],
 };
 
@@ -123,7 +122,6 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   cxp: 'operacion', collections: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
-  operating: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -171,20 +169,20 @@ function LazyTabFallback({ label }: { label: string }) {
           <div className="skeleton h-4 w-44 rounded opacity-60" />
           <div className="skeleton mt-2 h-3 w-64 rounded opacity-50" />
         </div>
-        <div className="skeleton h-10 w-48 rounded-xl opacity-50" />
+        <div className="skeleton h-10 w-48 rounded-[var(--radius)] opacity-50" />
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {Array.from({ length: 4 }).map((_, idx) => (
-          <div key={idx} className="rounded-xl border border-[var(--gray-200)] bg-white p-4">
+          <div key={idx} className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4">
             <div className="skeleton h-3 w-1/2 rounded opacity-50" />
             <div className="skeleton mt-3 h-5 w-3/4 rounded opacity-60" />
             <div className="skeleton mt-2 h-3 w-2/3 rounded opacity-40" />
           </div>
         ))}
       </div>
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
         <div className="skeleton h-3 w-40 rounded opacity-50" />
-        <div className="skeleton mt-3 h-[280px] w-full rounded-xl opacity-50" />
+        <div className="skeleton mt-3 h-[280px] w-full rounded-[var(--radius)] opacity-50" />
       </div>
     </div>
   );
@@ -539,7 +537,42 @@ export default function App() {
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
 
-  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'financialProjection', 'financialPlanning', 'collections', 'cxp', 'operating'];
+  // Planning scenarios + adjustments for Cmd+K — refreshed on every palette open.
+  const [paletteScenarios, setPaletteScenarios] = useState<{ id: string; name: string }[]>([]);
+  const [paletteAdjustments, setPaletteAdjustments] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    if (!cmdOpen) return;
+    try {
+      const scenarios = loadPlanningScenarios([]);
+      setPaletteScenarios(
+        scenarios
+          .filter((s) => !s.archivedAt)
+          .map((s) => ({ id: s.id, name: s.name })),
+      );
+      const adjustments = loadPlanningAdjustments([]);
+      setPaletteAdjustments(adjustments.map((a) => ({ id: a.id, name: a.name })));
+    } catch {
+      setPaletteScenarios([]);
+      setPaletteAdjustments([]);
+    }
+  }, [cmdOpen]);
+  const paletteActions: CommandPaletteAction[] = useMemo(() => [
+    {
+      id: 'open-planning',
+      label: 'Abrir Planeación Financiera',
+      run: () => setActiveTab('financialPlanning'),
+    },
+    {
+      id: 'create-draft',
+      label: 'Nueva propuesta (borrador)',
+      run: () => {
+        setActiveTab('financialPlanning');
+        window.dispatchEvent(new CustomEvent('midas:planning:createDraft'));
+      },
+    },
+  ], []);
+
+  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'financialProjection', 'financialPlanning', 'collections', 'cxp'];
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
@@ -1233,7 +1266,7 @@ export default function App() {
           <nav
             role="navigation"
             aria-label="Secciones principales"
-            className="flex items-center rounded-lg p-0.5 gap-0.5"
+            className="flex items-center rounded-[var(--radius-md)] p-0.5 gap-0.5"
             style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--shell-border)' }}
           >
             {SECTIONS.map(s => {
@@ -1294,7 +1327,7 @@ export default function App() {
               onClick={() => setActivityOpen(true)}
               title="Actividad reciente"
               aria-label="Ver actividad reciente"
-              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 transition-colors duration-150"
+              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
             >
               <Bell className="w-4 h-4" strokeWidth={1.5} />
             </button>
@@ -1318,7 +1351,7 @@ export default function App() {
               }}
               title="Descargar respaldo"
               aria-label="Descargar respaldo JSON"
-              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 transition-colors duration-150"
+              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
             >
               <Download className="w-4 h-4" strokeWidth={1.5} />
             </button>
@@ -1427,19 +1460,6 @@ export default function App() {
                   assumptions={assumptions}
                   budget={budget}
                   startingBalance={effectiveStartingBalance}
-                />
-              </Suspense>
-            )}
-            {activeTab === 'operating' && (
-              <Suspense fallback={<LazyTabFallback label="Operativa" />}>
-                <OperatingProjection
-                  companyCode={selectedCia}
-                  bankStatements={bankStatements}
-                  clients={clients}
-                  providers={providers}
-                  cxpRecords={cxpRecords}
-                  assumptions={assumptions}
-                  budget={budget}
                 />
               </Suspense>
             )}
@@ -1554,7 +1574,9 @@ export default function App() {
         onNavigate={(tabId) => { setActiveTab(tabId as TabId); setCmdOpen(false); }}
         clients={clients.map(c => ({ id: c.id, name: c.name }))}
         providers={providers.map(p => ({ id: p.id, name: p.name }))}
-        simulations={[]}
+        simulations={paletteAdjustments}
+        scenarios={paletteScenarios}
+        actions={paletteActions}
       />
       <ActivityFeedPanel
         open={activityOpen}
@@ -1679,7 +1701,7 @@ function CompanySelector({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`Compañía activa: ${label}. Filtra datos globalmente.`}
-        className="shell-picker-btn flex items-center gap-1.5 h-9 px-3 rounded-lg text-[13px] font-medium transition-colors duration-150 max-w-[300px]"
+        className="shell-picker-btn flex items-center gap-1.5 h-9 px-3 rounded-[var(--radius-md)] text-[13px] font-medium transition-colors duration-150 max-w-[300px]"
         style={{
           background: activeGroup ? `${activeGroup.color}20` : 'rgba(255,255,255,0.08)',
           color: 'var(--shell-text)',
@@ -1700,7 +1722,7 @@ function CompanySelector({
 
       {open && (
         <div
-          className="absolute right-0 top-11 w-[360px] rounded-lg border p-1.5 z-50 max-h-[520px] overflow-y-auto animate-slide-down"
+          className="absolute right-0 top-11 w-[360px] rounded-[var(--radius-md)] border p-1.5 z-50 max-h-[520px] overflow-y-auto animate-slide-down"
           style={{ background: 'var(--surface)', borderColor: 'var(--gray-200)', boxShadow: 'var(--shadow-md)' }}
         >
           {error ? (
@@ -1718,7 +1740,7 @@ function CompanySelector({
                 role="option"
                 aria-selected={selectedCia === 'all'}
                 onClick={() => { onSelect('all'); setOpen(false); }}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-[13px] text-left transition"
+                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-[var(--radius-md)] text-[13px] text-left transition"
                 style={{ background: selectedCia === 'all' ? 'var(--primary-muted)' : undefined, color: selectedCia === 'all' ? 'var(--primary)' : 'var(--gray-950)' }}
               >
                 <span className="font-medium">Todas las compañías</span>
@@ -1728,14 +1750,14 @@ function CompanySelector({
               {/* Groups section */}
               {groups.length > 0 && (
                 <div className="mt-2 mb-1">
-                  <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)] px-3 py-1 font-medium">Grupos</div>
+                  <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)] px-3 py-1 font-medium">Grupos</div>
                   {groups.map(g => {
                     const isActive = selectedCia === g.id;
                     return (
                       <div key={g.id} className="flex items-center group">
                         <button
                           onClick={() => { onSelect(g.id); setOpen(false); }}
-                          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition"
+                          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[13px] text-left transition"
                           style={{ background: isActive ? `${g.color}15` : undefined, color: isActive ? g.color : 'var(--gray-950)' }}
                         >
                           <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
@@ -1775,7 +1797,7 @@ function CompanySelector({
               {/* Create group button */}
               <button
                 onClick={startCreate}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition hover:bg-[var(--gray-50)]"
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[13px] text-left transition hover:bg-[var(--gray-50)]"
                 style={{ color: 'var(--primary)' }}
               >
                 <FolderPlus className="w-4 h-4" />
@@ -1786,7 +1808,7 @@ function CompanySelector({
               <div className="h-px bg-[var(--gray-100)] my-1.5" />
 
               {/* Individual companies */}
-              <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)] px-3 py-1 font-medium">Empresas individuales</div>
+              <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)] px-3 py-1 font-medium">Empresas individuales</div>
               {companies.length === 0 && !loading && (
                 <p className="text-[12px] px-3 py-2" style={{ color: 'var(--gray-400)' }}>Sin compañías disponibles.</p>
               )}
@@ -1798,7 +1820,7 @@ function CompanySelector({
                     <button
                       key={c.cia}
                       onClick={() => { onSelect(c.cia); setOpen(false); }}
-                      className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[13px] text-left transition"
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[13px] text-left transition"
                       style={{ background: isActive ? 'var(--primary-muted)' : undefined, color: isActive ? 'var(--primary)' : 'var(--gray-950)' }}
                     >
                       <div className="min-w-0">
@@ -1814,7 +1836,7 @@ function CompanySelector({
             /* ── Create / Edit Group form ── */
             <div className="p-3 space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">
+                <h3 className="text-[14px] font-bold text-[var(--gray-950)]">
                   {mode === 'edit' ? 'Editar grupo' : 'Nuevo grupo'}
                 </h3>
                 <button onClick={() => setMode('select')} className="p-1 rounded hover:bg-[var(--gray-100)] text-[var(--gray-400)]">
@@ -1855,14 +1877,14 @@ function CompanySelector({
                 <label className="text-[11px] text-[var(--gray-400)] mb-1 block">
                   Empresas ({groupCias.size} seleccionadas)
                 </label>
-                <div className="space-y-1 max-h-48 overflow-y-auto border border-[var(--gray-200)] rounded-lg p-1.5">
+                <div className="space-y-1 max-h-48 overflow-y-auto border border-[var(--gray-200)] rounded-[var(--radius-md)] p-1.5">
                   {companies.filter(c => c.activa !== false).map(c => {
                     const checked = groupCias.has(c.cia);
                     return (
                       <button
                         key={c.cia}
                         onClick={() => toggleCia(c.cia)}
-                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-[12px] text-left transition ${
+                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-[var(--radius-md)] text-[12px] text-left transition ${
                           checked ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
                         }`}
                       >
@@ -1884,14 +1906,14 @@ function CompanySelector({
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={() => setMode('select')}
-                  className="flex-1 h-9 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+                  className="flex-1 h-9 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
                 >
                   Cancelar
                 </button>
                 <button
                   onClick={saveGroup}
                   disabled={!groupName.trim() || groupCias.size === 0}
-                  className="flex-1 h-9 rounded-lg text-white text-[13px] font-medium hover-press disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex-1 h-9 rounded-[var(--radius-md)] text-white text-[13px] font-medium hover-press disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: groupColor }}
                 >
                   {mode === 'edit' ? 'Guardar cambios' : 'Crear grupo'}

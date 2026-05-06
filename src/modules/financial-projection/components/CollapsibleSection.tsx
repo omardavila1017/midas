@@ -73,7 +73,7 @@ function CollapsibleSectionImpl({
   const shouldRenderChildren = lazy ? hasOpenedRef.current : true;
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <header className="flex items-center justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
         <button
           type="button"
@@ -86,9 +86,9 @@ function CollapsibleSectionImpl({
             : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />}
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-[14px] font-semibold tracking-tight text-[var(--gray-950)]">{title}</h2>
+              <h2 className="text-[14px] font-bold tracking-tight text-[var(--gray-950)]">{title}</h2>
               {count !== undefined && (
-                <span className="rounded bg-[var(--gray-100)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--gray-600)]">
+                <span className="rounded bg-[var(--gray-100)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--gray-600)]">
                   {count}
                 </span>
               )}

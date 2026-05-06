@@ -200,7 +200,7 @@ function ToastItem({ toast, onRemove, onUndo, isLast }: ToastItemProps) {
       }}
     >
       <div
-        className="flex gap-3 rounded-lg p-4 border border-[var(--gray-200)]/40"
+        className="flex gap-3 rounded-[var(--radius-md)] p-4 border border-[var(--gray-200)]/40"
         style={{
           backgroundColor: styles.bgColor,
           boxShadow: 'var(--shadow-md)',

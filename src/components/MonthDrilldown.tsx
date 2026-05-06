@@ -117,7 +117,7 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
   return (
     <section
       ref={ref}
-      className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden animate-slide-down"
+      className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white overflow-hidden animate-slide-down"
       aria-label={`Detalle del flujo de ${fmtYearMonthLong(yearMonth)}`}
     >
       {/* Header */}
@@ -125,11 +125,11 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
         <div className="flex items-center gap-3 min-w-0">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-[16px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              <h3 className="text-[16px] font-bold tracking-tight" style={{ color: 'var(--gray-950)' }}>
                 {fmtYearMonthLong(yearMonth)}
               </h3>
               <span
-                className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                className="text-[10px] font-bold uppercase tracking-[0.08em] px-2 py-0.5 rounded-full"
                 style={{ background: phaseBadge.bg, color: phaseBadge.color }}
               >
                 {phaseBadge.label}
@@ -142,7 +142,7 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
         </div>
         <button
           onClick={onClose}
-          className="w-8 h-8 flex items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)] transition-colors flex-shrink-0"
+          className="w-8 h-8 flex items-center justify-center rounded-[var(--radius-md)] text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)] transition-colors flex-shrink-0"
           aria-label="Cerrar detalle"
         >
           <X className="w-4 h-4" />
@@ -222,10 +222,10 @@ const SummaryCell: React.FC<{ label: string; value: number; color: string; showS
   label, value, color, showSign,
 }) => (
   <div className="px-5 py-3">
-    <p className="text-[10px] font-medium uppercase tracking-wider mb-0.5" style={{ color: 'var(--gray-400)' }}>
+    <p className="text-[10px] font-medium uppercase tracking-[0.08em] mb-0.5" style={{ color: 'var(--gray-400)' }}>
       {label}
     </p>
-    <p className="text-[18px] font-semibold tabular-nums" style={{ color }}>
+    <p className="text-[18px] font-bold tabular-nums" style={{ color }}>
       {showSign && value > 0 ? '+' : ''}{fmtCurrency(value)}
     </p>
   </div>
@@ -262,7 +262,7 @@ const Column: React.FC<ColumnProps> = ({
     <div className={`p-5 ${borderRight ? 'lg:border-r lg:border-[var(--gray-100)]' : ''}`}>
       <div className="flex items-center gap-2 mb-3">
         <span style={{ color: accent }}>{icon}</span>
-        <h4 className="text-[13px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gray-700)' }}>
+        <h4 className="text-[13px] font-bold uppercase tracking-[0.08em]" style={{ color: 'var(--gray-700)' }}>
           {title}
         </h4>
       </div>
@@ -364,9 +364,9 @@ const SubBlock: React.FC<{
     <div className="flex items-center justify-between mb-1.5">
       <div className="flex items-center gap-2">
         <Swatch accent={accent} striped={striped} />
-        <span className="text-[12px] font-semibold" style={{ color: 'var(--gray-700)' }}>{label}</span>
+        <span className="text-[12px] font-bold" style={{ color: 'var(--gray-700)' }}>{label}</span>
       </div>
-      <span className="text-[12px] font-semibold tabular-nums" style={{ color: 'var(--gray-950)' }}>
+      <span className="text-[12px] font-bold tabular-nums" style={{ color: 'var(--gray-950)' }}>
         {fmtCurrency(total)}
       </span>
     </div>
@@ -387,7 +387,7 @@ const FlexChip: React.FC<{ flexibility?: ConceptRow['flexibility'] }> = ({ flexi
   if (!s) return null;
   return (
     <span
-      className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+      className="text-[9px] font-bold uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-full"
       style={{ background: s.bg, color: s.fg }}
     >
       {s.label}

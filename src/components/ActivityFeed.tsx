@@ -314,7 +314,7 @@ export function ActivityFeedPanel({
                 color: 'var(--primary)',
               }}
             />
-            <h2 className="text-base font-semibold">Actividad reciente</h2>
+            <h2 className="text-base font-bold">Actividad reciente</h2>
             {entries.length > 0 && (
               <span
                 className="text-xs font-medium px-2 py-1 rounded-full"
@@ -330,7 +330,7 @@ export function ActivityFeedPanel({
 
           <button
             onClick={handleClose}
-            className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-1 hover:bg-gray-100 rounded-[var(--radius-md)] transition-colors"
             aria-label="Cerrar"
           >
             <X className="w-5 h-5" />
@@ -355,7 +355,7 @@ export function ActivityFeedPanel({
                 <div key={group}>
                   {/* Date Group Header */}
                   <div
-                    className="sticky top-0 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
+                    className="sticky top-0 px-4 py-2 text-xs font-bold uppercase tracking-[0.08em]"
                     style={{
                       backgroundColor: 'var(--gray-50)',
                       color: 'var(--gray-500)',
@@ -390,7 +390,7 @@ export function ActivityFeedPanel({
           >
             <button
               onClick={clear}
-              className="w-full text-center text-xs font-medium py-2 rounded-lg transition-colors hover:bg-gray-100"
+              className="w-full text-center text-xs font-medium py-2 rounded-[var(--radius-md)] transition-colors hover:bg-gray-100"
               style={{
                 color: 'var(--gray-500)',
               }}
@@ -440,7 +440,7 @@ function ActivityEntryItem({ entry, onNavigate }: ActivityEntryItemProps) {
       <div className="flex gap-3 px-4 py-3">
         {/* Icon */}
         <div
-          className="mt-1 p-2 rounded-lg flex-shrink-0"
+          className="mt-1 p-2 rounded-[var(--radius-md)] flex-shrink-0"
           style={{
             backgroundColor: `${entityColor}15`,
             color: entityColor,
@@ -474,7 +474,7 @@ function ActivityEntryItem({ entry, onNavigate }: ActivityEntryItemProps) {
 
           {/* Entity name */}
           <p
-            className="text-sm font-semibold truncate"
+            className="text-sm font-bold truncate"
             style={{
               color: 'var(--gray-950)',
             }}
