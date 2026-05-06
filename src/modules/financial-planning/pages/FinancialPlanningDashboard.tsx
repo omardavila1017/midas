@@ -87,6 +87,7 @@ import {
 } from '../services/supplierPaymentSchedule';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import { MidasBubble } from '../../midas-ai';
 
 interface Props {
   companyCode: string;
@@ -1174,6 +1175,18 @@ export default function FinancialPlanningDashboard(props: Props) {
         defaultScenarioId={activeScenarioId}
         onClose={() => setEditorMovement(null)}
         onSave={handleSaveAdjustment}
+      />
+
+      <MidasBubble
+        cia={props.companyCode}
+        asOfDate={today}
+        activeRun={activeRun}
+        providers={props.providers}
+        adjustments={storedAdjustments}
+        activeScenarioId={activeScenario.id}
+        activeScenarioKind={activeScenario.kind}
+        isBaseScenario={activeScenario.kind === 'BASE'}
+        onCreateAdjustment={handleSaveAdjustment}
       />
     </div>
   );

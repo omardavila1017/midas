@@ -35,6 +35,11 @@ export const apiConfig = {
   atlas: {
     artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'midas',
   },
+  gemini: {
+    apiKey: import.meta.env.VITE_GEMINI_API_KEY ?? '',
+    model: import.meta.env.VITE_GEMINI_MODEL ?? 'gemini-2.0-flash',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  },
 } as const;
 
 // Aviso visible en consola si el bundle de producción carga con un token VITE_

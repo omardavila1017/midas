@@ -106,6 +106,7 @@ import {
 } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import { MidasBubble } from '../../midas-ai';
 
 interface Props {
   companyCode: string;
@@ -1093,6 +1094,18 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
           onCreate={handleCreateQuickEntry}
         />
       )}
+
+      <MidasBubble
+        cia={props.companyCode}
+        asOfDate={today}
+        activeRun={activeRun}
+        providers={props.providers}
+        adjustments={storedAdjustments}
+        activeScenarioId={activeScenario.id}
+        activeScenarioKind={activeScenario.kind}
+        isBaseScenario={activeScenario.kind === 'BASE'}
+        onCreateAdjustment={(adjustment) => setStoredAdjustments((current) => [...current, adjustment])}
+      />
     </div>
   );
 }
