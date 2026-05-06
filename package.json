@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@rollup/rollup-linux-x64-gnu": "^4.60.3",
     "exceljs": "^4.4.0",
     "lucide-react": "^0.383.0",
     "react": "^18.3.1",
