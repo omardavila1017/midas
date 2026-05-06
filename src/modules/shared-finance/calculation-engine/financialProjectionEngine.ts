@@ -500,6 +500,16 @@ function calculateRiskAlerts(buckets: ProjectionBucket[], movements: FinancialMo
   return alerts;
 }
 
+function bucketDaySpan(bucket: ProjectionBucket, index: number, buckets: ProjectionBucket[]): number {
+  const next = buckets[index + 1];
+  if (next) {
+    const a = parseIso(bucket.date);
+    const b = parseIso(next.date);
+    return Math.max(1, Math.round((b.getTime() - a.getTime()) / 86_400_000));
+  }
+  return 1;
+}
+
 function summarizeProjection(
   buckets: ProjectionBucket[],
   movements: FinancialMovement[],
@@ -526,7 +536,7 @@ function summarizeProjection(
     projectedCash30: bucketForDay(30)?.closingCash ?? lastBucket?.closingCash ?? 0,
     projectedCash90: bucketForDay(90)?.closingCash ?? lastBucket?.closingCash ?? 0,
     minimumCashRequired,
-    deficitDays: buckets.filter((bucket) => bucket.deficit > 0).length,
+    deficitDays: buckets.reduce((sum, bucket, i) => sum + (bucket.deficit > 0 ? bucketDaySpan(bucket, i, buckets) : 0), 0),
     largestUpcomingInflow,
     largestUpcomingOutflow,
     averageConfidence: movements.length === 0
