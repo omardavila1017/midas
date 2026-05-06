@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { callGemini, type GeminiTurn } from '../services/geminiClient';
+import { callOpenAI, type OpenAITurn } from '../services/openaiClient';
 import { buildContextBlock, MIDAS_SYSTEM_PROMPT } from '../services/midasPromptTemplates';
 import { parseProposal } from '../services/proposalParser';
 import { loadConversation, saveConversation, clearConversation } from '../services/midasStorage';
@@ -52,16 +52,16 @@ export function useMidasChat({ cia, scenarioId, buildContext }: UseMidasChatArgs
       setPending(true);
 
       try {
-        const turns: GeminiTurn[] = [
-          { role: 'user', text: contextBlock },
-          { role: 'model', text: 'Contexto recibido. Listo para asistir.' },
-          ...updatedHistory.map<GeminiTurn>((m) => ({
-            role: m.role === 'user' ? 'user' : 'model',
-            text: m.content,
+        const turns: OpenAITurn[] = [
+          { role: 'user', content: contextBlock },
+          { role: 'assistant', content: 'Contexto recibido. Listo para asistir.' },
+          ...updatedHistory.map<OpenAITurn>((m) => ({
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content,
           })),
         ];
 
-        const res = await callGemini({ systemPrompt: MIDAS_SYSTEM_PROMPT, history: turns });
+        const res = await callOpenAI({ systemPrompt: MIDAS_SYSTEM_PROMPT, history: turns });
 
         const proposals: MidasProposalSuggestion[] = [];
         const parseErrors: string[] = [];

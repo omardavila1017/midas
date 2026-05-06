@@ -87,7 +87,8 @@ import {
 } from '../services/supplierPaymentSchedule';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
-import { MidasBubble } from '../../midas-ai';
+import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
+import { createFinancialAdjustment } from '../services/financialPlanningService';
 
 interface Props {
   companyCode: string;
@@ -339,7 +340,7 @@ export default function FinancialPlanningDashboard(props: Props) {
     return {
       ...activeRunRaw,
       buckets,
-      summary: summarizeBucketsForScenario(buckets, activeRunRaw.movements, minimumCash),
+      summary: summarizeBucketsForScenario(buckets, activeRunRaw.movements, minimumCash, granularity),
       supplierPlan: activeRunRaw.supplierPlan,
     };
   }, [activeRunRaw, activeOverrides, rows, granularity, today, initialCash, minimumCash]);
@@ -370,7 +371,7 @@ export default function FinancialPlanningDashboard(props: Props) {
     return {
       ...approvedRun,
       buckets,
-      summary: summarizeBucketsForScenario(buckets, approvedRun.movements, minimumCash),
+      summary: summarizeBucketsForScenario(buckets, approvedRun.movements, minimumCash, granularity),
       supplierPlan: approvedRun.supplierPlan,
     };
   }, [approvedRun, approvedOverrides, customRows, approvedScenario.id, granularity, today, initialCash, minimumCash]);
@@ -438,6 +439,38 @@ export default function FinancialPlanningDashboard(props: Props) {
 
   const overrideFor = (conceptKey: string, bucketKey: string): CellOverride | undefined =>
     overrideMap.get(`${conceptKey}::${bucketKey}::${granularity}`);
+
+  const aiTouchedSet = useMemo(() => {
+    const set = new Set<string>();
+    const aiAdjustments = storedAdjustments.filter(
+      (adj) =>
+        adj.scenarioIds.includes(activeScenarioId) &&
+        adj.status !== 'REJECTED' &&
+        typeof adj.createdBy === 'string' &&
+        adj.createdBy.toLowerCase().startsWith('midas'),
+    );
+    if (aiAdjustments.length === 0) return set;
+    const targetIds = new Set<string>();
+    for (const adj of aiAdjustments) {
+      if (adj.targetType === 'MOVEMENT' && adj.targetExpression) {
+        targetIds.add(adj.targetExpression);
+      }
+    }
+    for (const movement of activeRunRaw.movements) {
+      const sourceMatches =
+        targetIds.has(movement.id) ||
+        (movement.sourceObjectId ? targetIds.has(movement.sourceObjectId) : false) ||
+        Array.from(targetIds).some((tid) => movement.id.startsWith(`${tid}:split:`));
+      if (!sourceMatches) continue;
+      const conceptKey = conceptKeyForMovement(movement);
+      const bucketKey = bucketKeyForDate(effectiveMovementDate(movement), granularity);
+      set.add(`${conceptKey}::${bucketKey}`);
+    }
+    return set;
+  }, [storedAdjustments, activeScenarioId, activeRunRaw.movements, granularity]);
+
+  const isAiTouched = (conceptKey: string, bucketKey: string): boolean =>
+    aiTouchedSet.has(`${conceptKey}::${bucketKey}`);
 
   const handleCommitCell = (conceptKey: string, bucketKey: string, value: number, type: FinancialMovementType) => {
     if (isReadOnly) return;
@@ -726,12 +759,50 @@ export default function FinancialPlanningDashboard(props: Props) {
     setStatusMessage(`"${entry.name}" quedó marcado como reemplazado.`);
   };
 
-  const handleCreateDraft = () => {
-    const { newScenario, seedEntry } = createNewDraft({ approved: approvedScenario, user: USER });
+  const handleCreateDraft = (name?: string): string => {
+    const { newScenario, seedEntry } = createNewDraft({ approved: approvedScenario, user: USER, name });
     setStoredScenarios((current) => [...current, newScenario]);
     setChangeLog((current) => [seedEntry, ...current]);
     setActiveScenarioId(newScenario.id);
     setStatusMessage(`Propuesta "${newScenario.name}" creada.`);
+    return newScenario.id;
+  };
+
+  const ensureEditableScenario = (name?: string): string => {
+    if (activeScenario.kind === 'DRAFT' && !activeScenario.archivedAt) return activeScenario.id;
+    return handleCreateDraft(name);
+  };
+
+  const handleAcceptMidasProposal = (suggestion: MidasProposalSuggestion) => {
+    try {
+      const targetScenarioId = ensureEditableScenario(`MIDAS · ${suggestion.draft.name}`.slice(0, 60));
+      const adjustment = createFinancialAdjustment({
+        name: suggestion.draft.name,
+        scenarioIds: [targetScenarioId],
+        type: suggestion.draft.type,
+        targetType: suggestion.draft.targetType,
+        targetExpression: suggestion.draft.targetExpression,
+        reasonCode: suggestion.draft.reasonCode,
+        justification: suggestion.draft.justification,
+        deltaAmount: suggestion.draft.deltaAmount,
+        deltaDays: suggestion.draft.deltaDays,
+        percentageChange: suggestion.draft.percentageChange,
+        adjustedValue: suggestion.draft.adjustedValue,
+        createdBy: 'midas@senda.local',
+      });
+      const withImpact: FinancialAdjustment = {
+        ...adjustment,
+        impactSummary: {
+          cashImpact: suggestion.estimatedCashImpact,
+          deficitDaysReduced: 0,
+          riskChange: 0,
+        },
+      };
+      setStoredAdjustments((current) => [...current, withImpact]);
+      setStatusMessage(`MIDAS guardó propuesta "${withImpact.name}" como DRAFT.`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'No se pudo crear la propuesta.');
+    }
   };
 
   const openProposalPicker = () => {
@@ -1064,6 +1135,7 @@ export default function FinancialPlanningDashboard(props: Props) {
               asOfDate={today}
               baseValueFor={baseValueFor}
               overrideFor={overrideFor}
+              isAiTouched={isAiTouched}
               totalsFor={totalsForKind}
               onCommitCell={handleCommitCell}
               onClearCell={handleClearCell}
@@ -1185,8 +1257,7 @@ export default function FinancialPlanningDashboard(props: Props) {
         adjustments={storedAdjustments}
         activeScenarioId={activeScenario.id}
         activeScenarioKind={activeScenario.kind}
-        isBaseScenario={activeScenario.kind === 'BASE'}
-        onCreateAdjustment={handleSaveAdjustment}
+        onAcceptProposal={handleAcceptMidasProposal}
       />
     </div>
   );

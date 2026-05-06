@@ -39,10 +39,10 @@ export const apiConfig = {
   atlas: {
     artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'midas',
   },
-  gemini: {
-    apiKey: import.meta.env.VITE_GEMINI_API_KEY ?? '',
-    model: import.meta.env.VITE_GEMINI_MODEL ?? 'gemini-2.0-flash',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  openai: {
+    apiKey: import.meta.env.VITE_OPENAI_API_KEY ?? '',
+    model: import.meta.env.VITE_OPENAI_MODEL ?? 'gpt-4o-mini',
+    baseUrl: 'https://api.openai.com/v1',
   },
 } as const;
 

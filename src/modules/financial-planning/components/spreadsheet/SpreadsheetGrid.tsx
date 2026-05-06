@@ -25,6 +25,7 @@ export interface SpreadsheetGridProps {
   asOfDate: string;
   baseValueFor: (conceptKey: string, bucketKey: string) => number;
   overrideFor: (conceptKey: string, bucketKey: string) => CellOverride | undefined;
+  isAiTouched?: (conceptKey: string, bucketKey: string) => boolean;
   totalsFor: (kind: 'inflows' | 'outflows' | 'net' | 'closingCash', bucketKey: string) => number;
   onCommitCell: (conceptKey: string, bucketKey: string, value: number, type: FinancialMovementType) => void;
   onClearCell: (conceptKey: string, bucketKey: string) => void;
@@ -47,6 +48,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     isReadOnly,
     baseValueFor,
     overrideFor,
+    isAiTouched,
     totalsFor,
     onCommitCell,
     onClearCell,
@@ -243,7 +245,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" left={0}>
         <span className="truncate">{row.group}</span>
       </StickyLeftCell>
-      <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH}>
+      <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow>
         <button
           type="button"
           onClick={() => onClickRow?.(row.conceptKey)}
@@ -259,8 +261,11 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         const value = override ? override.value : baseValue;
         const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;
         const isPast = column.isPast;
+        const aiTouched = !isPast && isAiTouched?.(row.conceptKey, column.key);
+        const aiBg = aiTouched && !isSelected ? 'bg-[#EEF2FF]' : '';
+        const aiText = aiTouched ? 'text-[#4338CA] font-semibold' : '';
         const cellClass = `relative flex h-full items-center justify-end px-2 text-[12px] tabular-nums border-l border-[var(--gray-100)] cursor-${isReadOnly || isPast ? 'default' : 'cell'} select-none ${
-          isPast ? 'bg-[var(--gray-50)] text-[var(--gray-400)]' : 'text-[var(--gray-950)]'
+          isPast ? 'bg-[var(--gray-50)] text-[var(--gray-400)]' : `${aiBg} ${aiText} text-[var(--gray-950)]`
         } ${isSelected ? 'ring-2 ring-inset ring-[var(--primary)] z-10 bg-white' : ''}`;
         return (
           <div
@@ -297,6 +302,14 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
                     aria-hidden="true"
                     className="absolute left-1 top-1 h-1.5 w-1.5 rounded-full"
                     style={{ background: 'var(--primary)' }}
+                  />
+                )}
+                {aiTouched && !override && (
+                  <span
+                    aria-hidden="true"
+                    title="Ajuste MIDAS"
+                    className="absolute left-1 top-1 h-1.5 w-1.5 rounded-full"
+                    style={{ background: '#7C3AED' }}
                   />
                 )}
                 <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
@@ -342,6 +355,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         width={GROUP_COL_WIDTH + LABEL_COL_WIDTH}
         left={0}
         className="text-[12px] font-bold text-[var(--gray-950)]"
+        shadow
       >
         {label}
       </StickyLeftCell>
@@ -383,7 +397,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         <StickyLeftCell width={GROUP_COL_WIDTH} left={0} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header>
           Sección
         </StickyLeftCell>
-        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header>
+        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header shadow>
           Concepto
         </StickyLeftCell>
         {columns.map((column) => (
@@ -450,17 +464,25 @@ function StickyLeftCell({
   children,
   className = '',
   header = false,
+  shadow = false,
 }: {
   width: number;
   left: number;
   children: React.ReactNode;
   className?: string;
   header?: boolean;
+  shadow?: boolean;
 }) {
   return (
     <div
       className={`sticky flex h-full items-center px-3 ${header ? 'bg-[var(--gray-50)]' : 'bg-white'} border-r border-[var(--gray-200)] ${className}`}
-      style={{ width, flex: `0 0 ${width}px`, left, zIndex: header ? 25 : 15 }}
+      style={{
+        width,
+        flex: `0 0 ${width}px`,
+        left,
+        zIndex: header ? 25 : 15,
+        boxShadow: shadow ? '4px 0 6px -4px rgba(15,23,42,0.18)' : undefined,
+      }}
     >
       {children}
     </div>
@@ -489,7 +511,7 @@ function SectionHeader({
         onClick={onToggle}
         aria-expanded={!collapsed}
         className="sticky left-0 flex h-full items-center gap-1.5 px-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--gray-700)] bg-[var(--gray-50)] hover:bg-[var(--gray-100)] transition-colors"
-        style={{ width: GROUP_COL_WIDTH + LABEL_COL_WIDTH, zIndex: 18 }}
+        style={{ width: GROUP_COL_WIDTH + LABEL_COL_WIDTH, zIndex: 18, boxShadow: '4px 0 6px -4px rgba(15,23,42,0.18)' }}
       >
         {collapsed
           ? <ChevronRight className="h-3 w-3" strokeWidth={1.5} />

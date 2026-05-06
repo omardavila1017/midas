@@ -86,7 +86,7 @@ export function calculateBaseProjection(movements: FinancialMovement[], options:
     generatedAt: new Date().toISOString(),
     movements: normalized,
     buckets: bucketsWithAlerts,
-    summary: summarizeProjection(bucketsWithAlerts, normalized, options.minimumCash),
+    summary: summarizeProjection(bucketsWithAlerts, normalized, options.minimumCash, granularity),
     alerts,
   };
 }
@@ -286,8 +286,9 @@ export function summarizeBucketsForScenario(
   buckets: ProjectionBucket[],
   movements: FinancialMovement[],
   minimumCashRequired: number,
+  granularity: ProjectionGranularity = 'daily',
 ): ProjectionSummary {
-  return summarizeProjection(buckets, movements, minimumCashRequired);
+  return summarizeProjection(buckets, movements, minimumCashRequired, granularity);
 }
 
 export function compareProjectionVsScenario(baseProjection: ForecastRun, scenarioProjection: ForecastRun): ScenarioComparison {
@@ -514,6 +515,7 @@ function summarizeProjection(
   buckets: ProjectionBucket[],
   movements: FinancialMovement[],
   minimumCashRequired: number,
+  granularity: ProjectionGranularity = 'daily',
 ): ProjectionSummary {
   const bucketForDay = (days: number) => buckets[Math.min(days - 1, Math.max(0, buckets.length - 1))];
   const futureMovements = movements

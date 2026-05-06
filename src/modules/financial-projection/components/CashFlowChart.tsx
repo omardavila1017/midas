@@ -5,7 +5,6 @@ import {
   ComposedChart,
   Legend,
   Line,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -323,17 +322,6 @@ function CashFlowChartImpl({
                 isAnimationActive={false}
               />
             )}
-            <ReferenceLine
-              y={projection.summary.minimumCashRequired}
-              stroke="var(--warning)"
-              strokeDasharray="3 3"
-              label={{
-                value: 'Caja mínima',
-                position: 'right',
-                fill: 'var(--warning)',
-                fontSize: 10,
-              }}
-            />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

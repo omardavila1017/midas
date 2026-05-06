@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { RefreshCw, Send, X } from 'lucide-react';
 import { MidasAvatar } from './MidasAvatar';
 import { MidasMessageBubble } from './MidasMessageBubble';
 import { useMidasChat } from '../hooks/useMidasChat';
-import { isGeminiConfigured } from '../services/geminiClient';
+import { isOpenAIConfigured } from '../services/openaiClient';
 import type { MidasContext, MidasProposalSuggestion } from '../types';
 
 interface Props {
@@ -30,7 +31,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
     scenarioId,
     buildContext,
   });
-  const configured = isGeminiConfigured();
+  const configured = isOpenAIConfigured();
 
   useEffect(() => {
     if (!open) return;
@@ -54,14 +55,21 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
     removeProposalFromMessage(msgId, suggestion.id);
   };
 
-  return (
+  return createPortal(
     <div
-      className="fixed bottom-[88px] right-5 z-[1000] flex h-[640px] w-[400px] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-2xl"
-      style={{ animation: 'midasPanelIn 180ms ease-out' }}
+      className="fixed bottom-[92px] right-6 z-[2147483647] flex h-[640px] w-[400px] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-[var(--gray-200)] bg-white shadow-2xl"
+      style={{
+        animation: 'midasPanelIn 180ms ease-out',
+        boxShadow:
+          '0 24px 60px -20px rgba(15,23,42,0.35), 0 8px 20px -8px rgba(79,70,229,0.25)',
+      }}
       role="dialog"
       aria-label="Asistente MIDAS"
     >
-      <header className="flex items-center justify-between border-b border-[var(--gray-100)] bg-gradient-to-r from-[#FFFCF1] to-white px-3 py-2.5">
+      <header
+        className="flex items-center justify-between border-b border-[var(--gray-100)] px-3 py-2.5"
+        style={{ background: 'linear-gradient(135deg, #EEF2FF 0%, #F5F3FF 50%, #FFFFFF 100%)' }}
+      >
         <div className="flex items-center gap-2.5">
           <MidasAvatar size={32} />
           <div>
@@ -94,10 +102,10 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
         {!configured && (
-          <div className="rounded-[var(--radius)] border border-[var(--warning,#E5B441)]/40 bg-[#FFFCF1] p-3 text-[12px] text-[var(--gray-800)]">
-            <div className="font-bold text-[#8C6618]">MIDAS no configurado</div>
+          <div className="rounded-[var(--radius)] border border-[#C7D2FE] bg-[#EEF2FF] p-3 text-[12px] text-[var(--gray-800)]">
+            <div className="font-bold text-[#4338CA]">MIDAS no configurado</div>
             <p className="mt-1">
-              Falta <code className="rounded bg-white px-1">VITE_GEMINI_API_KEY</code> en el archivo{' '}
+              Falta <code className="rounded bg-white px-1">VITE_OPENAI_API_KEY</code> en el archivo{' '}
               <code className="rounded bg-white px-1">.env</code>. Reinicia el servidor después de configurarla.
             </p>
           </div>
@@ -120,7 +128,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
                   type="button"
                   onClick={() => void send(prompt)}
                   disabled={pending}
-                  className="w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 py-2 text-left text-[12px] leading-relaxed text-[var(--gray-700)] transition-colors hover:border-[#E5B441] hover:bg-[#FFFCF1] disabled:opacity-50"
+                  className="w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 py-2 text-left text-[12px] leading-relaxed text-[var(--gray-700)] transition-colors hover:border-[#7C3AED] hover:bg-[#F5F3FF] disabled:opacity-50"
                 >
                   {prompt}
                 </button>
@@ -142,9 +150,9 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
           <div className="flex gap-2.5">
             <MidasAvatar size={28} pulse />
             <div className="flex items-center gap-1 rounded-[var(--radius-lg)] bg-[var(--gray-50)] px-3 py-2.5 text-[12px] text-[var(--gray-500)]">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#E5B441]" />
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#E5B441]" style={{ animationDelay: '120ms' }} />
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#E5B441]" style={{ animationDelay: '240ms' }} />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#7C3AED]" />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#7C3AED]" style={{ animationDelay: '120ms' }} />
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#7C3AED]" style={{ animationDelay: '240ms' }} />
             </div>
           </div>
         )}
@@ -161,10 +169,10 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
                 handleSubmit(e);
               }
             }}
-            placeholder={configured ? 'Pregunta a MIDAS...' : 'Configura VITE_GEMINI_API_KEY'}
+            placeholder={configured ? 'Pregunta a MIDAS...' : 'Configura VITE_OPENAI_API_KEY'}
             disabled={!configured || pending}
             rows={1}
-            className="min-h-[36px] max-h-[120px] flex-1 resize-none rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#E5B441] focus:ring-2 focus:ring-[#E5B441]/20 disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
+            className="min-h-[36px] max-h-[120px] flex-1 resize-none rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#7C3AED]/20 disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
           />
           <button
             type="submit"
@@ -183,6 +191,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
           to { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
-    </div>
+    </div>,
+    document.body,
   );
 }
