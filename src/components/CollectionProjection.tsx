@@ -9,6 +9,8 @@ import {
   type RealReconciliationMatch,
   type RealReconciliationResult,
   type MatchTier as RealMatchTier,
+  type PaymentReconciliation,
+  type PaymentReconciliationStatus,
   type ReconciliationReviewCandidate,
   type RealReconciliationBankCoverage,
 } from '../domain/realReconciliationEngine';
@@ -28,7 +30,7 @@ import {
   type CollectionCalendarSourceFilter,
 } from '../domain/collectionCalendarEngine';
 import { CXPRecord } from '../domain/persistence';
-import type { BankAccountStatement, CobranzaRecord } from '../services/jde';
+import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jde';
 import { MONTHS } from '../types';
 import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, FileSpreadsheet } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
@@ -64,6 +66,8 @@ interface Props {
    * muestra empty state.
    */
   cobranzaRecords?: CobranzaRecord[];
+  /** Pagos/recibos de CobranzaIndicadores, agrupados por Id Pago. */
+  cobranzaPayments?: CobranzaPayment[];
   /**
    * ISO timestamp por compañía del último fetch exitoso de /cobranza. Hoy
    * solo se usa para mostrar "Actualizado hace X" en la vista raw; en fases
@@ -124,7 +128,7 @@ function defaultActiveMonth(year: number): number {
   return now.getFullYear() === year ? now.getMonth() : 0;
 }
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaPayments = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -237,6 +241,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           clients={clients}
           assumptions={assumptions}
           records={cobranzaRecords}
+          payments={cobranzaPayments}
           loadedCias={cobranzaLoadedCias}
           companies={companies}
           bankStatements={bankStatements}
@@ -1398,6 +1403,296 @@ function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: st
   return event.cia === ciaFilter;
 }
 
+const PAYMENT_STATUS_LABELS: Record<PaymentReconciliationStatus, string> = {
+  CONFIRMED_REF: 'Confirmado recibo',
+  AUTO_UNIQUE: 'Auto único',
+  AMBIGUOUS: 'Ambiguo',
+  UNMATCHED: 'Sin banco',
+};
+
+function ReceiptReconciliationPanel({ payments }: { payments: PaymentReconciliation[] }) {
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<PaymentReconciliationStatus | 'all'>('all');
+  const [multiOnly, setMultiOnly] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const stats = useMemo(() => {
+    const reconciled = payments.filter(p => p.status === 'CONFIRMED_REF' || p.status === 'AUTO_UNIQUE');
+    const ambiguous = payments.filter(p => p.status === 'AMBIGUOUS');
+    const unmatched = payments.filter(p => p.status === 'UNMATCHED');
+    const multi = payments.filter(p => p.applicationCount > 1);
+    return {
+      reconciled: reconciled.length,
+      ambiguous: ambiguous.length,
+      unmatched: unmatched.length,
+      multi: multi.length,
+      multiAmount: multi
+        .filter(p => p.status === 'CONFIRMED_REF' || p.status === 'AUTO_UNIQUE')
+        .reduce((sum, p) => sum + p.importeRecibo, 0),
+    };
+  }, [payments]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return payments.filter(payment => {
+      if (statusFilter !== 'all' && payment.status !== statusFilter) return false;
+      if (multiOnly && payment.applicationCount <= 1) return false;
+      if (!q) return true;
+      const haystack = [
+        payment.idPago,
+        payment.noRecibo,
+        payment.cliente,
+        payment.noCliente,
+        payment.cuentaBancaria,
+        payment.banco,
+        payment.bankMovement?.referencia,
+        payment.bankMovement?.concepto,
+        ...payment.applications.flatMap(app => [app.noFactura, app.cliente, app.noCliente]),
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [multiOnly, payments, query, statusFilter]);
+
+  if (payments.length === 0) {
+    return (
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5">
+        <div className="flex items-center gap-2">
+          <Landmark className="w-4 h-4 text-[var(--gray-400)]" />
+          <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Recibos JDE / Banco</h3>
+        </div>
+        <p className="mt-2 text-[12px] text-[var(--gray-400)]">
+          Sin recibos cargados desde CobranzaIndicadores para el rango actual.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
+      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
+        <Landmark className="w-4 h-4 text-[var(--gray-400)]" />
+        <div>
+          <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Recibos JDE / Banco</h3>
+          <p className="text-[11px] text-[var(--gray-400)]">
+            Banco ABONO → Id Pago / No Recibo → facturas aplicadas.
+          </p>
+        </div>
+        <span className="ml-auto text-[11px] text-[var(--gray-400)]">
+          {filtered.length.toLocaleString('es-MX')} / {payments.length.toLocaleString('es-MX')} recibos
+        </span>
+      </div>
+
+      <div className="grid gap-3 border-b border-[var(--gray-100)] p-4 sm:grid-cols-2 lg:grid-cols-5">
+        <ReceiptStat label="Conciliados" value={`${stats.reconciled}`} tone="success" />
+        <ReceiptStat label="Sin banco" value={`${stats.unmatched}`} tone={stats.unmatched > 0 ? 'danger' : 'neutral'} />
+        <ReceiptStat label="Ambiguos" value={`${stats.ambiguous}`} tone={stats.ambiguous > 0 ? 'warning' : 'neutral'} />
+        <ReceiptStat label="Multi-factura" value={`${stats.multi}`} tone="neutral" />
+        <ReceiptStat label="Monto multi conciliado" value={fmtCompact(stats.multiAmount)} tone="neutral" />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--gray-100)] p-4">
+        <div className="relative min-w-[240px] flex-1 max-w-md">
+          <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Id Pago, No Recibo, cliente, factura, cuenta..."
+            className="input pl-9 w-full"
+          />
+        </div>
+        <select
+          value={statusFilter}
+          onChange={event => setStatusFilter(event.target.value as PaymentReconciliationStatus | 'all')}
+          className="input h-8 text-[12px]"
+        >
+          <option value="all">Todos los estados</option>
+          {Object.entries(PAYMENT_STATUS_LABELS).map(([status, label]) => (
+            <option key={status} value={status}>{label}</option>
+          ))}
+        </select>
+        <label className="inline-flex h-8 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--gray-200)] px-3 text-[12px] text-[var(--gray-600)]">
+          <input
+            type="checkbox"
+            checked={multiOnly}
+            onChange={event => setMultiOnly(event.target.checked)}
+          />
+          Solo multi-factura
+        </label>
+        {(query || statusFilter !== 'all' || multiOnly) && (
+          <button
+            type="button"
+            onClick={() => { setQuery(''); setStatusFilter('all'); setMultiOnly(false); }}
+            className="text-[12px] text-[var(--primary)] hover:underline px-2"
+          >
+            Limpiar
+          </button>
+        )}
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-3 py-2">Id Pago</th>
+              <th className="text-left px-3 py-2">No Recibo</th>
+              <th className="text-left px-3 py-2">Fecha cobro</th>
+              <th className="text-left px-3 py-2">Banco / cuenta</th>
+              <th className="text-right px-3 py-2">Importe recibo</th>
+              <th className="text-right px-3 py-2">Aplicado</th>
+              <th className="text-left px-3 py-2">Estado</th>
+              <th className="text-right px-3 py-2">Detalle</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.slice(0, 500).map(payment => {
+              const open = openId === payment.idPago;
+              return [
+                <tr key={payment.idPago} className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50">
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-[var(--gray-950)]">{payment.idPago}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">{payment.cia}</div>
+                  </td>
+                  <td className="px-3 py-2 tabular-nums">{payment.noRecibo || '—'}</td>
+                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">{payment.fechaCobro || '—'}</td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-[var(--gray-700)]">{payment.banco || payment.bankMovement?.banco || '—'}</div>
+                    <div className="text-[10px] text-[var(--gray-400)] tabular-nums">{payment.cuentaBancaria || '—'}</div>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtCurrency(payment.importeRecibo)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    <div>{fmtCurrency(payment.importeAplicado)}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">{payment.applicationCount} factura{payment.applicationCount === 1 ? '' : 's'}</div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${paymentStatusClass(payment.status)}`}>
+                      {PAYMENT_STATUS_LABELS[payment.status]}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setOpenId(open ? null : payment.idPago)}
+                      className="text-[12px] font-medium text-[var(--primary)] hover:underline"
+                    >
+                      {open ? 'Cerrar' : 'Ver detalle'}
+                    </button>
+                  </td>
+                </tr>,
+                open ? (
+                  <tr key={`${payment.idPago}-detail`} className="border-t border-[var(--gray-100)] bg-[var(--gray-50)]/50">
+                    <td colSpan={8} className="px-4 py-4">
+                      <ReceiptDetail payment={payment} />
+                    </td>
+                  </tr>
+                ) : null,
+              ];
+            })}
+          </tbody>
+        </table>
+        {filtered.length > 500 && (
+          <div className="px-4 py-2 text-[11px] text-[var(--gray-400)] border-t border-[var(--gray-100)] bg-[var(--surface-alt)]">
+            Mostrando 500 de {filtered.length.toLocaleString('es-MX')} — usa filtros para acotar.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReceiptStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: 'success' | 'warning' | 'danger' | 'neutral';
+}) {
+  const color = tone === 'success'
+    ? 'text-[var(--success)]'
+    : tone === 'warning'
+      ? 'text-[var(--warning)]'
+      : tone === 'danger'
+        ? 'text-[var(--danger)]'
+        : 'text-[var(--gray-950)]';
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-[var(--gray-400)]">{label}</div>
+      <div className={`mt-1 text-[15px] font-semibold tabular-nums ${color}`}>{value}</div>
+    </div>
+  );
+}
+
+function ReceiptDetail({ payment }: { payment: PaymentReconciliation }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(420px,1.4fr)]">
+      <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white p-3">
+        <div className="text-[11px] font-bold uppercase tracking-wide text-[var(--gray-400)]">Banco ligado</div>
+        {payment.bankMovement ? (
+          <div className="mt-2 space-y-1.5 text-[12px]">
+            <div className="font-medium text-[var(--gray-950)]">{payment.bankMovement.nombreBanco || payment.bankMovement.banco || 'Banco'}</div>
+            <div className="text-[var(--gray-500)]">Cuenta {payment.bankMovement.cuenta}</div>
+            <div className="text-[var(--gray-500)]">{payment.bankMovement.fechaOperacion} · {fmtCurrency(payment.bankMovement.importe)}</div>
+            <div className="text-[var(--gray-500)]">Ref. {payment.bankMovement.referencia || '—'}</div>
+            <div className="text-[var(--gray-400)] leading-snug">{payment.bankMovement.concepto || 'Sin concepto bancario'}</div>
+          </div>
+        ) : (
+          <p className="mt-2 text-[12px] text-[var(--gray-400)]">Sin movimiento bancario identificado para este recibo.</p>
+        )}
+        {payment.matchReason && (
+          <p className="mt-3 rounded-[var(--radius-md)] bg-[var(--surface-alt)] p-2 text-[11px] leading-snug text-[var(--gray-500)]">
+            {payment.matchReason}
+          </p>
+        )}
+      </div>
+      <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white overflow-hidden">
+        <div className="border-b border-[var(--gray-100)] px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-[var(--gray-400)]">
+          Facturas aplicadas
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[10px] uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-3 py-2">Factura</th>
+                <th className="text-left px-3 py-2">Cliente</th>
+                <th className="text-right px-3 py-2">Cobrado</th>
+                <th className="text-right px-3 py-2">Original</th>
+                <th className="text-right px-3 py-2">IVA prop.</th>
+                <th className="text-left px-3 py-2">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payment.applications.map(app => (
+                <tr key={`${payment.idPago}-${app.noFactura}`} className="border-t border-[var(--gray-100)]">
+                  <td className="px-3 py-2 tabular-nums font-medium text-[var(--gray-950)]">{app.noFactura}</td>
+                  <td className="px-3 py-2">
+                    <div>{app.cliente || payment.cliente || '—'}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">#{app.noCliente || payment.noCliente || '—'}</div>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(app.importeCobrado)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(app.importeOriginalFactura)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    <div>{fmtCurrency(app.ivaCausadoProporcional)}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">{app.tasaIva || 'IVA s/d'}</div>
+                  </td>
+                  <td className="px-3 py-2 text-[var(--gray-500)]">{app.facturaStatus ?? 'sin CXC'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function paymentStatusClass(status: PaymentReconciliationStatus): string {
+  if (status === 'CONFIRMED_REF') return 'bg-[var(--success)]/10 text-[var(--success)]';
+  if (status === 'AUTO_UNIQUE') return 'bg-[var(--primary-muted)] text-[var(--primary)]';
+  if (status === 'AMBIGUOUS') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
+  return 'bg-[var(--danger)]/10 text-[var(--danger)]';
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // CobranzaRealCalendar — calendario unico de banco + JDE + CXC + proyeccion.
 //
@@ -2253,6 +2548,7 @@ function CobranzaRealView({
   clients,
   assumptions,
   records,
+  payments,
   loadedCias,
   companies,
   bankStatements,
@@ -2268,6 +2564,7 @@ function CobranzaRealView({
   clients: Client[];
   assumptions: CashFlowAssumptions;
   records: CobranzaRecord[];
+  payments: CobranzaPayment[];
   loadedCias: Record<string, string>;
   companies: { cia: string; nombre: string }[];
   bankStatements: BankAccountStatement[];
@@ -2304,9 +2601,9 @@ function CobranzaRealView({
     // `externalReconciliation` ya viene con confirmaciones aplicadas desde
     // App.tsx; el fallback local debe aplicarlas también para no divergir.
     if (externalReconciliation) return externalReconciliation;
-    const raw = reconcileRealCollections(records, bankStatements);
+    const raw = reconcileRealCollections(records, bankStatements, { cobranzaPayments: payments });
     return applyManualConfirmations(raw, confirmedReviewKeys);
-  }, [externalReconciliation, records, bankStatements, confirmedReviewKeys]);
+  }, [externalReconciliation, records, bankStatements, payments, confirmedReviewKeys]);
   const reconciliation = localReconciliation;
   const matchByFactura = useMemo(() => {
     if (externalFacturaIndex) return externalFacturaIndex;
@@ -2406,7 +2703,7 @@ function CobranzaRealView({
     return new Date(Math.max(...ts));
   }, [loadedCias]);
 
-  if (records.length === 0) {
+  if (records.length === 0 && payments.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)]">
         <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary-muted)] flex items-center justify-center mb-3">
@@ -2512,6 +2809,8 @@ function CobranzaRealView({
           </div>
         )}
       </div>
+
+      <ReceiptReconciliationPanel payments={reconciliation.paymentReconciliations} />
 
       <ReviewCandidatesPanel candidates={reconciliation.reviewCandidates} reconciliation={reconciliation} />
 

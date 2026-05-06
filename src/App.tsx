@@ -205,6 +205,7 @@ function emptyRealReconciliationResult(): RealReconciliationResult {
   return {
     matches: [],
     abonoEnrichments: [],
+    paymentReconciliations: [],
     summary: {
       totalFacturas: 0,
       facturasCobradasBanco: 0,
@@ -434,7 +435,7 @@ export default function App() {
     [rawCobranzaReconciliation, confirmedReviewKeys],
   );
   const shouldComputeCobranzaReconciliation =
-    cobranzaRecords.length > 0 && RECONCILIATION_TABS.has(activeTab);
+    (cobranzaRecords.length > 0 || cobranzaPayments.length > 0) && RECONCILIATION_TABS.has(activeTab);
   const activeReconciliationCias = useMemo(() => {
     if (selectedCia === 'all') return undefined;
     const allCias = companies.filter(c => c.activa !== false).map(c => c.cia);
@@ -445,7 +446,7 @@ export default function App() {
   const reconciliationWorkerRef = useRef<Worker | null>(null);
   const reconciliationJobRef = useRef(0);
   useEffect(() => {
-    if (cobranzaRecords.length === 0) {
+    if (cobranzaRecords.length === 0 && cobranzaPayments.length === 0) {
       setCobranzaReconciliation(emptyRealReconciliationResult());
       return;
     }
@@ -884,11 +885,8 @@ export default function App() {
     const errors: string[] = [];
     let totalRecords = 0;
     const fetchedRecords: CobranzaRecord[] = [];
-    const fetchedPayments: CobranzaPayment[] = [];
     const fetchedCias: string[] = [];
-    const fetchedPaymentCias: string[] = [];
     const fetchedTimestamps: Record<string, string> = {};
-    const fetchedPaymentTimestamps: Record<string, string> = {};
     try {
       for (const cia of ciasToFetch) {
         try {
@@ -902,16 +900,24 @@ export default function App() {
           const msg = e instanceof Error ? e.message : String(e);
           errors.push(`${cia}: ${msg}`);
         }
-        try {
-          const payments = await fetchIndicadoresCobranza({ cia, fechaInicial, fechaFinal });
-          const stampedPayments = payments.map(p => ({ ...p, cia: p.cia || cia }));
-          fetchedPayments.push(...stampedPayments);
-          fetchedPaymentCias.push(cia);
-          fetchedPaymentTimestamps[cia] = new Date().toISOString();
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          errors.push(`${cia} indicadores: ${msg}`);
-        }
+      }
+
+      try {
+        const ciaBatch = ciasToFetch.join(',');
+        const payments = await fetchIndicadoresCobranza({ cia: ciaBatch, fechaInicial, fechaFinal });
+        const fetchedSet = new Set(ciasToFetch);
+        setCobranzaPayments(prev => [
+          ...prev.filter(p => !fetchedSet.has(p.cia)),
+          ...payments,
+        ]);
+        const stamp = new Date().toISOString();
+        setCobranzaPaymentsLoadedCias(prev => ({
+          ...prev,
+          ...Object.fromEntries(ciasToFetch.map(cia => [cia, stamp])),
+        }));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`indicadores ${ciasToFetch.join(',')}: ${msg}`);
       }
 
       if (fetchedCias.length > 0) {
@@ -921,14 +927,6 @@ export default function App() {
           ...fetchedRecords,
         ]);
         setCobranzaLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
-      }
-      if (fetchedPaymentCias.length > 0) {
-        const fetchedSet = new Set(fetchedPaymentCias);
-        setCobranzaPayments(prev => [
-          ...prev.filter(p => !fetchedSet.has(p.cia)),
-          ...fetchedPayments,
-        ]);
-        setCobranzaPaymentsLoadedCias(prev => ({ ...prev, ...fetchedPaymentTimestamps }));
       }
 
       if (errors.length > 0) {
@@ -1489,6 +1487,7 @@ export default function App() {
                   bankStatements={bankStatements}
                   companies={companies}
                   cobranzaRecords={cobranzaRecords}
+                  cobranzaPayments={cobranzaPayments}
                   cobranzaLoadedCias={cobranzaLoadedCias}
                   cobranzaReconciliation={cobranzaReconciliation}
                   cobranzaFacturaIndex={cobranzaFacturaIndex}

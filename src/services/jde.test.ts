@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { normalizeCobranzaPayments, normalizeInvoiceRef } from './jde';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fetchIndicadoresCobranza, normalizeCobranzaPayments, normalizeInvoiceRef } from './jde';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('normalizeCobranzaPayments', () => {
   it('agrupa filas repetidas por Id Pago y mantiene importes en el nivel correcto', () => {
@@ -64,5 +68,41 @@ describe('normalizeCobranzaPayments', () => {
 
   it('normaliza referencias de factura con espacios alrededor del guion', () => {
     expect(normalizeInvoiceRef('RI - 90829')).toBe(normalizeInvoiceRef('RI-90829'));
+  });
+
+  it('consulta CobranzaIndicadores por el proxy separado con cia batch', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      {
+        'Id Pago': 'PAY-BATCH',
+        CIA: '00011',
+        'Fecha Cobro': '2026-04-10',
+        'cta bancaria': '11.1020.0011302',
+        'No Recibo': 'RI-1',
+        'Importe Recibo': '1000',
+        'No Factura': 'F-1',
+        'Importe Cobrado': '1000',
+      },
+    ]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const payments = await fetchIndicadoresCobranza({
+      cia: '00011,00038',
+      fechaInicial: '2026-04-01',
+      fechaFinal: '2026-04-30',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/jde-indicadores/CobranzaIndicadores', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        cia: '00011,00038',
+        fechaInicial: '2026-04-01',
+        fechaFinal: '2026-04-30',
+      }),
+    }));
+    expect(payments).toHaveLength(1);
+    expect(payments[0].idPago).toBe('PAY-BATCH');
   });
 });

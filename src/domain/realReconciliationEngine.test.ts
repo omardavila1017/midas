@@ -426,6 +426,14 @@ describe('reconcileRealCollections — IndicadoresCobranza', () => {
     expect(result.summary.pagosConciliadosBanco).toBe(1);
     expect(result.summary.pagosMultiFactura).toBe(1);
     expect(result.summary.montoPagosMultiFacturaConciliado).toBe(1740);
+    expect(result.paymentReconciliations[0]).toMatchObject({
+      idPago: 'PAY-1',
+      noRecibo: 'RI - 90829',
+      status: 'CONFIRMED_REF',
+      applicationCount: 2,
+      importeAplicado: 1740,
+    });
+    expect(result.paymentReconciliations[0].bankMovement?.referencia).toBe('SPEI');
   });
 
   it('cruza automáticamente cuando cuenta, fecha e importe identifican un único Id Pago aunque el banco no traiga No Recibo', () => {
@@ -466,6 +474,7 @@ describe('reconcileRealCollections — IndicadoresCobranza', () => {
     expect(result.matches[0].matchTier).toBe('payment-auto-unique');
     expect(result.matches[0].paymentMatchStatus).toBe('AUTO_UNIQUE');
     expect(result.abonoEnrichments[0].paymentMatchStatus).toBe('AUTO_UNIQUE');
+    expect(result.paymentReconciliations[0].status).toBe('AUTO_UNIQUE');
   });
 
   it('deja en revisión cuando dos Id Pago tienen la misma cuenta, fecha e importe', () => {
@@ -522,7 +531,34 @@ describe('reconcileRealCollections — IndicadoresCobranza', () => {
       paymentMatchStatus: 'AMBIGUOUS',
     });
     expect(result.summary.pagosConciliadosBanco).toBe(0);
-    expect(result.summary.pagosSinBanco).toBe(2);
+    expect(result.summary.pagosAmbiguos).toBe(2);
+    expect(result.summary.pagosSinBanco).toBe(0);
+    expect(result.paymentReconciliations.map(payment => payment.status)).toEqual(['AMBIGUOUS', 'AMBIGUOUS']);
+  });
+
+  it('expone pagos de Indicadores sin banco como UNMATCHED', () => {
+    const payment = makePayment({
+      idPago: 'PAY-NOBANK',
+      cia: '00011',
+      fechaCobro: '2026-02-10',
+      cuentaBancaria: '11.1020.0011302',
+      noRecibo: 'RI-404',
+      importeRecibo: 1000,
+      applications: [
+        makeApplication({ idPago: 'PAY-NOBANK', cia: '00011', noFactura: 'RI-404', importeCobrado: 1000 }),
+      ],
+    });
+
+    const result = reconcileRealCollections([], [], { cobranzaPayments: [payment] });
+
+    expect(result.paymentReconciliations).toHaveLength(1);
+    expect(result.paymentReconciliations[0]).toMatchObject({
+      idPago: 'PAY-NOBANK',
+      status: 'UNMATCHED',
+      applicationCount: 1,
+      importeAplicado: 1000,
+    });
+    expect(result.summary.pagosSinBanco).toBe(1);
   });
 });
 
