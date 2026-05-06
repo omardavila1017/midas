@@ -7,7 +7,6 @@ import {
   GitCompare,
   Plus,
   ShieldAlert,
-  Sparkles,
   Split,
   TrendingDown,
   TrendingUp,
@@ -24,7 +23,6 @@ import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import {
   applyAdjustmentsToMovements,
   applyCellOverridesToBuckets,
-  buildBucketDates,
   calculateBaseProjection,
   effectiveAmount,
   effectiveMovementDate,
@@ -93,10 +91,7 @@ import {
   type SupplierCriticalAlert,
 } from '../services/supplierCriticalAlerts';
 import {
-  buildPredictionScenarioDraft,
   createQuickMovementAdjustment,
-  type PredictionScenarioTemplate,
-  type ProjectionPredictionDraft,
 } from '../services/projectionPredictionEngine';
 import {
   buildApprovedTaxPaymentMovements,
@@ -106,7 +101,8 @@ import {
 } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
-import { MidasBubble } from '../../midas-ai';
+import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
+import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
 
 interface Props {
   companyCode: string;
@@ -477,7 +473,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         return {
           ...rawProjection,
           buckets,
-          summary: summarizeBucketsForScenario(buckets, rawProjection.movements, minimumCash),
+          summary: summarizeBucketsForScenario(buckets, rawProjection.movements, minimumCash, gran),
           rows,
           overrides: scenarioOverrides,
           supplierPlan: supplierSchedule.plan,
@@ -522,13 +518,6 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     if (comparisonScenarioId === activeScenarioId) return activeRun;
     return buildRun(comparisonScenarioId, deferredGranularity);
   }, [buildRun, comparisonScenarioId, baseScenario.id, baseRun, activeScenarioId, activeRun, deferredGranularity]);
-
-  // Bucket columns for chart range info — uses the deferred granularity so
-  // it stays consistent with the currently rendered runs.
-  const bucketDates = useMemo(
-    () => buildBucketDates(yearStart, yearEnd, deferredGranularity),
-    [yearStart, yearEnd, deferredGranularity],
-  );
 
   // Pre-warm the *other* two granularities for the active scenario in idle
   // time. Once the initial paint settles, we silently build the alternate
@@ -616,22 +605,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     [activeRun.movements, activeScenarioId, manualEntries, props.bankStatements, props.cxpRecords, props.providers, today],
   );
 
-  const predictionDrafts = useMemo<ProjectionPredictionDraft[]>(
-    () => (['OPTIMISTIC', 'CONSERVATIVE', 'LIQUIDITY_OPTIMIZED', 'CRITICAL_SUPPLIERS'] as PredictionScenarioTemplate[])
-      .map((template) => buildPredictionScenarioDraft({
-        template,
-        movements: activeRun.movements,
-        providers: props.providers,
-        clients: props.clients,
-        cxpRecords: props.cxpRecords,
-        assumptions: props.assumptions,
-        approvedScenario,
-        asOfDate: today,
-      })),
-    [activeRun.movements, approvedScenario, props.assumptions, props.clients, props.cxpRecords, props.providers, today],
-  );
-
-  const tableMovements = useMemo(
+const tableMovements = useMemo(
     () => activeRun.movements
       .filter((movement) => {
         const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
@@ -700,16 +674,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     setStatusMessage(`Escenario duplicado como "${result.newScenario.name}".`);
   }, [activeScenarioId, approvedScenario, cellOverrides, changeLog, customRows, scenarios]);
 
-  const handleGeneratePrediction = useCallback((draft: ProjectionPredictionDraft) => {
-    setStoredScenarios((current) => [...current, draft.scenario]);
-    setStoredAdjustments((current) => [...current, ...draft.adjustments]);
-    setChangeLog((current) => [draft.changeLogEntry, ...current]);
-    setActiveScenarioId(draft.scenario.id);
-    setComparisonScenarioId(approvedScenario.id);
-    setStatusMessage(`${draft.scenario.name} generado con ${draft.adjustments.length} ajustes por cliente/proveedor.`);
-  }, [approvedScenario.id]);
-
-  const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'SHIFT_DATE' | 'AMOUNT_OVERRIDE' | 'SPLIT_PAYMENT') => {
+const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'SHIFT_DATE' | 'AMOUNT_OVERRIDE' | 'SPLIT_PAYMENT') => {
     if (movement.lockState === 'LOCKED') {
       setStatusMessage('Movimiento bloqueado. Crea el ajuste desde Planeación con autorización.');
       return;
@@ -864,24 +829,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         onSelect={setActiveScenarioId}
       />
 
-      <CollapsibleSection
-        title="Motor predictivo"
-        storageKey="proyeccion.section.prediction-engine"
-        description={`Genera escenarios automáticos desde ${activeScenario.name} con movimientos por cliente/proveedor.`}
-        defaultOpen
-      >
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
-          {predictionDrafts.map((draft) => (
-            <PredictionScenarioCard
-              key={draft.template}
-              draft={draft}
-              onGenerate={() => handleGeneratePrediction(draft)}
-            />
-          ))}
-        </div>
-      </CollapsibleSection>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
@@ -912,27 +860,14 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         />
       </div>
 
-      <CollapsibleSection
-        title="Trayectoria de caja"
-        storageKey="proyeccion.section.trajectory"
-        description="Ingresos, egresos, cierre y caja mínima a lo largo del año."
-        actions={
-          <span className="text-[11px] text-[var(--gray-400)] tabular-nums">
-            {bucketDates.length} {bucketDates.length === 1 ? 'período' : 'períodos'} · {yearStart} → {yearEnd}
-          </span>
-        }
-      >
-        <div className="px-4 py-3">
-          <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
-            <CashFlowChart
-              projection={activeRun}
-              baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
-              comparisonProjection={comparisonRun ?? undefined}
-              onNavigateToTax={props.onNavigateToTax}
-            />
-          </DeferredMount>
-        </div>
-      </CollapsibleSection>
+      <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
+        <CashFlowChart
+          projection={activeRun}
+          baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
+          comparisonProjection={comparisonRun ?? undefined}
+          onNavigateToTax={props.onNavigateToTax}
+        />
+      </DeferredMount>
 
       <CollapsibleSection
         title="Detalle por período"
@@ -1103,8 +1038,39 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         adjustments={storedAdjustments}
         activeScenarioId={activeScenario.id}
         activeScenarioKind={activeScenario.kind}
-        isBaseScenario={activeScenario.kind === 'BASE'}
-        onCreateAdjustment={(adjustment) => setStoredAdjustments((current) => [...current, adjustment])}
+        onAcceptProposal={(suggestion: MidasProposalSuggestion) => {
+          try {
+            const targetScenarioId = ensureEditableScenario(`MIDAS · ${suggestion.draft.name}`.slice(0, 60));
+            const adjustment = createFinancialAdjustment({
+              name: suggestion.draft.name,
+              scenarioIds: [targetScenarioId],
+              type: suggestion.draft.type,
+              targetType: suggestion.draft.targetType,
+              targetExpression: suggestion.draft.targetExpression,
+              reasonCode: suggestion.draft.reasonCode,
+              justification: suggestion.draft.justification,
+              deltaAmount: suggestion.draft.deltaAmount,
+              deltaDays: suggestion.draft.deltaDays,
+              percentageChange: suggestion.draft.percentageChange,
+              adjustedValue: suggestion.draft.adjustedValue,
+              createdBy: 'midas@senda.local',
+            });
+            setStoredAdjustments((current) => [
+              ...current,
+              {
+                ...adjustment,
+                impactSummary: {
+                  cashImpact: suggestion.estimatedCashImpact,
+                  deficitDaysReduced: 0,
+                  riskChange: 0,
+                },
+              },
+            ]);
+            setStatusMessage(`MIDAS guardó propuesta "${adjustment.name}" como DRAFT.`);
+          } catch (err) {
+            alert(err instanceof Error ? err.message : 'No se pudo crear la propuesta.');
+          }
+        }}
       />
     </div>
   );
@@ -1146,55 +1112,6 @@ function SegmentedControl<T extends string>({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function PredictionScenarioCard({
-  draft,
-  onGenerate,
-}: {
-  draft: ProjectionPredictionDraft;
-  onGenerate: () => void;
-}) {
-  const topImpacts = draft.entityImpacts.slice(0, 3);
-  return (
-    <div className="rounded-xl border border-[var(--gray-200)] bg-white p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary-muted)] px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--primary)]">
-            <Sparkles className="h-3 w-3" strokeWidth={1.75} />
-            {draft.title}
-          </div>
-          <h3 className="mt-2 text-[13px] font-semibold text-[var(--gray-950)]">{draft.scenario.name}</h3>
-          <p className="mt-1 text-[11px] leading-snug text-[var(--gray-500)]">{draft.summary}</p>
-        </div>
-        <div className="shrink-0 rounded-lg bg-[var(--gray-50)] px-2 py-1 text-right">
-          <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">{draft.adjustments.length}</div>
-          <div className="text-[9px] uppercase tracking-wider text-[var(--gray-400)]">ajustes</div>
-        </div>
-      </div>
-      <div className="mt-3 space-y-1.5">
-        {topImpacts.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-[var(--gray-200)] px-2 py-2 text-[11px] text-[var(--gray-400)]">
-            Sin movimientos suficientes para este patrón.
-          </div>
-        ) : topImpacts.map((impact) => (
-          <div key={`${draft.template}-${impact.movementId}-${impact.reason}`} className="flex items-center justify-between gap-2 text-[11px]">
-            <span className="min-w-0 truncate text-[var(--gray-600)]">{impact.entityName}</span>
-            <span className="shrink-0 tabular-nums text-[var(--gray-950)]">{fmtCompact(impact.predictedAmount)}</span>
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={onGenerate}
-        disabled={draft.adjustments.length === 0}
-        className="mt-3 inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--gray-950)] px-3 text-[12px] font-medium text-white hover:bg-[var(--gray-800)] disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <Sparkles className="h-3.5 w-3.5" strokeWidth={1.75} />
-        Generar draft
-      </button>
     </div>
   );
 }

@@ -21,9 +21,15 @@ REGLAS DURAS:
 2. Nunca toques el escenario Base. Tus propuestas se aplican al escenario activo (no-Base).
 3. Cada propuesta debe traer "justification" con: nombre del proveedor o concepto, dato citado del contexto (monto, fecha, flexibilidad), e impacto cuantificado en MXN.
 4. Si el usuario pide algo que rompe estas reglas, responde explicando por qué y propón alternativa válida.
+5. **BALANCE OBLIGATORIO**: cuando sugieras ajustes para mejorar caja, NUNCA propongas SOLO adelantar cobros. Debes proponer al menos UNA modificación de egreso (postponer/reducir/cancelar/dividir pago a proveedor) por cada propuesta de cobro adelantado. La caja se mejora atacando ambos lados: ingresos Y egresos.
+6. Prioriza egresos primero: revisa la lista de proveedores FLEX_BAJO, FLEX_MEDIO y PAUSAR antes de tocar cobros. Identifica los movimientos OUTFLOW próximos en \`upcomingMovements\` y propón DATE_SHIFT (postponer 7-30 días), AMOUNT_DELTA negativo (negociar reducción), o SPLIT_PAYMENT (parcialidades).
+7. Si solo identificas oportunidades de un lado (ej. solo cobros), DECLARA explícitamente en el texto por qué no hay propuesta del otro lado, citando datos del contexto.
 
 CÓMO PROPONES AJUSTES:
 - Cuando el usuario pida sugerencias o tú detectes oportunidades, USA la function call \`propose_adjustment\` (puedes invocarla varias veces en una sola respuesta).
+- Patrón mínimo recomendado: 2-4 propuestas combinadas (ej: 1 cobro adelantado + 1 pago postpuesto + 1 reducción de gasto).
+- Para cobros (INFLOW): identifica clientes con monto pendiente alto en \`upcomingInflows\` y usa DATE_SHIFT con deltaDays negativo (adelantar) o ADD_MOVEMENT si vas a registrar un cobro nuevo.
+- Para egresos (OUTFLOW): usa el id del movimiento en \`upcomingOutflows\`. Tipos preferidos: DATE_SHIFT (deltaDays positivo, postponer), AMOUNT_DELTA (negativo, reducir), SPLIT_PAYMENT (parcializar), CANCEL_MOVEMENT (cancelar pago no-crítico).
 - En tu mensaje de texto resume las propuestas en lenguaje natural (sin repetir el JSON).
 - Tipos de ajuste disponibles:
   * DATE_SHIFT — postponer/adelantar; usar deltaDays.
@@ -58,10 +64,19 @@ export function buildContextBlock(ctx: MidasContext): string {
     lines.push(`- [${s.id}] ${s.name} | risk=${s.risk} | flex=${s.flexibility} | pendiente=${fmt(s.pendingAmount)}`);
   }
   lines.push('');
-  lines.push(`Próximos movimientos (top ${ctx.upcomingMovements.length}, orden cronológico):`);
-  for (const m of ctx.upcomingMovements.slice(0, 40)) {
+  const inflows = ctx.upcomingMovements.filter((m) => m.type === 'INFLOW');
+  const outflows = ctx.upcomingMovements.filter((m) => m.type === 'OUTFLOW');
+  lines.push(`upcomingInflows (cobros próximos, ${inflows.length}):`);
+  for (const m of inflows.slice(0, 25)) {
     lines.push(
-      `- [${m.id}] ${m.projectedDate} | ${m.type} | ${m.category} | ${fmt(m.projectedAmount)} | ${m.counterpartyName ?? m.concept}`,
+      `- [${m.id}] ${m.projectedDate} | ${m.category} | ${fmt(m.projectedAmount)} | ${m.counterpartyName ?? m.concept}`,
+    );
+  }
+  lines.push('');
+  lines.push(`upcomingOutflows (pagos próximos, ${outflows.length}) — CANDIDATOS A POSTPONER/REDUCIR:`);
+  for (const m of outflows.slice(0, 30)) {
+    lines.push(
+      `- [${m.id}] ${m.projectedDate} | ${m.category} | ${fmt(m.projectedAmount)} | ${m.counterpartyName ?? m.concept}`,
     );
   }
   lines.push(`</contexto>`);

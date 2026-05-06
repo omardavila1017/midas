@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Provider } from '../../../domain/types';
-import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
 import type { FinancialAdjustment, ForecastRun } from '../../shared-finance/types';
 import { MidasAvatar } from './MidasAvatar';
 import { MidasChatPanel } from './MidasChatPanel';
@@ -15,9 +15,7 @@ interface Props {
   adjustments: FinancialAdjustment[];
   activeScenarioId: string;
   activeScenarioKind: string;
-  isBaseScenario: boolean;
-  onCreateAdjustment: (adjustment: FinancialAdjustment) => void;
-  onSuggestSwitchScenario?: () => void;
+  onAcceptProposal: (suggestion: MidasProposalSuggestion) => void;
 }
 
 export function MidasBubble(props: Props) {
@@ -45,57 +43,40 @@ export function MidasBubble(props: Props) {
     ],
   );
 
-  const handleAccept = (suggestion: MidasProposalSuggestion) => {
-    if (props.isBaseScenario) {
-      alert(
-        'No puedo aplicar propuestas en el escenario Base (es de solo lectura). Cambia a un borrador o crea uno nuevo y vuelve a aceptar la propuesta.',
-      );
-      props.onSuggestSwitchScenario?.();
-      return;
-    }
-    try {
-      const adjustment = createFinancialAdjustment({
-        name: suggestion.draft.name,
-        scenarioIds: [props.activeScenarioId],
-        type: suggestion.draft.type,
-        targetType: suggestion.draft.targetType,
-        targetExpression: suggestion.draft.targetExpression,
-        reasonCode: suggestion.draft.reasonCode,
-        justification: suggestion.draft.justification,
-        deltaAmount: suggestion.draft.deltaAmount,
-        deltaDays: suggestion.draft.deltaDays,
-        percentageChange: suggestion.draft.percentageChange,
-        adjustedValue: suggestion.draft.adjustedValue,
-        createdBy: 'midas@senda.local',
-      });
-      const withImpact: FinancialAdjustment = {
-        ...adjustment,
-        impactSummary: {
-          cashImpact: suggestion.estimatedCashImpact,
-          deficitDaysReduced: 0,
-          riskChange: 0,
-        },
-      };
-      props.onCreateAdjustment(withImpact);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'No se pudo crear la propuesta.');
-    }
-  };
-
-  return (
+  return createPortal(
     <>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="fixed bottom-5 right-5 z-[999] inline-flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95"
+        className="midas-bubble-btn group fixed bottom-6 right-6 z-[2147483646] inline-flex h-14 w-14 items-center justify-center rounded-full transition-transform hover:scale-105 active:scale-95"
         style={{
-          background: 'radial-gradient(circle at 30% 30%, #FFE89A 0%, #E5B441 60%, #8C6618 100%)',
-          boxShadow: '0 8px 24px rgba(229,180,65,0.45), 0 0 0 1px rgba(140,102,24,0.4)',
+          background: 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 50%, #2563EB 100%)',
+          boxShadow:
+            '0 10px 30px -8px rgba(124,58,237,0.55), 0 4px 12px -2px rgba(37,99,235,0.45), 0 0 0 1px rgba(255,255,255,0.08) inset',
         }}
         aria-label={open ? 'Cerrar MIDAS' : 'Abrir MIDAS'}
         aria-expanded={open}
       >
+        <span
+          className="pointer-events-none absolute inset-0 rounded-full opacity-0 transition-opacity group-hover:opacity-100"
+          style={{
+            background:
+              'radial-gradient(60% 60% at 30% 25%, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0) 70%)',
+          }}
+        />
         <MidasAvatar size={42} />
+        <style>{`
+          .midas-bubble-btn::after {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: 9999px;
+            background: linear-gradient(135deg, rgba(124,58,237,0.45), rgba(37,99,235,0.35));
+            filter: blur(14px);
+            z-index: -1;
+            opacity: 0.7;
+          }
+        `}</style>
       </button>
       <MidasChatPanel
         open={open}
@@ -103,8 +84,9 @@ export function MidasBubble(props: Props) {
         cia={props.cia}
         scenarioId={props.activeScenarioId}
         buildContext={buildContext}
-        onAcceptProposal={handleAccept}
+        onAcceptProposal={props.onAcceptProposal}
       />
-    </>
+    </>,
+    document.body,
   );
 }

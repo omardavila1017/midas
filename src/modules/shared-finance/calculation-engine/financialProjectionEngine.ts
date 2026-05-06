@@ -86,7 +86,7 @@ export function calculateBaseProjection(movements: FinancialMovement[], options:
     generatedAt: new Date().toISOString(),
     movements: normalized,
     buckets: bucketsWithAlerts,
-    summary: summarizeProjection(bucketsWithAlerts, normalized, options.minimumCash),
+    summary: summarizeProjection(bucketsWithAlerts, normalized, options.minimumCash, granularity),
     alerts,
   };
 }
@@ -286,8 +286,9 @@ export function summarizeBucketsForScenario(
   buckets: ProjectionBucket[],
   movements: FinancialMovement[],
   minimumCashRequired: number,
+  granularity: ProjectionGranularity = 'daily',
 ): ProjectionSummary {
-  return summarizeProjection(buckets, movements, minimumCashRequired);
+  return summarizeProjection(buckets, movements, minimumCashRequired, granularity);
 }
 
 export function compareProjectionVsScenario(baseProjection: ForecastRun, scenarioProjection: ForecastRun): ScenarioComparison {
@@ -500,10 +501,31 @@ function calculateRiskAlerts(buckets: ProjectionBucket[], movements: FinancialMo
   return alerts;
 }
 
+function countDeficitDaysFromMovements(movements: FinancialMovement[]): number {
+  const perDay = new Map<string, { inflows: number; outflows: number }>();
+  for (const movement of movements) {
+    if (movement.status === 'CANCELLED') continue;
+    const date = effectiveMovementDate(movement);
+    if (!date) continue;
+    const key = date.slice(0, 10);
+    const amount = effectiveAmount(movement);
+    const entry = perDay.get(key) ?? { inflows: 0, outflows: 0 };
+    if (movement.type === 'INFLOW') entry.inflows += amount;
+    else entry.outflows += amount;
+    perDay.set(key, entry);
+  }
+  let count = 0;
+  for (const { inflows, outflows } of perDay.values()) {
+    if (outflows > inflows) count += 1;
+  }
+  return count;
+}
+
 function summarizeProjection(
   buckets: ProjectionBucket[],
   movements: FinancialMovement[],
   minimumCashRequired: number,
+  granularity: ProjectionGranularity = 'daily',
 ): ProjectionSummary {
   const bucketForDay = (days: number) => buckets[Math.min(days - 1, Math.max(0, buckets.length - 1))];
   const futureMovements = movements
@@ -526,7 +548,7 @@ function summarizeProjection(
     projectedCash30: bucketForDay(30)?.closingCash ?? lastBucket?.closingCash ?? 0,
     projectedCash90: bucketForDay(90)?.closingCash ?? lastBucket?.closingCash ?? 0,
     minimumCashRequired,
-    deficitDays: buckets.filter((bucket) => bucket.deficit > 0).length,
+    deficitDays: countDeficitDaysFromMovements(movements),
     largestUpcomingInflow,
     largestUpcomingOutflow,
     averageConfidence: movements.length === 0
