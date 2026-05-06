@@ -242,11 +242,10 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     }));
 
     const outflowLines = collectOutflowLines(month, inputs, todayYm);
-    out.push(...balanceMonth({
+    out.push(...balanceOutflowMonth({
       lines: outflowLines,
       target: month.expense,
       ym: month.yearMonth,
-      type: 'OUTFLOW',
       asOfDate: inputs.asOfDate,
       fallbackCategory: 'OPEX',
       fallbackConcept: `Egresos proyectados ${month.yearMonth}`,
@@ -575,26 +574,34 @@ function collectOutflowLines(
 ): RawLine[] {
   const lines: RawLine[] = [];
   const providerByName = new Map(inputs.providers.map((p) => [normalize(p.name), p]));
+  const providerByJde = new Map(inputs.providers.flatMap((p) => (p.numProveedorJDE ? [[p.numProveedorJDE, p]] : [])));
   const filteredCxp = inputs.companyCode === 'all' || !inputs.companyCode
     ? inputs.cxpRecords
     : inputs.cxpRecords.filter((r) => r.cia === inputs.companyCode);
 
-  // 1) CXP con fecha real de programación que cae en este mes.
+  // 1) CXP abierta de JDE. Si ya venció, se trae al día operativo actual
+  // para que el scheduler decida si se paga hoy, se recorre o queda pendiente.
   filteredCxp.forEach((record, index) => {
     if (record.importePendientePesos <= 0) return;
-    const date = cleanDate(record.fechaProgramacionPago)
+    const rawDate = cleanDate(record.fechaProgramacionPago)
       ?? cleanDate(record.fechaVence)
-      ?? null;
-    if (!date) return;
-    if (date.slice(0, 7) !== month.yearMonth) return;
-    if (compareYearMonth(date.slice(0, 7), todayYm) < 0) return;
-    const provider = providerByName.get(normalize(record.nombre));
-    const score = (record.edoPago ?? '').toUpperCase().includes('APROB') ? 90 : 76;
+      ?? cleanDate(record.fechaFactura)
+      ?? inputs.asOfDate;
+    const dateInfo = moveOpenPayableIntoProjection(rawDate, inputs.asOfDate);
+    if (dateInfo.date.slice(0, 7) !== month.yearMonth) return;
+    if (compareYearMonth(dateInfo.date.slice(0, 7), todayYm) < 0) return;
+    const provider = (record.noProveedor ? providerByJde.get(record.noProveedor) : undefined)
+      ?? providerByName.get(normalize(record.nombre));
+    const score = provider?.score != null
+      ? Math.max(0, Math.min(100, Math.round(provider.score)))
+      : (record.edoPago ?? '').toUpperCase().includes('APROB')
+        ? 90
+        : 76;
     const taxBreakdown = taxBreakdownFromCxp(record);
     lines.push({
       id: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`,
       amount: record.importePendientePesos,
-      date,
+      date: dateInfo.date,
       concept: `Factura ${record.noFactura || 'sin folio'} · ${record.nombre}`,
       category: 'AP_PAYMENT',
       counterpartyId: provider?.id ?? record.noProveedor,
@@ -613,7 +620,11 @@ function collectOutflowLines(
       taxRate: taxBreakdown.taxRate,
       taxBaseAmount: taxBreakdown.taxBaseAmount,
       taxAmount: taxBreakdown.taxAmount,
-      comment: 'Factura abierta en JDE.',
+      comment: [
+        'Factura abierta en JDE.',
+        dateInfo.moved ? `Fecha original ${rawDate}; se agenda desde ${dateInfo.date} para decisión diaria.` : '',
+      ].filter(Boolean).join(' '),
+      amountLocked: true,
     });
   });
 
@@ -689,6 +700,34 @@ function balanceInflowMonth({
     target: remainingTarget,
     ym,
     type: 'INFLOW',
+    asOfDate,
+    fallbackCategory,
+    fallbackConcept,
+    fallbackRule,
+  }));
+  return out;
+}
+
+function balanceOutflowMonth({
+  lines,
+  target,
+  ym,
+  asOfDate,
+  fallbackCategory,
+  fallbackConcept,
+  fallbackRule,
+}: Omit<BalanceArgs, 'type'>): FinancialMovement[] {
+  const locked = lines.filter((line) => line.amountLocked);
+  const flexible = lines.filter((line) => !line.amountLocked);
+  const lockedSum = locked.reduce((sum, line) => sum + line.amount, 0);
+  const out = emitRawLines(locked, 'OUTFLOW', asOfDate);
+  const remainingTarget = Math.max(0, target - lockedSum);
+
+  out.push(...balanceMonth({
+    lines: flexible,
+    target: remainingTarget,
+    ym,
+    type: 'OUTFLOW',
     asOfDate,
     fallbackCategory,
     fallbackConcept,
@@ -886,6 +925,18 @@ function moveOpenReceivableIntoProjection(
 
   let next = parseIsoDate(asOfDate);
   next = new Date(next.getTime() + DAY_MS);
+  while (isNonOperatingDay(next)) next = new Date(next.getTime() + DAY_MS);
+  return { date: dateToIso(next), moved: true };
+}
+
+function moveOpenPayableIntoProjection(
+  rawDate: string,
+  asOfDate: string,
+): { date: string; moved: boolean } {
+  const safeDate = cleanDate(rawDate) ?? asOfDate;
+  if (safeDate >= asOfDate) return { date: safeDate, moved: false };
+
+  let next = parseIsoDate(asOfDate);
   while (isNonOperatingDay(next)) next = new Date(next.getTime() + DAY_MS);
   return { date: dateToIso(next), moved: true };
 }

@@ -23,9 +23,15 @@ describe('supplierPaymentSchedule', () => {
 
     const highDecision = result.plan.decisions.find((decision) => decision.movementId === 'm-high');
     const lowDecision = result.plan.decisions.find((decision) => decision.movementId === 'm-low');
+    const dailyRow = result.plan.dailyRows.find((row) => row.date === '2026-05-02');
 
     expect(highDecision).toMatchObject({ status: 'PAID', estimatedDate: '2026-05-02', paidAmount: 700, score: 100 });
     expect(lowDecision).toMatchObject({ status: 'PENDING', paidAmount: 0, pendingAmount: 500, score: 10 });
+    expect(dailyRow?.clientNamesExpected).toContain('Cliente · CXC-i-1');
+    expect(dailyRow?.supplierNamesScheduled).toEqual(['Proveedor Alto', 'Proveedor Bajo']);
+    expect(dailyRow?.outflowConcepts).toContain('Proveedor Alto · Factura m-high · F-m-high');
+    expect(dailyRow?.supplierNamesPaid).toEqual(['Proveedor Alto']);
+    expect(dailyRow?.supplierNamesPending).toEqual(['Proveedor Bajo']);
   });
 
   it('moves a supplier to a future date when later inflow makes the payment feasible', () => {
@@ -46,6 +52,29 @@ describe('supplierPaymentSchedule', () => {
 
     expect(decision).toMatchObject({ status: 'DEFERRED', originalDate: '2026-05-02', estimatedDate: '2026-05-04' });
     expect(scheduled?.adjustedDate).toBe('2026-05-04');
+  });
+
+  it('manages non-JDE supplier AP payments and keeps the original due date', () => {
+    const payment = movement('m-manual', 'Proveedor Manual', 'p-manual', 99, 300, '2026-05-06');
+    payment.sourceSystem = 'MANUAL';
+    payment.dueDate = '2026-05-01';
+
+    const result = scheduleSupplierPaymentsByScore({
+      movements: [payment],
+      providers: [provider('p-manual', 'Proveedor Manual', 99)],
+      startDate: '2026-05-06',
+      endDate: '2026-05-07',
+      initialCash: 1_000,
+      minimumCash: 100,
+      scenarioId: 'base',
+    });
+
+    expect(result.plan.decisions[0]).toMatchObject({
+      status: 'DEFERRED',
+      originalDate: '2026-05-01',
+      estimatedDate: '2026-05-06',
+      score: 99,
+    });
   });
 });
 

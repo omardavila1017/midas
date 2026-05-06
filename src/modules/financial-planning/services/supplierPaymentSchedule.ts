@@ -30,8 +30,12 @@ export interface DailyOperatingFlowRow {
   openingCash: number;
   expectedInflows: number;
   confirmedInflows: number;
+  clientNamesExpected: string[];
+  clientNamesConfirmed: string[];
   scheduledOutflows: number;
   executedOutflows: number;
+  outflowConcepts: string[];
+  supplierNamesScheduled: string[];
   suppliersPaid: number;
   suppliersPending: number;
   supplierNamesPaid: string[];
@@ -44,6 +48,14 @@ export interface DailyOperatingFlowRow {
 export interface SupplierPaymentPlan {
   decisions: SupplierPaymentDecision[];
   dailyRows: DailyOperatingFlowRow[];
+  diagnostics: SupplierPaymentDiagnostics;
+}
+
+export interface SupplierPaymentDiagnostics {
+  payableMovements: number;
+  managedPayableMovements: number;
+  skippedResolvedPayables: number;
+  missingProviderMatches: number;
 }
 
 export interface ScheduleSupplierPaymentsArgs {
@@ -59,6 +71,7 @@ export interface ScheduleSupplierPaymentsArgs {
 interface QueueItem {
   movement: FinancialMovement;
   originalDate: string;
+  readyDate: string;
   amount: number;
   provider?: Provider;
   score: number;
@@ -71,18 +84,29 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
   const providerIndex = buildProviderIndex(args.providers);
   const managed: QueueItem[] = [];
   const passthrough: FinancialMovement[] = [];
+  const diagnostics: SupplierPaymentDiagnostics = {
+    payableMovements: 0,
+    managedPayableMovements: 0,
+    skippedResolvedPayables: 0,
+    missingProviderMatches: 0,
+  };
 
   for (const movement of args.movements) {
+    if (isPayableMovement(movement)) diagnostics.payableMovements++;
     if (isSupplierPayment(movement)) {
       const provider = providerForMovement(movement, providerIndex);
+      if (!provider) diagnostics.missingProviderMatches++;
+      diagnostics.managedPayableMovements++;
       managed.push({
         movement,
         provider,
-        originalDate: effectiveMovementDate(movement),
+        originalDate: originalSupplierDate(movement),
+        readyDate: effectiveMovementDate(movement),
         amount: effectiveAmount(movement),
         score: scoreFor(provider, movement),
       });
     } else {
+      if (isPayableMovement(movement) && isResolvedPayment(movement)) diagnostics.skippedResolvedPayables++;
       passthrough.push(movement);
     }
   }
@@ -97,6 +121,7 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
         minimumCash: args.minimumCash,
         passthrough,
         decisions: [],
+        diagnostics,
       }),
     };
   }
@@ -120,13 +145,16 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
     const otherOutflows = todaysPassthrough
       .filter((movement) => movement.type === 'OUTFLOW')
       .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
+    const todayInflows = todaysPassthrough.filter((movement) => movement.type === 'INFLOW');
+    const todayOutflowMovements = todaysPassthrough.filter((movement) => movement.type === 'OUTFLOW');
+    const scheduledSupplierItems = managed.filter((item) => item.readyDate === date);
 
     cash += inflows;
     cash -= otherOutflows;
 
     const paidToday: QueueItem[] = [];
     const ready = pending
-      .filter((item) => item.originalDate <= date)
+      .filter((item) => item.readyDate <= date)
       .sort(compareQueueItems);
 
     while (ready.length > 0) {
@@ -139,9 +167,9 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
 
       const deferred = date > candidate.originalDate;
       paidMovementById.set(candidate.movement.id, {
-        ...candidate.movement,
-        adjustedDate: date,
-        adjustedAmount: candidate.amount,
+      ...candidate.movement,
+      adjustedDate: date,
+      adjustedAmount: candidate.amount,
         status: deferred ? 'ADJUSTED' : candidate.movement.status,
         confidenceScore: Math.max(candidate.movement.confidenceScore, Math.min(100, candidate.score)),
         comments: [
@@ -155,15 +183,15 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
     }
 
     const supplierNamesPending = pending
-      .filter((item) => item.originalDate <= date)
+      .filter((item) => item.readyDate <= date)
       .slice()
       .sort(compareQueueItems)
       .slice(0, 8)
-      .map((item) => item.movement.counterpartyName ?? item.provider?.name ?? 'Proveedor');
+      .map(supplierNameForItem);
 
     const executedSupplierOutflows = paidToday.reduce((sum, item) => sum + item.amount, 0);
     const scheduledSupplierOutflows = managed
-      .filter((item) => item.originalDate === date)
+      .filter((item) => item.readyDate === date)
       .reduce((sum, item) => sum + item.amount, 0);
     const executedOutflows = otherOutflows + executedSupplierOutflows;
     const expectedInflows = inflows;
@@ -174,12 +202,19 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
       openingCash,
       expectedInflows,
       confirmedInflows,
+      clientNamesExpected: uniqueLabels(todayInflows.map(inflowLabel)).slice(0, 10),
+      clientNamesConfirmed: uniqueLabels(todayInflows.filter(isConfirmedInflow).map(inflowLabel)).slice(0, 10),
       scheduledOutflows,
       executedOutflows,
+      outflowConcepts: uniqueLabels([
+        ...todayOutflowMovements.map(outflowLabel),
+        ...scheduledSupplierItems.map(supplierScheduledLabel),
+      ]).slice(0, 10),
+      supplierNamesScheduled: uniqueLabels(scheduledSupplierItems.map(supplierNameForItem)).slice(0, 8),
       suppliersPaid: paidToday.length,
-      suppliersPending: pending.filter((item) => item.originalDate <= date).length,
-      supplierNamesPaid: paidToday.map((item) => item.movement.counterpartyName ?? item.provider?.name ?? 'Proveedor'),
-      supplierNamesPending,
+      suppliersPending: pending.filter((item) => item.readyDate <= date).length,
+      supplierNamesPaid: uniqueLabels(paidToday.map(supplierNameForItem)),
+      supplierNamesPending: uniqueLabels(supplierNamesPending),
       net: expectedInflows - executedOutflows,
       closingCash: cash,
       deficit: Math.max(0, args.minimumCash - cash),
@@ -217,6 +252,7 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
         return a.originalDate.localeCompare(b.originalDate);
       }),
       dailyRows,
+      diagnostics,
     },
   };
 }
@@ -228,7 +264,8 @@ function buildDailyRows(args: {
   minimumCash: number;
   passthrough: FinancialMovement[];
   decisions: SupplierPaymentDecision[];
-}): { decisions: SupplierPaymentDecision[]; dailyRows: DailyOperatingFlowRow[] } {
+  diagnostics: SupplierPaymentDiagnostics;
+}): SupplierPaymentPlan {
   let cash = args.initialCash;
   const dailyRows = enumerateDates(args.startDate, args.endDate).map((date) => {
     const openingCash = cash;
@@ -248,8 +285,12 @@ function buildDailyRows(args: {
       openingCash,
       expectedInflows,
       confirmedInflows,
+      clientNamesExpected: uniqueLabels(movements.filter((movement) => movement.type === 'INFLOW').map(inflowLabel)).slice(0, 10),
+      clientNamesConfirmed: uniqueLabels(movements.filter((movement) => movement.type === 'INFLOW' && isConfirmedInflow(movement)).map(inflowLabel)).slice(0, 10),
       scheduledOutflows: executedOutflows,
       executedOutflows,
+      outflowConcepts: uniqueLabels(movements.filter((movement) => movement.type === 'OUTFLOW').map(outflowLabel)).slice(0, 10),
+      supplierNamesScheduled: [],
       suppliersPaid: 0,
       suppliersPending: 0,
       supplierNamesPaid: [],
@@ -259,14 +300,25 @@ function buildDailyRows(args: {
       deficit: Math.max(0, args.minimumCash - cash),
     };
   });
-  return { decisions: args.decisions, dailyRows };
+  return { decisions: args.decisions, dailyRows, diagnostics: args.diagnostics };
+}
+
+function isPayableMovement(movement: FinancialMovement): boolean {
+  return movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT';
+}
+
+function isResolvedPayment(movement: FinancialMovement): boolean {
+  return movement.status === 'REAL' || movement.status === 'EXECUTED' || movement.status === 'CANCELLED';
 }
 
 function isSupplierPayment(movement: FinancialMovement): boolean {
-  return movement.type === 'OUTFLOW'
-    && movement.category === 'AP_PAYMENT'
-    && movement.counterpartyType === 'SUPPLIER'
-    && movement.sourceSystem === 'JDE';
+  return isPayableMovement(movement)
+    && !isResolvedPayment(movement)
+    && (movement.counterpartyType === 'SUPPLIER' || movement.sourceSystem === 'JDE' || Boolean(movement.counterpartyName));
+}
+
+function originalSupplierDate(movement: FinancialMovement): string {
+  return movement.dueDate ?? movement.projectedDate;
 }
 
 function isConfirmedInflow(movement: FinancialMovement): boolean {
@@ -274,6 +326,38 @@ function isConfirmedInflow(movement: FinancialMovement): boolean {
     || movement.status === 'EXECUTED'
     || Boolean(movement.actualDate)
     || movement.sourceSystem === 'BANK';
+}
+
+function inflowLabel(movement: FinancialMovement): string {
+  const source = movement.sourceObjectId ? ` · ${movement.sourceObjectId}` : '';
+  return `${movement.counterpartyName ?? movement.concept}${source}`;
+}
+
+function outflowLabel(movement: FinancialMovement): string {
+  const counterparty = movement.counterpartyName ? `${movement.counterpartyName} · ` : '';
+  const source = movement.sourceObjectId ? ` · ${movement.sourceObjectId}` : '';
+  return `${counterparty}${movement.concept}${source}`;
+}
+
+function supplierNameForItem(item: QueueItem): string {
+  return item.movement.counterpartyName ?? item.provider?.name ?? 'Proveedor';
+}
+
+function supplierScheduledLabel(item: QueueItem): string {
+  const invoice = item.movement.sourceObjectId ? ` · ${item.movement.sourceObjectId}` : '';
+  return `${supplierNameForItem(item)} · ${item.movement.concept}${invoice}`;
+}
+
+function uniqueLabels(values: string[]): string[] {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const value of values) {
+    const label = value.trim();
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels;
 }
 
 function decisionFor(
@@ -309,6 +393,7 @@ function decisionFor(
 function compareQueueItems(a: QueueItem, b: QueueItem): number {
   if (b.score !== a.score) return b.score - a.score;
   if (a.originalDate !== b.originalDate) return a.originalDate.localeCompare(b.originalDate);
+  if (a.readyDate !== b.readyDate) return a.readyDate.localeCompare(b.readyDate);
   return a.amount - b.amount;
 }
 
