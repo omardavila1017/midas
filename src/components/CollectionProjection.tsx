@@ -136,12 +136,10 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   const [showSettings, setShowSettings] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [activeMonth, setActiveMonth] = useState(() => defaultActiveMonth(assumptions.year));
-  // Default a 'real' cuando hay datos JDE, 'projected' si no — para que el
-  // primer abrir la pestaña muestre lo más cercano a la realidad sin
-  // requerir clic. El usuario puede saltar entre ambos siempre.
-  const [sourceMode, setSourceMode] = useState<SourceMode>(() =>
-    cobranzaRecords.length > 0 ? 'real' : 'projected',
-  );
+  // Unified: show real view when JDE data or companies are available,
+  // fall back to projected-only when there's no JDE connection at all.
+  const hasJdeConnection = companies.length > 0 || cobranzaRecords.length > 0;
+  const sourceMode: SourceMode = hasJdeConnection ? 'real' : 'projected';
 
   useEffect(() => {
     setActiveMonth(defaultActiveMonth(assumptions.year));
@@ -207,28 +205,8 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
     <div className="space-y-5 animate-page-in">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <PageHeader title="Proyección de cobranza" />
-        {/* Toggle Real (JDE) / Proyectada.
-            Antes solo se mostraba cuando había registros de cobranza en
-            cache, lo que ocultaba el caso "JDE devolvió vacío". Ahora se
-            muestra siempre que haya catálogo de compañías cargado, para
-            que el usuario pueda entrar al modo Real, ver el error y
-            disparar un refresh manual. */}
-        {(companies.length > 0 || cobranzaRecords.length > 0) && (
-          <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[12px] border border-[var(--gray-200)]/60">
-            <button
-              onClick={() => setSourceMode('real')}
-              className={`px-3.5 py-1.5 rounded-full font-medium hover-press flex items-center gap-1.5 ${sourceMode === 'real' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-            >
-              <Database className="w-3.5 h-3.5" /> Real (JDE)
-            </button>
-            <button
-              onClick={() => setSourceMode('projected')}
-              className={`px-3.5 py-1.5 rounded-full font-medium hover-press flex items-center gap-1.5 ${sourceMode === 'projected' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-            >
-              <CalendarRange className="w-3.5 h-3.5" /> Proyectada
-            </button>
-          </nav>
-        )}
+        {/* Source mode indicator — no toggle needed; real view is
+            always shown when JDE companies are available. */}
       </div>
 
       {/* ── Vista Real (JDE) — Fase 1: tabla raw ──────────

@@ -339,7 +339,7 @@ describe('<CollectionProjection />', () => {
     expect(screen.getByText(/Fecha confirmada por JDE/i)).toBeTruthy();
   });
 
-  it('muestra cruces por revisar sin contarlos como banco cruzado', () => {
+  it('auto-confirma cruces por monto exacto incluso sin identidad fuerte de cliente', () => {
     render(
       <CollectionProjection
         clients={[makeClient({ id: 'x', name: 'Cliente X' })]}
@@ -356,9 +356,7 @@ describe('<CollectionProjection />', () => {
       />,
     );
 
-    expect(screen.getByText(/Cruces por revisar/i)).toBeTruthy();
-    expect(screen.getByText(/no cuentan como banco cruzado/i)).toBeTruthy();
-    expect(screen.getAllByText(/Por revisar/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/COBRANZA CRUZADA CON BANCO/i)).toBeTruthy();
   });
 
   it('permite cargar bancos sólo del rango visible', () => {

@@ -216,7 +216,7 @@ describe('reconcileRealCollections — match con tolerancia (capa 2)', () => {
     expect(result.matches[0].matchTier).toBe('customer-reference');
   });
 
-  it('deja un match de solo monto/fecha en revisión, no como cobro automático', () => {
+  it('auto-confirma un match de monto exacto/fecha incluso sin identidad de cliente', () => {
     const factura = makeFactura({
       cia: '00011',
       noFactura: 'F-REV',
@@ -235,10 +235,10 @@ describe('reconcileRealCollections — match con tolerancia (capa 2)', () => {
       [factura],
       [makeAccount({ cia: '00011', cuenta: '1', movimientos: [abono] })],
     );
-    expect(result.matches[0].status).toBe('pendiente');
-    expect(result.matches[0].reviewStatus).toBe('review');
-    expect(result.reviewCandidates).toHaveLength(1);
-    expect(result.summary.abonosFacturaCobrada).toBe(0);
+    expect(result.matches[0].status).toBe('cobrada-banco');
+    expect(result.matches[0].reviewStatus).toBe('auto');
+    expect(result.matches[0].matchTier).toBe('exact');
+    expect(result.summary.abonosFacturaCobrada).toBe(1);
   });
 
   it('no cruza cuando la diferencia rebasa 0.5%', () => {

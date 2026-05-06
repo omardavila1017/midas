@@ -50,11 +50,11 @@ import {
 // ── Configuración ──────────────────────────────────────────────────────────
 
 /** Tolerancia en monto para cobertura "tolerancia" y "subset". */
-const AMOUNT_TOLERANCE_PCT = 0.005; // 0.5%
+const AMOUNT_TOLERANCE_PCT = 0.02; // 2% — covers bank fees, rounding, minor IVA diffs
 /** Tolerancia absoluta mínima — un ABONO de $100 debe poder ajustar ±$1. */
 const AMOUNT_TOLERANCE_MIN_ABS = 1;
 /** Máximo de facturas en una combinación subset-sum. */
-const SUBSET_MAX_INVOICES = 4;
+const SUBSET_MAX_INVOICES = 6;
 /** Ventana de fecha alrededor de fechaVence (±N días) — capa 1/2. */
 const DATE_WINDOW_DAYS = 60;
 /** Ventana de fecha alrededor de fechaCobro cuando ya viene del ERP (±N días). */
@@ -379,8 +379,8 @@ function computeConfidence(
     tier === 'payment-ambiguous' ? 0.55 :
     tier === 'invoice-reference' ? 0.99 :
     tier === 'customer-reference' ? 0.93 :
-    tier === 'exact' ? 0.86 :
-    tier === 'tolerance' ? 0.74 :
+    tier === 'exact' ? 0.92 :
+    tier === 'tolerance' ? 0.82 :
     tier === 'multi-abono' ? 0.92 :
     0.9;
   // Penalización por monto: 0% diff → 1, 0.5% → ~0.5
@@ -490,8 +490,8 @@ function searchK<T extends { bruto: number }>(
 
 // ── Índices de candidatos ─────────────────────────────────────────────────
 
-const AUTO_CONFIDENCE_THRESHOLD = 0.9;
-const REVIEW_CONFIDENCE_THRESHOLD = 0.58;
+const AUTO_CONFIDENCE_THRESHOLD = 0.75;
+const REVIEW_CONFIDENCE_THRESHOLD = 0.50;
 const AMOUNT_BUCKET_SIZE = 1; // pesos redondeados; luego se valida al centavo/tolerancia.
 const MAX_REVIEW_CANDIDATES_PER_ABONO = 4;
 
@@ -743,11 +743,27 @@ function amountCandidates(
 ): FacturaTarget[] {
   const moneda = (abono.moneda || 'MXN').toUpperCase();
   const base = indexKey(abono.cia, moneda);
-  const bucket = amountBucket(abono.importe);
-  const tol = Math.ceil(amountTolerance(abono.importe) / AMOUNT_BUCKET_SIZE) + 1;
+  // Search for the bank amount AND IVA variants (bank might show
+  // IVA-inclusive while factura is subtotal, or vice versa).
+  const ivaRate = 0.16;
+  const searchAmounts = [
+    abono.importe,
+    abono.importe / (1 + ivaRate),
+    abono.importe * (1 + ivaRate),
+  ];
+  const seen = new Set<string>();
   const out: FacturaTarget[] = [];
-  for (let i = bucket - tol; i <= bucket + tol; i++) {
-    out.push(...(indexes.targetsByAmount.get(`${base}::${i}`) ?? []));
+  for (const amt of searchAmounts) {
+    const bucket = amountBucket(amt);
+    const tol = Math.ceil(amountTolerance(amt) / AMOUNT_BUCKET_SIZE) + 1;
+    for (let i = bucket - tol; i <= bucket + tol; i++) {
+      for (const target of indexes.targetsByAmount.get(`${base}::${i}`) ?? []) {
+        if (!seen.has(target.id)) {
+          seen.add(target.id);
+          out.push(target);
+        }
+      }
+    }
   }
   return out;
 }
@@ -758,14 +774,38 @@ function evaluateTarget(
   identity: 'invoice' | 'customer' | 'none',
 ): CandidateEvaluation | null {
   if (!mismaMoneda(target.record, abono)) return null;
-  const exact = importesCoinciden(target.amount, abono.importe, true);
-  const tolerated = !exact && importesCoinciden(target.amount, abono.importe, false);
-  if (!exact && !tolerated) return null;
 
   const daysDelta = daysBetween(target.refDate, abono.fechaOperacion);
   if (Math.abs(daysDelta) > target.windowDays) return null;
 
-  const amountDiffPct = Math.abs(target.amount - abono.importe) / Math.max(target.amount, 1);
+  // Try IVA variants: base amount, with IVA (16%), without IVA.
+  // JDE may report subtotal while bank shows IVA-inclusive, or vice versa.
+  const ivaRate = target.record.importeIVA && target.record.subTotal && target.record.subTotal > 0
+    ? target.record.importeIVA / target.record.subTotal
+    : 0.16;
+  const amountVariants = [
+    target.amount,
+    target.amount * (1 + ivaRate),
+    target.amount / (1 + ivaRate),
+  ];
+
+  let bestAmount = target.amount;
+  let exact = false;
+  let tolerated = false;
+  for (const variant of amountVariants) {
+    if (importesCoinciden(variant, abono.importe, true)) {
+      exact = true;
+      bestAmount = variant;
+      break;
+    }
+    if (!tolerated && importesCoinciden(variant, abono.importe, false)) {
+      tolerated = true;
+      bestAmount = variant;
+    }
+  }
+  if (!exact && !tolerated) return null;
+
+  const amountDiffPct = Math.abs(bestAmount - abono.importe) / Math.max(bestAmount, 1);
   const tier: MatchTier =
     identity === 'invoice' ? 'invoice-reference' :
     identity === 'customer' ? 'customer-reference' :
@@ -775,13 +815,14 @@ function evaluateTarget(
 
   if (identity === 'invoice') confidence = Math.max(confidence, exact ? 0.98 : 0.92);
   else if (identity === 'customer') confidence = Math.max(confidence, exact ? 0.93 : 0.9);
-  else confidence = Math.min(confidence, exact ? 0.86 : 0.78);
+  else confidence = Math.min(confidence, exact ? 0.92 : 0.82);
 
+  const ivaNote = bestAmount !== target.amount ? ' (ajuste IVA)' : '';
   const reason =
-    identity === 'invoice' ? `Referencia bancaria contiene factura ${target.record.noFactura}.` :
-    identity === 'customer' ? `Referencia/concepto menciona cliente ${target.record.noCliente || target.record.nombreCliente}.` :
-    exact ? 'Monto exacto y fecha en ventana; sin identidad fuerte de cliente.' :
-    'Monto dentro de tolerancia y fecha en ventana; sin identidad fuerte de cliente.';
+    identity === 'invoice' ? `Referencia bancaria contiene factura ${target.record.noFactura}${ivaNote}.` :
+    identity === 'customer' ? `Referencia/concepto menciona cliente ${target.record.noCliente || target.record.nombreCliente}${ivaNote}.` :
+    exact ? `Monto exacto y fecha en ventana${ivaNote}; sin identidad fuerte de cliente.` :
+    `Monto dentro de tolerancia y fecha en ventana${ivaNote}; sin identidad fuerte de cliente.`;
 
   return { target, tier, confidence, daysDelta, amountDiffPct, exact, reason };
 }
@@ -1181,28 +1222,49 @@ export function reconcileRealCollections(
     let bestSubset: { records: CobranzaRecord[]; confidence: number; reason: string } | null = null;
 
     if (!bestMatch) {
-      for (const clienteKey of strongClienteKeys) {
+      const triedClienteKeys = new Set<string>();
+      const trySubsetForCliente = (
+        clienteKey: string,
+        identified: boolean,
+      ): { records: CobranzaRecord[]; confidence: number; reason: string } | null => {
+        if (triedClienteKeys.has(clienteKey)) return null;
+        triedClienteKeys.add(clienteKey);
         const clienteFacturas = (facturasPorCliente.get(clienteKey) ?? []).filter(r => !consumedFactura.has(`${r.cia}::${r.noFactura}`));
-        if (clienteFacturas.length < 2) continue;
+        if (clienteFacturas.length < 2) return null;
         const sample = clienteFacturas[0];
-        if (!mismaMoneda(sample, abono)) continue;
+        if (!mismaMoneda(sample, abono)) return null;
         const subset = findSubset(clienteFacturas, abono.importe, useUSD);
-        if (!subset) continue;
+        if (!subset) return null;
         const fechas = subset.map(r => r.fechaCobro || r.fechaVence).filter(Boolean);
-        if (fechas.length === 0) continue;
+        if (fechas.length === 0) return null;
         const closestDelta = fechas
           .map(f => Math.abs(daysBetween(f, abono.fechaOperacion)))
           .reduce((min, d) => Math.min(min, d), Number.POSITIVE_INFINITY);
-        if (closestDelta > DATE_WINDOW_DAYS) continue;
+        if (closestDelta > DATE_WINDOW_DAYS) return null;
         const sumBruto = subset.reduce((s, r) => s + selectFacturaImporte(r, useUSD).bruto, 0);
         const amountDiffPct = Math.abs(sumBruto - abono.importe) / Math.max(sumBruto, 1);
-        const confidence = Math.max(0.9, computeConfidence('subset', amountDiffPct, closestDelta, DATE_WINDOW_DAYS));
-        if (!bestSubset || confidence > bestSubset.confidence) {
-          bestSubset = {
-            records: subset,
-            confidence,
-            reason: `Un ABONO cubre ${subset.length} facturas del mismo cliente identificado en banco.`,
-          };
+        const confidence = Math.max(identified ? 0.9 : 0.8, computeConfidence('subset', amountDiffPct, closestDelta, DATE_WINDOW_DAYS));
+        return {
+          records: subset,
+          confidence,
+          reason: identified
+            ? `Un ABONO cubre ${subset.length} facturas del mismo cliente identificado en banco.`
+            : `Un ABONO cubre ${subset.length} facturas del mismo cliente (${sample.nombreCliente.trim()}).`,
+        };
+      };
+
+      for (const clienteKey of strongClienteKeys) {
+        const result = trySubsetForCliente(clienteKey, true);
+        if (result && (!bestSubset || result.confidence > bestSubset.confidence)) {
+          bestSubset = result;
+        }
+      }
+
+      if (!bestSubset && abono.importe >= 10000) {
+        for (const [clienteKey] of facturasPorCliente) {
+          if (!clienteKey.startsWith(`${abono.cia}::`)) continue;
+          const result = trySubsetForCliente(clienteKey, false);
+          if (result) { bestSubset = result; break; }
         }
       }
     }
