@@ -50,6 +50,9 @@ function formatMonthTick(yearMonth: string): string {
 const TOOLTIP_SERIES: Record<string, { label: string; color: string }> = {
   base: { label: 'Caja base', color: '#475569' },
   forecast: { label: 'Caja escenario', color: '#0f172a' },
+  'Caja base': { label: 'Caja base', color: '#475569' },
+  'Caja escenario': { label: 'Caja escenario', color: '#0f172a' },
+  'Caja final': { label: 'Caja final', color: '#0f172a' },
   deltaAbove: { label: 'Δ positivo', color: '#16a34a' },
   deltaBelow: { label: 'Δ negativo', color: '#dc2626' },
 };
@@ -144,7 +147,7 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
 
   if (chartData.length === 0) {
     return (
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
+      <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
         <div
           role="status"
           aria-live="polite"
@@ -162,10 +165,10 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
   }
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
         <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">
             Trayectoria de la caja
           </h2>
           <p className="mt-1 text-[12px] text-[var(--gray-400)]">
@@ -181,39 +184,39 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
 
       <div className="grid grid-cols-3 gap-6 pb-4 mb-2 border-b border-[var(--gray-100)]">
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+          <p className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
             Caja base (fin)
           </p>
           <AnimatedNumber
             value={finalBase}
             format={fmtCurrency}
-            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            className="block text-[15px] font-bold tabular-nums mt-0.5"
             style={{ color: 'var(--gray-700)' }}
           />
         </div>
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+          <p className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
             Caja escenario (fin)
           </p>
           <AnimatedNumber
             value={finalForecast}
             format={fmtCurrency}
-            className="block text-[15px] font-semibold tabular-nums mt-0.5"
+            className="block text-[15px] font-bold tabular-nums mt-0.5"
             style={{ color: 'var(--gray-950)' }}
           />
         </div>
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
+          <p className="text-[10px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
             Δ vs base
           </p>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-[15px] font-semibold tabular-nums" style={{ color: deltaColor }}>
+            <span className="text-[15px] font-bold tabular-nums" style={{ color: deltaColor }}>
               {deltaSign}
             </span>
             <AnimatedNumber
               value={Math.abs(delta)}
               format={fmtCurrency}
-              className="text-[15px] font-semibold tabular-nums"
+              className="text-[15px] font-bold tabular-nums"
               style={{ color: deltaColor }}
             />
           </div>
@@ -226,7 +229,7 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
         aria-label="Trayectoria de la caja: línea base vs escenario activo por mes"
       >
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 16, right: 24, left: 8, bottom: 8 }}>
+          <ComposedChart data={chartData} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
             <XAxis
               dataKey="yearMonth"
@@ -251,6 +254,22 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
             <Legend
               wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
               iconType="plainline"
+              payload={
+                hasBaseline
+                  ? [
+                      { value: 'Caja base', type: 'plainline', id: 'base', color: COLOR.base, payload: { strokeDasharray: '4 4' } },
+                      { value: 'Caja escenario', type: 'plainline', id: 'forecast', color: COLOR.forecast, payload: { strokeDasharray: '0' } },
+                      ...(minimumCash > 0
+                        ? [{ value: 'Caja mínima', type: 'plainline' as const, id: 'min', color: COLOR.warning, payload: { strokeDasharray: '3 3' } }]
+                        : []),
+                    ]
+                  : [
+                      { value: 'Caja final', type: 'plainline', id: 'forecast', color: COLOR.forecast, payload: { strokeDasharray: '0' } },
+                      ...(minimumCash > 0
+                        ? [{ value: 'Caja mínima', type: 'plainline' as const, id: 'min', color: COLOR.warning, payload: { strokeDasharray: '3 3' } }]
+                        : []),
+                    ]
+              }
             />
 
             {hasBaseline && (
@@ -300,10 +319,12 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
                 stroke={COLOR.warning}
                 strokeDasharray="3 3"
                 label={{
-                  value: 'Caja mínima',
-                  position: 'right',
+                  value: `Caja mínima · ${fmtCompact(minimumCash)}`,
+                  position: 'insideTopRight',
                   fill: COLOR.warning,
                   fontSize: 10,
+                  fontWeight: 600,
+                  offset: 6,
                 }}
               />
             )}

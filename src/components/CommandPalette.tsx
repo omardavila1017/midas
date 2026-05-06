@@ -22,6 +22,8 @@ import {
   Search,
   BarChart3,
   ClipboardList,
+  GitBranch,
+  Zap,
 } from 'lucide-react';
 
 type TabId =
@@ -39,6 +41,13 @@ type TabId =
   | 'bancos'
   | 'netflow';
 
+export interface CommandPaletteAction {
+  id: string;
+  label: string;
+  icon?: React.ReactNode;
+  run: () => void;
+}
+
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
@@ -46,6 +55,8 @@ interface CommandPaletteProps {
   clients?: { id: string; name: string }[];
   providers?: { id: string; name: string }[];
   simulations?: { id: string; name: string }[];
+  scenarios?: { id: string; name: string }[];
+  actions?: CommandPaletteAction[];
 }
 
 interface NavigationItem {
@@ -54,12 +65,16 @@ interface NavigationItem {
   icon: React.ReactNode;
 }
 
+type ResultCategory = 'Acciones' | 'Navegación' | 'Escenarios' | 'Clientes' | 'Proveedores' | 'Propuestas';
+
 interface ResultItem {
   id: string;
   label: string;
-  category: 'Navegación' | 'Clientes' | 'Proveedores' | 'Propuestas';
+  category: ResultCategory;
   icon: React.ReactNode;
   tabId?: string;
+  run?: () => void;
+  scenarioId?: string;
 }
 
 const NAVIGATION_ITEMS: NavigationItem[] = [
@@ -91,6 +106,8 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   clients = [],
   providers = [],
   simulations = [],
+  scenarios = [],
+  actions = [],
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -99,6 +116,17 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   // Build results grouped by category
   const results = useMemo<ResultItem[]>(() => {
+    const actionResults: ResultItem[] = actions
+      .filter((a) => fuzzyMatch(query, a.label))
+      .slice(0, 6)
+      .map((a) => ({
+        id: a.id,
+        label: a.label,
+        category: 'Acciones',
+        icon: a.icon ?? <Zap size={18} />,
+        run: a.run,
+      }));
+
     const navResults: ResultItem[] = NAVIGATION_ITEMS.filter((item) =>
       fuzzyMatch(query, item.label)
     ).map((item) => ({
@@ -108,6 +136,18 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       icon: item.icon,
       tabId: item.tabId,
     }));
+
+    const scenarioResults: ResultItem[] = scenarios
+      .filter((s) => fuzzyMatch(query, s.name))
+      .slice(0, 8)
+      .map((s) => ({
+        id: s.id,
+        label: s.name,
+        category: 'Escenarios',
+        icon: <GitBranch size={18} />,
+        tabId: 'financialPlanning',
+        scenarioId: s.id,
+      }));
 
     const clientResults: ResultItem[] = clients
       .filter((c) => fuzzyMatch(query, c.name))
@@ -139,24 +179,25 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         label: pr.name,
         category: 'Propuestas',
         icon: <Receipt size={18} />,
-        tabId: 'cxp',
+        tabId: 'financialPlanning',
       }));
 
-    // Limit navigation results to 8
-    navResults.slice(0, 8);
-
     return [
+      ...actionResults,
       ...navResults.slice(0, 8),
+      ...scenarioResults,
       ...clientResults,
       ...providerResults,
       ...simulationResults,
     ];
-  }, [query, clients, providers, simulations]);
+  }, [query, actions, scenarios, clients, providers, simulations]);
 
   // Group results by category
   const groupedResults = useMemo(() => {
     const groups: Record<string, ResultItem[]> = {
+      Acciones: [],
       Navegación: [],
+      Escenarios: [],
       Clientes: [],
       Proveedores: [],
       Propuestas: [],
@@ -215,8 +256,13 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
           e.preventDefault();
           if (flatResults[selectedIndex]) {
             const item = flatResults[selectedIndex];
-            if (item.tabId) {
+            if (item.run) {
+              item.run();
+            } else if (item.tabId) {
               onNavigate(item.tabId);
+              if (item.scenarioId) {
+                window.dispatchEvent(new CustomEvent('midas:planning:setActiveScenario', { detail: { scenarioId: item.scenarioId } }));
+              }
             }
             onClose();
           }
@@ -297,7 +343,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                   <div key={group.category}>
                     {/* Category Header */}
                     <div className="px-4 pt-3 pb-2">
-                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide">
                         {group.category}
                       </h3>
                     </div>
@@ -314,8 +360,13 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                           key={item.id}
                           data-index={globalIndex}
                           onClick={() => {
-                            if (item.tabId) {
+                            if (item.run) {
+                              item.run();
+                            } else if (item.tabId) {
                               onNavigate(item.tabId);
+                              if (item.scenarioId) {
+                                window.dispatchEvent(new CustomEvent('midas:planning:setActiveScenario', { detail: { scenarioId: item.scenarioId } }));
+                              }
                             }
                             onClose();
                           }}

@@ -134,7 +134,7 @@ function BucketDetailTableImpl(props: BucketDetailTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[820px] text-[13px]">
-        <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+        <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
           <tr>
             <th className="px-4 py-2.5 w-[28%]">Período</th>
             <th className="px-4 py-2.5 text-right">Ingresos</th>
@@ -222,7 +222,7 @@ function BucketRow({
               ? <ChevronDown className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
               : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />}
             <div>
-              <div className="font-semibold text-[var(--gray-950)]">{bucket.label}</div>
+              <div className="font-bold text-[var(--gray-950)]">{bucket.label}</div>
               <div className="text-[10.5px] text-[var(--gray-400)]">{bucket.date}</div>
             </div>
           </div>
@@ -233,14 +233,14 @@ function BucketRow({
         <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap" style={{ color: 'var(--danger)' }}>
           {bucket.outflows > 0 ? `-${fmtCompact(bucket.outflows)}` : '—'}
         </td>
-        <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-semibold" style={{ color: netColor }}>
+        <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-bold" style={{ color: netColor }}>
           {bucket.net === 0 ? '—' : `${bucket.net > 0 ? '+' : ''}${fmtCompact(bucket.net)}`}
         </td>
         <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-medium text-[var(--gray-950)]">
           {fmtCompact(bucket.closingCash)}
         </td>
         {hasComparison && (
-          <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-semibold" style={{ color: compColor }}>
+          <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-bold" style={{ color: compColor }}>
             {comparisonDelta === undefined
               ? '—'
               : comparisonDelta === 0
@@ -289,7 +289,7 @@ function ConceptBreakdown({
   return (
     <div className="border-t border-[var(--gray-200)]">
       <table className="w-full text-[12.5px]">
-        <thead className="text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)] bg-[var(--gray-50)]/50">
+        <thead className="text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)] bg-[var(--gray-50)]/50">
           <tr>
             <th className="px-4 py-2 pl-10">Concepto</th>
             <th className="px-4 py-2">Tipo</th>
@@ -334,7 +334,7 @@ function ConceptBreakdown({
                   {agg.effectiveValue === 0 ? '—' : fmtCurrency(agg.effectiveValue)}
                 </td>
                 <td
-                  className="px-4 py-2.5 text-right tabular-nums font-semibold"
+                  className="px-4 py-2.5 text-right tabular-nums font-bold"
                   style={{ color: delta > 0 ? 'var(--success)' : delta < 0 ? 'var(--danger)' : 'var(--gray-400)' }}
                 >
                   {delta === 0 ? '—' : `${delta > 0 ? '+' : ''}${fmtCompact(delta)}`}

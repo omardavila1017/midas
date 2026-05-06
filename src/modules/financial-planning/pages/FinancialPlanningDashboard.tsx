@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, GitMerge, History, Wallet, AlertTriangle as AlertIcon, Banknote } from 'lucide-react';
+import { AlertTriangle, Wallet, AlertTriangle as AlertIcon, Banknote, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -33,11 +33,21 @@ import type {
 } from '../../shared-finance/types';
 import { CashTrajectoryChart } from '../components/CashTrajectoryChart';
 import { ScenarioTabs } from '../components/ScenarioTabs';
-import { ChangeLogDrawer } from '../components/ChangeLogDrawer';
-import { MergeDialog } from '../components/MergeDialog';
 import { AddRowPopover } from '../components/AddRowPopover';
 import { ExpectedCommitmentsPanel } from '../components/ExpectedCommitmentsPanel';
 import { DailyOperatingFlowTable, SupplierPaymentDecisionTable } from '../components/SupplierPaymentDecisionViews';
+import { ChangeLogDrawer } from '../components/ChangeLogDrawer';
+import { MergeDialog } from '../components/MergeDialog';
+import { applyMerge, buildMergeDiff, type MergeDiffEntry } from '../services/scenarioMerge';
+import { FirstSimulationNudge } from '../components/FirstSimulationNudge';
+import { MovementPickerModal } from '../components/MovementPickerModal';
+import { AdjustmentEditorPopover } from '../components/AdjustmentEditorPopover';
+import { ScenarioCompareTable, type CompareRow } from '../components/ScenarioCompareTable';
+import { cachedRun, fingerprintArray } from '../../financial-projection/services/projectionCache';
+import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
+import { CashTroughAlertBanner } from '../components/CashTroughAlertBanner';
+import { InsightsCard } from '../../financial-projection/components/InsightsCard';
+import { deriveInsights } from '../../financial-projection/services/insights';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
 import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
@@ -70,7 +80,6 @@ import {
 } from '../services/changeLogTemplates';
 import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../services/scenarioBootstrap';
 import { conceptKeyForMovement, buildPlanningRows } from '../services/planningRowTaxonomy';
-import { applyMerge, buildMergeDiff, type MergeDiffEntry } from '../services/scenarioMerge';
 import { createNewDraft, duplicateDraft } from '../services/scenarioDuplicate';
 import {
   scheduleSupplierPaymentsByScore,
@@ -185,12 +194,36 @@ export default function FinancialPlanningDashboard(props: Props) {
   const [detailMovement, setDetailMovement] = useState<FinancialMovement | null>(null);
   const [detailAnchor, setDetailAnchor] = useState<DOMRect | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedPlanningCell>(null);
+  const [inspectedCell, setInspectedCell] = useState<{ conceptKey: string; bucketKey: string } | null>(null);
+  const [proposalPickerOpen, setProposalPickerOpen] = useState(false);
+  const [editorMovement, setEditorMovement] = useState<FinancialMovement | null>(null);
+  const [compareOpen, setCompareOpen] = useState(false);
 
   useEffect(() => {
     if (!scenarios.some((s) => s.id === activeScenarioId && !s.archivedAt)) {
       setActiveScenarioId(approvedScenario.id);
     }
   }, [scenarios, activeScenarioId, approvedScenario.id]);
+
+  // External commands from CommandPalette (Cmd+K).
+  useEffect(() => {
+    const onSetActive = (event: Event) => {
+      const detail = (event as CustomEvent<{ scenarioId?: string }>).detail;
+      if (detail?.scenarioId && scenarios.some((s) => s.id === detail.scenarioId && !s.archivedAt)) {
+        setActiveScenarioId(detail.scenarioId);
+      }
+    };
+    const onCreateDraftEvt = () => {
+      handleCreateDraft();
+    };
+    window.addEventListener('midas:planning:setActiveScenario', onSetActive);
+    window.addEventListener('midas:planning:createDraft', onCreateDraftEvt);
+    return () => {
+      window.removeEventListener('midas:planning:setActiveScenario', onSetActive);
+      window.removeEventListener('midas:planning:createDraft', onCreateDraftEvt);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarios]);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -333,6 +366,23 @@ export default function FinancialPlanningDashboard(props: Props) {
       supplierPlan: approvedRun.supplierPlan,
     };
   }, [approvedRun, approvedOverrides, customRows, approvedScenario.id, granularity, today, initialCash, minimumCash]);
+
+  // Per-draft runs for the compare view. Memoized + LRU-cached so toggling
+  // compare on/off doesn't re-evaluate every draft on each render.
+  const draftRuns = useMemo(() => {
+    if (!compareOpen) return [] as Array<{ scenarioId: string; run: ForecastRun }>;
+    const movementsKey = fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount));
+    const adjustmentsKey = fingerprintArray(storedAdjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt);
+    const manualKey = fingerprintArray(manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? ''));
+    const taxKey = fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status);
+    const drafts = scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt).slice(0, 6);
+    return drafts.map((draft) => {
+      const cacheKey = `planning:${draft.id}:${granularity}:${yearStart}:${yearEnd}:${initialCash}:${minimumCash}:${movementsKey}:${adjustmentsKey}:${manualKey}:${taxKey}`;
+      const run = cachedRun<ForecastRun>(cacheKey, () => buildScenarioRun(draft.id, true));
+      return { scenarioId: draft.id, run };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compareOpen, scenarios, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, yearStart, yearEnd, initialCash, minimumCash]);
 
   // Pre-override per-row aggregates (for cell display when no override).
   const rowAggregateMap = useMemo(() => {
@@ -676,6 +726,24 @@ export default function FinancialPlanningDashboard(props: Props) {
     setStatusMessage(`Propuesta "${newScenario.name}" creada.`);
   };
 
+  const openProposalPicker = () => {
+    if (activeScenario.kind !== 'DRAFT') {
+      handleCreateDraft();
+    }
+    setProposalPickerOpen(true);
+  };
+
+  const handlePickMovement = (movement: FinancialMovement) => {
+    setProposalPickerOpen(false);
+    setEditorMovement(movement);
+  };
+
+  const handleSaveAdjustment = (adjustment: FinancialAdjustment) => {
+    setStoredAdjustments((current) => [...current, adjustment]);
+    setEditorMovement(null);
+    setStatusMessage(`Propuesta "${adjustment.name}" creada.`);
+  };
+
   const handleDuplicateDraft = (scenarioId: string) => {
     const sourceDraft = scenarios.find((s) => s.id === scenarioId);
     if (!sourceDraft) return;
@@ -706,6 +774,8 @@ export default function FinancialPlanningDashboard(props: Props) {
     setActiveScenarioId(approvedScenario.id);
     setStatusMessage('Borrador descartado.');
   };
+
+  const draftEntries = changeLog.filter((entry) => entry.scenarioId === activeScenarioId);
 
   // ------- Merge flow ---------
   const mergeDiff: MergeDiffEntry[] = useMemo(() => {
@@ -809,8 +879,6 @@ export default function FinancialPlanningDashboard(props: Props) {
     );
   }
 
-  const draftEntries = changeLog.filter((entry) => entry.scenarioId === activeScenarioId);
-
   return (
     <div className="space-y-4 animate-page-in">
       <PageHeader
@@ -838,32 +906,29 @@ export default function FinancialPlanningDashboard(props: Props) {
             )}
             <button
               type="button"
-              onClick={() => setDrawerOpen((open) => !open)}
-              className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors ${
-                drawerOpen
+              onClick={() => setCompareOpen((v) => !v)}
+              aria-pressed={compareOpen}
+              className={`inline-flex h-10 items-center gap-2 rounded-[var(--radius)] border px-3 text-[12px] font-medium transition-colors ${
+                compareOpen
                   ? 'border-[var(--gray-950)] bg-[var(--gray-950)] text-white'
                   : 'border-[var(--gray-200)] bg-white text-[var(--gray-700)] hover:bg-[var(--gray-50)]'
               }`}
             >
-              <History className="h-3.5 w-3.5" strokeWidth={2} />
-              Cambios
+              Comparar
             </button>
-            {isDraft && (
-              <button
-                type="button"
-                onClick={() => setMergeOpen(activeScenarioId)}
-                className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
-              >
-                <GitMerge className="h-3.5 w-3.5" strokeWidth={2} />
-                Mergear a Aprobado
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={openProposalPicker}
+              className="inline-flex h-10 items-center gap-2 rounded-[var(--radius)] bg-[var(--primary)] px-3 text-[12px] font-bold text-white transition-colors hover:bg-[var(--primary-hover)]"
+            >
+              + Crear propuesta
+            </button>
           </div>
         }
       />
 
       {statusMessage && (
-        <div className="rounded-xl border border-[var(--gray-200)] bg-white px-4 py-2 text-[12px] font-medium text-[var(--gray-700)]">
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-4 py-2 text-[12px] font-medium text-[var(--gray-700)]">
           {statusMessage}
         </div>
       )}
@@ -878,7 +943,29 @@ export default function FinancialPlanningDashboard(props: Props) {
         onDuplicateDraft={handleDuplicateDraft}
         onRenameDraft={handleRenameDraft}
         onDiscardDraft={handleDiscardDraft}
-        onMergeDraft={(id) => setMergeOpen(id)}
+      />
+
+      {scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt).length === 0 && (
+        <FirstSimulationNudge onCreateDraft={handleCreateDraft} />
+      )}
+
+      <CashTroughAlertBanner
+        scenarioId={activeScenario.id}
+        scenarioName={activeScenario.name}
+        deficitDays={activeRun.summary.deficitDays}
+        minCash={activeRun.summary.minCash}
+        maxRiskDate={activeRun.summary.maxRiskDate}
+        creditRequired={activeRun.summary.creditRequired}
+        minimumCashRequired={activeRun.summary.minimumCashRequired}
+      />
+
+      <InsightsCard
+        insights={deriveInsights({
+          active: activeRun.summary,
+          approved: approvedRunWithOverrides.summary,
+          scenarioName: activeScenario.name,
+          isBaseScenario: activeScenario.kind === 'BASE',
+        })}
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -906,11 +993,34 @@ export default function FinancialPlanningDashboard(props: Props) {
         <KpiCard
           label="Δ vs Aprobado"
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
-          icon={<GitMerge className="w-4 h-4" />}
+          icon={<TrendingUp className="w-4 h-4" />}
           color={finalCashDelta > 0 ? 'var(--success)' : finalCashDelta < 0 ? 'var(--danger)' : 'var(--gray-950)'}
           sublabel={isDraft ? 'Borrador activo' : 'Misma referencia'}
         />
       </div>
+
+      {compareOpen && (
+        <ScenarioCompareTable
+          rows={(() => {
+            const out: CompareRow[] = [];
+            out.push({ scenario: baseScenario, summary: baseRun.summary, isActive: activeScenario.id === baseScenario.id });
+            out.push({ scenario: approvedScenario, summary: approvedRunWithOverrides.summary, isActive: activeScenario.id === approvedScenario.id });
+            for (const { scenarioId, run } of draftRuns) {
+              const draft = scenarios.find((s) => s.id === scenarioId);
+              if (!draft) continue;
+              const isActive = activeScenario.id === draft.id;
+              out.push({
+                scenario: draft,
+                summary: isActive ? activeRun.summary : run.summary,
+                isActive,
+              });
+            }
+            return out;
+          })()}
+          baselineFinalCash={approvedRunWithOverrides.summary.finalCash}
+        />
+      )}
+
 
       {planningView === 'commitments' ? (
         <div className="grid gap-3" style={{ gridTemplateColumns: drawerOpen ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)' }}>
@@ -1024,8 +1134,64 @@ export default function FinancialPlanningDashboard(props: Props) {
           budget: props.budget,
         }}
       />
+
+      <CellDetailPopover
+        data={inspectedCell ? buildCellDetail(inspectedCell) : null}
+        onClose={() => setInspectedCell(null)}
+        onApplyOverride={(value) => {
+          if (!inspectedCell) return;
+          const row = rows.find((r) => r.conceptKey === inspectedCell.conceptKey);
+          if (!row) return;
+          if (activeScenario.kind !== 'DRAFT') {
+            handleCreateDraft();
+          }
+          handleCommitCell(inspectedCell.conceptKey, inspectedCell.bucketKey, value, row.type);
+          setInspectedCell(null);
+          setStatusMessage('Override aplicado.');
+        }}
+      />
+
+      {proposalPickerOpen && (
+        <MovementPickerModal
+          movements={activeRunRaw.movements}
+          asOfDate={today}
+          onPick={handlePickMovement}
+          onClose={() => setProposalPickerOpen(false)}
+        />
+      )}
+
+      <AdjustmentEditorPopover
+        movement={editorMovement}
+        anchor={null}
+        scenarios={scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt)}
+        defaultScenarioId={activeScenarioId}
+        onClose={() => setEditorMovement(null)}
+        onSave={handleSaveAdjustment}
+      />
     </div>
   );
+
+  function buildCellDetail({ conceptKey, bucketKey }: { conceptKey: string; bucketKey: string }): CellDetailData | null {
+    const row = rows.find((r) => r.conceptKey === conceptKey);
+    if (!row) return null;
+    const baseValue = baseValueFor(conceptKey, bucketKey);
+    const override = overrideFor(conceptKey, bucketKey);
+    const totalValue = override ? override.value : baseValue;
+    const isBaseScenario = activeScenario.kind === 'BASE';
+    return {
+      conceptKey,
+      conceptLabel: row.label,
+      bucketKey,
+      bucketLabel: engineBucketLabel(bucketKey, granularity),
+      scenarioName: activeScenario.name,
+      isBaseScenario,
+      baseValue,
+      manualOverride: override ? override.value : null,
+      overrideComment: override?.note ?? null,
+      totalValue,
+      diffVsBase: 0,
+    };
+  }
 }
 
 function SegmentedFilter<T extends string>({
@@ -1038,7 +1204,7 @@ function SegmentedFilter<T extends string>({
   options: Array<{ value: T; label: string }>;
 }) {
   return (
-    <div className="inline-flex h-10 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5">
+    <div className="inline-flex h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5">
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -1046,7 +1212,7 @@ function SegmentedFilter<T extends string>({
             key={option.value}
             type="button"
             onClick={() => onChange(option.value)}
-            className="px-3 text-[12px] font-medium rounded-lg transition-colors"
+            className="px-3 text-[12px] font-medium rounded-[var(--radius-md)] transition-colors"
             style={{
               background: active ? 'white' : 'transparent',
               color: active ? 'var(--gray-950)' : 'var(--gray-500)',
@@ -1164,11 +1330,11 @@ function minimumCashFor(props: Props): number {
 
 function EmptyDataState() {
   return (
-    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-10 text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--warning-muted)]">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-10 text-center">
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--warning-muted)]">
         <AlertTriangle className="h-5 w-5" style={{ color: 'var(--warning)' }} strokeWidth={1.5} />
       </div>
-      <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
+      <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
         Aún no hay datos suficientes para planear
       </h2>
       <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">

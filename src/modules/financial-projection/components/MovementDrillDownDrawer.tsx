@@ -118,7 +118,7 @@ export function MovementDrillDownDrawer({
   return (
     <div
       ref={popoverRef}
-      className="fixed z-[80] rounded-2xl border border-[var(--gray-200)] bg-white shadow-xl"
+      className="fixed z-[80] rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-xl"
       style={{
         top: pos.top,
         left: pos.left,
@@ -131,10 +131,10 @@ export function MovementDrillDownDrawer({
     >
       <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-[var(--gray-200)] bg-white px-4 py-3">
         <div className="min-w-0">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             Detalle del movimiento
           </div>
-          <h2 className="mt-1 truncate text-[15px] font-semibold text-[var(--gray-950)]">
+          <h2 className="mt-1 truncate text-[15px] font-bold text-[var(--gray-950)]">
             {movement.concept}
           </h2>
           <p className="mt-0.5 text-[11px] text-[var(--gray-500)]">
@@ -143,7 +143,7 @@ export function MovementDrillDownDrawer({
         </div>
         <button
           onClick={onClose}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
           aria-label="Cerrar detalle"
         >
           <X className="h-4 w-4" strokeWidth={1.5} />
@@ -152,12 +152,12 @@ export function MovementDrillDownDrawer({
 
       <div className="space-y-3 p-4">
         <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-lg border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">Estado</div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">Estado</div>
             <div className="mt-1.5"><StatusBadge status={movement.status} /></div>
           </div>
-          <div className="rounded-lg border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">Confianza</div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">Confianza</div>
             <div className="mt-1.5">
               <ConfidenceBadge band={movement.confidenceBand} score={movement.confidenceScore} />
             </div>
@@ -171,16 +171,16 @@ export function MovementDrillDownDrawer({
         )}
 
         {quickActions && (
-          <div className="rounded-lg border border-[var(--gray-200)] p-3">
-            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] p-3">
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
               Ajustes rápidos
             </div>
             {quickActions}
           </div>
         )}
 
-        <div className="rounded-lg border border-[var(--gray-200)]">
-          <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+        <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)]">
+          <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             Trazabilidad
           </div>
           <div className="divide-y divide-[var(--gray-100)]">
@@ -226,8 +226,8 @@ export function MovementDrillDownDrawer({
         )}
 
         {movement.comments && movement.comments.length > 0 && (
-          <div className="rounded-lg border border-[var(--gray-200)] p-3">
-            <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] p-3">
+            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
               Comentarios
             </div>
             <div className="mt-1.5 space-y-1.5">
@@ -355,14 +355,14 @@ function CobranzaRecordRow({ record }: { record: CobranzaRecord }) {
     <div className="px-3 py-2.5 space-y-1.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+          <div className="flex items-center gap-1.5 text-[12px] font-bold text-[var(--gray-950)]">
             <FileText className="h-3.5 w-3.5 text-[var(--gray-500)]" strokeWidth={1.75} />
             <span className="truncate">Factura {record.noFactura || 'sin folio'}</span>
           </div>
           <div className="text-[11px] text-[var(--gray-500)]">{record.nombreCliente || 'Cliente sin nombre'}</div>
         </div>
         <div className="text-right">
-          <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">
+          <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
             {fmtCurrency(record.importePendientePesos)}
           </div>
           <div className="text-[10px] text-[var(--gray-400)]">
@@ -398,14 +398,14 @@ function CxpRecordRow({ record }: { record: CXPRecord }) {
     <div className="px-3 py-2.5 space-y-1.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+          <div className="flex items-center gap-1.5 text-[12px] font-bold text-[var(--gray-950)]">
             <FileText className="h-3.5 w-3.5 text-[var(--gray-500)]" strokeWidth={1.75} />
             <span className="truncate">Factura {record.noFactura || 'sin folio'}</span>
           </div>
           <div className="text-[11px] text-[var(--gray-500)]">{record.nombre}</div>
         </div>
         <div className="text-right">
-          <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">
+          <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
             {fmtCurrency(record.importePendientePesos)}
           </div>
           <div className="text-[10px] text-[var(--gray-400)]">
@@ -432,7 +432,7 @@ function CxpRecordRow({ record }: { record: CXPRecord }) {
 
       {hasAgingBuckets(record) && (
         <div className="pt-1.5">
-          <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">Antigüedad</div>
+          <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">Antigüedad</div>
           <div className="mt-1 grid grid-cols-7 gap-1">
             <AgingPill label="Por vencer" value={record.porVencer} tone="ok" />
             <AgingPill label="1-30" value={record.v1_30} tone="warn" />
@@ -462,17 +462,17 @@ function CollectionEventRow({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+          <div className="flex items-center gap-1.5 text-[12px] font-bold text-[var(--gray-950)]">
             <FileText className="h-3.5 w-3.5 text-[var(--gray-500)]" strokeWidth={1.75} />
             <span>Cobro proyectado</span>
             {highlight && (
-              <span className="inline-flex h-4 items-center rounded-full bg-[var(--primary,var(--gray-700))] px-1.5 text-[9px] font-medium uppercase tracking-wider text-white">
+              <span className="inline-flex h-4 items-center rounded-full bg-[var(--primary,var(--gray-700))] px-1.5 text-[9px] font-medium uppercase tracking-[0.08em] text-white">
                 Este movimiento
               </span>
             )}
           </div>
         </div>
-        <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">
+        <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
           {fmtCurrency(event.amount)}
         </div>
       </div>
@@ -493,8 +493,8 @@ function CollectionEventRow({
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-[var(--gray-200)]">
-      <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)]">
+      <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
         {title}
       </div>
       {children}
@@ -561,8 +561,8 @@ function AgingPill({
         color: empty ? 'var(--gray-400)' : palette.fg,
       }}
     >
-      <div className="text-[9px] uppercase tracking-wider opacity-80">{label}</div>
-      <div className="text-[10px] font-semibold tabular-nums">
+      <div className="text-[9px] uppercase tracking-[0.08em] opacity-80">{label}</div>
+      <div className="text-[10px] font-bold tabular-nums">
         {empty ? '—' : compactCurrency(value)}
       </div>
     </div>
@@ -730,8 +730,8 @@ function computePosition(anchor: DOMRect): { top: number; left: number } {
 
 function DetailBlock({ title, items }: { title: string; items: [string, string][] }) {
   return (
-    <div className="rounded-lg border border-[var(--gray-200)] p-3">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{title}</div>
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] p-3">
+      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{title}</div>
       <div className="mt-2 grid gap-1.5">
         {items.map(([label, value]) => (
           <div key={label} className="flex items-start justify-between gap-3 text-[11px]">

@@ -70,14 +70,14 @@ const MonthPicker: React.FC<Props> = ({
   return (
     <div ref={rootRef} className="relative">
       {label && (
-        <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1.5">
+        <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)] mb-1.5">
           {label}
         </label>
       )}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full h-10 pl-3 pr-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
+        className="w-full h-10 pl-3 pr-3 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
         style={{ color: value ? 'var(--gray-950)' : 'var(--gray-400)' }}
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -94,7 +94,7 @@ const MonthPicker: React.FC<Props> = ({
 
       {open && (
         <div
-          className="absolute left-0 right-0 mt-2 z-50 rounded-2xl border border-[var(--gray-200)] bg-white shadow-xl overflow-hidden origin-top"
+          className="absolute left-0 right-0 mt-2 z-50 rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-xl overflow-hidden origin-top"
           style={{
             animation: 'slideDown var(--motion-state) var(--ease-smooth) both',
             boxShadow: 'var(--shadow-md)',
@@ -106,19 +106,19 @@ const MonthPicker: React.FC<Props> = ({
               type="button"
               onClick={() => canPrev && setViewYear((y) => y - 1)}
               disabled={!canPrev}
-              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+              className="h-7 w-7 flex items-center justify-center rounded-[var(--radius-md)] hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
               aria-label="Año anterior"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <span className="text-[13px] font-semibold tracking-tight text-[var(--gray-950)] tabular-nums">
+            <span className="text-[13px] font-bold tracking-tight text-[var(--gray-950)] tabular-nums">
               {viewYear}
             </span>
             <button
               type="button"
               onClick={() => canNext && setViewYear((y) => y + 1)}
               disabled={!canNext}
-              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+              className="h-7 w-7 flex items-center justify-center rounded-[var(--radius-md)] hover:bg-white text-[var(--gray-500)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
               aria-label="Año siguiente"
             >
               <ChevronRight className="w-4 h-4" />
@@ -135,7 +135,7 @@ const MonthPicker: React.FC<Props> = ({
                   key={m}
                   type="button"
                   onClick={() => handlePick(m)}
-                  className="h-9 rounded-lg text-[12px] font-medium transition-colors"
+                  className="h-9 rounded-[var(--radius-md)] text-[12px] font-medium transition-colors"
                   style={{
                     background: isSelected ? 'var(--gray-950)' : 'transparent',
                     color: isSelected ? 'white' : 'var(--gray-700)',

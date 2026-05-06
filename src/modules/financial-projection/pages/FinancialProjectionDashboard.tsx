@@ -226,27 +226,27 @@ function ProjectionWarmupShell() {
           <div className="skeleton h-4 w-44 rounded opacity-60" />
           <div className="skeleton mt-2 h-3 w-64 rounded opacity-50" />
         </div>
-        <div className="skeleton h-10 w-48 rounded-xl opacity-50" />
+        <div className="skeleton h-10 w-48 rounded-[var(--radius)] opacity-50" />
       </div>
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5">
         <div className="flex items-center gap-2">
           <div className="skeleton h-3 w-20 rounded opacity-50" />
-          <div className="skeleton h-9 w-32 rounded-xl opacity-50" />
-          <div className="skeleton h-9 w-32 rounded-xl opacity-50" />
+          <div className="skeleton h-9 w-32 rounded-[var(--radius)] opacity-50" />
+          <div className="skeleton h-9 w-32 rounded-[var(--radius)] opacity-50" />
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {Array.from({ length: 4 }).map((_, idx) => (
-          <div key={idx} className="rounded-xl border border-[var(--gray-200)] bg-white p-4">
+          <div key={idx} className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4">
             <div className="skeleton h-3 w-1/2 rounded opacity-50" />
             <div className="skeleton mt-3 h-5 w-3/4 rounded opacity-60" />
             <div className="skeleton mt-2 h-3 w-2/3 rounded opacity-40" />
           </div>
         ))}
       </div>
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
         <div className="skeleton h-3 w-40 rounded opacity-50" />
-        <div className="skeleton mt-3 h-[280px] w-full rounded-xl opacity-50" />
+        <div className="skeleton mt-3 h-[280px] w-full rounded-[var(--radius)] opacity-50" />
       </div>
     </div>
   );
@@ -1051,7 +1051,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         lazy
         count={activeRun.alerts.length}
         badge={activeRun.alerts.some((alert) => alert.severity === 'CRITICAL')
-          ? <span className="rounded-full bg-[var(--danger)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white">crítica</span>
+          ? <span className="rounded-full bg-[var(--danger)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-white">crítica</span>
           : undefined}
         description="Caja bajo mínimo, confianza baja, impuestos vencidos."
       >
@@ -1100,7 +1100,7 @@ function SegmentedControl<T extends string>({
 }) {
   return (
     <div
-      className="inline-flex h-10 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5"
+      className="inline-flex h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5"
       aria-busy={pending || undefined}
     >
       {options.map((option) => {
@@ -1111,7 +1111,7 @@ function SegmentedControl<T extends string>({
             type="button"
             onClick={() => onChange(option.id)}
             aria-pressed={active}
-            className={`px-3 text-[12px] font-medium rounded-lg transition-colors ${active && pending ? 'animate-soft-pulse' : ''}`}
+            className={`px-3 text-[12px] font-medium rounded-[var(--radius-md)] transition-colors ${active && pending ? 'animate-soft-pulse' : ''}`}
             style={{
               background: active ? 'white' : 'transparent',
               color: active ? 'var(--gray-950)' : 'var(--gray-500)',
@@ -1372,7 +1372,7 @@ function SupplierAlertsList({ alerts }: { alerts: SupplierCriticalAlert[] }) {
               <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${supplierAlertClass(alert.severity)}`}>
                 {alert.statusLabel}
               </span>
-              <div className="mt-1 text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{fmtCompact(alert.pendingAmount)}</div>
+              <div className="mt-1 text-[12px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCompact(alert.pendingAmount)}</div>
             </div>
           </div>
         </li>
@@ -1404,9 +1404,9 @@ function TaxStat({
         ? 'text-[var(--danger)]'
         : 'text-[var(--gray-950)]';
   return (
-    <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</div>
-      <div className={`mt-1 text-[14px] font-semibold tabular-nums ${toneClass}`}>{value}</div>
+    <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</div>
+      <div className={`mt-1 text-[14px] font-bold tabular-nums ${toneClass}`}>{value}</div>
     </div>
   );
 }
@@ -1446,11 +1446,11 @@ function minimumCashFor(props: Props): number {
 
 function EmptyDataState() {
   return (
-    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-10 text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--warning-muted)]">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-10 text-center">
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--warning-muted)]">
         <AlertTriangle className="h-5 w-5" style={{ color: 'var(--warning)' }} strokeWidth={1.5} />
       </div>
-      <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
+      <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
         Aún no hay datos suficientes para proyectar
       </h2>
       <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">

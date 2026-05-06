@@ -182,13 +182,13 @@ const BancosForm = ({
   return (
     <div className="w-full max-w-lg mx-auto">
       <div className="text-center mb-8">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
+        <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
           <Landmark className="text-white" size={26} />
         </div>
         <h1 className="text-[28px] font-bold text-white tracking-tight">Bancos</h1>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
+      <div className="bg-white rounded-[var(--radius-lg)] shadow-sm border border-[var(--gray-200)] p-8">
         {!loading && !success && (
           <div className="space-y-5">
             <div>
@@ -197,7 +197,7 @@ const BancosForm = ({
                 type="date"
                 value={fecha}
                 onChange={e => setFecha(e.target.value)}
-                className="w-full px-3 h-10 rounded-xl border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
+                className="w-full px-3 h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
               />
             </div>
             <div>
@@ -205,7 +205,7 @@ const BancosForm = ({
               <select
                 value={formato}
                 onChange={e => setFormato(e.target.value as BankStatementFormat)}
-                className="w-full px-3 h-10 rounded-xl border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
+                className="w-full px-3 h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
               >
                 {FORMATS.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
@@ -213,14 +213,14 @@ const BancosForm = ({
             <button
               onClick={consultar}
               disabled={!fecha}
-              className="w-full h-11 rounded-xl bg-[var(--primary)] text-white text-[14px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+              className="w-full h-11 rounded-[var(--radius)] bg-[var(--primary)] text-white text-[14px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
             >
               <Landmark className="w-4 h-4" /> Consultar
             </button>
 
             <div className="flex items-center gap-3 py-1">
               <div className="h-px flex-1 bg-[var(--gray-100)]" />
-              <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-300)]">o</span>
+              <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-300)]">o</span>
               <div className="h-px flex-1 bg-[var(--gray-100)]" />
             </div>
 
@@ -241,7 +241,7 @@ const BancosForm = ({
               <button
                 type="button"
                 onClick={() => santanderInputRef.current?.click()}
-                className="w-full h-11 rounded-xl border border-dashed border-[var(--gray-200)] bg-[var(--gray-50)] text-[13.5px] font-medium text-[var(--gray-700)] hover:border-[var(--primary)] hover:bg-[var(--primary-subtle)] transition flex items-center justify-center gap-2"
+                className="w-full h-11 rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] bg-[var(--gray-50)] text-[13.5px] font-medium text-[var(--gray-700)] hover:border-[var(--primary)] hover:bg-[var(--primary-subtle)] transition flex items-center justify-center gap-2"
               >
                 <Upload className="w-4 h-4" />
                 Subir archivo Santander
@@ -252,11 +252,11 @@ const BancosForm = ({
             </div>
 
             {error && (
-              <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl p-4">
+              <div className="bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] p-4">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
                   <div>
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)]">
+                    <p className="text-[13px] font-bold text-[var(--gray-950)]">
                       {errorSource === 'file' ? 'Error al leer archivo Santander' : 'Error al consultar JDE'}
                     </p>
                     <p className="text-[12px] text-[var(--gray-500)] mt-1">{error}</p>
@@ -282,7 +282,7 @@ const BancosForm = ({
         {success && (
           <div className="text-center py-14">
             <CheckCircle className="w-12 h-12 text-[var(--success)] mx-auto mb-3" />
-            <p className="text-[15px] font-semibold text-[var(--gray-950)]">{count.toLocaleString()} cuenta{count !== 1 ? 's' : ''} cargada{count !== 1 ? 's' : ''}</p>
+            <p className="text-[15px] font-bold text-[var(--gray-950)]">{count.toLocaleString()} cuenta{count !== 1 ? 's' : ''} cargada{count !== 1 ? 's' : ''}</p>
             <p className="text-[13px] text-[var(--gray-400)] mt-1">Abriendo dashboard...</p>
           </div>
         )}
@@ -551,7 +551,7 @@ const BancosDashboard = ({
 
       {/* ── cia filter banner ── */}
       {selectedCia !== 'all' && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-[var(--radius)] px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
           <Filter className="w-3.5 h-3.5" />
           Filtrando por {ciaNameMap.get(selectedCia) ?? `compañía ${selectedCia}`} — {totalCuentas} cuenta{totalCuentas !== 1 ? 's' : ''}
           {statements.some(s => !s.cia) && (
@@ -563,13 +563,13 @@ const BancosDashboard = ({
       )}
 
       {refreshError && (
-        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--danger)] font-medium">
+        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--danger)] font-medium">
           <AlertCircle className="w-3.5 h-3.5" /> {refreshError}
         </div>
       )}
 
       {query.hasUploadedSantander && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-[var(--radius)] px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
           <Upload className="w-3.5 h-3.5" />
           {canRefresh
             ? 'Archivo Santander agregado al dataset actual.'
@@ -617,10 +617,10 @@ const BancosDashboard = ({
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           return (
-            <div key={i} className="bg-white rounded-2xl border border-[var(--gray-200)] p-4 shadow-sm">
+            <div key={i} className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-wider">{kpi.label}</p>
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
+                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-[0.08em]">{kpi.label}</p>
+                <div className="w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
                   <Icon className="w-3.5 h-3.5" style={{ color: kpi.color }} />
                 </div>
               </div>
@@ -640,9 +640,9 @@ const BancosDashboard = ({
       </div>
 
       {/* ── Accounts list ── */}
-      <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
+      <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden">
         <div className="p-4 border-b border-[var(--gray-100)]">
-          <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
+          <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
             Cuentas <span className="text-[var(--gray-400)] font-normal ml-1">({accountsView.length.toLocaleString()})</span>
           </h2>
         </div>
@@ -676,13 +676,13 @@ const BancosDashboard = ({
                       ? <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />
                       : <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" />}
                     <Landmark className="w-4 h-4 text-[var(--primary)] flex-shrink-0" />
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)] truncate">
+                    <p className="text-[13px] font-bold text-[var(--gray-950)] truncate">
                       {bankName}
                       <span className="text-[var(--gray-400)] font-normal ml-2">({accs.length} cuenta{accs.length !== 1 ? 's' : ''})</span>
                     </p>
                     <div className="ml-auto text-right">
                       {sumSaldo !== null && moneda && (
-                        <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(sumSaldo, moneda)}</p>
+                        <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmtCurrency(sumSaldo, moneda)}</p>
                       )}
                       <p className="text-[10px] text-[var(--gray-400)]">
                         {accs.reduce((s, a) => s + a.movimientos.length, 0).toLocaleString()} mov.
@@ -711,7 +711,7 @@ const BancosDashboard = ({
                                   {acc.cuenta || 'Cuenta bancaria'}
                                 </p>
                                 <div className="flex items-center gap-2 mt-0.5">
-                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
                                   {acc.cia && (
                                     <span className="text-[11px] text-[var(--gray-400)]">
                                       {ciaNameMap.get(acc.cia) ?? `Cia ${acc.cia}`}
@@ -722,7 +722,7 @@ const BancosDashboard = ({
                               </div>
 
                               <div className="text-right w-36">
-                                <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
+                                <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
                                 <p className="text-[10px] text-[var(--gray-400)]">
                                   {acc.saldoFinal !== undefined ? 'Saldo final' : acc.saldoInicial !== undefined ? 'Saldo inicial' : 'Sin saldo'}
                                 </p>
@@ -797,12 +797,12 @@ const BancosMovimientos = ({
         <table className="w-full text-[11px]">
           <thead>
             <tr className="border-b border-[var(--gray-100)]">
-              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Fecha</th>
-              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Referencia</th>
-              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Concepto</th>
-              <th className="text-center py-2 text-[var(--gray-400)] font-semibold">Tipo</th>
-              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Importe</th>
-              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Saldo</th>
+              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Fecha</th>
+              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Referencia</th>
+              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Concepto</th>
+              <th className="text-center py-2 text-[var(--gray-400)] font-bold">Tipo</th>
+              <th className="text-right py-2 text-[var(--gray-400)] font-bold">Importe</th>
+              <th className="text-right py-2 text-[var(--gray-400)] font-bold">Saldo</th>
             </tr>
           </thead>
           <tbody>
@@ -831,13 +831,13 @@ const BancosMovimientos = ({
                   <td className="py-1.5 text-[var(--gray-500)] max-w-[320px] truncate" title={tooltip}>
                     {m.concepto || '—'}
                     {isInternal && (
-                      <span className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold align-middle">
+                      <span className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-bold align-middle">
                         Interno
                       </span>
                     )}
                     {enrichment?.status === 'factura-cobrada' && enrichment.facturas && enrichment.facturas.length > 0 && (
                       <span
-                        className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--success-muted)] text-[var(--success)] font-semibold align-middle"
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--success-muted)] text-[var(--success)] font-bold align-middle"
                         title={enrichment.facturas
                           .map(f => `${f.cia} · ${f.noFactura} · ${f.nombreCliente}`)
                           .join('\n')}
@@ -847,7 +847,7 @@ const BancosMovimientos = ({
                     )}
                     {enrichment?.status === 'cobranza-sin-factura' && (
                       <span
-                        className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] font-semibold align-middle"
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] font-bold align-middle"
                         title="ABONO no cruzó con ninguna factura JDE — probable anticipo o factura fuera del rango cargado."
                       >
                         Sin factura
@@ -855,7 +855,7 @@ const BancosMovimientos = ({
                     )}
                   </td>
                   <td className="py-1.5 text-center">
-                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${tipoColor}`}>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${tipoColor}`}>
                       {m.tipoMovimiento}
                     </span>
                   </td>
@@ -868,7 +868,7 @@ const BancosMovimientos = ({
                 </tr>
               );
             })}
-            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold">
+            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-bold">
               <td className="py-2" colSpan={3}>
                 Totales visibles
                 {internalCount > 0 && (

@@ -51,6 +51,7 @@ export default defineConfig(({ mode }) => {
             'vendor-charts': ['recharts'],
             'vendor-icons': ['lucide-react'],
             'vendor-react': ['react', 'react-dom'],
+            'vendor-excel': ['exceljs'],
           },
         },
       },

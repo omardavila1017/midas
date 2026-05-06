@@ -6,12 +6,13 @@ import React from 'react';
  * (Proyección Financiera, Planeación Financiera) hereden el mismo lenguaje
  * visual sin duplicar markup ni divergir en spacing/tipografía.
  *
- * Reglas:
- *   - 4 columnas en desktop, responsive a 1/2/4.
- *   - Label en uppercase 11px gray-400, valor en 20px tabular-nums.
- *   - El color del valor lo define el caller (success/danger/gray-950/...).
- *   - El breakdown es opcional; si existe, divide con border-t para
- *     no competir con el valor principal.
+ * Senda DS:
+ *   - Roboto 400/500/700.
+ *   - Tokens del DS (var(--gray-*), var(--warning), …). Cero tailwind raw.
+ *   - 4pt spacing scale. Radius `--radius` (0.625rem).
+ *   - Hover sutil (border + transición 150ms) — no glow, no transform.
+ *   - Breakdown alineado en grid 2-col para que las cifras siempre
+ *     terminen contra el mismo borde derecho.
  */
 export interface KpiBreakdownItem {
   label: string;
@@ -33,45 +34,80 @@ export interface KpiCardProps {
 }
 
 export const KpiCard: React.FC<KpiCardProps> = ({
-  label, value, icon, color = 'var(--gray-950)', sublabel, breakdown, tone = 'neutral',
+  label,
+  value,
+  icon,
+  color = 'var(--gray-950)',
+  sublabel,
+  breakdown,
+  tone = 'neutral',
 }) => {
-  const containerClass = tone === 'warning'
-    ? 'rounded-xl border-2 border-yellow-300 bg-yellow-50 p-4 flex flex-col'
-    : 'rounded-xl border border-[var(--gray-200)] bg-white p-4 flex flex-col';
+  const surfaceStyles =
+    tone === 'warning'
+      ? {
+          borderColor: 'color-mix(in oklch, var(--warning) 30%, var(--gray-200))',
+          background: 'var(--warning-muted)',
+        }
+      : {
+          borderColor: 'var(--gray-200)',
+          background: 'var(--surface)',
+        };
 
   return (
-    <div className={containerClass}>
-      <div className="flex items-center justify-between mb-2">
+    <div
+      className="group flex flex-col rounded-[var(--radius-lg)] border p-4 transition-colors duration-150 hover:border-[var(--gray-300)]"
+      style={surfaceStyles}
+    >
+      <div className="mb-1.5 flex items-center justify-between gap-2">
         <p
-          className="text-[11px] font-medium uppercase tracking-wider"
-          style={{ color: 'var(--gray-400)' }}
+          className="truncate text-[11px] font-medium uppercase tracking-[0.06em]"
+          style={{ color: 'var(--gray-500)' }}
         >
           {label}
         </p>
-        {icon && <span style={{ color }}>{icon}</span>}
+        {icon && (
+          <span
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
+            style={{ color }}
+            aria-hidden="true"
+          >
+            {icon}
+          </span>
+        )}
       </div>
-      <p className="text-[20px] font-semibold tabular-nums leading-tight" style={{ color }}>
+      <p
+        className="text-[22px] font-bold tabular-nums leading-[1.1]"
+        style={{ color }}
+      >
         {value}
       </p>
       {sublabel && (
-        <p className="text-[10px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
+        <p
+          className="mt-1 text-[11px] leading-snug"
+          style={{ color: 'var(--gray-500)' }}
+        >
           {sublabel}
         </p>
       )}
       {breakdown && breakdown.length > 0 && (
-        <div className="mt-2.5 space-y-1 border-t border-[var(--gray-100)] pt-2">
+        <dl
+          className="mt-3 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 border-t pt-2.5 text-[11px]"
+          style={{ borderColor: 'var(--gray-100)' }}
+        >
           {breakdown.map((item, idx) => (
-            <div key={idx} className="flex items-center justify-between text-[11px]">
-              <span style={{ color: 'var(--gray-500)' }}>{item.label}</span>
-              <span
-                className="font-medium tabular-nums"
+            <React.Fragment key={idx}>
+              <dt className="truncate" style={{ color: 'var(--gray-500)' }}>
+                {item.label}
+              </dt>
+              <dd
+                className="text-right font-medium tabular-nums"
                 style={{ color: item.valueColor ?? 'var(--gray-950)' }}
               >
                 {item.value}
-              </span>
-            </div>
+              </dd>
+            </React.Fragment>
           ))}
-        </div>
+        </dl>
       )}
     </div>
   );

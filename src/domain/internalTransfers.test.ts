@@ -186,9 +186,10 @@ describe('buildPairMatchedKeys', () => {
     expect(buildPairMatchedKeys(stmts).size).toBe(4);
   });
 
-  it('does NOT pair cuando una cuenta aparece en ambos lados (cargo+abono mismo día/monto)', () => {
-    // Si la cuenta A tiene CARGO y la cuenta A también tiene ABONO del
-    // mismo monto/día, hay solapamiento — no es un traspaso limpio.
+  it('parea greedy a través de cuentas distintas cuando ambos lados aparecen en las mismas cuentas', () => {
+    // Cuenta A tiene CARGO+ABONO y cuenta B tiene CARGO+ABONO del mismo
+    // monto/día. Greedy aparea cargo01↔abono02 y cargo02↔abono01 — los 4
+    // se marcan como pair-matched (cada par cruza cuentas distintas).
     const stmts: BankAccountStatement[] = [
       acc('00011', '0190000001', [
         mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, referencia: 'R1' }),
@@ -199,13 +200,12 @@ describe('buildPairMatchedKeys', () => {
         mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, referencia: 'R4' }),
       ]),
     ];
-    // Cargos: {01, 02}. Abonos: {01, 02}. Solapa → descarta.
-    expect(buildPairMatchedKeys(stmts).size).toBe(0);
+    expect(buildPairMatchedKeys(stmts).size).toBe(4);
   });
 
-  it('does NOT pair when bucket is ambiguous (e.g. 2 CARGOs + 1 ABONO of the same amount)', () => {
-    // Si hay más de 2 movimientos del mismo monto/día/cia, evitamos parear
-    // para no confundir un ingreso real con un traspaso.
+  it('parea min(K,N) en buckets asimétricos (2 CARGOs + 1 ABONO → marca 1 par)', () => {
+    // Asimetría permitida: parea min(K,N)=1 par cruzando cuentas distintas.
+    // El CARGO sobrante queda como real.
     const stmts: BankAccountStatement[] = [
       acc('00011', '0190000001', [
         mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, referencia: 'R1' }),
@@ -215,7 +215,8 @@ describe('buildPairMatchedKeys', () => {
         mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, referencia: 'R3' }),
       ]),
     ];
-    expect(buildPairMatchedKeys(stmts).size).toBe(0);
+    // Sólo se marcan 2 keys (el par) — el otro CARGO queda real.
+    expect(buildPairMatchedKeys(stmts).size).toBe(2);
   });
 
   it('does NOT pair when both movements are CARGO (no symmetry)', () => {

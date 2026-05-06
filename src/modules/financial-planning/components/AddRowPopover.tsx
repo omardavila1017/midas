@@ -70,11 +70,11 @@ export function AddRowPopover(props: AddRowPopoverProps) {
     >
       <div
         ref={containerRef}
-        className="w-[400px] rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-xl"
+        className="w-[400px] rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4 shadow-xl"
       >
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">
+            <h3 className="text-[14px] font-bold text-[var(--gray-950)]">
               Nueva fila en {type === 'INFLOW' ? 'Ingresos' : 'Egresos'}
             </h3>
             <p className="mt-0.5 text-[11px] text-[var(--gray-500)]">
@@ -84,15 +84,15 @@ export function AddRowPopover(props: AddRowPopoverProps) {
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-700)]"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-700)]"
             aria-label="Cerrar"
           >
-            <X className="h-4 w-4" strokeWidth={2} />
+            <X className="h-4 w-4" strokeWidth={1.5} />
           </button>
         </div>
 
         <label className="block">
-          <span className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <span className="mb-1 block text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             Nombre
           </span>
           <input
@@ -104,18 +104,18 @@ export function AddRowPopover(props: AddRowPopoverProps) {
               if (event.key === 'Enter') submit();
             }}
             placeholder="Nombre del concepto"
-            className="h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
+            className="h-10 w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
           />
         </label>
 
         <label className="mt-3 block">
-          <span className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <span className="mb-1 block text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             Categoría
           </span>
           <select
             value={category}
             onChange={(event) => setCategory(event.target.value as FinancialMovementCategory)}
-            className="h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
+            className="h-10 w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
           >
             {categories.map((value) => (
               <option key={value} value={value}>
@@ -133,16 +133,16 @@ export function AddRowPopover(props: AddRowPopoverProps) {
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+            className="inline-flex h-9 items-center rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
           >
             Cancelar
           </button>
           <button
             type="button"
             onClick={submit}
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
+            className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
           >
-            <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+            <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
             Crear fila
           </button>
         </div>
