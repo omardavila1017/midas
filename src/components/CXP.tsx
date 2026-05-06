@@ -551,8 +551,8 @@ const ChartTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.[0]) return null;
   const item = payload[0].payload;
   return (
-    <div className="bg-white border border-[var(--gray-200)] rounded-xl px-3 py-2 shadow-lg">
-      <p className="text-[12px] font-semibold text-[var(--gray-950)]">{item.name || payload[0].name}</p>
+    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] px-3 py-2 shadow-lg">
+      <p className="text-[12px] font-bold text-[var(--gray-950)]">{item.name || payload[0].name}</p>
       <p className="text-[12px] font-mono text-[var(--gray-500)]">{fmtFull(payload[0].value)}</p>
       {typeof item.percent === 'number' && (
         <p className="text-[11px] text-[var(--gray-400)]">{(item.percent * 100).toFixed(1)}% del total</p>
@@ -935,7 +935,7 @@ const CXPDashboard = ({
   return (
     <div className="relative space-y-4">
       {/* ── Header Bar ── */}
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5 shadow-sm">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex min-w-[240px] flex-1 items-center rounded-full border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-1.5 gap-2">
             <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
@@ -991,7 +991,7 @@ const CXPDashboard = ({
 
       {/* ── Active filter chips ── */}
       {hasDrill && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 animate-slide-down">
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-[var(--radius)] px-4 py-2.5 flex items-center justify-between gap-3 animate-slide-down">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] text-[var(--primary)] font-medium">
             <Filter className="w-3.5 h-3.5 flex-shrink-0" />
             {activeFilterChips.map(chip => (
@@ -1032,12 +1032,12 @@ const CXPDashboard = ({
                 setActiveKpi(activeKpi === kpi.kpi ? null : kpi.kpi);
                 setTab('proveedores');
               }}
-              className={`animate-card-in stagger-${i + 1} bg-white rounded-2xl border p-4 shadow-sm hover-lift cursor-pointer ${
+              className={`animate-card-in stagger-${i + 1} bg-white rounded-[var(--radius-lg)] border p-4 shadow-sm hover-lift cursor-pointer ${
                 active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/20' : 'border-[var(--gray-200)]'
               }`}>
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-wider">{kpi.label}</p>
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
+                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-[0.08em]">{kpi.label}</p>
+                <div className="w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
                   <Icon className="w-3.5 h-3.5" style={{ color: kpi.color }} />
                 </div>
               </div>
@@ -1086,9 +1086,9 @@ const CXPDashboard = ({
       {tab === 'resumen' && (
         <>
           {/* Aging Bar Chart */}
-          <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-5">
+          <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Distribución por Antigüedad</h2>
+              <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Distribución por Antigüedad</h2>
               <p className="text-[12px] text-[var(--gray-400)]">Click en barra para filtrar</p>
             </div>
             <ResponsiveContainer width="100%" height={300}>
@@ -1113,7 +1113,7 @@ const CXPDashboard = ({
                 <div key={i} className="flex items-center gap-1.5 bg-[var(--gray-50)] rounded-full px-2.5 py-1 text-[11px]">
                   <div className="w-2 h-2 rounded-full" style={{ backgroundColor: b.color }} />
                   <span className="text-[var(--gray-500)]">{b.name}:</span>
-                  <span className="font-mono font-semibold text-[var(--gray-950)]">{fmt(b.total)}</span>
+                  <span className="font-mono font-bold text-[var(--gray-950)]">{fmt(b.total)}</span>
                   <span className="text-[var(--gray-400)]">({b.count})</span>
                 </div>
               ))}
@@ -1123,9 +1123,9 @@ const CXPDashboard = ({
           {/* Two columns: Tipo proveedor + Top Proveedores */}
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-5">
             {/* Provider Type Donut */}
-            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
+            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Por tipo de proveedor</h2>
+                <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Por tipo de proveedor</h2>
                 <p className="text-[12px] text-[var(--gray-400)]">Click para filtrar</p>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
@@ -1174,7 +1174,7 @@ const CXPDashboard = ({
                           toggleCategoryGroup(e.categories);
                           setTab('proveedores');
                         }}
-                        className={`grid w-full grid-cols-[10px_1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-left transition ${
+                        className={`grid w-full grid-cols-[10px_1fr_auto] items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-left transition ${
                           active ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
                         }`}
                         title={`${e.name}: ${fmtFull(e.value)} (${pct(e.value, totalPendiente)})`}
@@ -1192,14 +1192,14 @@ const CXPDashboard = ({
             </div>
 
             {/* Top 10 Proveedores */}
-            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm hover-lift">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-3">Top 10 Proveedores</h2>
+            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm hover-lift">
+              <h2 className="text-[15px] font-bold text-[var(--gray-950)] mb-3">Top 10 Proveedores</h2>
               <div className="space-y-1.5">
                 {supplierData.slice(0, 10).map((s, i) => {
                   const barPct = supplierData[0]?.total > 0 ? (s.total / supplierData[0].total) : 0;
                   return (
                     <div key={i}
-                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-lg transition-colors duration-150"
+                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-[var(--radius-md)] transition-colors duration-150"
                       onClick={() => { clearDrill(); setSearchTerm(s.nombre.slice(0, 20)); setTab('proveedores'); setExpandedSupplier(s.nombre); setProvPage(0); }}>
                       <span className="text-[11px] font-mono text-[var(--gray-400)] w-4 text-right">{i + 1}</span>
                       <div className="flex-1 min-w-0">
@@ -1209,7 +1209,7 @@ const CXPDashboard = ({
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-[12px] font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</p>
+                        <p className="text-[12px] font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</p>
                         <p className="text-[10px] text-[var(--gray-400)]">{s.count} fact.</p>
                       </div>
                     </div>
@@ -1228,17 +1228,17 @@ const CXPDashboard = ({
 
           {/* Company breakdown (if multiple) */}
           {ciaData.length > 1 && (
-            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-9">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-4">Desglose por Compañía</h2>
+            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-9">
+              <h2 className="text-[15px] font-bold text-[var(--gray-950)] mb-4">Desglose por Compañía</h2>
               <div className="grid grid-cols-2 gap-3">
                 {ciaData.map((c, i) => (
-                  <div key={i} className="flex items-center gap-3 p-3 bg-[var(--surface-alt)] rounded-xl">
+                  <div key={i} className="flex items-center gap-3 p-3 bg-[var(--surface-alt)] rounded-[var(--radius)]">
                     <div className="w-2 h-8 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-[12px] font-medium text-[var(--gray-950)] truncate">{c.name}</p>
                       <p className="text-[11px] text-[var(--gray-400)]">{pct(c.value, totalPendiente)}</p>
                     </div>
-                    <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmt(c.value)}</p>
+                    <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmt(c.value)}</p>
                   </div>
                 ))}
               </div>
@@ -1251,10 +1251,10 @@ const CXPDashboard = ({
          PROVEEDORES TAB
          ════════════════════════════════════════════════════════════════ */}
       {tab === 'proveedores' && (
-        <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
+        <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden">
           {/* Header with sort controls */}
           <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
+            <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
               Proveedores
               <span className="text-[var(--gray-400)] font-normal ml-1">({supplierData.length.toLocaleString()})</span>
             </h2>
@@ -1266,7 +1266,7 @@ const CXPDashboard = ({
                 ['nombre', 'Nombre'],
               ] as [SortKey, string][]).map(([k, label]) => (
                 <button key={k} onClick={() => toggleSort(k)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-[var(--radius-md)] text-[11px] font-medium transition flex items-center gap-1 ${
                     sortKey === k ? 'bg-[var(--primary)] text-white' : 'bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)]'
                   }`}>
                   {label}
@@ -1319,7 +1319,7 @@ const CXPDashboard = ({
                     </div>
 
                     <div className="text-right w-28">
-                      <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</p>
+                      <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</p>
                       {vencido > 0 && <p className="text-[10px] font-mono text-[var(--danger)]">{fmt(vencido)} vencido</p>}
                       {s.creditLimit !== undefined && s.creditLimit > 0 && (
                         <p className={`text-[10px] font-mono ${s.total > s.creditLimit ? 'text-[var(--warning)]' : 'text-[var(--gray-400)]'}`}>
@@ -1351,15 +1351,15 @@ const CXPDashboard = ({
                         <table className="w-full text-[11px]">
                           <thead>
                             <tr className="border-b border-[var(--gray-100)]">
-                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Factura</th>
-                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">F. Factura</th>
-                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Vence</th>
-                              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Días</th>
-                              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Pendiente</th>
-                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold pl-3">Mon.</th>
-                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Cond. Pago</th>
-                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Prioridad</th>
-                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Referencias</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Factura</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-bold">F. Factura</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Vence</th>
+                              <th className="text-right py-2 text-[var(--gray-400)] font-bold">Días</th>
+                              <th className="text-right py-2 text-[var(--gray-400)] font-bold">Pendiente</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-bold pl-3">Mon.</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Cond. Pago</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Prioridad</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Referencias</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1374,7 +1374,7 @@ const CXPDashboard = ({
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaVence}</td>
                                 <td className="py-1.5 text-right font-mono">
                                   <span
-                                    className={r.diasVencida > 90 ? 'text-[var(--danger)] font-semibold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}
+                                    className={r.diasVencida > 90 ? 'text-[var(--danger)] font-bold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}
                                     title={agingTooltip(r.diasVencida)}
                                   >
                                     {r.diasVencida}
@@ -1421,12 +1421,12 @@ const CXPDashboard = ({
               </p>
               <div className="flex gap-1">
                 <button onClick={() => setProvPage(p => Math.max(0, p - 1))} disabled={provPage === 0}
-                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
+                  className="px-3 py-1 rounded-[var(--radius-md)] text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
                   Anterior
                 </button>
                 <span className="px-3 py-1 text-[12px] text-[var(--gray-400)]">{provPage + 1} / {totalPages}</span>
                 <button onClick={() => setProvPage(p => Math.min(totalPages - 1, p + 1))} disabled={provPage >= totalPages - 1}
-                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
+                  className="px-3 py-1 rounded-[var(--radius-md)] text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
                   Siguiente
                 </button>
               </div>
@@ -1506,20 +1506,20 @@ function AgingMatrix({
   filteredCount: number;
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden animate-card-in stagger-8">
+    <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden animate-card-in stagger-8">
       <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-        <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
+        <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
         <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-[11px]">
           <thead className="sticky top-0 bg-white z-10">
             <tr className="border-b-2 border-[var(--gray-200)]">
-              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
-              <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-semibold w-[90px]">Total</th>
-              <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-semibold w-[40px]">#</th>
+              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-bold w-[200px] min-w-[200px]">Proveedor</th>
+              <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-bold w-[90px]">Total</th>
+              <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-bold w-[40px]">#</th>
               {BUCKET_LABELS.map((label, i) => (
-                <th key={i} className="text-right py-2.5 px-2 font-semibold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
+                <th key={i} className="text-right py-2.5 px-2 font-bold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
               ))}
             </tr>
           </thead>
@@ -1530,7 +1530,7 @@ function AgingMatrix({
               return (
                 <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
                   <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
-                  <td className="py-2 px-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</td>
+                  <td className="py-2 px-2 text-right font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</td>
                   <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
                   {bucketVals.map((val, bi) => {
                     const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
@@ -1561,7 +1561,7 @@ function AgingMatrix({
                 </tr>
               );
             })}
-            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold sticky bottom-0">
+            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-bold sticky bottom-0">
               <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
               <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
               <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{filteredCount}</td>
@@ -1586,9 +1586,9 @@ function TriageAlertBoard({
   onSelect: (type: CxpAlertType) => void;
 }) {
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Clasificación de triage</h2>
+        <h2 className="text-[14px] font-bold text-[var(--gray-950)]">Clasificación de triage</h2>
         <span className="text-[11px] text-[var(--gray-400)]">Click para ver facturas</span>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
@@ -1596,7 +1596,7 @@ function TriageAlertBoard({
           <button
             key={bucket.type}
             onClick={() => onSelect(bucket.type)}
-            className={`rounded-xl border px-3 py-2 text-left transition ${
+            className={`rounded-[var(--radius)] border px-3 py-2 text-left transition ${
               active === bucket.type
                 ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
                 : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
@@ -1605,13 +1605,13 @@ function TriageAlertBoard({
           >
             <p className="truncate text-[11px] text-[var(--gray-500)]">{bucket.label}</p>
             <div className="mt-1 flex items-end justify-between gap-2">
-              <span className="font-mono text-[18px] font-semibold text-[var(--gray-950)]">{bucket.count}</span>
+              <span className="font-mono text-[18px] font-bold text-[var(--gray-950)]">{bucket.count}</span>
               <span className="font-mono text-[11px] text-[var(--gray-500)]">{fmt(bucket.total)}</span>
             </div>
           </button>
         ))}
         {buckets.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
+          <div className="col-span-full rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
             No hay alertas con los filtros actuales.
           </div>
         )}
@@ -1630,9 +1630,9 @@ function TriageDetailTable({
   onRecordSelect: (record: EnrichedCXPRecord) => void;
 }) {
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
       <header className="flex items-center justify-between gap-3 border-b border-[var(--gray-100)] px-4 py-3">
-        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">{title}</h2>
+        <h2 className="text-[14px] font-bold text-[var(--gray-950)]">{title}</h2>
         <span className="text-[11px] text-[var(--gray-400)]">{records.length} facturas</span>
       </header>
       <div className="overflow-x-auto">
@@ -1666,7 +1666,7 @@ function TriageDetailTable({
                   </div>
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-[var(--gray-950)]">{record.diasVencida}</td>
-                <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmtFull(record.importePendientePesos)}</td>
+                <td className="px-4 py-2 text-right font-mono font-bold text-[var(--gray-950)]">{fmtFull(record.importePendientePesos)}</td>
                 <td className="px-4 py-2 text-[var(--gray-500)]">{dueDateForRecord(record) ?? '-'}</td>
               </tr>
             ))}
@@ -1699,11 +1699,11 @@ function TriageColumn({
         : 'bg-[var(--warning-muted)] text-[var(--warning)]';
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
       <header className="border-b border-[var(--gray-100)] p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">{title}</h2>
+            <h2 className="text-[15px] font-bold text-[var(--gray-950)]">{title}</h2>
             <p className="mt-1 text-[11px] leading-4 text-[var(--gray-400)]">{detail}</p>
           </div>
           <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
@@ -1714,21 +1714,21 @@ function TriageColumn({
       </header>
       <div className="max-h-[620px] space-y-2 overflow-y-auto bg-[var(--surface-alt)] p-3">
         {records.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-[var(--gray-200)] bg-white p-5 text-center text-[12px] text-[var(--gray-400)]">
+          <div className="rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] bg-white p-5 text-center text-[12px] text-[var(--gray-400)]">
             Sin facturas en este balde.
           </div>
         ) : records.slice(0, 40).map((record) => (
           <button
             key={`${record.noProveedor}-${record.noFactura}-${record.fechaVence}`}
             onClick={() => onRecordSelect(record)}
-            className="block w-full rounded-xl border border-[var(--gray-200)] bg-white p-3 text-left shadow-sm transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+            className="block w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3 text-left shadow-sm transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="truncate text-[12px] font-semibold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
+                <p className="truncate text-[12px] font-bold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
                 <p className="mt-0.5 text-[10px] text-[var(--gray-400)]">{record.providerType}</p>
               </div>
-              <p className="shrink-0 font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmt(record.importePendientePesos)}</p>
+              <p className="shrink-0 font-mono text-[12px] font-bold text-[var(--gray-950)]">{fmt(record.importePendientePesos)}</p>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(record.paymentPriority)}`} title={priorityReason(record)}>
@@ -1787,10 +1787,10 @@ function InvoiceDetailPanel({
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Detalle de factura</p>
-              <h2 className="mt-1 truncate text-[18px] font-semibold text-[var(--gray-950)]">{record.noFactura || 'Sin factura'}</h2>
+              <h2 className="mt-1 truncate text-[18px] font-bold text-[var(--gray-950)]">{record.noFactura || 'Sin factura'}</h2>
               <p className="mt-1 truncate text-[12px] text-[var(--gray-500)]">{record.nombre}</p>
             </div>
-            <button onClick={onClose} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]">
+            <button onClick={onClose} className="rounded-[var(--radius-md)] p-1.5 text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -1860,10 +1860,10 @@ function InvoiceDetailPanel({
             ) : (
               <div className="space-y-2">
                 {bankMatches.map((movement, index) => (
-                  <div key={`${movement.referencia}-${index}`} className="rounded-lg border border-[var(--gray-200)] px-3 py-2">
+                  <div key={`${movement.referencia}-${index}`} className="rounded-[var(--radius-md)] border border-[var(--gray-200)] px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[12px] font-medium text-[var(--gray-950)]">{movement.fechaOperacion}</span>
-                      <span className="font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmtFull(movement.importe)}</span>
+                      <span className="font-mono text-[12px] font-bold text-[var(--gray-950)]">{fmtFull(movement.importe)}</span>
                     </div>
                     <p className="mt-1 text-[11px] text-[var(--gray-500)]">{movement.referencia} · {movement.concepto}</p>
                   </div>
@@ -1884,9 +1884,9 @@ function InvoiceDetailPanel({
 
 function DetailMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-[var(--gray-50)] px-3 py-2">
+    <div className="rounded-[var(--radius)] bg-[var(--gray-50)] px-3 py-2">
       <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
-      <p className="mt-1 truncate font-mono text-[15px] font-semibold text-[var(--gray-950)]" title={value}>{value}</p>
+      <p className="mt-1 truncate font-mono text-[15px] font-bold text-[var(--gray-950)]" title={value}>{value}</p>
     </div>
   );
 }
@@ -1894,8 +1894,8 @@ function DetailMetric({ label, value }: { label: string; value: string }) {
 function DetailSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
-      <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">{title}</h3>
-      <div className="rounded-xl border border-[var(--gray-200)] p-3">{children}</div>
+      <h3 className="mb-2 text-[12px] font-bold uppercase tracking-wide text-[var(--gray-400)]">{title}</h3>
+      <div className="rounded-[var(--radius)] border border-[var(--gray-200)] p-3">{children}</div>
     </section>
   );
 }
@@ -1940,13 +1940,13 @@ function PlanningCard({
   return (
     <button
       onClick={onClick}
-      className={`rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+      className={`rounded-[var(--radius-lg)] border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
         active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/15' : 'border-[var(--gray-200)]'
       }`}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[12px] font-semibold text-[var(--gray-950)]">{title}</p>
+          <p className="text-[12px] font-bold text-[var(--gray-950)]">{title}</p>
           <p className="mt-2 text-[22px] font-bold font-mono text-[var(--gray-950)]">{fmt(amount)}</p>
         </div>
         <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
@@ -2149,13 +2149,13 @@ const CXP = ({
       <div className="min-h-[60vh] flex items-center justify-center p-6">
         <div className="w-full max-w-3xl mx-auto">
           <div className="text-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
+            <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
               <Clock className="text-white" size={26} />
             </div>
             <h1 className="text-[28px] font-bold text-white tracking-tight">Cuentas por Pagar</h1>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
+          <div className="bg-white rounded-[var(--radius-lg)] shadow-sm border border-[var(--gray-200)] p-8">
             {loading ? (
               <div className="text-center py-14">
                 <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-3" />
@@ -2167,14 +2167,14 @@ const CXP = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="border-2 border-[var(--primary)]/30 bg-[var(--primary-subtle)] rounded-2xl p-10 text-center hover:border-[var(--primary)] hover:bg-[var(--primary-muted)] transition-colors">
+                <div className="border-2 border-[var(--primary)]/30 bg-[var(--primary-subtle)] rounded-[var(--radius-lg)] p-10 text-center hover:border-[var(--primary)] hover:bg-[var(--primary-muted)] transition-colors">
                   <Database className="w-10 h-10 mx-auto mb-3 text-[var(--primary)]" />
-                  <p className="text-[15px] font-semibold text-[var(--gray-950)]">Consultar desde JDE</p>
+                  <p className="text-[15px] font-bold text-[var(--gray-950)]">Consultar desde JDE</p>
                   <p className="text-[12px] text-[var(--gray-400)] mt-1">{scopeLabel}</p>
                   <button
                     onClick={() => selectedCia === 'all' ? loadAll() : loadSingle(selectedCia)}
                     disabled={loading || (selectedCia === 'all' && activeCias.length === 0)}
-                    className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-[var(--radius)] bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
                   >
                     <Database className="w-4 h-4" />
                     {selectedCia === 'all' ? 'Consultar todas' : 'Consultar antigüedad'}
@@ -2183,10 +2183,10 @@ const CXP = ({
 
                 <div
                   onClick={() => csvInput.current?.click()}
-                  className="border-2 border-dashed border-[var(--gray-200)] rounded-2xl p-10 text-center cursor-pointer hover:border-[var(--primary)] hover:bg-[var(--gray-50)] transition-colors"
+                  className="border-2 border-dashed border-[var(--gray-200)] rounded-[var(--radius-lg)] p-10 text-center cursor-pointer hover:border-[var(--primary)] hover:bg-[var(--gray-50)] transition-colors"
                 >
                   <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
-                  <p className="text-[15px] font-semibold text-[var(--gray-950)]">Subir CSV</p>
+                  <p className="text-[15px] font-bold text-[var(--gray-950)]">Subir CSV</p>
                   <p className="text-[13px] text-[var(--gray-400)] mt-1">Opcional · si JDE no está disponible</p>
                   <input
                     ref={csvInput} type="file" accept=".csv" className="hidden"
@@ -2197,11 +2197,11 @@ const CXP = ({
             )}
 
             {error && !loading && (
-              <div className="mt-4 bg-[var(--danger-muted)] border border-red-100 rounded-xl p-4">
+              <div className="mt-4 bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] p-4">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
                   <div className="flex-1">
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)]">Error al consultar JDE</p>
+                    <p className="text-[13px] font-bold text-[var(--gray-950)]">Error al consultar JDE</p>
                     <p className="text-[12px] text-[var(--gray-500)] mt-1">{error}</p>
                     <button
                       onClick={refresh}
@@ -2275,7 +2275,7 @@ const CXP = ({
       </div>
 
       {error && (
-        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3">
+        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] px-4 py-2.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-[12.5px] text-[var(--danger)] font-medium">
             <AlertCircle className="w-3.5 h-3.5" /> {error}
           </div>

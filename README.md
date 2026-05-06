@@ -32,28 +32,34 @@ Atlas (hosting)
 
 ```text
 src/
+├── App.tsx                          # Top-level shell, routing, store wiring
+├── index.css                        # Senda DS tokens and global styles
+├── theme.ts, formatters.ts, types.ts
 ├── config/
-│   └── api.config.ts          # Runtime API configuration from env vars
+│   └── api.config.ts                # Runtime API configuration from env vars
 ├── services/
-│   ├── cashFlow.service.ts    # Cognos cash-flow plan service with mock fallback
-│   ├── catalog.service.ts     # Cognos client/provider catalog services
-│   ├── jde.ts                 # JDE companies, CXP aging, and bank statements
-│   ├── jdeClient.ts           # Fetch client for JDE endpoints
-│   └── jdeTypes.ts            # JDE request/response types
-├── domain/
-│   ├── collectionEngine.ts    # Collection projection rules
-│   ├── scenarioEngine.ts      # Forecast and scenario evaluation
-│   ├── simulationCompiler.ts  # Proposal/simulation effect compiler
-│   ├── netCashFlowEngine.ts   # Unified inflow/outflow cash view
-│   └── persistence.ts         # Versioned local state
-├── components/
-│   ├── Dashboard.tsx
-│   ├── Forecast.tsx
-│   ├── Simulator.tsx
-│   ├── CXP.tsx
-│   ├── Bancos.tsx
+│   ├── catalog.service.ts           # Cognos client/provider catalog
+│   ├── jde.ts                       # JDE companies, CXP, cobranza, bank statements
+│   ├── jdeClient.ts                 # Fetch client for JDE endpoints
+│   └── jdeTypes.ts                  # JDE request/response types
+├── domain/                          # Treasury / cash-flow engines
+│   ├── persistence.ts               # midas-v8 store + migrations + normalizers
+│   ├── netCashFlowEngine.ts
+│   ├── collectionEngine.ts
+│   ├── reconciliationEngine.ts      # Projected events vs bank ABONOs
+│   ├── realReconciliationEngine.ts  # Real cobranza vs bank (4-layer match)
+│   ├── operatingProjectionModule.ts # + scenarios + taxes + manual events
+│   └── ...                          # forecast, budget, calendar, providers
+├── modules/
+│   ├── financial-planning/          # Scenarios + propuestas + spreadsheet
+│   ├── financial-projection/        # KPIs + alerts + forward projection
+│   ├── shared-finance/              # Shared types, audit, calc engine
+│   └── taxes/                       # Tax dashboard
+├── components/                      # Treasury UI
+│   ├── Dashboard.tsx, CXP.tsx, Bancos.tsx, Clients.tsx, Providers.tsx
+│   ├── CommandPalette.tsx, KeyboardShortcuts.tsx
 │   └── ...
-└── index.css                  # Senda DS tokens and global styles
+└── workers/                         # Web workers for heavy compute
 ```
 
 ## Environment Variables
@@ -103,12 +109,16 @@ To activate live data connections in Atlas:
 
 ## Business Rules
 
-- The Base Scenario is always present, locked, and represents the original forecast.
+- The **Base Scenario** (`id === 'base'`) is always present, locked, non-deletable, and represents the original forecast. No propuestas, no overrides, no manual edits. It is the comparison anchor for every other scenario.
+- Scenario / propuesta state lives in `src/modules/financial-planning/`, not in the top-level `MidasStore`. The store carries shared treasury data only (catalogs, CXP, cobranza, bank, assumptions).
+- Forecast composition order on a non-base scenario: **base values → active propuestas (FinancialAdjustments) → manual cell overrides → recompute KPIs**.
 - Manual forecast overrides are scenario-specific and only editable in monthly view.
 - Collections move to the next occurrence in the client's own payment cycle, not to the next business day.
 - Factoring collections use the factoring term from invoice date and ignore the normal payment-day pattern.
 - Internal bank transfers are excluded from net cash flow but remain visible in bank reconciliation views.
 - Provider payments are enriched with flexibility and DTI criticality when catalog data is available.
+
+UI ↔ code naming is intentionally inverted in financial-planning (Simulación / Escenario / Propuesta in UI vs. parent / `FinancialScenario` / `FinancialAdjustment` in code). See `CLAUDE.md` for the full table before renaming anything in that layer.
 
 Full detail is documented in `RULES.md`.
 

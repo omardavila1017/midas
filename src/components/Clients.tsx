@@ -345,13 +345,13 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
             <button
               onClick={handleExport}
               title="Exportar catálogo"
-              className="p-2 h-9 rounded-lg bg-white border border-[var(--gray-200)] hover:bg-[var(--gray-50)] text-[var(--gray-500)] hover:text-[var(--gray-950)] transition-colors"
+              className="p-2 h-9 rounded-[var(--radius-md)] bg-white border border-[var(--gray-200)] hover:bg-[var(--gray-50)] text-[var(--gray-500)] hover:text-[var(--gray-950)] transition-colors"
             >
               <Download className="w-4 h-4" strokeWidth={1.5} />
             </button>
             <button
               onClick={addBlank}
-              className="flex items-center gap-1.5 px-4 h-9 rounded-lg bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
+              className="flex items-center gap-1.5 px-4 h-9 rounded-[var(--radius-md)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
             >
               <Plus className="w-4 h-4" strokeWidth={1.5} /> Nuevo cliente
             </button>
@@ -387,7 +387,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
       </div>
 
       {/* Search + grouping actions */}
-      <div className="rounded-xl border border-[var(--gray-200)] bg-white p-3 shadow-sm">
+      <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-[260px] flex-1">
             <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
@@ -408,7 +408,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
             <button
               onClick={createGroupFromSelected}
               disabled={selectedIds.size === 0 || !groupNameDraft.trim()}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 text-[12px] font-medium text-white transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
               title="Crear un grupo con las cuentas seleccionadas"
             >
               <Link2 className="h-3.5 w-3.5" /> Crear grupo
@@ -428,7 +428,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
             <button
               onClick={separateSelected}
               disabled={selectedIds.size === 0}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40"
               title="Separar las cuentas seleccionadas de su grupo actual"
             >
               <Unlink className="h-3.5 w-3.5" /> Separar
@@ -450,7 +450,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
       </div>
 
       {/* Hierarchy table */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
         <div className="overflow-x-auto">
         <table className="min-w-[980px] w-full text-[13px]">
           <thead className="bg-[var(--gray-50)] text-[var(--gray-400)] text-left text-[12px] uppercase tracking-wide">
@@ -498,7 +498,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
                         {isOpen ? <ChevronDown className="h-4 w-4 text-[var(--gray-400)]" /> : <ChevronRight className="h-4 w-4 text-[var(--gray-400)]" />}
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="font-semibold text-[var(--gray-950)]">{group.name}</span>
+                            <span className="font-bold text-[var(--gray-950)]">{group.name}</span>
                             {group.source === 'manual' && <span className="rounded bg-[var(--primary-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--primary)]">Manual</span>}
                           </div>
                           <p className="text-[11px] text-[var(--gray-400)] truncate">{group.accounts.length} cuenta{group.accounts.length !== 1 ? 's' : ''}</p>
@@ -516,7 +516,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
                           e.stopPropagation();
                           toggleGroupSelection(group);
                         }}
-                        className="rounded-lg border border-[var(--gray-200)] px-2.5 py-1 text-[11px] font-medium text-[var(--gray-500)] hover:bg-white"
+                        className="rounded-[var(--radius-md)] border border-[var(--gray-200)] px-2.5 py-1 text-[11px] font-medium text-[var(--gray-500)] hover:bg-white"
                       >
                         Seleccionar cuentas
                       </button>
@@ -536,7 +536,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
                             />
                             <button
                               onClick={() => renameGroup(group)}
-                              className="h-8 rounded-lg bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
+                              className="h-8 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
                             >
                               Renombrar
                             </button>
@@ -585,12 +585,12 @@ function SummaryMetric({
   sub: string;
 }) {
   return (
-    <div className="rounded-xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+    <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
         <Icon className="h-4 w-4 text-[var(--gray-400)]" />
       </div>
-      <p className="mt-2 font-mono text-[22px] font-semibold text-[var(--gray-950)]">{value}</p>
+      <p className="mt-2 font-mono text-[22px] font-bold text-[var(--gray-950)]">{value}</p>
       <p className="mt-1 text-[11px] text-[var(--gray-400)]">{sub}</p>
     </div>
   );
@@ -668,7 +668,7 @@ function AccountRows({
         <Td className="text-right tabular-nums">{account.pendingInvoices}</Td>
         <Td className="text-right tabular-nums">
           {account.realCreditDays > c.creditDays
-            ? <span className="font-semibold text-[var(--danger)]">{account.realCreditDays}d</span>
+            ? <span className="font-bold text-[var(--danger)]">{account.realCreditDays}d</span>
             : <span className="text-[var(--success)]">{account.realCreditDays}d</span>}
         </Td>
         <Td>
@@ -685,7 +685,7 @@ function AccountRows({
             </select>
             <button
               onClick={(e) => { e.stopPropagation(); onSeparate(); }}
-              className="rounded-lg border border-[var(--gray-200)] px-2 py-1 text-[11px] font-medium text-[var(--gray-500)] hover:bg-white hover:text-[var(--primary)]"
+              className="rounded-[var(--radius-md)] border border-[var(--gray-200)] px-2 py-1 text-[11px] font-medium text-[var(--gray-500)] hover:bg-white hover:text-[var(--primary)]"
               title="Separar esta cuenta en su propio grupo"
             >
               Separar
@@ -703,22 +703,22 @@ function AccountRows({
       {isOpen && (
         <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--surface-alt)]">
           <td colSpan={8} className="px-4 py-4">
-            <div className="mb-3 grid grid-cols-2 gap-3 rounded-lg bg-white px-3 py-2 text-[12px] lg:grid-cols-4">
+            <div className="mb-3 grid grid-cols-2 gap-3 rounded-[var(--radius-md)] bg-white px-3 py-2 text-[12px] lg:grid-cols-4">
               <div>
                 <div className="text-[var(--gray-400)]">Lag estimado</div>
-                <div className="font-mono font-semibold text-[var(--gray-950)]">{avgLag.toFixed(0)}d</div>
+                <div className="font-mono font-bold text-[var(--gray-950)]">{avgLag.toFixed(0)}d</div>
               </div>
               <div>
                 <div className="text-[var(--gray-400)]">IVA</div>
-                <div className="font-mono font-semibold text-[var(--gray-950)]">{ivaRate}%</div>
+                <div className="font-mono font-bold text-[var(--gray-950)]">{ivaRate}%</div>
               </div>
               <div>
                 <div className="text-[var(--gray-400)]">Cobranza confirmada</div>
-                <div className="font-mono font-semibold text-[var(--gray-950)]">{fmt(account.confirmedCollections)}</div>
+                <div className="font-mono font-bold text-[var(--gray-950)]">{fmt(account.confirmedCollections)}</div>
               </div>
               <div>
                 <div className="text-[var(--gray-400)]">Facturas confirmadas</div>
-                <div className="font-mono font-semibold text-[var(--gray-950)]">{account.confirmedInvoices}</div>
+                <div className="font-mono font-bold text-[var(--gray-950)]">{account.confirmedInvoices}</div>
               </div>
             </div>
             <ClientEditor client={c} onChange={onUpdate} />
@@ -854,22 +854,22 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
             ))}
           </div>
         </div>
-        <div className="bg-[var(--gray-50)] rounded-lg px-3 py-2 text-[12px] grid grid-cols-3 gap-x-4">
+        <div className="bg-[var(--gray-50)] rounded-[var(--radius-md)] px-3 py-2 text-[12px] grid grid-cols-3 gap-x-4">
           <div>
             <div className="text-[var(--gray-400)]">Base gravable anual</div>
-            <div className="font-semibold tabular-nums text-[var(--gray-950)]">
+            <div className="font-bold tabular-nums text-[var(--gray-950)]">
               {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0))}
             </div>
           </div>
           <div>
             <div className="text-[var(--gray-400)]">IVA ({(client.ivaRate ?? 16)}%)</div>
-            <div className="font-semibold tabular-nums text-[var(--primary)]">
+            <div className="font-bold tabular-nums text-[var(--primary)]">
               {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * ivaRate)}
             </div>
           </div>
           <div>
             <div className="text-[var(--gray-400)]">Total con IVA</div>
-            <div className="font-semibold tabular-nums text-[var(--gray-950)]">
+            <div className="font-bold tabular-nums text-[var(--gray-950)]">
               {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * (1 + ivaRate))}
             </div>
           </div>
@@ -1032,7 +1032,7 @@ function PatternEditor({ pattern, onChange }: { pattern: PaymentDayPattern; onCh
 // ---------------------------------------------------------------------------
 function IssuesPanel({ issues, onDismiss }: { issues: ImportIssue[]; onDismiss: () => void }) {
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 hover-lift">
+    <div className="bg-amber-50 border border-amber-200 rounded-[var(--radius)] p-4 hover-lift">
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2 text-amber-800 font-medium text-[13px]">
           <AlertTriangle className="w-4 h-4" /> {issues.length} avisos de importación

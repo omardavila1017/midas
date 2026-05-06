@@ -150,10 +150,10 @@ function CashFlowChartImpl({
   );
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">
             Caja proyectada
           </h2>
           <p className="mt-1 text-[12px] text-[var(--gray-400)]">
@@ -221,7 +221,7 @@ function CashFlowChartImpl({
               dataKey="caja"
               name="Caja final"
               stroke="#1d4ed8"
-              strokeWidth={2.5}
+              strokeWidth={1.5}
               dot={false}
               isAnimationActive={false}
             />
@@ -309,10 +309,10 @@ function BreakdownPanel({
   const outflowCategories = breakdown.filter((c) => c.outflows > 0);
 
   return (
-    <div className="mt-4 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)]">
+    <div className="mt-4 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)]">
       <div className="flex items-center justify-between border-b border-[var(--gray-200)] px-4 py-2.5">
         <div>
-          <span className="text-[13px] font-semibold text-[var(--gray-950)]">
+          <span className="text-[13px] font-bold text-[var(--gray-950)]">
             Desglose: {bucket.label}
           </span>
           <span className="ml-2 text-[11px] text-[var(--gray-400)]">
@@ -321,7 +321,7 @@ function BreakdownPanel({
         </div>
         <button
           onClick={onClose}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--gray-200)] transition-colors"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--gray-200)] transition-colors"
         >
           <X className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
         </button>
@@ -331,8 +331,8 @@ function BreakdownPanel({
         {/* Entradas */}
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Entradas</span>
-            <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--success)' }}>
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Entradas</span>
+            <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--success)' }}>
               {fmtCompact(totalInflows)}
             </span>
           </div>
@@ -358,8 +358,8 @@ function BreakdownPanel({
         {/* Salidas */}
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Salidas</span>
-            <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--danger)' }}>
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Salidas</span>
+            <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--danger)' }}>
               {fmtCompact(totalOutflows)}
             </span>
           </div>
@@ -427,7 +427,7 @@ function CategoryRow({
   const showDetail = supplierLines.length > 0;
 
   return (
-    <div className="rounded-lg border border-[var(--gray-200)] bg-white">
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white">
       <button
         onClick={showDetail ? onToggle : undefined}
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
@@ -444,7 +444,7 @@ function CategoryRow({
           {category.label}
           <span className="ml-1.5 text-[10px] text-[var(--gray-400)]">{movements.length} mov.</span>
         </span>
-        <span className="text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">
+        <span className="text-[12px] font-bold tabular-nums text-[var(--gray-950)]">
           {fmtCompact(amount)}
         </span>
         <span className="w-[40px] text-right text-[10px] tabular-nums text-[var(--gray-400)]">
@@ -477,7 +477,7 @@ function CategoryRow({
           {onNavigateToTax && (
             <button
               onClick={(e) => { e.stopPropagation(); onNavigateToTax(); }}
-              className="mt-2 inline-flex h-7 items-center rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--gray-50)]"
+              className="mt-2 inline-flex h-7 items-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--gray-50)]"
             >
               Ver módulo de impuestos →
             </button>

@@ -188,10 +188,10 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   if (clients.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center animate-page-in">
-        <div className="w-16 h-16 rounded-2xl bg-[var(--primary-muted)] flex items-center justify-center mb-4 animate-scale-in">
+        <div className="w-16 h-16 rounded-[var(--radius-lg)] bg-[var(--primary-muted)] flex items-center justify-center mb-4 animate-scale-in">
           <Inbox className="w-7 h-7 text-[var(--primary)]" />
         </div>
-        <h2 className="text-xl font-semibold text-[var(--gray-950)]">Sin clientes cargados</h2>
+        <h2 className="text-xl font-bold text-[var(--gray-950)]">Sin clientes cargados</h2>
         <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-sm">
           Importa el catálogo en la pestaña Clientes para ver la proyección.
         </p>
@@ -253,13 +253,13 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       <>
 
       {/* ── Summary strip ─────────────────────────────────── */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 animate-card-in stagger-1 hover-lift">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5 flex items-end gap-8 animate-card-in stagger-1 hover-lift">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Total proyectado {assumptions.year}</div>
           <AnimatedNumber
             value={total}
             format={fmtCurrency}
-            className="block text-3xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+            className="block text-3xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
         </div>
         <div>
@@ -283,7 +283,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
         <div className="ml-auto">
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-400)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+            className="flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[13px] text-[var(--gray-400)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
           >
             <Settings2 className="w-3.5 h-3.5" />
             Supuestos
@@ -296,7 +296,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       {bankStatements.length > 0 && (() => {
         const bankEmpresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
         return (
-          <div className="bg-white border border-[var(--gray-200)] rounded-xl animate-card-in stagger-1">
+          <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] animate-card-in stagger-1">
             <div className="flex items-end gap-8 p-4">
               <div className="flex items-center gap-2">
                 <Landmark className="w-4 h-4 text-[var(--primary)]" />
@@ -305,7 +305,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
                   <AnimatedNumber
                     value={totalBankSaldo}
                     format={fmtCurrency}
-                    className="block text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5"
+                    className="block text-xl font-bold tabular-nums text-[var(--primary)] mt-0.5"
                   />
                 </div>
               </div>
@@ -314,12 +314,12 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
                 <AnimatedNumber
                   value={bankRealAbonos}
                   format={fmtCurrency}
-                  className="block text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5"
+                  className="block text-xl font-bold tabular-nums text-[var(--success)] mt-0.5"
                 />
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Empresas</div>
-                <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5">
+                <div className="text-xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5">
                   {bankEmpresas.length > 0 ? bankEmpresas.length : <span className="text-[var(--gray-300)]">—</span>}
                 </div>
               </div>
@@ -351,7 +351,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       })()}
 
       {showSettings && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex gap-6 items-end animate-slide-down">
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 flex gap-6 items-end animate-slide-down">
           <Field label="Año">
             <input
               type="number"
@@ -393,14 +393,14 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       />
 
       {/* ── Más vistas y filtros (colapsable) ─────────────── */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-6">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-6">
         <button
           onClick={() => setShowMore(!showMore)}
           className="w-full flex items-center justify-between px-5 py-3 hover:bg-[var(--gray-50)]/50 transition-colors"
         >
           <div className="flex items-center gap-2.5">
             <SlidersHorizontal className="w-4 h-4 text-[var(--gray-400)]" />
-            <span className="text-[13px] font-semibold text-[var(--gray-950)]">Filtros y otras vistas</span>
+            <span className="text-[13px] font-bold text-[var(--gray-950)]">Filtros y otras vistas</span>
             {(query || freqFilter.size > 0 || factorajeFilter !== 'all') && (
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--primary-muted)] text-[var(--primary)] font-medium">
                 Filtros activos
@@ -623,13 +623,13 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   return (
     <div className="space-y-4">
       {/* Month summary — compact strip */}
-      <div className="bg-white border border-[var(--gray-200)] rounded-xl p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
+      <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobranza total</div>
           <AnimatedNumber
             value={monthTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes con pagos</div>
         </div>
@@ -638,7 +638,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
           <AnimatedNumber
             value={confirmedTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--success)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">{confirmedCount} confirmados</div>
         </div>
@@ -647,14 +647,14 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
           <AnimatedNumber
             value={projectedTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--primary)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">{monthEvents - confirmedCount} pendientes</div>
         </div>
         <div className="ml-auto min-w-[200px]">
           <div className="flex items-baseline justify-between">
             <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Avance</div>
-            <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)]">
+            <div className="text-xl font-bold tabular-nums text-[var(--gray-950)]">
               {monthTotal > 0 ? (
                 <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
               ) : (
@@ -673,14 +673,14 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
       {/* ── Reconciliation Panel ─────────────────────── */}
       {bankStatements.length > 0 && reconSummary && (
-        <div className="bg-white border border-[var(--primary)]/20 rounded-xl overflow-hidden animate-card-in stagger-4">
+        <div className="bg-white border border-[var(--primary)]/20 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-4">
           <button
             onClick={() => setShowReconciliation(!showReconciliation)}
             className="w-full flex items-center justify-between px-5 py-3 hover:bg-[var(--gray-50)]/50 transition-colors"
           >
             <div className="flex items-center gap-2.5">
               <ArrowRightLeft className="w-4 h-4 text-[var(--primary)]" />
-              <span className="text-[13px] font-semibold text-[var(--gray-950)]">Reconciliación Bancaria</span>
+              <span className="text-[13px] font-bold text-[var(--gray-950)]">Reconciliación Bancaria</span>
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--primary-muted)] text-[var(--primary)] font-medium">
                 {(reconSummary.matchRate * 100).toFixed(0)}% cruzado
               </span>
@@ -690,36 +690,36 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
           {showReconciliation && (
             <div className="px-5 pb-4 pt-1 space-y-3">
               <div className="grid grid-cols-4 gap-4">
-                <div className="p-3 rounded-lg bg-[var(--success)]/5 border border-[var(--success)]/20">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--success)]/5 border border-[var(--success)]/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cruzados</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(reconSummary.totalMatched)}</div>
+                  <div className="text-lg font-bold tabular-nums text-[var(--success)]">{fmtCurrency(reconSummary.totalMatched)}</div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.matchedCount} pago{reconSummary.matchedCount !== 1 ? 's' : ''} confirmados en banco</div>
                 </div>
-                <div className="p-3 rounded-lg bg-[var(--info)]/5 border border-[var(--info)]/20">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--info)]/5 border border-[var(--info)]/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <HelpCircle className="w-3.5 h-3.5 text-[var(--info)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--info)]">Probables</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--info)]">{fmtCurrency(reconSummary.totalLikely)}</div>
+                  <div className="text-lg font-bold tabular-nums text-[var(--info)]">{fmtCurrency(reconSummary.totalLikely)}</div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.likelyCount} pago{reconSummary.likelyCount !== 1 ? 's' : ''} con match parcial</div>
                 </div>
-                <div className="p-3 rounded-lg bg-[var(--warning)]/5 border border-[var(--warning)]/20">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--warning)]/5 border border-[var(--warning)]/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <AlertTriangle className="w-3.5 h-3.5 text-[var(--warning)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--warning)]">Sin cruzar</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--warning)]">{fmtCurrency(reconSummary.totalUnmatched)}</div>
+                  <div className="text-lg font-bold tabular-nums text-[var(--warning)]">{fmtCurrency(reconSummary.totalUnmatched)}</div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.unmatchedCount} pago{reconSummary.unmatchedCount !== 1 ? 's' : ''} sin movimiento bancario</div>
                 </div>
-                <div className="p-3 rounded-lg bg-[var(--gray-50)] border border-[var(--gray-200)]/60">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--gray-50)] border border-[var(--gray-200)]/60">
                   <div className="flex items-center gap-1.5 mb-1">
                     <Banknote className="w-3.5 h-3.5 text-[var(--gray-400)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Abonos no asignados</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--gray-700)]">
+                  <div className="text-lg font-bold tabular-nums text-[var(--gray-700)]">
                     {fmtCurrency(reconSummary.unmatchedBankAbonos.reduce((s, a) => s + a.importe, 0))}
                   </div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.unmatchedBankAbonos.length} depósito{reconSummary.unmatchedBankAbonos.length !== 1 ? 's' : ''} sin proyección</div>
@@ -755,11 +755,11 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                   <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)] mb-1.5">Depósitos bancarios sin proyección asociada</div>
                   <div className="space-y-1 max-h-32 overflow-y-auto">
                     {reconSummary.unmatchedBankAbonos.slice(0, 8).map((a, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-[var(--gray-50)] text-[12px]">
+                      <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-[var(--radius-md)] bg-[var(--gray-50)] text-[12px]">
                         <span className="text-[var(--gray-400)]">{a.fechaOperacion}</span>
                         <span className="text-[var(--gray-700)] truncate flex-1">{a.concepto}</span>
                         <span className="text-[var(--gray-400)]">{a.referencia}</span>
-                        <span className="font-semibold tabular-nums text-[var(--success)]">+{fmtCurrency(a.importe)}</span>
+                        <span className="font-bold tabular-nums text-[var(--success)]">+{fmtCurrency(a.importe)}</span>
                       </div>
                     ))}
                     {reconSummary.unmatchedBankAbonos.length > 8 && (
@@ -776,16 +776,16 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
       )}
 
       {/* Calendar (header oscuro + grid en una sola card) */}
-      <div key={`grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
+      <div key={`grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-5">
         <div className="flex items-center justify-between px-4 py-3 bg-[var(--gray-950)]">
           <button
             onClick={prevMonth}
             aria-label="Mes anterior"
-            className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+            className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <h2 key={`${year}-${month}`} className="text-lg font-semibold text-white flex items-center gap-2 animate-slide-down">
+          <h2 key={`${year}-${month}`} className="text-lg font-bold text-white flex items-center gap-2 animate-slide-down">
             <CalendarRange className="w-4 h-4 text-white/60" />
             <span>{MONTH_NAMES[month]} {year}</span>
           </h2>
@@ -794,14 +794,14 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
               onClick={handleExport}
               title="Exportar mes"
               aria-label="Exportar mes"
-              className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+              className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={nextMonth}
               aria-label="Mes siguiente"
-              className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+              className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             >
               <ChevronRight className="w-5 h-5" />
             </button>
@@ -884,7 +884,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                     {d.getUTCDate()}
                   </span>
                   {isHoliday && isCurrentMonth && (
-                    <span className="text-[9px] uppercase tracking-wide font-semibold text-[var(--warning)] leading-none mt-0.5">Inhábil</span>
+                    <span className="text-[9px] uppercase tracking-wide font-bold text-[var(--warning)] leading-none mt-0.5">Inhábil</span>
                   )}
                   {dayEvents.length > 0 && (
                     <div className="flex items-center gap-0.5">
@@ -898,7 +898,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                 </div>
                 {dayTotal > 0 && isCurrentMonth && (
                   <div className="mt-1">
-                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
+                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-bold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
                       {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmtCurrency(dayTotal)}
                     </div>
                     {someConfirmed && (
@@ -926,12 +926,12 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
       {/* Day detail panel */}
       {selectedDay && selectedEvents.length > 0 && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 animate-slide-down">
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 animate-slide-down">
           <div className="flex justify-between items-center mb-3">
-            <h3 className="font-semibold text-[14px] text-[var(--gray-950)]">
+            <h3 className="font-bold text-[14px] text-[var(--gray-950)]">
               {new Date(selectedDay + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
             </h3>
-            <span className="text-lg font-semibold tabular-nums text-[var(--success)]">
+            <span className="text-lg font-bold tabular-nums text-[var(--success)]">
               +{fmtCurrency(selectedTotal)}
             </span>
           </div>
@@ -954,7 +954,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                       ? 'bg-[var(--warning)]/10 border border-[var(--warning)]/30'
                       : 'bg-[var(--gray-50)] border border-transparent';
               return (
-                <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-lg ${rowBg} hover:brightness-95 transition-colors`}>
+                <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-[var(--radius-md)] ${rowBg} hover:brightness-95 transition-colors`}>
                   {/* Confirm / Unconfirm toggle */}
                   <button
                     onClick={() => {
@@ -988,12 +988,12 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                     <div className="flex items-center gap-1.5">
                       <span className="text-[13px] font-medium text-[var(--gray-950)] truncate">{c?.name ?? e.clientId}</span>
                       {isReconciled && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--success)]/15 text-[var(--success)] font-semibold uppercase tracking-wide flex-shrink-0">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--success)]/15 text-[var(--success)] font-bold uppercase tracking-wide flex-shrink-0">
                           Cruzado
                         </span>
                       )}
                       {isLikely && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--info)]/15 text-[var(--info)] font-semibold uppercase tracking-wide flex-shrink-0">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--info)]/15 text-[var(--info)] font-bold uppercase tracking-wide flex-shrink-0">
                           Probable
                         </span>
                       )}
@@ -1023,7 +1023,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                     )}
                   </div>
                   <div className="text-right ml-3">
-                    <div className={`text-[13px] font-semibold tabular-nums ${isConfirmed || isReconciled ? 'text-[var(--success)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(e.amount)}</div>
+                    <div className={`text-[13px] font-bold tabular-nums ${isConfirmed || isReconciled ? 'text-[var(--success)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(e.amount)}</div>
                     {recon?.actualAmount && Math.abs((recon.actualAmount ?? 0) - e.amount) > 0.01 && (
                       <div className={`text-[10px] font-medium tabular-nums ${(recon.amountDelta ?? 0) > 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
                         Banco: {fmtCurrency(recon.actualAmount)} ({(recon.amountDelta ?? 0) > 0 ? '+' : ''}{fmtCurrency(recon.amountDelta ?? 0)})
@@ -1040,8 +1040,8 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
       {/* Weekly breakdown */}
       {Object.keys(weeklyTotals).length > 0 && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift animate-card-in">
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 hover-lift animate-card-in">
+          <h3 className="text-[13px] font-bold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
           <div className="space-y-2">
             {Object.entries(weeklyTotals).sort(([a], [b]) => a.localeCompare(b)).map(([week, total], i) => {
               const pct = monthTotal ? (total / monthTotal) * 100 : 0;
@@ -1075,9 +1075,9 @@ function MonthView({ events, total }: { events: CollectionEvent[]; total: number
   const max = Math.max(...monthly, 1);
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 hover-lift animate-card-in stagger-4">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5 hover-lift animate-card-in stagger-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Entrada de efectivo por mes</h3>
+        <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Entrada de efectivo por mes</h3>
         <span className="text-[12px] text-[var(--gray-400)]">
           Barra = monto del mes · % = participación sobre el total anual
         </span>
@@ -1111,7 +1111,7 @@ function MonthView({ events, total }: { events: CollectionEvent[]; total: number
       </div>
       <div className="mt-4 pt-3 border-t border-[var(--gray-200)]/40 flex justify-between text-[13px]">
         <span className="text-[var(--gray-400)]">Total anual</span>
-        <AnimatedNumber value={total} format={fmtCurrency} className="font-semibold tabular-nums" />
+        <AnimatedNumber value={total} format={fmtCurrency} className="font-bold tabular-nums" />
       </div>
     </div>
   );
@@ -1143,9 +1143,9 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
   const maxTotal = rows[0]?.total ?? 1;
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden hover-lift animate-card-in stagger-5">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden hover-lift animate-card-in stagger-5">
       <div className="px-5 py-3 border-b border-[var(--gray-200)]/40 flex items-center justify-between">
-        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Ranking por cliente</h3>
+        <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Ranking por cliente</h3>
         <span className="text-[12px] text-[var(--gray-400)]">Ordenado por monto proyectado</span>
       </div>
       <table className="w-full text-[13px]">
@@ -1217,10 +1217,10 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
     a.clientId.localeCompare(b.clientId),
   );
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden hover-lift">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden hover-lift">
       <div className="px-4 py-3 border-b border-[var(--gray-200)]/40 flex items-center justify-between">
         <div>
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Detalle de eventos</h3>
+          <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Detalle de eventos</h3>
           <p className="text-[12px] text-[var(--gray-400)] mt-0.5">
             Secuencia auditada: fecha de factura, fecha teórica por crédito y fecha real de cobro.
           </p>
@@ -1554,13 +1554,13 @@ function CobranzaRealCalendar({
           % Cruzado banco con barra de avance. La fila inline de seis
           totales que vivía aquí migró a esta estructura para que el
           primer scan visual sea idéntico al calendario legacy. */}
-      <div className="bg-white border border-[var(--gray-200)] rounded-xl p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
+      <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Total CXC</div>
           <AnimatedNumber
             value={totalMes}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">
             {eventCount} evento{eventCount !== 1 ? 's' : ''} · {uniqueClientCount} cliente{uniqueClientCount !== 1 ? 's' : ''}
@@ -1571,7 +1571,7 @@ function CobranzaRealCalendar({
           <AnimatedNumber
             value={bankTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--success)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">cruzado con banco</div>
         </div>
@@ -1580,14 +1580,14 @@ function CobranzaRealCalendar({
           <AnimatedNumber
             value={pendingTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--primary)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">JDE pago + factura abierta</div>
         </div>
         <div className="ml-auto min-w-[200px]">
           <div className="flex items-baseline justify-between">
             <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Cruzado banco</div>
-            <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)]">
+            <div className="text-xl font-bold tabular-nums text-[var(--gray-950)]">
               {expectedThisMonth > 0 ? (
                 <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
               ) : (
@@ -1608,23 +1608,23 @@ function CobranzaRealCalendar({
           Una sola card con la cabecera navy del legacy, la fila de
           chips de fuente con estilo legacy (primary cuando activo),
           el grid de celdas verticales y el panel de detalle. */}
-      <div key={`real-grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
+      <div key={`real-grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-5">
         <div className="flex items-center justify-between px-4 py-3 bg-[var(--gray-950)]">
           <button
             onClick={prevMonth}
             aria-label="Mes anterior"
-            className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+            className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <h2 key={`${year}-${month}`} className="text-lg font-semibold text-white flex items-center gap-2 capitalize animate-slide-down">
+          <h2 key={`${year}-${month}`} className="text-lg font-bold text-white flex items-center gap-2 capitalize animate-slide-down">
             <CalendarRange className="w-4 h-4 text-white/60" />
             <span>{monthLabel}</span>
           </h2>
           <button
             onClick={nextMonth}
             aria-label="Mes siguiente"
-            className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+            className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
             <ChevronRight className="w-5 h-5" />
           </button>
@@ -1658,7 +1658,7 @@ function CobranzaRealCalendar({
             })}
           </div>
           {onEnsureBankCoverage && coverageWeak && (
-            <div className="mt-3 flex items-center gap-3 rounded-lg border border-[var(--warning,_#f59e0b)]/30 bg-[var(--warning-muted,_#fef3c7)] px-3 py-2 text-[12px]">
+            <div className="mt-3 flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--warning,_#f59e0b)]/30 bg-[var(--warning-muted,_#fef3c7)] px-3 py-2 text-[12px]">
               <AlertTriangle className="w-4 h-4 text-[var(--warning,_#b45309)] flex-shrink-0" />
               <div className="min-w-0">
                 <div className="font-medium text-[var(--gray-950)]">Cobertura bancaria parcial del mes visible</div>
@@ -1675,7 +1675,7 @@ function CobranzaRealCalendar({
                   });
                 }}
                 disabled={bankCoverageLoading}
-                className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-lg bg-[var(--gray-950)] text-white text-[12px] font-medium disabled:opacity-50"
+                className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] bg-[var(--gray-950)] text-white text-[12px] font-medium disabled:opacity-50"
               >
                 {bankCoverageLoading ? 'Cargando…' : 'Cargar bancos del mes'}
               </button>
@@ -1750,7 +1750,7 @@ function CobranzaRealCalendar({
                 {dayTotal > 0 && inMonth && (
                   <div className="mt-1">
                     <div
-                      className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums inline-block"
+                      className="rounded-md px-1.5 py-0.5 text-[11px] font-bold tabular-nums inline-block"
                       style={{ backgroundColor: pillBg, color: pillFg }}
                     >
                       {dayTotal >= 1_000_000
@@ -1782,7 +1782,7 @@ function CobranzaRealCalendar({
         {selectedDay && (
           <div className="border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)] animate-slide-down">
             <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-              <span className="text-[13px] font-semibold text-[var(--gray-950)] capitalize">
+              <span className="text-[13px] font-bold text-[var(--gray-950)] capitalize">
                 {new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
               </span>
               <span className="text-[11px] text-[var(--gray-500)]">
@@ -1851,7 +1851,7 @@ function CobranzaRealCalendar({
                           <span className="text-[11px] text-[var(--gray-500)]">Factura CXC pendiente.</span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--gray-950)]">
+                      <td className="px-3 py-2 text-right tabular-nums font-bold text-[var(--gray-950)]">
                         {fmtCurrency(event.amount)}
                       </td>
                     </tr>
@@ -1870,8 +1870,8 @@ function CobranzaRealCalendar({
           Lunes-domingo, ordenado por fecha. Solo se muestra cuando
           hay eventos en el mes para no dejar una card vacía. */}
       {Object.keys(weeklyTotals).length > 0 && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 animate-card-in">
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 animate-card-in">
+          <h3 className="text-[13px] font-bold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
           <div className="space-y-2">
             {Object.entries(weeklyTotals)
               .sort(([a], [b]) => a.localeCompare(b))
@@ -1984,10 +1984,10 @@ function ClientAgingTable({
   const maxSaldo = Math.max(...top.map(a => a.saldoTotal), 1);
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
       <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
         <Banknote className="w-4 h-4 text-[var(--gray-400)]" />
-        <span className="text-[13px] font-semibold text-[var(--gray-950)]">
+        <span className="text-[13px] font-bold text-[var(--gray-950)]">
           Top {Math.min(20, aging.length)} clientes — antigüedad de saldo
         </span>
         {aging.length > 20 && (
@@ -2030,7 +2030,7 @@ function ClientAgingTable({
                       {a.cia} · #{a.noCliente}
                     </div>
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-semibold">
+                  <td className="px-3 py-2 text-right tabular-nums font-bold">
                     {fmtCurrency(a.saldoTotal)}
                   </td>
                   <td className="px-3 py-2">
@@ -2055,7 +2055,7 @@ function ClientAgingTable({
                   <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)]">
                     {a.v61_90.saldo > 0 ? fmtCurrency(a.v61_90.saldo) : '—'}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)] font-semibold">
+                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)] font-bold">
                     {a.mas90.saldo > 0 ? fmtCurrency(a.mas90.saldo) : '—'}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-500)]">
@@ -2166,11 +2166,11 @@ function ReviewCandidatesPanel({
     confirmReviewKeys(highConfidenceKeys);
   };
   return (
-    <div className="bg-white border border-[var(--warning,_#f59e0b)]/30 rounded-xl overflow-hidden">
+    <div className="bg-white border border-[var(--warning,_#f59e0b)]/30 rounded-[var(--radius)] overflow-hidden">
       <div className="px-4 py-3 bg-[var(--warning-muted,_#fef3c7)] border-b border-[var(--warning,_#f59e0b)]/20 flex flex-wrap items-center gap-2">
         <HelpCircle className="w-4 h-4 text-[var(--warning,_#b45309)]" />
         <div>
-          <div className="text-[13px] font-semibold text-[var(--gray-950)]">Cruces por revisar</div>
+          <div className="text-[13px] font-bold text-[var(--gray-950)]">Cruces por revisar</div>
           <div className="text-[11px] text-[var(--gray-500)]">
             {candidates.length} abono{candidates.length !== 1 ? 's' : ''} candidato{candidates.length !== 1 ? 's' : ''}; no cuentan como banco cruzado hasta confirmarse.
           </div>
@@ -2180,14 +2180,14 @@ function ReviewCandidatesPanel({
             <button
               type="button"
               onClick={handleBulkConfirm}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--primary,_#1d4ed8)] text-white text-[11px] font-semibold hover:opacity-90 transition-opacity"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--primary,_#1d4ed8)] text-white text-[11px] font-bold hover:opacity-90 transition-opacity"
               title="Confirma los cruces con confianza ≥ 85% y los suma al cruce real."
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
               Confirmar {highConfidenceKeys.length} cruce{highConfidenceKeys.length === 1 ? '' : 's'} ≥ 85%
             </button>
           )}
-          <div className="text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(totalAmount)}</div>
+          <div className="text-[12px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(totalAmount)}</div>
         </div>
       </div>
       <div className="divide-y divide-[var(--gray-100)]">
@@ -2408,11 +2408,11 @@ function CobranzaRealView({
 
   if (records.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-xl">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--primary-muted)] flex items-center justify-center mb-3">
+      <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)]">
+        <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary-muted)] flex items-center justify-center mb-3">
           <Database className="w-6 h-6 text-[var(--primary)]" />
         </div>
-        <h3 className="text-base font-semibold text-[var(--gray-950)]">Sin cobranza JDE cargada</h3>
+        <h3 className="text-base font-bold text-[var(--gray-950)]">Sin cobranza JDE cargada</h3>
         {error ? (
           <p className="text-[13px] text-[var(--danger)] mt-1 max-w-md">
             {error}
@@ -2429,7 +2429,7 @@ function CobranzaRealView({
           <button
             onClick={onRefresh}
             disabled={refreshing}
-            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary)]/90 disabled:opacity-50"
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-md)] border border-[var(--primary)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary)]/90 disabled:opacity-50"
           >
             {refreshing ? 'Reintentando…' : 'Reintentar carga'}
           </button>
@@ -2441,13 +2441,13 @@ function CobranzaRealView({
   return (
     <div className="space-y-4">
       {/* KPIs */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 flex-wrap">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5 flex items-end gap-8 flex-wrap">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo CXC pendiente</div>
           <AnimatedNumber
             value={totalSaldo}
             format={fmtCurrency}
-            className="block text-2xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+            className="block text-2xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
         </div>
         <div>
@@ -2516,7 +2516,7 @@ function CobranzaRealView({
       <ReviewCandidatesPanel candidates={reconciliation.reviewCandidates} reconciliation={reconciliation} />
 
       {/* Filtros */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex flex-wrap gap-2 items-center">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -2619,7 +2619,7 @@ function CobranzaRealView({
             const stamp = new Date().toISOString().slice(0, 10);
             downloadFile(toCSV(rows), `cobranza-cruce-${stamp}.csv`);
           }}
-          className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+          className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
           disabled={filtered.length === 0}
           title="Exporta lo visible con todas las columnas de cruce."
         >
@@ -2649,10 +2649,10 @@ function CobranzaRealView({
       />
 
       {/* Tabla raw */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
           <FileSpreadsheet className="w-4 h-4 text-[var(--gray-400)]" />
-          <span className="text-[13px] font-semibold text-[var(--gray-950)]">Facturas (CXC)</span>
+          <span className="text-[13px] font-bold text-[var(--gray-950)]">Facturas (CXC)</span>
           <span className="text-[11px] text-[var(--gray-400)] ml-auto">
             {bankStatements.length > 0
               ? `Cruce activo · ${reconciliation.summary.facturasCobradasBanco} cobradas con banco`

@@ -82,14 +82,14 @@ const CashFlowTable: React.FC<Props> = ({
 
   return (
     <section
-      className={`rounded-2xl border border-[var(--gray-200)] bg-white ${compact ? '' : 'overflow-hidden'}`}
+      className={`rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white ${compact ? '' : 'overflow-hidden'}`}
       aria-label={title ?? 'Flujo mensual editable'}
     >
       {!compact && (title || subtitle) && (
         <header className="flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--gray-100)]">
           <div>
             {title && (
-              <h3 className="text-[15px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              <h3 className="text-[15px] font-bold tracking-tight" style={{ color: 'var(--gray-950)' }}>
                 {title}
               </h3>
             )}
@@ -103,7 +103,7 @@ const CashFlowTable: React.FC<Props> = ({
             {hasAnyOverride && (
               <button
                 onClick={resetAll}
-                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+                className="flex items-center gap-1.5 h-8 px-3 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
                 title="Limpiar todos los ajustes manuales"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -113,7 +113,7 @@ const CashFlowTable: React.FC<Props> = ({
             {onDownloadExcel && (
               <button
                 onClick={onDownloadExcel}
-                className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)]"
+                className="flex items-center gap-1.5 h-8 px-3 rounded-[var(--radius-md)] bg-[var(--primary)] text-white text-[12px] font-medium hover:bg-[var(--primary-hover)]"
                 title="Descargar el flujo mensual completo como Excel"
               >
                 <Download className="w-3.5 h-3.5" />
@@ -188,7 +188,7 @@ const Row: React.FC<{
         <div className="flex items-center gap-2">
           <span className="font-medium" style={{ color: 'var(--gray-950)' }}>{fmtYearMonthShort(row.yearMonth)}</span>
           <span
-            className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+            className="text-[9px] font-bold uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-full"
             style={{ background: phaseBadge.bg, color: phaseBadge.color }}
           >
             {phaseBadge.label}
@@ -240,7 +240,7 @@ const Row: React.FC<{
       </td>
       <td className="px-4 py-2.5 text-right">
         <div className="flex items-center justify-end gap-2">
-          <span className="tabular-nums font-semibold" style={{ color: 'var(--gray-950)' }}>
+          <span className="tabular-nums font-bold" style={{ color: 'var(--gray-950)' }}>
             {fmtCurrency(row.closingCash)}
           </span>
           {(overrideIncome || overrideExpense) && (
@@ -350,8 +350,8 @@ export const CashFlowMiniStat: React.FC<CashSummaryProps> = ({ label, icon, valu
     {icon === 'up' && <TrendingUp className="w-4 h-4" style={{ color: 'var(--success)' }} />}
     {icon === 'down' && <TrendingDown className="w-4 h-4" style={{ color: 'var(--danger)' }} />}
     <div>
-      {label && <p className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>{label}</p>}
-      <p className="text-[14px] font-semibold tabular-nums" style={{ color: 'var(--gray-950)' }}>{fmtCurrency(value)}</p>
+      {label && <p className="text-[10px] uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>{label}</p>}
+      <p className="text-[14px] font-bold tabular-nums" style={{ color: 'var(--gray-950)' }}>{fmtCurrency(value)}</p>
     </div>
   </div>
 );

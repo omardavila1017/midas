@@ -105,7 +105,7 @@ function MovementsTableImpl(props: MovementsTableProps) {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Buscar contraparte o concepto"
-              className="h-9 w-[240px] rounded-xl border border-[var(--gray-200)] bg-white pl-8 pr-3 text-[12px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
+              className="h-9 w-[240px] rounded-[var(--radius)] border border-[var(--gray-200)] bg-white pl-8 pr-3 text-[12px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]"
             />
           </div>
           <Segmented
@@ -131,7 +131,7 @@ function MovementsTableImpl(props: MovementsTableProps) {
           type="button"
           onClick={toggleAll}
           disabled={groups.length === 0}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-50"
+          className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2.5 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-50"
         >
           {allExpanded
             ? <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.5} />
@@ -147,7 +147,7 @@ function MovementsTableImpl(props: MovementsTableProps) {
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[820px] text-[13px]">
-            <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+            <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
               <tr>
                 <th className="px-4 py-2.5 w-[40%]">Grupo</th>
                 <th className="px-4 py-2.5 text-right">Ingresos</th>
@@ -215,7 +215,7 @@ function GroupRows({
               : <ChevronRight className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />}
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-semibold text-[var(--gray-950)]">{group.label}</span>
+                <span className="font-bold text-[var(--gray-950)]">{group.label}</span>
                 {group.containsToday && (
                   <span className="inline-flex h-5 items-center rounded-full bg-[var(--gray-100)] px-2 text-[10px] font-medium text-[var(--gray-700)]">
                     En curso
@@ -235,7 +235,7 @@ function GroupRows({
           {group.outflowTotal > 0 ? `-${fmtCompact(group.outflowTotal)}` : '—'}
         </td>
         <td
-          className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-semibold"
+          className="px-4 py-3 text-right tabular-nums whitespace-nowrap font-bold"
           style={{ color: group.netTotal > 0 ? 'var(--success)' : group.netTotal < 0 ? 'var(--danger)' : 'var(--gray-700)' }}
         >
           {group.netTotal === 0 ? '$0' : `${group.netTotal > 0 ? '+' : '-'}${fmtCompact(Math.abs(group.netTotal))}`}
@@ -254,7 +254,7 @@ function GroupRows({
           <td colSpan={6} className="p-0 bg-white">
             <div className="border-t border-[var(--gray-200)]">
               <table className="w-full text-[12.5px]">
-                <thead className="text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)] bg-[var(--gray-50)]/50">
+                <thead className="text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)] bg-[var(--gray-50)]/50">
                   <tr>
                     <th className="px-4 py-2 pl-10">Fecha</th>
                     <th className="px-4 py-2">Tipo</th>
@@ -327,7 +327,7 @@ function GroupRows({
                             event.stopPropagation();
                             setVisibleLimit((current) => current + 120);
                           }}
-                          className="inline-flex h-9 items-center rounded-lg border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+                          className="inline-flex h-9 items-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
                         >
                           Cargar 120 más · faltan {hiddenCount}
                         </button>
@@ -478,11 +478,11 @@ function Segmented<T extends string>({
   return (
     <div className="flex items-center gap-2">
       {label && (
-        <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
           {label}
         </span>
       )}
-      <div className="inline-flex h-8 items-center rounded-lg border border-[var(--gray-200)] bg-white p-0.5">
+      <div className="inline-flex h-8 items-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white p-0.5">
         {options.map((option) => {
           const active = value === option.id;
           return (

@@ -123,14 +123,14 @@ const DatePicker: React.FC<Props> = ({
   return (
     <div ref={rootRef} className="relative">
       {label && (
-        <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1.5">
+        <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)] mb-1.5">
           {label}
         </label>
       )}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full h-10 pl-3 pr-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
+        className="w-full h-10 pl-3 pr-3 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
         style={{ color: value ? 'var(--gray-950)' : 'var(--gray-400)' }}
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -147,7 +147,7 @@ const DatePicker: React.FC<Props> = ({
 
       {open && (
         <div
-          className="absolute left-0 right-0 mt-2 z-50 rounded-2xl border border-[var(--gray-200)] bg-white shadow-xl overflow-hidden origin-top"
+          className="absolute left-0 right-0 mt-2 z-50 rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-xl overflow-hidden origin-top"
           style={{
             animation: 'slideDown var(--motion-state) var(--ease-smooth) both',
             boxShadow: 'var(--shadow-md)',
@@ -158,18 +158,18 @@ const DatePicker: React.FC<Props> = ({
             <button
               type="button"
               onClick={prevMonth}
-              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] transition-colors"
+              className="h-7 w-7 flex items-center justify-center rounded-[var(--radius-md)] hover:bg-white text-[var(--gray-500)] transition-colors"
               aria-label="Mes anterior"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <span className="text-[13px] font-semibold tracking-tight text-[var(--gray-950)] capitalize">
+            <span className="text-[13px] font-bold tracking-tight text-[var(--gray-950)] capitalize">
               {MONTHS_FULL[viewM - 1]} {viewY}
             </span>
             <button
               type="button"
               onClick={nextMonth}
-              className="h-7 w-7 flex items-center justify-center rounded-lg hover:bg-white text-[var(--gray-500)] transition-colors"
+              className="h-7 w-7 flex items-center justify-center rounded-[var(--radius-md)] hover:bg-white text-[var(--gray-500)] transition-colors"
               aria-label="Mes siguiente"
             >
               <ChevronRight className="w-4 h-4" />
@@ -180,7 +180,7 @@ const DatePicker: React.FC<Props> = ({
             {WEEKDAYS.map((w, i) => (
               <div
                 key={i}
-                className="h-6 flex items-center justify-center text-[10px] font-semibold uppercase tracking-wider text-[var(--gray-400)]"
+                className="h-6 flex items-center justify-center text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--gray-400)]"
               >
                 {w}
               </div>
@@ -196,7 +196,7 @@ const DatePicker: React.FC<Props> = ({
                   key={idx}
                   type="button"
                   onClick={() => handlePick(day)}
-                  className="h-8 rounded-lg text-[12px] font-medium tabular-nums transition-colors"
+                  className="h-8 rounded-[var(--radius-md)] text-[12px] font-medium tabular-nums transition-colors"
                   style={{
                     background: isSelected ? 'var(--gray-950)' : 'transparent',
                     color: isSelected ? 'white' : 'var(--gray-700)',

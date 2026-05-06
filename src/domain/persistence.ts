@@ -101,6 +101,21 @@ const STORAGE_KEY = 'midas-v8';
 const SAME_SCHEMA_LEGACY_KEYS = ['midas-v7', 'midas-v6', 'midas-v5', 'flowsense-v5'];
 const LEGACY_KEYS = ['flowsense-v4', 'flowsense-v3', 'flowsense-v2', 'flowsense-v1'];
 
+// Orphan keys de OperatingProjection (módulo eliminado). Se limpian al primer
+// boot tras el cut para que el localStorage del usuario quede ordenado.
+const ORPHAN_OPERATING_KEYS = [
+  'midas.operating.scenarios.v1',
+  'midas.operating.activeScenario.v1',
+  'midas.operating.manualAdjustments.v1',
+  'midas.operating.manualExpenseEvents.v1',
+];
+
+function purgeOrphanKeys(): void {
+  for (const key of ORPHAN_OPERATING_KEYS) {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  }
+}
+
 function isoNow(): string {
   return new Date().toISOString();
 }
@@ -267,6 +282,7 @@ export function saveStore(store: MidasStore): void {
 }
 
 export function loadStore(): MidasStore | null {
+  purgeOrphanKeys();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {

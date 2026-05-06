@@ -30,6 +30,7 @@ export interface SpreadsheetGridProps {
   onClearCell: (conceptKey: string, bucketKey: string) => void;
   onAddRow: (type: FinancialMovementType) => void;
   onClickRow?: (conceptKey: string) => void;
+  onInspectCell?: (conceptKey: string, bucketKey: string) => void;
   onReadOnlyAttempt?: () => void;
 }
 
@@ -51,6 +52,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     onClearCell,
     onAddRow,
     onClickRow,
+    onInspectCell,
     onReadOnlyAttempt,
   } = props;
 
@@ -212,13 +214,24 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         event.preventDefault();
         startEdit();
         break;
+      case 'i':
+      case 'I':
+        if (selection && onInspectCell) {
+          const row = dataRows[selection.rowIndex];
+          const col = columns[selection.colIndex];
+          if (row && col) {
+            event.preventDefault();
+            onInspectCell(row.conceptKey, col.key);
+          }
+        }
+        break;
       default:
         if (event.key.length === 1 && /[0-9.\-]/.test(event.key)) {
           event.preventDefault();
           startEdit(event.key);
         }
     }
-  }, [clearSelectedCell, commitEdit, isEditing, moveSelection, startEdit]);
+  }, [clearSelectedCell, columns, commitEdit, dataRows, isEditing, moveSelection, onInspectCell, selection, startEdit]);
 
   const renderDataRow = (row: PlanningRow, rowIndex: number) => (
     <div
@@ -227,7 +240,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       className="flex border-b border-[var(--gray-100)] hover:bg-[var(--gray-50)]/40"
       style={{ height: ROW_HEIGHT }}
     >
-      <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]" left={0}>
+      <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" left={0}>
         <span className="truncate">{row.group}</span>
       </StickyLeftCell>
       <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH}>
@@ -236,7 +249,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           onClick={() => onClickRow?.(row.conceptKey)}
           className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-medium text-[var(--gray-950)] hover:text-[var(--primary)]"
         >
-          {row.isCustom && <Sparkles className="h-3 w-3 text-[var(--primary)]" strokeWidth={2} />}
+          {row.isCustom && <Sparkles className="h-3 w-3 text-[var(--primary)]" strokeWidth={1.5} />}
           <span className="truncate">{row.label}</span>
         </button>
       </StickyLeftCell>
@@ -309,7 +322,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             onClick={() => onAddRow(type)}
             className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-[var(--gray-200)] bg-white px-2.5 py-1 text-[11px] font-medium text-[var(--gray-500)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
           >
-            <Plus className="h-3 w-3" strokeWidth={2} />
+            <Plus className="h-3 w-3" strokeWidth={1.5} />
             Agregar fila en {type === 'INFLOW' ? 'Ingresos' : 'Egresos'}
           </button>
         </div>
@@ -327,7 +340,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       <StickyLeftCell
         width={GROUP_COL_WIDTH + LABEL_COL_WIDTH}
         left={0}
-        className="text-[12px] font-semibold text-[var(--gray-950)]"
+        className="text-[12px] font-bold text-[var(--gray-950)]"
       >
         {label}
       </StickyLeftCell>
@@ -343,7 +356,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         return (
           <div
             key={column.key}
-            className="flex h-full items-center justify-end px-2 text-[12px] font-semibold tabular-nums border-l border-[var(--gray-100)]"
+            className="flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)]"
             style={{ width: colWidth, flex: `0 0 ${colWidth}px`, color }}
           >
             {value === 0 ? '—' : fmtCompact(value)}
@@ -361,21 +374,21 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       role="grid"
       aria-readonly={isReadOnly}
       aria-rowcount={dataRows.length}
-      className="relative overflow-auto rounded-2xl border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
+      className="relative overflow-auto rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
       style={{ maxHeight: 560 }}
     >
       {/* Header row */}
       <div className="sticky top-0 z-30 flex border-b border-[var(--gray-200)] bg-[var(--gray-50)]" style={{ height: HEADER_HEIGHT }}>
-        <StickyLeftCell width={GROUP_COL_WIDTH} left={0} className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]" header>
+        <StickyLeftCell width={GROUP_COL_WIDTH} left={0} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header>
           Sección
         </StickyLeftCell>
-        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]" header>
+        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header>
           Concepto
         </StickyLeftCell>
         {columns.map((column) => (
           <div
             key={column.key}
-            className={`flex h-full items-center justify-end px-2 text-[10px] uppercase tracking-wider border-l border-[var(--gray-200)] ${
+            className={`flex h-full items-center justify-end px-2 text-[10px] uppercase tracking-[0.08em] border-l border-[var(--gray-200)] ${
               column.isCurrent ? 'text-[var(--primary)]' : 'text-[var(--gray-500)]'
             } ${column.isPast ? 'bg-[var(--gray-100)]' : 'bg-[var(--gray-50)]'}`}
             style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
@@ -420,8 +433,8 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
       {isReadOnly && (
         <div className="pointer-events-none sticky top-2 z-40 flex justify-end px-3">
-          <span className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-[var(--gray-950)]/85 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-white">
-            <Lock className="h-3 w-3" strokeWidth={2} />
+          <span className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-[var(--gray-950)]/85 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-white">
+            <Lock className="h-3 w-3" strokeWidth={1.5} />
             Solo lectura
           </span>
         </div>
@@ -474,14 +487,14 @@ function SectionHeader({
         type="button"
         onClick={onToggle}
         aria-expanded={!collapsed}
-        className="sticky left-0 flex h-full items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--gray-700)] bg-[var(--gray-50)] hover:bg-[var(--gray-100)] transition-colors"
+        className="sticky left-0 flex h-full items-center gap-1.5 px-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--gray-700)] bg-[var(--gray-50)] hover:bg-[var(--gray-100)] transition-colors"
         style={{ width: GROUP_COL_WIDTH + LABEL_COL_WIDTH, zIndex: 18 }}
       >
         {collapsed
-          ? <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
-          : <ChevronDown className="h-3 w-3" strokeWidth={2.5} />}
+          ? <ChevronRight className="h-3 w-3" strokeWidth={1.5} />
+          : <ChevronDown className="h-3 w-3" strokeWidth={1.5} />}
         <span>{label}</span>
-        <span className="ml-1 rounded bg-[var(--gray-200)] px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-[var(--gray-600)]">
+        <span className="ml-1 rounded bg-[var(--gray-200)] px-1.5 py-0.5 text-[9px] font-bold tabular-nums text-[var(--gray-600)]">
           {count}
         </span>
       </button>

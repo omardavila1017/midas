@@ -177,7 +177,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span
-                  className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+                  className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide"
                   style={{
                     backgroundColor: albertoColor.bg,
                     color: albertoColor.text,
@@ -188,7 +188,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                   {CLASIFICACION_LABELS[alberto]}
                 </span>
                 {provider.dtiCriticidad === 'Alta' && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">
                     <AlertTriangle className="w-3 h-3" /> Crítico DTI · {provider.dtiArea}
                   </span>
                 )}
@@ -198,7 +198,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                   </span>
                 )}
               </div>
-              <h1 className="mt-2 text-[24px] font-semibold text-[var(--gray-950)] truncate" title={provider.name}>
+              <h1 className="mt-2 text-[24px] font-bold text-[var(--gray-950)] truncate" title={provider.name}>
                 {provider.name}
               </h1>
               <p className="mt-1 text-[13px] text-[var(--gray-500)]">
@@ -207,7 +207,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
             </div>
             <button
               onClick={onClose}
-              className="shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-lg bg-white border border-[var(--gray-200)] text-[var(--gray-600)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)] transition-colors"
+              className="shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-[var(--radius-md)] bg-white border border-[var(--gray-200)] text-[var(--gray-600)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)] transition-colors"
               aria-label="Cerrar"
             >
               <X className="w-5 h-5" />
@@ -256,8 +256,8 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
 
             {/* Score breakdown */}
             {provider.scoreCriterios && (
-              <div className="rounded-xl border border-[var(--gray-200)]/60 bg-white p-5">
-                <h2 className="text-[14px] font-semibold text-[var(--gray-950)] mb-3">
+              <div className="rounded-[var(--radius)] border border-[var(--gray-200)]/60 bg-white p-5">
+                <h2 className="text-[14px] font-bold text-[var(--gray-950)] mb-3">
                   Desglose del Score
                 </h2>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -268,9 +268,9 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                 </div>
                 <p className="mt-3 text-[11px] text-[var(--gray-500)]">
                   Score 0-100 ponderado de 4 criterios. Cada criterio se califica 1-5 (1 = bajo riesgo, 5 = alto riesgo).
-                  Categoría: <span className="font-semibold text-[var(--gray-700)]">{automaticaLabel(provider.clasificacionAutomatica)}</span>
+                  Categoría: <span className="font-bold text-[var(--gray-700)]">{automaticaLabel(provider.clasificacionAutomatica)}</span>
                   {alberto !== 'SIN_CLASIFICAR' && (
-                    <span> · Alberto lo marcó como <span className="font-semibold text-[var(--gray-700)]">{CLASIFICACION_LABELS[alberto]}</span></span>
+                    <span> · Alberto lo marcó como <span className="font-bold text-[var(--gray-700)]">{CLASIFICACION_LABELS[alberto]}</span></span>
                   )}
                 </p>
               </div>
@@ -279,9 +279,9 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
             {/* Two-column: trend + aging */}
             <div className="grid gap-4 lg:grid-cols-2">
               {/* Tendencia de gasto */}
-              <div className="rounded-xl border border-[var(--gray-200)]/60 bg-white p-5">
+              <div className="rounded-[var(--radius)] border border-[var(--gray-200)]/60 bg-white p-5">
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">
+                  <h2 className="text-[14px] font-bold text-[var(--gray-950)]">
                     Tendencia de gasto 2025
                   </h2>
                   <span className="text-[10px] text-[var(--gray-400)]">Estimado mensual</span>
@@ -300,7 +300,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                         type="monotone"
                         dataKey="monto"
                         stroke={alberto === 'CRITICO' ? 'var(--danger)' : 'var(--primary)'}
-                        strokeWidth={2}
+                        strokeWidth={1.5}
                         dot={{ r: 3 }}
                         activeDot={{ r: 5 }}
                       />
@@ -314,9 +314,9 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
               </div>
 
               {/* Aging distribution */}
-              <div className="rounded-xl border border-[var(--gray-200)]/60 bg-white p-5">
+              <div className="rounded-[var(--radius)] border border-[var(--gray-200)]/60 bg-white p-5">
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">
+                  <h2 className="text-[14px] font-bold text-[var(--gray-950)]">
                     Antigüedad de facturas pendientes
                   </h2>
                   <span className="text-[10px] text-[var(--gray-400)]">Saldo CXP</span>
@@ -349,9 +349,9 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
             </div>
 
             {/* Resumen de facturas */}
-            <div className="rounded-xl border border-[var(--gray-200)]/60 bg-white p-5">
+            <div className="rounded-[var(--radius)] border border-[var(--gray-200)]/60 bg-white p-5">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[14px] font-semibold text-[var(--gray-950)] flex items-center gap-2">
+                <h2 className="text-[14px] font-bold text-[var(--gray-950)] flex items-center gap-2">
                   <FileText className="w-4 h-4 text-[var(--gray-400)]" />
                   Facturas pendientes (CXP)
                 </h2>
@@ -360,7 +360,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                   {invoicesSummary.overdue > 0 && (
                     <span className="text-[var(--danger)] font-medium">{invoicesSummary.overdue} vencidas</span>
                   )}
-                  <span className="font-semibold text-[var(--gray-950)]">{fmtCurrency(invoicesSummary.total)}</span>
+                  <span className="font-bold text-[var(--gray-950)]">{fmtCurrency(invoicesSummary.total)}</span>
                 </div>
               </div>
               {providerInvoices.length === 0 ? (
@@ -419,7 +419,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
             </div>
 
             {/* Footer info */}
-            <div className="rounded-lg bg-[var(--gray-50)] p-4 text-[11px] text-[var(--gray-500)]">
+            <div className="rounded-[var(--radius-md)] bg-[var(--gray-50)] p-4 text-[11px] text-[var(--gray-500)]">
               <p className="flex items-start gap-2">
                 <ExternalLink className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span>
@@ -463,12 +463,12 @@ function DetailKpi({
     success: 'text-[var(--success)]',
   }[tone];
   return (
-    <div className={`rounded-xl border bg-white p-3 ${ringClass}`}>
+    <div className={`rounded-[var(--radius)] border bg-white p-3 ${ringClass}`}>
       <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wide ${iconColor}`}>
         {icon}
         <span className="font-medium">{label}</span>
       </div>
-      <div className="mt-2 text-[18px] font-semibold tabular-nums text-[var(--gray-950)] leading-tight">
+      <div className="mt-2 text-[18px] font-bold tabular-nums text-[var(--gray-950)] leading-tight">
         {value}
       </div>
       {sublabel && (
@@ -484,7 +484,7 @@ function CriterioBar({ label, value, weight }: { label: string; value: number; w
   if (value >= 4) color = 'var(--danger)';
   else if (value >= 3) color = '#F59E0B';
   return (
-    <div className="rounded-lg border border-[var(--gray-200)]/60 bg-[var(--gray-50)]/50 p-3">
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)]/60 bg-[var(--gray-50)]/50 p-3">
       <div className="flex items-center justify-between text-[11px] text-[var(--gray-500)]">
         <span className="font-medium">{label}</span>
         <span className="text-[10px]">{weight}%</span>
@@ -493,7 +493,7 @@ function CriterioBar({ label, value, weight }: { label: string; value: number; w
         <div className="flex-1 h-1.5 rounded-full bg-[var(--gray-200)] overflow-hidden">
           <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
         </div>
-        <span className="text-[12px] font-semibold tabular-nums" style={{ color }}>
+        <span className="text-[12px] font-bold tabular-nums" style={{ color }}>
           {value}<span className="text-[10px] text-[var(--gray-400)] font-normal">/5</span>
         </span>
       </div>

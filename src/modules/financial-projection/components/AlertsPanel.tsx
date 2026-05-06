@@ -34,11 +34,11 @@ export function AlertsPanel({ alerts, onSelect }: AlertsPanelProps) {
             <SeverityIcon severity={alert.severity} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-[13px] font-semibold text-[var(--gray-950)]">{alert.title}</span>
+                <span className="text-[13px] font-bold text-[var(--gray-950)]">{alert.title}</span>
                 <SeverityBadge severity={alert.severity} />
               </div>
               <p className="mt-0.5 text-[12px] text-[var(--gray-600)] leading-snug">{alert.description}</p>
-              <div className="mt-1 text-[10.5px] uppercase tracking-wider text-[var(--gray-400)] tabular-nums">
+              <div className="mt-1 text-[10.5px] uppercase tracking-[0.08em] text-[var(--gray-400)] tabular-nums">
                 {alert.date}
               </div>
             </div>
@@ -67,7 +67,7 @@ function SeverityBadge({ severity }: { severity: ProjectionAlert['severity'] }) 
       : { label: 'Info', bg: 'var(--gray-100)', color: 'var(--gray-600)' };
   return (
     <span
-      className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+      className="rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em]"
       style={{ background: config.bg, color: config.color }}
     >
       {config.label}

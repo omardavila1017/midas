@@ -1,440 +1,182 @@
 # CLAUDE.md
 
-## Propósito
+## Purpose
 
-Este archivo resume el contexto operativo real de `midas` (antes `flowsense`) para cualquier agente que vaya a tocar el proyecto.
+Operational context for any agent or new dev touching `midas` (formerly `flowsense`). The repo is the source of truth — this file is a map, not a spec. Read the actual files before changing them.
 
-`README.md` y `ARCHITECTURE.md` ya fueron alineados con el estado actual del repo, pero el código sigue siendo la fuente final de verdad. Los archivos más importantes para validar comportamiento son:
+`README.md` covers the deploy / env / business surface. This file covers the code layout, the data flow, and the rules that bite if you ignore them.
 
-- `src/App.tsx`
-- `src/types.ts`
-- `src/domain/persistence.ts`
-- `src/domain/scenarioEngine.ts`
-- `src/domain/simulationCompiler.ts`
-- `src/components/ProposalCreator.tsx`
-- `src/components/Simulator.tsx`
-- `src/components/Forecast.tsx`
+## Stack
 
-## Stack y comandos
+- React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4
+- Charts: Recharts 2.12
+- Icons: `lucide-react`
+- Excel I/O: `exceljs`
+- Tests: Vitest + Testing Library + jsdom; Playwright available for e2e
 
-- Frontend: React 18 + Vite + TypeScript + Tailwind
-- Charts: Recharts
-- Tests: Vitest + Testing Library
-- Parsing Excel: `xlsx`
-
-Comandos principales:
+Commands:
 
 ```bash
-npm run dev
-npm test
-npm run build
+npm run dev        # vite dev server
+npm test           # vitest run
+npm run typecheck  # tsc --noEmit
+npm run build      # tsc && vite build
 ```
 
-## Regla crítica: semántica de negocio vs nombres internos
+Always run `npm test` and `npm run build` before declaring a change done.
 
-La UI y el lenguaje de negocio ya NO coinciden 1:1 con los nombres internos de TypeScript.
+## Where things live now
 
-### Lenguaje que debe ver el usuario
+```text
+src/
+├── App.tsx                      # Top-level shell, routing, store load/save
+├── main.tsx                     # Entry
+├── index.css                    # Senda DS tokens (OKLCH), keyframes, a11y
+├── theme.ts                     # Token + motion config
+├── formatters.ts                # MXN / es-MX number + date formatters
+├── types.ts                     # Cross-cutting types (CashFlowOverrides, etc.)
+├── config/
+│   └── api.config.ts            # Env-var driven API config (JDE, Cognos)
+├── services/
+│   ├── jdeClient.ts             # Fetch client for JDE Orchestrator
+│   ├── jde.ts                   # JDE companies, CXP, bank statements, cobranza
+│   ├── jdeTypes.ts              # JDE request/response types
+│   └── catalog.service.ts       # Cognos client/provider catalog
+├── domain/                      # Treasury / cash-flow engines (NOT scenarios)
+│   ├── persistence.ts           # midas-v8 store, normalizers, migrations
+│   ├── netCashFlowEngine.ts     # Unified inflow/outflow cash view
+│   ├── collectionEngine.ts      # Collection projection rules
+│   ├── reconciliationEngine.ts  # Projected events vs bank ABONOs
+│   ├── realReconciliationEngine.ts  # Real cobranza vs bank movements (4-layer match)
+│   ├── operatingProjection*.ts  # Operating projection module + scenarios + taxes
+│   ├── projectionEngine.ts
+│   ├── forecastEngine.ts
+│   ├── cashFlowEngine.ts
+│   ├── budget*.ts, calendar.ts, bankHolidays*.ts, bankStatements*.ts
+│   ├── santanderCsv.ts, providerCatalog.ts, expensePerProvider.ts
+│   └── ... (see folder)
+├── modules/
+│   ├── financial-planning/      # Scenarios + propuestas + spreadsheet UI
+│   │   ├── components/          # SpreadsheetGrid, ProposalWizard, etc.
+│   │   ├── pages/
+│   │   └── services/            # scenarioBootstrap.ts, evaluation, storage
+│   ├── financial-projection/    # KPIs, alerts, forward projection
+│   │   ├── components/, pages/, services/, mock-data/
+│   ├── shared-finance/          # Shared types, audit log, calc engine, permissions
+│   │   ├── audit/, calculation-engine/, components/, permissions/, types/
+│   └── taxes/                   # Tax dashboard + service
+│       ├── pages/, services/
+├── components/                  # Treasury UI: Dashboard, CXP, Bancos, Clients, Providers, etc.
+├── workers/                     # Web workers for heavy compute
+├── data/                        # Static data (logos, etc.)
+└── assets/
+```
 
-- `Escenario Base`: pronóstico original, siempre visible, no editable, no eliminable.
-- `Simulación`: contenedor superior donde el usuario guarda un análisis.
-- `Escenario`: agrupación guardada dentro de una simulación.
-- `Propuesta`: ajuste financiero reusable que se asigna a uno o varios escenarios.
+Old files referenced by prior versions of this doc — `scenarioEngine.ts`, `simulationCompiler.ts`, `ProposalCreator.tsx`, `Forecast.tsx`, `Simulator.tsx` — no longer exist. Their responsibilities moved into `src/modules/financial-planning/` and `src/modules/financial-projection/`.
 
-### Nombres internos actuales
+## Critical UI ↔ code terminology inversion
 
-En código todavía existe esta equivalencia:
+The financial-planning module ships with this asymmetry between user language and code:
 
-- `Proposal` = lo que en UI se presenta como una **Simulación**
-- `Scenario` = **Escenario**
-- `Simulation` = lo que en UI se presenta como una **Propuesta**
+| User sees (Spanish UI) | Code (English)                 |
+|------------------------|--------------------------------|
+| Simulación             | parent of `FinancialScenario`s |
+| Escenario              | `FinancialScenario`            |
+| Propuesta              | `FinancialAdjustment`          |
+| Escenario Base         | scenario where `id === 'base'` |
 
-Además:
+Concrete code names today (in `src/modules/shared-finance/types/` and `src/modules/financial-planning/services/scenarioBootstrap.ts`):
 
-- `Scenario.simulationIds` realmente significa: IDs de **propuestas** aplicadas al escenario.
-- `EvaluatedCell.simulationContributions` realmente representa contribuciones de **propuestas** aplicadas.
+- `FinancialScenario` is what the UI calls **Escenario**.
+- `FinancialAdjustment` is what the UI calls **Propuesta** (a reusable financial change applied to one or more scenarios).
+- `ManualPlanningEntry` is a hand-typed line in the spreadsheet.
+- `CellOverride` is a per-cell manual edit on a scenario.
+- `BASE_SCENARIO_ID = 'base'` (scenarioBootstrap.ts:13)
+- `APPROVED_SCENARIO_ID = 'approved'`
 
-Si cambias algo de esta zona, mantén esta compatibilidad mental para no invertir otra vez el modelo.
+Before renaming or restructuring this layer, walk through both vocabularies and check what users see in the UI vs. what the type system calls it. The error of inverting these terms has happened before.
 
-## Estado global actual
+## Persistence (current shape)
 
-El estado principal vive en `src/App.tsx`.
-
-Campos importantes:
-
-- `plan`
-- `proposals`
-- `scenarios`
-- `simulations`
-- `scenarioCellOverrides`
-- `activeProposalId`
-- `activeScenarioId`
-- `forecastGranularity`
-
-Selección activa:
-
-- Si `activeScenarioId === BASE_SCENARIO_ID`, la app entra en modo Base.
-- En modo Base, `activeProposalId` debe quedar en `null`.
-- `selectScenario()` y la normalización del store ya contemplan esto.
-
-## Modelo de datos actual
-
-Definiciones en `src/types.ts`.
-
-### Base
-
-- `BASE_SCENARIO_ID = 'scenario-base'`
-- `BASE_SCENARIO_NAME = 'Escenario Base'`
-
-### Proposal
-
-Internamente sigue siendo:
+`src/domain/persistence.ts` owns the `midas-v8` store. The interface lives at `persistence.ts:67` (`MidasStore`):
 
 ```ts
-Proposal {
-  id,
-  name,
-  description,
-  status,
-  activeScenarioId?,
-  createdAt,
-  updatedAt
+MidasStore {
+  providers, clients,
+  assumptions,
+  confirmedPayments,
+  cxpRecords, cxpLoadedCias,
+  cobranzaRecords, cobranzaLoadedCias,
+  cobranzaPayments, cobranzaPaymentsLoadedCias,
+  cashFlowOverrides,
+  lastSaved
 }
 ```
 
-En UI esto se interpreta como una **Simulación**.
-
-### Scenario
-
-```ts
-Scenario {
-  id,
-  proposalId,
-  kind,
-  name,
-  description,
-  probability,
-  startYearMonth,
-  horizonMonths,
-  simulationIds[],
-  locked?,
-  createdAt,
-  updatedAt
-}
-```
-
-En UI esto es un **Escenario**.
-
-### Simulation
+Notes:
 
-```ts
-Simulation {
-  id,
-  name,
-  description,
-  category,
-  type,
-  targetIds[],
-  startYearMonth,
-  endYearMonth?,
-  startDate?,
-  endDate?,
-  frequency?,
-  operation?,
-  amount?,
-  percent?,
-  installments?,
-  customAllocation?,
-  shiftMonths?,
-  shiftRatio?,
-  paymentLabel?,
-  comments?,
-  effects[],
-  createdAt,
-  updatedAt
-}
-```
+- Scenarios / propuestas / cell overrides do **not** live in `MidasStore`. They live inside `src/modules/financial-planning/` storage helpers.
+- `App.tsx` writes a handful of `localStorage` keys directly outside the main store: `midas.selectedCia`, `midas.bankStatements.v2`, `midas.bankSupplementalStatements.v1`, `midas.bankLastQuery.v2`. These are intentional — bank-statement caches can be multi-MB and use a **debounced idle-task save strategy** (`scheduleIdleTask`, ~2.5s delay) so we never block the main thread on a hot keystroke. Pulling them into `MidasStore` (which `JSON.stringify`s the whole object on every save) would regress UX. If you ever consolidate, build an async-aware sub-store; do not flatten naively.
+- `loadStore()` migrates `midas-v7`, `midas-v6`, `midas-v5`, `flowsense-v5` (same shape, dropping any legacy proposal/scenario fields) and `flowsense-v1..v4` (incompatible legacy shapes; preserves clients/providers/cxp/assumptions only).
+- `normalizeStore()` is the defensive landing zone — assume any persisted payload may be partial or wrong-shaped; the normalizer enforces the schema.
 
-En UI esto es una **Propuesta**.
+## Engines
 
-## Persistencia
+Treasury / cash-flow logic lives in `src/domain/`. Two reconciliation engines exist by design:
 
-La persistencia vive en `src/domain/persistence.ts`.
+- `reconciliationEngine.ts` — matches projected collection events against bank ABONOs (heuristic, ±5% tolerance).
+- `realReconciliationEngine.ts` — matches real cobranza invoices (JDE `/v1/erp/tesoreria/cobranza`) against actual bank movements. 4-layer matching: exact → tolerance → subset-sum → unmatched.
 
-Puntos clave:
+These are not duplicates — they answer different questions (forecast vs. realized).
 
-- El store actual es `midas-v5` (el legacy `flowsense-v5` se migra tal cual; `flowsense-v4..v1` se migran descartando propuestas/escenarios).
-- `normalizeV2Store()` siempre reinyecta el escenario base.
-- `normalizeSimulation()` rellena simulaciones antiguas que no tengan los campos nuevos (`type`, `targetIds`, `startYearMonth`, etc.).
-- Si hay datos legacy, se migran a la estructura actual sin perder overrides.
+The forecast / scenario evaluation pipeline lives across `src/modules/financial-planning/services/` and `src/modules/shared-finance/calculation-engine/`. Order of computation for a non-base scenario is:
 
-### Regla importante
+1. Base values from the plan / real data
+2. Active propuestas (FinancialAdjustments) applied
+3. Manual cell overrides
+4. Recompute KPIs and projections
 
-No asumas que el `localStorage` tiene objetos completos. La UI debe tolerar datos parciales y la persistencia debe seguir normalizando.
+## Base scenario invariant
 
-## Motor de cálculo
+The Base scenario (`id === 'base'`) is special and non-negotiable:
 
-La fuente de verdad del forecast es `src/domain/scenarioEngine.ts`.
+- Always present (bootstrap in `scenarioBootstrap.ts` ensures it).
+- Not deletable.
+- No propuestas attached.
+- No manual cell overrides.
+- Read-only in the UI (forecast popover shows lock icon).
 
-### Orden de cálculo
+If you touch scenario selection, persistence, or the spreadsheet editor, validate this invariant explicitly.
 
-El orden actual es:
+## Forecast / spreadsheet
 
-1. Base del plan
-2. Propuestas activas del escenario
-3. Overrides manuales por celda
-4. Recomputar métricas y KPIs
+Lives in `src/modules/financial-planning/components/`:
 
-La función principal es:
+- `FinancialPlanningDashboard.tsx` — top-level page, owns scenario selection.
+- `SpreadsheetGrid.tsx` (+ `spreadsheet/` subfolder) — the editable forecast grid.
+- `ScenarioTabs.tsx`, `ProposalWizard.tsx` (4-step guided creation, replaces the older flat `AddRowPopover`).
+- `CellDetailPopover.tsx` — on cell click, shows base / Δ propuestas / Δ manual / total / diff vs Base / comments. Read-only on Base.
 
-```ts
-evaluateScenario(plan, proposal, scenario, simulations, overrides, { granularity? })
-```
+The forecast must always tolerate partial / legacy data. Defensive rendering + the persistence normalizer are the two lines of defense.
 
-### Reglas importantes del motor
+## Risks that bite
 
-- Los overrides son por `scenarioId`, no globales.
-- Solo celdas hoja son editables manualmente.
-- Subtotales y filas derivadas no deben aceptar override.
-- El Base no admite edición manual.
-- El mismo motor soporta `monthly`, `weekly` y `daily`.
-- La vista semanal sale de `weeklyData`.
-- La vista diaria se deriva repartiendo cada semana en 7 días.
-- Los overrides manuales siguen siendo mensuales y se reflejan en semana / día.
+1. **Inverting the terminology again.** Simulación / Escenario / Propuesta in UI vs. proposal/scenario/adjustment in code. Check both before renaming.
+2. **Breaking the Base scenario.** Any active-scenario change can accidentally allow editing or attach a propuesta to base. Validate.
+3. **Assuming new persisted shape.** `localStorage` can hold partial / legacy payloads. Use the normalizer; never read raw fields blindly.
+4. **Doc drift.** This file is reality at the time of writing. If you change architecture, update this file in the same PR.
+5. **Heavy compute on the main thread.** Forecast and reconciliation are non-trivial. Move new heavy compute into `src/workers/` instead of growing `useEffect` recompute loops.
 
-### Targets sintéticos
+## Spanish vs English
 
-Existen estos targets globales:
+User-facing copy is Spanish (es-MX). Internal identifiers, code, comments, and commit messages are English. Do not translate type names. Do translate UI strings.
 
-- `ROLE_TARGET_INCOME`
-- `ROLE_TARGET_EXPENSE`
-- `ROLE_TARGET_COLLECTIONS`
-- `ROLE_TARGET_PROVIDER_PAYMENTS`
+Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you ever need to internationalize, that file is the single chokepoint to refactor.
 
-### Bug ya corregido
+## Before you ship
 
-Los ajustes porcentuales globales (`+10% ingresos`, `-5% egresos`, etc.) antes no se reflejaban bien porque tomaban base `0` en esos targets sintéticos.
-
-Eso ya quedó corregido en `evaluateScenario()` calculando una base agregada separada para:
-
-- ingresos
-- egresos
-- cobranza
-- pagos a proveedores
-
-No reviertas esta lógica por accidente.
-
-## Compilación de propuestas a efectos
-
-La capa que convierte la propuesta de negocio en efectos homogéneos vive en:
-
-- `src/domain/simulationCompiler.ts`
-
-Funciones importantes:
-
-- `buildSimulationEffects()`
-- `ensureBaseScenario()`
-- `isBaseScenario()`
-- `createBaseScenario()`
-
-Tipos soportados actualmente:
-
-- `percent_adjustment`
-- `amount_adjustment`
-- `recurring_series`
-- `installment_plan`
-- `timing_shift`
-- `pause_expense`
-
-Todos terminan compilando a `concept_delta`.
-
-## Propuestas: comportamiento dinámico del formulario
-
-La pantalla de Propuestas está en `src/components/ProposalCreator.tsx`.
-
-### Qué hace hoy
-
-- Expone 3 pasos visibles:
-  - Simulación
-  - Escenario
-  - Propuestas
-- Muestra un resumen de contexto arriba:
-  - simulación activa
-  - escenario activo
-  - cuántas propuestas están activas
-- En el formulario de propuesta, los conceptos disponibles cambian dinámicamente según:
-  - `type`
-  - `category`
-
-### Ejemplos
-
-- Si el usuario elige incremento de ingresos, debe ver solo ingresos relevantes.
-- Si elige reducción de costos, debe ver solo gastos relevantes.
-- Si elige mover cobros/pagos, debe ver cobranza o pagos.
-- Puede seleccionar uno o varios conceptos.
-
-### Regla importante
-
-No vuelvas a mostrar siempre el mismo selector plano de conceptos. El usuario pidió explícitamente una experiencia dinámica:
-
-- primero define qué quiere hacer
-- luego el sistema muestra en qué conceptos puede aplicarlo
-
-## Forecast
-
-La tabla de forecast está en `src/components/Forecast.tsx`.
-
-### Reglas importantes
-
-- Debe poder mostrar:
-  - Base
-  - Simulado
-  - Manual
-  - Diff
-- El Base es solo lectura.
-- El popover de una celda muestra:
-  - valor base
-  - delta de propuestas
-  - valor simulado
-  - delta manual
-  - valor final
-  - diff vs base
-  - comentarios
-
-### Terminología
-
-En la UI ya se habla de:
-
-- `Impactada por propuesta`
-- `Propuestas aplicadas`
-
-Pero internamente los nombres de tipos siguen siendo `simulationContributions`.
-
-## Simulator
-
-La vista de análisis está en `src/components/Simulator.tsx`.
-
-### Qué debe representar
-
-- Árbol de trabajo: simulaciones y escenarios
-- KPIs contra Base
-- Caja base vs escenario
-- Comparación entre escenarios
-- Biblioteca lateral de propuestas activables
-
-### Regla de negocio
-
-Si editas una propuesta, el cambio debe reflejarse en todos los escenarios donde esa propuesta esté asignada.
-
-Eso hoy ocurre naturalmente porque el escenario solo guarda IDs de propuestas.
-
-## Base scenario
-
-El `Escenario Base` es un caso especial:
-
-- siempre visible
-- no se elimina
-- no admite simulaciones/propuestas aplicadas
-- no admite overrides
-- es el punto de comparación permanente
-
-Si tocas selección, persistencia o UI de escenarios, esta regla no se negocia.
-
-## Tests existentes
-
-Actualmente hay cobertura sobre:
-
-- migración / persistencia
-- aislamiento de overrides por escenario
-- stacking determinista de efectos
-- restauración de celdas
-- ajuste porcentual sobre targets agregados
-- smoke test de edición en Forecast
-
-Archivos:
-
-- `src/domain/persistence.test.ts`
-- `src/domain/scenarioEngine.test.ts`
-- `src/components/Forecast.test.tsx`
-
-Siempre corre:
-
-```bash
-npm test
-npm run build
-```
-
-## Riesgos frecuentes
-
-### 1. Invertir otra vez la terminología
-
-El error más común aquí es volver a mezclar:
-
-- simulación
-- escenario
-- propuesta
-
-Antes de renombrar o mover algo, revisa cómo lo entiende el usuario y cómo está guardado realmente.
-
-### 2. Romper el Base
-
-Muchos cambios de selección activa pueden forzar accidentalmente un `proposalId` o permitir edición manual en Base.
-
-Valida siempre:
-
-- `activeScenarioId`
-- `activeProposalId`
-- `isBaseScenario()`
-
-### 3. Romper simulaciones legacy
-
-Hay datos guardados con estructura vieja. No asumas presencia de:
-
-- `targetIds`
-- `type`
-- `startYearMonth`
-
-La persistencia ya lo compensa; la UI también debe ser defensiva.
-
-### 4. Porcentajes sobre agregados
-
-No calcules `%` sobre `baseValuesByConceptId` cuando el target sea sintético global. Usa la base agregada ya preparada en el motor.
-
-### 5. UI demasiado compleja
-
-El usuario ha pedido varias veces que Propuestas sea más fácil de entender.
-
-Cuando hagas UX en esa zona:
-
-- prioriza preguntas simples
-- muestra pocos controles a la vez
-- cambia los conceptos disponibles según el tipo de ajuste
-- evita meter demasiados campos visibles de golpe
-
-## Si vas a seguir mejorando este módulo
-
-El siguiente paso natural de UX sería convertir la creación de propuestas en un flujo aún más guiado, por ejemplo:
-
-1. ¿Qué quieres cambiar?
-2. ¿En qué rubros aplica?
-3. ¿Cuánto cambia?
-4. ¿Desde cuándo y con qué frecuencia?
-
-Ese camino está alineado con lo que el usuario quiere.
-
-## Resumen corto para no equivocarte
-
-- UI:
-  - Simulación > Escenario > Propuesta
-- Código:
-  - Proposal > Scenario > Simulation
-- Base:
-  - siempre existe
-  - nunca editable
-- Forecast:
-  - base -> propuestas activas -> override manual
-- Propuestas:
-  - formulario dinámico según el tipo de ajuste
-- Antes de cerrar:
-  - `npm test`
-  - `npm run build`
+- `npm test`
+- `npm run typecheck`
+- `npm run build`
+- Smoke `npm run dev` against real JDE data (or empty store) for the path you touched.
+- Update this file if you changed the architecture.

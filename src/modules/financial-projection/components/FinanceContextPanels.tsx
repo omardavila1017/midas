@@ -73,9 +73,9 @@ function ContextPanel({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">{title}</h2>
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">{title}</h2>
         <p className="mt-1 text-[12px] text-[var(--gray-400)]">{subtitle}</p>
       </div>
       <div className="divide-y divide-[var(--gray-100)]">{children}</div>
@@ -90,7 +90,7 @@ function ContextRow({ title, meta, value }: { title: string; meta: string; value
         <div className="truncate text-[13px] font-medium text-[var(--gray-950)]">{title}</div>
         <div className="mt-0.5 truncate text-[11px] text-[var(--gray-400)]">{meta}</div>
       </div>
-      <div className="shrink-0 text-right text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">
+      <div className="shrink-0 text-right text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
         {value}
       </div>
     </div>

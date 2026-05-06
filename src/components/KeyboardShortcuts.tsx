@@ -53,12 +53,12 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         }}
       >
         <div
-          className="bg-white rounded-lg shadow-lg w-full max-w-md max-h-[80vh] overflow-y-auto animate-scale-in"
+          className="bg-white rounded-[var(--radius-md)] shadow-lg w-full max-w-md max-h-[80vh] overflow-y-auto animate-scale-in"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-950">Atajos de teclado</h2>
+            <h2 className="text-lg font-bold text-gray-950">Atajos de teclado</h2>
             <button
               onClick={onClose}
               className="p-1 hover:bg-gray-100 rounded-md transition-colors touch-target-44 flex items-center justify-center"

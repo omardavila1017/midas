@@ -19,9 +19,9 @@ export function ScenarioReadOnlyTabs(props: ScenarioReadOnlyTabsProps) {
   const tooltip = 'Solo lectura. Edita en Planeación Financiera.';
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+        <span className="mr-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
           Escenarios
         </span>
         {baseScenario && (
@@ -58,7 +58,7 @@ export function ScenarioReadOnlyTabs(props: ScenarioReadOnlyTabsProps) {
               onClick={() => onSelect(draft.id)}
               aria-pressed={active}
               title={tooltip}
-              className="inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors"
+              className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border px-3 text-[12px] font-medium transition-colors"
               style={{
                 background: active ? 'var(--primary)' : 'white',
                 color: active ? 'white' : 'var(--gray-700)',
@@ -69,7 +69,7 @@ export function ScenarioReadOnlyTabs(props: ScenarioReadOnlyTabsProps) {
               <span className="truncate max-w-[160px]">{draft.name}</span>
               {delta !== 0 && (
                 <span
-                  className="text-[11px] tabular-nums font-semibold"
+                  className="text-[11px] tabular-nums font-bold"
                   style={{ color: active ? 'rgba(255,255,255,0.85)' : delta > 0 ? 'var(--success)' : 'var(--danger)' }}
                 >
                   {`${delta > 0 ? '+' : ''}${fmtCompact(delta)}`}
@@ -105,7 +105,7 @@ function CoreTab({
       onClick={onClick}
       aria-pressed={active}
       title={tooltip}
-      className="inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors"
+      className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border px-3 text-[12px] font-medium transition-colors"
       style={{
         background: active ? 'var(--gray-950)' : 'white',
         color: active ? 'white' : 'var(--gray-700)',
@@ -115,7 +115,7 @@ function CoreTab({
       <Icon className="h-3.5 w-3.5" strokeWidth={1.5} />
       <span className="truncate max-w-[160px]">{label}</span>
       <span
-        className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+        className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em]"
         style={{
           background: active ? 'rgba(255,255,255,0.15)' : 'var(--gray-100)',
           color: active ? 'white' : 'var(--gray-500)',

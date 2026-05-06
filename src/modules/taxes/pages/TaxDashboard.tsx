@@ -208,7 +208,7 @@ export default function TaxDashboard(props: Props) {
     return (
       <div className="space-y-5">
         <PageHeader title="Impuestos" />
-        <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-10 text-center text-[12px] text-[var(--gray-500)]">
+        <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-10 text-center text-[12px] text-[var(--gray-500)]">
           Carga clientes, CXP o captura una obligación manual para calcular el seguimiento fiscal.
         </div>
       </div>
@@ -223,14 +223,14 @@ export default function TaxDashboard(props: Props) {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowAddForm((v) => !v)}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+              className="inline-flex h-10 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
             >
               <Plus className="h-4 w-4" strokeWidth={1.5} />
               Captura manual
             </button>
             <button
               onClick={resetView}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+              className="inline-flex h-10 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
             >
               <RotateCcw className="h-4 w-4" strokeWidth={1.5} />
               Restablecer
@@ -240,7 +240,7 @@ export default function TaxDashboard(props: Props) {
       />
 
       {statusMessage && (
-        <div className="flex items-center justify-between rounded-xl border border-[var(--gray-200)] bg-white px-4 py-2">
+        <div className="flex items-center justify-between rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-4 py-2">
           <span className="text-[12px] font-medium text-[var(--gray-700)]">{statusMessage}</span>
           <button onClick={() => setStatusMessage(null)} className="text-[var(--gray-400)] hover:text-[var(--gray-600)]">
             <X className="h-3.5 w-3.5" strokeWidth={1.5} />
@@ -248,7 +248,7 @@ export default function TaxDashboard(props: Props) {
         </div>
       )}
 
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white px-4 py-3">
+      <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <SegmentedControl label="Rango" value={preset} options={RANGE_PRESETS} onChange={setPreset} />
           <div className="ml-auto text-[12px] text-[var(--gray-500)]">
@@ -385,13 +385,13 @@ function TaxForms({
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="flex items-center justify-between border-b border-[var(--gray-200)] px-4 py-3">
         <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Captura manual</h2>
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Captura manual</h2>
           <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Ajustes, overrides y obligaciones sin tocar JDE ni banco.</p>
         </div>
-        <button onClick={onClose} className="inline-flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--gray-100)]">
+        <button onClick={onClose} className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--gray-100)]">
           <X className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
         </button>
       </div>
@@ -502,17 +502,17 @@ function OverdueBalanceSection({
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Seguimiento de deuda fiscal</h2>
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Seguimiento de deuda fiscal</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
           Saldo vencido acumulado + nuevas obligaciones por periodo. Haz clic en el monto para editarlo.
         </p>
       </div>
       <div className="grid gap-2 p-4 sm:grid-cols-4">
         {/* Saldo vencido */}
-        <div className="rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--danger)]">
+        <div className="rounded-[var(--radius)] border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--danger)]">
             Saldo vencido acumulado
           </div>
           {editing ? (
@@ -528,7 +528,7 @@ function OverdueBalanceSection({
                 if (e.key === 'Escape') setEditing(false);
               }}
               onBlur={commit}
-              className="mt-1 h-8 w-full rounded-lg border border-[var(--danger)] bg-white px-2 text-right text-[16px] font-bold tabular-nums text-[var(--danger)] outline-none"
+              className="mt-1 h-8 w-full rounded-[var(--radius-md)] border border-[var(--danger)] bg-white px-2 text-right text-[16px] font-bold tabular-nums text-[var(--danger)] outline-none"
             />
           ) : (
             <button
@@ -542,8 +542,8 @@ function OverdueBalanceSection({
         </div>
 
         {/* Nuevas obligaciones del periodo */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Nuevos impuestos</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Nuevos impuestos</div>
           <div className="mt-1 flex items-baseline justify-between gap-2">
             <span className="text-[18px] font-bold tabular-nums text-[var(--warning)]">{fmtCurrency(newPeriodTotal)}</span>
           </div>
@@ -553,22 +553,22 @@ function OverdueBalanceSection({
         </div>
 
         {/* Benchmark 8% */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Referencia (8% Ingresos)</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Referencia (8% Ingresos)</div>
           <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-400)]">{fmtCurrency(benchmark8)}</div>
           <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Meta basada en facturación</div>
         </div>
 
         {/* Total acumulado */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Total acumulado</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Total acumulado</div>
           <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(runningTotal)}</div>
           <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Vencido + nuevos periodos</div>
         </div>
 
         {/* Neto pendiente */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Neto pendiente</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Neto pendiente</div>
           <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(netPending)}</div>
           <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Total − pagos aprobados/ejecutados</div>
         </div>
@@ -580,7 +580,7 @@ function OverdueBalanceSection({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</span>
+      <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</span>
       {children}
     </div>
   );
@@ -629,16 +629,16 @@ function TaxPeriodTable({
   const cancelEdit = () => setEditingCell(null);
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Obligaciones por periodo</h2>
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Obligaciones por periodo</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
           Haz clic en un monto de IVA, ISN o IMSS para editarlo. Selecciona un periodo para ver su detalle.
         </p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] text-[12px]">
-          <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             <tr>
               <th className="px-4 py-2.5">Periodo</th>
               <th className="px-4 py-2.5 text-right">IVA neto</th>
@@ -660,7 +660,7 @@ function TaxPeriodTable({
                   className="cursor-pointer border-t border-[var(--gray-200)] hover:bg-[var(--gray-50)]"
                   style={{ background: active ? 'var(--gray-50)' : undefined }}
                 >
-                  <td className="px-4 py-3 font-semibold text-[var(--gray-950)]">{period.period}</td>
+                  <td className="px-4 py-3 font-bold text-[var(--gray-950)]">{period.period}</td>
                   <EditableCell
                     value={period.ivaNet}
                     editing={editingCell?.period === period.period && editingCell.field === 'iva'}
@@ -688,7 +688,7 @@ function TaxPeriodTable({
                     onCommit={commitEdit}
                     onCancel={cancelEdit}
                   />
-                  <td className="px-4 py-3 text-right font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(period.total)}</td>
+                  <td className="px-4 py-3 text-right font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(period.total)}</td>
                   <td className="px-4 py-3 text-[var(--gray-600)]">{fmtDate(period.dueDate)}</td>
                   <td className="px-4 py-3"><TaxStatusPill status={period.status} /></td>
                   <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">{period.cashImpact > 0 ? fmtCurrency(period.cashImpact) : '—'}</td>
@@ -739,7 +739,7 @@ function EditableCell({
             if (e.key === 'Escape') onCancel();
           }}
           onBlur={onCommit}
-          className="h-8 w-full rounded-lg border border-[var(--primary)] bg-white px-2 text-right text-[12px] tabular-nums text-[var(--gray-950)] outline-none"
+          className="h-8 w-full rounded-[var(--radius-md)] border border-[var(--primary)] bg-white px-2 text-right text-[12px] tabular-nums text-[var(--gray-950)] outline-none"
         />
       </td>
     );
@@ -784,9 +784,9 @@ function TaxPeriodDetail({
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Detalle {period.period}</h2>
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Detalle {period.period}</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Origen de cada impuesto y plan de pagos.</p>
       </div>
 
@@ -860,7 +860,7 @@ function IvaDetail({
       />
 
       {(iva.unclassifiedIncome > 0 || iva.unclassifiedExpense > 0) && (
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[11px] text-[var(--gray-500)]">
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[11px] text-[var(--gray-500)]">
           Sin clasificar: {fmtCurrency(iva.unclassifiedIncome + iva.unclassifiedExpense)}
         </div>
       )}
@@ -878,13 +878,13 @@ function IvaLinesTable({
   onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--gray-200)]">
+    <div className="overflow-hidden rounded-[var(--radius)] border border-[var(--gray-200)]">
       <div className="max-h-[360px] overflow-auto">
         {lines.length === 0 ? (
           <div className="px-3 py-8 text-center text-[12px] text-[var(--gray-400)]">{empty}</div>
         ) : (
           <table className="w-full min-w-[560px] text-[11.5px]">
-            <thead className="sticky top-0 bg-[var(--gray-50)] text-left text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
+            <thead className="sticky top-0 bg-[var(--gray-50)] text-left text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">
               <tr>
                 <th className="px-3 py-2">Documento / concepto</th>
                 <th className="px-3 py-2">Fecha</th>
@@ -914,7 +914,7 @@ function IvaLinesTable({
                         if (!line.rateTarget) return;
                         onUpdateTaxRate(line.rateTarget, Number(event.target.value) as 8 | 16);
                       }}
-                      className="h-8 rounded-lg border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-700)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
+                      className="h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-700)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
                     >
                       <option value={16}>16%</option>
                       <option value={8}>8%</option>
@@ -987,7 +987,7 @@ function CollapsibleSourceLines({
   onToggle: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-[var(--gray-200)]">
+    <div className="rounded-[var(--radius)] border border-[var(--gray-200)]">
       <button
         onClick={onToggle}
         className="flex w-full items-center gap-2 border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-left"
@@ -995,7 +995,7 @@ function CollapsibleSourceLines({
         {expanded
           ? <ChevronDown className="h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />
           : <ChevronRight className="h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />}
-        <span className="text-[11px] font-semibold text-[var(--gray-950)]">{title}</span>
+        <span className="text-[11px] font-bold text-[var(--gray-950)]">{title}</span>
       </button>
       {expanded && (
         <div className="max-h-[320px] overflow-auto">
@@ -1003,7 +1003,7 @@ function CollapsibleSourceLines({
             <div className="px-3 py-5 text-center text-[12px] text-[var(--gray-400)]">{empty}</div>
           ) : (
             <table className="w-full min-w-[460px] text-[11.5px]">
-              <thead className="text-left text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
+              <thead className="text-left text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">
                 <tr>
                   <th className="px-3 py-2">Documento</th>
                   <th className="px-3 py-2">Fecha</th>
@@ -1047,7 +1047,7 @@ function PaymentPlanDetail({
         <div key={obligation.id} className="space-y-3 p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="font-semibold text-[var(--gray-950)]">{obligation.label}</div>
+              <div className="font-bold text-[var(--gray-950)]">{obligation.label}</div>
               <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
                 {obligation.source} · vence {fmtDate(obligation.dueDate)} · pendiente {fmtCompact(obligation.pendingAmount)}
               </div>
@@ -1058,13 +1058,13 @@ function PaymentPlanDetail({
             </button>
           </div>
           {obligation.paymentPlan.length === 0 ? (
-            <div className="rounded-xl border border-[var(--gray-200)] px-3 py-4 text-center text-[12px] text-[var(--gray-400)]">
+            <div className="rounded-[var(--radius)] border border-[var(--gray-200)] px-3 py-4 text-center text-[12px] text-[var(--gray-400)]">
               Sin pagos parciales programados.
             </div>
           ) : (
             <div className="space-y-2">
               {obligation.paymentPlan.map((payment) => (
-                <div key={payment.id} className="grid gap-2 rounded-xl border border-[var(--gray-200)] p-2 md:grid-cols-[130px_1fr_120px_110px]">
+                <div key={payment.id} className="grid gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] p-2 md:grid-cols-[130px_1fr_120px_110px]">
                   <input
                     type="date"
                     value={payment.date}
@@ -1113,9 +1113,9 @@ function PaymentPlanDetail({
 
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</div>
-      <div className="mt-1 text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">{value}</div>
+    <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</div>
+      <div className="mt-1 text-[13px] font-bold tabular-nums text-[var(--gray-950)]">{value}</div>
     </div>
   );
 }
@@ -1150,15 +1150,15 @@ function SegmentedControl<T extends string>({
 }) {
   return (
     <div className="flex items-center gap-2">
-      {label && <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</span>}
-      <div className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] bg-white p-0.5">
+      {label && <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</span>}
+      <div className="inline-flex h-9 items-center rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-0.5">
         {options.map((option) => {
           const active = value === option.id;
           return (
             <button
               key={option.id}
               onClick={() => onChange(option.id)}
-              className="h-8 rounded-lg px-3 text-[12px] font-medium transition-colors"
+              className="h-8 rounded-[var(--radius-md)] px-3 text-[12px] font-medium transition-colors"
               style={{
                 background: active ? 'var(--gray-950)' : 'transparent',
                 color: active ? 'white' : 'var(--gray-700)',
@@ -1179,8 +1179,8 @@ function addDays(date: string, days: number): string {
   return parsed.toISOString().slice(0, 10);
 }
 
-const taxInputClass = 'h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
-const taxButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed';
+const taxInputClass = 'h-10 w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
+const taxButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed';
 /* ────────────────────────────────────────────────────────────── */
 /* Trajectory Chart                                              */
 /* ────────────────────────────────────────────────────────────── */
@@ -1201,9 +1201,9 @@ function TaxTrajectoryChart({ view }: { view: TaxDashboardView }) {
   }, [view.overdueBalance, view.periods]);
 
   return (
-    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
       <div className="mb-4">
-        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Trayectoria de Deuda Fiscal</h3>
+        <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Trayectoria de Deuda Fiscal</h3>
         <p className="text-[11px] text-[var(--gray-400)]">Evolución del saldo acumulado proyectado vs pagos aprobados.</p>
       </div>
       <div className="h-[180px] w-full">
@@ -1218,7 +1218,7 @@ function TaxTrajectoryChart({ view }: { view: TaxDashboardView }) {
             />
             <Bar dataKey="nuevos" fill="var(--warning)" radius={[4, 4, 0, 0]} barSize={20} name="Nuevos" />
             <Bar dataKey="pagos" fill="var(--success)" radius={[4, 4, 0, 0]} barSize={20} name="Pagos" />
-            <Line type="monotone" dataKey="acumulado" stroke="var(--danger)" strokeWidth={2} dot={{ r: 3 }} name="Saldo Acumulado" />
+            <Line type="monotone" dataKey="acumulado" stroke="var(--danger)" strokeWidth={1.5} dot={{ r: 3 }} name="Saldo Acumulado" />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

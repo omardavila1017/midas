@@ -51,14 +51,14 @@ function SelectPicker<T extends string>({
   return (
     <div ref={rootRef} className="relative">
       {label && (
-        <label className="block text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)] mb-1.5">
+        <label className="block text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)] mb-1.5">
           {label}
         </label>
       )}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full h-10 pl-3 pr-3 rounded-xl border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
+        className="w-full h-10 pl-3 pr-3 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[13px] text-left flex items-center justify-between gap-2 transition-colors hover:border-[var(--gray-300)] hover:shadow-sm"
         style={{ color: current ? 'var(--gray-950)' : 'var(--gray-400)' }}
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -75,7 +75,7 @@ function SelectPicker<T extends string>({
 
       {open && (
         <div
-          className="absolute left-0 right-0 mt-2 z-50 rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden origin-top"
+          className="absolute left-0 right-0 mt-2 z-50 rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white overflow-hidden origin-top"
           style={{
             animation: 'slideDown var(--motion-state) var(--ease-smooth) both',
             boxShadow: 'var(--shadow-md)',
