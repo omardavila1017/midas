@@ -12,8 +12,9 @@
 //   2. La trayectoria de caja viene del motor canónico del Dashboard
 //      (computeBaseCashFlow) vía `buildCanonicalProjection`. No se
 //      vuelve a calcular aquí.
-//   3. La caja inicial coincide con la del Dashboard (FIXED_STARTING_BALANCE
-//      o budget.openingCash[0] o saldoInicial bancario, en ese orden).
+//   3. La caja inicial anual coincide con el Dashboard. La caja operativa
+//      diaria para decidir pagos se calcula aparte con el saldo bancario
+//      más reciente por cuenta.
 // ─────────────────────────────────────────────────────────────────────────
 
 import type { Budget } from '../../../domain/budget';
@@ -213,12 +214,30 @@ export function calculateInitialCash(
   bankStatements: BankAccountStatement[],
   fallback: number,
 ): number {
-  if (bankStatements.length === 0) return fallback;
-  const sumSaldoInicial = bankStatements.reduce(
-    (sum, statement) => sum + (statement.saldoInicial ?? 0),
+  void bankStatements;
+  return fallback;
+}
+
+export function calculateCurrentBankCash(
+  bankStatements: BankAccountStatement[],
+  companyCode = 'all',
+  fallback = 0,
+): number {
+  const latestByAccount = new Map<string, BankAccountStatement>();
+  for (const statement of bankStatements) {
+    if (companyCode !== 'all' && companyCode && statement.cia !== companyCode) continue;
+    const key = `${statement.cia}::${statement.cuenta}::${statement.moneda}`;
+    const current = latestByAccount.get(key);
+    if (!current || statement.fechaEstadoCuenta >= current.fechaEstadoCuenta) {
+      latestByAccount.set(key, statement);
+    }
+  }
+  if (latestByAccount.size === 0) return fallback;
+  const total = Array.from(latestByAccount.values()).reduce(
+    (sum, statement) => sum + (statement.saldoFinal ?? statement.saldoInicial ?? 0),
     0,
   );
-  return sumSaldoInicial > 0 ? sumSaldoInicial : fallback;
+  return total > 0 ? total : fallback;
 }
 
 function defaultScenarios(asOfDate: string): FinancialScenario[] {

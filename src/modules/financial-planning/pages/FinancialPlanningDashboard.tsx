@@ -51,7 +51,7 @@ import { deriveInsights } from '../../financial-projection/services/insights';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
 import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
-import { buildFinancialProjectionSourceData, calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
+import { buildFinancialProjectionSourceData, calculateCurrentBankCash, calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
 import { buildApprovedTaxPaymentMovements, defaultTaxStore, loadTaxStore } from '../../taxes/services/taxModuleService';
 import {
   createManualPlanningEntry,
@@ -239,6 +239,10 @@ export default function FinancialPlanningDashboard(props: Props) {
     () => calculateInitialCash(props.bankStatements, props.startingBalance),
     [props.bankStatements, props.startingBalance],
   );
+  const supplierInitialCash = useMemo(
+    () => calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash),
+    [props.bankStatements, props.companyCode, initialCash],
+  );
   const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
 
   const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
@@ -262,9 +266,9 @@ export default function FinancialPlanningDashboard(props: Props) {
     const supplierSchedule = scheduleSupplierPaymentsByScore({
       movements: adjustedMovements,
       providers: props.providers,
-      startDate: yearStart,
+      startDate: today,
       endDate: yearEnd,
-      initialCash,
+      initialCash: supplierInitialCash,
       minimumCash,
       scenarioId,
     });
@@ -284,19 +288,19 @@ export default function FinancialPlanningDashboard(props: Props) {
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers],
+    [approvedScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, supplierInitialCash],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers],
+    [baseScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, supplierInitialCash],
   );
 
   const activeRunRaw = useMemo(
     () => buildScenarioRun(activeScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers],
+    [activeScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, supplierInitialCash],
   );
 
   const activeOverrides = useMemo(
@@ -377,12 +381,12 @@ export default function FinancialPlanningDashboard(props: Props) {
     const taxKey = fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status);
     const drafts = scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt).slice(0, 6);
     return drafts.map((draft) => {
-      const cacheKey = `planning:${draft.id}:${granularity}:${yearStart}:${yearEnd}:${initialCash}:${minimumCash}:${movementsKey}:${adjustmentsKey}:${manualKey}:${taxKey}`;
+      const cacheKey = `planning:${draft.id}:${granularity}:${yearStart}:${yearEnd}:${initialCash}:${supplierInitialCash}:${minimumCash}:${movementsKey}:${adjustmentsKey}:${manualKey}:${taxKey}`;
       const run = cachedRun<ForecastRun>(cacheKey, () => buildScenarioRun(draft.id, true));
       return { scenarioId: draft.id, run };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compareOpen, scenarios, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, yearStart, yearEnd, initialCash, minimumCash]);
+  }, [compareOpen, scenarios, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, yearStart, yearEnd, initialCash, supplierInitialCash, minimumCash]);
 
   // Pre-override per-row aggregates (for cell display when no override).
   const rowAggregateMap = useMemo(() => {

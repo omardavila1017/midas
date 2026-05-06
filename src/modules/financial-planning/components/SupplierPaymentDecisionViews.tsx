@@ -57,7 +57,10 @@ export function SupplierPaymentDecisionTable({
             {decisions.length === 0 ? (
               <tr>
                 <td colSpan={9} className="px-4 py-10 text-center text-[12px] text-[var(--gray-400)]">
-                  Sin CXP de proveedores para decidir en este escenario.
+                  <div className="font-medium text-[var(--gray-600)]">Sin CXP de proveedores para decidir en este escenario.</div>
+                  <div className="mt-1 text-[11px]">
+                    {paymentDiagnosticText(plan)}
+                  </div>
                 </td>
               </tr>
             ) : decisions.map((decision) => {
@@ -119,18 +122,22 @@ export function DailyOperatingFlowTable({ rows }: { rows: DailyOperatingFlowRow[
       <header className="border-b border-[var(--gray-200)] px-4 py-3">
         <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Flujo operativo diario</h3>
         <p className="mt-1 text-[11px] text-[var(--gray-500)]">
-          Ingresos, pagos ejecutados, proveedores pendientes y alertas de déficit por día.
+          Ingresos con cliente, salidas con concepto, proveedores programados y alertas de déficit por día.
         </p>
       </header>
       <div className="max-h-[520px] overflow-auto">
-        <table className="w-full min-w-[1280px] text-left text-[12px]">
+        <table className="w-full min-w-[1780px] text-left text-[12px]">
           <thead className="sticky top-0 z-10 bg-[var(--gray-50)] text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
             <tr>
               <th className="px-3 py-2.5">Día</th>
               <th className="px-3 py-2.5 text-right">Saldo inicial</th>
               <th className="px-3 py-2.5 text-right">Ingresos esperados</th>
+              <th className="px-3 py-2.5">Clientes esperados</th>
               <th className="px-3 py-2.5 text-right">Ingresos confirmados</th>
+              <th className="px-3 py-2.5">Clientes confirmados</th>
               <th className="px-3 py-2.5 text-right">Pagos programados</th>
+              <th className="px-3 py-2.5">Salidas / concepto</th>
+              <th className="px-3 py-2.5">Prov. programados</th>
               <th className="px-3 py-2.5 text-right">Pagos ejecutados</th>
               <th className="px-3 py-2.5">Prov. pagados</th>
               <th className="px-3 py-2.5">Prov. pendientes</th>
@@ -142,7 +149,7 @@ export function DailyOperatingFlowTable({ rows }: { rows: DailyOperatingFlowRow[
           <tbody>
             {visibleRows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-10 text-center text-[12px] text-[var(--gray-400)]">
+                <td colSpan={15} className="px-4 py-10 text-center text-[12px] text-[var(--gray-400)]">
                   Sin movimientos diarios relevantes.
                 </td>
               </tr>
@@ -151,20 +158,20 @@ export function DailyOperatingFlowTable({ rows }: { rows: DailyOperatingFlowRow[
                 <td className="px-3 py-3 font-medium text-[var(--gray-950)]">{formatDate(row.date)}</td>
                 <MoneyCell value={row.openingCash} />
                 <MoneyCell value={row.expectedInflows} positive />
+                <ListPreview values={row.clientNamesExpected} />
                 <MoneyCell value={row.confirmedInflows} positive />
+                <ListPreview values={row.clientNamesConfirmed} muted />
                 <MoneyCell value={row.scheduledOutflows} negative />
+                <ListPreview values={row.outflowConcepts} />
+                <ListPreview values={row.supplierNamesScheduled} muted />
                 <MoneyCell value={row.executedOutflows} negative />
                 <td className="px-3 py-3">
                   <div className="font-medium text-[var(--gray-950)]">{row.suppliersPaid}</div>
-                  <div className="max-w-[220px] truncate text-[10.5px] text-[var(--gray-400)]" title={row.supplierNamesPaid.join(', ')}>
-                    {row.supplierNamesPaid.join(', ') || '—'}
-                  </div>
+                  <ListText values={row.supplierNamesPaid} muted />
                 </td>
                 <td className="px-3 py-3">
                   <div className="font-medium" style={{ color: row.suppliersPending > 0 ? 'var(--danger)' : 'var(--gray-950)' }}>{row.suppliersPending}</div>
-                  <div className="max-w-[220px] truncate text-[10.5px] text-[var(--gray-400)]" title={row.supplierNamesPending.join(', ')}>
-                    {row.supplierNamesPending.join(', ') || '—'}
-                  </div>
+                  <ListText values={row.supplierNamesPending} muted />
                 </td>
                 <MoneyCell value={row.net} signed />
                 <MoneyCell value={row.closingCash} />
@@ -182,6 +189,38 @@ export function DailyOperatingFlowTable({ rows }: { rows: DailyOperatingFlowRow[
         </table>
       </div>
     </section>
+  );
+}
+
+function ListPreview({ values, muted }: { values: string[]; muted?: boolean }) {
+  return (
+    <td className="px-3 py-3">
+      <ListText values={values} muted={muted} />
+    </td>
+  );
+}
+
+function paymentDiagnosticText(plan: SupplierPaymentPlan): string {
+  const diagnostics = plan.diagnostics;
+  if (!diagnostics || diagnostics.payableMovements === 0) {
+    return 'No se encontraron facturas CXP abiertas dentro del horizonte; revisa carga JDE o filtros de compañía.';
+  }
+  if (diagnostics.managedPayableMovements === 0 && diagnostics.skippedResolvedPayables > 0) {
+    return 'Las partidas CXP detectadas ya están reales, ejecutadas o canceladas; no requieren decisión de pago.';
+  }
+  if (diagnostics.missingProviderMatches > 0) {
+    return `${diagnostics.missingProviderMatches} CXP no hicieron match con catálogo de proveedores; se usó score del movimiento como respaldo.`;
+  }
+  return 'Hay CXP detectada, pero no generó decisiones con los filtros actuales del escenario.';
+}
+
+function ListText({ values, muted }: { values: string[]; muted?: boolean }) {
+  const label = values.join(', ');
+  const color = muted ? 'text-[var(--gray-400)]' : 'text-[var(--gray-600)]';
+  return (
+    <div className={`max-w-[240px] truncate text-[10.5px] ${color}`} title={label}>
+      {label || '—'}
+    </div>
   );
 }
 

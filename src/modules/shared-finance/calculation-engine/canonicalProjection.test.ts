@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
-import type { CashFlowAssumptions, Client } from '../../../domain/types';
+import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement, BankStatementLine, CobranzaRecord } from '../../../services/jdeTypes';
 import { buildHistoricalMonths } from '../../../domain/cashFlowEngine';
 import type {
@@ -64,6 +64,48 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.taxRate).toBe(16);
     expect(movement?.taxBaseAmount).toBeCloseTo(500);
     expect(movement?.taxAmount).toBeCloseTo(80);
+  });
+
+  it('keeps overdue open CXP as supplier payments from today with original due date', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          cuenta: 'CTA-1',
+          movimientos: [
+            bankMovement({ cia: '00001', cuenta: 'CTA-1', tipoMovimiento: 'ABONO', importe: 1, fechaOperacion: '2026-05-01' }),
+          ],
+        }),
+      ],
+      clients: [],
+      providers: [provider()],
+      cxpRecords: [
+        cxpRecord({
+          noProveedor: 'P-1',
+          nombre: 'Proveedor IVA',
+          noFactura: 'F-VENCIDA',
+          fechaFactura: '2026-04-01',
+          fechaVence: '2026-04-15',
+          fechaProgramacionPago: '2026-04-20',
+          importePendientePesos: 580,
+        }),
+      ],
+      assumptions,
+      budget: budget({ expenseMay: 0, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-05-06',
+    });
+
+    const movement = canonical.movements.find((item) => item.id.startsWith('cxp:') && item.sourceObjectId === 'F-VENCIDA');
+    expect(movement).toBeTruthy();
+    expect(movement?.sourceSystem).toBe('JDE');
+    expect(movement?.category).toBe('AP_PAYMENT');
+    expect(movement?.counterpartyType).toBe('SUPPLIER');
+    expect(movement?.counterpartyId).toBe('provider-1');
+    expect(movement?.projectedDate).toBe('2026-05-06');
+    expect(movement?.dueDate).toBe('2026-04-15');
+    expect(movement?.projectedAmount).toBe(580);
   });
 
   it('adds regimen 601 IVA creditable metadata to projected budget OPEX', () => {
@@ -284,6 +326,19 @@ function client(patch: Partial<Client> = {}): Client {
     creditDays: 0,
     monthlyBilling,
     complianceRate: 1,
+    ...patch,
+  };
+}
+
+function provider(patch: Partial<Provider> = {}): Provider {
+  return {
+    id: patch.id ?? 'provider-1',
+    name: patch.name ?? 'Proveedor IVA',
+    type: patch.type ?? 'Operativo',
+    risk: patch.risk ?? 'Medio',
+    paymentPeriod: patch.paymentPeriod ?? '30 días',
+    score: patch.score ?? 88,
+    numProveedorJDE: patch.numProveedorJDE ?? 'P-1',
     ...patch,
   };
 }

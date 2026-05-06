@@ -63,6 +63,7 @@ import { ChartSkeleton, TableSkeleton } from '../components/SectionSkeletons';
 import { cachedRun, fingerprintArray } from '../services/projectionCache';
 import {
   buildFinancialProjectionSourceData,
+  calculateCurrentBankCash,
   calculateInitialCash,
   tryGetCachedFinancialProjectionSourceData,
   type FinancialProjectionSourceData,
@@ -331,6 +332,10 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     () => calculateInitialCash(props.bankStatements, props.startingBalance),
     [props.bankStatements, props.startingBalance],
   );
+  const supplierInitialCash = useMemo(
+    () => calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash),
+    [props.bankStatements, props.companyCode, initialCash],
+  );
   const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
 
   // Pre-index storage by scenario for O(1) per-scenario lookups.
@@ -379,6 +384,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       yearEnd,
       today,
       initialCash,
+      supplierInitialCash,
       minimumCash,
     ].join('|');
   }, [
@@ -391,6 +397,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     yearEnd,
     today,
     initialCash,
+    supplierInitialCash,
     minimumCash,
   ]);
 
@@ -433,9 +440,9 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         const supplierSchedule = scheduleSupplierPaymentsByScore({
           movements: adjustedMovements,
           providers: props.providers,
-          startDate: yearStart,
+          startDate: today,
           endDate: yearEnd,
-          initialCash,
+          initialCash: supplierInitialCash,
           minimumCash,
           scenarioId,
         });
@@ -488,6 +495,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     yearEnd,
     today,
     initialCash,
+    supplierInitialCash,
     minimumCash,
   ]);
 
