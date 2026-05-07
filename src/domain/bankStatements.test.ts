@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { attachImportedStatementsToKnownCompanies, mergeBankStatements } from './bankStatements';
+import {
+  attachImportedStatementsToKnownCompanies,
+  currentBankStatements,
+  latestStatementDate,
+  mergeBankStatements,
+  sumBankStatementBalances,
+} from './bankStatements';
 import type { BankAccountStatement } from '../services/jdeTypes';
 
 function makeStatement(partial: Partial<BankAccountStatement> & Pick<BankAccountStatement, 'cia' | 'banco' | 'cuenta' | 'moneda' | 'fechaEstadoCuenta' | 'movimientos'>): BankAccountStatement {
@@ -97,5 +103,46 @@ describe('attachImportedStatementsToKnownCompanies', () => {
 
     expect(aligned.cia).toBe('00011');
     expect(aligned.movimientos[0].cia).toBe('00011');
+  });
+});
+
+describe('current bank balance helpers', () => {
+  it('uses only statements from the latest statement date for current cash', () => {
+    const statements: BankAccountStatement[] = [
+      makeStatement({
+        cia: '00011',
+        banco: 'BANAMEX',
+        cuenta: 'OLD',
+        moneda: 'MXN',
+        fechaEstadoCuenta: '2026-05-01',
+        saldoFinal: 280_000_000,
+        movimientos: [],
+      }),
+      makeStatement({
+        cia: '00011',
+        banco: 'BANAMEX',
+        cuenta: 'A',
+        moneda: 'MXN',
+        fechaEstadoCuenta: '2026-05-06',
+        saldoFinal: 45_000_000,
+        movimientos: [],
+      }),
+      makeStatement({
+        cia: '00038',
+        banco: 'BBVA',
+        cuenta: 'B',
+        moneda: 'MXN',
+        fechaEstadoCuenta: '2026-05-06',
+        saldoFinal: 25_000_000,
+        movimientos: [],
+      }),
+    ];
+
+    const latest = latestStatementDate(statements);
+    const current = currentBankStatements(statements, latest);
+
+    expect(latest).toBe('2026-05-06');
+    expect(current.map(statement => statement.cuenta).sort()).toEqual(['A', 'B']);
+    expect(sumBankStatementBalances(current)).toBe(70_000_000);
   });
 });

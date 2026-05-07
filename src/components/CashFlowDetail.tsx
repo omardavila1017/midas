@@ -13,6 +13,11 @@ import {
 } from '../domain/netCashFlowEngine';
 import type { BankAccountStatement } from '../services/jde';
 import {
+  currentBankStatements,
+  latestStatementDate,
+  sumBankStatementBalances,
+} from '../domain/bankStatements';
+import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -150,9 +155,14 @@ export default function CashFlowDetail({
   }, [bankStatements]);
 
   // Totales de bancos
+  const currentBalanceDate = useMemo(() => latestStatementDate(bankStatements), [bankStatements]);
+  const balanceStatements = useMemo(
+    () => currentBankStatements(bankStatements, currentBalanceDate),
+    [bankStatements, currentBalanceDate],
+  );
   const totalBankSaldo = useMemo(
-    () => bankStatements.reduce((s, acc) => s + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0),
-    [bankStatements],
+    () => sumBankStatementBalances(balanceStatements),
+    [balanceStatements],
   );
   const totalBankAbonos = useMemo(() => {
     let total = 0;
@@ -194,7 +204,9 @@ export default function CashFlowDetail({
   const totalInflows = daily.reduce((s, d) => s + d.inflows, 0);
   const totalOutflows = daily.reduce((s, d) => s + d.outflows, 0);
   const netFlow = totalInflows - totalOutflows;
-  const finalBalance = daily.length > 0 ? daily[daily.length - 1].cumulative : startingBalance;
+  const calculatedFinalBalance = daily.length > 0 ? daily[daily.length - 1].cumulative : startingBalance;
+  const bankBalanceAvailable = balanceStatements.length > 0;
+  const finalBalance = bankBalanceAvailable ? totalBankSaldo : calculatedFinalBalance;
   const minBalance = daily.reduce((m, d) => Math.min(m, d.cumulative), startingBalance);
   const minBalanceDate = daily.find(d => d.cumulative === minBalance)?.date;
 
@@ -260,7 +272,7 @@ export default function CashFlowDetail({
           tone={netFlow >= 0 ? 'primary' : 'danger'}
         />
         <KpiCard
-          label="Saldo final"
+          label={bankBalanceAvailable ? 'Saldo bancos' : 'Saldo final'}
           value={finalBalance}
           icon={Wallet}
           tone={finalBalance >= 0 ? 'primary' : 'danger'}
@@ -271,6 +283,8 @@ export default function CashFlowDetail({
       {bankStatements.length > 0 && (
         <BankSummaryCard
           bankStatements={bankStatements}
+          balanceStatements={balanceStatements}
+          balanceDate={currentBalanceDate}
           totalBankSaldo={totalBankSaldo}
           totalBankAbonos={totalBankAbonos}
           totalBankCargos={totalBankCargos}
@@ -418,11 +432,13 @@ function KpiCard({
 }
 
 function BankSummaryCard({
-  bankStatements, totalBankSaldo, totalBankAbonos, totalBankCargos,
+  bankStatements, balanceStatements, balanceDate, totalBankSaldo, totalBankAbonos, totalBankCargos,
   activeDays,
   ciaNameMap, bankFetchStatus, bankFetchProgress, onRefreshBanks,
 }: {
   bankStatements: BankAccountStatement[];
+  balanceStatements: BankAccountStatement[];
+  balanceDate: string | null;
   totalBankSaldo: number;
   totalBankAbonos: number;
   totalBankCargos: number;
@@ -435,8 +451,8 @@ function BankSummaryCard({
   // Mismo conteo que la vista Diario: días con movimiento real (excluye traspasos internos).
   const diasCubiertos = activeDays;
 
-  const empresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
-  const fechaCorte = bankStatements[0]?.fechaEstadoCuenta;
+  const empresas = Array.from(new Set(balanceStatements.map(a => a.cia).filter(Boolean)));
+  const staleAccounts = Math.max(0, bankStatements.length - balanceStatements.length);
   const isLoading = bankFetchStatus !== 'idle';
 
   return (
@@ -462,10 +478,11 @@ function BankSummaryCard({
             </span>
           )}
           <span className={`text-xs ${T.textMuted}`}>
-            {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''}
+            {balanceStatements.length} cuenta{balanceStatements.length !== 1 ? 's' : ''}
             {' · '}
             {diasCubiertos} día{diasCubiertos !== 1 ? 's' : ''} con actividad
-            {fechaCorte ? ` · Al ${formatDate(fechaCorte)}` : ''}
+            {balanceDate ? ` · Al ${formatDate(balanceDate)}` : ''}
+            {staleAccounts > 0 ? ` · ${staleAccounts} históricas no incluidas en saldo` : ''}
           </span>
           {onRefreshBanks && (
             <button

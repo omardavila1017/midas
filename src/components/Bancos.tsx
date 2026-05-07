@@ -40,7 +40,10 @@ import {
 } from '../domain/realReconciliationEngine';
 import {
   attachImportedStatementsToKnownCompanies,
+  currentBankStatements,
+  latestStatementDate,
   mergeBankStatements,
+  sumBankStatementBalances,
   type BankQueryState,
 } from '../domain/bankStatements';
 import { parseSantanderFile, SANTANDER_FILE_FORMAT } from '../domain/santanderCsv';
@@ -384,6 +387,12 @@ const BancosDashboard = ({
     });
   }, [accountsFiltered, searchTerm, tipoFilter]);
 
+  const balanceDate = useMemo(() => latestStatementDate(accountsView), [accountsView]);
+  const balanceAccountsView = useMemo(
+    () => currentBankStatements(accountsView, balanceDate),
+    [accountsView, balanceDate],
+  );
+
   const accountsByBank = useMemo(() => {
     type Acc = typeof accountsView[number];
     const m = new Map<string, Acc[]>();
@@ -411,7 +420,7 @@ const BancosDashboard = ({
     let totalCuentas = 0;
     let totalMovs = 0;
     let totalMovsInternal = 0;
-    let saldoTotal = 0;
+    const saldoTotal = sumBankStatementBalances(balanceAccountsView);
     let cargosBruto = 0;
     let cargosReal = 0;
     let abonosBruto = 0;
@@ -419,7 +428,6 @@ const BancosDashboard = ({
     for (const a of accountsView) {
       totalCuentas += 1;
       totalMovs += a.movimientos.length;
-      saldoTotal += a.saldoFinal ?? a.saldoInicial ?? 0;
       for (const m of a.movimientos) {
         const isInternal = internalReasonOf(a.cia, a.cuenta, m) !== null;
         if (isInternal) totalMovsInternal += 1;
@@ -433,10 +441,12 @@ const BancosDashboard = ({
       }
     }
     return { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal };
-  }, [accountsView, internalReasonOf]);
+  }, [accountsView, balanceAccountsView, internalReasonOf]);
   const { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal } = kpis;
   const totalCargos = cargosReal;
   const totalAbonos = abonosReal;
+  const balanceCuentas = balanceAccountsView.length;
+  const staleCuentas = Math.max(0, totalCuentas - balanceCuentas);
 
   const hasFilters = bancoFilter !== 'all' || monedaFilter !== 'all' || tipoFilter !== 'all' || searchTerm !== '';
   const clearFilters = () => { setBancoFilter('all'); setMonedaFilter('all'); setTipoFilter('all'); setSearchTerm(''); };
@@ -583,7 +593,7 @@ const BancosDashboard = ({
           {
             label: 'Saldo Total',
             value: fmtCurrency(saldoTotal),
-            sub: `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`,
+            sub: `${balanceCuentas} cuenta${balanceCuentas !== 1 ? 's' : ''} al corte${staleCuentas > 0 ? ` · ${staleCuentas} históricas fuera` : ''}`,
             icon: Wallet,
             color: hex.primary,
           },
@@ -656,10 +666,12 @@ const BancosDashboard = ({
             {accountsByBank.map(([bankName, accs], bankIdx) => {
               const bankCollapsed = collapsedBanks.has(bankName);
               const monedas = new Set(accs.map(a => a.moneda));
+              const currentAccs = currentBankStatements(accs, balanceDate);
               const sumSaldo = monedas.size === 1
-                ? accs.reduce((s, a) => s + (a.saldoFinal ?? a.saldoInicial ?? 0), 0)
+                ? sumBankStatementBalances(currentAccs)
                 : null;
               const moneda = monedas.size === 1 ? accs[0].moneda : null;
+              const staleBankAccounts = Math.max(0, accs.length - currentAccs.length);
               return (
                 <div key={bankName} className={bankIdx > 0 ? 'border-t border-[var(--gray-100)]' : ''}>
                   <button
@@ -686,6 +698,7 @@ const BancosDashboard = ({
                       )}
                       <p className="text-[10px] text-[var(--gray-400)]">
                         {accs.reduce((s, a) => s + a.movimientos.length, 0).toLocaleString()} mov.
+                        {staleBankAccounts > 0 ? ` · ${staleBankAccounts} históricas fuera` : ''}
                       </p>
                     </div>
                   </button>

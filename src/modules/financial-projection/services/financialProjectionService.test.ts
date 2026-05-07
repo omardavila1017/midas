@@ -7,11 +7,12 @@ describe('financialProjectionService cash helpers', () => {
     expect(calculateInitialCash([statement({ saldoInicial: 999_000, saldoFinal: 111_000 })], 76_300_000)).toBe(76_300_000);
   });
 
-  it('calculates current bank cash from the latest saldoFinal by account and company', () => {
+  it('calculates current bank cash from the latest cut date by company', () => {
     const statements: BankAccountStatement[] = [
       statement({ cia: '00001', cuenta: 'CTA-1', fechaEstadoCuenta: '2026-05-01', saldoInicial: 1_000_000, saldoFinal: 250_000 }),
       statement({ cia: '00001', cuenta: 'CTA-1', fechaEstadoCuenta: '2026-05-05', saldoInicial: 9_000_000, saldoFinal: 400_000 }),
       statement({ cia: '00001', cuenta: 'CTA-2', fechaEstadoCuenta: '2026-05-05', saldoInicial: 8_000_000, saldoFinal: 600_000 }),
+      statement({ cia: '00001', cuenta: 'STALE', fechaEstadoCuenta: '2026-05-02', saldoInicial: 99_000_000, saldoFinal: 99_000_000 }),
       statement({ cia: '00002', cuenta: 'CTA-3', fechaEstadoCuenta: '2026-05-05', saldoInicial: 7_000_000, saldoFinal: 900_000 }),
     ];
 

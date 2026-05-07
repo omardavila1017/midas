@@ -38,6 +38,30 @@ function movementSortKey(movement: Pick<BankStatementLine, 'fechaOperacion' | 'f
   ].join('|');
 }
 
+export function latestStatementDate(statements: readonly Pick<BankAccountStatement, 'fechaEstadoCuenta'>[]): string | null {
+  let latest: string | null = null;
+  for (const statement of statements) {
+    if (!latest || statement.fechaEstadoCuenta > latest) latest = statement.fechaEstadoCuenta;
+  }
+  return latest;
+}
+
+export function currentBankStatements<T extends Pick<BankAccountStatement, 'fechaEstadoCuenta'>>(
+  statements: readonly T[],
+  asOfDate = latestStatementDate(statements),
+): T[] {
+  if (!asOfDate) return [];
+  return statements.filter(statement => statement.fechaEstadoCuenta === asOfDate);
+}
+
+export function bankStatementBalance(statement: Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial'>): number {
+  return statement.saldoFinal ?? statement.saldoInicial ?? 0;
+}
+
+export function sumBankStatementBalances(statements: readonly Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial'>[]): number {
+  return statements.reduce((sum, statement) => sum + bankStatementBalance(statement), 0);
+}
+
 export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAccountStatement[] {
   const merged = new Map<string, BankAccountStatement>();
   const seenMovements = new Map<string, Set<string>>();
