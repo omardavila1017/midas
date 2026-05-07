@@ -9,7 +9,6 @@ import path from 'path'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const jdeUpstream = env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tesoreria'
-  const jdeIndicadoresUpstream = env.VITE_JDE_INDICADORES_UPSTREAM || 'http://srv-desarrollo:90/JDEdwards'
 
   // Extraemos el pathname del upstream para reescribir el prefix /api/jde
   // hacia la ruta correcta del host productivo (ej. /v1/erp/tesoreria).
@@ -19,15 +18,6 @@ export default defineConfig(({ mode }) => {
     const u = new URL(jdeUpstream)
     upstreamOrigin = u.origin
     upstreamPath = u.pathname.replace(/\/+$/, '')
-  } catch {
-    // Si no es una URL absoluta, dejamos el string tal cual (fallback dev local).
-  }
-  let indicadoresOrigin = jdeIndicadoresUpstream
-  let indicadoresPath = ''
-  try {
-    const u = new URL(jdeIndicadoresUpstream)
-    indicadoresOrigin = u.origin
-    indicadoresPath = u.pathname.replace(/\/+$/, '')
   } catch {
     // Si no es una URL absoluta, dejamos el string tal cual (fallback dev local).
   }
@@ -48,12 +38,29 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
           rewrite: (p) => p.replace(/^\/api\/jde/, upstreamPath),
-        },
-        '/api/jde-indicadores': {
-          target: indicadoresOrigin,
-          changeOrigin: true,
-          secure: false,
-          rewrite: (p) => p.replace(/^\/api\/jde-indicadores/, indicadoresPath),
+          // Stripear headers que el browser agrega y que pueden activar reglas
+          // de WAF / CORS en AWS API Gateway. curl no los manda y funciona;
+          // el browser sí los manda y endpoints nuevos (cobranzaindicadores)
+          // responden 500. Replicamos el comportamiento de curl.
+          configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq) => {
+              proxyReq.removeHeader('origin')
+              proxyReq.removeHeader('referer')
+              proxyReq.removeHeader('sec-fetch-dest')
+              proxyReq.removeHeader('sec-fetch-mode')
+              proxyReq.removeHeader('sec-fetch-site')
+              proxyReq.removeHeader('sec-ch-ua')
+              proxyReq.removeHeader('sec-ch-ua-mobile')
+              proxyReq.removeHeader('sec-ch-ua-platform')
+              proxyReq.removeHeader('cookie')
+              // Forzar respuesta sin compresión. Cuando el browser pide
+              // gzip/br/zstd, AWS API Gateway ocasionalmente devuelve
+              // InternalServerErrorException al comprimir respuestas grandes
+              // (~1MB en cobranzaindicadores). curl funciona porque no pide
+              // compresión por default — replicamos ese comportamiento.
+              proxyReq.setHeader('accept-encoding', 'identity')
+            })
+          },
         },
       },
     },

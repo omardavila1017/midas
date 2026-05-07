@@ -70,10 +70,10 @@ describe('normalizeCobranzaPayments', () => {
     expect(normalizeInvoiceRef('RI - 90829')).toBe(normalizeInvoiceRef('RI-90829'));
   });
 
-  it('consulta CobranzaIndicadores por el proxy separado con cia batch', async () => {
+  it('consulta cobranzaindicadores por el proxy JDE estándar por cía', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify([
       {
-        'Id Pago': 'PAY-BATCH',
+        'Id Pago': 'PAY-1',
         CIA: '00011',
         'Fecha Cobro': '2026-04-10',
         'cta bancaria': '11.1020.0011302',
@@ -89,20 +89,20 @@ describe('normalizeCobranzaPayments', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const payments = await fetchIndicadoresCobranza({
-      cia: '00011,00038',
+      cia: '00011',
       fechaInicial: '2026-04-01',
       fechaFinal: '2026-04-30',
     });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/jde-indicadores/CobranzaIndicadores', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('/api/jde/cobranzaindicadores', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({
-        cia: '00011,00038',
+        cia: '00011',
         fechaInicial: '2026-04-01',
         fechaFinal: '2026-04-30',
       }),
     }));
     expect(payments).toHaveLength(1);
-    expect(payments[0].idPago).toBe('PAY-BATCH');
+    expect(payments[0].idPago).toBe('PAY-1');
   });
 });

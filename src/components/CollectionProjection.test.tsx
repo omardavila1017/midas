@@ -409,6 +409,10 @@ describe('<CollectionProjection />', () => {
       idPago: 'PAY-NOBANK',
       noRecibo: 'RI-NOBANK',
       fechaCobro: isoForCurrentMonthDay(16),
+      // fechaContable también fuera de la ventana del banco (día 15) para
+      // que el match Banco→IndicadoresCobranza no lo confunda con
+      // PAY-REC. El engine indexa pagos por fechaCobro Y fechaContable.
+      fechaContable: isoForCurrentMonthDay(16),
       applications: [{
         ...matchedPayment.applications[0],
         idPago: 'PAY-NOBANK',

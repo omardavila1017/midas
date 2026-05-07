@@ -15,7 +15,6 @@
  */
 
 import { jdeClient, JdeClientConfig } from './jdeClient';
-import { apiConfig } from '../config/api.config';
 import {
   AgedBalanceRecord,
   AgedBalanceRequest,
@@ -931,19 +930,19 @@ export function normalizeCobranzaPayments(rows: Record<string, unknown>[], ciaFa
 }
 
 /**
- * POST /CobranzaIndicadores vía proxy separado `/api/jde-indicadores`.
+ * POST /cobranzaindicadores vía el proxy JDE estándar.
  *
- * Reporte de pagos/recibos y aplicaciones de cobranza. La respuesta plana se
- * normaliza a un pago por `Id Pago`, con sus facturas aplicadas anidadas.
+ * Reporte de pagos/recibos y aplicaciones de cobranza. Liberado en producción
+ * el 2026-05-07 en `api.gruposenda.com/v1/erp/tesoreria/cobranzaindicadores`,
+ * por lo que ya usa el mismo cliente, token y proxy que el resto de las APIs
+ * JDE — sin upstream separado ni headers de auth custom. La respuesta plana
+ * se normaliza a un pago por `Id Pago`, con sus facturas aplicadas anidadas.
  */
 export async function fetchIndicadoresCobranza(
   req: CobranzaPaymentRequest,
   config: JdeClientConfig = {},
 ): Promise<CobranzaPayment[]> {
-  const raw = await jdeClient.post<unknown>('/CobranzaIndicadores', req, {
-    ...config,
-    baseUrl: config.baseUrl ?? apiConfig.jdeIndicadores.baseUrl,
-  });
+  const raw = await jdeClient.post<unknown>('/cobranzaindicadores', req, config);
   return normalizeCobranzaPayments(unwrapList(raw), req.cia);
 }
 

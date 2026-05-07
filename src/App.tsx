@@ -909,22 +909,33 @@ export default function App() {
         }
       }
 
-      try {
-        const ciaBatch = ciasToFetch.join(',');
-        const payments = await fetchIndicadoresCobranza({ cia: ciaBatch, fechaInicial, fechaFinal });
-        const fetchedSet = new Set(ciasToFetch);
+      // Iteramos cía por cía (igual que /cobranza). Mandar todas juntas con
+      // `ciasToFetch.join(',')` hacía que el upstream tardara ~30s y AWS API
+      // Gateway respondiera InternalServerErrorException antes de terminar.
+      const fetchedPayments: CobranzaPayment[] = [];
+      const fetchedPaymentCias: string[] = [];
+      const fetchedPaymentTimestamps: Record<string, string> = {};
+      for (const cia of ciasToFetch) {
+        try {
+          const payments = await fetchIndicadoresCobranza({ cia, fechaInicial, fechaFinal });
+          fetchedPayments.push(...payments);
+          fetchedPaymentCias.push(cia);
+          fetchedPaymentTimestamps[cia] = new Date().toISOString();
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.push(`indicadores ${cia}: ${msg}`);
+        }
+      }
+      if (fetchedPaymentCias.length > 0) {
+        const fetchedSet = new Set(fetchedPaymentCias);
         setCobranzaPayments(prev => [
           ...prev.filter(p => !fetchedSet.has(p.cia)),
-          ...payments,
+          ...fetchedPayments,
         ]);
-        const stamp = new Date().toISOString();
         setCobranzaPaymentsLoadedCias(prev => ({
           ...prev,
-          ...Object.fromEntries(ciasToFetch.map(cia => [cia, stamp])),
+          ...fetchedPaymentTimestamps,
         }));
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        errors.push(`indicadores ${ciasToFetch.join(',')}: ${msg}`);
       }
 
       if (fetchedCias.length > 0) {
