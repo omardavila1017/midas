@@ -91,6 +91,7 @@ import {
   scheduleSupplierPaymentsByScore,
   type SupplierPaymentPlan,
 } from '../services/supplierPaymentSchedule';
+import { buildBudgetInflowMovements, buildBudgetOutflowMovements, buildCxpOutflowMovements } from '../services/cxpOutflowMovements';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
@@ -269,15 +270,72 @@ export default function FinancialPlanningDashboard(props: Props) {
   );
   const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
 
+  const cxpOutflowMovements = useMemo(
+    () => buildCxpOutflowMovements({
+      cxpRecords: props.cxpRecords,
+      providers: props.providers,
+      companyCode: props.companyCode,
+      asOfDate: today,
+      endDate: yearEnd,
+    }),
+    [props.cxpRecords, props.providers, props.companyCode, today, yearEnd],
+  );
+
+  const budgetOutflowMovements = useMemo(
+    () => buildBudgetOutflowMovements({
+      budget: props.budget,
+      asOfDate: today,
+      startDate: yearStart,
+      endDate: yearEnd,
+      includePast: true,
+    }),
+    [props.budget, today, yearStart, yearEnd],
+  );
+
+  const planningOutflowMovements = useMemo(
+    () => [...cxpOutflowMovements, ...budgetOutflowMovements],
+    [cxpOutflowMovements, budgetOutflowMovements],
+  );
+
+  // Base scenario mirrors Romo's CSV exactly: full-year inflows + outflows
+  // straight from the budget concept breakdown. No CXP, no real bank, no
+  // tax module — just the original projection.
+  const budgetBaseMovements = useMemo(() => {
+    const inflows = buildBudgetInflowMovements({
+      budget: props.budget,
+      asOfDate: today,
+      startDate: yearStart,
+      endDate: yearEnd,
+    });
+    const outflows = buildBudgetOutflowMovements({
+      budget: props.budget,
+      asOfDate: today,
+      startDate: yearStart,
+      endDate: yearEnd,
+      includePast: true,
+      includeTaxes: true,
+    });
+    return [...inflows, ...outflows];
+  }, [props.budget, today, yearStart, yearEnd]);
+
+  // Drop ALL OUTFLOW from canonical: planning view uses budget concepts
+  // planchado all year + CXP categories planchado, so the row layout matches
+  // Romo's projection across past and future months consistently.
+  const sourceNonOutflows = useMemo(
+    () => source.movements.filter((m) => m.type !== 'OUTFLOW'),
+    [source.movements],
+  );
+
   const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
-    const taxMovements = buildApprovedTaxPaymentMovements({
+    const isBase = scenarioId === BASE_SCENARIO_ID;
+    const taxMovements = isBase ? [] : buildApprovedTaxPaymentMovements({
       obligations: taxStore.obligations,
       scenarioId,
       startDate: yearStart,
       endDate: yearEnd,
       asOfDate: today,
     });
-    const manualMovements = includeManualEntries
+    const manualMovements = !isBase && includeManualEntries
       ? expandManualPlanningEntriesToMovements(manualEntries, {
         scenarioId,
         startDate: yearStart,
@@ -285,7 +343,9 @@ export default function FinancialPlanningDashboard(props: Props) {
         asOfDate: today,
       })
       : [];
-    const movementsBeforeAdjust = [...source.movements, ...manualMovements, ...taxMovements];
+    const movementsBeforeAdjust = isBase
+      ? budgetBaseMovements
+      : [...sourceNonOutflows, ...planningOutflowMovements, ...manualMovements, ...taxMovements];
     const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
     const supplierSchedule = scheduleSupplierPaymentsByScore({
       movements: adjustedMovements,
@@ -296,10 +356,11 @@ export default function FinancialPlanningDashboard(props: Props) {
       minimumCash,
       scenarioId,
     });
+    const baseInitialCash = props.budget?.openingCash?.[0];
     const projection = calculateBaseProjection(supplierSchedule.movements, {
       startDate: yearStart,
       endDate: yearEnd,
-      initialCash,
+      initialCash: isBase && baseInitialCash != null ? baseInitialCash : initialCash,
       minimumCash,
       granularity,
       scenarioId,
@@ -312,19 +373,19 @@ export default function FinancialPlanningDashboard(props: Props) {
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, supplierInitialCash],
+    [approvedScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, supplierInitialCash],
+    [baseScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
   );
 
   const activeRunRaw = useMemo(
     () => buildScenarioRun(activeScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, supplierInitialCash],
+    [activeScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
   );
 
   const activeOverrides = useMemo(

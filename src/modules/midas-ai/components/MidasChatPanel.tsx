@@ -17,10 +17,10 @@ interface Props {
 }
 
 const SUGGESTED_PROMPTS = [
+  'Cubre todas las semanas con proveedores operativos: arma propuestas en bulk que postpongan pagos FLEX_BAJO/FLEX_MEDIO ancladas a los cobros de cada semana, sin tocar críticos ni pausados.',
+  'Que no haya días en déficit sin mover proveedores operativos ni críticos: sólo postpongas FLEX_BAJO/FLEX_MEDIO en bulk hacia el cobro siguiente, monto agregado ≤ cobro ancla.',
   '¿Cómo mejoro la caja final del próximo mes?',
-  'Identifica proveedores flexibles donde pueda postergar pagos sin riesgo.',
-  'Propón 3 ajustes para reducir días en déficit.',
-  '¿Qué movimientos del próximo mes son los de mayor impacto?',
+  'Propón 3 ajustes en bulk para reducir días en déficit.',
 ];
 
 export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, onAcceptProposal }: Props) {

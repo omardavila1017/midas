@@ -54,6 +54,7 @@ import { parseBudgetCsv } from './domain/budget';
 import { loadBudget, saveBudget } from './domain/budgetPersistence';
 import {
   attachImportedStatementsToKnownCompanies,
+  excludeBajio,
   mergeBankStatements,
   type BankQueryState,
 } from './domain/bankStatements';
@@ -422,6 +423,12 @@ export default function App() {
     () => mergeBankStatements(bankJdeStatements, bankSupplementalStatements),
     [bankJdeStatements, bankSupplementalStatements],
   );
+  // BAJIO se exhibe en la pestaña Bancos pero no se contabiliza ni se proyecta:
+  // el excedente cae siempre en Banamex, así que incluirlo duplica flujo.
+  const accountableBankStatements = useMemo(
+    () => excludeBajio(bankStatements),
+    [bankStatements],
+  );
   // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
   // Es un motor pesado (texto + subset-sum), así que no corre durante render.
   // Lo diferimos a idle y sólo cuando una pestaña lo necesita; así cargar JDE
@@ -459,7 +466,7 @@ export default function App() {
         void import('./domain/realReconciliationEngine')
           .then(({ reconcileRealCollections }) => {
             if (cancelled || reconciliationJobRef.current !== jobId) return;
-            const result = reconcileRealCollections(cobranzaRecords, bankStatements, {
+            const result = reconcileRealCollections(cobranzaRecords, accountableBankStatements, {
               ciaFilter: activeReconciliationCias?.length ? new Set(activeReconciliationCias) : undefined,
               cobranzaPayments,
             });
@@ -492,7 +499,7 @@ export default function App() {
           jobId,
           cobranzaRecords,
           cobranzaPayments,
-          bankStatements,
+          bankStatements: accountableBankStatements,
           ciaFilter: activeReconciliationCias,
         });
       } catch {
@@ -504,7 +511,7 @@ export default function App() {
       cancelled = true;
       cancelIdle();
     };
-  }, [cobranzaRecords, cobranzaPayments, bankStatements, shouldComputeCobranzaReconciliation, activeReconciliationCiaKey]);
+  }, [cobranzaRecords, cobranzaPayments, accountableBankStatements, shouldComputeCobranzaReconciliation, activeReconciliationCiaKey]);
   useEffect(() => {
     return () => {
       reconciliationWorkerRef.current?.terminate();
@@ -1398,7 +1405,7 @@ export default function App() {
               <Suspense fallback={<LazyTabFallback label="Dashboard" />}>
                 <Dashboard
                   companyCode={selectedCia}
-                  bankStatements={bankStatements}
+                  bankStatements={accountableBankStatements}
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
@@ -1414,7 +1421,7 @@ export default function App() {
               <Suspense fallback={<LazyTabFallback label="Proyección Financiera" />}>
                 <FinancialProjectionDashboard
                   companyCode={selectedCia}
-                  bankStatements={bankStatements}
+                  bankStatements={accountableBankStatements}
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
@@ -1432,7 +1439,7 @@ export default function App() {
               <Suspense fallback={<LazyTabFallback label="Planeación Financiera" />}>
                 <FinancialPlanningDashboard
                   companyCode={selectedCia}
-                  bankStatements={bankStatements}
+                  bankStatements={accountableBankStatements}
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
@@ -1448,7 +1455,7 @@ export default function App() {
               <Suspense fallback={<LazyTabFallback label="Impuestos" />}>
                 <TaxDashboard
                   companyCode={selectedCia}
-                  bankStatements={bankStatements}
+                  bankStatements={accountableBankStatements}
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
@@ -1484,7 +1491,7 @@ export default function App() {
                   onConfirm={confirmPayment}
                   onUnconfirm={unconfirmPayment}
                   cxpRecords={cxpRecords}
-                  bankStatements={bankStatements}
+                  bankStatements={accountableBankStatements}
                   companies={companies}
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
@@ -1522,7 +1529,7 @@ export default function App() {
                   providers={providers}
                   clients={clients}
                   assumptions={assumptions}
-                  bankStatements={bankStatements}
+                  bankStatements={accountableBankStatements}
                   budget={budget}
                   onMergeCia={mergeCxpForCia}
                   onReplaceAll={replaceAllCxp}
@@ -1552,7 +1559,7 @@ export default function App() {
                   cxpRecords={cxpRecords}
                   assumptions={assumptions}
                   confirmedPayments={confirmedPayments}
-                  bankStatements={bankStatements}
+                  bankStatements={accountableBankStatements}
                   companies={companies}
                   bankFetchStatus={bankFetchStatus}
                   bankFetchProgress={bankFetchProgress}

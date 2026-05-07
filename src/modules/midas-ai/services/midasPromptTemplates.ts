@@ -9,21 +9,24 @@ IDENTIDAD Y TONO:
 - Justifica TODO con números concretos del contexto recibido.
 
 CONTEXTO DE NEGOCIO — proveedores:
-- "CRITICO" / clasificación CRITICO → operación se detiene si no se paga. NUNCA propongas DATE_SHIFT, CANCEL_MOVEMENT ni AMOUNT_DELTA negativo en estos.
+- "CRITICO" / clasificación CRITICO → operación se detiene si no se paga. NUNCA tocar.
 - "FLEX_ALTO" → prioritario, tocar solo bajo crisis explícita.
-- "FLEX_MEDIO" → negociable; bueno para AMOUNT_DELTA pequeños o DATE_SHIFT corto (<=7 días).
-- "FLEX_BAJO" → flexible; primer candidato para DATE_SHIFT o postponer.
-- "PAUSAR" → no pagar; CANCEL_MOVEMENT válido si la operación ya se detuvo.
+- "FLEX_MEDIO" → negociable; CANDIDATO PRINCIPAL para postponer.
+- "FLEX_BAJO" → flexible; CANDIDATO PRINCIPAL para postponer.
+- "PAUSAR" → ya está pausado / no se paga. NUNCA proponer postponer ni tocar movimientos de proveedores PAUSAR (ya no están saliendo de caja, postponerlos no mejora nada).
 - flexibility "inamovible" → nunca tocar la fecha.
 
 REGLAS DURAS:
-1. Nunca propongas movimientos contra proveedores con risk=CRITICO o flexibility=inamovible (excepto reasonCode=CRISIS y avisar explícitamente).
+1. Postponer pagos SOLO contra proveedores con flex = FLEX_BAJO o FLEX_MEDIO. Nunca contra CRITICO, PAUSAR, inamovible, ni FLEX_ALTO (salvo reasonCode=CRISIS explícita).
 2. Nunca toques el escenario Base. Tus propuestas se aplican al escenario activo (no-Base).
-3. Cada propuesta debe traer "justification" con: nombre del proveedor o concepto, dato citado del contexto (monto, fecha, flexibilidad), e impacto cuantificado en MXN.
+3. Cada propuesta debe traer "justification" con: proveedor(es) o filtro citado, monto agregado MXN, flex de los proveedores, y el cobro/ingreso de \`upcomingInflows\` que financia o justifica el desplazamiento.
 4. Si el usuario pide algo que rompe estas reglas, responde explicando por qué y propón alternativa válida.
-5. **BALANCE OBLIGATORIO**: cuando sugieras ajustes para mejorar caja, NUNCA propongas SOLO adelantar cobros. Debes proponer al menos UNA modificación de egreso (postponer/reducir/cancelar/dividir pago a proveedor) por cada propuesta de cobro adelantado. La caja se mejora atacando ambos lados: ingresos Y egresos.
-6. Prioriza egresos primero: revisa la lista de proveedores FLEX_BAJO, FLEX_MEDIO y PAUSAR antes de tocar cobros. Identifica los movimientos OUTFLOW próximos en \`upcomingMovements\` y propón DATE_SHIFT (postponer 7-30 días), AMOUNT_DELTA negativo (negociar reducción), o SPLIT_PAYMENT (parcialidades).
-7. Si solo identificas oportunidades de un lado (ej. solo cobros), DECLARA explícitamente en el texto por qué no hay propuesta del otro lado, citando datos del contexto.
+5. **BALANCE OBLIGATORIO**: cuando sugieras ajustes para mejorar caja, NUNCA propongas SOLO adelantar cobros. Debes proponer al menos UNA modificación de egreso por cada propuesta de cobro adelantado.
+6. **BULK OBLIGATORIO**: NO emitas una propuesta por cada movimiento individual. Agrupa pagos elegibles del mismo proveedor o de la misma ventana de fechas en UNA sola propuesta usando targetType=COUNTERPARTY (con el id del proveedor) o targetType=FILTER_SET (expresión tipo "flex IN (FLEX_BAJO,FLEX_MEDIO) AND date BETWEEN ..."). Una propuesta = muchos movimientos movidos juntos. Solo usa targetType=MOVEMENT cuando la acción aplique a un único pago aislado.
+7. **ANCLAR AL INGRESO**: cada DATE_SHIFT de egreso debe alinearse a un cobro real de \`upcomingInflows\`. Postponer 7-30 días no es arbitrario: la nueva fecha debe caer DESPUÉS del cobro que la financia. En la justification cita el id/cliente/monto del inflow ancla y compara monto agregado de egresos movidos vs monto del cobro (ej. "postpone $4.2M en pagos FLEX_BAJO/MEDIO al 18-may, día siguiente del cobro [INF-123] de Cliente X por $5.1M").
+8. Dimensiona el bulk relativo al ingreso: el monto agregado de egresos postpuestos debe ser ≤ al cobro ancla (no postpongas $10M apoyándote en un cobro de $2M).
+9. Prioriza egresos primero: revisa proveedores FLEX_BAJO y FLEX_MEDIO en \`upcomingOutflowsElegibles\`. Ignora la sección \`upcomingOutflowsNoTocar\` salvo para explicar por qué no se mueven.
+10. Si solo identificas oportunidades de un lado, DECLARA explícitamente por qué no hay propuesta del otro lado, citando datos del contexto.
 
 CÓMO PROPONES AJUSTES:
 - Cuando el usuario pida sugerencias o tú detectes oportunidades, USA la function call \`propose_adjustment\` (puedes invocarla varias veces en una sola respuesta).
@@ -66,17 +69,69 @@ export function buildContextBlock(ctx: MidasContext): string {
   lines.push('');
   const inflows = ctx.upcomingMovements.filter((m) => m.type === 'INFLOW');
   const outflows = ctx.upcomingMovements.filter((m) => m.type === 'OUTFLOW');
-  lines.push(`upcomingInflows (cobros próximos, ${inflows.length}):`);
+  lines.push(`upcomingInflows (cobros próximos, ${inflows.length}) — ANCLAS para postponer egresos:`);
   for (const m of inflows.slice(0, 25)) {
     lines.push(
       `- [${m.id}] ${m.projectedDate} | ${m.category} | ${fmt(m.projectedAmount)} | ${m.counterpartyName ?? m.concept}`,
     );
   }
   lines.push('');
-  lines.push(`upcomingOutflows (pagos próximos, ${outflows.length}) — CANDIDATOS A POSTPONER/REDUCIR:`);
-  for (const m of outflows.slice(0, 30)) {
+
+  const supplierMeta = new Map(ctx.suppliers.map((s) => [s.id, s] as const));
+  const supplierMetaByName = new Map(ctx.suppliers.map((s) => [s.name, s] as const));
+  const lookupMeta = (m: (typeof outflows)[number]) =>
+    (m.counterpartyId ? supplierMeta.get(m.counterpartyId) : undefined) ??
+    (m.counterpartyName ? supplierMetaByName.get(m.counterpartyName) : undefined);
+
+  const ELEGIBLE_FLEX = new Set(['FLEX_BAJO', 'FLEX_MEDIO']);
+  const elegibles: typeof outflows = [];
+  const noTocar: { m: (typeof outflows)[number]; reason: string }[] = [];
+  for (const m of outflows) {
+    const meta = lookupMeta(m);
+    const flex = meta?.flexibility ?? 'sin_clasificar';
+    const risk = meta?.risk ?? 'SIN_CLASIFICAR';
+    if (risk === 'CRITICO') noTocar.push({ m, reason: `risk=CRITICO` });
+    else if (flex === 'PAUSAR') noTocar.push({ m, reason: `flex=PAUSAR` });
+    else if (flex === 'inamovible') noTocar.push({ m, reason: `flex=inamovible` });
+    else if (flex === 'FLEX_ALTO') noTocar.push({ m, reason: `flex=FLEX_ALTO (solo CRISIS)` });
+    else if (ELEGIBLE_FLEX.has(flex)) elegibles.push(m);
+    else noTocar.push({ m, reason: `flex=${flex}` });
+  }
+
+  const groupBySupplier = (list: typeof outflows) => {
+    const g = new Map<string, { name: string; flex: string; risk: string; total: number; ids: string[]; dates: string[] }>();
+    for (const m of list) {
+      const meta = lookupMeta(m);
+      const key = m.counterpartyId ?? m.counterpartyName ?? m.concept;
+      const cur = g.get(key) ?? {
+        name: m.counterpartyName ?? m.concept,
+        flex: meta?.flexibility ?? 'sin_clasificar',
+        risk: meta?.risk ?? 'SIN_CLASIFICAR',
+        total: 0,
+        ids: [],
+        dates: [],
+      };
+      cur.total += m.projectedAmount;
+      cur.ids.push(m.id);
+      cur.dates.push(m.projectedDate);
+      g.set(key, cur);
+    }
+    return [...g.entries()].sort((a, b) => b[1].total - a[1].total);
+  };
+
+  lines.push(`upcomingOutflowsElegibles (FLEX_BAJO/FLEX_MEDIO, ${elegibles.length}) — CANDIDATOS A POSTPONER EN BULK:`);
+  for (const [key, g] of groupBySupplier(elegibles).slice(0, 20)) {
+    const minD = g.dates.reduce((a, b) => (a < b ? a : b));
+    const maxD = g.dates.reduce((a, b) => (a > b ? a : b));
     lines.push(
-      `- [${m.id}] ${m.projectedDate} | ${m.category} | ${fmt(m.projectedAmount)} | ${m.counterpartyName ?? m.concept}`,
+      `- counterpartyId=${key} | ${g.name} | flex=${g.flex} | ${g.ids.length} pagos | total=${fmt(g.total)} | rango=${minD}..${maxD} | ids=[${g.ids.slice(0, 10).join(',')}${g.ids.length > 10 ? ',...' : ''}]`,
+    );
+  }
+  lines.push('');
+  lines.push(`upcomingOutflowsNoTocar (${noTocar.length}) — NO PROPONER:`);
+  for (const { m, reason } of noTocar.slice(0, 15)) {
+    lines.push(
+      `- [${m.id}] ${m.projectedDate} | ${fmt(m.projectedAmount)} | ${m.counterpartyName ?? m.concept} | ${reason}`,
     );
   }
   lines.push(`</contexto>`);
