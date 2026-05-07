@@ -330,6 +330,7 @@ function emitRawLines(
     counterpartyId: line.counterpartyId,
     counterpartyName: line.counterpartyName,
     counterpartyType: line.counterpartyType,
+    providerCategory: line.providerCategory,
     concept: line.concept,
     currency: 'MXN',
     originalAmount: line.amount,
@@ -360,6 +361,7 @@ interface RawLine {
   concept: string;
   category: FinancialMovementCategory;
   subcategory?: string;
+  providerCategory?: string;
   counterpartyId?: string;
   counterpartyName?: string;
   counterpartyType?: FinancialMovement['counterpartyType'];
@@ -621,6 +623,7 @@ function collectOutflowLines(
       concept: `Factura ${record.noFactura || 'sin folio'} · ${record.nombre}`,
       category: 'AP_PAYMENT',
       subcategory: providerType,
+      providerCategory: providerType,
       counterpartyId: provider?.id ?? record.noProveedor,
       counterpartyName: record.nombre,
       counterpartyType: 'SUPPLIER',
@@ -824,6 +827,7 @@ function balanceMonth({
       counterpartyId: line.counterpartyId,
       counterpartyName: line.counterpartyName,
       counterpartyType: line.counterpartyType,
+      providerCategory: line.providerCategory,
       concept: line.concept,
       currency: 'MXN',
       originalAmount: line.amount,

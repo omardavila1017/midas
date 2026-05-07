@@ -47,6 +47,9 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
       subgroupLabel: movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT'
         ? movement.subcategory ?? 'Sin clasificar'
         : movement.counterpartyName,
+      providerCategoryLabel: movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT'
+        ? movement.providerCategory
+        : undefined,
     });
   }
 

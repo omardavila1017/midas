@@ -42,7 +42,8 @@ interface CellCoord {
 
 type DisplayRow =
   | { kind: 'data'; row: PlanningRow }
-  | { kind: 'ap-group'; id: string; label: string; rows: PlanningRow[] };
+  | { kind: 'ap-group'; id: string; label: string; rows: PlanningRow[] }
+  | { kind: 'ap-subgroup'; id: string; parentId: string; label: string; rows: PlanningRow[] };
 
 export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const {
@@ -67,11 +68,15 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
   const [collapsed, setCollapsed] = useState<Record<FinancialMovementType, boolean>>({ INFLOW: false, OUTFLOW: false });
   const [expandedApGroups, setExpandedApGroups] = useState<Record<string, boolean>>({});
+  const [expandedApSubgroups, setExpandedApSubgroups] = useState<Record<string, boolean>>({});
   const toggleSection = (type: FinancialMovementType) => {
     setCollapsed((current) => ({ ...current, [type]: !current[type] }));
   };
   const toggleApGroup = (id: string) => {
     setExpandedApGroups((current) => ({ ...current, [id]: !current[id] }));
+  };
+  const toggleApSubgroup = (id: string) => {
+    setExpandedApSubgroups((current) => ({ ...current, [id]: !(current[id] ?? true) }));
   };
 
   const visibleInflowRows = collapsed.INFLOW ? [] : inflowRows;
@@ -98,12 +103,30 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       .flatMap<DisplayRow>(([label, groupRows]) => {
         const id = `ap:${label}`;
         const sortedRows = [...groupRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
-        return expandedApGroups[id]
-          ? [{ kind: 'ap-group', id, label, rows: sortedRows }, ...sortedRows.map((row) => ({ kind: 'data' as const, row }))]
-          : [{ kind: 'ap-group', id, label, rows: sortedRows }];
+        if (!expandedApGroups[id]) return [{ kind: 'ap-group', id, label, rows: sortedRows }];
+        const byProviderCategory = new Map<string, PlanningRow[]>();
+        for (const row of sortedRows) {
+          const childLabel = row.providerCategoryLabel ?? 'Sin categoría';
+          const bucket = byProviderCategory.get(childLabel);
+          if (bucket) bucket.push(row);
+          else byProviderCategory.set(childLabel, [row]);
+        }
+        const childRows = Array.from(byProviderCategory.entries())
+          .sort(([a], [b]) => a.localeCompare(b, 'es-MX'))
+          .flatMap<DisplayRow>(([childLabel, categoryRows]) => {
+            const childId = `${id}:${childLabel}`;
+            const categorySortedRows = [...categoryRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
+            return (expandedApSubgroups[childId] ?? true)
+              ? [
+                { kind: 'ap-subgroup', id: childId, parentId: id, label: childLabel, rows: categorySortedRows },
+                ...categorySortedRows.map((row) => ({ kind: 'data' as const, row })),
+              ]
+              : [{ kind: 'ap-subgroup', id: childId, parentId: id, label: childLabel, rows: categorySortedRows }];
+          });
+        return [{ kind: 'ap-group', id, label, rows: sortedRows }, ...childRows];
       });
     return [...grouped, ...plainRows];
-  }, [expandedApGroups, visibleOutflowRows]);
+  }, [expandedApGroups, expandedApSubgroups, visibleOutflowRows]);
   const displayRows = useMemo(
     () => [...visibleInflowDisplayRows, ...visibleOutflowDisplayRows],
     [visibleInflowDisplayRows, visibleOutflowDisplayRows],
@@ -425,6 +448,65 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     );
   };
 
+  const renderApSubgroupRow = (group: Extract<DisplayRow, { kind: 'ap-subgroup' }>, rowIndex: number) => {
+    const expanded = expandedApSubgroups[group.id] ?? true;
+    return (
+      <div
+        key={group.id}
+        role="row"
+        className="flex border-b border-[var(--gray-100)] bg-white hover:bg-[var(--gray-50)]"
+        style={{ height: ROW_HEIGHT }}
+      >
+        <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" left={0}>
+          <span className="truncate">Egresos · Proveedores</span>
+        </StickyLeftCell>
+        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow>
+          <button
+            type="button"
+            onClick={() => toggleApSubgroup(group.id)}
+            aria-expanded={expanded}
+            className="flex w-full items-center gap-1.5 truncate pl-5 text-left text-[12px] font-semibold text-[var(--gray-800)] hover:text-[var(--primary)]"
+          >
+            {expanded
+              ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
+              : <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />}
+            <span className="truncate">{group.label}</span>
+            <span className="ml-auto rounded bg-[var(--gray-100)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--gray-500)]">
+              {group.rows.length}
+            </span>
+          </button>
+        </StickyLeftCell>
+        {columns.map((column, colIndex) => {
+          const value = group.rows.reduce((sum, child) => {
+            const override = overrideFor(child.conceptKey, column.key);
+            return sum + (override ? override.value : baseValueFor(child.conceptKey, column.key));
+          }, 0);
+          const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;
+          return (
+            <div
+              key={column.key}
+              role="gridcell"
+              aria-selected={isSelected}
+              onClick={() => {
+                setSelection({ rowIndex, colIndex });
+                setIsEditing(false);
+                toggleApSubgroup(group.id);
+              }}
+              className={`flex h-full items-center justify-end px-2 text-[12px] font-semibold tabular-nums border-l border-[var(--gray-100)] cursor-pointer select-none ${
+                column.isPast ? 'bg-[var(--gray-50)] text-[var(--gray-500)]' : 'text-[var(--gray-800)]'
+              } ${isSelected ? 'ring-2 ring-inset ring-[var(--primary)] z-10 bg-white' : ''}`}
+              style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
+            >
+              <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
+                {value === 0 ? '—' : fmtCompact(value)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderAddRow = (type: FinancialMovementType) => {
     if (isReadOnly) return null;
     return (
@@ -529,7 +611,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         visibleInflowDisplayRows.map((displayRow, index) =>
           displayRow.kind === 'data'
             ? renderDataRow(displayRow.row, index)
-            : renderApGroupRow(displayRow, index),
+            : displayRow.kind === 'ap-group'
+              ? renderApGroupRow(displayRow, index)
+              : renderApSubgroupRow(displayRow, index),
         )
       ))}
       {!collapsed.INFLOW && renderAddRow('INFLOW')}
@@ -548,7 +632,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           const rowIndex = visibleInflowDisplayRows.length + index;
           return displayRow.kind === 'data'
             ? renderDataRow(displayRow.row, rowIndex)
-            : renderApGroupRow(displayRow, rowIndex);
+            : displayRow.kind === 'ap-group'
+              ? renderApGroupRow(displayRow, rowIndex)
+              : renderApSubgroupRow(displayRow, rowIndex);
         })
       ))}
       {!collapsed.OUTFLOW && renderAddRow('OUTFLOW')}

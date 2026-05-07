@@ -44,6 +44,7 @@ export interface FinancialMovement {
   counterpartyId?: string;
   counterpartyName?: string;
   counterpartyType?: FinancialCounterpartyType;
+  providerCategory?: string;
   concept: string;
   currency: string;
   originalAmount: number;
@@ -271,6 +272,7 @@ export interface PlanningRow {
   type: FinancialMovementType;
   category: FinancialMovementCategory;
   subgroupLabel?: string;
+  providerCategoryLabel?: string;
   isCustom?: boolean;
 }
 
