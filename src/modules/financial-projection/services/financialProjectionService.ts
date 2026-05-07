@@ -24,6 +24,11 @@ import type { RealReconciliationResult } from '../../../domain/realReconciliatio
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
 import {
+  currentBankStatements,
+  latestStatementDate,
+  sumBankStatementBalances,
+} from '../../../domain/bankStatements';
+import {
   buildCanonicalProjection,
   hasSufficientCanonicalData,
   type CanonicalProjectionResult,
@@ -241,20 +246,13 @@ export function calculateCurrentBankCash(
   companyCode = 'all',
   fallback = 0,
 ): number {
-  const latestByAccount = new Map<string, BankAccountStatement>();
-  for (const statement of bankStatements) {
-    if (companyCode !== 'all' && companyCode && statement.cia !== companyCode) continue;
-    const key = `${statement.cia}::${statement.cuenta}::${statement.moneda}`;
-    const current = latestByAccount.get(key);
-    if (!current || statement.fechaEstadoCuenta >= current.fechaEstadoCuenta) {
-      latestByAccount.set(key, statement);
-    }
-  }
-  if (latestByAccount.size === 0) return fallback;
-  const total = Array.from(latestByAccount.values()).reduce(
-    (sum, statement) => sum + (statement.saldoFinal ?? statement.saldoInicial ?? 0),
-    0,
-  );
+  const scoped = companyCode === 'all' || !companyCode
+    ? bankStatements
+    : bankStatements.filter((statement) => statement.cia === companyCode);
+  const latest = latestStatementDate(scoped);
+  const current = currentBankStatements(scoped, latest);
+  if (current.length === 0) return fallback;
+  const total = sumBankStatementBalances(current);
   return total > 0 ? total : fallback;
 }
 
