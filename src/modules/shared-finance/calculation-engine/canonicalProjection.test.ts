@@ -108,6 +108,39 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.projectedAmount).toBe(580);
   });
 
+  it('classifies CXP supplier payments with provider catalog category using tolerant name and JDE matches', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [
+        provider({
+          name: 'ACCERTIFY INC',
+          type: 'TECNOLOGIA Y SOPORTE',
+          numProveedorJDE: '000123',
+        }),
+      ],
+      cxpRecords: [
+        cxpRecord({
+          noProveedor: '123',
+          nombre: 'Accertify, Inc.',
+          noFactura: 'F-CAT',
+          importePendientePesos: 900,
+        }),
+      ],
+      assumptions,
+      budget: budget({ expenseMay: 900, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const movement = canonical.movements.find((item) => item.id.startsWith('cxp:') && item.sourceObjectId === 'F-CAT');
+
+    expect(movement).toBeTruthy();
+    expect(movement?.counterpartyName).toBe('Accertify, Inc.');
+    expect(movement?.subcategory).toBe('TECNOLOGIA Y SOPORTE');
+  });
+
   it('adds regimen 601 IVA creditable metadata to projected budget OPEX', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',

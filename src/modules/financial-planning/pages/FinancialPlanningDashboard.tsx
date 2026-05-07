@@ -52,7 +52,13 @@ import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
 import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
 import { buildFinancialProjectionSourceData, calculateCurrentBankCash, calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
-import { buildApprovedTaxPaymentMovements, defaultTaxStore, loadTaxStore } from '../../taxes/services/taxModuleService';
+import {
+  buildApprovedTaxPaymentMovements,
+  defaultTaxStore,
+  loadTaxStore,
+  TAX_STORE_CHANGED_EVENT,
+  TAX_STORE_KEY,
+} from '../../taxes/services/taxModuleService';
 import {
   createManualPlanningEntry,
   expandManualPlanningEntriesToMovements,
@@ -143,7 +149,7 @@ export default function FinancialPlanningDashboard(props: Props) {
   const [customRows, setCustomRows] = useState<PlanningCustomRow[]>(() => loadCustomRows([]));
   const [cellOverrides, setCellOverrides] = useState<CellOverride[]>(() => loadCellOverrides([]));
   const [changeLog, setChangeLog] = useState<ScenarioChangeLogEntry[]>(() => loadChangeLog([]));
-  const [taxStore] = useState(() => loadTaxStore(defaultTaxStore()));
+  const [taxStore, setTaxStore] = useState(() => loadTaxStore(defaultTaxStore()));
 
   // Persistence — write through whenever state changes.
   useEffect(() => { savePlanningScenarios(storedScenarios); }, [storedScenarios]);
@@ -152,6 +158,19 @@ export default function FinancialPlanningDashboard(props: Props) {
   useEffect(() => { saveCustomRows(customRows); }, [customRows]);
   useEffect(() => { saveCellOverrides(cellOverrides); }, [cellOverrides]);
   useEffect(() => { saveChangeLog(changeLog); }, [changeLog]);
+
+  useEffect(() => {
+    const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === TAX_STORE_KEY) reloadTaxStore();
+    };
+    window.addEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   // Bootstrap: enforce Base + Approved + clean legacy on every relevant change.
   const bootstrap = useMemo(

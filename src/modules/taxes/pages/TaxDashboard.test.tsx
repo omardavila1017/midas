@@ -87,6 +87,35 @@ describe('<TaxDashboard />', () => {
     expect(screen.getByText(/Pagos registrados/i)).toBeTruthy();
   });
 
+  it('shows approved tax payments as connected cash outflows for planning and projection', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={20_000}
+      />,
+    );
+
+    expect(screen.getByText('Pagos fiscales en caja')).toBeTruthy();
+    expect(screen.getByText('Conectado a Planeación/Proyección')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Pagos/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Programar pago/i })[0]);
+
+    expect(screen.getByText(/Pago fiscal programado/i)).toBeTruthy();
+    expect(screen.getAllByText('Impacta Planeación/Proyección').length).toBeGreaterThan(0);
+
+    const stored = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
+    expect(stored.obligations[0].paymentPlan[0]).toMatchObject({
+      status: 'APPROVED',
+    });
+  });
+
   it('shows budget IVA creditable for February and persists editable rate overrides', () => {
     render(
       <TaxDashboard

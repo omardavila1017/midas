@@ -21,7 +21,7 @@ export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
 };
 
 export function conceptKeyForMovement(movement: FinancialMovement): string {
-  const tail = movement.counterpartyName ?? movement.subcategory ?? 'general';
+  const tail = rowLabelForMovement(movement);
   return `${movement.type}:${movement.category}:${slug(tail)}`;
 }
 
@@ -37,14 +37,16 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
   for (const movement of args.movements) {
     const key = conceptKeyForMovement(movement);
     if (map.has(key)) continue;
-    const tail = movement.counterpartyName ?? movement.subcategory ?? 'General';
+    const tail = rowLabelForMovement(movement);
     map.set(key, {
       conceptKey: key,
       label: tail,
       group: rowGroup(movement.type, movement.category),
       type: movement.type,
       category: movement.category,
-      subgroupLabel: movement.counterpartyName,
+      subgroupLabel: movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT'
+        ? movement.subcategory ?? 'Sin clasificar'
+        : movement.counterpartyName,
     });
   }
 
@@ -78,6 +80,22 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
     if (a.category !== b.category) return a.category.localeCompare(b.category);
     return a.label.localeCompare(b.label, 'es-MX');
   });
+}
+
+function rowLabelForMovement(movement: FinancialMovement): string {
+  if (movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT') {
+    return movement.counterpartyName ?? movement.subcategory ?? 'Sin proveedor';
+  }
+  return movement.counterpartyName
+    ?? movement.subcategory
+    ?? cleanConceptLabel(movement.concept)
+    ?? 'General';
+}
+
+function cleanConceptLabel(concept: string | undefined): string | null {
+  const trimmed = concept?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\s+/g, ' ');
 }
 
 export function rowGroup(type: FinancialMovementType, category: FinancialMovementCategory): string {

@@ -20,6 +20,7 @@ import {
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 
 export const TAX_STORE_KEY = 'midas.taxes.v1';
+export const TAX_STORE_CHANGED_EVENT = 'midas:taxes:changed';
 const LEGACY_IVA_ADJUSTMENTS_KEY = 'midas.financialProjection.taxAdjustments.v1';
 const LEGACY_OPERATING_SCENARIOS_KEY = 'midas.operating.scenarios.v1';
 const ISN_RATE = 0.03;
@@ -154,12 +155,19 @@ export function saveTaxStore(store: TaxStore): void {
       && store.overdueBalance <= 0
     ) {
       localStorage.removeItem(TAX_STORE_KEY);
+      notifyTaxStoreChanged(store);
       return;
     }
     localStorage.setItem(TAX_STORE_KEY, JSON.stringify(store));
+    notifyTaxStoreChanged(store);
   } catch {
     /* localStorage quota errors do not block planning. */
   }
+}
+
+function notifyTaxStoreChanged(store: TaxStore): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(TAX_STORE_CHANGED_EVENT, { detail: store }));
 }
 
 export function createTaxManualAdjustment(input: {

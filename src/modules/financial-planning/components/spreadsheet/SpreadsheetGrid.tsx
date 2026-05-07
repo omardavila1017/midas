@@ -40,6 +40,10 @@ interface CellCoord {
   colIndex: number;
 }
 
+type DisplayRow =
+  | { kind: 'data'; row: PlanningRow }
+  | { kind: 'ap-group'; id: string; label: string; rows: PlanningRow[] };
+
 export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const {
     rows,
@@ -62,13 +66,48 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const outflowRows = useMemo(() => rows.filter((row) => row.type === 'OUTFLOW'), [rows]);
 
   const [collapsed, setCollapsed] = useState<Record<FinancialMovementType, boolean>>({ INFLOW: false, OUTFLOW: false });
+  const [expandedApGroups, setExpandedApGroups] = useState<Record<string, boolean>>({});
   const toggleSection = (type: FinancialMovementType) => {
     setCollapsed((current) => ({ ...current, [type]: !current[type] }));
+  };
+  const toggleApGroup = (id: string) => {
+    setExpandedApGroups((current) => ({ ...current, [id]: !current[id] }));
   };
 
   const visibleInflowRows = collapsed.INFLOW ? [] : inflowRows;
   const visibleOutflowRows = collapsed.OUTFLOW ? [] : outflowRows;
-  const dataRows = useMemo(() => [...visibleInflowRows, ...visibleOutflowRows], [visibleInflowRows, visibleOutflowRows]);
+  const visibleInflowDisplayRows = useMemo<DisplayRow[]>(
+    () => visibleInflowRows.map((row) => ({ kind: 'data', row })),
+    [visibleInflowRows],
+  );
+  const visibleOutflowDisplayRows = useMemo<DisplayRow[]>(() => {
+    const byProviderType = new Map<string, PlanningRow[]>();
+    const plainRows: DisplayRow[] = [];
+    for (const row of visibleOutflowRows) {
+      if (row.category === 'AP_PAYMENT') {
+        const label = row.subgroupLabel ?? 'Sin clasificar';
+        const bucket = byProviderType.get(label);
+        if (bucket) bucket.push(row);
+        else byProviderType.set(label, [row]);
+      } else {
+        plainRows.push({ kind: 'data', row });
+      }
+    }
+    const grouped = Array.from(byProviderType.entries())
+      .sort(([a], [b]) => a.localeCompare(b, 'es-MX'))
+      .flatMap<DisplayRow>(([label, groupRows]) => {
+        const id = `ap:${label}`;
+        const sortedRows = [...groupRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
+        return expandedApGroups[id]
+          ? [{ kind: 'ap-group', id, label, rows: sortedRows }, ...sortedRows.map((row) => ({ kind: 'data' as const, row }))]
+          : [{ kind: 'ap-group', id, label, rows: sortedRows }];
+      });
+    return [...grouped, ...plainRows];
+  }, [expandedApGroups, visibleOutflowRows]);
+  const displayRows = useMemo(
+    () => [...visibleInflowDisplayRows, ...visibleOutflowDisplayRows],
+    [visibleInflowDisplayRows, visibleOutflowDisplayRows],
+  );
 
   const colWidth = colWidthForGranularity(granularity);
 
@@ -85,7 +124,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       let nextRow = baseRow + dr;
       let nextCol = baseCol + dc;
       if (nextRow < 0) nextRow = 0;
-      if (nextRow > dataRows.length - 1) nextRow = dataRows.length - 1;
+      if (nextRow > displayRows.length - 1) nextRow = displayRows.length - 1;
       if (nextCol < 0) {
         if (nextRow > 0) {
           nextRow -= 1;
@@ -95,18 +134,18 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         }
       }
       if (nextCol > columns.length - 1) {
-        if (nextRow < dataRows.length - 1) {
+        if (nextRow < displayRows.length - 1) {
           nextRow += 1;
           nextCol = 0;
         } else {
           nextCol = columns.length - 1;
         }
       }
-      if (dataRows.length === 0) return null;
+      if (displayRows.length === 0) return null;
       return { rowIndex: nextRow, colIndex: nextCol };
     });
     setIsEditing(false);
-  }, [columns.length, dataRows.length]);
+  }, [columns.length, displayRows.length]);
 
   const startEdit = useCallback((seed?: string) => {
     if (isReadOnly) {
@@ -114,9 +153,10 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       return;
     }
     if (!selection) return;
-    const row = dataRows[selection.rowIndex];
+    const displayRow = displayRows[selection.rowIndex];
     const col = columns[selection.colIndex];
-    if (!row || !col) return;
+    if (!displayRow || displayRow.kind !== 'data' || !col) return;
+    const row = displayRow.row;
     if (col.isPast) return;
     if (seed !== undefined) {
       setDraftValue(seed);
@@ -126,19 +166,20 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       setDraftValue(initial > 0 ? String(Math.round(initial)) : '');
     }
     setIsEditing(true);
-  }, [baseValueFor, columns, dataRows, isReadOnly, onReadOnlyAttempt, overrideFor, selection]);
+  }, [baseValueFor, columns, displayRows, isReadOnly, onReadOnlyAttempt, overrideFor, selection]);
 
   const commitEdit = useCallback(() => {
     if (!selection || !isEditing) {
       setIsEditing(false);
       return;
     }
-    const row = dataRows[selection.rowIndex];
+    const displayRow = displayRows[selection.rowIndex];
     const col = columns[selection.colIndex];
-    if (!row || !col) {
+    if (!displayRow || displayRow.kind !== 'data' || !col) {
       setIsEditing(false);
       return;
     }
+    const row = displayRow.row;
     const parsed = parseNumericInput(draftValue);
     if (parsed === null) {
       setIsEditing(false);
@@ -146,16 +187,17 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     }
     onCommitCell(row.conceptKey, col.key, Math.max(0, parsed), row.type);
     setIsEditing(false);
-  }, [columns, dataRows, draftValue, isEditing, onCommitCell, selection]);
+  }, [columns, displayRows, draftValue, isEditing, onCommitCell, selection]);
 
   const clearSelectedCell = useCallback(() => {
     if (!selection || isReadOnly) return;
-    const row = dataRows[selection.rowIndex];
+    const displayRow = displayRows[selection.rowIndex];
     const col = columns[selection.colIndex];
-    if (!row || !col) return;
+    if (!displayRow || displayRow.kind !== 'data' || !col) return;
+    const row = displayRow.row;
     if (col.isPast) return;
     onClearCell(row.conceptKey, col.key);
-  }, [columns, dataRows, isReadOnly, onClearCell, selection]);
+  }, [columns, displayRows, isReadOnly, onClearCell, selection]);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -219,9 +261,10 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       case 'i':
       case 'I':
         if (selection && onInspectCell) {
-          const row = dataRows[selection.rowIndex];
+          const displayRow = displayRows[selection.rowIndex];
           const col = columns[selection.colIndex];
-          if (row && col) {
+          if (displayRow?.kind === 'data' && col) {
+            const row = displayRow.row;
             event.preventDefault();
             onInspectCell(row.conceptKey, col.key);
           }
@@ -233,7 +276,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           startEdit(event.key);
         }
     }
-  }, [clearSelectedCell, columns, commitEdit, dataRows, isEditing, moveSelection, onInspectCell, selection, startEdit]);
+  }, [clearSelectedCell, columns, commitEdit, displayRows, isEditing, moveSelection, onInspectCell, selection, startEdit]);
 
   const renderDataRow = (row: PlanningRow, rowIndex: number) => (
     <div
@@ -323,6 +366,65 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     </div>
   );
 
+  const renderApGroupRow = (group: Extract<DisplayRow, { kind: 'ap-group' }>, rowIndex: number) => {
+    const expanded = !!expandedApGroups[group.id];
+    return (
+      <div
+        key={group.id}
+        role="row"
+        className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/70 hover:bg-[var(--gray-100)]/70"
+        style={{ height: ROW_HEIGHT }}
+      >
+        <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-500)]" left={0}>
+          <span className="truncate">Egresos · Proveedores</span>
+        </StickyLeftCell>
+        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow className="bg-[var(--gray-50)]/70">
+          <button
+            type="button"
+            onClick={() => toggleApGroup(group.id)}
+            aria-expanded={expanded}
+            className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-bold text-[var(--gray-950)] hover:text-[var(--primary)]"
+          >
+            {expanded
+              ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
+              : <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />}
+            <span className="truncate">{group.label}</span>
+            <span className="ml-auto rounded bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--gray-500)]">
+              {group.rows.length}
+            </span>
+          </button>
+        </StickyLeftCell>
+        {columns.map((column, colIndex) => {
+          const value = group.rows.reduce((sum, child) => {
+            const override = overrideFor(child.conceptKey, column.key);
+            return sum + (override ? override.value : baseValueFor(child.conceptKey, column.key));
+          }, 0);
+          const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;
+          return (
+            <div
+              key={column.key}
+              role="gridcell"
+              aria-selected={isSelected}
+              onClick={() => {
+                setSelection({ rowIndex, colIndex });
+                setIsEditing(false);
+                toggleApGroup(group.id);
+              }}
+              className={`flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)] cursor-pointer select-none ${
+                column.isPast ? 'bg-[var(--gray-100)] text-[var(--gray-500)]' : 'text-[var(--gray-950)]'
+              } ${isSelected ? 'ring-2 ring-inset ring-[var(--primary)] z-10 bg-white' : ''}`}
+              style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
+            >
+              <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
+                {value === 0 ? '—' : fmtCompact(value)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderAddRow = (type: FinancialMovementType) => {
     if (isReadOnly) return null;
     return (
@@ -388,7 +490,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       onKeyDown={handleKeyDown}
       role="grid"
       aria-readonly={isReadOnly}
-      aria-rowcount={dataRows.length}
+      aria-rowcount={displayRows.length}
       className="relative overflow-auto rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
       style={{ maxHeight: 560 }}
     >
@@ -424,7 +526,11 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       {!collapsed.INFLOW && (inflowRows.length === 0 ? (
         <EmptyRow message="Sin ingresos en este escenario." />
       ) : (
-        visibleInflowRows.map((row, index) => renderDataRow(row, index))
+        visibleInflowDisplayRows.map((displayRow, index) =>
+          displayRow.kind === 'data'
+            ? renderDataRow(displayRow.row, index)
+            : renderApGroupRow(displayRow, index),
+        )
       ))}
       {!collapsed.INFLOW && renderAddRow('INFLOW')}
 
@@ -438,7 +544,12 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       {!collapsed.OUTFLOW && (outflowRows.length === 0 ? (
         <EmptyRow message="Sin egresos en este escenario." />
       ) : (
-        visibleOutflowRows.map((row, index) => renderDataRow(row, visibleInflowRows.length + index))
+        visibleOutflowDisplayRows.map((displayRow, index) => {
+          const rowIndex = visibleInflowDisplayRows.length + index;
+          return displayRow.kind === 'data'
+            ? renderDataRow(displayRow.row, rowIndex)
+            : renderApGroupRow(displayRow, rowIndex);
+        })
       ))}
       {!collapsed.OUTFLOW && renderAddRow('OUTFLOW')}
 

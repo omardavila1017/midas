@@ -55,6 +55,7 @@ import type { Client, Provider, CashFlowAssumptions } from '../../../domain/type
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
   FinancialMovement,
@@ -324,6 +325,7 @@ function emitRawLines(
     sourceObjectId: line.sourceObjectId,
     type,
     category: line.category,
+    subcategory: line.subcategory,
     companyId: line.companyId,
     counterpartyId: line.counterpartyId,
     counterpartyName: line.counterpartyName,
@@ -357,6 +359,7 @@ interface RawLine {
   date: string;
   concept: string;
   category: FinancialMovementCategory;
+  subcategory?: string;
   counterpartyId?: string;
   counterpartyName?: string;
   counterpartyType?: FinancialMovement['counterpartyType'];
@@ -573,8 +576,12 @@ function collectOutflowLines(
   todayYm: string,
 ): RawLine[] {
   const lines: RawLine[] = [];
-  const providerByName = new Map(inputs.providers.map((p) => [normalize(p.name), p]));
-  const providerByJde = new Map(inputs.providers.flatMap((p) => (p.numProveedorJDE ? [[p.numProveedorJDE, p]] : [])));
+  const providerByName = new Map(inputs.providers.map((p) => [supplierLookupKey(p.name), p]));
+  const providerByJde = new Map<string, Provider>();
+  for (const provider of inputs.providers) {
+    const jdeKey = providerJdeKey(provider.numProveedorJDE);
+    if (jdeKey) providerByJde.set(jdeKey, provider);
+  }
   const filteredCxp = inputs.companyCode === 'all' || !inputs.companyCode
     ? inputs.cxpRecords
     : inputs.cxpRecords.filter((r) => r.cia === inputs.companyCode);
@@ -590,8 +597,17 @@ function collectOutflowLines(
     const dateInfo = moveOpenPayableIntoProjection(rawDate, inputs.asOfDate);
     if (dateInfo.date.slice(0, 7) !== month.yearMonth) return;
     if (compareYearMonth(dateInfo.date.slice(0, 7), todayYm) < 0) return;
-    const provider = (record.noProveedor ? providerByJde.get(record.noProveedor) : undefined)
-      ?? providerByName.get(normalize(record.nombre));
+    const provider = (record.noProveedor ? providerByJde.get(providerJdeKey(record.noProveedor)) : undefined)
+      ?? providerByName.get(supplierLookupKey(record.nombre));
+    const catalog = enrichFromCatalog({
+      supplier: record.nombre,
+      classification: record.clasificacionProveedor || record.clasifica,
+    });
+    const providerType = provider?.type
+      || catalog.providerType
+      || record.clasificacionProveedor
+      || record.clasifica
+      || 'Sin clasificar';
     const score = provider?.score != null
       ? Math.max(0, Math.min(100, Math.round(provider.score)))
       : (record.edoPago ?? '').toUpperCase().includes('APROB')
@@ -604,6 +620,7 @@ function collectOutflowLines(
       date: dateInfo.date,
       concept: `Factura ${record.noFactura || 'sin folio'} · ${record.nombre}`,
       category: 'AP_PAYMENT',
+      subcategory: providerType,
       counterpartyId: provider?.id ?? record.noProveedor,
       counterpartyName: record.nombre,
       counterpartyType: 'SUPPLIER',
@@ -802,6 +819,7 @@ function balanceMonth({
       sourceObjectId: line.sourceObjectId,
       type,
       category: line.category,
+      subcategory: line.subcategory,
       companyId: line.companyId,
       counterpartyId: line.counterpartyId,
       counterpartyName: line.counterpartyName,
@@ -953,6 +971,25 @@ function dateToIso(date: Date): string {
 
 function normalize(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function supplierLookupKey(value: string | undefined): string {
+  if (!value) return '';
+  return value
+    .toUpperCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function providerJdeKey(value: string | undefined): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  const numeric = trimmed.replace(/\D/g, '');
+  if (numeric) return String(Number(numeric));
+  return supplierLookupKey(trimmed);
 }
 
 function cxcTaxMeta(

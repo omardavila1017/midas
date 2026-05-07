@@ -98,6 +98,8 @@ import {
   buildTaxDashboardView,
   defaultTaxStore,
   loadTaxStore,
+  TAX_STORE_CHANGED_EVENT,
+  TAX_STORE_KEY,
 } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
@@ -266,7 +268,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const [cellOverrides, setCellOverrides] = useState<CellOverride[]>(() => loadCellOverrides([]));
   const [customRows, setCustomRows] = useState<PlanningCustomRow[]>(() => loadCustomRows([]));
   const [changeLog, setChangeLog] = useState(() => loadChangeLog([]));
-  const [taxStore] = useState(() => loadTaxStore(defaultTaxStore()));
+  const [taxStore, setTaxStore] = useState(() => loadTaxStore(defaultTaxStore()));
 
   useEffect(() => { savePlanningScenarios(storedScenarios); }, [storedScenarios]);
   useEffect(() => { savePlanningAdjustments(storedAdjustments); }, [storedAdjustments]);
@@ -274,6 +276,19 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   useEffect(() => { saveCellOverrides(cellOverrides); }, [cellOverrides]);
   useEffect(() => { saveCustomRows(customRows); }, [customRows]);
   useEffect(() => { saveChangeLog(changeLog); }, [changeLog]);
+
+  useEffect(() => {
+    const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === TAX_STORE_KEY) reloadTaxStore();
+    };
+    window.addEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   const sourceBaseScenario = source.scenarios.find((scenario) => scenario.kind === 'BASE') ?? source.scenarios[0];
   const baseScenario = storedScenarios.find((scenario) => scenario.kind === 'BASE' && !scenario.archivedAt) ?? sourceBaseScenario;

@@ -75,7 +75,7 @@ export function ScenarioTabs(props: ScenarioTabsProps) {
         })}
         <button
           type="button"
-          onClick={onCreateDraft}
+          onClick={() => onCreateDraft()}
           className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius)] border border-dashed border-[var(--gray-300)] bg-white px-3 text-[12px] font-medium text-[var(--gray-500)] transition-colors duration-150 hover:border-[var(--primary)] hover:text-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/30"
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
