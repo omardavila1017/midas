@@ -6,6 +6,20 @@ export interface BankQueryState {
   hasUploadedSantander?: boolean;
 }
 
+/**
+ * BAJIO se muestra en la pestaña Bancos pero NO se contabiliza ni se proyecta.
+ * El excedente cae siempre en Banamex, así que incluir BAJIO duplica flujo.
+ */
+export function isBajioStatement(stmt: Pick<BankAccountStatement, 'banco' | 'nombreBanco'>): boolean {
+  const name = (stmt.nombreBanco ?? '').toUpperCase();
+  const code = (stmt.banco ?? '').toUpperCase();
+  return name.includes('BAJIO') || name.includes('BAJÍO') || code.includes('BAJIO');
+}
+
+export function excludeBajio<T extends Pick<BankAccountStatement, 'banco' | 'nombreBanco'>>(stmts: readonly T[]): T[] {
+  return stmts.filter(s => !isBajioStatement(s));
+}
+
 function accountKey(statement: Pick<BankAccountStatement, 'cia' | 'cuenta' | 'moneda'>): string {
   return `${statement.cia}::${statement.cuenta}::${statement.moneda}`;
 }

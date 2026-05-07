@@ -538,7 +538,7 @@ function summarizeProjection(
     projectedCash30: bucketForDay(30)?.closingCash ?? lastBucket?.closingCash ?? 0,
     projectedCash90: bucketForDay(90)?.closingCash ?? lastBucket?.closingCash ?? 0,
     minimumCashRequired,
-    deficitDays: buckets.reduce((sum, bucket, i) => sum + (bucket.deficit > 0 ? bucketDaySpan(bucket, i, buckets) : 0), 0),
+    deficitDays: buckets.reduce((sum, bucket, i) => sum + (bucket.outflows > bucket.inflows ? bucketDaySpan(bucket, i, buckets) : 0), 0),
     largestUpcomingInflow,
     largestUpcomingOutflow,
     averageConfidence: movements.length === 0
