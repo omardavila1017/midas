@@ -12,6 +12,7 @@ describe('planning row taxonomy', () => {
       movement({
         id: 'm1',
         subcategory: 'REFACCIONARIO',
+        providerCategory: 'REFACCIONES',
         counterpartyName: 'Proveedor A',
         projectedAmount: 100,
       }),
@@ -37,6 +38,7 @@ describe('planning row taxonomy', () => {
       'Proveedor TI',
     ]);
     expect(rows.find((row) => row.label === 'Proveedor A')?.subgroupLabel).toBe('REFACCIONARIO');
+    expect(rows.find((row) => row.label === 'Proveedor A')?.providerCategoryLabel).toBe('REFACCIONES');
     expect(aggregateRowValueForBucket({
       conceptKey: conceptKeyForMovement(movements[0]),
       movementsInBucket: movements,
@@ -68,6 +70,7 @@ function movement(patch: Partial<FinancialMovement>): FinancialMovement {
     type: 'OUTFLOW',
     category: patch.category ?? 'AP_PAYMENT',
     subcategory: patch.subcategory,
+    providerCategory: patch.providerCategory,
     counterpartyName: patch.counterpartyName,
     counterpartyType: 'SUPPLIER',
     concept: patch.concept ?? 'Factura',
