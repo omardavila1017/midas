@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { CalendarDays, Check, ChevronDown, ChevronRight, FileText, Landmark, Pencil, Plus, RotateCcw, Wallet, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, ChevronRight, FileText, Pencil, Plus, RotateCcw, Trash2, Wallet, X } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -35,6 +35,7 @@ import {
   createTaxManualAdjustment,
   defaultTaxStore,
   loadTaxStore,
+  removeTaxPaymentPlanItem,
   saveTaxStore,
   taxDueDate,
   updateTaxPaymentPlanItem,
@@ -65,7 +66,7 @@ interface Props {
 }
 
 type RangePreset = '90d' | 'eoy';
-type DetailTab = 'iva' | 'isn' | 'imss' | 'payments';
+type DetailTab = 'summary' | 'iva' | 'isn' | 'imss' | 'payments';
 type IvaLineMode = 'caused' | 'creditable';
 
 const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
@@ -90,7 +91,7 @@ export default function TaxDashboard(props: Props) {
     return loaded;
   });
   const [selectedPeriod, setSelectedPeriod] = useState<string>(today.slice(0, 7));
-  const [detailTab, setDetailTab] = useState<DetailTab>('iva');
+  const [detailTab, setDetailTab] = useState<DetailTab>('summary');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -178,9 +179,11 @@ export default function TaxDashboard(props: Props) {
 
   const handleApproveSuggestedPayment = (obligation: TaxObligation) => {
     const pending = Math.max(0, obligation.totalAmount - obligation.paymentPlan
-      .filter((payment) => payment.status === 'PAID')
       .reduce((sum, payment) => sum + payment.amount, 0));
-    if (pending <= 0) return;
+    if (pending <= 0) {
+      setStatusMessage(`Pago ya programado para ${obligation.taxType} ${obligation.period}.`);
+      return;
+    }
     const next = addTaxPaymentPlanItem({
       obligation,
       date: obligation.dueDate < today ? today : obligation.dueDate,
@@ -197,6 +200,12 @@ export default function TaxDashboard(props: Props) {
     setTaxStore((current) => upsertTaxObligation(current, next));
   };
 
+  const handleRemovePayment = (obligation: TaxObligation, paymentId: string) => {
+    const next = removeTaxPaymentPlanItem(obligation, paymentId);
+    setTaxStore((current) => upsertTaxObligation(current, next));
+    setStatusMessage(`Pago eliminado para ${obligation.taxType} ${obligation.period}.`);
+  };
+
   const handleUpdateTaxRate = (target: TaxRateTarget, rate: 8 | 16) => {
     setTaxStore((current) => upsertTaxRateOverride(current, {
       ...target,
@@ -209,7 +218,7 @@ export default function TaxDashboard(props: Props) {
   const resetView = () => {
     setPreset('eoy');
     setSelectedPeriod(today.slice(0, 7));
-    setDetailTab('iva');
+    setDetailTab('summary');
     setShowAddForm(false);
   };
 
@@ -266,6 +275,8 @@ export default function TaxDashboard(props: Props) {
         </div>
       </section>
 
+      <TaxOperationalOverview view={view} today={today} />
+
       <TaxCashPlanningPanel
         obligations={view.obligations}
         schedule={paymentSchedule}
@@ -274,14 +285,6 @@ export default function TaxDashboard(props: Props) {
           setDetailTab('payments');
         }}
       />
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <KpiCard label="Saldo vencido" value={fmtCurrency(view.overdueBalance)} icon={<CalendarDays className="w-4 h-4" />} color="var(--danger)" sublabel="Impuestos acumulados" />
-        <KpiCard label="IVA neto" value={fmtCurrency(view.totals.ivaNet)} icon={<FileText className="w-4 h-4" />} color={view.totals.ivaNet > 0 ? 'var(--warning)' : 'var(--success)'} sublabel="Causado menos acreditable" />
-        <KpiCard label="ISN" value={fmtCurrency(view.totals.isn)} icon={<Landmark className="w-4 h-4" />} color="var(--gray-950)" sublabel="3% sobre nómina pagada" />
-        <KpiCard label="IMSS" value={fmtCurrency(view.totals.imss)} icon={<Check className="w-4 h-4" />} color={view.totals.imss > 0 ? 'var(--danger)' : 'var(--gray-950)'} sublabel="JDE o captura manual" />
-        <KpiCard label="Total acumulado" value={fmtCurrency(view.totals.totalWithOverdue)} icon={<Wallet className="w-4 h-4" />} color="var(--danger)" sublabel="Vencido + nuevos periodos" />
-      </div>
 
       {/* Overdue balance tracker */}
       <section className="grid gap-5 xl:grid-cols-2">
@@ -320,6 +323,7 @@ export default function TaxDashboard(props: Props) {
             onUpdateTaxRate={handleUpdateTaxRate}
             onApprovePayment={handleApproveSuggestedPayment}
             onUpdatePayment={handleUpdatePayment}
+            onRemovePayment={handleRemovePayment}
           />
         )}
       </div>
@@ -355,6 +359,53 @@ function buildTaxPaymentSchedule(obligations: TaxObligation[]): TaxPaymentSchedu
       note: payment.note,
     })))
     .sort((a, b) => a.date.localeCompare(b.date) || a.taxType.localeCompare(b.taxType));
+}
+
+function TaxOperationalOverview({ view, today }: { view: TaxDashboardView; today: string }) {
+  const scheduledCash = view.totals.cashImpact;
+  const unscheduled = view.obligations.reduce((sum, obligation) => {
+    const committed = obligation.paymentPlan
+      .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0);
+    return sum + Math.max(0, obligation.totalAmount - committed);
+  }, 0);
+  const soonLimit = addDays(today, 15);
+  const dueSoon = view.obligations
+    .filter((obligation) => obligation.pendingAmount > 0 && obligation.dueDate >= today && obligation.dueDate <= soonLimit)
+    .reduce((sum, obligation) => sum + obligation.pendingAmount, 0);
+
+  return (
+    <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <KpiCard
+        label="Por pagar"
+        value={fmtCurrency(view.totals.totalWithOverdue)}
+        icon={<Wallet className="w-4 h-4" />}
+        color="var(--danger)"
+        sublabel="Vencido + periodos visibles"
+      />
+      <KpiCard
+        label="Vence pronto"
+        value={fmtCurrency(dueSoon)}
+        icon={<CalendarDays className="w-4 h-4" />}
+        color={dueSoon > 0 ? 'var(--warning)' : 'var(--gray-950)'}
+        sublabel="Próximos 15 días"
+      />
+      <KpiCard
+        label="Programado en caja"
+        value={fmtCurrency(scheduledCash)}
+        icon={<Check className="w-4 h-4" />}
+        color="var(--success)"
+        sublabel="Aprobado o pagado"
+      />
+      <KpiCard
+        label="Sin programar"
+        value={fmtCurrency(unscheduled)}
+        icon={<FileText className="w-4 h-4" />}
+        color={unscheduled > 0 ? 'var(--danger)' : 'var(--success)'}
+        sublabel="Pendiente de calendarizar"
+      />
+    </section>
+  );
 }
 
 function TaxCashPlanningPanel({
@@ -713,7 +764,7 @@ function OverdueBalanceSection({
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
       <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</span>
       {children}
     </div>
@@ -902,6 +953,7 @@ function TaxPeriodDetail({
   onUpdateTaxRate,
   onApprovePayment,
   onUpdatePayment,
+  onRemovePayment,
 }: {
   period: TaxPeriodSummary;
   detailTab: DetailTab;
@@ -909,8 +961,10 @@ function TaxPeriodDetail({
   onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
   onApprovePayment: (obligation: TaxObligation) => void;
   onUpdatePayment: (obligation: TaxObligation, paymentId: string, patch: Partial<TaxPaymentPlanItem>) => void;
+  onRemovePayment: (obligation: TaxObligation, paymentId: string) => void;
 }) {
   const sourceCount = (tab: DetailTab) => {
+    if (tab === 'summary') return period.obligations.length;
     if (tab === 'iva') return period.iva.incomeLines.length + period.iva.expenseLines.length;
     if (tab === 'isn') return period.payrollLines.length;
     if (tab === 'imss') return period.imssLines.length;
@@ -935,14 +989,16 @@ function TaxPeriodDetail({
         <SegmentedControl
           value={detailTab}
           options={[
+            { id: 'summary' as const, label: 'Resumen' },
             { id: 'iva' as const, label: `IVA (${sourceCount('iva')})` },
-            { id: 'isn' as const, label: `ISN (${sourceCount('isn')})` },
+            { id: 'isn' as const, label: `Nómina / ISN (${sourceCount('isn')})` },
             { id: 'imss' as const, label: `IMSS (${sourceCount('imss')})` },
             { id: 'payments' as const, label: `Pagos (${sourceCount('payments')})` },
           ]}
           onChange={onDetailTabChange}
         />
       </div>
+      {detailTab === 'summary' && <PeriodOperationalSummary period={period} onApprovePayment={onApprovePayment} />}
       {detailTab === 'iva' && <IvaDetail iva={period.iva} onUpdateTaxRate={onUpdateTaxRate} />}
       {detailTab === 'isn' && <IsnDetail period={period} />}
       {detailTab === 'imss' && <ImssDetail period={period} />}
@@ -951,9 +1007,80 @@ function TaxPeriodDetail({
           obligations={period.obligations}
           onApprovePayment={onApprovePayment}
           onUpdatePayment={onUpdatePayment}
+          onRemovePayment={onRemovePayment}
         />
       )}
     </section>
+  );
+}
+
+function PeriodOperationalSummary({
+  period,
+  onApprovePayment,
+}: {
+  period: TaxPeriodSummary;
+  onApprovePayment: (obligation: TaxObligation) => void;
+}) {
+  const committed = period.obligations.reduce((sum, obligation) => (
+    sum + obligation.paymentPlan
+      .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+  ), 0);
+  const paid = period.obligations.reduce((sum, obligation) => (
+    sum + obligation.paymentPlan
+      .filter((payment) => payment.status === 'PAID')
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+  ), 0);
+  const pending = Math.max(0, period.total - committed);
+  const unscheduled = Math.max(0, period.total - period.obligations.reduce((sum, obligation) => (
+    sum + obligation.paymentPlan.reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+  ), 0));
+  const primaryObligation = period.obligations.find((obligation) => obligation.pendingAmount > 0)
+    ?? period.obligations[0];
+  const sourceSummary = summarizeObligationSources(period.obligations);
+
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="Total periodo" value={fmtCurrency(period.total)} />
+        <MiniStat label="Vencimiento" value={fmtDate(period.dueDate)} />
+        <MiniStat label="Programado" value={fmtCurrency(committed)} />
+        <MiniStat label="Pendiente" value={fmtCurrency(pending)} />
+      </div>
+      <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Estado operativo</div>
+            <div className="mt-1 text-[13px] font-bold text-[var(--gray-950)]">
+              {pending > 0 && unscheduled > 0
+                ? 'Falta calendarizar pago'
+                : pending > 0
+                  ? 'Pago en borrador pendiente de aprobar'
+                  : paid >= period.total ? 'Pagado' : 'Pago calendarizado'}
+            </div>
+            <div className="mt-0.5 text-[11px] text-[var(--gray-500)]">
+              Fuente: {sourceSummary}. Pagado: {fmtCurrency(paid)}.
+            </div>
+          </div>
+          {primaryObligation && (
+            <button
+              type="button"
+              onClick={() => onApprovePayment(primaryObligation)}
+              disabled={unscheduled <= 0}
+              className={taxButtonClass}
+            >
+              <CalendarDays className="h-4 w-4" strokeWidth={1.5} />
+              {unscheduled > 0 ? 'Programar pago' : 'Pago ya programado'}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
+        <MiniStat label="ISN" value={fmtCurrency(period.isn)} />
+        <MiniStat label="IMSS" value={fmtCurrency(period.imss)} />
+      </div>
+    </div>
   );
 }
 
@@ -1170,73 +1297,110 @@ function PaymentPlanDetail({
   obligations,
   onApprovePayment,
   onUpdatePayment,
+  onRemovePayment,
 }: {
   obligations: TaxObligation[];
   onApprovePayment: (obligation: TaxObligation) => void;
   onUpdatePayment: (obligation: TaxObligation, paymentId: string, patch: Partial<TaxPaymentPlanItem>) => void;
+  onRemovePayment: (obligation: TaxObligation, paymentId: string) => void;
 }) {
   return (
     <div className="divide-y divide-[var(--gray-100)]">
-      {obligations.map((obligation) => (
-        <div key={obligation.id} className="space-y-3 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="font-bold text-[var(--gray-950)]">{obligation.label}</div>
-              <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
-                {obligation.source} · vence {fmtDate(obligation.dueDate)} · pendiente {fmtCompact(obligation.pendingAmount)}
-              </div>
-            </div>
-            <button onClick={() => onApprovePayment(obligation)} className={taxButtonClass}>
-              <CalendarDays className="h-4 w-4" strokeWidth={1.5} />
-              Programar pago
-            </button>
-          </div>
-          {obligation.paymentPlan.length === 0 ? (
-            <div className="rounded-[var(--radius)] border border-[var(--gray-200)] px-3 py-4 text-center text-[12px] text-[var(--gray-400)]">
-              Sin pagos parciales programados.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {obligation.paymentPlan.map((payment) => (
-                <div key={payment.id} className="grid gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] p-2 md:grid-cols-[130px_1fr_120px_110px_160px]">
-                  <input
-                    type="date"
-                    value={payment.date}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { date: event.target.value })}
-                    className={taxInputClass}
-                  />
-                  <input
-                    value={payment.note ?? ''}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { note: event.target.value })}
-                    className={taxInputClass}
-                    placeholder="Nota"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={payment.amount}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { amount: Number(event.target.value) })}
-                    className={`${taxInputClass} text-right tabular-nums`}
-                  />
-                  <select
-                    value={payment.status}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { status: event.target.value as TaxPaymentPlanItem['status'] })}
-                    className={taxInputClass}
-                  >
-                    <option value="DRAFT">Borrador</option>
-                    <option value="APPROVED">Aprobado</option>
-                    <option value="PAID">Pagado</option>
-                  </select>
-                  <div className="flex items-center">
-                    <PaymentImpactPill status={payment.status} />
-                  </div>
+      {obligations.map((obligation) => {
+        const plannedAmount = obligation.paymentPlan.reduce((sum, payment) => sum + payment.amount, 0);
+        const remainingToPlan = Math.max(0, obligation.totalAmount - plannedAmount);
+        return (
+          <div key={obligation.id} className="space-y-3 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate font-bold text-[var(--gray-950)]" title={obligation.label}>{obligation.label}</div>
+                <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
+                  {obligation.source} · vence {fmtDate(obligation.dueDate)} · pendiente {fmtCompact(Math.max(0, obligation.totalAmount - plannedAmount))}
                 </div>
-              ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => onApprovePayment(obligation)}
+                disabled={remainingToPlan <= 0}
+                className={taxButtonClass}
+              >
+                <CalendarDays className="h-4 w-4" strokeWidth={1.5} />
+                <span className="hidden sm:inline">{remainingToPlan > 0 ? 'Programar pago' : 'Pago ya programado'}</span>
+                <span className="sm:hidden">{remainingToPlan > 0 ? 'Programar' : 'Listo'}</span>
+              </button>
             </div>
-          )}
-        </div>
-      ))}
+            {obligation.paymentPlan.length === 0 ? (
+              <div className="rounded-[var(--radius)] border border-[var(--gray-200)] px-3 py-4 text-center text-[12px] text-[var(--gray-400)]">
+                Sin pagos programados.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {obligation.paymentPlan.map((payment) => (
+                  <div key={payment.id} data-testid="tax-payment-card" className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Fecha">
+                          <input
+                            type="date"
+                            value={payment.date}
+                            onChange={(event) => onUpdatePayment(obligation, payment.id, { date: event.target.value })}
+                            className={taxInputClass}
+                          />
+                        </Field>
+                        <Field label="Monto">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={payment.amount}
+                            onChange={(event) => onUpdatePayment(obligation, payment.id, { amount: Number(event.target.value) })}
+                            className={`${taxInputClass} text-right tabular-nums`}
+                          />
+                        </Field>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <Field label="Estatus">
+                          <select
+                            value={payment.status}
+                            onChange={(event) => onUpdatePayment(obligation, payment.id, { status: event.target.value as TaxPaymentPlanItem['status'] })}
+                            className={taxInputClass}
+                          >
+                            <option value="DRAFT">Borrador</option>
+                            <option value="APPROVED">Aprobado</option>
+                            <option value="PAID">Pagado</option>
+                          </select>
+                        </Field>
+                        <button
+                          type="button"
+                          onClick={() => onRemovePayment(obligation, payment.id)}
+                          className="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[var(--gray-400)] hover:border-[var(--danger)]/30 hover:bg-[var(--danger)]/5 hover:text-[var(--danger)]"
+                          aria-label={`Borrar pago ${obligation.label}`}
+                        >
+                          <Trash2 className="h-4 w-4" strokeWidth={1.5} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <Field label="Nota">
+                        <input
+                          value={payment.note ?? ''}
+                          onChange={(event) => onUpdatePayment(obligation, payment.id, { note: event.target.value })}
+                          className={taxInputClass}
+                          placeholder="Nota opcional"
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <PaymentImpactPill status={payment.status} />
+                      <span className="text-[11px] tabular-nums text-[var(--gray-400)]">{fmtCurrency(payment.amount)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
       {obligations.length === 0 && (
         <div className="px-4 py-8 text-center text-[12px] text-[var(--gray-400)]">Sin obligaciones fiscales en este periodo.</div>
       )}
@@ -1263,19 +1427,28 @@ function PaymentStatusPill({ status }: { status: TaxPaymentPlanItem['status'] })
     : status === 'APPROVED'
       ? 'bg-[var(--primary-muted)] text-[var(--primary)]'
       : 'bg-[var(--gray-100)] text-[var(--gray-600)]';
-  const label = status === 'PAID' ? 'Pagado' : status === 'APPROVED' ? 'Aprobado' : 'Borrador';
+  const label = status === 'PAID'
+    ? 'Pagado, ejecutado'
+    : status === 'APPROVED'
+      ? 'Aprobado, entra a Planeación'
+      : 'Borrador, no impacta caja';
   return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${cls}`}>{label}</span>;
 }
 
 function PaymentImpactPill({ status }: { status: TaxPaymentPlanItem['status'] }) {
   const impactsProjection = status === 'APPROVED' || status === 'PAID';
+  const label = status === 'PAID'
+    ? 'Pagado: ejecutado'
+    : status === 'APPROVED'
+      ? 'Aprobado: impacta caja'
+      : 'Borrador: no impacta caja';
   return (
     <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${
       impactsProjection
         ? 'bg-[var(--success-muted)] text-[var(--success)]'
         : 'bg-[var(--gray-100)] text-[var(--gray-500)]'
     }`}>
-      {impactsProjection ? 'Impacta Planeación/Proyección' : 'Sin impacto'}
+      {label}
     </span>
   );
 }
@@ -1309,9 +1482,9 @@ function SegmentedControl<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {label && <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</span>}
-      <div className="inline-flex h-9 items-center rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-0.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-1 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-0.5">
         {options.map((option) => {
           const active = value === option.id;
           return (
@@ -1337,6 +1510,15 @@ function addDays(date: string, days: number): string {
   const parsed = new Date(`${date}T00:00:00.000Z`);
   parsed.setUTCDate(parsed.getUTCDate() + days);
   return parsed.toISOString().slice(0, 10);
+}
+
+function summarizeObligationSources(obligations: TaxObligation[]): string {
+  if (obligations.length === 0) return 'sin obligación';
+  const sources = Array.from(new Set(obligations.map((obligation) => obligation.source)));
+  if (sources.includes('MANUAL') && sources.length === 1) return 'manual';
+  if (sources.includes('JDE')) return sources.length > 1 ? 'JDE + manual' : 'JDE';
+  if (sources.includes('CALCULATED') && sources.length === 1) return 'calculado';
+  return sources.join(' + ').toLowerCase();
 }
 
 const taxInputClass = 'h-10 w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';

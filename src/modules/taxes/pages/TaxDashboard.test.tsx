@@ -46,7 +46,8 @@ describe('<TaxDashboard />', () => {
     expect(screen.queryByText(/Escenario/i)).toBeNull();
     expect(screen.queryByText(/Impacto caja/i)).toBeNull();
     expect(screen.queryByText(/Cierre:/i)).toBeNull();
-    expect(screen.getByText(/Causado \(/i)).toBeTruthy();
+    expect(screen.getByText('Resumen')).toBeTruthy();
+    expect(screen.getByText('Estado operativo')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /Captura manual/i }));
 
@@ -108,12 +109,86 @@ describe('<TaxDashboard />', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /Programar pago/i })[0]);
 
     expect(screen.getByText(/Pago fiscal programado/i)).toBeTruthy();
-    expect(screen.getAllByText('Impacta Planeación/Proyección').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Aprobado: impacta caja').length).toBeGreaterThan(0);
 
     const stored = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
     expect(stored.obligations[0].paymentPlan[0]).toMatchObject({
       status: 'APPROVED',
     });
+  });
+
+  it('deletes a scheduled tax payment without deleting the obligation', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={20_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Pagos/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Programar pago/i })[0]);
+
+    expect(screen.getByTestId('tax-payment-card')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Borrar pago/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Borrar pago/i }));
+
+    expect(screen.getByText(/Pago eliminado/i)).toBeTruthy();
+    expect(screen.queryByTestId('tax-payment-card')).toBeNull();
+    expect(screen.queryByText('Aprobado: impacta caja')).toBeNull();
+
+    const stored = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
+    expect(stored.obligations).toHaveLength(1);
+    expect(stored.obligations[0].paymentPlan).toHaveLength(0);
+  });
+
+  it('does not add duplicate payments once the current obligation is already planned', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={20_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Pagos/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Programar pago/i })[0]);
+
+    expect(screen.getByText(/Pago ya programado/i)).toBeTruthy();
+    const stored = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
+    expect(stored.obligations[0].paymentPlan).toHaveLength(1);
+  });
+
+  it('uses compact payment cards instead of the previous fixed wide grid', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={20_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Pagos/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Programar pago/i })[0]);
+
+    const card = screen.getByTestId('tax-payment-card');
+    expect(card.className).toContain('rounded');
+    expect(card.className).not.toContain('md:grid-cols-[130px_1fr_120px_110px_160px]');
   });
 
   it('shows budget IVA creditable for February and persists editable rate overrides', () => {
@@ -131,6 +206,7 @@ describe('<TaxDashboard />', () => {
     );
 
     fireEvent.click(screen.getByText('2026-02'));
+    fireEvent.click(screen.getByRole('button', { name: /IVA/i }));
     fireEvent.click(screen.getByRole('button', { name: /Acreditable/i }));
 
     expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();

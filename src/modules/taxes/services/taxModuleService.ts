@@ -300,6 +300,16 @@ export function updateTaxPaymentPlanItem(
   };
 }
 
+export function removeTaxPaymentPlanItem(
+  obligation: TaxObligation,
+  paymentId: string,
+): TaxObligation {
+  return {
+    ...obligation,
+    paymentPlan: obligation.paymentPlan.filter((payment) => payment.id !== paymentId),
+  };
+}
+
 export function buildTaxDashboardView(params: {
   clients?: Client[];
   providers?: Provider[];
