@@ -71,6 +71,67 @@ export interface FinancialMovement {
   updatedAt: string;
 }
 
+export interface PurchaseReceiptRecord {
+  cia: string;
+  noProveedor: string;
+  supplierName: string;
+  invoiceNo: string;
+  purchaseOrderNo: string;
+  receiptNo: string;
+  orderDate: string;
+  receiptDate: string;
+  creditDays: number;
+  estimatedDueDate: string;
+  currency: string;
+  exchangeRate: number;
+  totalAmount: number;
+  amountMxn: number;
+  taxCode?: string;
+  taxRateCode?: string;
+  taxRate?: FinancialTaxRate;
+  taxTreatment: FinancialTaxTreatment;
+  taxBaseAmount?: number;
+  taxAmount?: number;
+  cancelledAt?: string;
+  isCancelled: boolean;
+  status: FinancialDataStatus;
+  costCenter?: string;
+  productCode?: string;
+  productDescription?: string;
+  productType?: string;
+  categoryCode?: string;
+  categoryName?: string;
+  familyCode?: string;
+  familyName?: string;
+  subfamilyCode?: string;
+  subfamilyName?: string;
+}
+
+export type PayrollCashTreatment =
+  | 'CASH_OUT'
+  | 'EMPLOYER_TAX'
+  | 'WITHHOLDING_PAYABLE'
+  | 'DEDUCTION'
+  | 'NON_CASH';
+
+export interface PayrollCostRecord {
+  cia: string;
+  empresaNomina: string;
+  year: number;
+  month: number;
+  paymentDate: string;
+  periodStartDate?: string;
+  periodEndDate?: string;
+  payrollPeriod: string | number;
+  payrollType: string;
+  conceptId: string | number;
+  conceptName: string;
+  conceptType: string;
+  cashTreatment: PayrollCashTreatment;
+  amount: number;
+  costCenter?: string;
+}
+
 export type FinancialScenarioKind = 'BASE' | 'APPROVED' | 'DRAFT';
 export type ApprovalStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'PUBLISHED' | 'EXECUTED';
 

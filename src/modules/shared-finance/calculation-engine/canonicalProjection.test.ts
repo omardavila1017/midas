@@ -8,6 +8,7 @@ import type {
   RealReconciliationMatch,
   RealReconciliationResult,
 } from '../../../domain/realReconciliationEngine';
+import type { PayrollCostRecord, PurchaseReceiptRecord } from '../types';
 import { buildCanonicalProjection } from './canonicalProjection';
 
 const assumptions: CashFlowAssumptions = {
@@ -346,6 +347,95 @@ describe('canonicalProjection IVA metadata', () => {
     expect(mayAr).toHaveLength(1);
     expect(mayAr[0]?.sourceSystem).toBe('JDE');
   });
+
+  it('adds active purchase receipts as early AP commitments with IVA16 metadata', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      purchaseReceipts: [
+        purchaseReceipt({
+          invoiceNo: 'P-IVA16',
+          totalAmount: 1160,
+          amountMxn: 1160,
+          taxRateCode: 'IVA16',
+          taxRate: 16,
+          taxTreatment: 'IVA_CREDITABLE',
+          taxBaseAmount: 1000,
+          taxAmount: 160,
+        }),
+      ],
+      assumptions,
+      budget: budget({ expenseMay: 0, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const movement = canonical.movements.find((item) => item.id.includes('P-IVA16'));
+    expect(movement).toBeTruthy();
+    expect(movement?.category).toBe('AP_PAYMENT');
+    expect(movement?.projectedDate).toBe('2026-05-31');
+    expect(movement?.projectedAmount).toBe(1160);
+    expect(movement?.taxRate).toBe(16);
+    expect(movement?.taxBaseAmount).toBeCloseTo(1000);
+    expect(movement?.taxAmount).toBeCloseTo(160);
+  });
+
+  it('does not add cancelled purchase receipts or receipts already represented by CXP', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [
+        cxpRecord({
+          noProveedor: '59570032',
+          noFactura: 'MATCHED',
+          importePendientePesos: 1160,
+        }),
+      ],
+      purchaseReceipts: [
+        purchaseReceipt({ invoiceNo: 'CANCELLED', cancelledAt: '2026-05-10', isCancelled: true, status: 'CANCELLED' }),
+        purchaseReceipt({ invoiceNo: 'MATCHED', noProveedor: '59570032' }),
+      ],
+      assumptions,
+      budget: budget({ expenseMay: 1160, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    expect(canonical.movements.some((item) => item.id.includes('CANCELLED'))).toBe(false);
+    expect(canonical.movements.some((item) => item.id.startsWith('purchase:') && item.id.includes('MATCHED'))).toBe(false);
+    expect(canonical.movements.some((item) => item.id.startsWith('cxp:') && item.sourceObjectId === 'MATCHED')).toBe(true);
+  });
+
+  it('adds TRESS payroll costs but skips deduction-only concepts', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      payrollCosts: [
+        payrollCost({ conceptId: 1, conceptName: 'SUELDO ORDINARIO', conceptType: 'Percepción', amount: 1000, cashTreatment: 'CASH_OUT' }),
+        payrollCost({ conceptId: 51, conceptName: 'ISR (TRABAJADOR)', conceptType: 'Deducción', amount: 300, cashTreatment: 'DEDUCTION' }),
+        payrollCost({ conceptId: 97, conceptName: 'IMSS PATRONAL', conceptType: 'Obligación Empresa', amount: 200, cashTreatment: 'EMPLOYER_TAX' }),
+      ],
+      assumptions,
+      budget: budget({ expenseMay: 0, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const payroll = canonical.movements.filter((item) => item.sourceSystem === 'PAYROLL');
+    expect(payroll).toHaveLength(2);
+    expect(payroll.some((item) => item.concept.includes('ISR'))).toBe(false);
+    expect(payroll.find((item) => item.concept.includes('SUELDO'))?.category).toBe('PAYROLL');
+    expect(payroll.find((item) => item.concept.includes('IMSS'))?.category).toBe('AP_PAYMENT');
+    expect(payroll.every((item) => item.taxTreatment === 'IVA_EXEMPT')).toBe(true);
+  });
 });
 
 function client(patch: Partial<Client> = {}): Client {
@@ -432,6 +522,64 @@ function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
     v121_150: patch.v121_150 ?? 0,
     v151_180: patch.v151_180 ?? 0,
     mas180: patch.mas180 ?? 0,
+  };
+}
+
+function purchaseReceipt(patch: Partial<PurchaseReceiptRecord> = {}): PurchaseReceiptRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    noProveedor: patch.noProveedor ?? '59570032',
+    supplierName: patch.supplierName ?? 'NEW WORLD FUEL SA DE CV',
+    invoiceNo: patch.invoiceNo ?? 'P-1',
+    purchaseOrderNo: patch.purchaseOrderNo ?? 'OC-1',
+    receiptNo: patch.receiptNo ?? 'REC-1',
+    orderDate: patch.orderDate ?? '2026-05-01',
+    receiptDate: patch.receiptDate ?? '2026-05-01',
+    creditDays: patch.creditDays ?? 30,
+    estimatedDueDate: patch.estimatedDueDate ?? '2026-05-31',
+    currency: patch.currency ?? 'MXN',
+    exchangeRate: patch.exchangeRate ?? 1,
+    totalAmount: patch.totalAmount ?? 1160,
+    amountMxn: patch.amountMxn ?? patch.totalAmount ?? 1160,
+    taxCode: patch.taxCode,
+    taxRateCode: patch.taxRateCode,
+    taxRate: patch.taxRate,
+    taxTreatment: patch.taxTreatment ?? 'UNCLASSIFIED',
+    taxBaseAmount: patch.taxBaseAmount,
+    taxAmount: patch.taxAmount,
+    cancelledAt: patch.cancelledAt,
+    isCancelled: patch.isCancelled ?? false,
+    status: patch.status ?? 'PROJECTED_BASE',
+    costCenter: patch.costCenter,
+    productCode: patch.productCode,
+    productDescription: patch.productDescription,
+    productType: patch.productType,
+    categoryCode: patch.categoryCode,
+    categoryName: patch.categoryName ?? 'Combustibles',
+    familyCode: patch.familyCode,
+    familyName: patch.familyName ?? 'DIESEL AUTOCONSUMO',
+    subfamilyCode: patch.subfamilyCode,
+    subfamilyName: patch.subfamilyName ?? 'DIESEL',
+  };
+}
+
+function payrollCost(patch: Partial<PayrollCostRecord>): PayrollCostRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    empresaNomina: patch.empresaNomina ?? 'SIR',
+    year: patch.year ?? 2026,
+    month: patch.month ?? 5,
+    paymentDate: patch.paymentDate ?? '2026-05-15',
+    periodStartDate: patch.periodStartDate,
+    periodEndDate: patch.periodEndDate,
+    payrollPeriod: patch.payrollPeriod ?? 1,
+    payrollType: patch.payrollType ?? 'Semanal',
+    conceptId: patch.conceptId ?? 1,
+    conceptName: patch.conceptName ?? 'SUELDO ORDINARIO',
+    conceptType: patch.conceptType ?? 'Percepción',
+    cashTreatment: patch.cashTreatment ?? 'CASH_OUT',
+    amount: patch.amount ?? 1000,
+    costCenter: patch.costCenter,
   };
 }
 

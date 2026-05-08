@@ -50,7 +50,7 @@ describe('buildCxpOutflowMovements', () => {
   it('moves overdue CXP to as-of date and sorts higher score providers first', () => {
     const movements = buildCxpOutflowMovements({
       cxpRecords: [
-        cxp({ noProveedor: '000111', nombre: 'OPERACION CRITICA', noFactura: 'OLD', fechaProgramacionPago: '2026-04-30', importePendientePesos: 500 }),
+        cxp({ noProveedor: '000111', nombre: 'OPERACION CRITICA', noFactura: 'OLD', fechaProgramacionPago: '2026-04-30', fechaVence: '2026-04-30', importePendientePesos: 500 }),
         cxp({ noProveedor: '000222', nombre: 'FLEXIBLE ALTO', noFactura: 'SOON', fechaProgramacionPago: '2026-05-08', importePendientePesos: 900 }),
       ],
       providers: [
@@ -82,6 +82,39 @@ describe('buildCxpOutflowMovements', () => {
       subcategory: 'CRITICO',
       providerCategory: 'OPERACION',
       confidenceScore: 100,
+    });
+  });
+
+  it('does not schedule CXP before invoice due date even if payment programming is earlier', () => {
+    const movements = buildCxpOutflowMovements({
+      cxpRecords: [
+        cxp({
+          noProveedor: '000333',
+          nombre: 'PROVEEDOR CON CREDITO',
+          noFactura: 'EARLY-PROGRAM',
+          fechaProgramacionPago: '2026-05-08',
+          fechaVence: '2026-05-20',
+          importePendientePesos: 750,
+        }),
+      ],
+      providers: [
+        provider({
+          id: 'p-333',
+          numProveedorJDE: '333',
+          name: 'PROVEEDOR CON CREDITO',
+          type: 'OPERACION',
+          clasificacionAlberto: 'CRITICO',
+          score: 99,
+        }),
+      ],
+      companyCode: 'all',
+      asOfDate: '2026-05-07',
+      endDate: '2026-12-31',
+    });
+
+    expect(movements[0]).toMatchObject({
+      projectedDate: '2026-05-20',
+      dueDate: '2026-05-20',
     });
   });
 });

@@ -61,7 +61,13 @@ import type {
   FinancialMovement,
   FinancialMovementCategory,
   FinancialTaxRate,
+  PayrollCostRecord,
+  PurchaseReceiptRecord,
 } from '../types';
+import {
+  buildPayrollCostMovements,
+  buildPurchaseReceiptMovements,
+} from '../sourceRecords';
 
 const DAY_MS = 86_400_000;
 
@@ -72,6 +78,8 @@ export interface CanonicalProjectionInputs {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   /**
    * Resultado del cruce JDE ↔ banco. Cuando se pasa, las facturas con
    * `match.status === 'cobrada-banco'` no se vuelven a proyectar como
@@ -592,10 +600,12 @@ function collectOutflowLines(
   // para que el scheduler decida si se paga hoy, se recorre o queda pendiente.
   filteredCxp.forEach((record, index) => {
     if (record.importePendientePesos <= 0) return;
-    const rawDate = cleanDate(record.fechaProgramacionPago)
+    const scheduledDate = cleanDate(record.fechaProgramacionPago)
       ?? cleanDate(record.fechaVence)
       ?? cleanDate(record.fechaFactura)
       ?? inputs.asOfDate;
+    const dueDate = cleanDate(record.fechaVence);
+    const rawDate = dueDate && scheduledDate < dueDate ? dueDate : scheduledDate;
     const dateInfo = moveOpenPayableIntoProjection(rawDate, inputs.asOfDate);
     if (dateInfo.date.slice(0, 7) !== month.yearMonth) return;
     if (compareYearMonth(dateInfo.date.slice(0, 7), todayYm) < 0) return;
@@ -648,7 +658,79 @@ function collectOutflowLines(
     });
   });
 
-  // 2) Líneas del presupuesto que aplican a este mes. Las distribuimos
+  // 2) Compras activas sin CXP matcheada. Son compromisos tempranos: se
+  // emiten como locked para no perderlos al balancear contra budget/baseline.
+  for (const movement of buildPurchaseReceiptMovements({
+    purchaseReceipts: inputs.purchaseReceipts ?? [],
+    cxpRecords: inputs.cxpRecords,
+    companyCode: inputs.companyCode,
+    asOfDate: inputs.asOfDate,
+  })) {
+    if (movement.projectedDate.slice(0, 7) !== month.yearMonth) continue;
+    lines.push({
+      id: movement.id,
+      amount: movement.projectedAmount,
+      date: movement.projectedDate,
+      concept: movement.concept,
+      category: movement.category,
+      subcategory: movement.subcategory,
+      providerCategory: movement.providerCategory,
+      counterpartyId: movement.counterpartyId,
+      counterpartyName: movement.counterpartyName,
+      counterpartyType: movement.counterpartyType,
+      ruleApplied: movement.ruleApplied ?? 'Recibo de compras',
+      sourceSystem: movement.sourceSystem,
+      sourceObjectId: movement.sourceObjectId,
+      companyId: movement.companyId,
+      issueDate: movement.issueDate,
+      dueDate: movement.dueDate,
+      forecastMethod: movement.forecastMethod,
+      confidenceScore: movement.confidenceScore,
+      lockState: movement.lockState,
+      taxTreatment: movement.taxTreatment,
+      taxRate: movement.taxRate,
+      taxBaseAmount: movement.taxBaseAmount,
+      taxAmount: movement.taxAmount,
+      comment: movement.comments?.join(' ') ?? 'Compromiso temprano desde Recibo de Compras.',
+      amountLocked: true,
+    });
+  }
+
+  // 3) Nómina TRESS. No genera IVA; sí alimenta ISN/IMSS en el módulo fiscal.
+  for (const movement of buildPayrollCostMovements({
+    payrollCosts: inputs.payrollCosts ?? [],
+    companyCode: inputs.companyCode,
+    asOfDate: inputs.asOfDate,
+  })) {
+    if (movement.projectedDate.slice(0, 7) !== month.yearMonth) continue;
+    lines.push({
+      id: movement.id,
+      amount: movement.projectedAmount,
+      date: movement.projectedDate,
+      concept: movement.concept,
+      category: movement.category,
+      subcategory: movement.subcategory,
+      counterpartyName: movement.counterpartyName,
+      counterpartyType: movement.counterpartyType,
+      ruleApplied: movement.ruleApplied ?? 'TRESS',
+      sourceSystem: movement.sourceSystem,
+      sourceObjectId: movement.sourceObjectId,
+      companyId: movement.companyId,
+      issueDate: movement.issueDate,
+      dueDate: movement.dueDate,
+      forecastMethod: movement.forecastMethod,
+      confidenceScore: movement.confidenceScore,
+      lockState: movement.lockState,
+      taxTreatment: movement.taxTreatment,
+      taxRate: movement.taxRate,
+      taxBaseAmount: movement.taxBaseAmount,
+      taxAmount: movement.taxAmount,
+      comment: movement.comments?.join(' ') ?? 'Costo de nómina desde TRESS.',
+      amountLocked: true,
+    });
+  }
+
+  // 4) Líneas del presupuesto que aplican a este mes. Las distribuimos
   //    a un día específico para que en vista semanal aparezcan.
   if (inputs.budget) {
     const monthIdx = Number(month.yearMonth.slice(5, 7)) - 1;
@@ -855,12 +937,16 @@ function balanceMonth({
 
 export function hasSufficientCanonicalData(inputs: CanonicalProjectionInputs): boolean {
   const cobranzaRecords = inputs.cobranzaRecords ?? [];
-  if (inputs.bankStatements.length === 0 && cobranzaRecords.length === 0) return false;
+  const purchaseReceipts = inputs.purchaseReceipts ?? [];
+  const payrollCosts = inputs.payrollCosts ?? [];
+  if (inputs.bankStatements.length === 0 && cobranzaRecords.length === 0 && purchaseReceipts.length === 0 && payrollCosts.length === 0) return false;
   if (
     inputs.budget === null
     && inputs.clients.length === 0
     && inputs.cxpRecords.length === 0
     && cobranzaRecords.length === 0
+    && purchaseReceipts.length === 0
+    && payrollCosts.length === 0
   ) {
     return false;
   }

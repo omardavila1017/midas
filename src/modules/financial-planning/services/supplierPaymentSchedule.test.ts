@@ -76,6 +76,34 @@ describe('supplierPaymentSchedule', () => {
       score: 99,
     });
   });
+
+  it('does not pay suppliers before due date and then applies score order', () => {
+    const high = movement('m-high', 'Proveedor Alto', 'p-high', 100, 700, '2026-05-02');
+    high.dueDate = '2026-05-04';
+    const low = movement('m-low', 'Proveedor Bajo', 'p-low', 10, 500, '2026-05-02');
+    low.dueDate = '2026-05-04';
+
+    const result = scheduleSupplierPaymentsByScore({
+      movements: [inflow('i-1', 1000, '2026-05-02'), high, low],
+      providers: [
+        provider('p-high', 'Proveedor Alto', 100),
+        provider('p-low', 'Proveedor Bajo', 10),
+      ],
+      startDate: '2026-05-01',
+      endDate: '2026-05-05',
+      initialCash: 0,
+      minimumCash: 100,
+      scenarioId: 'base',
+    });
+
+    const highDecision = result.plan.decisions.find((decision) => decision.movementId === 'm-high');
+    const lowDecision = result.plan.decisions.find((decision) => decision.movementId === 'm-low');
+    const earlyRow = result.plan.dailyRows.find((row) => row.date === '2026-05-02');
+
+    expect(earlyRow?.suppliersPaid).toBe(0);
+    expect(highDecision).toMatchObject({ status: 'PAID', estimatedDate: '2026-05-04', score: 100 });
+    expect(lowDecision).toMatchObject({ status: 'PENDING', score: 10 });
+  });
 });
 
 function provider(id: string, name: string, score: number): Provider {

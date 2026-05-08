@@ -33,10 +33,12 @@ function cleanDate(value?: string): string | undefined {
 }
 
 function effectiveCxpDate(record: CXPRecord, asOfDate: string): { date: string; originalDate: string; moved: boolean } {
-  const originalDate = cleanDate(record.fechaProgramacionPago)
+  const scheduledDate = cleanDate(record.fechaProgramacionPago)
     ?? cleanDate(record.fechaVence)
     ?? cleanDate(record.fechaFactura)
     ?? asOfDate;
+  const dueDate = cleanDate(record.fechaVence);
+  const originalDate = dueDate && scheduledDate < dueDate ? dueDate : scheduledDate;
   return originalDate < asOfDate
     ? { date: asOfDate, originalDate, moved: true }
     : { date: originalDate, originalDate, moved: false };

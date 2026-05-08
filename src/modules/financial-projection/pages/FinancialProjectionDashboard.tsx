@@ -37,10 +37,12 @@ import type {
   ForecastRun,
   ManualPlanningCategory,
   ManualPlanningEntry,
+  PayrollCostRecord,
   PlanningCustomRow,
   PlanningRow,
   ProjectionAlert,
   ProjectionGranularity,
+  PurchaseReceiptRecord,
 } from '../../shared-finance/types';
 
 type ScenarioRun = ForecastRun & {
@@ -94,6 +96,7 @@ import {
   createQuickMovementAdjustment,
 } from '../services/projectionPredictionEngine';
 import {
+  buildAutomaticTaxReserveMovements,
   buildApprovedTaxPaymentMovements,
   buildTaxDashboardView,
   defaultTaxStore,
@@ -115,6 +118,8 @@ interface Props {
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
   cobranzaReconciliation?: RealReconciliationResult;
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -160,6 +165,8 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.cobranzaRecords,
       props.cobranzaPayments,
       props.cobranzaReconciliation,
+      props.purchaseReceipts,
+      props.payrollCosts,
       props.assumptions,
       props.budget,
       props.startingBalance,
@@ -387,7 +394,12 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     const movementsKey = fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount));
     const adjustmentsKey = fingerprintArray(storedAdjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt);
     const manualKey = fingerprintArray(manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? ''));
-    const taxKey = fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status);
+    const taxKey = [
+      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
+      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
+      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
+      taxStore.overdueBalance,
+    ].join(':');
     const providerKey = fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? ''));
     return [
       movementsKey,
@@ -406,7 +418,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     source.movements,
     storedAdjustments,
     manualEntries,
-    taxStore.obligations,
+    taxStore,
     props.providers,
     yearStart,
     yearEnd,
@@ -434,19 +446,49 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       ].join('||');
 
       return cachedRun<ScenarioRun>(cacheKey, () => {
-        const taxMovements = buildApprovedTaxPaymentMovements({
-          obligations: taxStore.obligations,
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        });
         const manualMovements = expandManualPlanningEntriesToMovements(manualEntries, {
           scenarioId,
           startDate: yearStart,
           endDate: yearEnd,
           asOfDate: today,
         });
+        const preTaxMovements = applyAdjustmentsToMovements(
+          [...source.movements, ...manualMovements],
+          storedAdjustments,
+          scenarioId,
+        );
+        const taxSeedView = buildTaxDashboardView({
+          clients: props.clients,
+          providers: props.providers,
+          assumptions: props.assumptions,
+          cxpRecords: props.cxpRecords,
+          purchaseReceipts: props.purchaseReceipts,
+          payrollCosts: props.payrollCosts,
+          cobranzaPayments: props.cobranzaPayments,
+          budget: props.budget,
+          companyCode: props.companyCode,
+          startDate: yearStart,
+          endDate: yearEnd,
+          movements: preTaxMovements,
+          store: taxStore,
+          today,
+        });
+        const taxMovements = [
+          ...buildApprovedTaxPaymentMovements({
+            obligations: taxSeedView.obligations,
+            scenarioId,
+            startDate: yearStart,
+            endDate: yearEnd,
+            asOfDate: today,
+          }),
+          ...buildAutomaticTaxReserveMovements({
+            obligations: taxSeedView.obligations,
+            scenarioId,
+            startDate: yearStart,
+            endDate: yearEnd,
+            asOfDate: today,
+          }),
+        ];
         const adjustedMovements = applyAdjustmentsToMovements(
           [...source.movements, ...manualMovements, ...taxMovements],
           storedAdjustments,
@@ -504,7 +546,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     source.movements,
     storedAdjustments,
     manualEntries,
-    taxStore.obligations,
+    taxStore,
     props.providers,
     yearStart,
     yearEnd,
@@ -602,10 +644,12 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       store: taxStore,
       providers: props.providers,
       cxpRecords: props.cxpRecords,
+      purchaseReceipts: props.purchaseReceipts,
+      payrollCosts: props.payrollCosts,
       cobranzaPayments: props.cobranzaPayments,
       today,
     }),
-    [activeRun, props.cobranzaPayments, props.cxpRecords, props.providers, taxStore, today],
+    [activeRun, props.cobranzaPayments, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, taxStore, today],
   );
   const supplierAlerts = useMemo(
     () => buildSupplierCriticalAlerts({

@@ -21,10 +21,12 @@ import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import { buildFinancialProjectionSourceData } from '../../financial-projection/services/financialProjectionService';
 import type {
+  PayrollCostRecord,
   TaxManualAdjustment,
   TaxObligation,
   TaxPaymentPlanItem,
   TaxType,
+  PurchaseReceiptRecord,
 } from '../../shared-finance/types';
 import {
   addTaxPaymentPlanItem,
@@ -55,6 +57,8 @@ interface Props {
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
   cobranzaReconciliation?: RealReconciliationResult;
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -105,6 +109,8 @@ export default function TaxDashboard(props: Props) {
       props.cxpRecords,
       props.cobranzaRecords,
       props.cobranzaReconciliation,
+      props.purchaseReceipts,
+      props.payrollCosts,
       props.assumptions,
       props.budget,
       props.startingBalance,
@@ -118,6 +124,8 @@ export default function TaxDashboard(props: Props) {
       providers: props.providers,
       assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
+      purchaseReceipts: props.purchaseReceipts,
+      payrollCosts: props.payrollCosts,
       cobranzaPayments: props.cobranzaPayments,
       budget: props.budget,
       companyCode: props.companyCode,
@@ -127,7 +135,7 @@ export default function TaxDashboard(props: Props) {
       store: taxStore,
       today,
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpRecords, props.providers, source.movements, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source.movements, taxStore, today],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 

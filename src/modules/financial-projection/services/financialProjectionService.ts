@@ -38,6 +38,8 @@ import type {
   FinancialAdjustment,
   FinancialMovement,
   FinancialScenario,
+  PayrollCostRecord,
+  PurchaseReceiptRecord,
   SupplierFinancialProfile,
   TaxObligation,
 } from '../../shared-finance/types';
@@ -49,6 +51,8 @@ export interface FinancialProjectionSourceInput {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   /**
    * Resultado del cruce JDE ↔ banco. Cuando se pasa, las facturas con
    * `match.status === 'cobrada-banco'` no se vuelven a proyectar como
@@ -110,6 +114,8 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.providers),
     refId(input.cxpRecords),
     refId(input.cobranzaRecords),
+    refId(input.purchaseReceipts),
+    refId(input.payrollCosts),
     refId(input.cobranzaReconciliation),
     refId(input.assumptions),
     refId(input.budget),
@@ -154,6 +160,8 @@ export function buildFinancialProjectionSourceData(
     providers: input.providers,
     cxpRecords: input.cxpRecords,
     cobranzaRecords: input.cobranzaRecords ?? [],
+    purchaseReceipts: input.purchaseReceipts ?? [],
+    payrollCosts: input.payrollCosts ?? [],
     cobranzaReconciliation: input.cobranzaReconciliation,
     assumptions: input.assumptions,
     budget: input.budget,

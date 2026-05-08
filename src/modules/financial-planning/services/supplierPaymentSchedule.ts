@@ -101,7 +101,7 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
         movement,
         provider,
         originalDate: originalSupplierDate(movement),
-        readyDate: effectiveMovementDate(movement),
+        readyDate: eligibleSupplierDate(movement),
         amount: effectiveAmount(movement),
         score: scoreFor(provider, movement),
       });
@@ -319,6 +319,11 @@ function isSupplierPayment(movement: FinancialMovement): boolean {
 
 function originalSupplierDate(movement: FinancialMovement): string {
   return movement.dueDate ?? movement.projectedDate;
+}
+
+function eligibleSupplierDate(movement: FinancialMovement): string {
+  const effectiveDate = effectiveMovementDate(movement);
+  return movement.dueDate && movement.dueDate > effectiveDate ? movement.dueDate : effectiveDate;
 }
 
 function isConfirmedInflow(movement: FinancialMovement): boolean {

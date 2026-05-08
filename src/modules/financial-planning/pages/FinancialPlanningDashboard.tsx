@@ -27,8 +27,10 @@ import type {
   FinancialScenario,
   ForecastRun,
   ManualPlanningEntry,
+  PayrollCostRecord,
   PlanningCustomRow,
   ProjectionGranularity,
+  PurchaseReceiptRecord,
   ScenarioChangeLogEntry,
 } from '../../shared-finance/types';
 import { CashTrajectoryChart } from '../components/CashTrajectoryChart';
@@ -53,7 +55,9 @@ import { BucketColumn } from '../components/spreadsheet/gridGeometry';
 import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
 import { buildFinancialProjectionSourceData, calculateCurrentBankCash, calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
 import {
+  buildAutomaticTaxReserveMovements,
   buildApprovedTaxPaymentMovements,
+  buildTaxDashboardView,
   defaultTaxStore,
   loadTaxStore,
   TAX_STORE_CHANGED_EVENT,
@@ -92,6 +96,7 @@ import {
   type SupplierPaymentPlan,
 } from '../services/supplierPaymentSchedule';
 import { buildBudgetInflowMovements, buildBudgetOutflowMovements, buildCxpOutflowMovements } from '../services/cxpOutflowMovements';
+import { buildPayrollCostMovements, buildPurchaseReceiptMovements } from '../../shared-finance/sourceRecords';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
@@ -105,6 +110,8 @@ interface Props {
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
   cobranzaReconciliation?: RealReconciliationResult;
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -132,6 +139,8 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.cxpRecords,
       props.cobranzaRecords,
       props.cobranzaReconciliation,
+      props.purchaseReceipts,
+      props.payrollCosts,
       props.assumptions,
       props.budget,
       props.startingBalance,
@@ -292,9 +301,30 @@ export default function FinancialPlanningDashboard(props: Props) {
     [props.budget, today, yearStart, yearEnd],
   );
 
+  const purchaseOutflowMovements = useMemo(
+    () => buildPurchaseReceiptMovements({
+      purchaseReceipts: props.purchaseReceipts ?? [],
+      cxpRecords: props.cxpRecords,
+      companyCode: props.companyCode,
+      asOfDate: today,
+      endDate: yearEnd,
+    }),
+    [props.purchaseReceipts, props.cxpRecords, props.companyCode, today, yearEnd],
+  );
+
+  const payrollOutflowMovements = useMemo(
+    () => buildPayrollCostMovements({
+      payrollCosts: props.payrollCosts ?? [],
+      companyCode: props.companyCode,
+      asOfDate: today,
+      endDate: yearEnd,
+    }),
+    [props.payrollCosts, props.companyCode, today, yearEnd],
+  );
+
   const planningOutflowMovements = useMemo(
-    () => [...cxpOutflowMovements, ...budgetOutflowMovements],
-    [cxpOutflowMovements, budgetOutflowMovements],
+    () => [...cxpOutflowMovements, ...purchaseOutflowMovements, ...payrollOutflowMovements, ...budgetOutflowMovements],
+    [cxpOutflowMovements, purchaseOutflowMovements, payrollOutflowMovements, budgetOutflowMovements],
   );
 
   // Base scenario mirrors Romo's CSV exactly: full-year inflows + outflows
@@ -328,13 +358,6 @@ export default function FinancialPlanningDashboard(props: Props) {
 
   const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
     const isBase = scenarioId === BASE_SCENARIO_ID;
-    const taxMovements = isBase ? [] : buildApprovedTaxPaymentMovements({
-      obligations: taxStore.obligations,
-      scenarioId,
-      startDate: yearStart,
-      endDate: yearEnd,
-      asOfDate: today,
-    });
     const manualMovements = !isBase && includeManualEntries
       ? expandManualPlanningEntriesToMovements(manualEntries, {
         scenarioId,
@@ -345,10 +368,45 @@ export default function FinancialPlanningDashboard(props: Props) {
       : [];
     const movementsBeforeAdjust = isBase
       ? budgetBaseMovements
-      : [...sourceNonOutflows, ...planningOutflowMovements, ...manualMovements, ...taxMovements];
+      : [...sourceNonOutflows, ...planningOutflowMovements, ...manualMovements];
+    const preTaxMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
+    const taxSeedView = isBase ? null : buildTaxDashboardView({
+      clients: props.clients,
+      providers: props.providers,
+      assumptions: props.assumptions,
+      cxpRecords: props.cxpRecords,
+      purchaseReceipts: props.purchaseReceipts,
+      payrollCosts: props.payrollCosts,
+      budget: props.budget,
+      companyCode: props.companyCode,
+      startDate: yearStart,
+      endDate: yearEnd,
+      movements: preTaxMovements,
+      store: taxStore,
+      today,
+    });
+    const taxMovements = taxSeedView
+      ? [
+        ...buildApprovedTaxPaymentMovements({
+          obligations: taxSeedView.obligations,
+          scenarioId,
+          startDate: yearStart,
+          endDate: yearEnd,
+          asOfDate: today,
+        }),
+        ...buildAutomaticTaxReserveMovements({
+          obligations: taxSeedView.obligations,
+          scenarioId,
+          startDate: yearStart,
+          endDate: yearEnd,
+          asOfDate: today,
+        }),
+      ]
+      : [];
     const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
+    const movementsWithTax = [...adjustedMovements, ...taxMovements];
     const supplierSchedule = scheduleSupplierPaymentsByScore({
-      movements: adjustedMovements,
+      movements: movementsWithTax,
       providers: props.providers,
       startDate: today,
       endDate: yearEnd,
@@ -373,19 +431,19 @@ export default function FinancialPlanningDashboard(props: Props) {
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
+    [approvedScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
+    [baseScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
   );
 
   const activeRunRaw = useMemo(
     () => buildScenarioRun(activeScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore.obligations, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
+    [activeScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
   );
 
   const activeOverrides = useMemo(
@@ -463,7 +521,12 @@ export default function FinancialPlanningDashboard(props: Props) {
     const movementsKey = fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount));
     const adjustmentsKey = fingerprintArray(storedAdjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt);
     const manualKey = fingerprintArray(manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? ''));
-    const taxKey = fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status);
+    const taxKey = [
+      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
+      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
+      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
+      taxStore.overdueBalance,
+    ].join(':');
     const drafts = scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt).slice(0, 6);
     return drafts.map((draft) => {
       const cacheKey = `planning:${draft.id}:${granularity}:${yearStart}:${yearEnd}:${initialCash}:${supplierInitialCash}:${minimumCash}:${movementsKey}:${adjustmentsKey}:${manualKey}:${taxKey}`;
@@ -471,7 +534,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       return { scenarioId: draft.id, run };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compareOpen, scenarios, source.movements, storedAdjustments, manualEntries, taxStore.obligations, granularity, yearStart, yearEnd, initialCash, supplierInitialCash, minimumCash]);
+  }, [compareOpen, scenarios, source.movements, storedAdjustments, manualEntries, taxStore, granularity, yearStart, yearEnd, initialCash, supplierInitialCash, minimumCash]);
 
   // Pre-override per-row aggregates (for cell display when no override).
   const rowAggregateMap = useMemo(() => {

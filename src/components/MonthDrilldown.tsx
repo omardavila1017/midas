@@ -5,9 +5,10 @@ import { fmtCurrency, fmtYearMonthLong } from '../formatters';
 import { toYearMonth, compareYearMonth } from '../domain/cashFlowEngine';
 import type { MonthlyProjection, ProjectionOverrides } from '../domain/projectionEngine';
 import {
-  isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildPairMatchedKeys,
+  classifyMovement,
 } from '../domain/netCashFlowEngine';
 import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
 
@@ -489,12 +490,20 @@ function buildDrilldownData(args: {
   const ownAccountDetector = buildOwnAccountDetector(
     buildOwnAccountsIndex(bankStatements),
   );
+  const pairedKeys = buildPairMatchedKeys(bankStatements);
   for (const acc of filteredBank) {
     for (const mov of acc.movimientos) {
       if (toYearMonth(mov.fechaOperacion) !== yearMonth) continue;
-      // Los traspasos entre cuentas propias no son ingresos ni egresos reales
-      // del negocio — se compensan entre sí. No deben aparecer en el drilldown.
-      if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      // Mismo clasificador que usa el Dashboard para los totales del chart:
+      // excluye traspasos por RFC/cuenta propia y pares CARGO/ABONO simétricos.
+      if (
+        classifyMovement(
+          mov,
+          { ownAccountDetector, pairedKeys },
+          acc.cia,
+          acc.cuenta,
+        ).kind === 'internal'
+      ) continue;
       const bucket = mov.tipoMovimiento === 'ABONO' ? incomeByConcept
         : mov.tipoMovimiento === 'CARGO' ? expenseByConcept
         : null;

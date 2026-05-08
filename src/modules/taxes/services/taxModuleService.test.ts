@@ -4,9 +4,10 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
-import type { FinancialMovement, TaxObligation } from '../../shared-finance/types';
+import type { FinancialMovement, PurchaseReceiptRecord, TaxObligation } from '../../shared-finance/types';
 import {
   addTaxPaymentPlanItem,
+  buildAutomaticTaxReserveMovements,
   buildApprovedTaxPaymentMovements,
   buildTaxDashboardView,
   createManualTaxObligation,
@@ -86,6 +87,103 @@ describe('taxModuleService', () => {
     expect(may.iva.ivaCreditable).toBeCloseTo(80 + (500 - 500 / 1.16));
     expect(may.iva.unclassifiedExpense).toBe(0);
     expect(may.iva.expenseLines.some((line) => line.concept.includes('F-NOTAX'))).toBe(true);
+  });
+
+  it('uses matched purchase receipt tax rate when CXP has no tax fields', () => {
+    const view = buildTaxDashboardView({
+      cxpRecords: [
+        cxpRecord({
+          noProveedor: '59570032',
+          noFactura: 'F-MATCH',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 0,
+          importeImpuestosPesos: 0,
+          importeBrutoPesos: 1080,
+          importePendientePesos: 1080,
+        }),
+      ],
+      purchaseReceipts: [
+        purchaseReceipt({
+          noProveedor: '59570032',
+          invoiceNo: 'F-MATCH',
+          amountMxn: 1080,
+          totalAmount: 1080,
+          taxRate: 8,
+          taxRateCode: 'IVA8',
+          taxTreatment: 'IVA_CREDITABLE',
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.expenseBase8).toBeCloseTo(1000);
+    expect(may.iva.ivaCreditable8).toBeCloseTo(80);
+    expect(may.iva.expenseLines).toHaveLength(1);
+  });
+
+  it('adds unmatched active purchase receipts to creditable IVA and excludes cancelled receipts', () => {
+    const view = buildTaxDashboardView({
+      purchaseReceipts: [
+        purchaseReceipt({
+          invoiceNo: 'ACTIVE-16',
+          amountMxn: 1160,
+          totalAmount: 1160,
+          taxRate: 16,
+          taxRateCode: 'IVA16',
+          taxTreatment: 'IVA_CREDITABLE',
+        }),
+        purchaseReceipt({
+          invoiceNo: 'CANCELLED',
+          amountMxn: 1160,
+          totalAmount: 1160,
+          taxRate: 16,
+          taxRateCode: 'IVA16',
+          taxTreatment: 'IVA_CREDITABLE',
+          cancelledAt: '2026-05-03',
+          isCancelled: true,
+          status: 'CANCELLED',
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.ivaCreditable).toBeCloseTo(160);
+    expect(may.iva.expenseLines).toHaveLength(1);
+    expect(may.iva.expenseLines[0].concept).toContain('ACTIVE-16');
+  });
+
+  it('sends unmatched purchase receipts without fiscal rate to unclassified expense', () => {
+    const view = buildTaxDashboardView({
+      purchaseReceipts: [
+        purchaseReceipt({
+          invoiceNo: 'NO-TAX',
+          amountMxn: 500,
+          totalAmount: 500,
+          taxRate: undefined,
+          taxRateCode: '',
+          taxTreatment: 'UNCLASSIFIED',
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.ivaCreditable).toBe(0);
+    expect(may.iva.unclassifiedExpense).toBe(500);
   });
 
   it('estimates budget OPEX as IVA creditable under regimen 601', () => {
@@ -378,6 +476,37 @@ describe('taxModuleService', () => {
     expect(movements[0].projectedAmount).toBe(400);
     expect(movements[0].status).toBe('APPROVED');
   });
+
+  it('creates automatic tax reserves only for the amount not covered by approved or paid plans', () => {
+    const obligation: TaxObligation = addTaxPaymentPlanItem({
+      obligation: createManualTaxObligation({
+        taxType: 'IVA',
+        period: '2026-08',
+        amount: 1000,
+        dueDate: '2026-09-17',
+      }),
+      date: '2026-09-17',
+      amount: 400,
+      status: 'APPROVED',
+      scenarioId: 'approved',
+    });
+
+    const movements = buildAutomaticTaxReserveMovements({
+      obligations: [obligation],
+      scenarioId: 'approved',
+      startDate: '2026-09-01',
+      endDate: '2026-09-30',
+      asOfDate: '2026-08-01',
+    });
+
+    expect(movements).toHaveLength(1);
+    expect(movements[0]).toMatchObject({
+      category: 'TAX',
+      projectedAmount: 600,
+      projectedDate: '2026-09-17',
+      lockState: 'RESTRICTED',
+    });
+  });
 });
 
 const assumptions: CashFlowAssumptions = {
@@ -484,6 +613,44 @@ function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
     v121_150: patch.v121_150 ?? 0,
     v151_180: patch.v151_180 ?? 0,
     mas180: patch.mas180 ?? 0,
+  };
+}
+
+function purchaseReceipt(patch: Partial<PurchaseReceiptRecord> = {}): PurchaseReceiptRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    noProveedor: patch.noProveedor ?? '59570032',
+    supplierName: patch.supplierName ?? 'NEW WORLD FUEL SA DE CV',
+    invoiceNo: patch.invoiceNo ?? 'P-1',
+    purchaseOrderNo: patch.purchaseOrderNo ?? 'OC-1',
+    receiptNo: patch.receiptNo ?? 'REC-1',
+    orderDate: patch.orderDate ?? '2026-05-01',
+    receiptDate: patch.receiptDate ?? '2026-05-01',
+    creditDays: patch.creditDays ?? 30,
+    estimatedDueDate: patch.estimatedDueDate ?? '2026-05-31',
+    currency: patch.currency ?? 'MXN',
+    exchangeRate: patch.exchangeRate ?? 1,
+    totalAmount: patch.totalAmount ?? 1160,
+    amountMxn: patch.amountMxn ?? patch.totalAmount ?? 1160,
+    taxCode: patch.taxCode,
+    taxRateCode: patch.taxRateCode,
+    taxRate: patch.taxRate,
+    taxTreatment: patch.taxTreatment ?? 'UNCLASSIFIED',
+    taxBaseAmount: patch.taxBaseAmount,
+    taxAmount: patch.taxAmount,
+    cancelledAt: patch.cancelledAt,
+    isCancelled: patch.isCancelled ?? false,
+    status: patch.status ?? 'PROJECTED_BASE',
+    costCenter: patch.costCenter,
+    productCode: patch.productCode,
+    productDescription: patch.productDescription,
+    productType: patch.productType,
+    categoryCode: patch.categoryCode,
+    categoryName: patch.categoryName ?? 'Combustibles',
+    familyCode: patch.familyCode,
+    familyName: patch.familyName ?? 'DIESEL AUTOCONSUMO',
+    subfamilyCode: patch.subfamilyCode,
+    subfamilyName: patch.subfamilyName ?? 'DIESEL',
   };
 }
 
