@@ -109,6 +109,7 @@ export default function CashFlowDetail({
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [monthFilter, setMonthFilter] = useState<number | 'all'>('all');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
   // Build company name lookup
   const ciaNameMap = useMemo(() => {
@@ -191,14 +192,30 @@ export default function CashFlowDetail({
 
   // Filter by month if selected
   const filteredDaily = useMemo(() => {
-    if (monthFilter === 'all') return daily;
-    return daily.filter(d => Number(d.date.slice(5, 7)) - 1 === monthFilter);
-  }, [daily, monthFilter]);
+    const base = monthFilter === 'all'
+      ? daily
+      : daily.filter(d => Number(d.date.slice(5, 7)) - 1 === monthFilter);
+    const sorted = [...base].sort((a, b) =>
+      sortOrder === 'desc' ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date),
+    );
+    return sorted;
+  }, [daily, monthFilter, sortOrder]);
 
   const filteredWeekly = useMemo(() => {
-    if (monthFilter === 'all') return weekly;
-    return weekly.filter(w => Number(w.weekStart.slice(5, 7)) - 1 === monthFilter);
-  }, [weekly, monthFilter]);
+    const base = monthFilter === 'all'
+      ? weekly
+      : weekly.filter(w => Number(w.weekStart.slice(5, 7)) - 1 === monthFilter);
+    const sorted = [...base].sort((a, b) =>
+      sortOrder === 'desc' ? b.weekStart.localeCompare(a.weekStart) : a.weekStart.localeCompare(b.weekStart),
+    );
+    return sorted;
+  }, [weekly, monthFilter, sortOrder]);
+
+  const sortedMonthly = useMemo(() => {
+    return [...monthly].sort((a, b) =>
+      sortOrder === 'desc' ? b.month - a.month : a.month - b.month,
+    );
+  }, [monthly, sortOrder]);
 
   // KPIs
   const totalInflows = daily.reduce((s, d) => s + d.inflows, 0);
@@ -238,68 +255,7 @@ export default function CashFlowDetail({
 
   return (
     <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-5">
-      <PageHeader
-        title="Flujo de efectivo"
-        actions={
-          <button
-            onClick={handleExport}
-            className={`inline-flex items-center gap-2 h-9 px-3 rounded-[var(--radius-md)] border ${T.border} bg-white text-sm font-medium ${T.textMuted} ${T.rowHover} hover:text-[var(--card-foreground)] transition-colors duration-150`}
-          >
-            <Download size={16} strokeWidth={1.5} />
-            Exportar
-          </button>
-        }
-      />
-
-      {/* KPI grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KpiCard
-          label="Abonos"
-          value={totalInflows}
-          icon={TrendingUp}
-          tone="success"
-        />
-        <KpiCard
-          label="Cargos"
-          value={totalOutflows}
-          icon={TrendingDown}
-          tone="danger"
-        />
-        <KpiCard
-          label="Neto"
-          value={netFlow}
-          icon={Wallet}
-          tone={netFlow >= 0 ? 'primary' : 'danger'}
-        />
-        <KpiCard
-          label={bankBalanceAvailable ? 'Saldo bancos' : 'Saldo final'}
-          value={finalBalance}
-          icon={Wallet}
-          tone={finalBalance >= 0 ? 'primary' : 'danger'}
-        />
-      </div>
-
-      {/* Saldo real bancos */}
-      {bankStatements.length > 0 && (
-        <BankSummaryCard
-          bankStatements={bankStatements}
-          balanceStatements={balanceStatements}
-          balanceDate={currentBalanceDate}
-          totalBankSaldo={totalBankSaldo}
-          totalBankAbonos={totalBankAbonos}
-          totalBankCargos={totalBankCargos}
-          activeDays={daily.length}
-          ciaNameMap={ciaNameMap}
-          bankFetchStatus={bankFetchStatus}
-          bankFetchProgress={bankFetchProgress}
-          onRefreshBanks={onRefreshBanks}
-        />
-      )}
-
-      {/* Skeleton while first-time loading bank data */}
-      {bankStatements.length === 0 && bankFetchStatus !== 'idle' && (
-        <BankSkeleton />
-      )}
+      <PageHeader title="Flujo de efectivo" />
 
       {/* Alerta de saldo mínimo negativo */}
       {minBalance < 0 && minBalanceDate && (
@@ -328,6 +284,23 @@ export default function CashFlowDetail({
             <option value="all">Todo el año</option>
             {MONTH_NAMES.map((m, i) => <option key={m} value={i}>{m}</option>)}
           </select>
+          <select
+            value={sortOrder}
+            onChange={e => setSortOrder(e.target.value as 'desc' | 'asc')}
+            className={`h-9 px-3 rounded-[var(--radius-md)] border ${T.border} bg-white text-sm ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
+            title="Orden por fecha"
+          >
+            <option value="desc">Última a primera fecha</option>
+            <option value="asc">Primera a última fecha</option>
+          </select>
+          <button
+            onClick={handleExport}
+            className={`inline-flex items-center gap-1.5 text-xs ${T.textMuted} hover:text-[var(--primary)] transition-colors duration-150`}
+            title="Exportar CSV"
+          >
+            <Download size={14} strokeWidth={1.5} />
+            Exportar
+          </button>
         </div>
       </div>
 
@@ -357,7 +330,7 @@ export default function CashFlowDetail({
       )}
       {granularity === 'monthly' && (
         <MonthlyTable
-          monthly={monthly}
+          monthly={sortedMonthly}
           daily={daily}
           expandedKey={expandedKey}
           onToggle={setExpandedKey}

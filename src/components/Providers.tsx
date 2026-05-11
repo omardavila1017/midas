@@ -7,15 +7,11 @@ import { fetchProviderCatalog } from '../services/catalog.service';
 import {
   AlertTriangle,
   Calendar,
-  CircleDollarSign,
   Clock3,
-  Hash,
   Info,
   Plus,
   RefreshCw,
   Search,
-  ShieldAlert,
-  TrendingUp,
   X,
 } from 'lucide-react';
 import PageHeader from './ui/PageHeader';
@@ -90,13 +86,6 @@ const fmtCurrency = (n: number | null | undefined): string => {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n);
 };
 
-const fmtCompact = (n: number | null | undefined): string => {
-  if (n == null || !Number.isFinite(n)) return '—';
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${Math.round(n)}`;
-};
-
 export default function Providers({ providers, cxpRecords, onReplace, onAdd, onUpdate: _onUpdate, onDelete: _onDelete }: Props) {
   void _onUpdate; void _onDelete;
   const [query, setQuery] = useState('');
@@ -113,18 +102,6 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
     for (const p of providers) out[bucketOf(p)]++;
     return out;
   }, [providers]);
-
-  const totalMinimumExpense = useMemo(
-    () => providers
-      .filter((p) => p.clasificacionAutomatica === 'CRITICO' && p.gastoMinimoMensual)
-      .reduce((sum, p) => sum + (p.gastoMinimoMensual ?? 0), 0),
-    [providers],
-  );
-
-  const totalPaid2025 = useMemo(
-    () => providers.reduce((sum, p) => sum + (p.montoTotal2025 ?? 0), 0),
-    [providers],
-  );
 
   // ─── Listas únicas para filtros ───────────────────────────────────────
   const frequencies = useMemo(() => {
@@ -205,55 +182,19 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
           <button
             onClick={handleSyncCatalog}
             disabled={syncing}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-[var(--radius-md)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
+            title="Sincronizar plantilla"
+            aria-label="Sincronizar plantilla"
+            className="flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] text-[var(--gray-400)] hover:text-[var(--primary)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
           >
-            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} strokeWidth={1.5} /> Sincronizar plantilla
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
           </button>
         }
       />
-
-      <p className="text-[12px] text-[var(--gray-500)] -mt-2">
-        Catálogo derivado de la <span className="font-medium text-[var(--gray-700)]">Plantilla de Proveedores</span> de Alberto.
-        Para editar criticidad o agregar proveedores, actualiza el Excel y regenera el JSON.
-      </p>
 
       {syncError && (
         <p className="text-[13px] text-white/80 bg-[var(--danger)]/25 border border-[var(--danger)]/40 rounded-[var(--radius-md)] px-3 py-2">
           {syncError}
         </p>
-      )}
-
-      {/* ─── KPIs Strip ──────────────────────────────────────────────── */}
-      {providers.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiCard
-            label="Total proveedores"
-            value={providers.length.toString()}
-            icon={<Hash className="w-4 h-4" strokeWidth={1.5} />}
-            tone="neutral"
-          />
-          <KpiCard
-            label="Operativos (score ≥ 80)"
-            value={scoreCounts.CRITICO.toString()}
-            sublabel={`${Math.round(scoreCounts.CRITICO / providers.length * 100)}% del catálogo`}
-            icon={<ShieldAlert className="w-4 h-4" strokeWidth={1.5} />}
-            tone="danger"
-          />
-          <KpiCard
-            label="Piso operativo / mes"
-            value={fmtCompact(totalMinimumExpense)}
-            sublabel={`${fmtCompact(totalMinimumExpense * 12)} anual`}
-            icon={<TrendingUp className="w-4 h-4" strokeWidth={1.5} />}
-            tone="warning"
-          />
-          <KpiCard
-            label="Pagado en 2025"
-            value={fmtCompact(totalPaid2025)}
-            sublabel={`${providers.filter((p) => p.numPagos2025).length} con histórico`}
-            icon={<CircleDollarSign className="w-4 h-4" strokeWidth={1.5} />}
-            tone="success"
-          />
-        </div>
       )}
 
       {/* ─── Chips filtro por bucket de score ─────────────────────────── */}
@@ -290,19 +231,19 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="input h-9 max-w-[200px]"
+            className="input h-9 max-w-[180px]"
             title="Filtrar por categoría"
           >
-            <option value="all">Todas las categorías</option>
+            <option value="all">Categoría</option>
             {categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <select
             value={freqFilter}
             onChange={(e) => setFreqFilter(e.target.value)}
-            className="input h-9 max-w-[180px]"
+            className="input h-9 max-w-[160px]"
             title="Filtrar por frecuencia"
           >
-            <option value="all">Todas las frecuencias</option>
+            <option value="all">Frecuencia</option>
             {frequencies.map((f) => <option key={f} value={f}>{f}</option>)}
           </select>
           {filtersActive && (
@@ -324,7 +265,7 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
       {/* ─── Table ─────────────────────────────────────────────────────── */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden animate-card-in">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1480px] text-[13px]">
+          <table className="w-full text-[13px]">
             <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0 z-10">
               <tr>
                 <Th className="pl-5">Proveedor</Th>
@@ -377,7 +318,7 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                       title="Clic para ver detalle del proveedor"
                     >
                       <Td className="pl-5">
-                        <div className="font-medium text-[var(--gray-950)] truncate max-w-[260px]" title={p.name}>
+                        <div className="font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={p.name}>
                           {p.name}
                         </div>
                         {p.dtiCriticidad === 'Alta' && (
@@ -397,7 +338,7 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                         )}
                       </Td>
                       <Td>
-                        <span className="inline-block max-w-[160px] truncate text-[var(--gray-700)]" title={p.type}>
+                        <span className="inline-block max-w-[120px] truncate text-[var(--gray-700)]" title={p.type}>
                           {p.type}
                         </span>
                       </Td>
@@ -518,12 +459,12 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
 
 function Th({ children, align = 'left', className = '' }: { children?: React.ReactNode; align?: 'left' | 'right' | 'center'; className?: string }) {
   const alignCls = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
-  return <th className={`px-4 py-2.5 font-medium ${alignCls} ${className}`}>{children}</th>;
+  return <th className={`px-2.5 py-2.5 font-medium ${alignCls} ${className}`}>{children}</th>;
 }
 
 function Td({ children, align = 'left', className = '' }: { children?: React.ReactNode; align?: 'left' | 'right' | 'center'; className?: string }) {
   const alignCls = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
-  return <td className={`px-4 py-2.5 text-[var(--gray-950)] align-middle ${alignCls} ${className}`}>{children}</td>;
+  return <td className={`px-2.5 py-2.5 text-[var(--gray-950)] align-middle ${alignCls} ${className}`}>{children}</td>;
 }
 
 function Chip({ children, style, title }: { children: React.ReactNode; style: ChipStyle; title?: string }) {
@@ -579,7 +520,7 @@ function ScoreBar({ score }: { score: number | undefined }) {
   else if (pct >= 40) color = '#F97316';
   return (
     <div className="flex flex-col items-center gap-0.5">
-      <div className="w-16 h-1.5 rounded-full bg-[var(--gray-100)] overflow-hidden">
+      <div className="w-12 h-1.5 rounded-full bg-[var(--gray-100)] overflow-hidden">
         <div
           className="h-full rounded-full transition-all"
           style={{ width: `${pct}%`, backgroundColor: color }}
@@ -592,33 +533,3 @@ function ScoreBar({ score }: { score: number | undefined }) {
   );
 }
 
-function KpiCard({
-  label, value, sublabel, icon, tone,
-}: {
-  label: string;
-  value: string;
-  sublabel?: string;
-  icon: React.ReactNode;
-  tone: 'neutral' | 'danger' | 'warning' | 'success';
-}) {
-  const toneClass = {
-    neutral: 'border-[var(--gray-200)]/60 text-[var(--gray-500)]',
-    danger:  'border-[var(--danger)]/30 bg-[var(--danger-muted)] text-[var(--danger)]',
-    warning: 'border-yellow-300 bg-yellow-50 text-yellow-800',
-    success: 'border-[var(--success)]/30 bg-[var(--success-muted)] text-[var(--success)]',
-  }[tone];
-  return (
-    <div className={`rounded-[var(--radius)] border bg-white p-4 ${toneClass}`}>
-      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide opacity-80">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-2 text-[22px] font-bold tabular-nums text-[var(--gray-950)]">
-        {value}
-      </div>
-      {sublabel && (
-        <div className="mt-0.5 text-[11px] opacity-70">{sublabel}</div>
-      )}
-    </div>
-  );
-}

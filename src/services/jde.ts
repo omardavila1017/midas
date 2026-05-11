@@ -67,6 +67,25 @@ function trimIsoDate(v: unknown): string {
   return s.length >= 10 ? s.slice(0, 10) : s;
 }
 
+/**
+ * Normaliza un valor de `No_Recibo` a la llave de cruce canónica:
+ *   1. Descarta cualquier caracter que no sea dígito (espacios, guiones,
+ *      prefijos tipo "RI -", etc.).
+ *   2. Si quedan más de 8 dígitos, conserva solo los últimos 8.
+ *
+ * Contexto: el API de Bancos JDE devuelve `No_Recibo` con dígitos extra al
+ * frente (tipo de documento, padding contable, batch, etc.) que no aparecen
+ * en la columna `No_Recibo` de `cobranzaindicadores`. Para cruzar ambos
+ * lados con confianza, normalizamos a "los últimos 8 dígitos". Cuando el
+ * valor ya tiene 8 o menos dígitos (caso cobranzaindicadores típico) la
+ * función es idempotente y solo limpia separadores.
+ */
+function extractReciboKey(value: unknown): string {
+  const digits = toStr(value).replace(/\D/g, '');
+  if (!digits) return '';
+  return digits.length > 8 ? digits.slice(-8) : digits;
+}
+
 export function normalizeInvoiceRef(value: unknown): string {
   return toStr(value)
     .toUpperCase()
@@ -251,7 +270,10 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
   const desc036 = toStr(pick(raw, ['DESC036', 'desc036', 'moneda', 'currency']));
   const codigoTransaccionBanco = toStr(pick(raw, ['Codigo_Transaccion_banco', 'codigo_transaccion_banco']));
   const referenciaCliente = toStr(pick(raw, ['Referencia_Cliente', 'referencia_cliente']));
-  const noRecibo = toStr(pick(raw, ['No_Recibo', 'No Recibo', 'noRecibo', 'no_recibo']));
+  // No_Recibo viene del API de Bancos con dígitos extra al inicio; nos
+  // quedamos con los últimos 8 dígitos para cruzar 1:1 con la columna
+  // `No_Recibo` de cobranzaindicadores.
+  const noRecibo = extractReciboKey(pick(raw, ['No_Recibo', 'No Recibo', 'noRecibo', 'no_recibo']));
   const infAdi1 = toStr(pick(raw, ['InF_ADI_1', 'INF_ADI_1', 'infAdi1']));
   const infAdi2 = toStr(pick(raw, ['InF_ADI_2', 'INF_ADI_2', 'infAdi2']));
   const infAdi3 = toStr(pick(raw, ['InF_ADI_3', 'INF_ADI_3', 'infAdi3']));
@@ -903,7 +925,10 @@ function mapCobranzaPaymentHeader(rows: RawRecord[], idPago: string, ciaFallback
     fechaContable: trimIsoDate(pick(header, ['Fecha Contable', 'Fecha_Contable', 'fechaContable', 'fecha_contable'])),
     cuentaBancaria: toStr(pick(header, ['cta bancaria', 'cta_bancaria', 'cuentaBancaria', 'cuenta_bancaria'])),
     banco: toStr(pick(header, ['Banco', 'banco'])),
-    noRecibo: toStr(pick(header, ['No Recibo', 'No_Recibo', 'noRecibo', 'no_recibo'])),
+    // Cruzamos por `No_Recibo` contra el banco; normalizamos al mismo
+    // formato (solo dígitos, últimos 8) para que ambos lados produzcan la
+    // misma llave aún si cobranzaindicadores trae prefijos tipo "RI - ".
+    noRecibo: extractReciboKey(pick(header, ['No Recibo', 'No_Recibo', 'noRecibo', 'no_recibo'])),
     importeRecibo: toNum(pick(header, ['Importe Recibo', 'Importe_Recibo', 'importeRecibo', 'importe_recibo'])),
     pendienteAplicar: toNum(pick(header, ['Pendiente de Aplicar', 'Pendiente_de_Aplicar', 'pendienteAplicar'])),
     noCliente: toStr(pick(header, ['No Cliente', 'No_Cliente', 'noCliente', 'no_cliente'])),

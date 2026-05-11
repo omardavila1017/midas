@@ -58,7 +58,9 @@ describe('normalizeCobranzaPayments', () => {
       cia: '00011',
       fechaCobro: '2026-02-10',
       cuentaBancaria: '11.1020.0011302',
-      noRecibo: 'RI - 90829',
+      // No_Recibo de cobranzaindicadores se normaliza a solo dígitos
+      // (últimos 8 si hubiese más) para cruzar con el banco.
+      noRecibo: '90829',
       importeRecibo: 1740,
     });
     expect(payments[0].applications).toHaveLength(2);
@@ -99,7 +101,36 @@ describe('normalizeCobranzaPayments', () => {
     }));
     expect(statements[0].cia).toBe('00011');
     expect(statements[0].movimientos[0].cia).toBe('00011');
-    expect(statements[0].movimientos[0].noRecibo).toBe('RI-100');
+    // El banco devuelve "RI-100" → normalizado a solo dígitos: "100".
+    expect(statements[0].movimientos[0].noRecibo).toBe('100');
+  });
+
+  it('recorta No_Recibo del banco a los últimos 8 dígitos para cruzar con cobranzaindicadores', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      {
+        cia: '11',
+        Cuenta_Contable: '11.1020.0011302',
+        Cuenta_Bancos: '000123',
+        Nombre_cuenta_Contable: 'BANAMEX CTA',
+        Fecha_Estado_Cuenta: '2026-02-10',
+        Importe: '1000.00',
+        Tipo_Movimiento: 'CREDITO',
+        Referencia_Cliente: 'SPEI',
+        // 14 dígitos en el banco — debemos quedarnos con los últimos 8.
+        No_Recibo: '00000012345678',
+      },
+    ]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: '2026-02-10',
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(statements[0].movimientos[0].noRecibo).toBe('12345678');
   });
 
   it('consulta cobranzaindicadores por el proxy JDE estándar por cía', async () => {

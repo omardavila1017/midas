@@ -1,44 +1,57 @@
 import { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
+import { AlertTriangle, Check, Loader2 } from 'lucide-react';
 
-export type BootStep = 'init' | 'catalog' | 'jde' | 'banks' | 'ready';
+export type BootTaskStatus = 'pending' | 'loading' | 'done' | 'error';
 
-interface MidasSplashProps {
-  visible: boolean;
-  step: BootStep;
-  hasError?: boolean;
+export interface BootTask {
+  id: string;
+  label: string;
+  status: BootTaskStatus;
   progress?: { done: number; total: number } | null;
 }
 
-const STEP_LABEL: Record<BootStep, string> = {
-  init: 'Iniciando Midas…',
-  catalog: 'Cargando catálogos…',
-  jde: 'Conectando con JDE…',
-  banks: 'Sincronizando bancos…',
-  ready: 'Listo',
-};
+interface MidasSplashProps {
+  visible: boolean;
+  tasks: BootTask[];
+  startedAt: number;
+}
 
-const STEP_LABEL_ERROR: Partial<Record<BootStep, string>> = {
-  jde: 'JDE no respondió — continuando…',
-};
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
 
-export default function MidasSplash({ visible, step, hasError, progress }: MidasSplashProps) {
+export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashProps) {
   const [leaving, setLeaving] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!visible) setLeaving(true);
+    if (!visible) {
+      setLeaving(true);
+      return;
+    }
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
   }, [visible]);
 
-  const showProgressBar = step === 'banks';
-  const hasMeasurableProgress =
-    showProgressBar && !!progress && progress.total > 0;
-  const progressPct = hasMeasurableProgress
-    ? Math.min(100, Math.max(0, (progress!.done / progress!.total) * 100))
-    : 0;
+  const total = tasks.length;
+  const doneCount = tasks.filter(t => t.status === 'done').length;
+  const errorCount = tasks.filter(t => t.status === 'error').length;
+  const settled = doneCount + errorCount;
+  const overallPct = total > 0 ? Math.min(100, (settled / total) * 100) : 0;
+  const allSettled = total > 0 && settled === total;
 
-  const label = hasMeasurableProgress
-    ? `Cargando año ${progress!.done}/${progress!.total}`
-    : (hasError && STEP_LABEL_ERROR[step]) || STEP_LABEL[step];
+  const current =
+    tasks.find(t => t.status === 'loading') ?? tasks.find(t => t.status === 'pending');
+  const headline = allSettled
+    ? errorCount > 0
+      ? 'Listo · con avisos'
+      : 'Listo'
+    : current?.label ?? 'Iniciando Midas…';
+
+  const elapsed = formatElapsed(now - startedAt);
 
   return (
     <div
@@ -48,10 +61,10 @@ export default function MidasSplash({ visible, step, hasError, progress }: Midas
       aria-label="Cargando Midas"
     >
       <div
-        className="flex flex-col items-center gap-6 splash-logo-enter"
-        style={{ marginTop: -24 }}
+        className="flex flex-col items-center gap-5 splash-logo-enter"
+        style={{ marginTop: -24, width: 'min(360px, calc(100vw - 48px))' }}
       >
-        {/* Brand lockup — replicates header App.tsx:654–681 */}
+        {/* Brand lockup */}
         <div className="flex items-center gap-3">
           <img
             src={`${import.meta.env.BASE_URL}logos/senda-corporativo.svg`}
@@ -81,9 +94,9 @@ export default function MidasSplash({ visible, step, hasError, progress }: Midas
           </span>
         </div>
 
-        {/* Status line — re-mounts on step change for fade-in */}
+        {/* Headline */}
         <div
-          key={step}
+          key={headline}
           className="animate-fade-in"
           style={{
             fontSize: 13,
@@ -91,85 +104,102 @@ export default function MidasSplash({ visible, step, hasError, progress }: Midas
             color: 'var(--shell-text-muted)',
             letterSpacing: '0.02em',
             minHeight: 18,
+            textAlign: 'center',
           }}
         >
-          {label}
-        </div>
-
-        {/* Dots → checkmark → progress bar */}
-        <div className="flex items-center justify-center" style={{ height: 12, gap: 8 }}>
-          {step === 'ready' ? (
-            <Check
-              className="animate-fade-in"
-              size={16}
-              strokeWidth={2.25}
-              style={{ color: 'var(--shell-text)' }}
-              aria-hidden="true"
-            />
-          ) : showProgressBar ? (
-            <div
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={hasMeasurableProgress ? progress!.total : undefined}
-              aria-valuenow={hasMeasurableProgress ? progress!.done : undefined}
+          {allSettled ? (
+            <span
               style={{
-                width: 200,
-                height: 4,
-                borderRadius: 999,
-                background: 'var(--shell-border)',
-                overflow: 'hidden',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                color: 'var(--shell-text)',
               }}
             >
-              <div
-                style={{
-                  width: `${progressPct}%`,
-                  height: '100%',
-                  background: 'var(--shell-text)',
-                  borderRadius: 999,
-                  transition: 'width 360ms var(--ease-smooth)',
-                }}
-              />
-            </div>
+              <Check size={14} strokeWidth={2.25} aria-hidden="true" />
+              {headline}
+            </span>
           ) : (
-            <>
-              <span
-                data-splash-dot
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: 'var(--shell-text-muted)',
-                  opacity: 0.5,
-                  animation: 'softPulse 1.2s var(--ease-smooth) infinite',
-                  animationDelay: '0ms',
-                }}
-              />
-              <span
-                data-splash-dot
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: 'var(--shell-text-muted)',
-                  opacity: 0.5,
-                  animation: 'softPulse 1.2s var(--ease-smooth) infinite',
-                  animationDelay: '160ms',
-                }}
-              />
-              <span
-                data-splash-dot
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: 'var(--shell-text-muted)',
-                  opacity: 0.5,
-                  animation: 'softPulse 1.2s var(--ease-smooth) infinite',
-                  animationDelay: '320ms',
-                }}
-              />
-            </>
+            headline
           )}
+        </div>
+
+        {/* Overall progress bar */}
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={settled}
+          aria-label={`Progreso ${settled} de ${total}`}
+          style={{
+            width: '100%',
+            height: 4,
+            borderRadius: 999,
+            background: 'var(--shell-border)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              width: `${overallPct}%`,
+              height: '100%',
+              background: 'var(--shell-text)',
+              borderRadius: 999,
+              transition: 'width 360ms var(--ease-smooth)',
+            }}
+          />
+        </div>
+
+        {/* Task list */}
+        <ul
+          style={{
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            listStyle: 'none',
+            padding: 0,
+            margin: 0,
+          }}
+        >
+          {tasks.map(task => (
+            <li
+              key={task.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 12,
+                fontFamily: 'var(--font-family)',
+                color:
+                  task.status === 'done'
+                    ? 'var(--shell-text)'
+                    : 'var(--shell-text-muted)',
+                letterSpacing: '0.01em',
+                opacity: task.status === 'pending' ? 0.55 : 1,
+                transition: 'opacity 200ms var(--ease-smooth), color 200ms var(--ease-smooth)',
+              }}
+            >
+              <TaskIcon status={task.status} />
+              <span>{task.label}</span>
+            </li>
+          ))}
+        </ul>
+
+        {/* Elapsed timer */}
+        <div
+          style={{
+            fontSize: 11,
+            fontFamily: 'var(--font-family)',
+            color: 'var(--shell-text-muted)',
+            letterSpacing: 'var(--tracking-meta)',
+            textTransform: 'uppercase',
+            opacity: 0.7,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {allSettled ? 'Tiempo total · ' : 'Tiempo · '}
+          <strong style={{ fontWeight: 600, color: 'var(--shell-text)' }}>{elapsed}</strong>
         </div>
       </div>
 
@@ -191,5 +221,51 @@ export default function MidasSplash({ visible, step, hasError, progress }: Midas
         Treasury workbench · Grupo Senda
       </div>
     </div>
+  );
+}
+
+function TaskIcon({ status }: { status: BootTaskStatus }) {
+  if (status === 'done') {
+    return (
+      <Check
+        size={14}
+        strokeWidth={2.25}
+        style={{ color: 'var(--shell-text)' }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (status === 'error') {
+    return (
+      <AlertTriangle
+        size={14}
+        strokeWidth={2}
+        style={{ color: 'var(--shell-text-muted)' }}
+        aria-hidden="true"
+      />
+    );
+  }
+  if (status === 'loading') {
+    return (
+      <Loader2
+        size={14}
+        strokeWidth={2.25}
+        className="animate-spin"
+        style={{ color: 'var(--shell-text)' }}
+        aria-hidden="true"
+      />
+    );
+  }
+  return (
+    <span
+      style={{
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        border: '1px solid var(--shell-border)',
+        display: 'inline-block',
+      }}
+      aria-hidden="true"
+    />
   );
 }

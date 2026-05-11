@@ -578,9 +578,44 @@ function bankPaymentMatchKeys(line: BankStatementLine): string[] {
     normalizeAccountKey(line.cuenta),
   ]);
   cuentas.delete('');
-  return Array.from(cuentas).map(cuenta =>
-    paymentMatchKey(line.cia, cuenta, line.fechaOperacion, line.importe),
+  // Fecha de cruce contra cobranzaindicadores.fechaCobro:
+  //   • `fechaEstadoCuenta` del banco siempre coincide con `Fecha_Cobro` de
+  //     cobranzaindicadores — es la llave de fecha primaria.
+  //   • `fechaOperacion` se mantiene como llave alterna por compatibilidad
+  //     con escenarios donde el banco fechó la operación distinto al estado
+  //     de cuenta.
+  const fechas = new Set<string>(
+    [line.fechaEstadoCuenta, line.fechaOperacion].filter((d): d is string => !!d),
   );
+  const keys: string[] = [];
+  for (const cuenta of cuentas) {
+    for (const fecha of fechas) {
+      keys.push(paymentMatchKey(line.cia, cuenta, fecha, line.importe));
+    }
+  }
+  return keys;
+}
+
+/**
+ * Llave laxa de respaldo cuando No_Recibo no funciona y la cuenta no cruza
+ * entre banco y cobranzaindicadores: solo `(cía + fecha + importe)`.
+ *
+ * Sigue exigiendo importe + fecha juntos para que el match sea confiable;
+ * la única dimensión que se afloja es la cuenta. Si dos pagos diferentes
+ * caen aquí en el mismo día, mismo importe y misma cía, el motor los marca
+ * como AMBIGUOUS y los manda a revisión manual.
+ */
+function bankDateAmountKeys(line: BankStatementLine): string[] {
+  const fechas = new Set<string>(
+    [line.fechaEstadoCuenta, line.fechaOperacion].filter((d): d is string => !!d),
+  );
+  return Array.from(fechas).map(fecha =>
+    `${line.cia || '(sin cia)'}::${fecha}::${amountCents(line.importe)}`,
+  );
+}
+
+function dateAmountKey(cia: string, fecha: string, importe: number): string {
+  return `${cia || '(sin cia)'}::${fecha}::${amountCents(importe)}`;
 }
 
 function bankReferenceText(line: BankStatementLine): string {
@@ -1086,6 +1121,12 @@ export function reconcileRealCollections(
   const paymentMatchMeta = new Map<string, PaymentMatchMeta>();
   const paymentsByBankKey = new Map<string, CobranzaPayment[]>();
   const paymentsByNoRecibo = new Map<string, CobranzaPayment[]>();
+  // Índice laxo: (cía + fechaCobro + importeRecibo). Se usa solo como
+  // respaldo cuando No_Recibo no cruza y la cuenta no logra alinearse
+  // entre banco y cobranzaindicadores. La fecha (Fecha_Cobro ↔
+  // Fecha_Estado_Cuenta) siempre debe coincidir, y el importe filtra falsos
+  // positivos. Ambigüedades reales caen en la rama AMBIGUOUS de abajo.
+  const paymentsByDateAmount = new Map<string, CobranzaPayment[]>();
   for (const payment of scopedPayments) {
     if (payment.noRecibo) {
       for (const key of reciboMatchKeys(payment.cia, payment.noRecibo)) {
@@ -1096,6 +1137,13 @@ export function reconcileRealCollections(
       addToListMap(
         paymentsByBankKey,
         paymentMatchKey(payment.cia, payment.cuentaBancaria, payment.fechaCobro, payment.importeRecibo),
+        payment,
+      );
+    }
+    if (payment.fechaCobro && payment.importeRecibo > 0) {
+      addToListMap(
+        paymentsByDateAmount,
+        dateAmountKey(payment.cia, payment.fechaCobro, payment.importeRecibo),
         payment,
       );
     }
@@ -1246,9 +1294,19 @@ export function reconcileRealCollections(
       continue;
     }
 
-    const paymentCandidates = uniquePayments(
+    let paymentCandidates = uniquePayments(
       bankPaymentMatchKeys(abono).flatMap(key => paymentsByBankKey.get(key) ?? []),
     ).filter(payment => !consumedPayment.has(payment.idPago));
+    // Fallback laxo cuando el cuenta-key no encontró candidatos: cruzamos
+    // solo por (cía + fecha + importe). Sigue exigiendo fecha + importe
+    // juntos — sin esto el match sería ruidoso — pero permite que el cruce
+    // funcione cuando el banco y cobranzaindicadores no expresan la cuenta
+    // de la misma forma.
+    if (paymentCandidates.length === 0) {
+      paymentCandidates = uniquePayments(
+        bankDateAmountKeys(abono).flatMap(key => paymentsByDateAmount.get(key) ?? []),
+      ).filter(payment => !consumedPayment.has(payment.idPago));
+    }
     const refPayment = paymentCandidates.find(payment => bankContainsNoRecibo(abono, payment.noRecibo));
     const selectedPayment = refPayment ?? (paymentCandidates.length === 1 ? paymentCandidates[0] : null);
     if (selectedPayment) {

@@ -335,6 +335,7 @@ const BancosDashboard = ({
   }, [companies]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [collapsedBanks, setCollapsedBanks] = useState<Set<string>>(new Set());
+  const seenBanksRef = useRef<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [bancoFilter, setBancoFilter] = useState<string>('all');
   const [monedaFilter, setMonedaFilter] = useState<string>('all');
@@ -403,6 +404,23 @@ const BancosDashboard = ({
     }
     return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [accountsView]);
+
+  useEffect(() => {
+    const newOnes: string[] = [];
+    for (const [bankName] of accountsByBank) {
+      if (!seenBanksRef.current.has(bankName)) {
+        seenBanksRef.current.add(bankName);
+        newOnes.push(bankName);
+      }
+    }
+    if (newOnes.length > 0) {
+      setCollapsedBanks(prev => {
+        const next = new Set(prev);
+        for (const n of newOnes) next.add(n);
+        return next;
+      });
+    }
+  }, [accountsByBank]);
 
   const bancoOptions = useMemo(
     () => Array.from(new Set(statements.map(s => s.nombreBanco ?? s.banco).filter(Boolean))).sort(),
@@ -476,7 +494,8 @@ const BancosDashboard = ({
 
   return (
     <div className="space-y-4">
-      {/* ── Top bar ── */}
+      {/* ── Top bar (hidden) ── */}
+      {false && (
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex items-center bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 gap-2 shadow-sm">
           <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
@@ -558,6 +577,7 @@ const BancosDashboard = ({
           </button>
         </div>
       </div>
+      )}
 
       {/* ── cia filter banner ── */}
       {selectedCia !== 'all' && (
@@ -587,7 +607,8 @@ const BancosDashboard = ({
         </div>
       )}
 
-      {/* ── KPI cards ── */}
+      {/* ── KPI cards (hidden) ── */}
+      {false && (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           {
@@ -640,14 +661,17 @@ const BancosDashboard = ({
           );
         })}
       </div>
+      )}
 
-      {/* ── Query chip ── */}
+      {/* ── Query chip (hidden) ── */}
+      {false && (
       <div className="inline-flex items-center gap-2 text-[12px] text-[var(--gray-500)] bg-white border border-[var(--gray-200)] rounded-full px-3 py-1 shadow-sm w-fit">
         <Calendar className="w-3.5 h-3.5" />
         <span>Estado al <span className="text-[var(--gray-950)] font-medium">{query.fechaEstadoCuenta}</span></span>
         <span className="text-[var(--gray-300)]">·</span>
         <span>Formato <span className="text-[var(--gray-950)] font-medium">{formatSourceLabel(query.formatoElectronico, query.hasUploadedSantander)}</span></span>
       </div>
+      )}
 
       {/* ── Accounts list ── */}
       <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden">
@@ -668,7 +692,7 @@ const BancosDashboard = ({
               const monedas = new Set(accs.map(a => a.moneda));
               const currentAccs = currentBankStatements(accs, balanceDate);
               const sumSaldo = monedas.size === 1
-                ? sumBankStatementBalances(currentAccs)
+                ? sumBankStatementBalances(accs)
                 : null;
               const moneda = monedas.size === 1 ? accs[0].moneda : null;
               const staleBankAccounts = Math.max(0, accs.length - currentAccs.length);

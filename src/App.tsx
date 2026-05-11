@@ -33,7 +33,7 @@ const FinancialProjectionDashboard = lazy(() => import('./modules/financial-proj
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
-import MidasSplash, { type BootStep } from './components/MidasSplash';
+import MidasSplash, { type BootTask, type BootTaskStatus } from './components/MidasSplash';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette, { type CommandPaletteAction } from './components/CommandPalette';
@@ -93,8 +93,8 @@ const RECONCILIATION_TABS = new Set<TabId>([
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: string }[] = [
-  { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes y proveedores' },
-  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo neto, CXP, cobranza y bancos' },
+  { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes, proveedores y bancos' },
+  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo neto, CXP y cobranza' },
   { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, pronóstico y escenarios' },
 ];
 
@@ -102,12 +102,12 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   catalogos: [
     { id: 'clients',   label: 'Clientes',     icon: UserSquare },
     { id: 'providers', label: 'Proveedores',  icon: Users },
+    { id: 'bancos',    label: 'Bancos',       icon: Landmark },
   ],
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
-    { id: 'bancos',      label: 'Bancos',      icon: Landmark },
   ],
   proyeccion: [
     { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
@@ -118,8 +118,8 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
-  clients: 'catalogos', providers: 'catalogos',
-  netflow: 'operacion', bancos: 'operacion',
+  clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
+  netflow: 'operacion',
   cxp: 'operacion', collections: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
@@ -353,7 +353,30 @@ export default function App() {
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   // ── Boot splash state ──
-  const [bootStep, setBootStep] = useState<BootStep>('init');
+  // All boot APIs (catalog, companies, banks, CXP, cobranza) run in parallel.
+  // The artifact only renders once every task lands in `done` or `error`.
+  const bootStartedAtRef = useRef<number>(Date.now());
+  const [bootStatus, setBootStatus] = useState<{
+    catalog: BootTaskStatus;
+    companies: BootTaskStatus;
+    banks: BootTaskStatus;
+    cxp: BootTaskStatus;
+    cobranza: BootTaskStatus;
+  }>({
+    catalog: 'loading',
+    companies: 'loading',
+    banks: 'loading',
+    cxp: 'pending',
+    cobranza: 'pending',
+  });
+  const [cxpBootProgress, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
+  const [cobranzaBootProgress, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
+  const setBootSlot = useCallback(
+    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza', status: BootTaskStatus) => {
+      setBootStatus(prev => (prev[slot] === status ? prev : { ...prev, [slot]: status }));
+    },
+    [],
+  );
   const [isBooted, setIsBooted] = useState(false);
   const [splashMounted, setSplashMounted] = useState(true);
 
@@ -606,10 +629,16 @@ export default function App() {
 
   // Catalog bootstrap tracking — splash waits for both bundled CSVs to settle.
   const [clientsCatalogDone, setClientsCatalogDone] = useState(false);
+  const [clientsCatalogError, setClientsCatalogError] = useState(false);
   const [providersCatalogDone, setProvidersCatalogDone] = useState(false);
+  const [providersCatalogError, setProvidersCatalogError] = useState(false);
   useEffect(() => {
-    if (clientsCatalogDone && providersCatalogDone) setCatalogLoaded(true);
-  }, [clientsCatalogDone, providersCatalogDone]);
+    if (clientsCatalogDone && providersCatalogDone) {
+      setCatalogLoaded(true);
+      const bothFailed = clientsCatalogError && providersCatalogError;
+      setBootSlot('catalog', bothFailed ? 'error' : 'done');
+    }
+  }, [clientsCatalogDone, providersCatalogDone, clientsCatalogError, providersCatalogError, setBootSlot]);
 
   // Load clients from catalog if no clients exist yet
   useEffect(() => {
@@ -624,7 +653,7 @@ export default function App() {
           setCatalogLoaded(true);
         }
       })
-      .catch(() => { /* deja la app boote igual */ })
+      .catch(() => { setClientsCatalogError(true); })
       .finally(() => setClientsCatalogDone(true));
   }, [catalogLoaded, clients.length]);
 
@@ -700,7 +729,7 @@ export default function App() {
         return changed ? merged : current;
       });
     })
-      .catch(() => { /* deja la app boote igual */ })
+      .catch(() => { setProvidersCatalogError(true); })
       .finally(() => setProvidersCatalogDone(true));
   }, []);
 
@@ -753,50 +782,56 @@ export default function App() {
   const loadCompanies = useCallback(async () => {
     setCompaniesLoading(true);
     setCompaniesError(null);
+    setBootSlot('companies', 'loading');
     try {
       const list = await fetchCompanies();
       setCompanies(list);
       if (list.length === 0) {
         setCompaniesError('JDE respondió vacío. Revisa conectividad con srv-desarrollo.');
+        setBootSlot('companies', 'error');
+      } else {
+        setBootSlot('companies', 'done');
       }
     } catch (e) {
       setCompaniesError(e instanceof Error ? e.message : 'No se pudo contactar JDE.');
       setCompanies([]);
+      setBootSlot('companies', 'error');
     } finally {
       setCompaniesLoading(false);
     }
-  }, []);
+  }, [setBootSlot]);
 
   useEffect(() => { loadCompanies(); }, [loadCompanies]);
 
-  // ── Boot orchestrator: drives splash step + dismiss when critical path ready ──
-  // Critical path: catalogs settled + JDE companies settled (success or error) +
-  // short bank priming finished (status === 'idle'). Heavy JDE ranges and CXC
-  // reconciliation now run on demand so the user can enter the app sooner.
+  // ── Boot orchestrator ──
+  // Artifact renders only when every boot task (catalog, companies, banks, CXP,
+  // cobranza) has settled (done or error). All five run in parallel; per-cía
+  // fetches (CXP, cobranza) use bounded concurrency to respect JDE rate limits
+  // without serializing every request.
+  const bootTasks = useMemo<BootTask[]>(
+    () => [
+      { id: 'catalog', label: 'Catálogos · clientes y proveedores', status: bootStatus.catalog },
+      { id: 'companies', label: 'JDE · empresas', status: bootStatus.companies },
+      { id: 'banks', label: 'Bancos · estado reciente', status: bootStatus.banks, progress: bankFetchProgress },
+      { id: 'cxp', label: 'CXP · antigüedad de saldos', status: bootStatus.cxp, progress: cxpBootProgress },
+      { id: 'cobranza', label: 'Cobranza · cartera y pagos', status: bootStatus.cobranza, progress: cobranzaBootProgress },
+    ],
+    [bootStatus, bankFetchProgress, cxpBootProgress, cobranzaBootProgress],
+  );
   useEffect(() => {
     if (isBooted) return;
-    if (!catalogLoaded) {
-      setBootStep('catalog');
-    } else if (companiesLoading) {
-      setBootStep('jde');
-    } else if (bankFetchStatus === 'priming' || bankFetchStatus === 'ranging') {
-      setBootStep('banks');
-    } else {
-      setBootStep('ready');
-    }
-
-    const catalogDone = catalogLoaded;
-    const companiesDone = !companiesLoading;
-    const banksDone = bankFetchStatus === 'idle';
-    if (catalogDone && companiesDone && banksDone) {
-      const t = setTimeout(() => setIsBooted(true), 220);
+    const allSettled = bootTasks.every(t => t.status === 'done' || t.status === 'error');
+    if (allSettled) {
+      const t = setTimeout(() => setIsBooted(true), 240);
       return () => clearTimeout(t);
     }
-  }, [catalogLoaded, companiesLoading, bankFetchStatus, isBooted]);
+  }, [bootTasks, isBooted]);
 
-  // Hard timeout — never trap the user behind the splash if JDE hangs.
+  // Hard timeout — never trap the user behind the splash si JDE cuelga. 4 min
+  // basta para CXP + Cobranza paralelas; pasado eso, asumimos que algo está
+  // mal aguas arriba y renderizamos con lo que tengamos.
   useEffect(() => {
-    const t = setTimeout(() => setIsBooted(true), 30000);
+    const t = setTimeout(() => setIsBooted(true), 240000);
     return () => clearTimeout(t);
   }, []);
 
@@ -807,164 +842,231 @@ export default function App() {
     return () => clearTimeout(t);
   }, [isBooted]);
 
-  // ── Auto-load CXP (antigüedad de saldos) en background al abrir el app ──
-  // Se dispara una sola vez por sesión en cuanto tenemos el catálogo de
-  // compañías. El usuario ve el empty state de CXP sólo si esto falla para
-  // todas las compañías activas; si al menos una responde, la vista se
-  // llena sola sin pasar por "Consultar todas". Llamadas secuenciales
-  // (ver comentario en CXP.loadAll) — JDE revienta en paralelo.
+  // ── Auto-load CXP (antigüedad de saldos) durante el boot ──
+  // Concurrencia limitada a 3 — JDE revienta con paralelismo total contra
+  // /antiguedadsaldos, pero 3 paralelas es estable y reduce el tiempo total
+  // a ~1/3 vs la versión secuencial anterior.
   const cxpAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cxpAutoFetchDone.current) return;
     if (companies.length === 0) return;
     const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
-    if (activeCias.length === 0) return;
+    if (activeCias.length === 0) {
+      cxpAutoFetchDone.current = true;
+      setBootSlot('cxp', 'done');
+      return;
+    }
     const ciasToFetch = activeCias.filter(cia => !isFreshTimestamp(cxpLoadedCias[cia], CXP_AUTO_REFRESH_TTL_MS));
-    if (ciasToFetch.length === 0) return;
+    if (ciasToFetch.length === 0) {
+      cxpAutoFetchDone.current = true;
+      setBootSlot('cxp', 'done');
+      return;
+    }
     cxpAutoFetchDone.current = true;
-    let cancelled = false;
+    setBootSlot('cxp', 'loading');
+    setCxpBootProgress({ done: 0, total: ciasToFetch.length });
+    // Sin `cancelled` mid-flight: en StrictMode el cleanup dispara antes de
+    // que JDE responda y matar los workers ahí deja CXP atorado en 0/N para
+    // siempre. El ref `cxpAutoFetchDone` ya evita re-entrada al re-mount.
     (async () => {
       const fetchedRecords: CXPRecord[] = [];
       const fetchedCias: string[] = [];
       const fetchedTimestamps: Record<string, string> = {};
-      for (const cia of ciasToFetch) {
-        if (cancelled) return;
-        try {
-          const data = await fetchAgedBalances({ cia });
-          if (cancelled) return;
-          const stamped = (data as CXPRecord[]).map(r => ({ ...r, cia }));
-          fetchedRecords.push(...stamped);
-          fetchedCias.push(cia);
-          fetchedTimestamps[cia] = new Date().toISOString();
-        } catch {
-          // Silent: si ninguna compañía carga, el empty state de CXP
-          // deja al usuario "Consultar todas" o subir CSV manualmente.
+      let errors = 0;
+      let completed = 0;
+      let cursor = 0;
+      const concurrency = Math.min(3, ciasToFetch.length);
+      const worker = async () => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= ciasToFetch.length) return;
+          const cia = ciasToFetch[idx];
+          try {
+            const data = await fetchAgedBalances({ cia });
+            const stamped = (data as CXPRecord[]).map(r => ({ ...r, cia }));
+            fetchedRecords.push(...stamped);
+            fetchedCias.push(cia);
+            fetchedTimestamps[cia] = new Date().toISOString();
+          } catch {
+            errors += 1;
+          } finally {
+            completed += 1;
+            setCxpBootProgress({ done: completed, total: ciasToFetch.length });
+          }
         }
+      };
+      await Promise.all(Array.from({ length: concurrency }, worker));
+      if (fetchedCias.length > 0) {
+        const fetchedSet = new Set(fetchedCias);
+        setCxpRecords(prev => [...prev.filter(r => !fetchedSet.has(r.cia)), ...fetchedRecords]);
+        setCxpLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
       }
-      if (cancelled || fetchedCias.length === 0) return;
-      const fetchedSet = new Set(fetchedCias);
-      setCxpRecords(prev => [...prev.filter(r => !fetchedSet.has(r.cia)), ...fetchedRecords]);
-      setCxpLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
+      setBootSlot('cxp', errors === ciasToFetch.length ? 'error' : 'done');
     })();
-    return () => { cancelled = true; };
-  }, [companies, cxpLoadedCias]);
+  }, [companies, cxpLoadedCias, setBootSlot]);
 
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /v1/erp/tesoreria/cobranza (productivo desde 2026-05-01).
   //
-  // Estrategia (idéntica a CXP):
-  //   1. Una llamada por compañía activa, secuencial — JDE revienta en
-  //      paralelo igual que /antiguedadsaldos.
-  //   2. Rango: últimos 365 días (fechaInicial = hoy - 365). Suficiente para
-  //      conciliar el año fiscal con bancos sin traer histórico completo.
-  //   3. Cache por (cia, noFactura): cada respuesta reemplaza solo los
-  //      registros de esa cia para que reintentos de un día a otro no
-  //      dupliquen filas.
-  //   4. Errores agregados a `cobranzaError` para que la pestaña Cobranza
-  //      pueda surfacerlos al usuario (antes se silenciaban).
-  const refreshCobranza = useCallback(async (force = true) => {
-    if (companies.length === 0) {
-      setCobranzaError('No hay compañías cargadas todavía. Espera a que /empresas responda.');
-      return;
-    }
-    const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
-    if (activeCias.length === 0) {
-      setCobranzaError('No hay compañías activas en el catálogo.');
-      return;
-    }
-    const ciasToFetch = force
-      ? activeCias
-      : activeCias.filter(cia =>
-        !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
-        || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
-      );
-    if (ciasToFetch.length === 0) return;
+  // Concurrencia: 3 cías en paralelo, y dentro de cada cía /cobranza y
+  // /cobranzaindicadores corren en paralelo. Mandar todas las cías juntas
+  // (ciasToFetch.join(',')) sigue rompiendo el upstream con
+  // InternalServerErrorException; lo que JDE tolera es una llamada por cía
+  // con concurrencia acotada.
+  const refreshCobranza = useCallback(
+    async (force = true, progressSlot?: 'cobranza') => {
+      if (companies.length === 0) {
+        setCobranzaError('No hay compañías cargadas todavía. Espera a que /empresas responda.');
+        return;
+      }
+      const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
+      if (activeCias.length === 0) {
+        setCobranzaError('No hay compañías activas en el catálogo.');
+        return;
+      }
+      const ciasToFetch = force
+        ? activeCias
+        : activeCias.filter(cia =>
+          !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
+          || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
+        );
+      if (ciasToFetch.length === 0) return;
 
-    setCobranzaRefreshing(true);
-    setCobranzaError(null);
-
-    const today = new Date();
-    const fechaFinal = today.toISOString().slice(0, 10);
-    const yearAgo = new Date(today);
-    yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
-    const fechaInicial = yearAgo.toISOString().slice(0, 10);
-
-    const errors: string[] = [];
-    let totalRecords = 0;
-    const fetchedRecords: CobranzaRecord[] = [];
-    const fetchedCias: string[] = [];
-    const fetchedTimestamps: Record<string, string> = {};
-    try {
-      for (const cia of ciasToFetch) {
-        try {
-          const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
-          const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
-          fetchedRecords.push(...stamped);
-          fetchedCias.push(cia);
-          fetchedTimestamps[cia] = new Date().toISOString();
-          totalRecords += stamped.length;
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          errors.push(`${cia}: ${msg}`);
-        }
+      setCobranzaRefreshing(true);
+      setCobranzaError(null);
+      if (progressSlot === 'cobranza') {
+        setCobranzaBootProgress({ done: 0, total: ciasToFetch.length });
       }
 
-      // Iteramos cía por cía (igual que /cobranza). Mandar todas juntas con
-      // `ciasToFetch.join(',')` hacía que el upstream tardara ~30s y AWS API
-      // Gateway respondiera InternalServerErrorException antes de terminar.
+      const today = new Date();
+      const fechaFinal = today.toISOString().slice(0, 10);
+      const yearAgo = new Date(today);
+      yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
+      const fechaInicial = yearAgo.toISOString().slice(0, 10);
+
+      const errors: string[] = [];
+      let totalRecords = 0;
+      const fetchedRecords: CobranzaRecord[] = [];
+      const fetchedCias: string[] = [];
+      const fetchedTimestamps: Record<string, string> = {};
       const fetchedPayments: CobranzaPayment[] = [];
       const fetchedPaymentCias: string[] = [];
       const fetchedPaymentTimestamps: Record<string, string> = {};
-      for (const cia of ciasToFetch) {
-        try {
-          const payments = await fetchIndicadoresCobranza({ cia, fechaInicial, fechaFinal });
-          fetchedPayments.push(...payments);
-          fetchedPaymentCias.push(cia);
-          fetchedPaymentTimestamps[cia] = new Date().toISOString();
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          errors.push(`indicadores ${cia}: ${msg}`);
+
+      let completed = 0;
+      let cursor = 0;
+      const concurrency = Math.min(3, ciasToFetch.length);
+      const worker = async () => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= ciasToFetch.length) return;
+          const cia = ciasToFetch[idx];
+          const [recordsResult, paymentsResult] = await Promise.allSettled([
+            fetchCobranza({ cia, fechaInicial, fechaFinal }),
+            fetchIndicadoresCobranza({ cia, fechaInicial, fechaFinal }),
+          ]);
+          if (recordsResult.status === 'fulfilled') {
+            const stamped = recordsResult.value.map(r => ({ ...r, cia: r.cia || cia }));
+            fetchedRecords.push(...stamped);
+            fetchedCias.push(cia);
+            fetchedTimestamps[cia] = new Date().toISOString();
+            totalRecords += stamped.length;
+          } else {
+            const msg = recordsResult.reason instanceof Error ? recordsResult.reason.message : String(recordsResult.reason);
+            errors.push(`${cia}: ${msg}`);
+          }
+          if (paymentsResult.status === 'fulfilled') {
+            fetchedPayments.push(...paymentsResult.value);
+            fetchedPaymentCias.push(cia);
+            fetchedPaymentTimestamps[cia] = new Date().toISOString();
+          } else {
+            const msg = paymentsResult.reason instanceof Error ? paymentsResult.reason.message : String(paymentsResult.reason);
+            errors.push(`indicadores ${cia}: ${msg}`);
+          }
+          completed += 1;
+          if (progressSlot === 'cobranza') {
+            setCobranzaBootProgress({ done: completed, total: ciasToFetch.length });
+          }
         }
-      }
-      if (fetchedPaymentCias.length > 0) {
-        const fetchedSet = new Set(fetchedPaymentCias);
-        setCobranzaPayments(prev => [
-          ...prev.filter(p => !fetchedSet.has(p.cia)),
-          ...fetchedPayments,
-        ]);
-        setCobranzaPaymentsLoadedCias(prev => ({
-          ...prev,
-          ...fetchedPaymentTimestamps,
-        }));
-      }
+      };
 
-      if (fetchedCias.length > 0) {
-        const fetchedSet = new Set(fetchedCias);
-        setCobranzaRecords(prev => [
-          ...prev.filter(r => !fetchedSet.has(r.cia)),
-          ...fetchedRecords,
-        ]);
-        setCobranzaLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
-      }
+      try {
+        await Promise.all(Array.from({ length: concurrency }, worker));
 
-      if (errors.length > 0) {
-        setCobranzaError(`Errores en ${errors.length}/${ciasToFetch.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
-      } else if (totalRecords === 0) {
-        setCobranzaError(`Todas las ${ciasToFetch.length} cías consultadas respondieron VACÍO. Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
-      }
-    } finally {
-      setCobranzaRefreshing(false);
-    }
-  }, [companies, cobranzaLoadedCias, cobranzaPaymentsLoadedCias]);
+        if (fetchedPaymentCias.length > 0) {
+          const fetchedSet = new Set(fetchedPaymentCias);
+          setCobranzaPayments(prev => [
+            ...prev.filter(p => !fetchedSet.has(p.cia)),
+            ...fetchedPayments,
+          ]);
+          setCobranzaPaymentsLoadedCias(prev => ({
+            ...prev,
+            ...fetchedPaymentTimestamps,
+          }));
+        }
 
+        if (fetchedCias.length > 0) {
+          const fetchedSet = new Set(fetchedCias);
+          setCobranzaRecords(prev => [
+            ...prev.filter(r => !fetchedSet.has(r.cia)),
+            ...fetchedRecords,
+          ]);
+          setCobranzaLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
+        }
+
+        if (errors.length > 0) {
+          setCobranzaError(`Errores en ${errors.length}/${ciasToFetch.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
+        } else if (totalRecords === 0) {
+          setCobranzaError(`Todas las ${ciasToFetch.length} cías consultadas respondieron VACÍO. Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
+        }
+        return {
+          totalRecords,
+          failedCias: errors.length,
+          totalCias: ciasToFetch.length,
+        };
+      } finally {
+        setCobranzaRefreshing(false);
+      }
+    },
+    [companies, cobranzaLoadedCias, cobranzaPaymentsLoadedCias],
+  );
+
+  // Cobranza ya forma parte de la ruta crítica del boot — no esperamos a que
+  // el usuario abra el tab de Cobranza, lo jalamos en paralelo con CXP.
   const cobranzaAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cobranzaAutoFetchDone.current) return;
-    if (!RECONCILIATION_TABS.has(activeTab)) return;
     if (companies.length === 0) return;
+    const activeCias = companies.filter(c => c.activa !== false);
+    if (activeCias.length === 0) {
+      cobranzaAutoFetchDone.current = true;
+      setBootSlot('cobranza', 'done');
+      return;
+    }
     cobranzaAutoFetchDone.current = true;
-    refreshCobranza(false);
-  }, [activeTab, companies, refreshCobranza]);
+    setBootSlot('cobranza', 'loading');
+    (async () => {
+      try {
+        const summary = await refreshCobranza(false, 'cobranza');
+        if (!summary) {
+          setBootSlot('cobranza', 'done');
+          return;
+        }
+        const allFailed = summary.failedCias >= summary.totalCias * 2;
+        setBootSlot('cobranza', allFailed ? 'error' : 'done');
+      } catch {
+        setBootSlot('cobranza', 'error');
+      }
+    })();
+  }, [companies, refreshCobranza, setBootSlot]);
+
+  // Si JDE no devuelve compañías (companies en error), CXP y cobranza nunca
+  // se dispararon — marcamos los slots como error para destrabar el boot.
+  useEffect(() => {
+    if (bootStatus.companies !== 'error') return;
+    if (bootStatus.cxp === 'pending') setBootSlot('cxp', 'error');
+    if (bootStatus.cobranza === 'pending') setBootSlot('cobranza', 'error');
+  }, [bootStatus.companies, bootStatus.cxp, bootStatus.cobranza, setBootSlot]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
@@ -1062,27 +1164,30 @@ export default function App() {
 
     setBankFetchStatus('priming');
 
-    // ── Step 1: Prime con 1 día (solo si no hay cache o force) ──
+    // ── Step 1: Prime paralelo — dispara las 6 fechas a la vez, conserva
+    //           la primera (más reciente) que devuelva datos. JDE tolera
+    //           6 paralelas a /bancos (mismo nivel que el backfill anual).
     let primed = !force && bankJdeStatements.length > 0;
     if (!primed) {
-      for (const fecha of tryDates) {
-        try {
-          const res = await fetchBankStatements({
+      const settled = await Promise.allSettled(
+        tryDates.map(fecha =>
+          fetchBankStatements({
             fechaEstadoCuenta: fecha,
             formatoElectronico: defaultFormat,
+          }).then(res => ({ fecha, res })),
+        ),
+      );
+      for (let i = 0; i < settled.length; i++) {
+        const entry = settled[i];
+        if (entry.status === 'fulfilled' && entry.value.res.length > 0) {
+          setBankJdeStatements(entry.value.res);
+          setBankLastQuery({
+            fechaEstadoCuenta: entry.value.fecha,
+            formatoElectronico: defaultFormat,
+            hasUploadedSantander: bankSupplementalStatements.length > 0,
           });
-          if (res.length > 0) {
-            setBankJdeStatements(res);
-            setBankLastQuery({
-              fechaEstadoCuenta: fecha,
-              formatoElectronico: defaultFormat,
-              hasUploadedSantander: bankSupplementalStatements.length > 0,
-            });
-            primed = true;
-            break;
-          }
-        } catch {
-          // Try the next recent business date.
+          primed = true;
+          break;
         }
       }
     }
@@ -1171,9 +1276,19 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      // Sólo prime corto de JDE al boot. El backfill completo es manual para
-      // evitar que el arranque bloquee la plataforma.
-      await refreshBankStatementsRange(false, false);
+      // Backfill anual al boot — el botón "Actualizar" en la vista Bancos
+      // hace exactamente esto. Lo metemos al boot para que el usuario no
+      // tenga que hacer click después (antes sólo cargaba el prime de 1
+      // día y la vista quedaba con "1 día con actividad"). force=true
+      // bypassa cache; includeRange=true dispara el rango año-a-la-fecha
+      // con concurrencia 6 (mismo path que el botón manual).
+      setBootSlot('banks', 'loading');
+      try {
+        await refreshBankStatementsRange(true, true);
+        setBootSlot('banks', 'done');
+      } catch {
+        setBootSlot('banks', 'error');
+      }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1224,9 +1339,8 @@ export default function App() {
       {splashMounted && (
         <MidasSplash
           visible={!isBooted}
-          step={bootStep}
-          hasError={!!companiesError}
-          progress={bankFetchProgress}
+          tasks={bootTasks}
+          startedAt={bootStartedAtRef.current}
         />
       )}
       <div
