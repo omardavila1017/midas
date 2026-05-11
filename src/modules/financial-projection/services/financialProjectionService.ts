@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────
 // financialProjectionService — adapta los catálogos de Midas (clientes,
-// proveedores, CXP, bancos, presupuesto) al modelo de "movimientos" que
+// proveedores, CXP, bancos y cobranza real) al modelo de "movimientos" que
 // consume Proyección Financiera y Planeación Financiera.
 //
 // Reglas duras:
@@ -88,7 +88,7 @@ export interface FinancialProjectionSourceData {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Module-level memo for `buildFinancialProjectionSourceData`. The canonical
-// projection iterates clients × months × CXP × budget through
+// projection iterates clients × months × CXP through
 // `computeBaseCashFlow`, which is by far the heaviest piece of work in the
 // module — anywhere from 80–250ms on a real catalog. The dashboard's
 // `useMemo` only caches *per mount*, so navigating away from the tab and
@@ -118,7 +118,6 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.payrollCosts),
     refId(input.cobranzaReconciliation),
     refId(input.assumptions),
-    refId(input.budget),
   ];
   return [
     input.companyCode,
@@ -164,7 +163,7 @@ export function buildFinancialProjectionSourceData(
     payrollCosts: input.payrollCosts ?? [],
     cobranzaReconciliation: input.cobranzaReconciliation,
     assumptions: input.assumptions,
-    budget: input.budget,
+    budget: null,
     startingBalance: input.startingBalance,
     asOfDate,
   };
@@ -217,14 +216,13 @@ export function __clearProjectionSourceCache(): void {
 }
 
 /**
- * Caja inicial canónica — misma prioridad que `computeBaseCashFlow` del
- * Dashboard:
+ * Caja inicial canónica — misma prioridad operativa que `computeBaseCashFlow`
+ * del Dashboard:
  *   1. `startingBalance` numérico (override manual del usuario)
- *   2. `budget.openingCash[0]` (caja inicial declarada en el presupuesto)
- *   3. Σ saldoInicial de los estados de cuenta de la compañía activa
+ *   2. Σ saldoInicial de los estados de cuenta de la compañía activa
  *
- * Antes este helper ignoraba `startingBalance` y `budget.openingCash`, y
- * además sumaba el saldoInicial de TODAS las cuentas sin filtrar por
+ * Antes este helper ignoraba `startingBalance` y sumaba el saldoInicial
+ * de TODAS las cuentas sin filtrar por
  * `companyCode`. Eso inflaba la caja proyectada de Trayectoria de caja
  * cuando el usuario tenía una sola compañía seleccionada o un override
  * manual de caja inicial — la línea de caja en Caja proyectada no empataba
@@ -233,11 +231,9 @@ export function __clearProjectionSourceCache(): void {
 export function calculateInitialCash(
   bankStatements: BankAccountStatement[],
   startingBalance: number | undefined,
-  options?: { companyCode?: string; budget?: Budget | null },
+  options?: { companyCode?: string },
 ): number {
   if (typeof startingBalance === 'number') return startingBalance;
-  const budgetOpening = options?.budget?.openingCash?.[0];
-  if (typeof budgetOpening === 'number') return budgetOpening;
   const companyCode = options?.companyCode;
   const filtered = !companyCode || companyCode === 'all'
     ? bankStatements

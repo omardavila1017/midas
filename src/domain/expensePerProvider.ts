@@ -112,6 +112,13 @@ export interface ProviderBankPattern {
   isRecurring: boolean;
 }
 
+function operationalMonthlyFloor(provider: Provider | undefined): number {
+  if (!provider) return 0;
+  if (provider.clasificacionAutomatica !== 'CRITICO') return 0;
+  const amount = provider.gastoMinimoMensual ?? 0;
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
+
 /**
  * Para cada proveedor del catálogo, calcula su patrón de pago histórico
  * agregando los CARGOs cuyos conceptos hagan match con su nombre. Excluye
@@ -140,6 +147,7 @@ export function buildProviderBankPatterns(
     for (const mov of acc.movimientos) {
       if (mov.tipoMovimiento !== 'CARGO') continue;
       if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      if (isNoisyBankExpenseConcept(mov.concepto ?? '')) continue;
       const ym = (mov.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;
       if (compareYearMonth(ym, currentYm) >= 0) continue;
@@ -194,13 +202,29 @@ export function buildProviderBankPatterns(
   return patterns;
 }
 
+export function isNoisyBankExpenseConcept(concepto: string): boolean {
+  const normalized = norm(concepto);
+  if (!normalized) return false;
+  const compact = normalized.replace(/[^A-Z0-9]/g, '');
+  if (/\bPAGO\s+(?:A\s+)?TARJETA\b/.test(normalized)) return true;
+  if (/\bTARJ(?:ETA)?\.?\s*NO\b/.test(normalized) || compact.startsWith('TARJNO')) return true;
+  if (normalized.includes('TRANS INTERBANCARIA') || normalized.includes('TRANS. INTERBANCARIA')) return true;
+  if (normalized.includes('TRANSF A LA CUENTA') || normalized.includes('TRANSF. A LA CUENTA')) return true;
+  if (normalized.includes('TRASPASO') || normalized.includes('TRANSFERENCIA ENTRE CUENTAS')) return true;
+  return false;
+}
+
 // ── Egresos por proveedor-mes ────────────────────────────────────────────
 
 export interface ProviderMonthLine {
   providerId: string;
   providerName: string;
+  providerCategory?: string;
   flexibility: Flexibility;
   paymentPeriod: Provider['paymentPeriod'];
+  typicalPayDay?: number;
+  score?: number;
+  ivaRate?: Provider['ivaRate'];
   amount: number;
   source: 'scheduled' | 'recurring' | 'mixed';
   /** Detalle de cómo se compuso el amount — útil para tooltip. */
@@ -260,11 +284,17 @@ export function projectExpenseByProvider(params: {
 
     // 1. Proveedores con CXP abierto este mes.
     for (const [key, bucket] of agedForMonth) {
+      const matchedProvider = providers.find((p) => p.id === key);
+      const minMonthly = operationalMonthlyFloor(matchedProvider);
       const line: ProviderMonthLine = {
         providerId: key,
         providerName: bucket.name,
+        providerCategory: matchedProvider?.type,
         flexibility: bucket.flex,
         paymentPeriod: bucket.period,
+        typicalPayDay: 15,
+        score: matchedProvider?.score,
+        ivaRate: matchedProvider?.ivaRate,
         amount: bucket.amount,
         source: 'scheduled',
         parts: { scheduled: bucket.amount, recurring: 0 },
@@ -276,6 +306,14 @@ export function projectExpenseByProvider(params: {
         line.amount = pat.monthlyAvg;
         line.source = 'mixed';
         line.parts.recurring = pat.monthlyAvg - bucket.amount;
+        line.typicalPayDay = pat.typicalPayDay;
+        line.score = pat.provider.score;
+        line.ivaRate = pat.provider.ivaRate;
+      }
+      if (minMonthly > line.amount) {
+        line.source = 'mixed';
+        line.parts.recurring += minMonthly - line.amount;
+        line.amount = minMonthly;
       }
       lines.push(line);
       coveredProviderIds.add(key);
@@ -285,15 +323,45 @@ export function projectExpenseByProvider(params: {
     for (const [provId, pat] of patterns) {
       if (!pat.isRecurring) continue;
       if (coveredProviderIds.has(provId)) continue;
+      const minMonthly = operationalMonthlyFloor(pat.provider);
+      const amount = Math.max(pat.monthlyAvg, minMonthly);
       lines.push({
         providerId: provId,
         providerName: pat.provider.name,
+        providerCategory: pat.provider.type,
         flexibility: pat.provider.flexibility ?? 'unknown',
         paymentPeriod: pat.provider.paymentPeriod,
-        amount: pat.monthlyAvg,
+        typicalPayDay: pat.typicalPayDay,
+        score: pat.provider.score,
+        ivaRate: pat.provider.ivaRate,
+        amount,
         source: 'recurring',
-        parts: { scheduled: 0, recurring: pat.monthlyAvg },
+        parts: { scheduled: 0, recurring: amount },
       });
+      coveredProviderIds.add(provId);
+    }
+
+    // 3. Piso operativo del catálogo para proveedores críticos sin CXP ni
+    // patrón bancario suficiente. Esto hace visible el gasto mínimo como
+    // egreso proyectado real, no sólo como indicador amarillo.
+    for (const provider of providers) {
+      if (coveredProviderIds.has(provider.id)) continue;
+      const minMonthly = operationalMonthlyFloor(provider);
+      if (minMonthly <= 0) continue;
+      lines.push({
+        providerId: provider.id,
+        providerName: provider.name,
+        providerCategory: provider.type,
+        flexibility: provider.flexibility ?? 'unknown',
+        paymentPeriod: provider.paymentPeriod,
+        typicalPayDay: 15,
+        score: provider.score,
+        ivaRate: provider.ivaRate,
+        amount: minMonthly,
+        source: 'recurring',
+        parts: { scheduled: 0, recurring: minMonthly },
+      });
+      coveredProviderIds.add(provider.id);
     }
 
     lines.sort((a, b) => b.amount - a.amount);

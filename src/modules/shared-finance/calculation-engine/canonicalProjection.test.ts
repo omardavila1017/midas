@@ -142,7 +142,115 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.subcategory).toBe('TECNOLOGIA Y SOPORTE');
   });
 
-  it('adds regimen 601 IVA creditable metadata to projected budget OPEX', () => {
+  it('adds future AP_PAYMENT rows from recurring bank/provider patterns when there is no future CXP', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          cuenta: 'CTA-1',
+          movimientos: recurringBankMovements('PAGO NOMINA MX', 50_000),
+        }),
+      ],
+      clients: [],
+      providers: [
+        provider({
+          id: 'provider-nomina',
+          name: 'NOMINA MX',
+          type: 'NOMINA',
+          flexibility: 'inamovible',
+          numProveedorJDE: 'NOMINA',
+        }),
+      ],
+      cxpRecords: [],
+      assumptions,
+      budget: null,
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const may = canonical.movements.find(
+      (item) => item.id === 'recurring-provider:2026-05:provider-nomina',
+    );
+    expect(may).toBeTruthy();
+    expect(may?.category).toBe('AP_PAYMENT');
+    expect(may?.counterpartyName).toBe('NOMINA MX');
+    expect(may?.providerCategory).toBe('NOMINA');
+    expect(may?.projectedAmount).toBe(50_000);
+    expect(may?.projectedDate).toBe('2026-05-05');
+  });
+
+  it('adds only the recurring complement when CXP is lower than the provider pattern', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          cuenta: 'CTA-1',
+          movimientos: recurringBankMovements('PAGO RENTA MENSUAL', 25_000, '01'),
+        }),
+      ],
+      clients: [],
+      providers: [
+        provider({
+          id: 'provider-renta',
+          name: 'RENTA MENSUAL',
+          type: 'ARRENDAMIENTO',
+          flexibility: 'inamovible',
+        }),
+      ],
+      cxpRecords: [
+        cxpRecord({
+          noProveedor: 'RENTA',
+          nombre: 'RENTA MENSUAL',
+          noFactura: 'RENTA-MAY',
+          fechaProgramacionPago: '2026-05-01',
+          fechaVence: '2026-05-01',
+          importePendientePesos: 10_000,
+        }),
+      ],
+      assumptions,
+      budget: null,
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const mayAp = canonical.movements.filter(
+      (item) => item.category === 'AP_PAYMENT' && item.projectedDate.slice(0, 7) === '2026-05',
+    );
+    const cxp = mayAp.find((item) => item.sourceSystem === 'JDE' && item.sourceObjectId === 'RENTA-MAY');
+    const recurring = mayAp.find((item) => item.id === 'recurring-provider:2026-05:provider-renta');
+    expect(cxp?.projectedAmount).toBe(10_000);
+    expect(recurring?.projectedAmount).toBe(15_000);
+    expect(mayAp.reduce((sum, item) => sum + item.projectedAmount, 0)).toBe(25_000);
+  });
+
+  it('does not turn recurrent card/internal bank concepts into future expenses', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          cuenta: 'CTA-1',
+          movimientos: recurringBankMovements('TARJ.NO.5579 6211 F.TRANS.2', 30_000),
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: null,
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const futureOutflows = canonical.movements.filter(
+      (item) => item.type === 'OUTFLOW' && item.status === 'PROJECTED_BASE',
+    );
+    expect(futureOutflows).toHaveLength(0);
+  });
+
+  it('ignores legacy budget-only OPEX lines', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [],
@@ -155,13 +263,8 @@ describe('canonicalProjection IVA metadata', () => {
       asOfDate: '2026-04-22',
     });
 
-    const movement = canonical.movements.find((item) => item.category === 'OPEX' && item.projectedDate === '2026-05-03');
-    expect(movement).toBeTruthy();
-    expect(movement?.projectedAmount).toBeCloseTo(1160);
-    expect(movement?.taxTreatment).toBe('IVA_CREDITABLE');
-    expect(movement?.taxRate).toBe(16);
-    expect(movement?.taxBaseAmount).toBeCloseTo(1000);
-    expect(movement?.taxAmount).toBeCloseTo(160);
+    const movement = canonical.movements.find((item) => item.category === 'OPEX');
+    expect(movement).toBeUndefined();
   });
 
   it('adds open JDE CXC invoices as projected inflows using the pending balance', () => {
@@ -620,6 +723,17 @@ function bankMovement(patch: Partial<BankStatementLine> & Pick<BankStatementLine
     importe: patch.importe,
     saldo: patch.saldo,
   };
+}
+
+function recurringBankMovements(concepto: string, importe: number, day = '05'): BankStatementLine[] {
+  return ['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03'].map((ym) => bankMovement({
+    cia: '00001',
+    cuenta: 'CTA-1',
+    tipoMovimiento: 'CARGO',
+    importe,
+    fechaOperacion: `${ym}-${day}`,
+    concepto,
+  }));
 }
 
 function bankStatement(patch: Partial<BankAccountStatement> & Pick<BankAccountStatement, 'cia' | 'cuenta' | 'movimientos'>): BankAccountStatement {

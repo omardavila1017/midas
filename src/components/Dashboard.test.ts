@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { computeBaseCashFlow } from './Dashboard';
 import type { BankAccountStatement } from '../services/jde';
 import type { Budget } from '../domain/budget';
+import type { Provider } from '../domain/types';
 
 // Fijamos la fecha "hoy" para que el horizonte sea determinista.
 const TODAY = '2026-04-22';
@@ -40,7 +41,7 @@ function mkStmt(ym: string, income: number, expense: number): BankAccountStateme
 function mkBudget(overrides: Partial<Budget> = {}): Budget {
   return {
     year: 2026,
-    fileName: 'presupuesto.csv',
+    fileName: 'legacy.csv',
     scale: 'pesos',
     uploadedAt: '2026-01-01T00:00:00Z',
     incomeByConcept: [],
@@ -65,8 +66,8 @@ const BASE_INPUTS = {
   budget: null as Budget | null,
 };
 
-describe('computeBaseCashFlow — horizonte y proyección budget-only', () => {
-  it('cubre de enero a diciembre del año en curso con budget cargado', () => {
+describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
+  it('cubre de enero a diciembre del año en curso aunque llegue budget legacy', () => {
     const statements = [
       mkStmt('2026-01', 100, 40),
       mkStmt('2026-02', 100, 40),
@@ -84,11 +85,11 @@ describe('computeBaseCashFlow — horizonte y proyección budget-only', () => {
     expect(base[base.length - 1].yearMonth).toBe('2026-12');
   });
 
-  it('los meses proyectados salen DIRECTO del CSV de presupuesto, sin regresión', () => {
+  it('ignora el budget legacy; sin datos operativos futuros los meses proyectados quedan en cero', () => {
     const statements = [mkStmt('2026-04', 0, 0)];
     const budget = mkBudget({
-      // Año deliberadamente inflado para que regresión/moving-avg del histórico
-      // jamás lo produciría — esto prueba que no se mezcla.
+      // Año deliberadamente inflado: si la plantilla siguiera activa, mayo tomaría
+      // estos valores. La lógica operativa debe ignorarlos.
       incomeTotal: [0, 0, 0, 0, 7777, 7777, 7777, 7777, 7777, 7777, 7777, 7777],
       expenseTotal: [0, 0, 0, 0, 3333, 3333, 3333, 3333, 3333, 3333, 3333, 3333],
     });
@@ -98,17 +99,17 @@ describe('computeBaseCashFlow — horizonte y proyección budget-only', () => {
       budget,
     });
     const may = base.find((m) => m.yearMonth === '2026-05');
-    expect(may?.income).toBe(7777);
-    expect(may?.expense).toBe(3333);
+    expect(may?.income).toBe(0);
+    expect(may?.expense).toBe(0);
     expect(may?.isHistorical).toBe(false);
   });
 
-  it('sin presupuesto cargado, los meses futuros quedan en cero (no hay fallback de regresión)', () => {
+  it('sin datos operativos futuros, los meses futuros quedan en cero (no hay fallback de regresión)', () => {
     const statements = [
-      mkStmt('2026-01', 500, 200),
-      mkStmt('2026-02', 500, 200),
-      mkStmt('2026-03', 500, 200),
-      mkStmt('2026-04', 500, 200),
+      mkStmt('2026-01', 500, 0),
+      mkStmt('2026-02', 500, 0),
+      mkStmt('2026-03', 500, 0),
+      mkStmt('2026-04', 500, 0),
     ];
     const { base } = computeBaseCashFlow({
       ...BASE_INPUTS,
@@ -138,4 +139,37 @@ describe('computeBaseCashFlow — horizonte y proyección budget-only', () => {
     expect(baseline.avgIncome).toBe(0);
     expect(baseline.avgExpense).toBe(0);
   });
+
+  it('proyecta egresos futuros desde el piso operativo de proveedores críticos', () => {
+    const { base, projection } = computeBaseCashFlow({
+      ...BASE_INPUTS,
+      bankStatements: [mkStmt('2026-04', 0, 0)],
+      providers: [
+        provider({
+          id: 'p-critical',
+          name: 'Proveedor Critico',
+          type: 'OPERACION',
+          clasificacionAutomatica: 'CRITICO',
+          gastoMinimoMensual: 19_000,
+        }),
+      ],
+    });
+
+    const may = base.find((m) => m.yearMonth === '2026-05');
+    const mayProjection = projection.months.find((m) => m.yearMonth === '2026-05');
+    expect(may?.expense).toBe(19_000);
+    expect(mayProjection?.expense.providerLines[0]?.providerName).toBe('Proveedor Critico');
+    expect(mayProjection?.expense.providerLines[0]?.parts.recurring).toBe(19_000);
+  });
 });
+
+function provider(patch: Partial<Provider>): Provider {
+  return {
+    id: patch.id ?? 'p-1',
+    name: patch.name ?? 'Proveedor',
+    type: patch.type ?? 'OPERACION',
+    risk: patch.risk ?? 'Medio',
+    paymentPeriod: patch.paymentPeriod ?? '30 días',
+    ...patch,
+  };
+}

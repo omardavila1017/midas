@@ -60,13 +60,36 @@ describe('planning row taxonomy', () => {
     expect(rows[0]?.label).toBe('Nómina semanal');
     expect(conceptKeyForMovement(payroll)).toBe('OUTFLOW:PAYROLL:nomina-semanal');
   });
+
+  it('shows recurrent provider movements as editable future expense rows', () => {
+    const recurring = movement({
+      id: 'recurring-provider:2026-06:provider-diesel',
+      sourceSystem: 'FORECAST',
+      forecastMethod: 'DRIVER',
+      counterpartyName: 'Proveedor Diesel',
+      providerCategory: 'COMBUSTIBLE',
+      subcategory: 'COMBUSTIBLE',
+      concept: 'Pago recurrente Proveedor Diesel',
+      projectedAmount: 50_000,
+    });
+
+    const rows = buildPlanningRows({ movements: [recurring], customRows: [], overrides: [] });
+    const row = rows.find((item) => item.label === 'Proveedor Diesel');
+
+    expect(row?.category).toBe('AP_PAYMENT');
+    expect(row?.providerCategoryLabel).toBe('COMBUSTIBLE');
+    expect(aggregateRowValueForBucket({
+      conceptKey: conceptKeyForMovement(recurring),
+      movementsInBucket: [recurring],
+    })).toBe(50_000);
+  });
 });
 
 function movement(patch: Partial<FinancialMovement>): FinancialMovement {
   const now = '2026-05-01T00:00:00.000Z';
   return {
     id: patch.id ?? 'm',
-    sourceSystem: 'JDE',
+    sourceSystem: patch.sourceSystem ?? 'JDE',
     type: 'OUTFLOW',
     category: patch.category ?? 'AP_PAYMENT',
     subcategory: patch.subcategory,
@@ -81,7 +104,7 @@ function movement(patch: Partial<FinancialMovement>): FinancialMovement {
     projectedDate: '2026-05-15',
     confidenceScore: 90,
     confidenceBand: 'HIGH',
-    forecastMethod: 'RULE',
+    forecastMethod: patch.forecastMethod ?? 'RULE',
     status: 'PROJECTED_BASE',
     lockState: 'RESTRICTED',
     createdAt: now,

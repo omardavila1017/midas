@@ -3,6 +3,7 @@ import {
   buildProviderIndex,
   matchConceptToProvider,
   buildProviderBankPatterns,
+  isNoisyBankExpenseConcept,
   projectExpenseByProvider,
   paymentPeriodDays,
 } from './expensePerProvider';
@@ -97,6 +98,12 @@ describe('buildProviderBankPatterns', () => {
     const pat = patterns.get(providers[0].id);
     expect(pat?.isRecurring).toBe(false);
   });
+
+  it('filters card and own-account style concepts before recurrent matching', () => {
+    expect(isNoisyBankExpenseConcept('TARJ.NO.5579 6211 F.TRANS.2')).toBe(true);
+    expect(isNoisyBankExpenseConcept('TRANSF. A LA CUENTA NO. 021')).toBe(true);
+    expect(isNoisyBankExpenseConcept('PAGO PROVEEDOR DIESEL')).toBe(false);
+  });
 });
 
 describe('projectExpenseByProvider', () => {
@@ -176,6 +183,60 @@ describe('projectExpenseByProvider', () => {
     expect(rentLine.source).toBe('mixed');
     expect(rentLine.parts.scheduled).toBe(10_000);
     expect(rentLine.parts.recurring).toBe(15_000);
+  });
+
+  it('uses critical provider minimum monthly spend when there is no CXP or bank pattern', () => {
+    const providers = [
+      provider('OPERACION CRITICA', {
+        type: 'OPERACION',
+        clasificacionAutomatica: 'CRITICO',
+        gastoMinimoMensual: 19_000,
+      }),
+      provider('FLEXIBLE SIN PISO', {
+        clasificacionAutomatica: 'MEDIO',
+        gastoMinimoMensual: 99_000,
+      }),
+    ];
+
+    const months = projectExpenseByProvider({
+      providers,
+      aged: [],
+      bankStatements: [],
+      today: '2026-04-22',
+      fromYm: '2026-05',
+      toYm: '2026-05',
+    });
+
+    const critical = months[0].lines.find((l) => l.providerName === 'OPERACION CRITICA');
+    expect(critical?.amount).toBe(19_000);
+    expect(critical?.parts.recurring).toBe(19_000);
+    expect(critical?.providerCategory).toBe('OPERACION');
+    expect(months[0].lines.some((l) => l.providerName === 'FLEXIBLE SIN PISO')).toBe(false);
+  });
+
+  it('bumps scheduled CXP up to critical provider minimum without duplicating', () => {
+    const providers = [
+      provider('OPERACION CRITICA', {
+        id: 'p-critical',
+        type: 'OPERACION',
+        clasificacionAutomatica: 'CRITICO',
+        gastoMinimoMensual: 19_000,
+      }),
+    ];
+    const months = projectExpenseByProvider({
+      providers,
+      aged: [aged_({ nombre: 'OPERACION CRITICA', fechaProgramacionPago: '2026-05-10', importePendientePesos: 7_000 })],
+      bankStatements: [],
+      today: '2026-04-22',
+      fromYm: '2026-05',
+      toYm: '2026-05',
+    });
+
+    const line = months[0].lines.find((l) => l.providerName === 'OPERACION CRITICA');
+    expect(line?.amount).toBe(19_000);
+    expect(line?.parts.scheduled).toBe(7_000);
+    expect(line?.parts.recurring).toBe(12_000);
+    expect(months[0].total).toBe(19_000);
   });
 
   it('unmatched aged records appear with __un:: key and unknown flex', () => {

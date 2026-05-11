@@ -30,7 +30,7 @@ import {
   toYearMonth,
   monthsBetween,
 } from './cashFlowEngine';
-import { projectExpenseByProvider, type ProviderMonthLine } from './expensePerProvider';
+import { isNoisyBankExpenseConcept, projectExpenseByProvider, type ProviderMonthLine } from './expensePerProvider';
 import {
   isInternalTransfer,
   buildOwnAccountsIndex,
@@ -209,6 +209,7 @@ export function detectRecurringExpenses(
     for (const mov of acc.movimientos) {
       if (mov.tipoMovimiento !== 'CARGO') continue;
       if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      if (isNoisyBankExpenseConcept(mov.concepto ?? '')) continue;
       const ym = (mov.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;
       if (compareYearMonth(ym, currentYm) >= 0) continue;

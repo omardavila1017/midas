@@ -21,6 +21,11 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+    cb();
+    return 1;
+  });
+  vi.stubGlobal('cancelIdleCallback', () => {});
 });
 
 afterEach(() => {
@@ -29,22 +34,12 @@ afterEach(() => {
 });
 
 describe('<FinancialProjectionDashboard />', () => {
-  it('generates an automatic predictive draft from Projection', async () => {
+  it('renders the operational projection even when a legacy budget is passed', async () => {
     renderDashboard();
     await flushProjectionWarmup();
 
-    await waitFor(() => expect(screen.getByText('Motor predictivo')).toBeTruthy());
-
-    const generateButtons = screen.getAllByRole('button', { name: /Generar draft/i });
-    const enabled = generateButtons.find((button) => !(button as HTMLButtonElement).disabled);
-    expect(enabled).toBeTruthy();
-    fireEvent.click(enabled!);
-
-    const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
-    const predictiveDrafts = stored.filter((scenario: { kind?: string; name?: string }) => (
-      scenario.kind === 'DRAFT' && scenario.name?.includes('Predictivo')
-    ));
-    expect(predictiveDrafts.length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => expect(screen.getByText('Detalle por período')).toBeTruthy());
+    expect(screen.getByText('Movimientos')).toBeTruthy();
   });
 
   it('saves quick estimated supplier outflows through planning manual entries', async () => {

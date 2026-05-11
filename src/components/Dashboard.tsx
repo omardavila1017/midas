@@ -132,21 +132,21 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
-  // Gasto mínimo operativo: proveedores de Operación + nómina del presupuesto.
-  // Nómina y finiquitos son obligaciones contractuales no-pausables, igual que
-  // los proveedores críticos, así que se suman al piso operativo del Dashboard.
+  // Gasto mínimo operativo: proveedores de Operación calculados desde catálogo.
+  // La nómina real se modela en la proyección operativa cuando existe fuente
+  // TRESS/JDE; el Dashboard no toma nómina desde una plantilla.
   const minimumExpense = useMemo(
-    () => computeMinimumOperatingExpense(providers, budget),
-    [providers, budget],
+    () => computeMinimumOperatingExpense(providers, null),
+    [providers],
   );
 
   const { base, baseline, projection } = useMemo(
     () => computeBaseCashFlow({
       bankStatements, aged, clients, providers, cxpRecords, assumptions,
-      companyCode, today, overrides, budget,
+      companyCode, today, overrides, budget: null,
       startingBalance,
     }),
-    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance, budget],
+    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance],
   );
 
   // Antes el Dashboard pasaba por `evaluateCashFlow` (motor de Simulación) con
@@ -226,21 +226,15 @@ const Dashboard: React.FC<DashboardProps> = ({
     return map;
   }, [projection]);
 
-  // Datos del chart: cada mes lleva ingresos/egresos partidos en real + proyectado.
-  // - Histórico completo: real = lo del banco. Si hay budget y supera lo real,
-  //   la diferencia se muestra como overlay rayado (variación vs presupuesto).
-  // - Mes en curso: real = lo capturado; proyectado = lo que falta para llegar
-  //   al total proyectado del mes (clientes/aged/budget).
-  // - Mes futuro: todo al tramo proyectado (engine + override + budget).
-  const budgetMonthValue = (
+  // Datos del chart: cada mes lleva ingresos/egresos partidos en real +
+  // proyectado. La parte proyectada sale de lógica operativa
+  // (clientes, CXP/JDE, proveedores y overrides manuales).
+  const operationalMonthValue = (
     ym: string,
     kind: 'income' | 'expense',
   ): number | null => {
-    if (!budget) return null;
-    const [y, mo] = ym.split('-').map(Number);
-    if (budget.year !== y) return null;
-    const arr = kind === 'income' ? budget.incomeTotal : budget.expenseTotal;
-    const v = arr[mo - 1];
+    const projected = projectionByMonth.get(ym);
+    const v = kind === 'income' ? projected?.income.total : projected?.expense.total;
     return typeof v === 'number' ? v : null;
   };
 
@@ -252,7 +246,7 @@ const Dashboard: React.FC<DashboardProps> = ({
    * La suma de los 3 = realExpense + projExpenseGap (sin cambios en altura total).
    */
   const partitionExpense = (realExpense: number, projGap: number, ym: string) => {
-    const floor = floorForMonth(ym, minimumExpense.providersMonthly, budget);
+    const floor = floorForMonth(ym, minimumExpense.providersMonthly, null);
     const total = realExpense + projGap;
     const floorPortion = Math.max(0, Math.min(floor, total));
     const carvedFromReal = Math.min(realExpense, floorPortion);
@@ -269,12 +263,12 @@ const Dashboard: React.FC<DashboardProps> = ({
     const ym = m.yearMonth;
     const cmp = compareYearMonth(ym, currentYm);
     const override = overrides[ym];
-    const budgetIncome = budgetMonthValue(ym, 'income');
-    const budgetExpense = budgetMonthValue(ym, 'expense');
+    const projectedIncome = operationalMonthValue(ym, 'income');
+    const projectedExpense = operationalMonthValue(ym, 'expense');
 
     if (cmp < 0) {
-      const projectedIncomeTotal = override?.income ?? budgetIncome ?? 0;
-      const projectedExpenseTotal = override?.expense ?? budgetExpense ?? 0;
+      const projectedIncomeTotal = override?.income ?? projectedIncome ?? 0;
+      const projectedExpenseTotal = override?.expense ?? projectedExpense ?? 0;
       const projIncGap = projectedIncomeTotal > 0
         ? Math.max(0, projectedIncomeTotal - m.baseIncome)
         : 0;
@@ -322,8 +316,8 @@ const Dashboard: React.FC<DashboardProps> = ({
         phase: 'future' as const,
       };
     }
-    const projectedIncomeTotal = override?.income ?? budgetIncome ?? 0;
-    const projectedExpenseTotal = override?.expense ?? budgetExpense ?? 0;
+    const projectedIncomeTotal = override?.income ?? projectedIncome ?? 0;
+    const projectedExpenseTotal = override?.expense ?? projectedExpense ?? 0;
     const projIncGap = Math.max(0, projectedIncomeTotal - m.baseIncome);
     const projExpGap = Math.max(0, projectedExpenseTotal - m.baseExpense);
     const parts = partitionExpense(m.baseExpense, projExpGap, ym);
@@ -341,7 +335,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       cashBase: m.baseClosingCash,
       phase: 'current' as const,
     };
-  }), [evaluated.months, currentYm, overrides, projectionByMonth, baseline, budget, minimumExpense.providersMonthly]);
+  }), [evaluated.months, currentYm, overrides, projectionByMonth, minimumExpense.providersMonthly]);
 
   const tableRows: CashFlowTableRow[] = useMemo(
     () => evaluated.months.map((m) => {
@@ -350,21 +344,21 @@ const Dashboard: React.FC<DashboardProps> = ({
       const phase: 'past' | 'current' | 'future' = cmp < 0 ? 'past' : cmp === 0 ? 'current' : 'future';
       const override = overrides[ym];
       const projDetail = projectionByMonth.get(ym);
-      const budgetIncome = budgetMonthValue(ym, 'income');
-      const budgetExpense = budgetMonthValue(ym, 'expense');
+      const projectedIncome = operationalMonthValue(ym, 'income');
+      const projectedExpense = operationalMonthValue(ym, 'expense');
 
       if (phase === 'past') {
-        // En pasado mostramos el real; si budget > real, la diferencia va en
-        // la columna "proyectado" para que el usuario vea la variación.
-        const budgetIncomeVal = override?.income ?? budgetIncome ?? 0;
-        const budgetExpenseVal = override?.expense ?? budgetExpense ?? 0;
+        // En pasado mostramos el real; sólo un override manual puede agregar
+        // una columna proyectada contra el dato capturado.
+        const projectedIncomeVal = override?.income ?? projectedIncome ?? 0;
+        const projectedExpenseVal = override?.expense ?? projectedExpense ?? 0;
         return {
           yearMonth: ym,
           phase,
           realIncome: m.baseIncome,
           realExpense: m.baseExpense,
-          projectedIncome: budgetIncomeVal > 0 ? Math.max(0, budgetIncomeVal - m.baseIncome) : 0,
-          projectedExpense: budgetExpenseVal > 0 ? Math.max(0, budgetExpenseVal - m.baseExpense) : 0,
+          projectedIncome: projectedIncomeVal > 0 ? Math.max(0, projectedIncomeVal - m.baseIncome) : 0,
+          projectedExpense: projectedExpenseVal > 0 ? Math.max(0, projectedExpenseVal - m.baseExpense) : 0,
           closingCash: m.baseClosingCash,
           projectionDetail: projDetail,
           override,
@@ -383,9 +377,9 @@ const Dashboard: React.FC<DashboardProps> = ({
           override,
         };
       }
-      // current — sólo budget o override manual, no baseline.avg*.
-      const projIncTotal = override?.income ?? budgetIncome ?? 0;
-      const projExpTotal = override?.expense ?? budgetExpense ?? 0;
+      // Mes en curso: sólo proyección operativa u override manual.
+      const projIncTotal = override?.income ?? projectedIncome ?? 0;
+      const projExpTotal = override?.expense ?? projectedExpense ?? 0;
       return {
         yearMonth: ym,
         phase,
@@ -398,7 +392,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         override,
       };
     }),
-    [evaluated.months, currentYm, overrides, projectionByMonth, baseline, budget],
+    [evaluated.months, currentYm, overrides, projectionByMonth],
   );
 
   const hasRealData = bankStatements.length > 0;
@@ -970,7 +964,7 @@ export function computeBankStartingBalance(statements: BankAccountStatement[]): 
 }
 
 export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
-  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance, budget } = inputs;
+  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
@@ -988,11 +982,8 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
 
   const todayYm = toYearMonth(today);
 
-  // Horizonte: diciembre del año en curso.
-  // El usuario pidió explícitamente que el flujo mensual cubra enero-diciembre
-  // y que las proyecciones salgan únicamente del CSV de presupuesto, sin
-  // regresión lineal ni promedios móviles. Cortamos el horizonte al fin del
-  // año calendario actual en vez de los 12 meses rolling que teníamos antes.
+  // Horizonte: diciembre del año en curso. Cortamos el horizonte al fin del
+  // año calendario actual en vez de usar 12 meses rolling.
   const todayYear = Number(todayYm.slice(0, 4));
   const endOfYearYm = `${todayYear}-12`;
   const lastHistoricalYm = historical.length > 0
@@ -1008,9 +999,8 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     ? endOfYearYm
     : null;
 
-  // La proyección per-cliente / per-proveedor se mantiene para alimentar los
-  // drilldowns mensuales (vista detallada del mes en curso). No se usa ya
-  // para la línea de caja: esa sale del presupuesto.
+  // Proyección operativa per-cliente / per-proveedor. Esta es la fuente para
+  // los meses futuros; las plantillas externas quedan fuera del runtime normal.
   const projection = buildMonthlyProjection({
     fromYm: todayYm,
     toYm: lastFutureYm ?? todayYm,
@@ -1022,8 +1012,9 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     baselineExpense: 0,
     assumptions,
     today,
-    budget,
+    budget: null,
   });
+  const projectionByYm = new Map(projection.months.map((m) => [m.yearMonth, m]));
 
   // Baseline queda expuesto como 0 — ya no se calcula linear regression.
   const baseline = { avgIncome: 0, avgExpense: 0 };
@@ -1031,17 +1022,12 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   // ── Encadenado de caja con fórmula simple y predecible ──────────────
   // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
   //
-  // Los meses históricos SIEMPRE usan sus ingresos/egresos REALES (del
-  // banco). No sustituimos con el budget — el budget sólo aparece como
-  // overlay visual (barra rayada) cuando excede lo real del mes, para
-  // que el usuario pueda ver la variación vs presupuesto.
-  //
-  // Para la caja inicial, si el usuario no dio override manual, usamos
-  // la declarada en el budget cuando aplica; si no, la suma de
-  // saldoInicial de las cuentas.
+  // Los meses históricos SIEMPRE usan sus ingresos/egresos REALES (del banco).
+  // Para la caja inicial, si el usuario no dio override manual, usamos la suma
+  // de saldoInicial de las cuentas.
   const baseStart = typeof startingBalance === 'number'
     ? startingBalance
-    : (budget?.openingCash?.[0] ?? computeBankStartingBalance(filtered));
+    : computeBankStartingBalance(filtered);
   const historicalChained: CashFlowMonth[] = [];
   let runningHist = baseStart;
   for (const m of historical) {
@@ -1049,10 +1035,8 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     historicalChained.push({ ...m, closingCash: runningHist });
   }
 
-  // Proyección budget-only para los meses futuros. Si el usuario cargó un
-  // override manual del mes, ese valor manda; si no, toma el valor directo
-  // del presupuesto. Si no hay presupuesto, el mes queda en 0 — la UI debe
-  // mostrar claramente ese estado para que el usuario cargue el CSV.
+  // Meses futuros: overrides manuales si existen; si no, proyección operativa
+  // desde clientes, CXP/JDE, proveedores recurrentes y bancos.
   const months: CashFlowMonth[] = [...historicalChained];
   let running = historicalChained.length > 0
     ? historicalChained[historicalChained.length - 1].closingCash
@@ -1060,12 +1044,10 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   if (lastFutureYm !== null) {
     let cursor = firstFutureYm;
     while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-      const monthIndex = Number(cursor.slice(5, 7)) - 1;
-      const budgetIncome = budget?.incomeTotal?.[monthIndex] ?? 0;
-      const budgetExpense = budget?.expenseTotal?.[monthIndex] ?? 0;
       const ov = overrides[cursor];
-      const income = ov?.income ?? budgetIncome;
-      const expense = ov?.expense ?? budgetExpense;
+      const projected = projectionByYm.get(cursor);
+      const income = ov?.income ?? projected?.income.total ?? 0;
+      const expense = ov?.expense ?? projected?.expense.total ?? 0;
       running = running + income - expense;
       months.push({
         yearMonth: cursor,
