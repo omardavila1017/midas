@@ -10,16 +10,16 @@
 //      ingreso/egreso y lo distribuimos sobre catálogos reales:
 //        - Inflows  → `projectClientMonth` por cada cliente con eventos
 //          fechados en ese mes (respeta payment-day, créditos, factoraje).
-//        - Outflows → CXP con `fechaProgramacionPago` real, líneas de
-//          presupuesto fechadas a su día típico, y patrones recurrentes
-//          de proveedores cuando faltan CXP/presupuesto.
+//        - Outflows → CXP con `fechaProgramacionPago` real, costos de
+//          nómina/compras, y patrones recurrentes de proveedores cuando
+//          faltan CXP.
 //
 //   2. Cada movimiento informativo guarda su monto crudo en `baseAmount`
 //      y el monto escalado al canónico en `projectedAmount`. La suma de
 //      `projectedAmount` por mes empata con el Dashboard.
 //
 //   3. NUNCA caemos a mock data. Si los catálogos no producen líneas
-//      para un mes, se emite UN movement sintético "Resto presupuesto"
+//      para un mes, se emite UN movement sintético de resto operativo
 //      con la fecha del día medio del mes — pero esto es el último
 //      recurso, no la regla.
 //
@@ -36,6 +36,7 @@ import type { ComputeInputs } from '../../../components/Dashboard';
 import { compareYearMonth, toYearMonth } from '../../../domain/cashFlowEngine';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 import { isNonOperatingDay } from '../../../domain/bankHolidays';
+import type { ExpenseProjectionBreakdown } from '../../../domain/projectionEngine';
 import {
   buildClientLookup,
   clientRuleLabel,
@@ -122,10 +123,11 @@ export function buildCanonicalProjection(
     companyCode: inputs.companyCode,
     today: inputs.asOfDate,
     overrides: loadCanonicalOverrides(),
-    budget: inputs.budget,
+    budget: null,
     startingBalance: inputs.startingBalance,
   };
-  const { base } = computeBaseCashFlow(computeInputs);
+  const { base, projection } = computeBaseCashFlow(computeInputs);
+  const projectionByYm = new Map(projection.months.map((month) => [month.yearMonth, month]));
 
   const monthly: CanonicalMonthlyPoint[] = base.map((m) => ({
     yearMonth: m.yearMonth,
@@ -135,7 +137,7 @@ export function buildCanonicalProjection(
     closingCash: m.closingCash,
   }));
 
-  const movements = buildMovements({ monthly, inputs });
+  const movements = buildMovements({ monthly, inputs, projectionByYm });
 
   const initialCash = base.length > 0
     ? base[0].closingCash - base[0].income + base[0].expense
@@ -164,9 +166,10 @@ function loadCanonicalOverrides() {
 interface BuildArgs {
   monthly: CanonicalMonthlyPoint[];
   inputs: CanonicalProjectionInputs;
+  projectionByYm: Map<string, ReturnType<typeof computeBaseCashFlow>['projection']['months'][number]>;
 }
 
-function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
+function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): FinancialMovement[] {
   const out: FinancialMovement[] = [];
   const todayYm = toYearMonth(inputs.asOfDate);
   const monthlyByYm = new Map(monthly.map((m) => [m.yearMonth, m]));
@@ -234,49 +237,45 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   }
 
   // 2) Para cada mes futuro: distribuimos los totales canónicos sobre
-  //    catálogos reales (`projectClientMonth` para inflows, CXP +
-  //    presupuesto para outflows). El escalamiento garantiza que la
+  //    catálogos reales (`projectClientMonth` para inflows, CXP/JDE,
+  //    compras, nómina y proveedores recurrentes para outflows). El escalamiento garantiza que la
   //    suma de `projectedAmount` empate con el total canónico.
   const futureMonths = monthly.filter((m) => !m.isHistorical);
   for (const month of futureMonths) {
     const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
-    out.push(...balanceInflowMonth({
-      lines: inflowLines,
-      target: month.income,
-      ym: month.yearMonth,
-      asOfDate: inputs.asOfDate,
-      fallbackCategory: 'AR_COLLECTION',
-      fallbackConcept: `Cobranza proyectada ${month.yearMonth}`,
-      fallbackRule: 'Total proyectado mensual (Dashboard)',
-    }));
+    const hasCxcFromJde = inflowLines.some((line) => line.id.startsWith('cxc:'));
+    out.push(...(hasCxcFromJde
+      ? emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate)
+      : balanceInflowMonth({
+        lines: inflowLines,
+        target: month.income,
+        ym: month.yearMonth,
+        asOfDate: inputs.asOfDate,
+        fallbackCategory: 'AR_COLLECTION',
+        fallbackConcept: `Cobranza proyectada ${month.yearMonth}`,
+        fallbackRule: 'Total proyectado mensual (Dashboard)',
+      })));
 
-    const outflowLines = collectOutflowLines(month, inputs, todayYm);
+    const outflowLines = collectOutflowLines(month, inputs, todayYm, projectionByYm.get(month.yearMonth)?.expense);
     out.push(...balanceOutflowMonth({
       lines: outflowLines,
       target: month.expense,
       ym: month.yearMonth,
       asOfDate: inputs.asOfDate,
       fallbackCategory: 'OPEX',
-      fallbackConcept: `Egresos proyectados ${month.yearMonth}`,
+      fallbackConcept: `Egresos recurrentes operativos ${month.yearMonth}`,
       fallbackRule: 'Total proyectado mensual (Dashboard)',
     }));
   }
 
   // 3) Mes en curso (histórico parcial). Días pasados ya están como
-  //    REAL desde el banco; el resto del mes se escala al presupuesto
-  //    para que la proyección empate con el chart "Flujo mensual" del
-  //    Dashboard, que muestra `proyectado = budget(mes) - real(mes)`.
-  //    Sin escalar (emitRawLines crudo), el catálogo CXC/CXP suele
-  //    sumar muchísimo menos que el budget y el usuario ve un mes en
-  //    curso enano respecto al Dashboard.
+  //    REAL desde el banco. El resto del mes no se rellena con plantillas;
+  //    sólo se conserva lo que venga de fuentes operativas explícitas.
   const currentYm = todayYm;
   const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
   if (currentHistorical) {
-    const monthIndex = Number(currentYm.slice(5, 7)) - 1;
-    const budgetIncome = inputs.budget?.incomeTotal?.[monthIndex] ?? 0;
-    const budgetExpense = inputs.budget?.expenseTotal?.[monthIndex] ?? 0;
-    const remainingIncome = Math.max(0, budgetIncome - currentHistorical.income);
-    const remainingExpense = Math.max(0, budgetExpense - currentHistorical.expense);
+    const remainingIncome = 0;
+    const remainingExpense = 0;
 
     const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
       .filter((line) => line.date >= inputs.asOfDate);
@@ -288,13 +287,13 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
         asOfDate: inputs.asOfDate,
         fallbackCategory: 'AR_COLLECTION',
         fallbackConcept: `Cobranza proyectada ${currentYm} (resto del mes)`,
-        fallbackRule: 'Presupuesto del mes en curso menos cobranza real',
+        fallbackRule: 'Proyección operativa del mes en curso menos cobranza real',
       }));
     } else {
       out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
     }
 
-    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm)
+    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, projectionByYm.get(currentYm)?.expense)
       .filter((line) => line.date >= inputs.asOfDate);
     if (remainingExpense > 0) {
       out.push(...balanceMonth({
@@ -305,7 +304,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
         asOfDate: inputs.asOfDate,
         fallbackCategory: 'OPEX',
         fallbackConcept: `Egresos proyectados ${currentYm} (resto del mes)`,
-        fallbackRule: 'Presupuesto del mes en curso menos egresos reales',
+        fallbackRule: 'Proyección operativa del mes en curso menos egresos reales',
       }));
     } else {
       out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
@@ -576,14 +575,15 @@ function collectCxcInflowLines(
 }
 
 /**
- * Outflows: combina CXP (con fechas reales de programación de pago) con
- * líneas de presupuesto (distribuidas a un día típico del mes). Cuando
- * no hay ninguna fuente, `balanceMonth` cae al sintético.
+ * Outflows: combina CXP (con fechas reales de programación de pago),
+ * compras, nómina y proveedores recurrentes. Cuando no hay ninguna fuente,
+ * `balanceMonth` cae al sintético.
  */
 function collectOutflowLines(
   month: CanonicalMonthlyPoint,
   inputs: CanonicalProjectionInputs,
   todayYm: string,
+  expenseProjection?: ExpenseProjectionBreakdown,
 ): RawLine[] {
   const lines: RawLine[] = [];
   const providerByName = new Map(inputs.providers.map((p) => [supplierLookupKey(p.name), p]));
@@ -658,8 +658,8 @@ function collectOutflowLines(
     });
   });
 
-  // 2) Compras activas sin CXP matcheada. Son compromisos tempranos: se
-  // emiten como locked para no perderlos al balancear contra budget/baseline.
+  // 2) Compras activas sin CXP matcheada. Son compromisos tempranos:
+  // se emiten como locked para no perderlos al balancear el mes.
   for (const movement of buildPurchaseReceiptMovements({
     purchaseReceipts: inputs.purchaseReceipts ?? [],
     cxpRecords: inputs.cxpRecords,
@@ -730,41 +730,59 @@ function collectOutflowLines(
     });
   }
 
-  // 4) Líneas del presupuesto que aplican a este mes. Las distribuimos
-  //    a un día específico para que en vista semanal aparezcan.
-  if (inputs.budget) {
-    const monthIdx = Number(month.yearMonth.slice(5, 7)) - 1;
-    if (inputs.budget.year === Number(month.yearMonth.slice(0, 4))) {
-      let conceptIdx = 0;
-      for (const concept of inputs.budget.expenseByConcept ?? []) {
-        const amount = concept.monthly?.[monthIdx];
-        if (!amount || amount <= 0) continue;
-        // Día típico del concepto: nómina día 15/30, otros día 5 + offset
-        // por concepto para esparcir las barras del chart semanal.
-        const typicalDay = typicalDayForConcept(concept.concept, conceptIdx);
-        const category = budgetCategoryFor(concept.concept);
-        const taxMeta = budgetTaxMeta(concept.concept, amount);
-        conceptIdx++;
-        lines.push({
-          id: `budget:${inputs.budget.year}:${monthIdx + 1}:${normalize(concept.concept)}`,
-          amount,
-          date: dateForDayOfMonth(month.yearMonth, typicalDay),
-          concept: concept.concept,
-          category,
-          ruleApplied: 'Presupuesto anual',
-          sourceSystem: 'FORECAST',
-          forecastMethod: 'DRIVER',
-          confidenceScore: 60,
-          lockState: 'RESTRICTED',
-          taxTreatment: taxMeta ? 'IVA_CREDITABLE' : category === 'PAYROLL' || category === 'TAX' || category === 'DEBT'
-            ? 'IVA_EXEMPT'
-            : 'UNCLASSIFIED',
-          taxRate: taxMeta?.taxRate,
-          taxBaseAmount: taxMeta?.taxBaseAmount,
-          taxAmount: taxMeta?.taxAmount,
-          comment: 'Línea del presupuesto, fechada al día típico del concepto.',
-        });
-      }
+  if (expenseProjection) {
+    for (const providerLine of expenseProjection.providerLines) {
+      const recurringAmount = positiveNumber(providerLine.parts.recurring);
+      if (recurringAmount <= 0) continue;
+      const taxMeta = providerLine.ivaRate ? grossToIvaTaxMeta(recurringAmount, providerLine.ivaRate) : undefined;
+      lines.push({
+        id: `recurring-provider:${month.yearMonth}:${providerLine.providerId}`,
+        amount: recurringAmount,
+        date: dateForDayOfMonth(month.yearMonth, providerLine.typicalPayDay ?? 15),
+        concept: `Pago recurrente ${providerLine.providerName}`,
+        category: 'AP_PAYMENT',
+        subcategory: providerLine.providerCategory ?? 'Recurrente',
+        providerCategory: providerLine.providerCategory,
+        counterpartyId: providerLine.providerId.startsWith('__un::') ? undefined : providerLine.providerId,
+        counterpartyName: providerLine.providerName,
+        counterpartyType: 'SUPPLIER',
+        ruleApplied: providerLine.source === 'mixed'
+          ? 'Complemento recurrente sobre CXP'
+          : 'Patrón recurrente bancario por proveedor',
+        sourceSystem: 'FORECAST',
+        sourceObjectId: `${month.yearMonth}:${providerLine.providerId}`,
+        companyId: inputs.companyCode !== 'all' ? inputs.companyCode : undefined,
+        forecastMethod: 'DRIVER',
+        confidenceScore: providerLine.score != null ? Math.max(60, Math.min(90, Math.round(providerLine.score))) : 72,
+        lockState: providerLine.flexibility === 'inamovible' ? 'RESTRICTED' : 'UNLOCKED',
+        taxTreatment: taxMeta ? 'IVA_CREDITABLE' : 'UNCLASSIFIED',
+        taxRate: taxMeta?.taxRate,
+        taxBaseAmount: taxMeta?.taxBaseAmount,
+        taxAmount: taxMeta?.taxAmount,
+        comment: providerLine.source === 'mixed'
+          ? `CXP cubre ${providerLine.parts.scheduled}; se agrega recurrente histórico por ${recurringAmount}.`
+          : 'Gasto recurrente detectado en bancos y asociado al proveedor.',
+      });
+    }
+
+    if (expenseProjection.providerLines.length === 0 && expenseProjection.recurring > 0) {
+      lines.push({
+        id: `recurring-operating:${month.yearMonth}`,
+        amount: expenseProjection.recurring,
+        date: midMonthDate(month.yearMonth),
+        concept: 'Egresos recurrentes operativos',
+        category: 'OPEX',
+        subcategory: 'Recurrente',
+        ruleApplied: 'Patrón recurrente bancario agrupado',
+        sourceSystem: 'FORECAST',
+        sourceObjectId: month.yearMonth,
+        companyId: inputs.companyCode !== 'all' ? inputs.companyCode : undefined,
+        forecastMethod: 'DRIVER',
+        confidenceScore: 58,
+        lockState: 'RESTRICTED',
+        taxTreatment: 'UNCLASSIFIED',
+        comment: 'Gasto recurrente detectado sin proveedor identificado; se agrupa para evitar conceptos bancarios crudos.',
+      });
     }
   }
 
@@ -939,9 +957,16 @@ export function hasSufficientCanonicalData(inputs: CanonicalProjectionInputs): b
   const cobranzaRecords = inputs.cobranzaRecords ?? [];
   const purchaseReceipts = inputs.purchaseReceipts ?? [];
   const payrollCosts = inputs.payrollCosts ?? [];
-  if (inputs.bankStatements.length === 0 && cobranzaRecords.length === 0 && purchaseReceipts.length === 0 && payrollCosts.length === 0) return false;
   if (
-    inputs.budget === null
+    inputs.bankStatements.length === 0
+    && inputs.cxpRecords.length === 0
+    && cobranzaRecords.length === 0
+    && purchaseReceipts.length === 0
+    && payrollCosts.length === 0
+  ) return false;
+  if (
+    inputs.bankStatements.length === 0
+    && inputs.providers.length === 0
     && inputs.clients.length === 0
     && inputs.cxpRecords.length === 0
     && cobranzaRecords.length === 0
@@ -961,27 +986,9 @@ function midMonthDate(yearMonth: string): string {
 
 function dateForDayOfMonth(yearMonth: string, day: number): string {
   const [year, month] = yearMonth.split('-').map(Number);
-  // Cap day to last day of month to evitar fechas inválidas.
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const safeDay = Math.min(Math.max(1, day), lastDay);
+  const safeDay = Math.min(Math.max(1, Math.round(day || 15)), lastDay);
   return `${yearMonth}-${String(safeDay).padStart(2, '0')}`;
-}
-
-function typicalDayForConcept(concept: string, fallbackIndex: number): number {
-  const upper = concept.toUpperCase();
-  if (upper.includes('NOMINA') || upper.includes('NÓMINA') || upper.includes('SUELDOS') || upper.includes('FINIQUITO')) {
-    return 30; // último día del mes — el helper hace clamp a fin de mes.
-  }
-  if (upper.includes('IMPUESTO') || upper.includes('ISR') || upper.includes('IVA') || upper.includes('IMSS')) {
-    return 17;
-  }
-  if (upper.includes('RENTA') || upper.includes('SEGURO')) {
-    return 5;
-  }
-  // Otros conceptos: distribuidos por su orden para que la vista semanal
-  // muestre actividad en distintas semanas.
-  const days = [3, 8, 12, 18, 22, 26];
-  return days[fallbackIndex % days.length];
 }
 
 function cleanDate(value?: string): string | undefined {
@@ -1059,10 +1066,6 @@ function dateToIso(date: Date): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
 }
 
-function normalize(value: string): string {
-  return value.trim().replace(/\s+/g, ' ').toUpperCase();
-}
-
 function supplierLookupKey(value: string | undefined): string {
   if (!value) return '';
   return value
@@ -1116,15 +1119,6 @@ function taxRateFromAmounts(base: number, taxAmount: number): FinancialTaxRate |
   return undefined;
 }
 
-function budgetTaxMeta(
-  concept: string,
-  amount: number,
-): { taxRate: FinancialTaxRate; taxBaseAmount: number; taxAmount: number } | undefined {
-  const category = budgetCategoryFor(concept);
-  if (category !== 'OPEX' && category !== 'CAPEX') return undefined;
-  return grossToIvaTaxMeta(amount, 16);
-}
-
 function grossToIvaTaxMeta(
   amount: number,
   rate: 8 | 16,
@@ -1162,13 +1156,4 @@ function paymentPatternLabel(client: Client): string {
   if (client.paymentDay.kind === 'DOM_LIST') return `Días ${client.paymentDay.days.join(', ')}`;
   if (client.paymentDay.kind === 'WOM') return `Semanas ${client.paymentDay.weeks.join(', ')}`;
   return `Día ${client.paymentDay.day}`;
-}
-
-function budgetCategoryFor(concept: string): FinancialMovementCategory {
-  const upper = concept.toUpperCase();
-  if (upper.includes('NOMINA') || upper.includes('NÓMINA') || upper.includes('SUELDOS') || upper.includes('FINIQUITO')) return 'PAYROLL';
-  if (upper.includes('IMPUESTO') || upper.includes('ISR') || upper.includes('IVA') || upper.includes('IMSS')) return 'TAX';
-  if (upper.includes('DEUDA') || upper.includes('PRESTAMO') || upper.includes('CREDITO') || upper.includes('PASIVO')) return 'DEBT';
-  if (upper.includes('CAPEX') || upper.includes('INVERSION')) return 'CAPEX';
-  return 'OPEX';
 }

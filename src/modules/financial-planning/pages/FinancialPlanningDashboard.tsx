@@ -95,8 +95,6 @@ import {
   scheduleSupplierPaymentsByScore,
   type SupplierPaymentPlan,
 } from '../services/supplierPaymentSchedule';
-import { buildBudgetInflowMovements, buildBudgetOutflowMovements, buildCxpOutflowMovements } from '../services/cxpOutflowMovements';
-import { buildPayrollCostMovements, buildPurchaseReceiptMovements } from '../../shared-finance/sourceRecords';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
@@ -129,7 +127,7 @@ export default function FinancialPlanningDashboard(props: Props) {
   const yearEnd = `${currentYear}-12-31`;
 
   const source = useMemo(
-    () => buildFinancialProjectionSourceData({ ...props, asOfDate: today }),
+    () => buildFinancialProjectionSourceData({ ...props, budget: null, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -142,7 +140,6 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
-      props.budget,
       props.startingBalance,
       today,
     ],
@@ -269,92 +266,14 @@ export default function FinancialPlanningDashboard(props: Props) {
   const initialCash = useMemo(
     () => calculateInitialCash(props.bankStatements, props.startingBalance, {
       companyCode: props.companyCode,
-      budget: props.budget,
     }),
-    [props.bankStatements, props.startingBalance, props.companyCode, props.budget],
+    [props.bankStatements, props.startingBalance, props.companyCode],
   );
   const supplierInitialCash = useMemo(
     () => calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash),
     [props.bankStatements, props.companyCode, initialCash],
   );
-  const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
-
-  const cxpOutflowMovements = useMemo(
-    () => buildCxpOutflowMovements({
-      cxpRecords: props.cxpRecords,
-      providers: props.providers,
-      companyCode: props.companyCode,
-      asOfDate: today,
-      endDate: yearEnd,
-    }),
-    [props.cxpRecords, props.providers, props.companyCode, today, yearEnd],
-  );
-
-  const budgetOutflowMovements = useMemo(
-    () => buildBudgetOutflowMovements({
-      budget: props.budget,
-      asOfDate: today,
-      startDate: yearStart,
-      endDate: yearEnd,
-      includePast: true,
-    }),
-    [props.budget, today, yearStart, yearEnd],
-  );
-
-  const purchaseOutflowMovements = useMemo(
-    () => buildPurchaseReceiptMovements({
-      purchaseReceipts: props.purchaseReceipts ?? [],
-      cxpRecords: props.cxpRecords,
-      companyCode: props.companyCode,
-      asOfDate: today,
-      endDate: yearEnd,
-    }),
-    [props.purchaseReceipts, props.cxpRecords, props.companyCode, today, yearEnd],
-  );
-
-  const payrollOutflowMovements = useMemo(
-    () => buildPayrollCostMovements({
-      payrollCosts: props.payrollCosts ?? [],
-      companyCode: props.companyCode,
-      asOfDate: today,
-      endDate: yearEnd,
-    }),
-    [props.payrollCosts, props.companyCode, today, yearEnd],
-  );
-
-  const planningOutflowMovements = useMemo(
-    () => [...cxpOutflowMovements, ...purchaseOutflowMovements, ...payrollOutflowMovements, ...budgetOutflowMovements],
-    [cxpOutflowMovements, purchaseOutflowMovements, payrollOutflowMovements, budgetOutflowMovements],
-  );
-
-  // Base scenario mirrors Romo's CSV exactly: full-year inflows + outflows
-  // straight from the budget concept breakdown. No CXP, no real bank, no
-  // tax module — just the original projection.
-  const budgetBaseMovements = useMemo(() => {
-    const inflows = buildBudgetInflowMovements({
-      budget: props.budget,
-      asOfDate: today,
-      startDate: yearStart,
-      endDate: yearEnd,
-    });
-    const outflows = buildBudgetOutflowMovements({
-      budget: props.budget,
-      asOfDate: today,
-      startDate: yearStart,
-      endDate: yearEnd,
-      includePast: true,
-      includeTaxes: true,
-    });
-    return [...inflows, ...outflows];
-  }, [props.budget, today, yearStart, yearEnd]);
-
-  // Drop ALL OUTFLOW from canonical: planning view uses budget concepts
-  // planchado all year + CXP categories planchado, so the row layout matches
-  // Romo's projection across past and future months consistently.
-  const sourceNonOutflows = useMemo(
-    () => source.movements.filter((m) => m.type !== 'OUTFLOW'),
-    [source.movements],
-  );
+  const minimumCash = useMemo(() => minimumCashFor(), []);
 
   const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
     const isBase = scenarioId === BASE_SCENARIO_ID;
@@ -367,8 +286,8 @@ export default function FinancialPlanningDashboard(props: Props) {
       })
       : [];
     const movementsBeforeAdjust = isBase
-      ? budgetBaseMovements
-      : [...sourceNonOutflows, ...planningOutflowMovements, ...manualMovements];
+      ? source.movements
+      : [...source.movements, ...manualMovements];
     const preTaxMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
     const taxSeedView = isBase ? null : buildTaxDashboardView({
       clients: props.clients,
@@ -377,7 +296,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       cxpRecords: props.cxpRecords,
       purchaseReceipts: props.purchaseReceipts,
       payrollCosts: props.payrollCosts,
-      budget: props.budget,
+      budget: null,
       companyCode: props.companyCode,
       startDate: yearStart,
       endDate: yearEnd,
@@ -414,11 +333,10 @@ export default function FinancialPlanningDashboard(props: Props) {
       minimumCash,
       scenarioId,
     });
-    const baseInitialCash = props.budget?.openingCash?.[0];
     const projection = calculateBaseProjection(supplierSchedule.movements, {
       startDate: yearStart,
       endDate: yearEnd,
-      initialCash: isBase && baseInitialCash != null ? baseInitialCash : initialCash,
+      initialCash,
       minimumCash,
       granularity,
       scenarioId,
@@ -431,19 +349,19 @@ export default function FinancialPlanningDashboard(props: Props) {
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
+    [approvedScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, supplierInitialCash, initialCash],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
+    [baseScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, supplierInitialCash, initialCash],
   );
 
   const activeRunRaw = useMemo(
     () => buildScenarioRun(activeScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, yearStart, yearEnd, sourceNonOutflows, planningOutflowMovements, budgetBaseMovements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, props.budget, supplierInitialCash, initialCash],
+    [activeScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, supplierInitialCash, initialCash],
   );
 
   const activeOverrides = useMemo(
@@ -775,7 +693,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       startDate: input.startDate,
       recurrence: input.recurrence,
       companyId: input.companyId,
-      description: 'Compromiso esperado capturado por pegado desde Excel.',
+      description: 'Compromiso esperado capturado por pegado manual.',
       status: activeScenario.kind === 'APPROVED' ? 'APPROVED' : 'DRAFT',
       createdBy: USER,
     }));
@@ -1354,7 +1272,7 @@ export default function FinancialPlanningDashboard(props: Props) {
           cxpRecords: props.cxpRecords,
           clients: props.clients,
           assumptions: props.assumptions,
-          budget: props.budget,
+          budget: null,
         }}
       />
 
@@ -1554,12 +1472,9 @@ function taxTreatmentForCommitment(category: ExpectedCommitmentDraft['category']
   return 'UNCLASSIFIED';
 }
 
-function minimumCashFor(props: Props): number {
+function minimumCashFor(): number {
   const fallback = 20_000_000;
-  if (!props.budget) return fallback;
-  const month = new Date().getUTCMonth();
-  const monthlyExpense = props.budget.expenseTotal?.[month] ?? 0;
-  return monthlyExpense > 0 ? Math.round(monthlyExpense * 0.3) : fallback;
+  return fallback;
 }
 
 function EmptyDataState() {
@@ -1572,8 +1487,7 @@ function EmptyDataState() {
         Aún no hay datos suficientes para planear
       </h2>
       <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">
-        Carga estados de cuenta en <strong>Bancos</strong> y configura el presupuesto en <strong>Operativa</strong>{' '}
-        para empezar.
+        Carga estados de cuenta en <strong>Bancos</strong>, CXP JDE o cobranza real para empezar.
       </p>
     </div>
   );

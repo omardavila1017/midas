@@ -49,9 +49,6 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
-import type { Budget } from './domain/budget';
-import { parseBudgetCsv } from './domain/budget';
-import { loadBudget, saveBudget } from './domain/budgetPersistence';
 import {
   attachImportedStatementsToKnownCompanies,
   excludeBajio,
@@ -70,7 +67,6 @@ import {
 } from './domain/reconciliationConfirmations';
 import type { RealReconciliationWorkerResponse } from './workers/realReconciliationWorkerTypes';
 
-const DEFAULT_BUDGET_CSV_URL = `${import.meta.env.BASE_URL}presupuesto.csv`;
 const STORE_SAVE_DEBOUNCE_MS = 900;
 const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
@@ -310,27 +306,6 @@ export default function App() {
     factorajeDays: 30,
   });
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
-  const [budget, setBudget] = useState<Budget | null>(() => loadBudget());
-
-  useEffect(() => { saveBudget(budget); }, [budget]);
-
-  // Carga automática del CSV de presupuesto empaquetado en `public/presupuesto.csv`.
-  // Si el archivo existe y parsea bien, sobrescribe el budget cacheado — así el
-  // usuario no tiene que volver a subir el CSV manualmente cada vez. Si falla
-  // (404, parser error, red), dejamos el budget que ya estuviera en localStorage.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(DEFAULT_BUDGET_CSV_URL, { cache: 'no-cache' });
-        if (!res.ok) return;
-        const text = await res.text();
-        const r = parseBudgetCsv(text, { fileName: 'presupuesto.csv' });
-        if (!cancelled && r.budget) setBudget(r.budget);
-      } catch { /* sin red o sin archivo → conservamos lo que hubiera en cache */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
 
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
@@ -1535,7 +1510,7 @@ export default function App() {
                   providers={providers}
                   cxpRecords={cxpRecords}
                   assumptions={assumptions}
-                  budget={budget}
+                  budget={null}
                   onOpenFlow={() => setActiveTab('financialPlanning')}
                   startingBalance={effectiveStartingBalance}
                   cobranzaReconciliation={cobranzaReconciliation}
@@ -1554,7 +1529,7 @@ export default function App() {
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
-                  budget={budget}
+                  budget={null}
                   startingBalance={effectiveStartingBalance}
                   onNavigateToTax={() => setActiveTab('taxes')}
                 />
@@ -1571,7 +1546,7 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
-                  budget={budget}
+                  budget={null}
                   startingBalance={effectiveStartingBalance}
                 />
               </Suspense>
@@ -1588,7 +1563,7 @@ export default function App() {
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
                   assumptions={assumptions}
-                  budget={budget}
+                  budget={null}
                   startingBalance={effectiveStartingBalance}
                 />
               </Suspense>
@@ -1655,7 +1630,7 @@ export default function App() {
                   clients={clients}
                   assumptions={assumptions}
                   bankStatements={accountableBankStatements}
-                  budget={budget}
+                  budget={null}
                   onMergeCia={mergeCxpForCia}
                   onReplaceAll={replaceAllCxp}
                   onReset={resetCxp}

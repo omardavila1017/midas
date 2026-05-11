@@ -31,8 +31,7 @@ const POPOVER_EST_HEIGHT = 620;
  *   - AP_PAYMENT  → registro CXP (factura JDE) por `noFactura`.
  *   - AR_COLLECTION → eventos de cobranza derivados del catálogo del
  *     cliente para el mes proyectado (synthetic invoices).
- *   - PAYROLL/TAX/OPEX/CAPEX/DEBT → línea del presupuesto que originó
- *     el movimiento (cuando aplica).
+ *   - PAYROLL/TAX/OPEX/CAPEX/DEBT → detalle operativo o legado cuando aplica.
  *
  * Si no se pasa contexto, el drawer cae al modo "trazabilidad" anterior.
  */
@@ -165,7 +164,7 @@ export function MovementDrillDownDrawer({
         </div>
 
         {/* Sección nueva: detalle al nivel de factura. Sólo cuando el
-            caller pasa el contexto (catálogos, CXP y presupuesto). */}
+            caller pasa el contexto operativo. */}
         {invoiceContext && (
           <InvoiceDetailSection movement={movement} context={invoiceContext} />
         )}
@@ -328,19 +327,19 @@ function InvoiceDetailSection({
     if (!breakdown) {
       return (
         <SourceMissingNote
-          title="Concepto del presupuesto"
-          message="Este movimiento se deriva del presupuesto. No se encontró un concepto coincidente."
+          title="Detalle operativo no disponible"
+          message="No se encontró una factura, documento o fuente operativa coincidente."
         />
       );
     }
     return (
-      <SectionCard title="Concepto del presupuesto">
+      <SectionCard title="Detalle de plantilla legacy">
         <div className="px-3 py-2.5 space-y-1.5">
           <Row label="Concepto" value={breakdown.concept} />
           <Row label="Mes" value={breakdown.monthLabel} />
           <Row label="Importe del mes" value={fmtCurrency(breakdown.monthAmount)} accent />
           <Row label="Importe anual" value={fmtCurrency(breakdown.annualAmount)} />
-          <Row label="Origen" value="Plantilla del presupuesto (Operativa)" />
+          <Row label="Origen" value="Plantilla legacy" />
         </div>
       </SectionCard>
     );

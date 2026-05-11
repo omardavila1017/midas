@@ -145,7 +145,7 @@ const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> =
  * Mount strategy:
  *   The canonical projection (`buildFinancialProjectionSourceData` →
  *   `computeBaseCashFlow`) is the single most expensive thing this page
- *   does — it iterates clients × months × CXP × budget. We outer-gate the
+ *   does — it iterates clients × months × CXP. We outer-gate the
  *   inner dashboard so the chrome (header, KPI placeholders, section
  *   shells) paints in one frame and the heavy compute lands on the next
  *   idle slot. Cache hits short-circuit the gating completely.
@@ -154,7 +154,7 @@ export default function FinancialProjectionDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const cacheProbeInput = useMemo(
-    () => ({ ...props, asOfDate: today }),
+    () => ({ ...props, budget: null, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -168,7 +168,6 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
-      props.budget,
       props.startingBalance,
       today,
     ],
@@ -350,15 +349,14 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const initialCash = useMemo(
     () => calculateInitialCash(props.bankStatements, props.startingBalance, {
       companyCode: props.companyCode,
-      budget: props.budget,
     }),
-    [props.bankStatements, props.startingBalance, props.companyCode, props.budget],
+    [props.bankStatements, props.startingBalance, props.companyCode],
   );
   const supplierInitialCash = useMemo(
     () => calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash),
     [props.bankStatements, props.companyCode, initialCash],
   );
-  const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
+  const minimumCash = useMemo(() => minimumCashFor(), []);
 
   // Pre-index storage by scenario for O(1) per-scenario lookups.
   const customRowsByScenario = useMemo(() => {
@@ -465,7 +463,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
           purchaseReceipts: props.purchaseReceipts,
           payrollCosts: props.payrollCosts,
           cobranzaPayments: props.cobranzaPayments,
-          budget: props.budget,
+          budget: null,
           companyCode: props.companyCode,
           startDate: yearStart,
           endDate: yearEnd,
@@ -822,9 +820,9 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
       cobranzaRecords: props.cobranzaRecords ?? [],
       clients: props.clients,
       assumptions: props.assumptions,
-      budget: props.budget,
+      budget: null,
     }),
-    [props.cxpRecords, props.cobranzaRecords, props.clients, props.assumptions, props.budget],
+    [props.cxpRecords, props.cobranzaRecords, props.clients, props.assumptions],
   );
 
   if (!source.hasData) {
@@ -1436,12 +1434,9 @@ function manualCategoryForQuickEntry(
   return 'MANUAL_OUTFLOW';
 }
 
-function minimumCashFor(props: Props): number {
+function minimumCashFor(): number {
   const fallback = 20_000_000;
-  if (!props.budget) return fallback;
-  const month = new Date().getUTCMonth();
-  const monthlyExpense = props.budget.expenseTotal?.[month] ?? 0;
-  return monthlyExpense > 0 ? Math.round(monthlyExpense * 0.3) : fallback;
+  return fallback;
 }
 
 function EmptyDataState() {
@@ -1455,7 +1450,7 @@ function EmptyDataState() {
       </h2>
       <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">
         Necesitamos estados de cuenta bancarios y al menos uno de:
-        catálogo de clientes, antigüedad de saldos, o presupuesto del año.
+        catálogo de clientes, antigüedad de saldos, CXP JDE o cobranza real.
       </p>
     </div>
   );
