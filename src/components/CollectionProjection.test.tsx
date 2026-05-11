@@ -312,8 +312,8 @@ describe('<CollectionProjection />', () => {
     expect(screen.getByRole('button', { name: /^Real banco$/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Banco sin CXC$/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^JDE$/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /^CXC pendiente$/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /^Proyectado$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^JDE por cobrar$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Sin factura$/i })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Sin regla$/i })).toBeTruthy();
   });
 
@@ -323,9 +323,18 @@ describe('<CollectionProjection />', () => {
     fireEvent.click(screen.getByRole('button', { name: /^JDE$/i }));
     expect(screen.getByRole('button', { name: new RegExp(`${jdeDate}: 1 evento`) })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Proyectado$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Sin factura$/i }));
     expect(screen.getByRole('button', { name: new RegExp(`${jdeDate}: 0 eventos`) })).toBeTruthy();
     expect(screen.getAllByRole('button', { name: /: [1-9]\d* evento/ }).length).toBeGreaterThan(0);
+  });
+
+  it('separa facturas JDE emitidas de proyección sin factura', () => {
+    renderRealCobranzaView();
+
+    expect(screen.getByText(/Facturas JDE emitidas/i)).toBeTruthy();
+    expect(screen.getByText(/Pagado JDE sin banco/i)).toBeTruthy();
+    expect(screen.getByText(/Por cobrar JDE/i)).toBeTruthy();
+    expect(screen.getByText(/Proyección sin factura/i)).toBeTruthy();
   });
 
   it('al hacer click en un evento muestra fuente, estado y regla aplicada', () => {

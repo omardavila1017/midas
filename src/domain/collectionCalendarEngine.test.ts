@@ -109,7 +109,7 @@ describe('buildCollectionCalendar', () => {
     expect(event?.date).toBe('2026-01-30');
     expect(event?.noFactura).toBe('F-100');
     expect(event?.bank?.referencia).toBe('DEP-100');
-    expect(calendar.events.some(e => e.noFactura === 'F-100' && e.source === 'CXC_RULED_PENDING')).toBe(false);
+    expect(calendar.events.some(e => e.noFactura === 'F-100' && e.source === 'JDE_OPEN_PROJECTED')).toBe(false);
   });
 
   it('muestra JDE cobrado sin bankStatements como JDE_PAID_UNMATCHED', () => {
@@ -137,7 +137,7 @@ describe('buildCollectionCalendar', () => {
     expect(event?.statusLabel).toContain('JDE');
   });
 
-  it('calendariza una CXC pendiente con regla de cliente', () => {
+  it('calendariza una factura JDE pendiente con regla de cliente', () => {
     const factura = makeFactura({
       cia: '00011',
       noFactura: 'F-RULE',
@@ -159,13 +159,14 @@ describe('buildCollectionCalendar', () => {
       reconciliation: reconcileRealCollections([factura], []),
     });
 
-    const event = calendar.events.find(e => e.source === 'CXC_RULED_PENDING' && e.noFactura === 'F-RULE');
+    const event = calendar.events.find(e => e.source === 'JDE_OPEN_PROJECTED' && e.noFactura === 'F-RULE');
     expect(event?.date).toBe('2026-02-06');
     expect(event?.ruleApplied).toContain('Viernes');
     expect(event?.dateReason).toContain('30 dias');
+    expect(event?.statusLabel).toContain('JDE');
   });
 
-  it('calendariza CXC pendiente sin regla en fecha de vencimiento', () => {
+  it('calendariza factura JDE pendiente sin regla en fecha de vencimiento', () => {
     const factura = makeFactura({
       cia: '00011',
       noFactura: 'F-NORULE',
@@ -181,12 +182,13 @@ describe('buildCollectionCalendar', () => {
       reconciliation: reconcileRealCollections([factura], []),
     });
 
-    const event = calendar.events.find(e => e.source === 'CXC_UNRULED_PENDING');
+    const event = calendar.events.find(e => e.source === 'JDE_OPEN_PROJECTED');
     expect(event?.date).toBe('2026-03-15');
     expect(event?.ruleApplied).toBe('Sin regla confiable');
+    expect(calendarEventMatchesSourceFilter(event!, 'unruled')).toBe(true);
   });
 
-  it('genera proyecciones futuras aunque exista CXC pendiente y evita duplicar ese ciclo emitido', () => {
+  it('genera proyecciones futuras aunque exista factura JDE pendiente y evita duplicar ese ciclo emitido', () => {
     const factura = makeFactura({
       cia: '00011',
       noFactura: 'F-JAN',
@@ -205,11 +207,11 @@ describe('buildCollectionCalendar', () => {
       cobranzaRecords: [factura],
       reconciliation: reconcileRealCollections([factura], []),
     });
-    const projections = calendar.events.filter(e => e.source === 'PROJECTED_CLIENT_RULE');
+    const projections = calendar.events.filter(e => e.source === 'CLIENT_PROJECTED');
 
     expect(projections.some(e => e.projected?.invoiceDate === '2026-01-01')).toBe(false);
     expect(projections.some(e => e.projected?.invoiceDate === '2026-02-01')).toBe(true);
-    expect(calendar.events.some(e => e.source === 'CXC_RULED_PENDING' && e.noFactura === 'F-JAN')).toBe(true);
+    expect(calendar.events.some(e => e.source === 'JDE_OPEN_PROJECTED' && e.noFactura === 'F-JAN')).toBe(true);
   });
 
   it('filtra eventos por fuente del calendario', () => {
@@ -241,7 +243,7 @@ describe('buildCollectionCalendar', () => {
     });
     const bank = calendar.events.find(e => e.source === 'BANK_UNMATCHED');
     const jde = calendar.events.find(e => e.source === 'JDE_PAID_UNMATCHED');
-    const projected = calendar.events.find(e => e.source === 'PROJECTED_CLIENT_RULE');
+    const projected = calendar.events.find(e => e.source === 'CLIENT_PROJECTED');
 
     expect(bank && calendarEventMatchesSourceFilter(bank, 'bank')).toBe(false);
     expect(bank && calendarEventMatchesSourceFilter(bank, 'bank_unmatched')).toBe(true);

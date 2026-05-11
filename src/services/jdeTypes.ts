@@ -109,6 +109,8 @@ export interface BankStatementLine {
   fechaValor?: string;
   /** Referencia bancaria / folio. */
   referencia: string;
+  /** No. de recibo JDE reportado por bancos, si viene en el API. */
+  noRecibo?: string;
   /** Descripción / concepto del movimiento. */
   concepto: string;
   /** Tipo: CARGO (salida) o ABONO (entrada). */

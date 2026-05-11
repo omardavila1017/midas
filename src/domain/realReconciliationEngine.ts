@@ -87,6 +87,7 @@ export interface BankMovementSnapshot {
   importe: number;
   concepto: string;
   referencia: string;
+  noRecibo?: string;
   banco?: string;
   nombreBanco?: string;
 }
@@ -562,18 +563,31 @@ function amountCents(value: number): number {
   return Math.round((Number.isFinite(value) ? value : 0) * 100);
 }
 
-function paymentMatchKey(cuenta: string, fecha: string, importe: number): string {
-  return `${cuenta.trim()}::${fecha}::${amountCents(importe)}`;
+function normalizeAccountKey(value: string | undefined): string {
+  return (value || '').trim().replace(/\s+/g, '').toUpperCase();
 }
 
-function bankCuentaContable(line: BankStatementLine): string {
-  return (line.cuentaContable || line.cuenta || '').trim();
+function paymentMatchKey(cia: string, cuenta: string, fecha: string, importe: number): string {
+  return `${cia || '(sin cia)'}::${normalizeAccountKey(cuenta)}::${fecha}::${amountCents(importe)}`;
+}
+
+function bankPaymentMatchKeys(line: BankStatementLine): string[] {
+  const cuentas = new Set([
+    normalizeAccountKey(line.cuentaContable),
+    normalizeAccountKey(line.cuentaBancos),
+    normalizeAccountKey(line.cuenta),
+  ]);
+  cuentas.delete('');
+  return Array.from(cuentas).map(cuenta =>
+    paymentMatchKey(line.cia, cuenta, line.fechaOperacion, line.importe),
+  );
 }
 
 function bankReferenceText(line: BankStatementLine): string {
   return normalizeCode([
     line.gsaid,
     line.referencia,
+    line.noRecibo,
     line.referenciaCliente,
     line.concepto,
     line.infAdi1,
@@ -593,6 +607,14 @@ function reciboTokens(noRecibo: string): string[] {
     tokens.add(token.replace(/^0+/, '') || '0');
   }
   return Array.from(tokens).filter(token => token.length >= 4);
+}
+
+function reciboMatchKeys(cia: string, noRecibo: string): string[] {
+  const keys = new Set<string>();
+  const compact = normalizeCode(noRecibo);
+  if (compact.length >= 4) keys.add(compact);
+  for (const token of reciboTokens(noRecibo)) keys.add(token);
+  return Array.from(keys).map(key => `${cia || '(sin cia)'}::${key}`);
 }
 
 function bankContainsNoRecibo(line: BankStatementLine, noRecibo: string): boolean {
@@ -836,6 +858,7 @@ function movementSnapshot(abono: BankStatementLine): BankMovementSnapshot {
     importe: abono.importe,
     concepto: abono.concepto,
     referencia: abono.referencia,
+    noRecibo: abono.noRecibo,
     banco: abono.banco,
     nombreBanco: abono.nombreBanco,
   };
@@ -1062,13 +1085,20 @@ export function reconcileRealCollections(
   const scopedPayments = cobranzaPayments.filter(payment => !ciaFilter || ciaFilter.has(payment.cia));
   const paymentMatchMeta = new Map<string, PaymentMatchMeta>();
   const paymentsByBankKey = new Map<string, CobranzaPayment[]>();
+  const paymentsByNoRecibo = new Map<string, CobranzaPayment[]>();
   for (const payment of scopedPayments) {
-    if (!payment.cuentaBancaria || !payment.fechaCobro || payment.importeRecibo <= 0) continue;
-    addToListMap(
-      paymentsByBankKey,
-      paymentMatchKey(payment.cuentaBancaria, payment.fechaCobro, payment.importeRecibo),
-      payment,
-    );
+    if (payment.noRecibo) {
+      for (const key of reciboMatchKeys(payment.cia, payment.noRecibo)) {
+        addToListMap(paymentsByNoRecibo, key, payment);
+      }
+    }
+    if (payment.cuentaBancaria && payment.fechaCobro && payment.importeRecibo > 0) {
+      addToListMap(
+        paymentsByBankKey,
+        paymentMatchKey(payment.cia, payment.cuentaBancaria, payment.fechaCobro, payment.importeRecibo),
+        payment,
+      );
+    }
   }
   const indexes = buildFacturaIndexes(facturas);
   const indexMs = nowMs() - indexStartedAt;
@@ -1083,6 +1113,93 @@ export function reconcileRealCollections(
   // ── 5. Iterar ABONOs y buscar matches ──
   const matchStartedAt = nowMs();
   let subsetCounter = 0;
+  const uniquePayments = (payments: CobranzaPayment[]): CobranzaPayment[] =>
+    Array.from(new Map(payments.map(payment => [payment.idPago, payment])).values());
+
+  const markPaymentAmbiguous = (
+    enrichment: AbonoEnrichment,
+    abono: BankStatementLine,
+    payments: CobranzaPayment[],
+    reason: string,
+  ) => {
+    enrichment.matchTier = 'payment-ambiguous';
+    enrichment.confidence = 0.55;
+    enrichment.matchReason = reason;
+    enrichment.paymentMatchStatus = 'AMBIGUOUS';
+    for (const payment of payments) {
+      if (!paymentMatchMeta.has(payment.idPago)) {
+        paymentMatchMeta.set(payment.idPago, {
+          status: 'AMBIGUOUS',
+          matchTier: 'payment-ambiguous',
+          confidence: 0.55,
+          matchReason: reason,
+          bankMovement: movementSnapshot(abono),
+        });
+      }
+    }
+  };
+
+  const applyPaymentMatch = (
+    enrichment: AbonoEnrichment,
+    abono: BankStatementLine,
+    selectedPayment: CobranzaPayment,
+    matchStatus: Exclude<PaymentReconciliationStatus, 'UNMATCHED' | 'AMBIGUOUS'>,
+    tier: Extract<MatchTier, 'payment-confirmed-ref' | 'payment-auto-unique'>,
+    confidence: number,
+    reason: string,
+  ) => {
+    const paidFacturas: AbonoEnrichment['facturas'] = [];
+
+    consumedPayment.add(selectedPayment.idPago);
+    paymentMatchMeta.set(selectedPayment.idPago, {
+      status: matchStatus,
+      matchTier: tier,
+      confidence,
+      matchReason: reason,
+      bankMovement: movementSnapshot(abono),
+    });
+    consumedAbono.add(enrichment.movementKey);
+    for (const app of selectedPayment.applications) {
+      const facturaKey = facturaKeyByNormalized.get(`${app.cia || selectedPayment.cia}::${normalizeCode(app.noFactura)}`);
+      const state = facturaKey ? facturaState.get(facturaKey) : undefined;
+      if (!facturaKey || !state) continue;
+      consumedFactura.add(facturaKey);
+      state.status = 'cobrada-banco';
+      state.matchTier = tier;
+      state.confidence = confidence;
+      state.reviewStatus = 'auto';
+      state.matchReason = reason;
+      state.bankRef = abono.referencia;
+      state.bankAmount = app.importeCobrado || selectedPayment.importeRecibo;
+      state.bankDate = abono.fechaOperacion;
+      state.bankConcept = abono.concepto;
+      state.bankAccount = abono.cuenta;
+      state.bankCia = abono.cia;
+      state.bankMovements = [movementSnapshot(abono)];
+      state.idPago = selectedPayment.idPago;
+      state.noRecibo = selectedPayment.noRecibo;
+      state.paymentMatchStatus = matchStatus;
+      paidFacturas.push({
+        cia: state.cia,
+        noFactura: state.noFactura,
+        noCliente: state.noCliente,
+        nombreCliente: state.nombreCliente,
+        importeBruto: app.importeCobrado || state.importeBruto,
+      });
+    }
+
+    enrichment.status = paidFacturas.length > 0 ? 'factura-cobrada' : 'cobranza-sin-factura';
+    enrichment.matchTier = tier;
+    enrichment.confidence = confidence;
+    enrichment.matchReason = paidFacturas.length > 0
+      ? reason
+      : `${reason} No se encontró factura CXC correspondiente en /cobranza.`;
+    enrichment.facturas = paidFacturas.length > 0 ? paidFacturas : undefined;
+    enrichment.idPago = selectedPayment.idPago;
+    enrichment.noRecibo = selectedPayment.noRecibo;
+    enrichment.paymentMatchStatus = matchStatus;
+  };
+
   for (const abono of abonos) {
     const moneda = (abono.moneda || 'MXN').toUpperCase();
     const useUSD = enableUSD && moneda === 'USD';
@@ -1098,89 +1215,62 @@ export function reconcileRealCollections(
       referencia: abono.referencia,
     };
 
-    const paymentCandidates = (paymentsByBankKey.get(
-      paymentMatchKey(bankCuentaContable(abono), abono.fechaOperacion, abono.importe),
-    ) ?? []).filter(payment => !consumedPayment.has(payment.idPago));
+    const bankNoReciboCandidates = uniquePayments(
+      abono.noRecibo
+        ? reciboMatchKeys(abono.cia, abono.noRecibo).flatMap(key => paymentsByNoRecibo.get(key) ?? [])
+        : [],
+    ).filter(payment => !consumedPayment.has(payment.idPago));
+    if (bankNoReciboCandidates.length > 0) {
+      const matchingAmount = bankNoReciboCandidates.filter(payment =>
+        importesCoinciden(payment.importeRecibo, abono.importe, false),
+      );
+      const selectedPayment = matchingAmount.length === 1 ? matchingAmount[0] : null;
+      if (selectedPayment) {
+        applyPaymentMatch(
+          enrichment,
+          abono,
+          selectedPayment,
+          'CONFIRMED_REF',
+          'payment-confirmed-ref',
+          0.99,
+          `Banco cruza con Id Pago ${selectedPayment.idPago} por No_Recibo bancario ${abono.noRecibo}.`,
+        );
+        enrichments.push(enrichment);
+        continue;
+      }
+      const reason = matchingAmount.length > 1
+        ? `${matchingAmount.length} Id Pago comparten No_Recibo bancario ${abono.noRecibo} e importe ${abono.importe}; requiere revisión.`
+        : `No_Recibo bancario ${abono.noRecibo} apunta a Id Pago ${bankNoReciboCandidates[0].idPago}, pero el importe banco ${abono.importe} no coincide con recibo ${bankNoReciboCandidates[0].importeRecibo}.`;
+      markPaymentAmbiguous(enrichment, abono, matchingAmount.length > 1 ? matchingAmount : bankNoReciboCandidates, reason);
+      enrichments.push(enrichment);
+      continue;
+    }
+
+    const paymentCandidates = uniquePayments(
+      bankPaymentMatchKeys(abono).flatMap(key => paymentsByBankKey.get(key) ?? []),
+    ).filter(payment => !consumedPayment.has(payment.idPago));
     const refPayment = paymentCandidates.find(payment => bankContainsNoRecibo(abono, payment.noRecibo));
     const selectedPayment = refPayment ?? (paymentCandidates.length === 1 ? paymentCandidates[0] : null);
     if (selectedPayment) {
       const confirmedByRef = selectedPayment === refPayment;
       const matchStatus = confirmedByRef ? 'CONFIRMED_REF' : 'AUTO_UNIQUE';
-      const tier: MatchTier = confirmedByRef ? 'payment-confirmed-ref' : 'payment-auto-unique';
+      const tier = confirmedByRef ? 'payment-confirmed-ref' : 'payment-auto-unique';
       const confidence = confirmedByRef ? 0.99 : 0.94;
       const reason = confirmedByRef
         ? `Banco cruza con Id Pago ${selectedPayment.idPago} y No Recibo ${selectedPayment.noRecibo}.`
         : `Banco cruza con Id Pago ${selectedPayment.idPago} por cuenta contable, fecha e importe únicos.`;
-      const paidFacturas: AbonoEnrichment['facturas'] = [];
-
-      consumedPayment.add(selectedPayment.idPago);
-      paymentMatchMeta.set(selectedPayment.idPago, {
-        status: matchStatus,
-        matchTier: tier,
-        confidence,
-        matchReason: reason,
-        bankMovement: movementSnapshot(abono),
-      });
-      consumedAbono.add(enrichment.movementKey);
-      for (const app of selectedPayment.applications) {
-        const facturaKey = facturaKeyByNormalized.get(`${app.cia || selectedPayment.cia}::${normalizeCode(app.noFactura)}`);
-        const state = facturaKey ? facturaState.get(facturaKey) : undefined;
-        if (!facturaKey || !state) continue;
-        consumedFactura.add(facturaKey);
-        state.status = 'cobrada-banco';
-        state.matchTier = tier;
-        state.confidence = confidence;
-        state.reviewStatus = 'auto';
-        state.matchReason = reason;
-        state.bankRef = abono.referencia;
-        state.bankAmount = app.importeCobrado || selectedPayment.importeRecibo;
-        state.bankDate = abono.fechaOperacion;
-        state.bankConcept = abono.concepto;
-        state.bankAccount = abono.cuenta;
-        state.bankCia = abono.cia;
-        state.bankMovements = [movementSnapshot(abono)];
-        state.idPago = selectedPayment.idPago;
-        state.noRecibo = selectedPayment.noRecibo;
-        state.paymentMatchStatus = matchStatus;
-        paidFacturas.push({
-          cia: state.cia,
-          noFactura: state.noFactura,
-          noCliente: state.noCliente,
-          nombreCliente: state.nombreCliente,
-          importeBruto: app.importeCobrado || state.importeBruto,
-        });
-      }
-
-      enrichment.status = paidFacturas.length > 0 ? 'factura-cobrada' : 'cobranza-sin-factura';
-      enrichment.matchTier = tier;
-      enrichment.confidence = confidence;
-      enrichment.matchReason = paidFacturas.length > 0
-        ? reason
-        : `${reason} No se encontró factura CXC correspondiente en /cobranza.`;
-      enrichment.facturas = paidFacturas.length > 0 ? paidFacturas : undefined;
-      enrichment.idPago = selectedPayment.idPago;
-      enrichment.noRecibo = selectedPayment.noRecibo;
-      enrichment.paymentMatchStatus = matchStatus;
+      applyPaymentMatch(enrichment, abono, selectedPayment, matchStatus, tier, confidence, reason);
       enrichments.push(enrichment);
       continue;
     }
 
     if (paymentCandidates.length > 1) {
-      enrichment.matchTier = 'payment-ambiguous';
-      enrichment.confidence = 0.55;
-      enrichment.matchReason = `${paymentCandidates.length} Id Pago comparten cuenta, fecha e importe; requiere revisión.`;
-      enrichment.paymentMatchStatus = 'AMBIGUOUS';
-      for (const payment of paymentCandidates) {
-        if (!paymentMatchMeta.has(payment.idPago)) {
-          paymentMatchMeta.set(payment.idPago, {
-            status: 'AMBIGUOUS',
-            matchTier: 'payment-ambiguous',
-            confidence: 0.55,
-            matchReason: enrichment.matchReason,
-            bankMovement: movementSnapshot(abono),
-          });
-        }
-      }
+      markPaymentAmbiguous(
+        enrichment,
+        abono,
+        paymentCandidates,
+        `${paymentCandidates.length} Id Pago comparten cuenta, fecha e importe; requiere revisión.`,
+      );
       enrichments.push(enrichment);
       continue;
     }

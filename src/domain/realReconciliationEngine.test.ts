@@ -477,6 +477,271 @@ describe('reconcileRealCollections — IndicadoresCobranza', () => {
     expect(result.paymentReconciliations[0].status).toBe('AUTO_UNIQUE');
   });
 
+  it('cruza automáticamente cuando Indicadores usa Cuenta_Bancos en vez de Cuenta_Contable', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-BANCO',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '999999',
+      cuentaContable: '11.1020.0011302',
+      cuentaBancos: '000123',
+      fechaOperacion: '2026-02-10',
+      importe: 1000,
+      concepto: 'TRANSFERENCIA SPEI',
+    });
+    const payment = makePayment({
+      idPago: 'PAY-CUENTA-BANCOS',
+      cia: '00011',
+      fechaCobro: '2026-02-10',
+      cuentaBancaria: '000123',
+      noRecibo: 'RI-BANCO',
+      importeRecibo: 1000,
+      applications: [
+        makeApplication({ idPago: 'PAY-CUENTA-BANCOS', cia: '00011', noFactura: 'RI-BANCO', importeCobrado: 1000 }),
+      ],
+    });
+
+    const result = reconcileRealCollections(
+      [factura],
+      [makeAccount({ cia: '00011', cuenta: '999999', movimientos: [abono] })],
+      { cobranzaPayments: [payment] },
+    );
+
+    expect(result.matches[0]).toMatchObject({
+      status: 'cobrada-banco',
+      matchTier: 'payment-auto-unique',
+      paymentMatchStatus: 'AUTO_UNIQUE',
+      idPago: 'PAY-CUENTA-BANCOS',
+    });
+    expect(result.paymentReconciliations[0].status).toBe('AUTO_UNIQUE');
+  });
+
+  it('cruza por No_Recibo bancario aunque referencia y concepto no mencionen el recibo', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-555',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '000123',
+      fechaOperacion: '2026-02-12',
+      importe: 1000,
+      referencia: 'SPEI',
+      concepto: 'TRANSFERENCIA CLIENTE',
+      noRecibo: 'RI-555',
+    });
+    const payment = makePayment({
+      idPago: 'PAY-NORECIBO',
+      cia: '00011',
+      fechaCobro: '2026-02-10',
+      cuentaBancaria: '11.1020.0011302',
+      noRecibo: 'RI - 555',
+      importeRecibo: 1000,
+      applications: [
+        makeApplication({ idPago: 'PAY-NORECIBO', cia: '00011', noFactura: 'RI-555', importeCobrado: 1000 }),
+      ],
+    });
+
+    const result = reconcileRealCollections(
+      [factura],
+      [makeAccount({ cia: '00011', cuenta: '000123', movimientos: [abono] })],
+      { cobranzaPayments: [payment] },
+    );
+
+    expect(result.matches[0]).toMatchObject({
+      status: 'cobrada-banco',
+      matchTier: 'payment-confirmed-ref',
+      idPago: 'PAY-NORECIBO',
+      paymentMatchStatus: 'CONFIRMED_REF',
+    });
+    expect(result.paymentReconciliations[0].bankMovement?.noRecibo).toBe('RI-555');
+    expect(result.paymentReconciliations[0].matchReason).toMatch(/No_Recibo bancario RI-555/);
+  });
+
+  it('usa No_Recibo bancario para desambiguar dos Id Pago con la misma cuenta, fecha e importe', () => {
+    const f1 = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-101',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const f2 = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-102',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '000123',
+      cuentaContable: '11.1020.0011302',
+      fechaOperacion: '2026-02-10',
+      importe: 1000,
+      noRecibo: 'RI-102',
+      concepto: 'TRANSFERENCIA SPEI',
+    });
+    const payments = [
+      makePayment({
+        idPago: 'PAY-A',
+        cia: '00011',
+        fechaCobro: '2026-02-10',
+        cuentaBancaria: '11.1020.0011302',
+        noRecibo: 'RI-101',
+        importeRecibo: 1000,
+        applications: [
+          makeApplication({ idPago: 'PAY-A', cia: '00011', noFactura: 'RI-101', importeCobrado: 1000 }),
+        ],
+      }),
+      makePayment({
+        idPago: 'PAY-B',
+        cia: '00011',
+        fechaCobro: '2026-02-10',
+        cuentaBancaria: '11.1020.0011302',
+        noRecibo: 'RI-102',
+        importeRecibo: 1000,
+        applications: [
+          makeApplication({ idPago: 'PAY-B', cia: '00011', noFactura: 'RI-102', importeCobrado: 1000 }),
+        ],
+      }),
+    ];
+
+    const result = reconcileRealCollections(
+      [f1, f2],
+      [makeAccount({ cia: '00011', cuenta: '000123', movimientos: [abono] })],
+      { cobranzaPayments: payments },
+    );
+
+    expect(result.matches.find(match => match.noFactura === 'RI-101')?.status).toBe('pendiente');
+    expect(result.matches.find(match => match.noFactura === 'RI-102')).toMatchObject({
+      status: 'cobrada-banco',
+      idPago: 'PAY-B',
+      paymentMatchStatus: 'CONFIRMED_REF',
+    });
+    expect(result.paymentReconciliations.map(payment => [payment.idPago, payment.status])).toEqual([
+      ['PAY-A', 'UNMATCHED'],
+      ['PAY-B', 'CONFIRMED_REF'],
+    ]);
+  });
+
+  it('usa importe para elegir un único Id Pago cuando varios comparten el mismo No_Recibo', () => {
+    const f1 = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-201',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const f2 = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-202',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1200,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '000123',
+      fechaOperacion: '2026-02-10',
+      importe: 1200,
+      noRecibo: '339563',
+      concepto: 'TRANSFERENCIA SPEI',
+    });
+    const payments = [
+      makePayment({
+        idPago: 'PAY-OLD',
+        cia: '00011',
+        fechaCobro: '2026-02-09',
+        cuentaBancaria: '11.1020.0011302',
+        noRecibo: '339563',
+        importeRecibo: 1000,
+        applications: [
+          makeApplication({ idPago: 'PAY-OLD', cia: '00011', noFactura: 'RI-201', importeCobrado: 1000 }),
+        ],
+      }),
+      makePayment({
+        idPago: 'PAY-MATCH',
+        cia: '00011',
+        fechaCobro: '2026-02-10',
+        cuentaBancaria: '11.1020.0011302',
+        noRecibo: '339563',
+        importeRecibo: 1200,
+        applications: [
+          makeApplication({ idPago: 'PAY-MATCH', cia: '00011', noFactura: 'RI-202', importeCobrado: 1200 }),
+        ],
+      }),
+    ];
+
+    const result = reconcileRealCollections(
+      [f1, f2],
+      [makeAccount({ cia: '00011', cuenta: '000123', movimientos: [abono] })],
+      { cobranzaPayments: payments },
+    );
+
+    expect(result.matches.find(match => match.noFactura === 'RI-201')?.status).toBe('pendiente');
+    expect(result.matches.find(match => match.noFactura === 'RI-202')).toMatchObject({
+      status: 'cobrada-banco',
+      idPago: 'PAY-MATCH',
+      paymentMatchStatus: 'CONFIRMED_REF',
+    });
+  });
+
+  it('deja ambiguo cuando No_Recibo bancario apunta a un recibo con importe distinto', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-300',
+      noCliente: 'C-9001',
+      nombreCliente: 'CLIENTE RECIBO',
+      importeBrutoPesos: 1000,
+    });
+    const abono = makeAbono({
+      cia: '00011',
+      cuenta: '000123',
+      fechaOperacion: '2026-02-10',
+      importe: 1000,
+      noRecibo: 'RI-300',
+      referencia: 'RI-300',
+    });
+    const payment = makePayment({
+      idPago: 'PAY-MISMATCH',
+      cia: '00011',
+      fechaCobro: '2026-02-10',
+      cuentaBancaria: '11.1020.0011302',
+      noRecibo: 'RI-300',
+      importeRecibo: 900,
+      applications: [
+        makeApplication({ idPago: 'PAY-MISMATCH', cia: '00011', noFactura: 'RI-300', importeCobrado: 900 }),
+      ],
+    });
+
+    const result = reconcileRealCollections(
+      [factura],
+      [makeAccount({ cia: '00011', cuenta: '000123', movimientos: [abono] })],
+      { cobranzaPayments: [payment] },
+    );
+
+    expect(result.matches[0].status).toBe('pendiente');
+    expect(result.abonoEnrichments[0]).toMatchObject({
+      status: 'cobranza-sin-factura',
+      matchTier: 'payment-ambiguous',
+      paymentMatchStatus: 'AMBIGUOUS',
+    });
+    expect(result.paymentReconciliations[0]).toMatchObject({
+      idPago: 'PAY-MISMATCH',
+      status: 'AMBIGUOUS',
+    });
+    expect(result.abonoEnrichments[0].matchReason).toMatch(/importe banco 1000 no coincide con recibo 900/);
+  });
+
   it('deja en revisión cuando dos Id Pago tienen la misma cuenta, fecha e importe', () => {
     const factura = makeFactura({
       cia: '00011',

@@ -1288,8 +1288,8 @@ const COLLECTION_CALENDAR_FILTERS: Array<{ id: CollectionCalendarSourceFilter; l
   { id: 'bank', label: 'Real banco' },
   { id: 'bank_unmatched', label: 'Banco sin CXC' },
   { id: 'jde', label: 'JDE' },
-  { id: 'cxc', label: 'CXC pendiente' },
-  { id: 'projected', label: 'Proyectado' },
+  { id: 'cxc', label: 'JDE por cobrar' },
+  { id: 'projected', label: 'Sin factura' },
   { id: 'unruled', label: 'Sin regla' },
 ];
 
@@ -1317,23 +1317,17 @@ const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
     textClass: 'text-[var(--primary)]',
     borderClass: 'border-[var(--primary)]/30',
   },
-  CXC_RULED_PENDING: {
+  JDE_OPEN_PROJECTED: {
     color: '#7c3aed',
     rgb: '124,58,237',
     textClass: 'text-[#6d28d9]',
     borderClass: 'border-[#7c3aed]/30',
   },
-  PROJECTED_CLIENT_RULE: {
+  CLIENT_PROJECTED: {
     color: '#64748b',
     rgb: '100,116,139',
     textClass: 'text-[var(--gray-500)]',
     borderClass: 'border-[var(--gray-300)]',
-  },
-  CXC_UNRULED_PENDING: {
-    color: '#ef4444',
-    rgb: '239,68,68',
-    textClass: 'text-[var(--danger)]',
-    borderClass: 'border-[var(--danger)]/30',
   },
 };
 
@@ -1377,7 +1371,7 @@ function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: st
   // Las proyecciones vienen del catalogo de clientes y no siempre tienen cia
   // JDE; se mantienen visibles para que el calendario futuro no desaparezca
   // al filtrar una compania.
-  if (event.source === 'PROJECTED_CLIENT_RULE') return true;
+  if (event.source === 'CLIENT_PROJECTED') return true;
   return event.cia === ciaFilter;
 }
 
@@ -1423,6 +1417,7 @@ function ReceiptReconciliationPanel({ payments }: { payments: PaymentReconciliat
         payment.noCliente,
         payment.cuentaBancaria,
         payment.banco,
+        payment.bankMovement?.noRecibo,
         payment.bankMovement?.referencia,
         payment.bankMovement?.concepto,
         ...payment.applications.flatMap(app => [app.noFactura, app.cliente, app.noCliente]),
@@ -1611,6 +1606,9 @@ function ReceiptDetail({ payment }: { payment: PaymentReconciliation }) {
             <div className="font-medium text-[var(--gray-950)]">{payment.bankMovement.nombreBanco || payment.bankMovement.banco || 'Banco'}</div>
             <div className="text-[var(--gray-500)]">Cuenta {payment.bankMovement.cuenta}</div>
             <div className="text-[var(--gray-500)]">{payment.bankMovement.fechaOperacion} · {fmtCurrency(payment.bankMovement.importe)}</div>
+            {payment.bankMovement.noRecibo && (
+              <div className="text-[var(--gray-500)]">No Recibo banco {payment.bankMovement.noRecibo}</div>
+            )}
             <div className="text-[var(--gray-500)]">Ref. {payment.bankMovement.referencia || '—'}</div>
             <div className="text-[var(--gray-400)] leading-snug">{payment.bankMovement.concepto || 'Sin concepto bancario'}</div>
           </div>
@@ -1715,15 +1713,12 @@ function CobranzaRealCalendar({
     return map;
   }, [monthEvents]);
 
-  // Totales por fuente. La KPI strip estilo legacy solo muestra
-  // BANK_MATCHED (Real banco) y JDE+CXC (pendiente). BANK_UNMATCHED y
-  // PROYECTADO siguen reflejados en el calendario por color/dot pero ya
-  // no necesitan acumular un total — la fila inline de seis números
-  // que vivía aquí migró a la KPI strip de cuatro bloques.
   const totalMes = monthEvents.reduce((s, event) => s + event.amount, 0);
   const bankTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_MATCHED');
   const jdeTotal = collectionSourceAmount(monthEvents, source => source === 'JDE_PAID_UNMATCHED');
-  const cxcTotal = collectionSourceAmount(monthEvents, source => source === 'CXC_RULED_PENDING' || source === 'CXC_UNRULED_PENDING');
+  const jdeOpenTotal = collectionSourceAmount(monthEvents, source => source === 'JDE_OPEN_PROJECTED');
+  const clientProjectedTotal = collectionSourceAmount(monthEvents, source => source === 'CLIENT_PROJECTED');
+  const jdeIssuedTotal = bankTotal + jdeTotal + jdeOpenTotal;
 
   const firstDay = new Date(Date.UTC(year, month, 1));
   const lastDay = new Date(Date.UTC(year, month + 1, 0));
@@ -1776,21 +1771,8 @@ function CobranzaRealCalendar({
     if (selectedDay && !byDay.has(selectedDay)) setSelectedDay(null);
   }, [selectedDay, byDay]);
 
-  // ── Métricas derivadas para la KPI strip estilo legacy ─────────────────
-  // El legacy original mostraba (Total / Cobrado / Proyectado / % Avance).
-  // Aquí adaptamos a las cuatro fuentes del modelo nuevo:
-  //   1. Total CXC          — todo lo agregado por el calendar engine.
-  //   2. Real banco         — BANK_MATCHED (entró al banco y cruzó factura).
-  //   3. JDE + CXC pendiente — JDE_PAID_UNMATCHED + CXC_RULED_PENDING +
-  //      CXC_UNRULED_PENDING. Es la cobranza que JDE/CXC reconoce pero
-  //      todavía no aparece cruzada con banco.
-  //   4. % Cruzado banco    — qué fracción de la cobranza esperada
-  //      (BANK + JDE + CXC) ya cobró por banco. Excluye PROYECTADO porque
-  //      no es factura emitida.
-  const pendingTotal = jdeTotal + cxcTotal;
-  const expectedThisMonth = bankTotal + pendingTotal;
-  const progressPct = expectedThisMonth > 0
-    ? (bankTotal / expectedThisMonth) * 100
+  const progressPct = jdeIssuedTotal > 0
+    ? (bankTotal / jdeIssuedTotal) * 100
     : 0;
   const eventCount = monthEvents.length;
   const uniqueClientCount = useMemo(() => {
@@ -1822,21 +1804,17 @@ function CobranzaRealCalendar({
 
   return (
     <div className="space-y-4">
-      {/* ── KPI strip estilo legacy ────────────────────────────
-          Cuatro bloques: Total CXC, Real banco, JDE+CXC pendiente,
-          % Cruzado banco con barra de avance. La fila inline de seis
-          totales que vivía aquí migró a esta estructura para que el
-          primer scan visual sea idéntico al calendario legacy. */}
+      {/* ── KPI strip: JDE emitido y proyección sin factura separados. */}
       <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Total CXC</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Facturas JDE emitidas</div>
           <AnimatedNumber
-            value={totalMes}
+            value={jdeIssuedTotal}
             format={fmtCurrency}
             className="block text-xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">
-            {eventCount} evento{eventCount !== 1 ? 's' : ''} · {uniqueClientCount} cliente{uniqueClientCount !== 1 ? 's' : ''}
+            {eventCount} evento{eventCount !== 1 ? 's' : ''} visibles · {uniqueClientCount} cliente{uniqueClientCount !== 1 ? 's' : ''}
           </div>
         </div>
         <div>
@@ -1849,19 +1827,37 @@ function CobranzaRealCalendar({
           <div className="text-[11px] text-[var(--gray-400)]">cruzado con banco</div>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--primary)]">JDE + CXC pendiente</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--primary)]">Pagado JDE sin banco</div>
           <AnimatedNumber
-            value={pendingTotal}
+            value={jdeTotal}
             format={fmtCurrency}
             className="block text-xl font-bold tabular-nums text-[var(--primary)] mt-0.5"
           />
-          <div className="text-[11px] text-[var(--gray-400)]">JDE pago + factura abierta</div>
+          <div className="text-[11px] text-[var(--gray-400)]">pendiente de cruzar banco</div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[#6d28d9]">Por cobrar JDE</div>
+          <AnimatedNumber
+            value={jdeOpenTotal}
+            format={fmtCurrency}
+            className="block text-xl font-bold tabular-nums text-[#6d28d9] mt-0.5"
+          />
+          <div className="text-[11px] text-[var(--gray-400)]">factura emitida pendiente</div>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Proyección sin factura</div>
+          <AnimatedNumber
+            value={clientProjectedTotal}
+            format={fmtCurrency}
+            className="block text-xl font-bold tabular-nums text-[var(--gray-500)] mt-0.5"
+          />
+          <div className="text-[11px] text-[var(--gray-400)]">cliente sin factura JDE</div>
         </div>
         <div className="ml-auto min-w-[200px]">
           <div className="flex items-baseline justify-between">
             <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Cruzado banco</div>
             <div className="text-xl font-bold tabular-nums text-[var(--gray-950)]">
-              {expectedThisMonth > 0 ? (
+              {jdeIssuedTotal > 0 ? (
                 <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
               ) : (
                 '—'
@@ -1903,11 +1899,7 @@ function CobranzaRealCalendar({
           </button>
         </div>
 
-        {/* Chips de fuente — usan el patrón redondo del Chip legacy.
-            Sus aria-labels y nombres accesibles se conservan exactos
-            (Todas / Real banco / Banco sin CXC / JDE / CXC pendiente
-            / Proyectado / Sin regla) porque CollectionProjection.test
-            los matchea por getByRole('button', { name: ... }). */}
+        {/* Chips de fuente — separan facturas JDE emitidas de proyección sin factura. */}
         <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-white">
           <div className="flex flex-wrap gap-1.5" aria-label="Filtrar fuente de calendario">
             {COLLECTION_CALENDAR_FILTERS.map(filter => {
@@ -1972,12 +1964,29 @@ function CobranzaRealCalendar({
             const iso = d.toISOString().slice(0, 10);
             const dayEvents = byDay.get(iso) ?? [];
             const dayTotal = dayEvents.reduce((s, event) => s + event.amount, 0);
+            const dayJdeTotal = dayEvents
+              .filter(event =>
+                event.source === 'BANK_MATCHED'
+                || event.source === 'JDE_PAID_UNMATCHED'
+                || event.source === 'JDE_OPEN_PROJECTED',
+              )
+              .reduce((s, event) => s + event.amount, 0);
+            const dayClientProjectedTotal = dayEvents
+              .filter(event => event.source === 'CLIENT_PROJECTED')
+              .reduce((s, event) => s + event.amount, 0);
             const isSelected = selectedDay === iso;
             const isToday = iso === todayISO;
             const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
             const heat = dayTotal / maxDayMonto;
             const dominantSource = dominantCollectionSource(dayEvents);
-            const sourceStyle = dominantSource ? COLLECTION_CALENDAR_SOURCE_STYLES[dominantSource] : null;
+            const dominantJdeSource = dominantCollectionSource(dayEvents.filter(event =>
+              event.source === 'BANK_MATCHED'
+              || event.source === 'JDE_PAID_UNMATCHED'
+              || event.source === 'JDE_OPEN_PROJECTED',
+            ));
+            const sourceStyle = (dominantJdeSource || dominantSource)
+              ? COLLECTION_CALENDAR_SOURCE_STYLES[dominantJdeSource || dominantSource!]
+              : null;
             // Pill: fondo coloreado por la fuente dominante con
             // intensidad proporcional al monto, igual que el legacy
             // hace con confirmado/proyectado.
@@ -2021,17 +2030,32 @@ function CobranzaRealCalendar({
                   )}
                 </div>
                 {dayTotal > 0 && inMonth && (
-                  <div className="mt-1">
-                    <div
-                      className="rounded-md px-1.5 py-0.5 text-[11px] font-bold tabular-nums inline-block"
-                      style={{ backgroundColor: pillBg, color: pillFg }}
-                    >
-                      {dayTotal >= 1_000_000
-                        ? `${(dayTotal / 1_000_000).toFixed(1)}M`
-                        : dayTotal >= 1000
-                          ? `${Math.round(dayTotal / 1000)}K`
-                          : fmtCompact(dayTotal)}
-                    </div>
+                  <div className="mt-1 space-y-1">
+                    {dayJdeTotal > 0 && (
+                      <div
+                        className="rounded-md px-1.5 py-0.5 text-[11px] font-bold tabular-nums inline-block"
+                        style={{ backgroundColor: pillBg, color: pillFg }}
+                        title="Facturas JDE emitidas"
+                      >
+                        {dayJdeTotal >= 1_000_000
+                          ? `${(dayJdeTotal / 1_000_000).toFixed(1)}M`
+                          : dayJdeTotal >= 1000
+                            ? `${Math.round(dayJdeTotal / 1000)}K`
+                            : fmtCompact(dayJdeTotal)}
+                      </div>
+                    )}
+                    {dayClientProjectedTotal > 0 && (
+                      <div
+                        className="rounded-md bg-[var(--gray-100)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--gray-500)] w-fit"
+                        title="Proyección sin factura JDE"
+                      >
+                        Sin fact. {dayClientProjectedTotal >= 1_000_000
+                          ? `${(dayClientProjectedTotal / 1_000_000).toFixed(1)}M`
+                          : dayClientProjectedTotal >= 1000
+                            ? `${Math.round(dayClientProjectedTotal / 1000)}K`
+                            : fmtCompact(dayClientProjectedTotal)}
+                      </div>
+                    )}
                   </div>
                 )}
                 {sourceBreakdown.length > 0 && inMonth && (
@@ -2117,11 +2141,11 @@ function CobranzaRealCalendar({
                             )}
                           </div>
                         ) : event.projected ? (
-                          <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura CXC emitida.</span>
+                          <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura JDE emitida.</span>
                         ) : event.source === 'JDE_PAID_UNMATCHED' ? (
                           <span className="text-[11px] text-[var(--gray-500)]">JDE reporta Fecha_Pago; no se requiere banco cargado.</span>
                         ) : (
-                          <span className="text-[11px] text-[var(--gray-500)]">Factura CXC pendiente.</span>
+                          <span className="text-[11px] text-[var(--gray-500)]">Factura JDE emitida pendiente de cobro.</span>
                         )}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold text-[var(--gray-950)]">
@@ -2605,9 +2629,8 @@ function CobranzaRealView({
       BANK_MATCHED: 0,
       BANK_UNMATCHED: 1,
       JDE_PAID_UNMATCHED: 2,
-      CXC_RULED_PENDING: 3,
-      CXC_UNRULED_PENDING: 4,
-      PROJECTED_CLIENT_RULE: 5,
+      JDE_OPEN_PROJECTED: 3,
+      CLIENT_PROJECTED: 4,
     };
     const map = new Map<string, CollectionCalendarEvent>();
     for (const event of collectionCalendar.events) {
@@ -2718,7 +2741,7 @@ function CobranzaRealView({
       {/* KPIs */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5 flex items-end gap-8 flex-wrap">
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo CXC pendiente</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo JDE por cobrar</div>
           <AnimatedNumber
             value={totalSaldo}
             format={fmtCurrency}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchIndicadoresCobranza, normalizeCobranzaPayments, normalizeInvoiceRef } from './jde';
+import { fetchBankStatements, fetchIndicadoresCobranza, normalizeCobranzaPayments, normalizeInvoiceRef } from './jde';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -68,6 +68,38 @@ describe('normalizeCobranzaPayments', () => {
 
   it('normaliza referencias de factura con espacios alrededor del guion', () => {
     expect(normalizeInvoiceRef('RI - 90829')).toBe(normalizeInvoiceRef('RI-90829'));
+  });
+
+  it('normaliza No_Recibo del API de bancos hacia la línea bancaria', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      {
+        cia: '11',
+        Cuenta_Contable: '11.1020.0011302',
+        Cuenta_Bancos: '000123',
+        Nombre_cuenta_Contable: 'BANAMEX CTA',
+        Fecha_Estado_Cuenta: '2026-02-10',
+        Importe: '1000.00',
+        Tipo_Movimiento: 'CREDITO',
+        Referencia_Cliente: 'SPEI',
+        No_Recibo: 'RI-100',
+      },
+    ]), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: '2026-02-10',
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/jde/bancos', expect.objectContaining({
+      method: 'POST',
+    }));
+    expect(statements[0].cia).toBe('00011');
+    expect(statements[0].movimientos[0].cia).toBe('00011');
+    expect(statements[0].movimientos[0].noRecibo).toBe('RI-100');
   });
 
   it('consulta cobranzaindicadores por el proxy JDE estándar por cía', async () => {

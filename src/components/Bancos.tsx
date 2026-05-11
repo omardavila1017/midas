@@ -843,6 +843,14 @@ const BancosMovimientos = ({
                   <td className="py-1.5 font-mono text-[var(--gray-950)]">{m.referencia || '—'}</td>
                   <td className="py-1.5 text-[var(--gray-500)] max-w-[320px] truncate" title={tooltip}>
                     {m.concepto || '—'}
+                    {m.noRecibo && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--gray-100)] text-[var(--gray-600)] font-bold align-middle"
+                        title={`No Recibo banco ${m.noRecibo}`}
+                      >
+                        Recibo {m.noRecibo}
+                      </span>
+                    )}
                     {isInternal && (
                       <span className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-bold align-middle">
                         Interno

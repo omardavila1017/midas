@@ -237,7 +237,8 @@ function parseConcepto(inf1: unknown, inf2: unknown): string {
  *   Cuenta_Contable, Nombre_cuenta_Contable, Saldo_Inicial, Saldo_Final,
  *   tipo_Cuenta_Bancos, DESC039, Importe, Codigo_Transaccion_banco,
  *   Tipo_Movimiento ("DEBITO"/"CREDITO"), Referencia_Cliente,
- *   InF_ADI_1, InF_ADI_2, InF_ADI_3, Codigo_Categoria_33..38, DESC033..038
+ *   No_Recibo, InF_ADI_1, InF_ADI_2, InF_ADI_3,
+ *   Codigo_Categoria_33..38, DESC033..038
  */
 function mapBankLine(raw: RawRecord): BankStatementLine {
   const gsaid = toStr(pick(raw, ['gsaid', 'GSAID']));
@@ -250,6 +251,7 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
   const desc036 = toStr(pick(raw, ['DESC036', 'desc036', 'moneda', 'currency']));
   const codigoTransaccionBanco = toStr(pick(raw, ['Codigo_Transaccion_banco', 'codigo_transaccion_banco']));
   const referenciaCliente = toStr(pick(raw, ['Referencia_Cliente', 'referencia_cliente']));
+  const noRecibo = toStr(pick(raw, ['No_Recibo', 'No Recibo', 'noRecibo', 'no_recibo']));
   const infAdi1 = toStr(pick(raw, ['InF_ADI_1', 'INF_ADI_1', 'infAdi1']));
   const infAdi2 = toStr(pick(raw, ['InF_ADI_2', 'INF_ADI_2', 'infAdi2']));
   const infAdi3 = toStr(pick(raw, ['InF_ADI_3', 'INF_ADI_3', 'infAdi3']));
@@ -287,7 +289,7 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
 
   // ── Empresa ── derivada de Cuenta_Contable (BU → cia con padding)
   const ciaExplicit = toStr(pick(raw, ['cia', 'compania']));
-  const cia = ciaExplicit || extractCiaFromCuentaContable(cuentaContable);
+  const cia = ciaExplicit ? normalizeCia(ciaExplicit) : extractCiaFromCuentaContable(cuentaContable);
 
   // ── Banco ── nombre extraído de Nombre_cuenta_Contable + tipo de cuenta (DESC039)
   const nombreBancoRaw = toStr(
@@ -335,6 +337,7 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
     fechaOperacion,
     fechaValor: undefined,
     referencia,
+    noRecibo,
     concepto,
     tipoMovimiento,
     importe: absImporte,

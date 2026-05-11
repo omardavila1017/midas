@@ -16,9 +16,8 @@ export type CollectionCalendarEventSource =
   | 'BANK_MATCHED'
   | 'BANK_UNMATCHED'
   | 'JDE_PAID_UNMATCHED'
-  | 'CXC_RULED_PENDING'
-  | 'PROJECTED_CLIENT_RULE'
-  | 'CXC_UNRULED_PENDING';
+  | 'JDE_OPEN_PROJECTED'
+  | 'CLIENT_PROJECTED';
 
 export type CollectionCalendarSourceFilter =
   | 'all'
@@ -104,18 +103,16 @@ export const COLLECTION_CALENDAR_SOURCE_LABELS: Record<CollectionCalendarEventSo
   BANK_MATCHED: 'Banco cruzado',
   BANK_UNMATCHED: 'Banco sin factura',
   JDE_PAID_UNMATCHED: 'JDE cobrado',
-  CXC_RULED_PENDING: 'CXC por regla',
-  PROJECTED_CLIENT_RULE: 'Proyectado',
-  CXC_UNRULED_PENDING: 'Sin regla',
+  JDE_OPEN_PROJECTED: 'Factura JDE por cobrar',
+  CLIENT_PROJECTED: 'Proyección sin factura',
 };
 
 const SOURCE_ORDER: CollectionCalendarEventSource[] = [
   'BANK_MATCHED',
   'BANK_UNMATCHED',
   'JDE_PAID_UNMATCHED',
-  'CXC_RULED_PENDING',
-  'PROJECTED_CLIENT_RULE',
-  'CXC_UNRULED_PENDING',
+  'JDE_OPEN_PROJECTED',
+  'CLIENT_PROJECTED',
 ];
 
 export function emptyCollectionCalendarSummary(): Record<CollectionCalendarEventSource, CollectionCalendarSourceSummary> {
@@ -139,11 +136,11 @@ export function calendarEventMatchesSourceFilter(
     case 'jde':
       return event.source === 'JDE_PAID_UNMATCHED';
     case 'cxc':
-      return event.source === 'CXC_RULED_PENDING';
+      return event.source === 'JDE_OPEN_PROJECTED';
     case 'projected':
-      return event.source === 'PROJECTED_CLIENT_RULE';
+      return event.source === 'CLIENT_PROJECTED';
     case 'unruled':
-      return event.source === 'CXC_UNRULED_PENDING';
+      return event.source === 'JDE_OPEN_PROJECTED' && !event.rule;
   }
 }
 
@@ -191,12 +188,12 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     }
 
     if (record.importePendientePesos > 0 && clientMatch) {
-      events.push(eventFromPendingRule(record, clientMatch, assumptions));
+      events.push(eventFromJdeOpenProjected(record, clientMatch, assumptions));
       continue;
     }
 
     if (record.importePendientePesos > 0) {
-      events.push(eventFromUnruledPending(record));
+      events.push(eventFromJdeOpenProjected(record, null, assumptions));
     }
   }
 
@@ -291,67 +288,56 @@ function eventFromJdePaid(record: CobranzaRecord): CollectionCalendarEvent {
   };
 }
 
-function eventFromPendingRule(
+function eventFromJdeOpenProjected(
   record: CobranzaRecord,
-  clientMatch: CollectionCalendarClientMatch,
+  clientMatch: CollectionCalendarClientMatch | null,
   assumptions: CashFlowAssumptions,
 ): CollectionCalendarEvent {
-  const resolved = resolveCobranzaRuleDate(record, clientMatch.client, assumptions);
-  return {
-    id: `cxc-rule:${record.cia}:${record.noFactura}`,
-    source: 'CXC_RULED_PENDING',
-    date: resolved.calendarDate,
-    amount: record.importePendientePesos,
-    cia: record.cia,
-    clientId: clientMatch.client.id,
-    clientName: record.nombreCliente || clientMatch.client.name,
-    noCliente: record.noCliente,
-    noFactura: record.noFactura,
-    statusLabel: 'CXC pendiente por regla de cliente',
-    dateReason: resolved.reason,
-    ruleApplied: clientRuleLabel(clientMatch.client),
-    confidence: clientMatch.confidence,
-    facturas: [facturaFromRecord(record)],
-    rule: {
-      clientId: clientMatch.client.id,
-      clientName: clientMatch.client.name,
-      ruleApplied: clientRuleLabel(clientMatch.client),
-      matchConfidence: clientMatch.confidence,
-      invoiceDate: resolved.invoiceDate,
-      theoreticalDate: resolved.theoreticalDate,
-    },
-  };
-}
-
-function eventFromUnruledPending(record: CobranzaRecord): CollectionCalendarEvent {
+  const resolved = clientMatch
+    ? resolveCobranzaRuleDate(record, clientMatch.client, assumptions)
+    : null;
   const fallbackDate = record.fechaVence || record.fechaFactura || new Date().toISOString().slice(0, 10);
   return {
-    id: `cxc-unruled:${record.cia}:${record.noFactura}`,
-    source: 'CXC_UNRULED_PENDING',
-    date: fallbackDate,
+    id: `jde-open:${record.cia}:${record.noFactura}`,
+    source: 'JDE_OPEN_PROJECTED',
+    date: resolved?.calendarDate ?? fallbackDate,
     amount: record.importePendientePesos,
     cia: record.cia,
-    clientName: record.nombreCliente || 'Cliente sin regla',
+    clientId: clientMatch?.client.id,
+    clientName: record.nombreCliente || clientMatch?.client.name || 'Cliente sin regla',
     noCliente: record.noCliente,
     noFactura: record.noFactura,
-    statusLabel: 'CXC pendiente sin regla confiable',
-    dateReason: record.fechaVence
-      ? 'Sin cliente/regla confiable; se usa fecha de vencimiento.'
-      : 'Sin cliente/regla confiable ni vencimiento; se usa fecha de factura.',
-    ruleApplied: 'Sin regla confiable',
+    statusLabel: 'Factura JDE emitida por cobrar',
+    dateReason: resolved?.reason ?? (
+      record.fechaVence
+        ? 'Sin cliente/regla confiable; se usa fecha de vencimiento JDE.'
+        : 'Sin cliente/regla confiable ni vencimiento; se usa fecha de factura JDE.'
+    ),
+    ruleApplied: clientMatch ? clientRuleLabel(clientMatch.client) : 'Sin regla confiable',
+    confidence: clientMatch?.confidence,
     facturas: [facturaFromRecord(record)],
+    rule: clientMatch && resolved
+      ? {
+          clientId: clientMatch.client.id,
+          clientName: clientMatch.client.name,
+          ruleApplied: clientRuleLabel(clientMatch.client),
+          matchConfidence: clientMatch.confidence,
+          invoiceDate: resolved.invoiceDate,
+          theoreticalDate: resolved.theoreticalDate,
+        }
+      : undefined,
   };
 }
 
 function eventFromProjection(projected: CollectionEvent, client: Client | undefined): CollectionCalendarEvent {
   return {
     id: `projected:${eventKey(projected)}`,
-    source: 'PROJECTED_CLIENT_RULE',
+    source: 'CLIENT_PROJECTED',
     date: projected.realDate,
     amount: projected.amount,
     clientId: projected.clientId,
     clientName: client?.name ?? projected.clientId,
-    statusLabel: 'Proyectado por regla de cliente',
+    statusLabel: 'Proyección sin factura JDE emitida',
     dateReason: 'Fecha calculada por collectionEngine desde calendario del cliente.',
     ruleApplied: client ? clientRuleLabel(client) : 'Regla de cliente',
     facturas: [],
