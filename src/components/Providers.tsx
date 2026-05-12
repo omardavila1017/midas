@@ -522,8 +522,13 @@ function ScoreBar({ score }: { score: number | undefined }) {
     <div className="flex flex-col items-center gap-0.5">
       <div className="w-12 h-1.5 rounded-full bg-[var(--gray-100)] overflow-hidden">
         <div
-          className="h-full rounded-full transition-all"
-          style={{ width: `${pct}%`, backgroundColor: color }}
+          className="h-full w-full rounded-full"
+          style={{
+            backgroundColor: color,
+            transform: `scaleX(${Math.max(0, Math.min(100, pct)) / 100})`,
+            transformOrigin: 'left center',
+            transition: 'transform var(--motion-state) var(--ease-smooth)',
+          }}
         />
       </div>
       <span className="text-[10px] tabular-nums font-medium" style={{ color }}>

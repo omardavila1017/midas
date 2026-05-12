@@ -69,15 +69,22 @@ interface DashboardProps {
   cobranzaReconciliation?: RealReconciliationResult;
 }
 
+/*
+ * Chart hex literals. Recharts SVG primitives accept hex strings only —
+ * CSS variables would require getComputedStyle reads on every render.
+ * Aligned with --chart-income / --chart-expense tokens in index.css;
+ * keep in sync if those tokens move. When a dark-mode token set ships,
+ * resolve these from theme context instead of literals.
+ */
 const CHART_COLORS = {
-  income: '#059669',       // emerald-600 (real income)
-  incomePattern: '#10b981', // emerald-500 (projected stripes)
-  incomeBg: '#ecfdf5',     // emerald-50
-  expense: '#dc2626',       // red-600 (real expense)
-  expensePattern: '#ef4444', // red-500 (projected stripes)
-  expenseBg: '#fef2f2',    // red-50
-  cash: '#1d4ed8',         // blue-700
-};
+  income:         '#16a34a', // var(--success)
+  incomePattern:  '#22c55e',
+  incomeBg:       '#dcfce7', // var(--success-muted)
+  expense:        '#dc2626', // var(--danger)
+  expensePattern: '#ef4444',
+  expenseBg:      '#fee2e2', // var(--danger-muted)
+  cash:           '#1e293b', // var(--primary)
+} as const;
 
 const OVERRIDES_KEY = 'midas.dashboard.projectionOverrides.v1';
 const LEGACY_OVERRIDES_KEY = 'flowsense.dashboard.projectionOverrides.v1';

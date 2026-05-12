@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
 interface KeyboardShortcutsModalProps {
@@ -15,7 +15,7 @@ interface UseKeyboardShortcutsOptions {
 
 const SHORTCUTS = [
   { keys: 'Cmd+K', description: 'Buscar / Command Palette' },
-  { keys: '1-9', description: 'Cambiar pestaña' },
+  { keys: '1-9', description: 'Cambiar sub-tab dentro de la sección activa' },
   { keys: '?', description: 'Atajos de teclado' },
   { keys: 'E', description: 'Exportar CSV' },
   { keys: 'N', description: 'Nuevo (cliente, proveedor, propuesta)' },
@@ -112,73 +112,76 @@ export const useKeyboardShortcuts = (
 } => {
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input or textarea
-      const target = event.target as HTMLElement;
-      if (
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.contentEditable === 'true'
-      ) {
-        // Allow Esc to close even from inputs
-        if (event.key === 'Escape') {
-          setShortcutsOpen(false);
-          return;
-        }
+  // Stable ref for callbacks. Previously the handler was rebuilt every render
+  // because `options` is a fresh object literal at the call site, which
+  // caused the global keydown listener to be removed+readded each render.
+  // Under heavy compute (Proyección Financiera) digit keypresses were
+  // dropped between unmount and remount. Ref keeps the listener stable and
+  // always reads the latest callbacks.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  useEffect(() => {
+    const isEditableTarget = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (el.isContentEditable) return true;
+      const role = el.getAttribute('role');
+      if (role === 'textbox' || role === 'combobox' || role === 'searchbox') return true;
+      return false;
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const opts = optionsRef.current;
+      const editable = isEditableTarget(event.target) || isEditableTarget(document.activeElement);
+
+      if (event.key === 'Escape') {
+        setShortcutsOpen(false);
         return;
       }
 
-      // Cmd+K or Ctrl+K - Command Palette (parent handles this)
+      if (editable) return;
+
       if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
         event.preventDefault();
-        // Parent component should handle command palette opening
+        return;
       }
 
-      // 1-9 - Tab switching
-      if (event.key >= '1' && event.key <= '9' && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+      if (event.key >= '1' && event.key <= '9' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
         const tabNumber = parseInt(event.key, 10);
-        options.onTabSwitch?.(tabNumber);
+        event.preventDefault();
+        opts.onTabSwitch?.(tabNumber);
+        return;
       }
 
-      // ? - Keyboard shortcuts
       if (event.shiftKey && event.key === '?') {
         event.preventDefault();
         setShortcutsOpen(true);
+        return;
       }
 
-      // E - Export CSV
       if (event.key === 'e' && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
-        options.onExport?.();
+        opts.onExport?.();
+        return;
       }
 
-      // N - New item
       if (event.key === 'n' && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
-        options.onNew?.();
+        opts.onNew?.();
+        return;
       }
 
-      // Esc - Close modal/panel
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setShortcutsOpen(false);
-        // Parent component should handle closing panels
-      }
-
-      // / - Search in table
       if (event.key === '/' && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
         event.preventDefault();
-        options.onSearch?.();
+        opts.onSearch?.();
       }
-    },
-    [options]
-  );
+    };
 
-  useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handleKeyDown]);
+  }, []);
 
   return { shortcutsOpen, setShortcutsOpen };
 };

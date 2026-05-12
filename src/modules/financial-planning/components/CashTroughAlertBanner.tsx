@@ -79,7 +79,7 @@ export function CashTroughAlertBanner({
         type="button"
         aria-label="Descartar alerta"
         onClick={() => setDismissed(true)}
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--gray-500)] transition-colors duration-150 hover:bg-white/60 hover:text-[var(--gray-800)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/30"
+        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--gray-500)] transition-colors duration-150 hover:bg-[var(--gray-100)] hover:text-[var(--gray-900)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/30"
       >
         <X className="h-3.5 w-3.5" strokeWidth={1.5} />
       </button>

@@ -86,7 +86,7 @@ export default function EmptyState({
             className={[
               'inline-flex shrink-0 items-center justify-center rounded-[var(--radius-md)]',
               isCompact ? 'h-5 w-5 mt-0.5' : 'h-10 w-10',
-              isCompact ? '' : tone === 'warning' ? 'bg-white/60' : 'bg-[var(--gray-50)]',
+              isCompact ? '' : tone === 'warning' ? 'bg-[var(--warning-muted)]' : 'bg-[var(--gray-50)]',
             ].join(' ')}
             style={{ color: t.iconColor }}
             aria-hidden="true"

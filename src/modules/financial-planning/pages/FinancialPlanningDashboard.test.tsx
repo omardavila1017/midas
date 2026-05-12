@@ -19,6 +19,15 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  // Outer dashboard schedules `buildFinancialProjectionSourceData` through
+  // requestIdleCallback to keep the warmup shell on screen on real browsers.
+  // In tests we want the full inner UI to mount synchronously so assertions
+  // don't have to wait — fire the idle callback immediately.
+  vi.stubGlobal('requestIdleCallback', (cb: () => void) => {
+    cb();
+    return 1;
+  });
+  vi.stubGlobal('cancelIdleCallback', () => {});
 });
 
 afterEach(() => {
@@ -27,7 +36,7 @@ afterEach(() => {
 });
 
 describe('<FinancialPlanningDashboard />', () => {
-  it('bootstraps Base + Aprobado on first mount and shows the workbench', () => {
+  it('bootstraps Base + Aprobado on first mount and shows the workbench', async () => {
     render(
       <FinancialPlanningDashboard
         companyCode="all"
@@ -41,13 +50,14 @@ describe('<FinancialPlanningDashboard />', () => {
       />,
     );
 
+    await flushPlanningWarmup();
     expect(screen.getByText('Planeación Financiera')).toBeTruthy();
     expect(screen.getAllByText('Escenario Base').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Escenario Aprobado').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /Nueva propuesta/i })).toBeTruthy();
   });
 
-  it('creates a draft when clicking "Nueva propuesta" and persists it', () => {
+  it('creates a draft when clicking "Nueva propuesta" and persists it', async () => {
     render(
       <FinancialPlanningDashboard
         companyCode="all"
@@ -61,6 +71,7 @@ describe('<FinancialPlanningDashboard />', () => {
       />,
     );
 
+    await flushPlanningWarmup();
     fireEvent.click(screen.getByRole('button', { name: /Nueva propuesta/i }));
 
     const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
@@ -68,7 +79,7 @@ describe('<FinancialPlanningDashboard />', () => {
     expect(drafts.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('purges legacy scenario kinds during bootstrap', () => {
+  it('purges legacy scenario kinds during bootstrap', async () => {
     localStorage.setItem(
       'midas.financialPlanning.scenarios.v1',
       JSON.stringify([
@@ -89,6 +100,7 @@ describe('<FinancialPlanningDashboard />', () => {
       />,
     );
 
+    await flushPlanningWarmup();
     const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
     const surviving = stored.filter((scenario: { id: string }) => scenario.id === 'legacy-c');
     expect(surviving.length).toBe(0);
@@ -108,6 +120,7 @@ describe('<FinancialPlanningDashboard />', () => {
       />,
     );
 
+    await flushPlanningWarmup();
     fireEvent.click(screen.getByRole('button', { name: /Compromisos/i }));
     fireEvent.change(screen.getByLabelText('Concepto'), { target: { value: 'Nómina semanal' } });
     fireEvent.change(screen.getByLabelText('Monto'), { target: { value: '150000' } });
@@ -129,6 +142,10 @@ describe('<FinancialPlanningDashboard />', () => {
     });
   });
 });
+
+async function flushPlanningWarmup() {
+  await waitFor(() => expect(screen.queryByLabelText('Cargando planeación')).toBeNull());
+}
 
 const assumptions: CashFlowAssumptions = {
   year: 2026,

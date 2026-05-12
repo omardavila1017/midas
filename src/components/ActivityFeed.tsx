@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import {
   Bell,
   Plus,
@@ -173,7 +173,26 @@ interface ActivityFeedProviderProps {
 }
 
 export function ActivityFeedProvider({ children }: ActivityFeedProviderProps) {
-  const [entries, setEntries] = useState<ActivityEntry[]>(() => loadFromStorage());
+  // Defer the localStorage read out of the sync init path — the activity feed
+  // is a non-critical history panel, so starting empty for one tick keeps the
+  // initial render off the JSON.parse + LEGACY_STORAGE_KEY migration code.
+  const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  useEffect(() => {
+    type IdleHandle = number;
+    const idle: (cb: () => void) => IdleHandle =
+      typeof window !== 'undefined' && 'requestIdleCallback' in window
+        ? (cb) => (window as unknown as { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(cb)
+        : (cb) => window.setTimeout(cb, 0);
+    const cancel: (h: IdleHandle) => void =
+      typeof window !== 'undefined' && 'cancelIdleCallback' in window
+        ? (h) => (window as unknown as { cancelIdleCallback: (h: number) => void }).cancelIdleCallback(h)
+        : (h) => window.clearTimeout(h);
+    const handle = idle(() => {
+      const loaded = loadFromStorage();
+      if (loaded.length) setEntries(loaded);
+    });
+    return () => cancel(handle);
+  }, []);
 
   const log = useCallback(
     (entry: Omit<ActivityEntry, 'id' | 'timestamp'>) => {

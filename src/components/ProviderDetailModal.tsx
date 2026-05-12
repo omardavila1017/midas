@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
@@ -77,10 +77,15 @@ const ALBERTO_COLORS: Record<ClasificacionAlberto, { bg: string; text: string; r
 };
 
 export default function ProviderDetailModal({ provider, cxpRecords, onClose }: Props) {
-  // Bloquear scroll del body
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+
+  // Bloquear scroll del body, mover foco al modal, restaurarlo al cerrar.
   useEffect(() => {
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    queueMicrotask(() => closeBtnRef.current?.focus());
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
@@ -88,6 +93,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
     return () => {
       document.body.style.overflow = prev;
       window.removeEventListener('keydown', handler);
+      previouslyFocused.current?.focus?.();
     };
   }, [onClose]);
 
@@ -156,9 +162,12 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
 
   const content = (
     <div
-      className="fixed inset-0 z-[9999] overflow-y-auto overscroll-contain bg-black/60 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-[9999] overflow-y-auto overscroll-contain animate-fade-in"
       onClick={onClose}
-      style={{ WebkitOverflowScrolling: 'touch' }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provider-detail-title"
+      style={{ background: 'var(--modal-overlay)', WebkitOverflowScrolling: 'touch' }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -166,11 +175,9 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
       >
         {/* ─── Header (sticky) ─────────────────────────────────────── */}
         <header
-          className="sticky top-0 z-10 border-b border-[var(--gray-200)]/60 bg-white/95 backdrop-blur px-6 py-4"
+          className="sticky top-0 z-10 border-b border-[var(--gray-200)] px-6 py-4"
           style={{
-            background: alberto === 'CRITICO'
-              ? `linear-gradient(135deg, ${albertoColor.bg} 0%, white 80%)`
-              : 'rgba(255,255,255,0.95)',
+            background: alberto === 'CRITICO' ? albertoColor.bg : 'var(--surface)',
           }}
         >
           <div className="flex items-start justify-between gap-4 max-w-7xl mx-auto">
@@ -198,7 +205,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                   </span>
                 )}
               </div>
-              <h1 className="mt-2 text-[24px] font-bold text-[var(--gray-950)] truncate" title={provider.name}>
+              <h1 id="provider-detail-title" className="mt-2 text-[24px] font-bold text-[var(--gray-950)] truncate" title={provider.name}>
                 {provider.name}
               </h1>
               <p className="mt-1 text-[13px] text-[var(--gray-500)]">
@@ -206,6 +213,7 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
               </p>
             </div>
             <button
+              ref={closeBtnRef}
               onClick={onClose}
               className="shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-[var(--radius-md)] bg-white border border-[var(--gray-200)] text-[var(--gray-600)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)] transition-colors"
               aria-label="Cerrar"
@@ -491,7 +499,15 @@ function CriterioBar({ label, value, weight }: { label: string; value: number; w
       </div>
       <div className="mt-2 flex items-center gap-2">
         <div className="flex-1 h-1.5 rounded-full bg-[var(--gray-200)] overflow-hidden">
-          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+          <div
+            className="h-full w-full rounded-full"
+            style={{
+              backgroundColor: color,
+              transform: `scaleX(${Math.max(0, Math.min(100, pct)) / 100})`,
+              transformOrigin: 'left center',
+              transition: 'transform var(--motion-state) var(--ease-smooth)',
+            }}
+          />
         </div>
         <span className="text-[12px] font-bold tabular-nums" style={{ color }}>
           {value}<span className="text-[10px] text-[var(--gray-400)] font-normal">/5</span>

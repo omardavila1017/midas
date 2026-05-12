@@ -13,10 +13,19 @@ export function ProposalSuggestionCard({ suggestion, onAccept, onEdit, onDismiss
   const { draft, estimatedCashImpact, citedSuppliers } = suggestion;
   const positive = estimatedCashImpact >= 0;
   return (
-    <div className="rounded-[var(--radius)] border border-[#E5B441]/40 bg-gradient-to-br from-[#FFFCF1] to-white p-3 text-[12px] shadow-sm">
+    <div
+      className="rounded-[var(--radius)] border p-3 text-[12px] shadow-sm"
+      style={{
+        background: 'var(--tone-warning-soft)',
+        borderColor: 'var(--tone-warning)',
+      }}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-[#8C6618]">
+          <div
+            className="text-[11px] font-bold uppercase tracking-wider"
+            style={{ color: 'var(--tone-warning)' }}
+          >
             Propuesta MIDAS · {draft.type}
           </div>
           <div className="mt-1 text-[13px] font-bold text-[var(--gray-950)] truncate">{draft.name}</div>

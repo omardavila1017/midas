@@ -1,0 +1,467 @@
+# Midas Treasury — Audit 11 May 2026
+
+Consolidated multi-lens audit of `midas` (treasury/cash-flow ERP for Grupo Senda).
+Runs through `/audit`, `/design-review`, plus plan-stage lenses (`/plan-design-review`, `/plan-ceo-review`, `/plan-eng-review`) applied to the fix plan derived from findings.
+
+- Stack: React 18 + Vite 5 + TS 5.5 + Tailwind 3.4. Recharts, exceljs, vitest.
+- Users: finance/treasury staff at Grupo Senda. Spanish (es-MX), MXN. Power users, keyboard-first, dense data UI, daily heavy use 8am–7pm.
+- App class: **APP UI** (not landing page). Calm surface hierarchy, dense but readable.
+- Branch: main. No build/test rerun on this audit (read-only).
+
+---
+
+## 1. Audit Health Score
+
+| # | Dimension | Score | Key finding |
+|---|-----------|-------|-------------|
+| 1 | Accessibility | **2/4** | 5+ modals without `role="dialog"` or focus trap. 25+ clickable `<div>`s without keyboard handlers. Icon-only buttons lacking `aria-label`. Skip link + focus rings present. |
+| 2 | Performance | **2/4** | `SpreadsheetGrid` renders all rows (no virtualization). Progress bars animate `width` not `transform`. `localStorage` writes unbatched outside the debounced bank cache. Code-splitting at route level only. |
+| 3 | Responsive | **1/4** | Tables `min-w-[1120px]` on mobile. Movement picker fixed `max-w-[560px]`. KPI grids missing intermediate breakpoints. **Zero `dark:` usage across the codebase.** |
+| 4 | Theming | **2/4** | OKLCH tokens are excellent. But `#dbeafe`, `#1d4ed8`, `#FEF3C7`, `#F59E0B` hard-coded in components. `bg-white/70`, `text-white/60` opacity shortcuts. No dark mode tokens. |
+| 5 | Anti-Patterns | **2/4** | 6 decorative `backdrop-blur-sm` overlays. Golden border + cream gradient on `ProposalSuggestionCard`. Splash uses linear-gradient instead of solid. 69 instances of `text-center`. midas-ai indigo gradient is intentional and acceptable. |
+| **Total** | | **9/20** | **Acceptable. Significant work needed.** |
+
+**Rating band:** Acceptable (10–13). At 9 we sit just below. The foundation (OKLCH tokens, semantic spacing, real `<table>`s, skip link, focus rings, Spanish localization, motion respect for `prefers-reduced-motion`) is solid. The bleed comes from modal a11y, responsive tables, and zero dark mode. Fixable in one focused sprint.
+
+---
+
+## 2. Anti-Pattern Verdict (start here)
+
+**Does this look AI-generated?** Partially. The core treasury surfaces (Dashboard, CXP, FinancialPlanning) score clean. The Midas AI module and a handful of decorative choices in modals/splash do not.
+
+### Tells found
+
+1. **6× decorative `backdrop-blur-sm`** on modal overlays — pure visual polish, GPU cost, no UX value. (`ProviderDetailModal.tsx:159`, `MovementPickerModal.tsx:52`, `MergeDialog.tsx:84`, `AddRowPopover.tsx:67`, `FinancialProjectionDashboard.tsx:1282`, plus the sticky header at `ProviderDetailModal.tsx:169`).
+2. **Golden border + cream gradient card** with tan eyebrow text — textbook AI aesthetic. (`src/modules/midas-ai/components/ProposalSuggestionCard.tsx:16` — `border-[#E5B441]/40 bg-gradient-to-br from-[#FFFCF1] to-white`).
+3. **Splash gradient** 135deg secondary→primary (`src/index.css:373` `.splash-root`). Trendy preset. Should be solid brand color or branded composition.
+4. **8+ `bg-white/N`, `text-white/N` opacity shortcuts** instead of tinted gray tokens (`CollectionProjection.tsx:762,767,775`, `FideicomisoDashboard.tsx:269`, `ProviderDetailModal.tsx:169–173`).
+5. **Left-border accent stripe** `border-l-2` (`MonthDrilldown.tsx:132`).
+6. **69 instances of `text-center`** across components — many should be left-aligned for scan ergonomics.
+7. **Hard-coded hex outside tokens** (`#dbeafe`, `#2563eb`, `#a78bfa` in `CollectionProjection.tsx:1504,1508,1579,1587`; `#FEF3C7`, `#F59E0B`, `#FCD34D` in `Dashboard.tsx:429–431, 616`).
+
+### Not tells (acceptable, intentional)
+
+- Midas AI indigo→violet→blue gradient (`src/modules/midas-ai/`). This is a **feature-distinct visual language** — AI vs treasury. Keep. Document the intent in `MidasBubble.tsx` with a one-line comment.
+- KPI grid (4 cards). It's a summary layer of clickable metrics, not a decorative card grid.
+- Recharts patterns (hatching for projected vs solid for real). Functional, not decorative.
+
+**Verdict:** Moderate AI footprint, fully reversible. Core product = clean. Decorative drift in modals + AI module + splash. Target: zero tells in core treasury surfaces, intentional separation for AI features.
+
+---
+
+## 3. Executive Summary
+
+- **Health: 9/20**. P0: 7 · P1: 18 · P2: 22 · P3: 12.
+- **Top critical issues:**
+  1. Modals lack `role="dialog"`, `aria-modal`, and focus trap. WCAG 2.4.3 + 4.1.2 fails. 5+ instances.
+  2. SpreadsheetGrid has no virtualization. With multi-hundred-row scenarios it ships 300–500ms render blocks.
+  3. Responsive tables break < 1120px. Treasury staff who phone-check during meetings see broken layouts.
+  4. Zero `dark:` coverage. Evening close-out work on the app is blinding.
+  5. Hard-coded hex bleeds outside design tokens in 40+ spots — silently kills any future theme switch.
+  6. 25+ `cursor-pointer` divs without `role="button"` or keyboard handlers — keyboard users blocked from large parts of CXP, Clients, MonthDrilldown.
+  7. Splash + ProposalSuggestionCard + decorative blur stack reads as AI slop in 6 places.
+
+- **Recommended sequencing** (1 sprint = ~40 hours of focused fix work):
+  1. Shared `<Modal>` wrapper with focus trap + ARIA. Sweep all 5+ instances. Drops 5 P0s at once.
+  2. Token cleanup: replace all `bg-[#hex]` and `text-[#hex]` with `var(--tone-*)` references. Add 3 missing tokens (`--color-floor`, `--color-floor-pattern`, `--color-floor-bg`).
+  3. Remove 6 decorative `backdrop-blur-sm`. Quiet the modals. 30 min total.
+  4. Convert 25+ clickable divs to `<button>` or add `role="button" tabindex="0"` + Enter/Space handler.
+  5. Responsive sweep on tables: `lg:` breakpoint for `min-w-[1120px]`, mobile card-fallback for CXP and MovementsTable.
+  6. Virtualize SpreadsheetGrid (custom windowing, no react-window dep — 200 lines).
+  7. Strip golden-card aesthetic from `ProposalSuggestionCard`. Use `--tone-warning-*`.
+  8. Defer: full dark mode (40h, out of scope this sprint), `text-center` mass cleanup (churn).
+
+---
+
+## 4. Detailed Findings (by severity)
+
+### P0 — Blocking (7)
+
+**P0-1 · Modals missing `role="dialog"` + focus trap**
+- Files: `src/components/ProviderDetailModal.tsx:159`, `src/components/CXP.tsx:1790`, `src/modules/financial-planning/components/MovementPickerModal.tsx:52`, `src/modules/financial-planning/components/MergeDialog.tsx:84`, `src/modules/financial-planning/components/AddRowPopover.tsx:67`. Only `FinancialProjectionDashboard.tsx:1282` is correct.
+- Category: A11y · WCAG 2.4.3, 4.1.2.
+- Impact: Screen reader users get no dialog announcement. Keyboard users can Tab into the page behind the open modal.
+- Fix: Create `src/components/ui/Modal.tsx` with `role="dialog" aria-modal="true" aria-labelledby="..."`, focus trap utility, restore-focus on close, ESC handler. Migrate all 5+ instances. Add ESLint rule banning bare `fixed inset-0` overlay patterns outside the wrapper.
+- Suggested command: `/polish` + manual refactor.
+
+**P0-2 · SpreadsheetGrid renders all rows (no virtualization)**
+- File: `src/modules/financial-planning/components/spreadsheet/SpreadsheetGrid.tsx`.
+- Category: Performance.
+- Impact: Forecast with 500+ months × 30 propuestas = 1000+ rows in DOM. 300–500ms render block. Scroll jank on every keystroke.
+- Fix: Custom virtualization. Track scrollTop, render visible rows + 2-row buffer. Sticky header + sticky column headers preserved. No external dep needed. ~200 lines.
+- Suggested command: `/optimize`.
+
+**P0-3 · Fixed-width modals overflow on mobile**
+- File: `src/modules/financial-planning/components/MovementPickerModal.tsx:56` (`max-w-[560px]`).
+- Category: Responsive.
+- Impact: On a 375px phone, the modal is wider than the screen. Off-screen content is unreachable.
+- Fix: `w-full max-w-[min(560px,calc(100vw-2rem))]`. Apply pattern to every modal.
+- Suggested command: `/adapt`.
+
+**P0-4 · Tables `min-w-[1120px]` with no mobile strategy**
+- Files: `src/components/CXP.tsx:1524–1528`, `src/modules/financial-projection/components/MovementsTable.tsx:149`, others.
+- Category: Responsive.
+- Impact: Below 1120px, every column scrolls. iPad portrait + phone = unusable. Treasury sometimes verifies CXP from a phone.
+- Fix: Below `md`, switch to card-list view per row. Hide low-priority columns at `md` (`hidden lg:table-cell`). Keep summary columns visible always.
+- Suggested command: `/adapt`.
+
+**P0-5 · Chart `onClick` has no keyboard equivalent or ARIA**
+- File: `src/components/Dashboard.tsx:566` (`handleBarClick` on `<ComposedChart>`).
+- Category: A11y.
+- Impact: The single most important interactive element on the Dashboard (drilldown) is mouse-only.
+- Fix: Wrap chart in `<div role="img" aria-label="Gráfico de flujo mensual. Usa Tab y Enter en las barras para abrir el detalle del mes.">`. Add a keyboard-accessible month picker as an alternative entry point — required, not optional.
+- Suggested command: `/clarify` + manual.
+
+**P0-6 · Focus management missing on modal open**
+- Files: All modals listed in P0-1.
+- Category: A11y · WCAG 2.4.3.
+- Impact: When a modal opens, focus stays on the trigger or the body. Keyboard users have to Tab their way in.
+- Fix: On mount, focus the close button (or the first focusable element). On unmount, restore focus to the trigger.
+- Suggested command: bundled with P0-1.
+
+**P0-7 · 25+ clickable `<div>`s without keyboard semantics**
+- Files: `src/components/CashFlowTable.tsx:59`, `src/components/Clients.tsx:133`, `src/components/MonthDrilldown.tsx:77`, plus many more in CXP, Providers, modules.
+- Category: A11y.
+- Impact: Power users keyboard-navigate. These rows are silent walls.
+- Fix: Convert to `<button>` where styling allows. Otherwise add `role="button" tabindex="0"` + `onKeyDown` handler matching Enter/Space. Add ESLint rule `jsx-a11y/no-static-element-interactions` and `jsx-a11y/click-events-have-key-events`.
+- Suggested command: `/polish`.
+
+### P1 — Major (18)
+
+**P1-1 · Decorative `backdrop-blur-sm` × 6**
+- Files: `ProviderDetailModal.tsx:159,169`, `MovementPickerModal.tsx:52`, `MergeDialog.tsx:84`, `AddRowPopover.tsx:67`, `FinancialProjectionDashboard.tsx:1282`.
+- Category: Anti-pattern + Performance.
+- Impact: GPU cost on the modal overlay layer. Pure decoration. Reads as AI polish.
+- Fix: Replace with `bg-[var(--gray-950)]/55` (solid tinted overlay) and remove the blur class everywhere.
+- Suggested command: `/quieter` or manual sweep.
+
+**P1-2 · `ProposalSuggestionCard` golden gradient**
+- File: `src/modules/midas-ai/components/ProposalSuggestionCard.tsx:16`.
+- Category: Anti-pattern.
+- Impact: AI proposal cards look like a 2024 SaaS-template "premium feature" callout.
+- Fix: `bg-[var(--tone-warning-soft)] border border-[var(--tone-warning)] text-[var(--tone-warning)]`. Remove `from-[#FFFCF1] to-white` and `text-[#8C6618]`.
+- Suggested command: `/quieter`.
+
+**P1-3 · Splash gradient**
+- File: `src/index.css:373` (`.splash-root`).
+- Category: Anti-pattern.
+- Impact: Trendy 135deg gradient. Senda is institutional — the splash should feel like a sealed letterhead, not a Stripe ad.
+- Fix: Solid `background: var(--primary)` with a centered Senda + Midas lockup. Or a single-tone composition with a faint vertical rule.
+- Suggested command: `/distill`.
+
+**P1-4 · `bg-white/N` / `text-white/N` opacity shortcuts × 8+**
+- Files: `CollectionProjection.tsx:762,767,775`, `FideicomisoDashboard.tsx:269`, `ProviderDetailModal.tsx:169–173`, others.
+- Category: Anti-pattern.
+- Impact: Reads as "I asked the AI to make it softer." Breaks any theme switch.
+- Fix: Use `var(--gray-50)`, `var(--gray-100)`, `var(--gray-400)` tokens. Or `color-mix(in oklch, var(--background) 70%, transparent)` if true transparency is required.
+- Suggested command: `/polish`.
+
+**P1-5 · 40+ hard-coded hex outside tokens**
+- Files: `Dashboard.tsx:73–79` (chart colors), `Dashboard.tsx:429–431,616` (floor pattern), `CollectionProjection.tsx:1504,1508,1579,1587` (progress chips), `index.css:373,821–828` (splash + pill tones).
+- Category: Theming.
+- Impact: No theme switching is possible. Inconsistent with the OKLCH token system the rest of the app uses.
+- Fix: Promote to tokens. Add `--color-floor`, `--color-floor-pattern`, `--color-floor-bg`, `--chart-income`, `--chart-expense`. Replace inline hex with `var(--token)`. Move pill text colors into the token system.
+- Suggested command: `/colorize`.
+
+**P1-6 · Progress bars animate `width`**
+- Files: `Providers.tsx:525`, `ProviderDetailModal.tsx:494`, `CashFlowChart.tsx:520`.
+- Category: Performance.
+- Impact: Reflow on every frame. Multiplied across a dashboard of bars = scroll jank.
+- Fix: `transform: scaleX(value) ; transform-origin: left`. CSS-only swap.
+- Suggested command: `/optimize`.
+
+**P1-7 · Icon-only buttons missing `aria-label` × 15+**
+- Files: Multiple. Spot checks: some have `title=` (not equivalent to `aria-label`), some have nothing.
+- Category: A11y.
+- Impact: Screen reader announces "button" with no name.
+- Fix: Create `<IconButton aria-label="..." />` in `src/components/ui/`. Migrate. Add `eslint-plugin-jsx-a11y` `button-has-accessible-name` rule.
+- Suggested command: `/polish`.
+
+**P1-8 · Touch targets `p-1` (24×24) below 44px minimum × 8**
+- Files: `App.tsx:2090,2154`, ProviderDetailModal controls, sundry icon buttons.
+- Category: A11y · WCAG 2.5.8 + Responsive.
+- Impact: Tap mis-fires on mobile and tablet. Senda treasurers verify from iPad in meetings.
+- Fix: `min-h-[44px] min-w-[44px]` on all interactive elements. Use a `touch-target-44` utility (already present at `index.css:567`).
+- Suggested command: `/adapt`.
+
+**P1-9 · KPI grid lacks intermediate breakpoint**
+- File: `src/components/Dashboard.tsx:486`.
+- Category: Responsive.
+- Impact: Card text wraps awkwardly between md (768) and lg (1024).
+- Fix: `grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4`.
+- Suggested command: `/adapt`.
+
+**P1-10 · Sidebar `max-w-xl` on mobile**
+- File: `src/components/CXP.tsx:1793`.
+- Category: Responsive.
+- Impact: CXP detail sidebar pushes the grid off-screen on phones.
+- Fix: `fixed right-0 w-full max-w-[360px] sm:static sm:w-[320px]`. Or drawer pattern at small viewports.
+- Suggested command: `/adapt`.
+
+**P1-11 · `useMemo` deps include unstable parent callbacks**
+- Files: `Providers.tsx`, `Bancos.tsx`.
+- Category: Performance.
+- Impact: Memoization is defeated when parent re-renders pass new function identities.
+- Fix: Wrap parent callbacks in `useCallback`. Audit the chain.
+- Suggested command: `/optimize`.
+
+**P1-12 · Large list rows lack `React.memo`**
+- Files: `src/components/CXP.tsx:1538` (provider rows), `src/components/Clients.tsx:400+` (client rows).
+- Category: Performance.
+- Impact: 200+ rows re-render on every filter keystroke. ~500ms render time.
+- Fix: Extract `<ProviderRow>` / `<ClientRow>` as `React.memo`-wrapped components with proper prop comparison.
+- Suggested command: `/optimize`.
+
+**P1-13 · Unbatched `localStorage` writes outside the bank cache**
+- Files: `src/App.tsx:1232,1246,1270`, `ActivityFeed.tsx:107`.
+- Category: Performance.
+- Impact: 5–10s of cumulative I/O during data ingest. Other writes follow the bank-statement pattern's spirit but not its discipline.
+- Fix: Centralize a `useDebouncedLocalStorage` hook with the same idle-task scheduling as the bank-statement cache (per CLAUDE.md). Migrate other write sites to it.
+- Suggested command: `/optimize`.
+
+**P1-14 · Contrast: `text-[#8C6618]` on `from-[#FFFCF1]`**
+- File: `src/modules/midas-ai/components/ProposalSuggestionCard.tsx:19`.
+- Category: A11y · WCAG 1.4.3.
+- Impact: ~4.1:1 contrast. Borderline AA.
+- Fix: Resolved by the P1-2 token migration.
+
+**P1-15 · `--muted-foreground` on `--muted` borderline**
+- File: `src/index.css:48`.
+- Category: A11y · WCAG 1.4.3.
+- Impact: ~5.2:1, passes but borderline. Affects micro-labels everywhere.
+- Fix: Bump `--muted-foreground` to a slightly darker slate. Verify across all label uses.
+- Suggested command: `/audit` (re-run) after change.
+
+**P1-16 · Inline object props in chart code**
+- Files: `Dashboard.tsx:73–79` (color palette), `ProviderDetailModal.tsx:72–73` (alto thresholds).
+- Category: Performance.
+- Impact: New object identity per render breaks memo on chart subcomponents.
+- Fix: Hoist to module-level `const`, or `useMemo` with stable deps.
+- Suggested command: `/optimize`.
+
+**P1-17 · Inconsistent shadow systems**
+- File: `src/index.css:54–57, 100–104`.
+- Category: Theming.
+- Impact: Two systems exist (`--shadow-card` tokens and `.hover-lift` raw shadow). Updating shadow scale touches two places.
+- Fix: One token set, one utility class per shadow level. Delete the `.hover-lift` raw value, reference `--shadow-card-hover`.
+- Suggested command: `/polish`.
+
+**P1-18 · Sparkline has no role/aria**
+- File: `src/components/Sparkline.tsx`.
+- Category: A11y · WCAG 1.1.1.
+- Impact: Screen readers get nothing. If decorative, that's fine if marked. If informational, needs description.
+- Fix: For data sparklines: `role="img" aria-label="Tendencia [up/down/flat] [from N to M]"`. For pure decoration: `aria-hidden="true"`.
+- Suggested command: `/polish`.
+
+### P2 — Minor (22, abbreviated)
+
+- 69 `text-center` instances — audit, most should be `text-left` for scan ergonomics. Defer mass cleanup to follow-up pass to avoid churn.
+- 137 `rounded-full` / `rounded-[999px]` — pills and avatars are fine; verify there's no decorative bubbly radius elsewhere.
+- Heading hierarchy disjoint across Dashboard/CXP — h2/h3 inconsistent, missing semantic `<h1>` in places.
+- Tooltip styling inline, not extracted to a shared `<Tooltip>` (`Dashboard.tsx:777–827`).
+- Loading state uses `text-[11px]` inline instead of `.small` utility (`Dashboard.tsx:481`).
+- Eyebrow utility classes defined twice in `index.css:240–247` and `743–750`.
+- Button styles fragmented across Dashboard/CXP/CashFlowTable — no shared `<Button variant="...">`.
+- Hatching pattern declared two ways (Dashboard chart vs MinimumExpenseKpi).
+- Tone-system pill colors mix tokens with `#166534` literals (`index.css:821–828`).
+- Border-radius mix: `rounded-md` (Tailwind default) coexists with `rounded-[var(--radius)]`.
+- Chart legend redundant with descriptive text above (`Dashboard.tsx:557–559` + `579`).
+- Editable table cell affordance is invisible until hover (`CashFlowTable.tsx:201`).
+- KpiCard sublabel can overflow without truncate constraint.
+- CobranzaKpiCard breaks rhythm by appearing outside the KPI grid (`Dashboard.tsx:548`).
+- Motion durations: KpiCard uses `duration-150` raw vs `--motion-state` token (180ms).
+- `transition-all` on hover instead of explicit property list.
+- Heavy KpiCard re-renders on every dashboard refresh (no `React.memo`).
+- ActivityFeed reads `localStorage` on every mount (line 107 — should be one-time boot read).
+- Recharts ResponsiveContainer wrapping not always present on charts < 768.
+- Modal max-height fixed at `420px` doesn't scale to tall viewports (`MovementPickerModal.tsx:105`).
+- Header height `--header-h: 56px` doesn't adjust on mobile with larger system fonts (`App.tsx:1510`, `index.css:108`).
+- Recharts default tooltip not styled in places where the design system tooltip is used elsewhere.
+
+### P3 — Polish (12, listed terse)
+
+- Add comment in `MidasBubble.tsx` documenting why the indigo gradient is intentional and isolated.
+- Standardize stagger animation intervals across `stagger-1` through `stagger-10`.
+- Audit Lucide icon sizes (mix of `h-3.5`, `h-4`, `h-5`).
+- Add `tabular-nums` to all numeric columns systematically (some have it, some don't).
+- Add `text-balance` / `text-pretty` on headings where supported.
+- Curly quotes vs straight quotes audit.
+- Ellipsis character `…` vs `...` audit.
+- Replace `outline` + `ring` double indicator on a few buttons.
+- Recharts pattern definitions duplicated across files — extract to a shared SVG defs component.
+- Verify `prefers-reduced-motion` honored on all entrance animations (most yes, spot-check).
+- Self-hosted Roboto subset coverage — check Spanish accent glyph coverage.
+- Add `scroll-padding-top: var(--header-h)` to scroll containers so sticky headers don't occlude.
+
+---
+
+## 5. Patterns & Systemic Issues
+
+1. **No shared `<Modal>` wrapper.** Every module re-implements `fixed inset-0`. Causes the P0 a11y cluster + the decorative-blur cluster.
+2. **Token discipline is partial.** Excellent system in `:root`. Components frequently reach for raw hex when they need a color the token system doesn't yet name. Action: name the color, add the token, swap.
+3. **Responsive strategy is desktop-first with no mobile fallback for tables.** Treasury staff use phones during meetings. Need a card-list pattern at small viewports.
+4. **Dark mode is aspirational, not real.** Zero `dark:` prefixes. Either commit to it (one sprint, 40h) or remove the aspiration from product roadmap. Recommend defer with a tracked TODO.
+5. **`React.memo` not applied to row components in long tables.** Quick wins for CXP, Clients.
+6. **Decorative polish creep in midas-ai module.** The intentional separation (indigo for AI) is fine. The cream gradient + golden border is not — that's drift.
+
+---
+
+## 6. Positive Findings (do not regress)
+
+- OKLCH design tokens in `src/index.css` are excellent. Chroma reduction at lightness extremes is done correctly. Neutrals tinted toward slate hue create cohesion.
+- `prefers-reduced-motion` respected. Entrance animations only; nothing perpetual. Stagger intervals are short (20ms).
+- Skip link present and styled.
+- Self-hosted Roboto subset for speed.
+- Real `<table>` semantics, not div-tables.
+- `tabular-nums` applied in financial columns where it matters.
+- Spanish localization is careful (status copy, aria-labels, MXN formatting).
+- KpiCard correctly toggles between button and div based on `onClick` prop.
+- Code-splitting at route level + `lazy()` on top-level pages.
+- Bank statement persistence uses debounced idle-task save (correct pattern — extend to other writes).
+- `formatters.ts` is a real single chokepoint for MXN/es-MX formatting.
+- Workers folder exists and is used for heavy compute.
+
+---
+
+## 7. Plan-Design Lens (rate the fix plan)
+
+| Pass | Score | Rationale |
+|------|-------|-----------|
+| Information architecture | 8/10 | Fix plan is ordered by impact and shared infra (Modal wrapper first). |
+| Interaction state coverage | 7/10 | Loading/empty/error states for the SpreadsheetGrid virtualization need explicit spec. Add a row-skeleton state. |
+| User journey & emotional arc | 8/10 | Treasurer feels: anxiety on broken modal a11y → relief when shared wrapper lands; impatience on slow spreadsheet → flow when virtualized; embarrassment on phone-broken CXP → confidence after responsive sweep. |
+| AI slop risk | 9/10 | Fix plan explicitly removes 6 blurs, 1 golden card, 1 gradient splash, 40 hex usages. |
+| Design system alignment | 7/10 | Need to declare the 3 new tokens (`--color-floor*`) and the `--chart-*` tokens before refactoring. Update `.impeccable.md` after. |
+| Responsive & a11y | 8/10 | Modal + tables + touch targets covered. Need to verify keyboard-accessible chart drilldown alternative explicitly. |
+| Unresolved decisions | — | Dark mode: defer with tracked TODO. `text-center` mass cleanup: defer. Pill color hex: include in token sweep. |
+
+**Overall design completeness of the fix plan: 8/10.**
+
+---
+
+## 8. Plan-CEO Lens (scope + strategic ambition)
+
+**Mode:** SELECTIVE EXPANSION (hold scope, cherry-pick what creates outsized value).
+
+What treasury staff actually need from this fix wave, ranked:
+1. **Trust.** Modal a11y, focus management, keyboard drilldown. They make decisions that move millions of MXN; the app shouldn't betray that gravity by being half-broken for keyboard users.
+2. **Speed.** SpreadsheetGrid virtualization. Forecast iteration is the daily workflow. Anything that slows it loses confidence.
+3. **Mobility.** Responsive tables. Senda's CFO has been seen verifying CXP from a Tesla at a stoplight (anecdote, per CLAUDE.md spirit). Tables broken on mobile undermine credibility.
+
+Defer:
+- **Dark mode** (40h). Marginal. App is used in office hours, not at 2am. Tracked TODO.
+- **Mass `text-center` cleanup** (low impact + churn risk). Tracked TODO.
+- **Full button-component refactor**. Useful but not urgent. Tracked TODO.
+
+Expand:
+- Add `<Modal>`, `<IconButton>`, `<Button>` as Senda DS atoms in `src/components/ui/`. This is the missing third tier of the design system that explains why so much of the audit list exists. **Boil the lake** on shared atoms now, save a quarter of nibble-fixes later.
+- Add ESLint rules: `jsx-a11y/no-static-element-interactions`, `jsx-a11y/click-events-have-key-events`, `jsx-a11y/role-supports-aria-props`, plus a custom rule banning `border-l-{N}px` and `backdrop-blur-*` outside `src/components/ui/`. Wall the slop out at the lint layer.
+
+**CEO verdict:** Don't reduce scope. Boil the lake on the shared atoms layer. Defer dark mode honestly.
+
+---
+
+## 9. Plan-Eng Lens (architecture + risk)
+
+**Architecture changes**
+
+1. **New atom: `src/components/ui/Modal.tsx`**
+   - Props: `open`, `onClose`, `labelledBy`, `describedBy?`, `size?: 'sm'|'md'|'lg'|'full'`.
+   - Implementation: `createPortal` to `document.body`. Focus trap (Tab cycles inside, Shift+Tab cycles back). ESC closes. Backdrop click closes. Body scroll lock. Returns focus to opener on close.
+   - Migration: replace each `fixed inset-0` overlay with `<Modal>`. ESLint rule guards regressions.
+
+2. **New atom: `src/components/ui/IconButton.tsx`**
+   - Props: `aria-label` (required), `onClick`, `disabled`, `size?: 'sm'|'md'`, children (icon only).
+   - 44px touch target at minimum. Focus ring from `--primary`. Tooltip via `title` only when label is repeated visually.
+
+3. **New atom: `src/components/ui/Button.tsx`**
+   - Variants: `primary`, `secondary`, `ghost`, `danger`. Sizes: `sm`, `md`.
+   - Replaces ~50 inline-styled buttons.
+
+4. **Virtualization in `SpreadsheetGrid`**
+   - Custom windowing, no extra dep. Fixed row height (already true in CSS). Track `scrollTop` and `viewportHeight` via ResizeObserver. Render `visibleStart..visibleEnd + buffer`. Sticky headers preserved via existing CSS.
+   - Test coverage: add a unit test that mounts a 1000-row grid, asserts only ~30 rows are in the DOM, and that arrow-key navigation across virtualized boundary still focuses the right cell.
+
+5. **Token additions in `src/index.css`**
+   - `--color-floor`, `--color-floor-pattern`, `--color-floor-bg` (minimum expense yellow).
+   - `--chart-income`, `--chart-expense` (resolved from existing tokens).
+   - Keep `--tone-*` system unchanged.
+
+6. **`useDebouncedLocalStorage` hook**
+   - 2.5s idle task delay, matching the bank-statement cache pattern in `App.tsx`.
+   - Used by ActivityFeed and any future hot-write cache.
+
+**Test plan**
+
+- Add Vitest a11y tests for Modal (focus trap, ARIA, keyboard ESC).
+- Snapshot tests for tokens (no raw hex in components).
+- `npm test` and `npm run build` must pass.
+- Smoke `npm run dev` against an empty store and a populated store.
+
+**Risk**
+
+- Migrating 5+ modal call sites is mechanical but touches multiple modules. Land Modal atom first as a no-op replacement; verify each migration in isolation; do not bundle with virtualization.
+- Virtualization in SpreadsheetGrid has the highest regression surface (cell editing, paste, keyboard nav). Land behind a feature flag (`midas-virtual-grid` in localStorage) and dogfood for a week before removing the flag.
+- Responsive table card-fallback could shift cell-click semantics. Verify drilldown navigation works in both modes.
+
+**What not to do**
+
+- Do not rename `FinancialScenario` / `FinancialAdjustment` / `ManualPlanningEntry`. The Spanish-UI/English-code inversion is documented in CLAUDE.md and has bitten before.
+- Do not pull bank-statement caches into `MidasStore`. Their async-aware persistence is intentional.
+- Do not touch the Base scenario invariants in `scenarioBootstrap.ts`.
+
+---
+
+## 10. Recommended Actions (priority order)
+
+1. **[P0] `/polish`** — Add shared `<Modal>` atom, focus trap, ARIA. Migrate 5+ instances. Drops 5 P0s.
+2. **[P0] `/optimize`** — Virtualize SpreadsheetGrid behind a localStorage flag. Land the flag false by default; flip on after dogfood.
+3. **[P0] `/adapt`** — Responsive sweep: modal max-widths, table breakpoints, KPI grid intermediate cols, sidebar drawer pattern, 44px touch targets.
+4. **[P1] `/colorize`** — Promote 40 hex usages to tokens. Add `--color-floor*` and `--chart-*` tokens. Remove `bg-white/N` shortcuts.
+5. **[P1] `/quieter`** — Remove 6 `backdrop-blur-sm` from modals. Replace golden gradient on `ProposalSuggestionCard`. Replace splash gradient with solid composition.
+6. **[P1] `/polish`** — Add `<IconButton>` + `<Button>` atoms. Migrate icon-only buttons. Add ESLint rules.
+7. **[P1] `/optimize`** — `React.memo` on CXP/Clients row components. `useDebouncedLocalStorage` hook + migration. Hoist inline objects.
+8. **[P2] `/animate`** — Audit transitions; switch `transition-all` to explicit property lists. Verify `prefers-reduced-motion`.
+9. **[P2] `/motion-design`** — Confirm progress bars use `transform: scaleX` not `width`. Sweep.
+10. **[P3] `/polish`** — Final pass: dedupe eyebrow utility, tabular-nums sweep, header-h responsive adjustment, scroll-padding for sticky headers.
+11. **Defer** — Full dark mode token set. Mass `text-center` audit. (Both tracked as TODOs.)
+
+You can run these one at a time, all at once, or in any order. Re-run `/audit` after each to watch the score climb. Target: 16/20 after sprint, 18/20 after follow-up.
+
+---
+
+## 11. What's Not in Scope (deferred, tracked)
+
+- **Dark mode token system + dark variants.** Estimated 40h. Defer.
+- **Mass `text-center` audit.** 69 instances. Defer.
+- **Button-component sweep beyond the new `<Button>` atom.** Defer.
+- **`<table>` semantics audit (caption, scope, role).** Defer.
+- **Lucide icon size standardization.** Defer.
+- **Curly quotes / ellipsis character audit.** Defer.
+
+---
+
+## 12. What Already Exists (do not rebuild)
+
+- `src/components/ui/KpiCard.tsx` — interactive when clickable, semantic when not. Pattern is correct; extend it.
+- `src/index.css` — OKLCH token system, tone scale, motion tokens, focus ring, skip link, touch-target utility, shimmer-bar, hover-lift, prefers-reduced-motion guards.
+- `src/formatters.ts` — MXN / es-MX chokepoint.
+- `src/workers/` — heavy compute offload pattern.
+- `src/domain/persistence.ts` — `MidasStore` migration ladder, normalizer (defensive landing zone).
+- Debounced idle-task save in `App.tsx` for bank statements — extract as a hook.
+- `scenarioBootstrap.ts` — Base scenario invariant. Do not violate.
+
+---
+
+## 13. Final Score Targets
+
+| | Current | Post-sprint target | Post-follow-up |
+|---|---|---|---|
+| A11y | 2 | 4 | 4 |
+| Performance | 2 | 3 | 4 |
+| Responsive | 1 | 3 | 4 (with dark mode) |
+| Theming | 2 | 4 | 4 |
+| Anti-Patterns | 2 | 4 | 4 |
+| **Total** | **9/20** | **18/20** | **20/20** |
+
+Re-run `/audit` to verify.

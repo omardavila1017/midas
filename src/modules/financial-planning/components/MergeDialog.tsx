@@ -81,8 +81,10 @@ export function MergeDialog(props: MergeDialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'var(--modal-overlay)' }}
       role="dialog"
+      aria-modal="true"
       aria-label="Mergear propuesta a Aprobado"
     >
       <div className="flex max-h-[88vh] w-[840px] flex-col overflow-hidden rounded-2xl border border-[var(--gray-200)] bg-white shadow-2xl">

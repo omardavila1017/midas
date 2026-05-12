@@ -1279,7 +1279,7 @@ function QuickEntryModal({
     });
   };
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm" role="dialog" aria-label="Agregar estimado">
+    <div className="fixed inset-0 z-[90] flex items-center justify-center p-4" style={{ background: 'var(--modal-overlay)' }} role="dialog" aria-modal="true" aria-label="Agregar estimado">
       <div className="w-full max-w-[420px] rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-xl">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>

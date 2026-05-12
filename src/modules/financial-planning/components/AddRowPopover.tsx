@@ -64,8 +64,10 @@ export function AddRowPopover(props: AddRowPopoverProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'var(--modal-overlay)' }}
       role="dialog"
+      aria-modal="true"
       aria-label="Crear fila personalizada"
     >
       <div

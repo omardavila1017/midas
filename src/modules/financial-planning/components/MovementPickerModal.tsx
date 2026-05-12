@@ -48,8 +48,10 @@ export function MovementPickerModal({ movements, asOfDate, onPick, onClose }: Pr
   return (
     <div
       role="dialog"
+      aria-modal="true"
       aria-label="Selecciona movimiento para crear propuesta"
-      className="fixed inset-0 z-[75] flex items-center justify-center bg-black/30 backdrop-blur-sm p-6"
+      className="fixed inset-0 z-[75] flex items-center justify-center p-6"
+      style={{ background: 'var(--modal-overlay)' }}
       onClick={onClose}
     >
       <div

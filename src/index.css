@@ -1,4 +1,27 @@
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+/* Roboto self-hosted. Variable file covers 400-700 with one woff2 per
+   subset — eliminates the render-blocking external CSS round-trip to
+   fonts.googleapis.com that previously sat on the critical path. */
+@font-face {
+  font-family: 'Roboto';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/roboto-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6,
+                 U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F,
+                 U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Roboto';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/roboto-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7,
+                 U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF,
+                 U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+                 U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
 
 @tailwind base;
 @tailwind components;
@@ -118,6 +141,28 @@
   --tone-danger-soft: oklch(95% 0.05 25);
   --tone-info: oklch(56% 0.10 248);
   --tone-info-soft: oklch(95% 0.02 248);
+
+  /* ── Modal / overlay ──
+     Tinted dark slate for modal scrims. Reads as institutional shadow,
+     not photographer's vignette. Use everywhere a modal opens. */
+  --modal-overlay: oklch(15% 0.02 248 / 0.55);
+
+  /* ── Chart accent tokens ──
+     Promoted from inline hex in Dashboard.tsx so chart colors can
+     evolve with the theme. Match Senda accent + status palette. */
+  --chart-income: var(--success);
+  --chart-income-muted: var(--success-muted);
+  --chart-expense: var(--danger);
+  --chart-expense-muted: var(--danger-muted);
+  --chart-projected: var(--gray-400);
+
+  /* ── Minimum-expense floor tokens ──
+     Yellow hatch pattern used in cash flow chart + KPI card. Single
+     source of truth so the floor color can be retuned without
+     hunting through component files. */
+  --color-floor:         #d97706;
+  --color-floor-bg:      #fef3c7;
+  --color-floor-pattern: #f59e0b;
 }
 
 /* Light-shell tokens.
@@ -347,7 +392,7 @@ kbd {
   z-index: 100;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--secondary) 0%, var(--primary) 100%);
+  background: var(--surface);
 }
 
 .splash-logo-enter {
@@ -746,6 +791,11 @@ input[type="range"]::-moz-range-thumb {
   filter: brightness(0);
   opacity: 0.88;
   transition: opacity var(--motion-feedback) var(--ease-smooth);
+  /* Wordmark fills its viewBox vertically (center = img-box center),
+     but Roboto Bold caps sit ~1px above line-box center (empirical via
+     baseline probe). Shift SVG up by the same % of img height so the
+     wordmark optical center aligns with adjacent "Midas" caps. */
+  transform: translateY(-4.5%);
 }
 .senda-lockup-dark:hover .senda-mark-inverted {
   opacity: 1;

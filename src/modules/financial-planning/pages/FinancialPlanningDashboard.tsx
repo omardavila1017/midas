@@ -53,7 +53,13 @@ import { deriveInsights } from '../../financial-projection/services/insights';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
 import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
-import { buildFinancialProjectionSourceData, calculateCurrentBankCash, calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
+import {
+  buildFinancialProjectionSourceData,
+  calculateCurrentBankCash,
+  calculateInitialCash,
+  tryGetCachedFinancialProjectionSourceData,
+  type FinancialProjectionSourceData,
+} from '../../financial-projection/services/financialProjectionService';
 import {
   buildAutomaticTaxReserveMovements,
   buildApprovedTaxPaymentMovements,
@@ -97,6 +103,7 @@ import {
 } from '../services/supplierPaymentSchedule';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
 import EmptyState from '../../shared-finance/components/EmptyState';
 import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
 import {
@@ -128,15 +135,25 @@ type PlanningView = 'matrix' | 'commitments';
 type PlanningScenarioRun = ForecastRun & { supplierPlan: SupplierPaymentPlan };
 type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
 
+/**
+ * Outer entry — gates the heavy planning pipeline behind a paint.
+ *
+ * The inner dashboard runs `buildFinancialProjectionSourceData` plus 3+
+ * `buildScenarioRun` passes synchronously on mount. On a real catalog that
+ * blocks the main thread for hundreds of ms — long enough that the user
+ * never sees the Suspense skeleton between tabs (the lazy chunk resolves
+ * synchronously after first navigation, so React skips the fallback and
+ * commits the heavy mount in one frame).
+ *
+ * Mirrors `FinancialProjectionDashboard`'s pattern: cheap cache probe on
+ * the first render, `DashboardLoadingShell` while we wait, idle-scheduled
+ * canonical build, then mount the inner once `source` is ready.
+ */
 export default function FinancialPlanningDashboard(props: Props) {
-  const goTo = useNavigateToTab();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
-  const yearStart = `${currentYear}-01-01`;
-  const yearEnd = `${currentYear}-12-31`;
 
-  const source = useMemo(
-    () => buildFinancialProjectionSourceData({ ...props, budget: null, asOfDate: today }),
+  const cacheProbeInput = useMemo(
+    () => ({ ...props, budget: null, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -153,6 +170,68 @@ export default function FinancialPlanningDashboard(props: Props) {
       today,
     ],
   );
+
+  const cachedSource = useMemo(
+    () => tryGetCachedFinancialProjectionSourceData(cacheProbeInput),
+    [cacheProbeInput],
+  );
+
+  const [source, setSource] = useState<FinancialProjectionSourceData | null>(cachedSource);
+
+  useEffect(() => {
+    if (cachedSource) {
+      setSource(cachedSource);
+      return;
+    }
+    let cancelled = false;
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    });
+    const run = () => {
+      if (cancelled) return;
+      const built = buildFinancialProjectionSourceData(cacheProbeInput);
+      if (!cancelled) setSource(built);
+    };
+    if (typeof ric.requestIdleCallback === 'function') {
+      const id = ric.requestIdleCallback(run, { timeout: 200 });
+      return () => {
+        cancelled = true;
+        if (typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(id);
+      };
+    }
+    const id = window.setTimeout(run, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+    };
+  }, [cachedSource, cacheProbeInput]);
+
+  if (!source) {
+    return <PlanningWarmupShell />;
+  }
+
+  return <PlanningDashboardInner {...props} today={today} source={source} />;
+}
+
+function PlanningWarmupShell() {
+  return (
+    <DashboardLoadingShell
+      kpis={4}
+      showFilterBar
+      showChart
+      tableRows={4}
+      label="Cargando planeación"
+    />
+  );
+}
+
+function PlanningDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
+  const { today, source } = props;
+  const goTo = useNavigateToTab();
+  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
+  const yearStart = `${currentYear}-01-01`;
+  const yearEnd = `${currentYear}-12-31`;
 
   const sourceBaseScenario = useMemo(
     () => source.scenarios.find((s) => s.kind === 'BASE') ?? source.scenarios[0],
@@ -284,93 +363,147 @@ export default function FinancialPlanningDashboard(props: Props) {
   );
   const minimumCash = useMemo(() => minimumCashFor(), []);
 
-  const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
-    const isBase = scenarioId === BASE_SCENARIO_ID;
-    const manualMovements = !isBase && includeManualEntries
-      ? expandManualPlanningEntriesToMovements(manualEntries, {
-        scenarioId,
-        startDate: yearStart,
-        endDate: yearEnd,
-        asOfDate: today,
-      })
-      : [];
-    const movementsBeforeAdjust = isBase
-      ? source.movements
-      : [...source.movements, ...manualMovements];
-    const preTaxMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
-    const taxSeedView = isBase ? null : buildTaxDashboardView({
-      clients: props.clients,
-      providers: props.providers,
-      assumptions: props.assumptions,
-      cxpRecords: props.cxpRecords,
-      purchaseReceipts: props.purchaseReceipts,
-      payrollCosts: props.payrollCosts,
-      budget: null,
-      companyCode: props.companyCode,
-      startDate: yearStart,
-      endDate: yearEnd,
-      movements: preTaxMovements,
-      store: taxStore,
+  // Stable fingerprint for the inputs every scenario run shares. Folds into
+  // the LRU cache key so repeat tab visits + tab-strip lookups skip the
+  // full pipeline. Mirrors `FinancialProjectionDashboard` so the modules
+  // share a cache across navigation.
+  const sharedRunInputsKey = useMemo(() => {
+    const movementsKey = fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount));
+    const adjustmentsKey = fingerprintArray(storedAdjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt);
+    const manualKey = fingerprintArray(manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? ''));
+    const taxKey = [
+      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
+      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
+      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
+      taxStore.overdueBalance,
+    ].join(':');
+    const providerKey = fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? ''));
+    return [
+      movementsKey,
+      adjustmentsKey,
+      manualKey,
+      taxKey,
+      providerKey,
+      yearStart,
+      yearEnd,
       today,
-    });
-    const taxMovements = taxSeedView
-      ? [
-        ...buildApprovedTaxPaymentMovements({
-          obligations: taxSeedView.obligations,
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        }),
-        ...buildAutomaticTaxReserveMovements({
-          obligations: taxSeedView.obligations,
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        }),
-      ]
-      : [];
-    const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
-    const movementsWithTax = [...adjustedMovements, ...taxMovements];
-    const supplierSchedule = scheduleSupplierPaymentsByScore({
-      movements: movementsWithTax,
-      providers: props.providers,
-      startDate: today,
-      endDate: yearEnd,
-      initialCash: supplierInitialCash,
-      minimumCash,
-      scenarioId,
-    });
-    const projection = calculateBaseProjection(supplierSchedule.movements, {
-      startDate: yearStart,
-      endDate: yearEnd,
       initialCash,
+      supplierInitialCash,
       minimumCash,
       granularity,
-      scenarioId,
-      name: scenarios.find((s) => s.id === scenarioId)?.name ?? scenarioId,
+    ].join('|');
+  }, [
+    source.movements,
+    storedAdjustments,
+    manualEntries,
+    taxStore,
+    props.providers,
+    yearStart,
+    yearEnd,
+    today,
+    initialCash,
+    supplierInitialCash,
+    minimumCash,
+    granularity,
+  ]);
+
+  const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
+    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}`;
+    return cachedRun<PlanningScenarioRun>(cacheKey, () => {
+      const isBase = scenarioId === BASE_SCENARIO_ID;
+      const manualMovements = !isBase && includeManualEntries
+        ? expandManualPlanningEntriesToMovements(manualEntries, {
+          scenarioId,
+          startDate: yearStart,
+          endDate: yearEnd,
+          asOfDate: today,
+        })
+        : [];
+      const movementsBeforeAdjust = isBase
+        ? source.movements
+        : [...source.movements, ...manualMovements];
+      const preTaxMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
+      const taxSeedView = isBase ? null : buildTaxDashboardView({
+        clients: props.clients,
+        providers: props.providers,
+        assumptions: props.assumptions,
+        cxpRecords: props.cxpRecords,
+        purchaseReceipts: props.purchaseReceipts,
+        payrollCosts: props.payrollCosts,
+        budget: null,
+        companyCode: props.companyCode,
+        startDate: yearStart,
+        endDate: yearEnd,
+        movements: preTaxMovements,
+        store: taxStore,
+        today,
+      });
+      const taxMovements = taxSeedView
+        ? [
+          ...buildApprovedTaxPaymentMovements({
+            obligations: taxSeedView.obligations,
+            scenarioId,
+            startDate: yearStart,
+            endDate: yearEnd,
+            asOfDate: today,
+          }),
+          ...buildAutomaticTaxReserveMovements({
+            obligations: taxSeedView.obligations,
+            scenarioId,
+            startDate: yearStart,
+            endDate: yearEnd,
+            asOfDate: today,
+          }),
+        ]
+        : [];
+      const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
+      const movementsWithTax = [...adjustedMovements, ...taxMovements];
+      const supplierSchedule = scheduleSupplierPaymentsByScore({
+        movements: movementsWithTax,
+        providers: props.providers,
+        startDate: today,
+        endDate: yearEnd,
+        initialCash: supplierInitialCash,
+        minimumCash,
+        scenarioId,
+      });
+      const projection = calculateBaseProjection(supplierSchedule.movements, {
+        startDate: yearStart,
+        endDate: yearEnd,
+        initialCash,
+        minimumCash,
+        granularity,
+        scenarioId,
+        name: scenarios.find((s) => s.id === scenarioId)?.name ?? scenarioId,
+      });
+      return { ...projection, supplierPlan: supplierSchedule.plan };
     });
-    return { ...projection, supplierPlan: supplierSchedule.plan };
   };
 
   // Approved baseline used for diff reference.
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, supplierInitialCash, initialCash],
+    [approvedScenario.id, sharedRunInputsKey],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, supplierInitialCash, initialCash],
+    [baseScenario.id, sharedRunInputsKey],
   );
 
+  // Reuse approved/base when the active scenario is one of them — the cache
+  // would hit anyway, but skipping the call avoids an extra function frame
+  // and keeps the dependency graph clearer for React's reconciliation.
   const activeRunRaw = useMemo(
-    () => buildScenarioRun(activeScenario.id, true),
+    () => {
+      if (activeScenario.id === approvedScenario.id) return approvedRun;
+      if (activeScenario.id === baseScenario.id) return baseRun;
+      return buildScenarioRun(activeScenario.id, true);
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, yearStart, yearEnd, source.movements, storedAdjustments, manualEntries, taxStore, granularity, today, props.providers, supplierInitialCash, initialCash],
+    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey],
   );
 
   const activeOverrides = useMemo(

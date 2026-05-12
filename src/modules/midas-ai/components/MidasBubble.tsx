@@ -1,3 +1,10 @@
+/*
+ * Midas AI bubble. The indigo→violet→blue gradient inside this module
+ * is intentional and isolated — it signals "AI feature" against the
+ * institutional slate palette of the treasury surface. Do not copy
+ * this gradient into Dashboard / CXP / FinancialPlanning surfaces;
+ * those stay on the Senda slate tone scale.
+ */
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Provider } from '../../../domain/types';

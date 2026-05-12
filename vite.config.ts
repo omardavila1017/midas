@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import { visualizer } from 'rollup-plugin-visualizer'
 
 // Proxy de desarrollo para los APIs de JDE / Tesorería.
 // El browser llama a /api/jde/... y Vite reescribe hacia el host productivo
@@ -22,8 +23,24 @@ export default defineConfig(({ mode }) => {
     // Si no es una URL absoluta, dejamos el string tal cual (fallback dev local).
   }
 
+  // Bundle analyzer only when ANALYZE=1. Writes dist/stats.html with a
+  // treemap of chunk content + duplicate-module detection.
+  const analyze = env.ANALYZE === '1' || process.env.ANALYZE === '1'
+
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      ...(analyze
+        ? [
+            visualizer({
+              filename: 'dist/stats.html',
+              template: 'treemap',
+              gzipSize: true,
+              brotliSize: true,
+            }),
+          ]
+        : []),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
@@ -68,13 +85,24 @@ export default defineConfig(({ mode }) => {
       // Las dependencias de charts e icons pesan ~350 KB juntas y rara vez
       // cambian. Separarlas a chunks propios acelera el arranque de sesiones
       // nuevas porque el browser puede cachearlos entre deploys del app core.
+      //
+      // Function form (no string-array): el array previo dejaba a recharts
+      // arrastrar react-dom dentro de `vendor-charts` (~133KB de react-dom
+      // viajaban en el chunk de charts). Aquí evaluamos react/react-dom
+      // PRIMERO para garantizar que terminen en `vendor-react`.
       rollupOptions: {
         output: {
-          manualChunks: {
-            'vendor-charts': ['recharts'],
-            'vendor-icons': ['lucide-react'],
-            'vendor-react': ['react', 'react-dom'],
-            'vendor-excel': ['exceljs'],
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return
+            if (id.includes('/react-dom/') || id.includes('/react/') ||
+                id.includes('/scheduler/')) {
+              return 'vendor-react'
+            }
+            if (id.includes('/recharts/') || id.includes('/d3-') ||
+                id.includes('/victory-vendor/') || id.includes('/decimal.js-light/')) {
+              return 'vendor-charts'
+            }
+            if (id.includes('/lucide-react/')) return 'vendor-icons'
           },
         },
       },

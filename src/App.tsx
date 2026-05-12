@@ -41,6 +41,7 @@ import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette, { type CommandPaletteAction } from './components/CommandPalette';
 import { loadPlanningScenarios, loadPlanningAdjustments } from './modules/financial-planning/services/financialPlanningStorage';
+import { buildFinancialProjectionSourceData } from './modules/financial-projection/services/financialProjectionService';
 import { NavigationProvider, type AppTabId, type NavTarget } from './modules/shared-finance/components/NavigationContext';
 import DashboardLoadingShell from './modules/shared-finance/components/DashboardLoadingShell';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
@@ -199,6 +200,55 @@ function containsDemoBankData(statements: BankAccountStatement[] | undefined | n
     }
   }
   return false;
+}
+
+interface BankCacheLoad {
+  bankJdeStatements: BankAccountStatement[];
+  bankSupplementalStatements: BankAccountStatement[];
+  bankLastQuery: BankQueryState | null;
+}
+
+// Single-pass read of the three bank-statement localStorage caches. The
+// previous code ran 3 separate `useState(() => ...)` lazy initializers on the
+// sync render path, each re-parsing multi-MB JSON. Consolidated here and
+// invoked from a deferred useEffect so it never blocks first paint.
+function loadBankCaches(): BankCacheLoad {
+  try {
+    const rawQuery = localStorage.getItem('midas.bankLastQuery.v2');
+    const rawStatements = localStorage.getItem('midas.bankStatements.v2');
+    const rawSupplemental = localStorage.getItem('midas.bankSupplementalStatements.v1');
+
+    const parsedQuery = rawQuery ? (JSON.parse(rawQuery) as BankQueryState) : null;
+    const parsedStatements = rawStatements ? (JSON.parse(rawStatements) as BankAccountStatement[]) : [];
+    let parsedSupplemental: BankAccountStatement[] | null = rawSupplemental
+      ? (JSON.parse(rawSupplemental) as BankAccountStatement[])
+      : null;
+
+    if (containsDemoBankData(parsedStatements)) {
+      localStorage.removeItem('midas.bankStatements.v2');
+      localStorage.removeItem('midas.bankLastQuery.v2');
+      localStorage.removeItem('midas.bankSupplementalStatements.v1');
+      return { bankJdeStatements: [], bankSupplementalStatements: [], bankLastQuery: null };
+    }
+    if (parsedSupplemental && containsDemoBankData(parsedSupplemental)) {
+      localStorage.removeItem('midas.bankSupplementalStatements.v1');
+      parsedSupplemental = null;
+    }
+
+    const isSantander = parsedQuery?.formatoElectronico === SANTANDER_FILE_FORMAT;
+    const bankJdeStatements: BankAccountStatement[] = isSantander ? [] : parsedStatements;
+    const bankSupplementalStatements: BankAccountStatement[] =
+      parsedSupplemental ?? (isSantander ? parsedStatements : []);
+    const bankLastQuery: BankQueryState | null = parsedQuery
+      ? (isSantander || parsedSupplemental !== null
+          ? { ...parsedQuery, hasUploadedSantander: true }
+          : parsedQuery)
+      : null;
+
+    return { bankJdeStatements, bankSupplementalStatements, bankLastQuery };
+  } catch {
+    return { bankJdeStatements: [], bankSupplementalStatements: [], bankLastQuery: null };
+  }
 }
 
 function emptyRealReconciliationResult(): RealReconciliationResult {
@@ -402,57 +452,25 @@ export default function App() {
   useEffect(() => { saveCompanyGroups(companyGroups); }, [companyGroups]);
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
-  const [bankJdeStatements, setBankJdeStatements] = useState<BankAccountStatement[]>(() => {
-    try {
-      const rawQuery = localStorage.getItem('midas.bankLastQuery.v2');
-      const parsedQuery = rawQuery ? (JSON.parse(rawQuery) as BankQueryState) : null;
-      const raw = localStorage.getItem('midas.bankStatements.v2');
-      const parsed = raw ? (JSON.parse(raw) as BankAccountStatement[]) : [];
-      // Descartar demo data ficticia que pudo haber quedado cacheada de
-      // versiones previas. Si detectamos CUALQUIER referencia demo dentro
-      // del cache, lo tiramos entero — no vale la pena mezclar ficticio con
-      // real en el flujo.
-      if (containsDemoBankData(parsed)) {
-        localStorage.removeItem('midas.bankStatements.v2');
-        localStorage.removeItem('midas.bankLastQuery.v2');
-        localStorage.removeItem('midas.bankSupplementalStatements.v1');
-        return [];
-      }
-      if (parsedQuery?.formatoElectronico === SANTANDER_FILE_FORMAT) return [];
-      return parsed;
-    } catch { return []; }
-  });
-  const [bankSupplementalStatements, setBankSupplementalStatements] = useState<BankAccountStatement[]>(() => {
-    try {
-      const rawCurrent = localStorage.getItem('midas.bankSupplementalStatements.v1');
-      if (rawCurrent) {
-        const parsedCurrent = JSON.parse(rawCurrent) as BankAccountStatement[];
-        if (!containsDemoBankData(parsedCurrent)) return parsedCurrent;
-        localStorage.removeItem('midas.bankSupplementalStatements.v1');
-      }
-
-      const rawQuery = localStorage.getItem('midas.bankLastQuery.v2');
-      const parsedQuery = rawQuery ? (JSON.parse(rawQuery) as BankQueryState) : null;
-      if (parsedQuery?.formatoElectronico !== SANTANDER_FILE_FORMAT) return [];
-
-      const rawLegacy = localStorage.getItem('midas.bankStatements.v2');
-      const parsedLegacy = rawLegacy ? (JSON.parse(rawLegacy) as BankAccountStatement[]) : [];
-      if (containsDemoBankData(parsedLegacy)) return [];
-      return parsedLegacy;
-    } catch { return []; }
-  });
-  const [bankLastQuery, setBankLastQuery] = useState<BankQueryState | null>(() => {
-    try {
-      const raw = localStorage.getItem('midas.bankLastQuery.v2');
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as BankQueryState;
-      if (parsed.formatoElectronico === SANTANDER_FILE_FORMAT) {
-        return { ...parsed, hasUploadedSantander: true };
-      }
-      const hasSupplemental = !!localStorage.getItem('midas.bankSupplementalStatements.v1');
-      return hasSupplemental ? { ...parsed, hasUploadedSantander: true } : parsed;
-    } catch { return null; }
-  });
+  // Bank-statement caches start empty and hydrate from localStorage on idle
+  // (see `bankCacheHydrationEffect` below). The splash screen masks any
+  // first-paint where the data is still empty, so the lift moves the
+  // multi-MB JSON.parse off the critical render path without a UX cost.
+  const [bankJdeStatements, setBankJdeStatements] = useState<BankAccountStatement[]>([]);
+  const [bankSupplementalStatements, setBankSupplementalStatements] = useState<BankAccountStatement[]>([]);
+  const [bankLastQuery, setBankLastQuery] = useState<BankQueryState | null>(null);
+  // Hydrate bank caches on idle. The splash screen covers the UI until JDE
+  // boot tasks finish, so a one-tick delay before localStorage is parsed has
+  // no observable cost — and pulling multi-MB JSON.parse out of the sync
+  // mount keeps the LCP under the budget the perf audit flagged.
+  useEffect(() => {
+    return scheduleIdleTask(() => {
+      const caches = loadBankCaches();
+      if (caches.bankJdeStatements.length) setBankJdeStatements(caches.bankJdeStatements);
+      if (caches.bankSupplementalStatements.length) setBankSupplementalStatements(caches.bankSupplementalStatements);
+      if (caches.bankLastQuery) setBankLastQuery(caches.bankLastQuery);
+    });
+  }, []);
   const bankStatements = useMemo(
     () => mergeBankStatements(bankJdeStatements, bankSupplementalStatements),
     [bankJdeStatements, bankSupplementalStatements],
@@ -621,12 +639,14 @@ export default function App() {
   // match the sidebar order. Previously hardcoded — bancos at #4 was a
   // catálogos tab leaking into the operación block; fideicomiso/taxes were
   // unreachable by number entirely.
-  const TAB_IDS: TabId[] = useMemo(
-    () => SECTIONS.flatMap((section) => SUB_TABS[section.id].map((tab) => tab.id)),
-    [],
-  );
+  // Atajos 1-N cambian sub-tabs DENTRO de la sección activa
+  // (Proyección / Operación / Catálogos). Sección se deriva de activeTab.
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
-    onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
+    onTabSwitch: (n) => {
+      const section = SECTION_FOR_TAB[activeTab] ?? 'proyeccion';
+      const tabs = SUB_TABS[section];
+      if (n >= 1 && n <= tabs.length) setActiveTab(tabs[n - 1].id);
+    },
   });
 
   // Load from persistence on mount
@@ -910,6 +930,61 @@ export default function App() {
     const t = setTimeout(() => setSplashMounted(false), 280);
     return () => clearTimeout(t);
   }, [isBooted]);
+
+  // Pre-warm the projection / planning source cache once boot data is in.
+  // The canonical projection (clients × months × CXP) is the single most
+  // expensive thing those dashboards do. Building it during idle time after
+  // boot means the first navigation into Proyección or Planeación gets a
+  // cache hit for the source layer — saves ~250ms of main-thread work and
+  // (more importantly) means the warmup shell doesn't need to wait for the
+  // canonical pass to finish before mounting the inner dashboard.
+  useEffect(() => {
+    if (!isBooted) return;
+    const idleWindow = window as IdleWindow;
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      try {
+        buildFinancialProjectionSourceData({
+          companyCode: selectedCia,
+          bankStatements: accountableBankStatements,
+          clients,
+          providers,
+          cxpRecords,
+          cobranzaRecords,
+          cobranzaReconciliation,
+          assumptions,
+          budget: null,
+          startingBalance: effectiveStartingBalance,
+        });
+      } catch {
+        /* pre-warm is best-effort — never block the user on a cache miss */
+      }
+    };
+    if (idleWindow.requestIdleCallback) {
+      const id = idleWindow.requestIdleCallback(run, { timeout: 1500 });
+      return () => {
+        cancelled = true;
+        idleWindow.cancelIdleCallback?.(id);
+      };
+    }
+    const id = window.setTimeout(run, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+    };
+  }, [
+    isBooted,
+    selectedCia,
+    accountableBankStatements,
+    clients,
+    providers,
+    cxpRecords,
+    cobranzaRecords,
+    cobranzaReconciliation,
+    assumptions,
+    effectiveStartingBalance,
+  ]);
 
   // ── Auto-load CXP (antigüedad de saldos) durante el boot ──
   // Concurrencia limitada a 3 — JDE revienta con paralelismo total contra
@@ -1471,18 +1546,12 @@ export default function App() {
           >
             {SECTIONS.map(s => {
               const isActive = activeSection === s.id;
-              const catalogCount = clients.length + providers.length;
-              const badge = s.id === 'catalogos' && catalogCount > 0
-                ? `${catalogCount}`
-                : s.id === 'operacion' && (cxpRecords.length > 0 || bankStatements.length > 0)
-                  ? 'Activo'
-                  : null;
               return (
                 <button
                   key={s.id}
                   onClick={() => switchSection(s.id)}
                   aria-current={isActive ? 'page' : undefined}
-                  className="flex items-center gap-2 rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors duration-150 whitespace-nowrap"
+                  className="flex items-center justify-center gap-2 rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors duration-150 whitespace-nowrap"
                   style={{
                     background: isActive ? 'var(--card)' : 'transparent',
                     color: isActive ? 'var(--gray-950)' : 'var(--shell-text-muted)',
@@ -1496,15 +1565,6 @@ export default function App() {
                     style={{ color: isActive ? 'var(--primary)' : 'currentColor' }}
                   />
                   {s.label}
-                  {badge && (
-                    <span
-                      className="midas-pill"
-                      data-tone={isActive ? 'neutral' : 'shell'}
-                    >
-                      <span className="midas-pill-dot" aria-hidden="true" />
-                      {badge}
-                    </span>
-                  )}
                 </button>
               );
             })}
