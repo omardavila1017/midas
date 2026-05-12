@@ -78,6 +78,10 @@ export interface CollectionCalendarEvent {
   bank?: CollectionCalendarBankInfo;
   rule?: CollectionCalendarRuleInfo;
   projected?: CollectionEvent;
+  /** Fecha esperada por la regla del cliente (factura + creditDays alineado al calendario). */
+  expectedPayDate?: string;
+  /** Diferencia en días entre fecha real de pago y la esperada. >0 tarde, <0 temprano. */
+  paymentLagDays?: number;
 }
 
 export interface CollectionCalendarSourceSummary {
@@ -102,9 +106,9 @@ const DAY_MS = 86_400_000;
 export const COLLECTION_CALENDAR_SOURCE_LABELS: Record<CollectionCalendarEventSource, string> = {
   BANK_MATCHED: 'Banco cruzado',
   BANK_UNMATCHED: 'Banco sin factura',
-  JDE_PAID_UNMATCHED: 'JDE cobrado',
+  JDE_PAID_UNMATCHED: 'Ingreso',
   JDE_OPEN_PROJECTED: 'Factura JDE por cobrar',
-  CLIENT_PROJECTED: 'Proyección sin factura',
+  CLIENT_PROJECTED: 'Proyectado',
 };
 
 const SOURCE_ORDER: CollectionCalendarEventSource[] = [
@@ -158,21 +162,24 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     cobranzaByFactura.set(facturaKey(record.cia, record.noFactura), record);
   }
 
+  const clientMatchByFactura = new Map<string, CollectionCalendarClientMatch | null>();
+  for (const record of cobranzaRecords) {
+    clientMatchByFactura.set(facturaKey(record.cia, record.noFactura), findClientForCobranza(record, clientLookup));
+  }
+
   const consumedByBank = new Set<string>();
   for (const abono of reconciliation.abonoEnrichments) {
-    events.push(eventFromAbono(abono, cobranzaByFactura));
+    events.push(eventFromAbono(abono, cobranzaByFactura, clientMatchByFactura, assumptions));
     for (const factura of abono.facturas ?? []) {
       consumedByBank.add(facturaKey(factura.cia, factura.noFactura));
     }
   }
 
-  const clientMatchByFactura = new Map<string, CollectionCalendarClientMatch | null>();
   const cxcCoverageByClientMonth = new Map<string, Set<string>>();
 
   for (const record of cobranzaRecords) {
     const key = facturaKey(record.cia, record.noFactura);
-    const clientMatch = findClientForCobranza(record, clientLookup);
-    clientMatchByFactura.set(key, clientMatch);
+    const clientMatch = clientMatchByFactura.get(key) ?? null;
     if (clientMatch && record.fechaFactura) {
       addCoveredMonth(cxcCoverageByClientMonth, clientMatch.client.id, record.fechaFactura.slice(0, 7));
     }
@@ -183,7 +190,7 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     if (match?.status === 'cobrada-banco') continue;
 
     if (record.importePendientePesos <= 0 && record.fechaCobro) {
-      events.push(eventFromJdePaid(record));
+      events.push(eventFromJdePaid(record, clientMatch, assumptions));
       continue;
     }
 
@@ -223,6 +230,8 @@ function facturaKey(cia: string, noFactura: string): string {
 function eventFromAbono(
   abono: AbonoEnrichment,
   cobranzaByFactura: Map<string, CobranzaRecord>,
+  clientMatchByFactura: Map<string, CollectionCalendarClientMatch | null>,
+  assumptions: CashFlowAssumptions,
 ): CollectionCalendarEvent {
   const source: CollectionCalendarEventSource = abono.status === 'factura-cobrada'
     ? 'BANK_MATCHED'
@@ -242,6 +251,16 @@ function eventFromAbono(
     };
   });
   const firstFactura = facturas[0];
+  let expectedPayDate: string | undefined;
+  let paymentLagDays: number | undefined;
+  if (source === 'BANK_MATCHED' && firstFactura) {
+    const record = cobranzaByFactura.get(facturaKey(firstFactura.cia, firstFactura.noFactura));
+    const clientMatch = record ? clientMatchByFactura.get(facturaKey(record.cia, record.noFactura)) : null;
+    if (record && clientMatch) {
+      expectedPayDate = resolveCobranzaRuleDate(record, clientMatch.client, assumptions).calendarDate;
+      paymentLagDays = isoDaysBetween(expectedPayDate, abono.fechaOperacion);
+    }
+  }
   return {
     id: `bank:${abono.movementKey}`,
     source,
@@ -268,16 +287,29 @@ function eventFromAbono(
       matchTier: abono.matchTier,
       confidence: abono.confidence,
     },
+    expectedPayDate,
+    paymentLagDays,
   };
 }
 
-function eventFromJdePaid(record: CobranzaRecord): CollectionCalendarEvent {
+function eventFromJdePaid(
+  record: CobranzaRecord,
+  clientMatch: CollectionCalendarClientMatch | null,
+  assumptions: CashFlowAssumptions,
+): CollectionCalendarEvent {
+  let expectedPayDate: string | undefined;
+  let paymentLagDays: number | undefined;
+  if (clientMatch) {
+    expectedPayDate = resolveCobranzaRuleDate(record, clientMatch.client, assumptions).calendarDate;
+    paymentLagDays = isoDaysBetween(expectedPayDate, record.fechaCobro);
+  }
   return {
     id: `jde:${record.cia}:${record.noFactura}`,
     source: 'JDE_PAID_UNMATCHED',
     date: record.fechaCobro,
     amount: record.importeBrutoPesos,
     cia: record.cia,
+    clientId: clientMatch?.client.id,
     clientName: record.nombreCliente || 'Cliente sin nombre',
     noCliente: record.noCliente,
     noFactura: record.noFactura,
@@ -285,6 +317,8 @@ function eventFromJdePaid(record: CobranzaRecord): CollectionCalendarEvent {
     dateReason: 'Fecha_Pago del API de cobranza.',
     ruleApplied: 'Fecha confirmada por JDE',
     facturas: [facturaFromRecord(record)],
+    expectedPayDate,
+    paymentLagDays,
   };
 }
 
@@ -337,7 +371,7 @@ function eventFromProjection(projected: CollectionEvent, client: Client | undefi
     amount: projected.amount,
     clientId: projected.clientId,
     clientName: client?.name ?? projected.clientId,
-    statusLabel: 'Proyección sin factura JDE emitida',
+    statusLabel: 'Proyectado',
     dateReason: 'Fecha calculada por collectionEngine desde calendario del cliente.',
     ruleApplied: client ? clientRuleLabel(client) : 'Regla de cliente',
     facturas: [],
@@ -539,4 +573,49 @@ function parseIsoDate(value: string): Date {
 
 function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * DAY_MS);
+}
+
+function isoDaysBetween(fromIso: string, toIso: string): number {
+  const a = parseIsoDate(fromIso);
+  const b = parseIsoDate(toIso);
+  return Math.round((b.getTime() - a.getTime()) / DAY_MS);
+}
+
+/**
+ * Recalcula `creditDays` por cliente a partir de pagos reales (`fechaCobro`).
+ * Promedia el lag observado (fecha real - fecha factura) sobre todas las
+ * facturas pagadas del cliente, redondea y aplica un piso de 1 día. Devuelve
+ * los clientes mutados (referencia nueva) y los conserva igual cuando no hay
+ * datos de pago suficientes.
+ */
+export function recomputeClientCreditDaysFromCobranza(
+  clients: Client[],
+  cobranzaRecords: CobranzaRecord[],
+): Client[] {
+  if (cobranzaRecords.length === 0 || clients.length === 0) return clients;
+  const lookup = buildClientLookup(clients);
+  const lagsByClient = new Map<string, { sum: number; count: number }>();
+  for (const record of cobranzaRecords) {
+    if (!record.fechaCobro || !record.fechaFactura) continue;
+    if (record.importePendientePesos > 0) continue;
+    const match = findClientForCobranza(record, lookup);
+    if (!match) continue;
+    const lag = isoDaysBetween(record.fechaFactura, record.fechaCobro);
+    if (!Number.isFinite(lag)) continue;
+    const slot = lagsByClient.get(match.client.id) ?? { sum: 0, count: 0 };
+    slot.sum += lag;
+    slot.count += 1;
+    lagsByClient.set(match.client.id, slot);
+  }
+  if (lagsByClient.size === 0) return clients;
+  let mutated = false;
+  const next = clients.map(client => {
+    const slot = lagsByClient.get(client.id);
+    if (!slot || slot.count === 0) return client;
+    const observed = Math.max(1, Math.round(slot.sum / slot.count));
+    if (observed === client.creditDays) return client;
+    mutated = true;
+    return { ...client, creditDays: observed };
+  });
+  return mutated ? next : clients;
 }

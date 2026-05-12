@@ -28,6 +28,14 @@ function persistAuth() {
   }
 }
 
+export function clearAuth() {
+  try {
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {
+    /* no-op */
+  }
+}
+
 interface LoginScreenProps {
   onSuccess: () => void;
 }

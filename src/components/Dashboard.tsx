@@ -42,6 +42,13 @@ import type { RealReconciliationResult } from '../domain/realReconciliationEngin
 import MonthDrilldown from './MonthDrilldown';
 import { type CashFlowTableRow } from './CashFlowTable';
 import PageHeader from './ui/PageHeader';
+import SharedKpiCard from './ui/KpiCard';
+import EmptyState from '../modules/shared-finance/components/EmptyState';
+import { useNavigateToTab } from '../modules/shared-finance/components/NavigationContext';
+import {
+  toneByDelta,
+  toneByFloor,
+} from '../modules/shared-finance/components/tone';
 
 interface DashboardProps {
   companyCode: string;
@@ -105,6 +112,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   startingBalance,
   cobranzaReconciliation,
 }) => {
+  const goTo = useNavigateToTab();
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -442,54 +450,71 @@ const Dashboard: React.FC<DashboardProps> = ({
       />
 
       {!hasRealData && (
-        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-[var(--warning-muted)]">
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: 'var(--warning)' }} />
-          <p className="text-[12px]" style={{ color: 'var(--gray-700)' }}>
-            No hay estados de cuenta cargados. Ve a Flujo Neto y haz refresh para traer datos reales desde JDE.
-          </p>
-        </div>
+        <EmptyState
+          tone="warning"
+          density="compact"
+          icon={<AlertTriangle className="w-4 h-4" />}
+          title="No hay estados de cuenta cargados."
+          description="Ve a Flujo Neto y haz refresh para traer datos reales desde JDE."
+          action={
+            <button
+              type="button"
+              onClick={() => goTo('netflow')}
+              className="text-[12px] font-medium underline-offset-2 hover:underline"
+              style={{ color: 'var(--warning)' }}
+            >
+              Abrir Flujo Neto →
+            </button>
+          }
+        />
       )}
       {error && (
-        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-[var(--danger)]/10">
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: 'var(--danger)' }} />
-          <p className="text-[12px]" style={{ color: 'var(--gray-700)' }}>
-            Error al cargar Antigüedad de Saldos: {error}
-          </p>
-        </div>
+        <EmptyState
+          tone="info"
+          density="compact"
+          live
+          icon={<AlertTriangle className="w-4 h-4" />}
+          title={`Error al cargar Antigüedad de Saldos: ${error}`}
+        />
       )}
       {loading && (
-        <p className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Cargando saldos comprometidos…</p>
+        <p className="text-[11px] animate-soft-pulse" style={{ color: 'var(--gray-400)' }}>Cargando saldos comprometidos…</p>
       )}
 
-      {/* KPI cards */}
+      {/* KPI cards — shared SharedKpiCard for cross-module consistency.
+          Each card is a navigation entry into the relevant deep view. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <KpiCard
+        <SharedKpiCard
           label={`Ingresos YTD ${currentYear}`}
-          value={ingresosYtd}
+          value={fmtCurrency(ingresosYtd)}
           icon={<TrendingUp className="w-4 h-4" />}
-          color="var(--success)"
+          color="var(--tone-success, var(--success))"
           sublabel={monthsElapsed > 0 ? `${fmtCompact(ingresosAvgMonth)} / mes promedio` : undefined}
           breakdown={monthsElapsed > 0 ? [
             { label: 'Meses transcurridos', value: String(monthsElapsed) },
-            { label: 'Margen neto', value: `${(margenYtd * 100).toFixed(1)}%`, valueColor: margenYtd >= 0 ? 'var(--success)' : 'var(--danger)' },
+            { label: 'Margen neto', value: `${(margenYtd * 100).toFixed(1)}%`, valueColor: toneByDelta(margenYtd) },
           ] : undefined}
+          onClick={() => goTo({ tab: 'collections', focus: 'ingresos-ytd' })}
+          navHint="Ver detalle de cobranza"
         />
-        <KpiCard
+        <SharedKpiCard
           label={`Egresos YTD ${currentYear}`}
-          value={egresosYtd}
+          value={fmtCurrency(egresosYtd)}
           icon={<TrendingDown className="w-4 h-4" />}
-          color="var(--danger)"
+          color="var(--tone-danger, var(--danger))"
           sublabel={monthsElapsed > 0 ? `${fmtCompact(egresosAvgMonth)} / mes promedio` : undefined}
           breakdown={monthsElapsed > 0 ? [
             { label: 'Vs Ingresos', value: `${ingresosYtd > 0 ? ((egresosYtd / ingresosYtd) * 100).toFixed(1) : '—'}%` },
-            { label: 'Flujo neto YTD', value: fmtCompact(flujoNetoYtd), valueColor: flujoNetoYtd >= 0 ? 'var(--success)' : 'var(--danger)' },
+            { label: 'Flujo neto YTD', value: fmtCompact(flujoNetoYtd), valueColor: toneByDelta(flujoNetoYtd) },
           ] : undefined}
+          onClick={() => goTo({ tab: 'cxp', focus: 'egresos-ytd' })}
+          navHint="Ver CXP"
         />
-        <KpiCard
+        <SharedKpiCard
           label="Caja Actual"
-          value={cajaActual}
+          value={fmtCurrency(cajaActual)}
           icon={<Wallet className="w-4 h-4" />}
-          color="var(--gray-950)"
+          color={toneByFloor(cajaActual, minimumExpense.totalMonthly)}
           sublabel={cajaInicial !== 0
             ? `${cajaDelta >= 0 ? '+' : ''}${fmtCompact(cajaDelta)} vs inicial (${(cajaDeltaPct * 100).toFixed(1)}%)`
             : undefined}
@@ -500,13 +525,11 @@ const Dashboard: React.FC<DashboardProps> = ({
               value: minimumExpense.totalMonthly > 0
                 ? `${(cajaActual / minimumExpense.totalMonthly).toFixed(1)} meses`
                 : '—',
-              valueColor: cajaActual / Math.max(1, minimumExpense.totalMonthly) < 1
-                ? 'var(--danger)'
-                : cajaActual / minimumExpense.totalMonthly < 3
-                ? 'var(--warning)'
-                : 'var(--success)',
+              valueColor: toneByFloor(cajaActual / Math.max(1, minimumExpense.totalMonthly), 3),
             },
           ]}
+          onClick={() => goTo({ tab: 'financialPlanning', focus: 'caja-actual' })}
+          navHint="Abrir Planeación"
         />
         <MinimumExpenseKpi
           monthly={minimumExpense.totalMonthly}
@@ -816,56 +839,13 @@ const StartingBalanceDisplay: React.FC<{ value: number }> = ({ value }) => (
   </div>
 );
 
-interface KpiBreakdownItem {
-  label: string;
-  value: string;
-  valueColor?: string;
-}
-
-const KpiCard: React.FC<{
-  label: string;
-  value: number;
-  icon: React.ReactNode;
-  color: string;
-  sublabel?: string;
-  breakdown?: KpiBreakdownItem[];
-}> = ({ label, value, icon, color, sublabel, breakdown }) => (
-  <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4 flex flex-col">
-    <div className="flex items-center justify-between mb-2">
-      <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
-        {label}
-      </p>
-      <span style={{ color }}>{icon}</span>
-    </div>
-    <p className="text-[20px] font-bold tabular-nums leading-tight" style={{ color }}>
-      {fmtCurrency(value)}
-    </p>
-    {sublabel && (
-      <p className="text-[10px] mt-0.5" style={{ color: 'var(--gray-400)' }}>
-        {sublabel}
-      </p>
-    )}
-    {breakdown && breakdown.length > 0 && (
-      <div className="mt-2.5 space-y-1 border-t border-[var(--gray-100)] pt-2">
-        {breakdown.map((item, idx) => (
-          <div key={idx} className="flex items-center justify-between text-[11px]">
-            <span style={{ color: 'var(--gray-500)' }}>{item.label}</span>
-            <span
-              className="font-medium tabular-nums"
-              style={{ color: item.valueColor ?? 'var(--gray-950)' }}
-            >
-              {item.value}
-            </span>
-          </div>
-        ))}
-      </div>
-    )}
-  </div>
-);
-
 /**
  * KPI especial del piso operativo. Se renderiza con fondo amarillo rayado
  * (mismo lenguaje visual que la línea amarilla de la proyección operativa).
+ *
+ * NOTA: el `KpiCard` local fue eliminado en la unificación con
+ * `components/ui/KpiCard.tsx` (SharedKpiCard) para que los 4 dashboards
+ * usen el mismo componente y comportamiento de navegación.
  */
 const MinimumExpenseKpi: React.FC<{
   monthly: number;

@@ -21,7 +21,11 @@
       "Bash(md5 /tmp/snippet.txt)",
       "Bash(python3)",
       "Bash(node -e ' *)",
-      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" -H \"Authorization: Bearer $\\(grep VITE_JDE_TOKEN .env.local)"
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" -H \"Authorization: Bearer $\\(grep VITE_JDE_TOKEN .env.local)",
+      "Bash(gh pr *)",
+      "Bash(/Applications/Conductor.app/Contents/Resources/bin/gh --version)",
+      "Bash(git pull *)",
+      "Bash(git --version)"
     ]
   }
 }

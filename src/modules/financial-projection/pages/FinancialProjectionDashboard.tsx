@@ -106,6 +106,15 @@ import {
 } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
+import EmptyState from '../../shared-finance/components/EmptyState';
+import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
+import {
+  toneByFloor,
+  toneByCount,
+  toneByDelta,
+  toneByRequirement,
+} from '../../shared-finance/components/tone';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
 
@@ -221,40 +230,19 @@ export default function FinancialProjectionDashboard(props: Props) {
 
 /**
  * Lightweight skeleton shown for the first paint when the canonical
- * projection still needs to build. Mirrors the eventual layout (header,
- * scenario tabs, KPI grid, chart card) so there's no shift.
+ * projection still needs to build. Delegates to the shared
+ * DashboardLoadingShell so every dashboard warms up with the same
+ * shimmer + stagger language.
  */
 function ProjectionWarmupShell() {
   return (
-    <div className="space-y-4 animate-page-in" aria-busy="true" aria-label="Calculando proyección">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="skeleton h-4 w-44 rounded opacity-60" />
-          <div className="skeleton mt-2 h-3 w-64 rounded opacity-50" />
-        </div>
-        <div className="skeleton h-10 w-48 rounded-[var(--radius)] opacity-50" />
-      </div>
-      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <div className="skeleton h-3 w-20 rounded opacity-50" />
-          <div className="skeleton h-9 w-32 rounded-[var(--radius)] opacity-50" />
-          <div className="skeleton h-9 w-32 rounded-[var(--radius)] opacity-50" />
-        </div>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {Array.from({ length: 4 }).map((_, idx) => (
-          <div key={idx} className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4">
-            <div className="skeleton h-3 w-1/2 rounded opacity-50" />
-            <div className="skeleton mt-3 h-5 w-3/4 rounded opacity-60" />
-            <div className="skeleton mt-2 h-3 w-2/3 rounded opacity-40" />
-          </div>
-        ))}
-      </div>
-      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
-        <div className="skeleton h-3 w-40 rounded opacity-50" />
-        <div className="skeleton mt-3 h-[280px] w-full rounded-[var(--radius)] opacity-50" />
-      </div>
-    </div>
+    <DashboardLoadingShell
+      kpis={4}
+      showFilterBar
+      showChart
+      tableRows={4}
+      label="Calculando proyección"
+    />
   );
 }
 
@@ -264,6 +252,7 @@ function ProjectionWarmupShell() {
  */
 function ProjectionDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
+  const goTo = useNavigateToTab();
   const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
   const yearStart = `${currentYear}-01-01`;
   const yearEnd = `${currentYear}-12-31`;
@@ -891,28 +880,32 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
           icon={<Wallet className="w-4 h-4" strokeWidth={1.5} />}
-          color={tone(summary.finalCash, summary.minimumCashRequired)}
+          color={toneByFloor(summary.finalCash, summary.minimumCashRequired)}
           sublabel={`${currentYear} · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          onClick={() => goTo({ tab: 'financialPlanning', focus: 'caja-final' })}
+          navHint="Abrir Planeación"
         />
         <KpiCard
           label="Días en déficit"
           value={String(summary.deficitDays)}
           icon={<AlertIcon className="w-4 h-4" strokeWidth={1.5} />}
-          color={summary.deficitDays > 0 ? 'var(--danger)' : 'var(--success)'}
+          color={toneByCount(summary.deficitDays)}
           sublabel={summary.maxRiskDate ? `Máx riesgo ${summary.maxRiskDate}` : 'Sin fecha crítica'}
+          onClick={() => goTo({ tab: 'financialPlanning', focus: 'deficit' })}
+          navHint="Ver días en déficit"
         />
         <KpiCard
           label="Crédito requerido"
           value={fmtCurrency(summary.creditRequired)}
           icon={<Banknote className="w-4 h-4" strokeWidth={1.5} />}
-          color={summary.creditRequired > 0 ? 'var(--warning)' : 'var(--gray-950)'}
+          color={toneByRequirement(summary.creditRequired)}
           sublabel={`Ingresos ${fmtCompact(summary.totalInflows)} · egresos ${fmtCompact(summary.totalOutflows)}`}
         />
         <KpiCard
           label={`Δ vs ${comparisonLabel}`}
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
           icon={<GitCompare className="w-4 h-4" strokeWidth={1.5} />}
-          color={finalCashDelta > 0 ? 'var(--success)' : finalCashDelta < 0 ? 'var(--danger)' : 'var(--gray-950)'}
+          color={toneByDelta(finalCashDelta)}
           sublabel={comparisonRun ? 'Comparación activa' : 'vs Base'}
         />
       </div>
@@ -1409,11 +1402,7 @@ function TaxStat({
   );
 }
 
-function tone(value: number, minimum: number): string {
-  if (value < minimum) return 'var(--danger)';
-  if (value < minimum * 1.2) return 'var(--warning)';
-  return 'var(--gray-950)';
-}
+// Tone helpers moved to ../../shared-finance/components/tone.ts.
 
 function shiftIsoDate(date: string, days: number, floorDate: string): string {
   const parsed = new Date(`${date}T12:00:00.000Z`);
@@ -1441,17 +1430,12 @@ function minimumCashFor(): number {
 
 function EmptyDataState() {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-10 text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--warning-muted)]">
-        <AlertTriangle className="h-5 w-5" style={{ color: 'var(--warning)' }} strokeWidth={1.5} />
-      </div>
-      <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
-        Aún no hay datos suficientes para proyectar
-      </h2>
-      <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">
-        Necesitamos estados de cuenta bancarios y al menos uno de:
-        catálogo de clientes, antigüedad de saldos, CXP JDE o cobranza real.
-      </p>
-    </div>
+    <EmptyState
+      tone="warning"
+      align="center"
+      icon={<AlertTriangle className="h-5 w-5" strokeWidth={1.5} />}
+      title="Aún no hay datos suficientes para proyectar"
+      description="Necesitamos estados de cuenta bancarios y al menos uno de: catálogo de clientes, antigüedad de saldos, CXP JDE o cobranza real."
+    />
   );
 }

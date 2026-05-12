@@ -1,5 +1,10 @@
 /**
- * Persistence layer for Midas — v8.
+ * Persistence layer for Midas — v9.
+ *
+ * v9 adds Client.jdeAccounts: enlaces persistidos entre el catálogo de
+ * clientes y las cuentas JDE de cobranza (cia+noCliente). El primer boot
+ * tras la migración deja `jdeAccounts` en undefined, lo que dispara el
+ * auto-seed del matcher (clientCobranzaMatcher.ts).
  *
  * v8 adds IndicadoresCobranza payments (recibos/aplicaciones) as the
  * bridge between bank deposits and CXC invoices.
@@ -94,11 +99,12 @@ export interface MidasStore {
   lastSaved: string;
 }
 
-const STORE_VERSION = 8;
-const STORAGE_KEY = 'midas-v8';
-// v5-v7 live at compatible shapes minus newer cobranza fields — `normalizeStore`
-// defaults them to empty arrays, so those payloads load transparently.
-const SAME_SCHEMA_LEGACY_KEYS = ['midas-v7', 'midas-v6', 'midas-v5', 'flowsense-v5'];
+const STORE_VERSION = 9;
+const STORAGE_KEY = 'midas-v9';
+// v5-v8 live at compatible shapes minus newer fields — `normalizeStore`
+// defaults them to empty arrays / undefined jdeAccounts, so those payloads
+// load transparently and the first boot runs the matcher auto-seed.
+const SAME_SCHEMA_LEGACY_KEYS = ['midas-v8', 'midas-v7', 'midas-v6', 'midas-v5', 'flowsense-v5'];
 const LEGACY_KEYS = ['flowsense-v4', 'flowsense-v3', 'flowsense-v2', 'flowsense-v1'];
 
 // Orphan keys de OperatingProjection (módulo eliminado). Se limpian al primer
@@ -315,7 +321,7 @@ export function loadStore(): MidasStore | null {
           `[persistence] migrando ${legacyKey} → ${STORAGE_KEY}` +
             (dropsLegacySimulation
               ? '; descartando propuestas/escenarios legacy.'
-              : '; agregando caches de cobranza faltantes.'),
+              : '; agregando caches/jdeAccounts faltantes.'),
         );
         const migrated = normalizeStore(payload.data);
         saveStore(migrated);

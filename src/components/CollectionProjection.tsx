@@ -8,31 +8,23 @@ import {
   reconcileRealCollections,
   type RealReconciliationMatch,
   type RealReconciliationResult,
-  type MatchTier as RealMatchTier,
-  type PaymentReconciliation,
-  type PaymentReconciliationStatus,
-  type ReconciliationReviewCandidate,
   type RealReconciliationBankCoverage,
 } from '../domain/realReconciliationEngine';
 import {
   applyManualConfirmations,
-  confirmReviewKeys,
-  reviewCandidateKeysAboveThreshold,
   useConfirmedReviewKeys,
 } from '../domain/reconciliationConfirmations';
 import {
   buildCollectionCalendar,
-  calendarEventMatchesSourceFilter,
   COLLECTION_CALENDAR_SOURCE_LABELS,
   type BuildCollectionCalendarResult,
   type CollectionCalendarEvent,
   type CollectionCalendarEventSource,
-  type CollectionCalendarSourceFilter,
 } from '../domain/collectionCalendarEngine';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jde';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, FileSpreadsheet } from 'lucide-react';
+import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency, fmtCompact } from '../formatters';
@@ -204,7 +196,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   return (
     <div className="space-y-5 animate-page-in">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <PageHeader title="Proyección de cobranza" />
+        <PageHeader title="Calendario de cobranza" />
         {/* Source mode indicator — no toggle needed; real view is
             always shown when JDE companies are available. */}
       </div>
@@ -501,7 +493,10 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
   const byId = new Map(clients.map(c => [c.id, c]));
   const confirmedSet = useMemo(() => new Set(confirmedPayments.map(p => p.key)), [confirmedPayments]);
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
 
   // ── Bank Reconciliation ──
   const { matches: reconMatches, summary: reconSummary } = useMemo(
@@ -1283,16 +1278,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const COLLECTION_CALENDAR_FILTERS: Array<{ id: CollectionCalendarSourceFilter; label: string }> = [
-  { id: 'all', label: 'Todas' },
-  { id: 'bank', label: 'Real banco' },
-  { id: 'bank_unmatched', label: 'Banco sin CXC' },
-  { id: 'jde', label: 'JDE' },
-  { id: 'cxc', label: 'JDE por cobrar' },
-  { id: 'projected', label: 'Sin factura' },
-  { id: 'unruled', label: 'Sin regla' },
-];
-
 const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
   color: string;
   rgb: string;
@@ -1331,6 +1316,33 @@ const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
   },
 };
 
+function PaymentLagBadge({ lag, expected }: { lag: number; expected?: string }) {
+  if (lag === 0) {
+    return (
+      <span
+        title={expected ? `Esperado ${expected}` : undefined}
+        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--success)]/10 text-[var(--success)]"
+      >
+        Puntual
+      </span>
+    );
+  }
+  const late = lag > 0;
+  const cls = late
+    ? 'bg-[var(--danger)]/10 text-[var(--danger)]'
+    : 'bg-[var(--primary)]/10 text-[var(--primary)]';
+  const sign = late ? '+' : '−';
+  const word = late ? 'tarde' : 'temprano';
+  return (
+    <span
+      title={expected ? `Esperado ${expected}` : undefined}
+      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}
+    >
+      {sign}{Math.abs(lag)}d {word}
+    </span>
+  );
+}
+
 function CollectionSourceBadge({ source }: { source: CollectionCalendarEventSource }) {
   const style = COLLECTION_CALENDAR_SOURCE_STYLES[source];
   return (
@@ -1339,31 +1351,6 @@ function CollectionSourceBadge({ source }: { source: CollectionCalendarEventSour
       {COLLECTION_CALENDAR_SOURCE_LABELS[source]}
     </span>
   );
-}
-
-function dominantCollectionSource(events: CollectionCalendarEvent[]): CollectionCalendarEventSource | null {
-  const totals = new Map<CollectionCalendarEventSource, number>();
-  for (const event of events) {
-    totals.set(event.source, (totals.get(event.source) ?? 0) + event.amount);
-  }
-  let dominant: CollectionCalendarEventSource | null = null;
-  let max = 0;
-  for (const [source, amount] of totals) {
-    if (amount > max) {
-      dominant = source;
-      max = amount;
-    }
-  }
-  return dominant;
-}
-
-function collectionSourceAmount(
-  events: CollectionCalendarEvent[],
-  predicate: (source: CollectionCalendarEventSource) => boolean,
-): number {
-  return events
-    .filter(event => predicate(event.source))
-    .reduce((sum, event) => sum + event.amount, 0);
 }
 
 function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: string): boolean {
@@ -1375,299 +1362,6 @@ function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: st
   return event.cia === ciaFilter;
 }
 
-const PAYMENT_STATUS_LABELS: Record<PaymentReconciliationStatus, string> = {
-  CONFIRMED_REF: 'Confirmado recibo',
-  AUTO_UNIQUE: 'Auto único',
-  AMBIGUOUS: 'Ambiguo',
-  UNMATCHED: 'Sin banco',
-};
-
-function ReceiptReconciliationPanel({ payments }: { payments: PaymentReconciliation[] }) {
-  const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<PaymentReconciliationStatus | 'all'>('all');
-  const [multiOnly, setMultiOnly] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(null);
-
-  const stats = useMemo(() => {
-    const reconciled = payments.filter(p => p.status === 'CONFIRMED_REF' || p.status === 'AUTO_UNIQUE');
-    const ambiguous = payments.filter(p => p.status === 'AMBIGUOUS');
-    const unmatched = payments.filter(p => p.status === 'UNMATCHED');
-    const multi = payments.filter(p => p.applicationCount > 1);
-    return {
-      reconciled: reconciled.length,
-      ambiguous: ambiguous.length,
-      unmatched: unmatched.length,
-      multi: multi.length,
-      multiAmount: multi
-        .filter(p => p.status === 'CONFIRMED_REF' || p.status === 'AUTO_UNIQUE')
-        .reduce((sum, p) => sum + p.importeRecibo, 0),
-    };
-  }, [payments]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return payments.filter(payment => {
-      if (statusFilter !== 'all' && payment.status !== statusFilter) return false;
-      if (multiOnly && payment.applicationCount <= 1) return false;
-      if (!q) return true;
-      const haystack = [
-        payment.idPago,
-        payment.noRecibo,
-        payment.cliente,
-        payment.noCliente,
-        payment.cuentaBancaria,
-        payment.banco,
-        payment.bankMovement?.noRecibo,
-        payment.bankMovement?.referencia,
-        payment.bankMovement?.concepto,
-        ...payment.applications.flatMap(app => [app.noFactura, app.cliente, app.noCliente]),
-      ].filter(Boolean).join(' ').toLowerCase();
-      return haystack.includes(q);
-    });
-  }, [multiOnly, payments, query, statusFilter]);
-
-  if (payments.length === 0) {
-    return (
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5">
-        <div className="flex items-center gap-2">
-          <Landmark className="w-4 h-4 text-[var(--gray-400)]" />
-          <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Recibos JDE / Banco</h3>
-        </div>
-        <p className="mt-2 text-[12px] text-[var(--gray-400)]">
-          Sin recibos cargados desde CobranzaIndicadores para el rango actual.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
-      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
-        <Landmark className="w-4 h-4 text-[var(--gray-400)]" />
-        <div>
-          <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Recibos JDE / Banco</h3>
-          <p className="text-[11px] text-[var(--gray-400)]">
-            Banco ABONO → Id Pago / No Recibo → facturas aplicadas.
-          </p>
-        </div>
-        <span className="ml-auto text-[11px] text-[var(--gray-400)]">
-          {filtered.length.toLocaleString('es-MX')} / {payments.length.toLocaleString('es-MX')} recibos
-        </span>
-      </div>
-
-      <div className="grid gap-3 border-b border-[var(--gray-100)] p-4 sm:grid-cols-2 lg:grid-cols-5">
-        <ReceiptStat label="Conciliados" value={`${stats.reconciled}`} tone="success" />
-        <ReceiptStat label="Sin banco" value={`${stats.unmatched}`} tone={stats.unmatched > 0 ? 'danger' : 'neutral'} />
-        <ReceiptStat label="Ambiguos" value={`${stats.ambiguous}`} tone={stats.ambiguous > 0 ? 'warning' : 'neutral'} />
-        <ReceiptStat label="Multi-factura" value={`${stats.multi}`} tone="neutral" />
-        <ReceiptStat label="Monto multi conciliado" value={fmtCompact(stats.multiAmount)} tone="neutral" />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--gray-100)] p-4">
-        <div className="relative min-w-[240px] flex-1 max-w-md">
-          <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder="Id Pago, No Recibo, cliente, factura, cuenta..."
-            className="input pl-9 w-full"
-          />
-        </div>
-        <select
-          value={statusFilter}
-          onChange={event => setStatusFilter(event.target.value as PaymentReconciliationStatus | 'all')}
-          className="input h-8 text-[12px]"
-        >
-          <option value="all">Todos los estados</option>
-          {Object.entries(PAYMENT_STATUS_LABELS).map(([status, label]) => (
-            <option key={status} value={status}>{label}</option>
-          ))}
-        </select>
-        <label className="inline-flex h-8 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--gray-200)] px-3 text-[12px] text-[var(--gray-600)]">
-          <input
-            type="checkbox"
-            checked={multiOnly}
-            onChange={event => setMultiOnly(event.target.checked)}
-          />
-          Solo multi-factura
-        </label>
-        {(query || statusFilter !== 'all' || multiOnly) && (
-          <button
-            type="button"
-            onClick={() => { setQuery(''); setStatusFilter('all'); setMultiOnly(false); }}
-            className="text-[12px] text-[var(--primary)] hover:underline px-2"
-          >
-            Limpiar
-          </button>
-        )}
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-[12px]">
-          <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
-            <tr>
-              <th className="text-left px-3 py-2">Id Pago</th>
-              <th className="text-left px-3 py-2">No Recibo</th>
-              <th className="text-left px-3 py-2">Fecha cobro</th>
-              <th className="text-left px-3 py-2">Banco / cuenta</th>
-              <th className="text-right px-3 py-2">Importe recibo</th>
-              <th className="text-right px-3 py-2">Aplicado</th>
-              <th className="text-left px-3 py-2">Estado</th>
-              <th className="text-right px-3 py-2">Detalle</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.slice(0, 500).map(payment => {
-              const open = openId === payment.idPago;
-              return [
-                <tr key={payment.idPago} className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50">
-                  <td className="px-3 py-2">
-                    <div className="font-medium text-[var(--gray-950)]">{payment.idPago}</div>
-                    <div className="text-[10px] text-[var(--gray-400)]">{payment.cia}</div>
-                  </td>
-                  <td className="px-3 py-2 tabular-nums">{payment.noRecibo || '—'}</td>
-                  <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">{payment.fechaCobro || '—'}</td>
-                  <td className="px-3 py-2">
-                    <div className="font-medium text-[var(--gray-700)]">{payment.banco || payment.bankMovement?.banco || '—'}</div>
-                    <div className="text-[10px] text-[var(--gray-400)] tabular-nums">{payment.cuentaBancaria || '—'}</div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtCurrency(payment.importeRecibo)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    <div>{fmtCurrency(payment.importeAplicado)}</div>
-                    <div className="text-[10px] text-[var(--gray-400)]">{payment.applicationCount} factura{payment.applicationCount === 1 ? '' : 's'}</div>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${paymentStatusClass(payment.status)}`}>
-                      {PAYMENT_STATUS_LABELS[payment.status]}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setOpenId(open ? null : payment.idPago)}
-                      className="text-[12px] font-medium text-[var(--primary)] hover:underline"
-                    >
-                      {open ? 'Cerrar' : 'Ver detalle'}
-                    </button>
-                  </td>
-                </tr>,
-                open ? (
-                  <tr key={`${payment.idPago}-detail`} className="border-t border-[var(--gray-100)] bg-[var(--gray-50)]/50">
-                    <td colSpan={8} className="px-4 py-4">
-                      <ReceiptDetail payment={payment} />
-                    </td>
-                  </tr>
-                ) : null,
-              ];
-            })}
-          </tbody>
-        </table>
-        {filtered.length > 500 && (
-          <div className="px-4 py-2 text-[11px] text-[var(--gray-400)] border-t border-[var(--gray-100)] bg-[var(--surface-alt)]">
-            Mostrando 500 de {filtered.length.toLocaleString('es-MX')} — usa filtros para acotar.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ReceiptStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: 'success' | 'warning' | 'danger' | 'neutral';
-}) {
-  const color = tone === 'success'
-    ? 'text-[var(--success)]'
-    : tone === 'warning'
-      ? 'text-[var(--warning)]'
-      : tone === 'danger'
-        ? 'text-[var(--danger)]'
-        : 'text-[var(--gray-950)]';
-  return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-[var(--gray-400)]">{label}</div>
-      <div className={`mt-1 text-[15px] font-semibold tabular-nums ${color}`}>{value}</div>
-    </div>
-  );
-}
-
-function ReceiptDetail({ payment }: { payment: PaymentReconciliation }) {
-  return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(420px,1.4fr)]">
-      <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white p-3">
-        <div className="text-[11px] font-bold uppercase tracking-wide text-[var(--gray-400)]">Banco ligado</div>
-        {payment.bankMovement ? (
-          <div className="mt-2 space-y-1.5 text-[12px]">
-            <div className="font-medium text-[var(--gray-950)]">{payment.bankMovement.nombreBanco || payment.bankMovement.banco || 'Banco'}</div>
-            <div className="text-[var(--gray-500)]">Cuenta {payment.bankMovement.cuenta}</div>
-            <div className="text-[var(--gray-500)]">{payment.bankMovement.fechaOperacion} · {fmtCurrency(payment.bankMovement.importe)}</div>
-            {payment.bankMovement.noRecibo && (
-              <div className="text-[var(--gray-500)]">No Recibo banco {payment.bankMovement.noRecibo}</div>
-            )}
-            <div className="text-[var(--gray-500)]">Ref. {payment.bankMovement.referencia || '—'}</div>
-            <div className="text-[var(--gray-400)] leading-snug">{payment.bankMovement.concepto || 'Sin concepto bancario'}</div>
-          </div>
-        ) : (
-          <p className="mt-2 text-[12px] text-[var(--gray-400)]">Sin movimiento bancario identificado para este recibo.</p>
-        )}
-        {payment.matchReason && (
-          <p className="mt-3 rounded-[var(--radius-md)] bg-[var(--surface-alt)] p-2 text-[11px] leading-snug text-[var(--gray-500)]">
-            {payment.matchReason}
-          </p>
-        )}
-      </div>
-      <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white overflow-hidden">
-        <div className="border-b border-[var(--gray-100)] px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-[var(--gray-400)]">
-          Facturas aplicadas
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]">
-            <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[10px] uppercase tracking-wide">
-              <tr>
-                <th className="text-left px-3 py-2">Factura</th>
-                <th className="text-left px-3 py-2">Cliente</th>
-                <th className="text-right px-3 py-2">Cobrado</th>
-                <th className="text-right px-3 py-2">Original</th>
-                <th className="text-right px-3 py-2">IVA prop.</th>
-                <th className="text-left px-3 py-2">Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payment.applications.map(app => (
-                <tr key={`${payment.idPago}-${app.noFactura}`} className="border-t border-[var(--gray-100)]">
-                  <td className="px-3 py-2 tabular-nums font-medium text-[var(--gray-950)]">{app.noFactura}</td>
-                  <td className="px-3 py-2">
-                    <div>{app.cliente || payment.cliente || '—'}</div>
-                    <div className="text-[10px] text-[var(--gray-400)]">#{app.noCliente || payment.noCliente || '—'}</div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(app.importeCobrado)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(app.importeOriginalFactura)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    <div>{fmtCurrency(app.ivaCausadoProporcional)}</div>
-                    <div className="text-[10px] text-[var(--gray-400)]">{app.tasaIva || 'IVA s/d'}</div>
-                  </td>
-                  <td className="px-3 py-2 text-[var(--gray-500)]">{app.facturaStatus ?? 'sin CXC'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function paymentStatusClass(status: PaymentReconciliationStatus): string {
-  if (status === 'CONFIRMED_REF') return 'bg-[var(--success)]/10 text-[var(--success)]';
-  if (status === 'AUTO_UNIQUE') return 'bg-[var(--primary-muted)] text-[var(--primary)]';
-  if (status === 'AMBIGUOUS') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
-  return 'bg-[var(--danger)]/10 text-[var(--danger)]';
-}
 
 // ─────────────────────────────────────────────────────────────────────────
 // CobranzaRealCalendar — calendario unico de banco + JDE + CXC + proyeccion.
@@ -1691,17 +1385,16 @@ function CobranzaRealCalendar({
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [sourceFilter, setSourceFilter] = useState<CollectionCalendarSourceFilter>('all');
 
   const monthEvents = useMemo(() => {
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}`;
     return calendar.events.filter(event => {
       if (!event.date.startsWith(prefix)) return false;
       if (!collectionEventMatchesCia(event, ciaFilter)) return false;
-      if (sourceFilter === 'all' && event.source === 'BANK_UNMATCHED') return false;
-      return calendarEventMatchesSourceFilter(event, sourceFilter);
+      if (event.source === 'BANK_UNMATCHED') return false;
+      return true;
     });
-  }, [calendar.events, year, month, ciaFilter, sourceFilter]);
+  }, [calendar.events, year, month, ciaFilter]);
 
   const byDay = useMemo(() => {
     const map = new Map<string, CollectionCalendarEvent[]>();
@@ -1713,39 +1406,14 @@ function CobranzaRealCalendar({
     return map;
   }, [monthEvents]);
 
-  const totalMes = monthEvents.reduce((s, event) => s + event.amount, 0);
-  const bankTotal = collectionSourceAmount(monthEvents, source => source === 'BANK_MATCHED');
-  const jdeTotal = collectionSourceAmount(monthEvents, source => source === 'JDE_PAID_UNMATCHED');
-  const jdeOpenTotal = collectionSourceAmount(monthEvents, source => source === 'JDE_OPEN_PROJECTED');
-  const clientProjectedTotal = collectionSourceAmount(monthEvents, source => source === 'CLIENT_PROJECTED');
-  const jdeIssuedTotal = bankTotal + jdeTotal + jdeOpenTotal;
-
   const firstDay = new Date(Date.UTC(year, month, 1));
   const lastDay = new Date(Date.UTC(year, month + 1, 0));
-  const visibleFrom = firstDay.toISOString().slice(0, 10);
-  const visibleTo = lastDay.toISOString().slice(0, 10);
-  const loadedDateSet = useMemo(
-    () => new Set(bankCoverage?.loadedDates ?? []),
-    [bankCoverage],
-  );
-  const loadedInMonth = useMemo(
-    () => (bankCoverage?.loadedDates ?? []).filter(date => date >= visibleFrom && date <= visibleTo).length,
-    [bankCoverage, visibleFrom, visibleTo],
-  );
-  const monthDayCount = lastDay.getUTCDate();
-  const coveragePct = monthDayCount > 0 ? loadedInMonth / monthDayCount : 0;
-  const coverageWeak = loadedDateSet.size === 0 || coveragePct < 0.4;
   const startPad = (firstDay.getUTCDay() + 6) % 7;
   const days: Date[] = [];
   for (let i = -startPad; i < lastDay.getUTCDate() + (7 - ((lastDay.getUTCDay() + 6) % 7 + 1) % 7); i++) {
     days.push(new Date(Date.UTC(year, month, i + 1)));
   }
   while (days.length % 7 !== 0) days.push(new Date(Date.UTC(year, month, days.length - startPad + 1)));
-
-  const maxDayMonto = Math.max(
-    ...Array.from(byDay.values()).map(list => list.reduce((s, event) => s + event.amount, 0)),
-    1,
-  );
 
   const prevMonth = () => {
     if (month === 0) { setYear(year - 1); setMonth(11); }
@@ -1771,108 +1439,39 @@ function CobranzaRealCalendar({
     if (selectedDay && !byDay.has(selectedDay)) setSelectedDay(null);
   }, [selectedDay, byDay]);
 
-  const progressPct = jdeIssuedTotal > 0
-    ? (bankTotal / jdeIssuedTotal) * 100
-    : 0;
-  const eventCount = monthEvents.length;
-  const uniqueClientCount = useMemo(() => {
-    const set = new Set<string>();
-    for (const event of monthEvents) {
-      const key = event.clientId
-        ?? `${event.cia ?? ''}::${event.noCliente ?? ''}`;
-      set.add(key);
-    }
-    return set.size;
-  }, [monthEvents]);
-
   // Totales semanales (lunes-domingo). Replica el bloque "Cobranza
   // semanal" del calendario legacy. Si el mes no tiene eventos
   // visibles la sección no se renderiza.
   const weeklyTotals = useMemo(() => {
-    const weeks: Record<string, number> = {};
+    const weeks: Record<string, { real: number; projected: number }> = {};
     for (const [date, evts] of byDay.entries()) {
       const d = new Date(date + 'T12:00:00');
       const weekStart = new Date(d);
       weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
       const key = weekStart.toISOString().slice(0, 10);
-      weeks[key] = (weeks[key] ?? 0) + evts.reduce((s, e) => s + e.amount, 0);
+      const slot = weeks[key] ?? { real: 0, projected: 0 };
+      for (const e of evts) {
+        if (e.source === 'BANK_MATCHED' || e.source === 'JDE_PAID_UNMATCHED') {
+          slot.real += e.amount;
+        } else if (
+          e.source === 'JDE_OPEN_PROJECTED'
+          || e.source === 'CLIENT_PROJECTED'
+        ) {
+          slot.projected += e.amount;
+        }
+      }
+      weeks[key] = slot;
     }
     return weeks;
   }, [byDay]);
 
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
 
   return (
     <div className="space-y-4">
-      {/* ── KPI strip: JDE emitido y proyección sin factura separados. */}
-      <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Facturas JDE emitidas</div>
-          <AnimatedNumber
-            value={jdeIssuedTotal}
-            format={fmtCurrency}
-            className="block text-xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
-          />
-          <div className="text-[11px] text-[var(--gray-400)]">
-            {eventCount} evento{eventCount !== 1 ? 's' : ''} visibles · {uniqueClientCount} cliente{uniqueClientCount !== 1 ? 's' : ''}
-          </div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--success)]">Real banco</div>
-          <AnimatedNumber
-            value={bankTotal}
-            format={fmtCurrency}
-            className="block text-xl font-bold tabular-nums text-[var(--success)] mt-0.5"
-          />
-          <div className="text-[11px] text-[var(--gray-400)]">cruzado con banco</div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--primary)]">Pagado JDE sin banco</div>
-          <AnimatedNumber
-            value={jdeTotal}
-            format={fmtCurrency}
-            className="block text-xl font-bold tabular-nums text-[var(--primary)] mt-0.5"
-          />
-          <div className="text-[11px] text-[var(--gray-400)]">pendiente de cruzar banco</div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[#6d28d9]">Por cobrar JDE</div>
-          <AnimatedNumber
-            value={jdeOpenTotal}
-            format={fmtCurrency}
-            className="block text-xl font-bold tabular-nums text-[#6d28d9] mt-0.5"
-          />
-          <div className="text-[11px] text-[var(--gray-400)]">factura emitida pendiente</div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Proyección sin factura</div>
-          <AnimatedNumber
-            value={clientProjectedTotal}
-            format={fmtCurrency}
-            className="block text-xl font-bold tabular-nums text-[var(--gray-500)] mt-0.5"
-          />
-          <div className="text-[11px] text-[var(--gray-400)]">cliente sin factura JDE</div>
-        </div>
-        <div className="ml-auto min-w-[200px]">
-          <div className="flex items-baseline justify-between">
-            <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Cruzado banco</div>
-            <div className="text-xl font-bold tabular-nums text-[var(--gray-950)]">
-              {jdeIssuedTotal > 0 ? (
-                <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
-              ) : (
-                '—'
-              )}
-            </div>
-          </div>
-          <div className="mt-1.5 h-1.5 bg-[var(--gray-50)] rounded-full overflow-hidden">
-            <div
-              className="h-full bg-[var(--success)] rounded-full"
-              style={{ width: `${progressPct}%`, transition: 'width var(--motion-layout) var(--ease-smooth)' }}
-            />
-          </div>
-        </div>
-      </div>
-
       {/* ── Calendario (header oscuro + chips + grid + detalle) ──
           Una sola card con la cabecera navy del legacy, la fila de
           chips de fuente con estilo legacy (primary cuando activo),
@@ -1899,53 +1498,20 @@ function CobranzaRealCalendar({
           </button>
         </div>
 
-        {/* Chips de fuente — separan facturas JDE emitidas de proyección sin factura. */}
-        <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-white">
-          <div className="flex flex-wrap gap-1.5" aria-label="Filtrar fuente de calendario">
-            {COLLECTION_CALENDAR_FILTERS.map(filter => {
-              const active = sourceFilter === filter.id;
-              return (
-                <button
-                  key={filter.id}
-                  onClick={() => {
-                    setSourceFilter(filter.id);
-                    setSelectedDay(null);
-                  }}
-                  className={`px-3 h-8 rounded-full text-[12px] font-medium border transition-colors hover-press ${
-                    active
-                      ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
-                      : 'bg-white text-[var(--gray-400)] border-[var(--gray-200)] hover:text-[var(--gray-950)]'
-                  }`}
-                >
-                  {filter.label}
-                </button>
-              );
-            })}
-          </div>
-          {onEnsureBankCoverage && coverageWeak && (
-            <div className="mt-3 flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--warning,_#f59e0b)]/30 bg-[var(--warning-muted,_#fef3c7)] px-3 py-2 text-[12px]">
-              <AlertTriangle className="w-4 h-4 text-[var(--warning,_#b45309)] flex-shrink-0" />
-              <div className="min-w-0">
-                <div className="font-medium text-[var(--gray-950)]">Cobertura bancaria parcial del mes visible</div>
-                <div className="text-[var(--gray-500)]">
-                  {loadedInMonth} de {monthDayCount} días con movimientos cargados. Cargar sólo este rango mejora el cruce sin traer todo el año.
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  void onEnsureBankCoverage({
-                    from: visibleFrom,
-                    to: visibleTo,
-                    ciaFilter: ciaFilter === 'all' ? undefined : [ciaFilter],
-                  });
-                }}
-                disabled={bankCoverageLoading}
-                className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] bg-[var(--gray-950)] text-white text-[12px] font-medium disabled:opacity-50"
-              >
-                {bankCoverageLoading ? 'Cargando…' : 'Cargar bancos del mes'}
-              </button>
-            </div>
-          )}
+        {/* Leyenda — explica los colores que aparecen en cada día. */}
+        <div className="px-4 py-2.5 border-b border-[var(--gray-200)]/60 bg-white flex items-center gap-4 text-[11px] text-[var(--gray-500)] flex-wrap">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#2563eb]" />
+            <span><strong className="text-[var(--gray-950)]">Ingreso</strong> · cruzado con banco</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#7c3aed]" />
+            <span><strong className="text-[var(--gray-950)]">Proyección</strong> · esperado sin cruce</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm border border-[var(--gray-300)] bg-white" />
+            <span><strong className="text-[var(--gray-950)]">Δ</strong> · ingreso − proyección</span>
+          </span>
         </div>
 
         {/* Cabecera de días de la semana — fondo surface-alt como legacy */}
@@ -1964,45 +1530,22 @@ function CobranzaRealCalendar({
             const iso = d.toISOString().slice(0, 10);
             const dayEvents = byDay.get(iso) ?? [];
             const dayTotal = dayEvents.reduce((s, event) => s + event.amount, 0);
-            const dayJdeTotal = dayEvents
+            const dayRealTotal = dayEvents
               .filter(event =>
                 event.source === 'BANK_MATCHED'
-                || event.source === 'JDE_PAID_UNMATCHED'
-                || event.source === 'JDE_OPEN_PROJECTED',
+                || event.source === 'JDE_PAID_UNMATCHED',
               )
               .reduce((s, event) => s + event.amount, 0);
-            const dayClientProjectedTotal = dayEvents
-              .filter(event => event.source === 'CLIENT_PROJECTED')
+            const dayProjectedTotal = dayEvents
+              .filter(event =>
+                event.source === 'JDE_OPEN_PROJECTED'
+                || event.source === 'CLIENT_PROJECTED',
+              )
               .reduce((s, event) => s + event.amount, 0);
+            const dayDiff = dayRealTotal - dayProjectedTotal;
             const isSelected = selectedDay === iso;
             const isToday = iso === todayISO;
             const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
-            const heat = dayTotal / maxDayMonto;
-            const dominantSource = dominantCollectionSource(dayEvents);
-            const dominantJdeSource = dominantCollectionSource(dayEvents.filter(event =>
-              event.source === 'BANK_MATCHED'
-              || event.source === 'JDE_PAID_UNMATCHED'
-              || event.source === 'JDE_OPEN_PROJECTED',
-            ));
-            const sourceStyle = (dominantJdeSource || dominantSource)
-              ? COLLECTION_CALENDAR_SOURCE_STYLES[dominantJdeSource || dominantSource!]
-              : null;
-            // Pill: fondo coloreado por la fuente dominante con
-            // intensidad proporcional al monto, igual que el legacy
-            // hace con confirmado/proyectado.
-            let pillBg = 'transparent';
-            let pillFg = 'var(--gray-950)';
-            if (sourceStyle && dayTotal > 0) {
-              const intensity = Math.max(0.18, Math.min(0.88, heat + 0.12));
-              pillBg = `rgba(${sourceStyle.rgb}, ${intensity})`;
-              pillFg = intensity > 0.5 ? 'white' : sourceStyle.color;
-            }
-            const sourceBreakdown = Array.from(
-              dayEvents.reduce((map, event) => {
-                map.set(event.source, (map.get(event.source) ?? 0) + 1);
-                return map;
-              }, new Map<CollectionCalendarEventSource, number>()),
-            );
             return (
               <button
                 key={i}
@@ -2030,44 +1573,35 @@ function CobranzaRealCalendar({
                   )}
                 </div>
                 {dayTotal > 0 && inMonth && (
-                  <div className="mt-1 space-y-1">
-                    {dayJdeTotal > 0 && (
+                  <div className="mt-1 space-y-0.5">
+                    {dayRealTotal > 0 && (
                       <div
-                        className="rounded-md px-1.5 py-0.5 text-[11px] font-bold tabular-nums inline-block"
-                        style={{ backgroundColor: pillBg, color: pillFg }}
-                        title="Facturas JDE emitidas"
+                        className="rounded-md bg-[#dbeafe] text-[#1d4ed8] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
+                        title="Ingreso real (cruzado con banco o JDE pagada)"
                       >
-                        {dayJdeTotal >= 1_000_000
-                          ? `${(dayJdeTotal / 1_000_000).toFixed(1)}M`
-                          : dayJdeTotal >= 1000
-                            ? `${Math.round(dayJdeTotal / 1000)}K`
-                            : fmtCompact(dayJdeTotal)}
+                        Ing. {fmtCompact(dayRealTotal)}
                       </div>
                     )}
-                    {dayClientProjectedTotal > 0 && (
+                    {dayProjectedTotal > 0 && (
                       <div
-                        className="rounded-md bg-[var(--gray-100)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--gray-500)] w-fit"
-                        title="Proyección sin factura JDE"
+                        className="rounded-md bg-[#ede9fe] text-[#5b21b6] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
+                        title="Proyección esperada sin cruce con banco"
                       >
-                        Sin fact. {dayClientProjectedTotal >= 1_000_000
-                          ? `${(dayClientProjectedTotal / 1_000_000).toFixed(1)}M`
-                          : dayClientProjectedTotal >= 1000
-                            ? `${Math.round(dayClientProjectedTotal / 1000)}K`
-                            : fmtCompact(dayClientProjectedTotal)}
+                        Proy. {fmtCompact(dayProjectedTotal)}
                       </div>
                     )}
-                  </div>
-                )}
-                {sourceBreakdown.length > 0 && inMonth && (
-                  <div className="flex items-center gap-0.5 mt-auto pt-1">
-                    {sourceBreakdown.slice(0, 5).map(([source, count]) => (
-                      <span
-                        key={source}
-                        className="w-1.5 h-1.5 rounded-full"
-                        style={{ backgroundColor: COLLECTION_CALENDAR_SOURCE_STYLES[source].color }}
-                        title={`${COLLECTION_CALENDAR_SOURCE_LABELS[source]}: ${count}`}
-                      />
-                    ))}
+                    {(dayRealTotal > 0 || dayProjectedTotal > 0) && iso <= todayISO && (
+                      <div
+                        className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit ${
+                          dayDiff >= 0
+                            ? 'bg-[#dcfce7] text-[#15803d]'
+                            : 'bg-[#fee2e2] text-[#b91c1c]'
+                        }`}
+                        title="Diferencia entre ingreso real y proyección"
+                      >
+                        Δ {dayDiff >= 0 ? '+' : '−'}{fmtCompact(Math.abs(dayDiff))}
+                      </div>
+                    )}
                   </div>
                 )}
               </button>
@@ -2126,7 +1660,12 @@ function CobranzaRealCalendar({
                         )}
                       </td>
                       <td className="px-3 py-2">
-                        <div className="tabular-nums text-[var(--gray-950)]">{event.date}</div>
+                        <div className="tabular-nums text-[var(--gray-950)] flex items-center gap-1.5">
+                          <span>{event.date}</span>
+                          {typeof event.paymentLagDays === 'number' && (
+                            <PaymentLagBadge lag={event.paymentLagDays} expected={event.expectedPayDate} />
+                          )}
+                        </div>
                         <div className="text-[10px] text-[var(--gray-500)] max-w-[300px]">{event.dateReason}</div>
                         <div className="text-[10px] text-[var(--gray-400)] max-w-[300px]">{event.ruleApplied}</div>
                       </td>
@@ -2163,366 +1702,69 @@ function CobranzaRealCalendar({
         )}
       </div>
 
-      {/* Cobranza semanal — réplica del bloque del calendario legacy.
-          Lunes-domingo, ordenado por fecha. Solo se muestra cuando
-          hay eventos en el mes para no dejar una card vacía. */}
-      {Object.keys(weeklyTotals).length > 0 && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 animate-card-in">
-          <h3 className="text-[13px] font-bold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
-          <div className="space-y-2">
-            {Object.entries(weeklyTotals)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([week, weekTotal], i) => {
-                const pct = totalMes ? (weekTotal / totalMes) * 100 : 0;
-                const delay = `${i * 60}ms`;
-                return (
-                  <div key={week} className="grid grid-cols-[90px_1fr_100px_50px] items-center gap-3 animate-slide-up" style={{ animationDelay: delay }}>
-                    <span className="text-[12px] text-[var(--gray-400)]">
-                      Sem. {new Date(week + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
-                    </span>
-                    <div className="h-5 bg-[var(--gray-50)] rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-[var(--primary)] rounded-full animate-progress-fill"
-                        style={{ width: `${Math.min(100, pct)}%`, animationDelay: delay }}
-                      />
-                    </div>
-                    <span className="text-[13px] font-medium tabular-nums text-right">{fmtCurrency(weekTotal)}</span>
-                    <span className="text-[11px] text-[var(--gray-400)] text-right">{pct.toFixed(0)}%</span>
-                  </div>
-                );
-              })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// ClientAgingTable — Top clientes con saldo abierto
-//
-// Aging por cliente (no por factura): agrupa las facturas filtradas por
-// cliente, calcula el saldo total + buckets de antigüedad (por vencer,
-// 1-30, 31-60, 61-90, 90+), y muestra el % cruzado con banco para cada
-// cliente. Las top 20 facturas individuales siguen visibles abajo en la
-// tabla raw — esta tabla es para el primer scan visual.
-//
-// Cuando hay datos de bancos cargados, también muestra una columna
-// "Cobrado banco" con el porcentaje de facturas del cliente que cruzaron
-// — si un cliente tiene 4 facturas y 3 cruzaron, dice "75%".
-// ─────────────────────────────────────────────────────────────────────────
-function ClientAgingTable({
-  records,
-  matchByFactura,
-  bankActive,
-}: {
-  records: CobranzaRecord[];
-  matchByFactura: Map<string, RealReconciliationMatch>;
-  bankActive: boolean;
-}) {
-  // Agrupar por cliente. Usamos `${cia}::${noCliente}` para no fusionar el
-  // mismo cliente entre dos compañías (caso real: HOMEX puede facturar a
-  // Senda Norte y Senda Sur — son dos cuentas diferentes en JDE).
-  const aging = useMemo(() => {
-    type Bucket = { saldo: number; bruto: number };
-    type Aging = {
-      key: string;
-      cia: string;
-      noCliente: string;
-      nombreCliente: string;
-      saldoTotal: number;
-      brutoTotal: number;
-      facturasTotal: number;
-      facturasCobradas: number;
-      porVencer: Bucket;
-      v1_30: Bucket;
-      v31_60: Bucket;
-      v61_90: Bucket;
-      mas90: Bucket;
-    };
-    const map = new Map<string, Aging>();
-    for (const r of records) {
-      const key = `${r.cia}::${r.noCliente}`;
-      let a = map.get(key);
-      if (!a) {
-        a = {
-          key, cia: r.cia, noCliente: r.noCliente, nombreCliente: r.nombreCliente,
-          saldoTotal: 0, brutoTotal: 0, facturasTotal: 0, facturasCobradas: 0,
-          porVencer: { saldo: 0, bruto: 0 },
-          v1_30: { saldo: 0, bruto: 0 },
-          v31_60: { saldo: 0, bruto: 0 },
-          v61_90: { saldo: 0, bruto: 0 },
-          mas90: { saldo: 0, bruto: 0 },
-        };
-        map.set(key, a);
-      }
-      a.saldoTotal += r.importePendientePesos;
-      a.brutoTotal += r.importeBrutoPesos;
-      a.facturasTotal += 1;
-      const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
-      if (m?.status === 'cobrada-banco') a.facturasCobradas += 1;
-
-      const bucket = r.diasVencida <= 0 ? a.porVencer
-        : r.diasVencida <= 30 ? a.v1_30
-        : r.diasVencida <= 60 ? a.v31_60
-        : r.diasVencida <= 90 ? a.v61_90
-        : a.mas90;
-      bucket.saldo += r.importePendientePesos;
-      bucket.bruto += r.importeBrutoPesos;
-    }
-    return Array.from(map.values()).sort((a, b) => b.saldoTotal - a.saldoTotal);
-  }, [records, matchByFactura]);
-
-  const top = aging.slice(0, 20);
-  const restoSaldo = aging.slice(20).reduce((s, a) => s + a.saldoTotal, 0);
-
-  if (top.length === 0) return null;
-
-  const maxSaldo = Math.max(...top.map(a => a.saldoTotal), 1);
-
-  return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
-      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
-        <Banknote className="w-4 h-4 text-[var(--gray-400)]" />
-        <span className="text-[13px] font-bold text-[var(--gray-950)]">
-          Top {Math.min(20, aging.length)} clientes — antigüedad de saldo
-        </span>
-        {aging.length > 20 && (
-          <span className="text-[11px] text-[var(--gray-400)] ml-auto">
-            +{aging.length - 20} clientes más · {fmtCurrency(restoSaldo)}
-          </span>
-        )}
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-[12px]">
-          <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
-            <tr>
-              <th className="text-left px-3 py-2">Cliente</th>
-              <th className="text-right px-3 py-2">Saldo</th>
-              <th className="text-left px-3 py-2 w-32">Distribución</th>
-              <th className="text-right px-3 py-2">Por vencer</th>
-              <th className="text-right px-3 py-2">1–30</th>
-              <th className="text-right px-3 py-2">31–60</th>
-              <th className="text-right px-3 py-2">61–90</th>
-              <th className="text-right px-3 py-2">90+</th>
-              <th className="text-right px-3 py-2">Facturas</th>
-              {bankActive && <th className="text-right px-3 py-2">Cruzadas</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {top.map((a) => {
-              // Mini barra apilada con los 5 buckets — solo % relativos al saldoTotal.
-              const seg = (b: number) => a.saldoTotal > 0 ? (b / a.saldoTotal) * 100 : 0;
-              const widthPct = (a.saldoTotal / maxSaldo) * 100;
-              return (
-                <tr
-                  key={a.key}
-                  className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
-                >
-                  <td className="px-3 py-2">
-                    <div className="font-medium text-[var(--gray-950)] truncate max-w-[280px]" title={a.nombreCliente}>
-                      {a.nombreCliente || '—'}
-                    </div>
-                    <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
-                      {a.cia} · #{a.noCliente}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-bold">
-                    {fmtCurrency(a.saldoTotal)}
-                  </td>
-                  <td className="px-3 py-2">
-                    {/* Barra apilada: verde "por vencer" + amarillos progresivos. */}
-                    <div className="w-full h-2 bg-[var(--gray-100)] rounded-full overflow-hidden flex" style={{ width: `${Math.max(20, widthPct)}%` }}>
-                      <div className="h-full bg-[var(--success)]" style={{ width: `${seg(a.porVencer.saldo)}%` }} />
-                      <div className="h-full bg-[var(--warning,_#f59e0b)] opacity-60" style={{ width: `${seg(a.v1_30.saldo)}%` }} />
-                      <div className="h-full bg-[var(--warning,_#f59e0b)] opacity-80" style={{ width: `${seg(a.v31_60.saldo)}%` }} />
-                      <div className="h-full bg-[var(--danger)] opacity-70" style={{ width: `${seg(a.v61_90.saldo)}%` }} />
-                      <div className="h-full bg-[var(--danger)]" style={{ width: `${seg(a.mas90.saldo)}%` }} />
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--success)]">
-                    {a.porVencer.saldo > 0 ? fmtCurrency(a.porVencer.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--warning,_#b45309)]">
-                    {a.v1_30.saldo > 0 ? fmtCurrency(a.v1_30.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--warning,_#b45309)]">
-                    {a.v31_60.saldo > 0 ? fmtCurrency(a.v31_60.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)]">
-                    {a.v61_90.saldo > 0 ? fmtCurrency(a.v61_90.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)] font-bold">
-                    {a.mas90.saldo > 0 ? fmtCurrency(a.mas90.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-500)]">
-                    {a.facturasTotal}
-                  </td>
-                  {bankActive && (
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {a.facturasTotal > 0
-                        ? <span className={a.facturasCobradas / a.facturasTotal >= 0.8 ? 'text-[var(--success)]' : 'text-[var(--gray-500)]'}>
-                            {Math.round((a.facturasCobradas / a.facturasTotal) * 100)}%
-                          </span>
-                        : '—'}
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Pill que resume el cruce de una factura contra bancos.
- *
- * Estados:
- *   - cobrada-banco (matched): verde, muestra fecha y monto del ABONO.
- *     Si fue parte de un subset (un ABONO pagó N facturas) lo indica.
- *   - cobrada-jde-sin-banco: gris, factura ya cobrada en JDE pero sin
- *     ABONO equivalente — caso normal cuando el ABONO está fuera de la
- *     ventana de últimos 12 meses.
- *   - pendiente: ámbar tenue.
- *
- * El tier (exact / tolerance / subset) se muestra como sufijo cuando hay
- * match — el usuario sabe si fue un cruce limpio o si tuvo que aplicar
- * tolerancia.
- */
-function BankBadge({ match }: { match?: RealReconciliationMatch }) {
-  if (!match) {
-    return <span className="text-[10px] text-[var(--gray-300)]">—</span>;
-  }
-  if (match.status === 'cobrada-banco') {
-    const tierLabel: Record<RealMatchTier, string> = {
-      'payment-confirmed-ref': 'Recibo ref.',
-      'payment-auto-unique': 'Recibo',
-      'payment-ambiguous': 'Recibo rev.',
-      'invoice-reference': 'Factura ref.',
-      'customer-reference': 'Cliente ref.',
-      exact: 'Exacto',
-      tolerance: '±0.5%',
-      subset: `Subset ×${match.subsetSize ?? 2}`,
-      'multi-abono': `Multi ×${match.bankMovements?.length ?? 2}`,
-    };
-    const tier = match.matchTier ?? 'exact';
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--success-muted,_#dcfce7)] text-[var(--success)] text-[11px] font-medium">
-        <CheckCircle2 className="w-3 h-3" />
-        {match.bankDate ? match.bankDate.slice(0, 10) : '—'}
-        <span className="text-[10px] opacity-70 ml-0.5">{tierLabel[tier]}</span>
-      </span>
-    );
-  }
-  if (match.reviewStatus === 'review') {
-    return (
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning,_#b45309)] text-[11px] font-medium"
-        title={match.matchReason}
-      >
-        <HelpCircle className="w-3 h-3" /> Por revisar
-        {typeof match.confidence === 'number' && (
-          <span className="text-[10px] opacity-70 ml-0.5">{Math.round(match.confidence * 100)}%</span>
-        )}
-      </span>
-    );
-  }
-  if (match.status === 'cobrada-jde-sin-banco') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--gray-100)] text-[var(--gray-500)] text-[11px]">
-        <Check className="w-3 h-3" /> JDE (sin abono)
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] text-[11px]">
-      <AlertTriangle className="w-3 h-3" /> Pendiente
-    </span>
-  );
-}
-
-function ReviewCandidatesPanel({
-  candidates,
-  reconciliation,
-}: {
-  candidates: ReconciliationReviewCandidate[];
-  reconciliation: RealReconciliationResult;
-}) {
-  const top = candidates.slice(0, 6);
-  if (top.length === 0) return null;
-  const totalAmount = top.reduce((sum, c) => sum + c.movement.importe, 0);
-  const highConfidenceKeys = useMemo(
-    () => reviewCandidateKeysAboveThreshold(reconciliation, 0.85),
-    [reconciliation],
-  );
-  const handleBulkConfirm = () => {
-    if (highConfidenceKeys.length === 0) return;
-    confirmReviewKeys(highConfidenceKeys);
-  };
-  return (
-    <div className="bg-white border border-[var(--warning,_#f59e0b)]/30 rounded-[var(--radius)] overflow-hidden">
-      <div className="px-4 py-3 bg-[var(--warning-muted,_#fef3c7)] border-b border-[var(--warning,_#f59e0b)]/20 flex flex-wrap items-center gap-2">
-        <HelpCircle className="w-4 h-4 text-[var(--warning,_#b45309)]" />
-        <div>
-          <div className="text-[13px] font-bold text-[var(--gray-950)]">Cruces por revisar</div>
-          <div className="text-[11px] text-[var(--gray-500)]">
-            {candidates.length} abono{candidates.length !== 1 ? 's' : ''} candidato{candidates.length !== 1 ? 's' : ''}; no cuentan como banco cruzado hasta confirmarse.
-          </div>
-        </div>
-        <div className="ml-auto flex items-center gap-3">
-          {highConfidenceKeys.length > 0 && (
-            <button
-              type="button"
-              onClick={handleBulkConfirm}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--primary,_#1d4ed8)] text-white text-[11px] font-bold hover:opacity-90 transition-opacity"
-              title="Confirma los cruces con confianza ≥ 85% y los suma al cruce real."
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Confirmar {highConfidenceKeys.length} cruce{highConfidenceKeys.length === 1 ? '' : 's'} ≥ 85%
-            </button>
-          )}
-          <div className="text-[12px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(totalAmount)}</div>
-        </div>
-      </div>
-      <div className="divide-y divide-[var(--gray-100)]">
-        {top.map(candidate => {
-          const best = candidate.candidateFacturas[0];
-          return (
-            <div key={candidate.movement.movementKey} className="px-4 py-3 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_auto] gap-3 text-[12px]">
-              <div>
-                <div className="font-medium text-[var(--gray-950)] tabular-nums">
-                  {candidate.movement.fechaOperacion} · {fmtCurrency(candidate.movement.importe)}
-                </div>
-                <div className="text-[11px] text-[var(--gray-500)] truncate" title={candidate.movement.concepto}>
-                  {candidate.movement.cia} · {candidate.movement.cuenta} · {candidate.movement.concepto || 'Sin concepto'}
-                </div>
-                <code className="text-[10px] text-[var(--gray-400)]">{candidate.movement.referencia || 'Sin referencia'}</code>
-              </div>
-              <div>
-                <div className="font-medium text-[var(--gray-950)] truncate" title={best?.nombreCliente}>
-                  {best ? `${best.nombreCliente} · Fact. ${best.noFactura}` : 'Sin candidato'}
-                </div>
-                <div className="text-[11px] text-[var(--gray-500)]">
-                  {candidate.matchReason}
-                </div>
-              </div>
-              <div className="text-right tabular-nums">
-                <span className="inline-flex px-2 py-0.5 rounded-md bg-[var(--gray-100)] text-[var(--gray-600)] text-[11px]">
-                  {best ? `${Math.round(best.confidence * 100)}%` : '—'}
+      {/* Cobranza semanal — dos barras por semana: ingreso real
+          (cruzado con banco) arriba y proyección abajo, escaladas al
+          monto semanal más grande para hacer comparable la magnitud. */}
+      {Object.keys(weeklyTotals).length > 0 && (() => {
+        const entries = Object.entries(weeklyTotals).sort(([a], [b]) => a.localeCompare(b));
+        const maxWeek = Math.max(
+          ...entries.map(([, w]) => Math.max(w.real, w.projected)),
+          1,
+        );
+        return (
+          <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 animate-card-in">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Cobranza semanal</h3>
+              <div className="flex items-center gap-3 text-[11px] text-[var(--gray-500)]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-[#2563eb]" />
+                  Ingreso real
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-[#a78bfa]" />
+                  Proyección
                 </span>
               </div>
             </div>
-          );
-        })}
-      </div>
-      {candidates.length > top.length && (
-        <div className="px-4 py-2 text-[11px] text-[var(--gray-400)] bg-[var(--surface-alt)]">
-          Mostrando {top.length} de {candidates.length}; exporta CSV para revisar el resto.
-        </div>
-      )}
+            <div className="space-y-3">
+              {entries.map(([week, w], i) => {
+                const realPct = (w.real / maxWeek) * 100;
+                const projPct = (w.projected / maxWeek) * 100;
+                const delay = `${i * 60}ms`;
+                return (
+                  <div key={week} className="grid grid-cols-[90px_1fr_180px] items-center gap-3 animate-slide-up" style={{ animationDelay: delay }}>
+                    <span className="text-[12px] text-[var(--gray-400)]">
+                      Sem. {new Date(week + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
+                    </span>
+                    <div className="space-y-1">
+                      <div className="h-3 bg-[var(--gray-50)] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#2563eb] rounded-full animate-progress-fill"
+                          style={{ width: `${Math.min(100, realPct)}%`, animationDelay: delay }}
+                        />
+                      </div>
+                      <div className="h-3 bg-[var(--gray-50)] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#a78bfa] rounded-full animate-progress-fill"
+                          style={{ width: `${Math.min(100, projPct)}%`, animationDelay: delay }}
+                        />
+                      </div>
+                    </div>
+                    <div className="text-right space-y-0.5">
+                      <div className="text-[12px] font-semibold tabular-nums text-[#2563eb]">
+                        {fmtCurrency(w.real)}
+                      </div>
+                      <div className="text-[11px] tabular-nums text-[#7c3aed]">
+                        {fmtCurrency(w.projected)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2687,23 +1929,6 @@ function CobranzaRealView({
     });
   }, [records, ciaFilter, estatusFilter, crossFilter, query, matchByFactura]);
 
-  // ── KPIs ──
-  const totalSaldo = filtered.reduce((s, r) => s + (r.importePendientePesos || 0), 0);
-  const totalBruto = filtered.reduce((s, r) => s + (r.importeBrutoPesos || 0), 0);
-  const vencidoSaldo = filtered
-    .filter(r => r.diasVencida > 0)
-    .reduce((s, r) => s + (r.importePendientePesos || 0), 0);
-  const pctVencido = totalSaldo > 0 ? (vencidoSaldo / totalSaldo) * 100 : 0;
-
-  // Cuándo se actualizó la cia más reciente (si hay alguna)
-  const lastUpdate = useMemo(() => {
-    const ts = Object.values(loadedCias)
-      .map(s => new Date(s).getTime())
-      .filter(n => Number.isFinite(n));
-    if (ts.length === 0) return null;
-    return new Date(Math.max(...ts));
-  }, [loadedCias]);
-
   if (records.length === 0 && payments.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)]">
@@ -2738,83 +1963,6 @@ function CobranzaRealView({
 
   return (
     <div className="space-y-4">
-      {/* KPIs */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5 flex items-end gap-8 flex-wrap">
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo JDE por cobrar</div>
-          <AnimatedNumber
-            value={totalSaldo}
-            format={fmtCurrency}
-            className="block text-2xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
-          />
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Importe bruto facturado</div>
-          <AnimatedNumber
-            value={totalBruto}
-            format={fmtCurrency}
-            className="block text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5"
-          />
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Vencido (% del saldo)</div>
-          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
-            <span className={pctVencido > 30 ? 'text-[var(--danger)]' : pctVencido > 10 ? 'text-[var(--warning)]' : 'text-[var(--success)]'}>
-              {pctVencido.toFixed(1)}%
-            </span>
-            <span className="text-[12px] text-[var(--gray-400)] ml-2">
-              {fmtCurrency(vencidoSaldo)}
-            </span>
-          </div>
-        </div>
-        {/* KPI principal de Fase 2: % cruzado con bancos.
-            - Verde >= 95%: cobranza altamente reconciliada.
-            - Ámbar 70-95%: hueco probable, revisar abonos sin factura.
-            - Rojo  < 70%:  algo está mal (token, fechas, mapeo). */}
-        {bankStatements.length > 0 && (() => {
-          const pctCruzado = reconciliation.summary.pctAbonosCruzados * 100;
-          const pctColor = pctCruzado >= 95
-            ? 'text-[var(--success)]'
-            : pctCruzado >= 70
-              ? 'text-[var(--warning)]'
-              : 'text-[var(--danger)]';
-          return (
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobranza cruzada con banco</div>
-              <div className="text-xl font-medium tabular-nums mt-0.5">
-                <span className={pctColor}>{pctCruzado.toFixed(1)}%</span>
-                <span className="text-[12px] text-[var(--gray-400)] ml-2">
-                  {reconciliation.summary.abonosFacturaCobrada} / {reconciliation.summary.totalAbonos} abonos
-                </span>
-                {reconciliation.reviewCandidates.length > 0 && (
-                  <span className="text-[12px] text-[var(--warning,_#b45309)] ml-2">
-                    {reconciliation.reviewCandidates.length} por revisar
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Facturas</div>
-          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
-            {filtered.length.toLocaleString('es-MX')}
-            {filtered.length !== records.length && (
-              <span className="text-[var(--gray-400)] text-[13px]"> / {records.length.toLocaleString('es-MX')}</span>
-            )}
-          </div>
-        </div>
-        {lastUpdate && (
-          <div className="ml-auto text-[11px] text-[var(--gray-400)]">
-            Actualizado: {lastUpdate.toLocaleString('es-MX')}
-          </div>
-        )}
-      </div>
-
-      <ReceiptReconciliationPanel payments={reconciliation.paymentReconciliations} />
-
-      <ReviewCandidatesPanel candidates={reconciliation.reviewCandidates} reconciliation={reconciliation} />
-
       {/* Filtros */}
       <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[240px] max-w-md">
@@ -2873,6 +2021,42 @@ function CobranzaRealView({
           </button>
         )}
 
+        {/* Indicador único: % de abonos bancarios que vienen tagueados con
+            un noRecibo JDE — proxy rápido y exacto del cruce. Cuenta sobre
+            todos los movimientos de los estados de cuenta cargados, sin
+            depender del motor pesado de reconciliación que corre en worker
+            (puede tardar minutos). Solo aparece cuando hay estados de cuenta. */}
+        {bankStatements.length > 0 && (() => {
+          let totalAbonos = 0;
+          let abonosConRecibo = 0;
+          for (const account of bankStatements) {
+            for (const mov of account.movimientos) {
+              if (mov.tipoMovimiento !== 'ABONO') continue;
+              totalAbonos++;
+              if ((mov.noRecibo ?? '').trim()) abonosConRecibo++;
+            }
+          }
+          const pctCruzado = totalAbonos > 0 ? (abonosConRecibo / totalAbonos) * 100 : 0;
+          const pctColor = pctCruzado >= 95
+            ? 'text-[var(--success)]'
+            : pctCruzado >= 70
+              ? 'text-[var(--warning)]'
+              : 'text-[var(--danger)]';
+          return (
+            <div
+              className="ml-auto inline-flex items-center gap-2 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--surface-alt)]"
+              title={`${abonosConRecibo.toLocaleString('es-MX')} de ${totalAbonos.toLocaleString('es-MX')} abonos bancarios del rango cargado vienen con número de recibo JDE.`}
+            >
+              <Landmark className="w-3.5 h-3.5 text-[var(--gray-400)]" />
+              <span className="text-[11px] uppercase tracking-wide text-[var(--gray-500)]">Cruzado con banco</span>
+              <span className={`text-[13px] font-bold tabular-nums ${pctColor}`}>{pctCruzado.toFixed(1)}%</span>
+              <span className="text-[11px] text-[var(--gray-400)] tabular-nums">
+                {abonosConRecibo.toLocaleString('es-MX')}/{totalAbonos.toLocaleString('es-MX')}
+              </span>
+            </div>
+          );
+        })()}
+
         {/* Export del cruce — incluye TODAS las columnas de la factura más
             las del banco cuando hay match. Ideal para mandar a contabilidad
             o reconciliar manualmente lo que el motor no cruzó. Respeta los
@@ -2919,7 +2103,7 @@ function CobranzaRealView({
             const stamp = new Date().toISOString().slice(0, 10);
             downloadFile(toCSV(rows), `cobranza-cruce-${stamp}.csv`);
           }}
-          className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+          className="inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
           disabled={filtered.length === 0}
           title="Exporta lo visible con todas las columnas de cruce."
         >
@@ -2941,93 +2125,6 @@ function CobranzaRealView({
         bankCoverageLoading={bankCoverageLoading}
       />
 
-      {/* Aging por cliente — Top 20 con mayor saldo abierto */}
-      <ClientAgingTable
-        records={filtered}
-        matchByFactura={matchByFactura}
-        bankActive={bankStatements.length > 0}
-      />
-
-      {/* Tabla raw */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
-        <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
-          <FileSpreadsheet className="w-4 h-4 text-[var(--gray-400)]" />
-          <span className="text-[13px] font-bold text-[var(--gray-950)]">Facturas (CXC)</span>
-          <span className="text-[11px] text-[var(--gray-400)] ml-auto">
-            {bankStatements.length > 0
-              ? `Cruce activo · ${reconciliation.summary.facturasCobradasBanco} cobradas con banco`
-              : 'Sube/carga estados de cuenta para activar el cruce.'}
-          </span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]">
-            <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
-              <tr>
-                <th className="text-left px-3 py-2">Cía</th>
-                <th className="text-left px-3 py-2">Cliente</th>
-                <th className="text-left px-3 py-2">Factura</th>
-                <th className="text-left px-3 py-2">F. emisión</th>
-                <th className="text-left px-3 py-2">F. vencimiento</th>
-                <th className="text-right px-3 py-2">Días venc.</th>
-                <th className="text-right px-3 py-2">Bruto MXN</th>
-                <th className="text-right px-3 py-2">Pendiente MXN</th>
-                <th className="text-left px-3 py-2">Moneda</th>
-                <th className="text-left px-3 py-2">Estatus</th>
-                {bankStatements.length > 0 && (
-                  <th className="text-left px-3 py-2">Banco</th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.slice(0, 500).map((r, idx) => {
-                const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
-                return (
-                  <tr
-                    key={`${r.cia}-${r.noFactura}-${idx}`}
-                    className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
-                  >
-                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">{r.cia}</td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-[var(--gray-950)]">{r.nombreCliente || '—'}</div>
-                      {r.noCliente && (
-                        <div className="text-[10px] text-[var(--gray-400)] tabular-nums">#{r.noCliente}</div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 tabular-nums">{r.noFactura || '—'}</td>
-                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
-                      {r.fechaFactura ? r.fechaFactura.slice(0, 10) : '—'}
-                    </td>
-                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
-                      {r.fechaVence ? r.fechaVence.slice(0, 10) : '—'}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${r.diasVencida > 0 ? 'text-[var(--danger)] font-medium' : 'text-[var(--gray-400)]'}`}>
-                      {r.diasVencida}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {fmtCurrency(r.importeBrutoPesos)}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">
-                      {fmtCurrency(r.importePendientePesos)}
-                    </td>
-                    <td className="px-3 py-2 text-[var(--gray-500)]">{r.moneda || '—'}</td>
-                    <td className="px-3 py-2 text-[var(--gray-500)]">{r.estatus || '—'}</td>
-                    {bankStatements.length > 0 && (
-                      <td className="px-3 py-2">
-                        <BankBadge match={m} />
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {filtered.length > 500 && (
-            <div className="px-4 py-2 text-[11px] text-[var(--gray-400)] border-t border-[var(--gray-100)] bg-[var(--surface-alt)]">
-              Mostrando 500 de {filtered.length.toLocaleString('es-MX')} — usa los filtros para acotar.
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }

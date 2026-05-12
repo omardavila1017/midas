@@ -171,6 +171,14 @@ export interface RealReconciliationMatch {
   /** Si la factura es parte de un subset (un solo ABONO cubre varias). */
   subsetGroupId?: string;
   subsetSize?: number;
+
+  /**
+   * ID / nombre del Client del catálogo asociado al `noCliente` JDE, cuando
+   * existe un enlace (Client.jdeAccounts). Lo aplica el caller mediante
+   * `enrichMatchesWithCatalog` — el engine no conoce el catálogo.
+   */
+  catalogClientId?: string;
+  catalogClientName?: string;
 }
 
 /** Etiqueta enriquecida sobre un movimiento bancario ABONO. */
@@ -203,6 +211,10 @@ export interface AbonoEnrichment {
   importe: number;
   concepto: string;
   referencia: string;
+
+  /** Cliente del catálogo (cuando se enriqueció vía catalog map). */
+  catalogClientId?: string;
+  catalogClientName?: string;
 }
 
 export interface PaymentApplicationReconciliation {

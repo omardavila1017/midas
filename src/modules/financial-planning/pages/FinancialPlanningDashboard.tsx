@@ -97,6 +97,14 @@ import {
 } from '../services/supplierPaymentSchedule';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import EmptyState from '../../shared-finance/components/EmptyState';
+import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
+import {
+  toneByFloor,
+  toneByCount,
+  toneByDelta,
+  toneByRequirement,
+} from '../../shared-finance/components/tone';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
 
@@ -121,6 +129,7 @@ type PlanningScenarioRun = ForecastRun & { supplierPlan: SupplierPaymentPlan };
 type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
 
 export default function FinancialPlanningDashboard(props: Props) {
+  const goTo = useNavigateToTab();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
   const yearStart = `${currentYear}-01-01`;
@@ -1108,33 +1117,37 @@ export default function FinancialPlanningDashboard(props: Props) {
         })}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
           icon={<Wallet className="w-4 h-4" />}
-          color="var(--gray-950)"
-          sublabel={`${currentYear}`}
+          color={toneByFloor(summary.finalCash, summary.minimumCashRequired)}
+          sublabel={`${currentYear} · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          onClick={() => goTo({ tab: 'financialProjection', focus: 'caja-final' })}
+          navHint="Ver en Proyección"
         />
         <KpiCard
           label="Días en déficit"
           value={String(summary.deficitDays)}
           icon={<AlertIcon className="w-4 h-4" />}
-          color={summary.deficitDays > 0 ? 'var(--danger)' : 'var(--success)'}
+          color={toneByCount(summary.deficitDays)}
           sublabel={summary.maxRiskDate ? `Máx riesgo ${summary.maxRiskDate}` : 'Sin fecha crítica'}
+          onClick={() => goTo({ tab: 'financialProjection', focus: 'deficit' })}
+          navHint="Ver detalle"
         />
         <KpiCard
           label="Crédito requerido"
           value={fmtCurrency(summary.creditRequired)}
           icon={<Banknote className="w-4 h-4" />}
-          color={summary.creditRequired > 0 ? 'var(--warning)' : 'var(--gray-950)'}
+          color={toneByRequirement(summary.creditRequired)}
           sublabel={`Mínimo ${fmtCompact(summary.minimumCashRequired)}`}
         />
         <KpiCard
           label="Δ vs Aprobado"
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
           icon={<TrendingUp className="w-4 h-4" />}
-          color={finalCashDelta > 0 ? 'var(--success)' : finalCashDelta < 0 ? 'var(--danger)' : 'var(--gray-950)'}
+          color={toneByDelta(finalCashDelta)}
           sublabel={isDraft ? 'Borrador activo' : 'Misma referencia'}
         />
       </div>
@@ -1479,16 +1492,12 @@ function minimumCashFor(): number {
 
 function EmptyDataState() {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-10 text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--warning-muted)]">
-        <AlertTriangle className="h-5 w-5" style={{ color: 'var(--warning)' }} strokeWidth={1.5} />
-      </div>
-      <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
-        Aún no hay datos suficientes para planear
-      </h2>
-      <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">
-        Carga estados de cuenta en <strong>Bancos</strong>, CXP JDE o cobranza real para empezar.
-      </p>
-    </div>
+    <EmptyState
+      tone="warning"
+      align="center"
+      icon={<AlertTriangle className="h-5 w-5" strokeWidth={1.5} />}
+      title="Aún no hay datos suficientes para planear"
+      description={<>Carga estados de cuenta en <strong>Bancos</strong>, CXP JDE o cobranza real para empezar.</>}
+    />
   );
 }

@@ -689,12 +689,17 @@ const BancosDashboard = ({
           <div>
             {accountsByBank.map(([bankName, accs], bankIdx) => {
               const bankCollapsed = collapsedBanks.has(bankName);
-              const monedas = new Set(accs.map(a => a.moneda));
               const currentAccs = currentBankStatements(accs, balanceDate);
-              const sumSaldo = monedas.size === 1
-                ? sumBankStatementBalances(accs)
-                : null;
-              const moneda = monedas.size === 1 ? accs[0].moneda : null;
+              // Saldos por moneda (un banco puede tener cuentas MXN + USD).
+              // Antes ocultábamos el total si había mezcla; ahora mostramos
+              // un total por cada moneda para no perder la cifra.
+              const totalsByMoneda = (() => {
+                const m = new Map<string, number>();
+                for (const a of accs) {
+                  m.set(a.moneda, (m.get(a.moneda) ?? 0) + (a.saldoFinal ?? a.saldoInicial ?? 0));
+                }
+                return Array.from(m.entries()).sort((x, y) => x[0].localeCompare(y[0]));
+              })();
               const staleBankAccounts = Math.max(0, accs.length - currentAccs.length);
               return (
                 <div key={bankName} className={bankIdx > 0 ? 'border-t border-[var(--gray-100)]' : ''}>
@@ -717,9 +722,14 @@ const BancosDashboard = ({
                       <span className="text-[var(--gray-400)] font-normal ml-2">({accs.length} cuenta{accs.length !== 1 ? 's' : ''})</span>
                     </p>
                     <div className="ml-auto text-right">
-                      {sumSaldo !== null && moneda && (
-                        <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmtCurrency(sumSaldo, moneda)}</p>
-                      )}
+                      {totalsByMoneda.map(([moneda, total]) => (
+                        <p key={moneda} className="text-[13px] font-mono font-bold text-[var(--gray-950)]">
+                          {fmtCurrency(total, moneda)}
+                          {totalsByMoneda.length > 1 && (
+                            <span className="ml-1 text-[10px] font-normal text-[var(--gray-400)]">{moneda}</span>
+                          )}
+                        </p>
+                      ))}
                       <p className="text-[10px] text-[var(--gray-400)]">
                         {accs.reduce((s, a) => s + a.movimientos.length, 0).toLocaleString()} mov.
                         {staleBankAccounts > 0 ? ` · ${staleBankAccounts} históricas fuera` : ''}
@@ -746,6 +756,9 @@ const BancosDashboard = ({
                               <div className="flex-1 min-w-0">
                                 <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">
                                   {acc.cuenta || 'Cuenta bancaria'}
+                                  {acc.desc039 && (
+                                    <span className="ml-2 text-[11px] font-normal text-[var(--gray-500)]">· {acc.desc039}</span>
+                                  )}
                                 </p>
                                 <div className="flex items-center gap-2 mt-0.5">
                                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>

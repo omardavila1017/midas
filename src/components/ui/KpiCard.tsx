@@ -1,4 +1,5 @@
 import React from 'react';
+import { ArrowUpRight } from 'lucide-react';
 
 /**
  * Tarjeta KPI canónica del producto. Vive aquí (componente compartido) en
@@ -13,6 +14,11 @@ import React from 'react';
  *   - Hover sutil (border + transición 150ms) — no glow, no transform.
  *   - Breakdown alineado en grid 2-col para que las cifras siempre
  *     terminen contra el mismo borde derecho.
+ *
+ * Nueva responsabilidad: KPIs pueden ser "navegables". Cuando se le pasa
+ * `onClick`, la tarjeta se convierte en un <button> con affordance discreto
+ * (ArrowUpRight). Esto es lo que mapea el número al módulo destino sin
+ * inventar UI extra — el número *es* el link.
  */
 export interface KpiBreakdownItem {
   label: string;
@@ -30,8 +36,31 @@ export interface KpiCardProps {
   sublabel?: string;
   breakdown?: KpiBreakdownItem[];
   /** Tono del card; controla borde + fondo. Default neutro. */
-  tone?: 'neutral' | 'warning';
+  tone?: 'neutral' | 'warning' | 'danger' | 'success';
+  /**
+   * Click handler. Cuando se especifica, la tarjeta se renderiza como
+   * `<button>` con hover lift + ArrowUpRight glyph que insinúa el jump.
+   */
+  onClick?: () => void;
+  /** Tooltip / aria-label adicional cuando es navegable. */
+  navHint?: string;
 }
+
+const TONE_SURFACE: Record<NonNullable<KpiCardProps['tone']>, { border: string; bg: string }> = {
+  neutral: { border: 'var(--gray-200)', bg: 'var(--surface)' },
+  warning: {
+    border: 'color-mix(in oklch, var(--warning) 30%, var(--gray-200))',
+    bg: 'var(--warning-muted)',
+  },
+  danger: {
+    border: 'color-mix(in oklch, var(--danger) 25%, var(--gray-200))',
+    bg: 'var(--danger-muted)',
+  },
+  success: {
+    border: 'color-mix(in oklch, var(--success) 25%, var(--gray-200))',
+    bg: 'var(--success-muted)',
+  },
+};
 
 export const KpiCard: React.FC<KpiCardProps> = ({
   label,
@@ -41,23 +70,14 @@ export const KpiCard: React.FC<KpiCardProps> = ({
   sublabel,
   breakdown,
   tone = 'neutral',
+  onClick,
+  navHint,
 }) => {
-  const surfaceStyles =
-    tone === 'warning'
-      ? {
-          borderColor: 'color-mix(in oklch, var(--warning) 30%, var(--gray-200))',
-          background: 'var(--warning-muted)',
-        }
-      : {
-          borderColor: 'var(--gray-200)',
-          background: 'var(--surface)',
-        };
+  const surfaceStyles = TONE_SURFACE[tone];
+  const isInteractive = typeof onClick === 'function';
 
-  return (
-    <div
-      className="group flex flex-col rounded-[var(--radius-lg)] border p-4 transition-colors duration-150 hover:border-[var(--gray-300)]"
-      style={surfaceStyles}
-    >
+  const body = (
+    <>
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <p
           className="truncate text-[11px] font-medium uppercase tracking-[0.06em]"
@@ -65,15 +85,29 @@ export const KpiCard: React.FC<KpiCardProps> = ({
         >
           {label}
         </p>
-        {icon && (
-          <span
-            className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
-            style={{ color }}
-            aria-hidden="true"
-          >
-            {icon}
-          </span>
-        )}
+        <div className="flex items-center gap-1 shrink-0">
+          {icon && (
+            <span
+              className="inline-flex h-5 w-5 items-center justify-center"
+              style={{ color }}
+              aria-hidden="true"
+            >
+              {icon}
+            </span>
+          )}
+          {isInteractive && (
+            // Affordance must be visible on touch devices (no hover state).
+            // Desktop: opacity 0 → 100 on hover/focus for a calmer scan.
+            // Coarse pointer (mobile/tablet): persistent at 60% so it's
+            // discoverable without a hover gesture.
+            <ArrowUpRight
+              className="kpi-nav-glyph h-3.5 w-3.5 transition-opacity duration-150"
+              style={{ color: 'var(--gray-400)' }}
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
+          )}
+        </div>
       </div>
       <p
         className="text-[22px] font-bold tabular-nums leading-[1.1]"
@@ -109,6 +143,33 @@ export const KpiCard: React.FC<KpiCardProps> = ({
           ))}
         </dl>
       )}
+    </>
+  );
+
+  const baseClasses =
+    'group flex flex-col rounded-[var(--radius-lg)] border p-4 text-left transition-all duration-150';
+  const interactiveClasses = isInteractive
+    ? 'cursor-pointer hover:border-[var(--gray-400)] hover:-translate-y-[1px] hover:shadow-[var(--shadow-card-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] focus-visible:ring-offset-2'
+    : 'hover:border-[var(--gray-300)]';
+
+  if (isInteractive) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={navHint ? `${label} — ${navHint}` : `Abrir ${label}`}
+        title={navHint}
+        className={`${baseClasses} ${interactiveClasses}`}
+        style={surfaceStyles}
+      >
+        {body}
+      </button>
+    );
+  }
+
+  return (
+    <div className={`${baseClasses} ${interactiveClasses}`} style={surfaceStyles}>
+      {body}
     </div>
   );
 };

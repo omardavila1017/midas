@@ -1,5 +1,6 @@
-import { Fragment, useMemo, useState, type ElementType, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Client, Frequency, PaymentDayPattern, DayOfWeek, NthOfMonth, WeekOfMonth, CashFlowAssumptions, ConfirmedPayment } from '../domain/types';
+import type { CobranzaRecord } from '../services/jdeTypes';
 import { parsePaymentDay } from '../domain/parsePaymentDay';
 import { projectClientMonth } from '../domain/collectionEngine';
 import {
@@ -9,26 +10,30 @@ import {
   type ClientGroupNode,
   type ClientGroupSource,
 } from '../domain/clientGrouping';
+import {
+  buildCobranzaByAccount,
+  computeMonthlyBilling,
+  type CobranzaByAccount,
+  type ClientMonthlyBilling,
+} from '../domain/clientBillingHistory';
 import { MONTHS } from '../types';
 import {
   Trash2,
   AlertTriangle,
-  Plus,
   Search,
   Download,
   ChevronDown,
   ChevronRight,
   FolderPlus,
-  Link2,
-  Unlink,
   Pencil,
-  Users,
-  Building2,
-  Check,
+  Lock,
+  TrendingUp,
+  Info,
 } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { fmtSmart } from '../formatters';
 import PageHeader from './ui/PageHeader';
+import ClientMatchWizard from './ClientMatchWizard';
 
 /**
  * Clientes tab.
@@ -64,19 +69,28 @@ interface Props {
   clients: Client[];
   assumptions: CashFlowAssumptions;
   confirmedPayments: ConfirmedPayment[];
+  cobranzaRecords: CobranzaRecord[];
+  matcherReview: import('../domain/clientCobranzaMatcher').MatcherOutput;
   onReplace: (clients: Client[]) => void;
   onAdd: (c: Client) => void;
   onUpdate: (c: Client) => void;
   onDelete: (id: string) => void;
+  onConfirmMatch: (s: import('../domain/clientCobranzaMatcher').MatchSuggestion, targetClientId?: string) => void;
+  onIgnoreOrphan: (cia: string, noCliente: string) => void;
+  onCreateClientFromOrphan: (o: import('../domain/clientCobranzaMatcher').OrphanNoCliente) => void;
 }
 
-export default function Clients({ clients, assumptions, confirmedPayments, onReplace, onAdd, onUpdate, onDelete }: Props) {
+type SortKey = 'sales-desc' | 'sales-asc' | 'credit-desc' | 'credit-asc' | 'real-credit-desc' | 'real-credit-asc' | 'name-asc';
+
+export default function Clients({ clients, assumptions, confirmedPayments, cobranzaRecords, matcherReview, onReplace, onAdd, onUpdate, onDelete, onConfirmMatch, onIgnoreOrphan, onCreateClientFromOrphan }: Props) {
+  void onAdd; // reservado para alta manual; el wizard delega en onConfirmMatch
+  const [sortKey, setSortKey] = useState<SortKey>('sales-desc');
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [issues, setIssues] = useState<ImportIssue[]>([]);
   const [query, setQuery] = useState('');
   const [expandedAccountId, setExpandedAccountId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [groupNameDraft, setGroupNameDraft] = useState('');
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -85,28 +99,45 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     [clients, assumptions, confirmedPayments, today],
   );
 
-  const totalAnnual = useMemo(
-    () => clients.reduce((a, c) => a + c.monthlyBilling.reduce((s, v) => s + v, 0), 0),
-    [clients],
+  const cobranzaByAccount = useMemo<CobranzaByAccount>(
+    () => buildCobranzaByAccount(cobranzaRecords),
+    [cobranzaRecords],
   );
 
-  const totalIva = useMemo(
-    () => clients.reduce((a, c) => {
-      const rate = (c.ivaRate ?? 16) / 100;
-      return a + c.monthlyBilling.reduce((s, v) => s + v, 0) * rate;
-    }, 0),
-    [clients],
-  );
+  const referenceMonth = useMemo(() => {
+    const d = new Date(`${today}T12:00:00`);
+    return d.getFullYear() * 12 + d.getMonth();
+  }, [today]);
 
-  const totalReceivable = useMemo(
-    () => hierarchy.reduce((sum, group) => sum + group.projectedReceivable, 0),
-    [hierarchy],
-  );
+  const billingMap = useMemo(() => {
+    const map = new Map<string, ClientMonthlyBilling>();
+    for (const c of clients) {
+      map.set(c.id, computeMonthlyBilling(c, cobranzaByAccount, assumptions.year, referenceMonth));
+    }
+    return map;
+  }, [clients, cobranzaByAccount, assumptions.year, referenceMonth]);
 
-  const totalPendingInvoices = useMemo(
-    () => hierarchy.reduce((sum, group) => sum + group.pendingInvoices, 0),
-    [hierarchy],
-  );
+  // Persist derived monthlyBilling back to the client record so downstream
+  // engines (collection, forecast, projection) consume the regression output
+  // — not stale Excel seed values. Only fires when the derived array differs
+  // and the client actually has cobranza data to learn from.
+  useEffect(() => {
+    if (cobranzaRecords.length === 0) return;
+    const next: Client[] = [];
+    let changed = false;
+    for (const c of clients) {
+      const derived = billingMap.get(c.id);
+      if (!derived || derived.historicalMonths === 0) { next.push(c); continue; }
+      const same = c.monthlyBilling.length === 12 && derived.values.every((v, i) =>
+        Math.abs((c.monthlyBilling[i] ?? 0) - v) < 0.5
+      );
+      if (same) { next.push(c); continue; }
+      changed = true;
+      next.push({ ...c, monthlyBilling: derived.values.slice() });
+    }
+    if (changed) onReplace(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billingMap, cobranzaRecords.length]);
 
   // Calculate avg lag per client (credit real vs nominal)
   const lagMap = useMemo(() => {
@@ -121,10 +152,14 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     return map;
   }, [clients, assumptions, today]);
 
+  const groupNominalCredit = (g: ClientGroupNode): number => {
+    if (g.accounts.length === 0) return 0;
+    return Math.round(g.accounts.reduce((s, a) => s + a.client.creditDays, 0) / g.accounts.length);
+  };
+
   const filteredGroups = useMemo(() => {
-    if (!query) return hierarchy;
     const q = query.toLowerCase();
-    return hierarchy
+    const base = !query ? hierarchy : (hierarchy
       .map(group => {
         const groupMatches = group.name.toLowerCase().includes(q);
         const accounts = groupMatches
@@ -140,31 +175,22 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
             );
         return accounts.length ? { ...group, accounts } : null;
       })
-      .filter(Boolean) as ClientGroupNode[];
-  }, [hierarchy, query]);
+      .filter(Boolean) as ClientGroupNode[]);
 
-  const filteredAggregates = useMemo(() => {
-    let groups = 0;
-    let accounts = 0;
-    let annual = 0;
-    let iva = 0;
-    let receivable = 0;
-    let pendingInvoices = 0;
-    for (const group of filteredGroups) {
-      groups += 1;
-      receivable += group.projectedReceivable;
-      pendingInvoices += group.pendingInvoices;
-      for (const account of group.accounts) {
-        accounts += 1;
-        const sum = account.client.monthlyBilling.reduce((s, v) => s + v, 0);
-        annual += sum;
-        iva += sum * ((account.client.ivaRate ?? 16) / 100);
+    const sorted = [...base];
+    sorted.sort((a, b) => {
+      switch (sortKey) {
+        case 'sales-asc': return a.annualSales - b.annualSales;
+        case 'sales-desc': return b.annualSales - a.annualSales;
+        case 'credit-asc': return groupNominalCredit(a) - groupNominalCredit(b);
+        case 'credit-desc': return groupNominalCredit(b) - groupNominalCredit(a);
+        case 'real-credit-asc': return a.realCreditDays - b.realCreditDays;
+        case 'real-credit-desc': return b.realCreditDays - a.realCreditDays;
+        case 'name-asc': return a.name.localeCompare(b.name, 'es');
       }
-    }
-    return { groups, accounts, annual, iva, receivable, pendingInvoices };
-  }, [filteredGroups]);
-
-  const isFiltered = query.trim().length > 0;
+    });
+    return sorted;
+  }, [hierarchy, query, sortKey]);
 
   const selectedClients = useMemo(
     () => clients.filter(client => selectedIds.has(client.id)),
@@ -175,18 +201,6 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     () => hierarchy.map(group => ({ id: group.id, name: group.name })),
     [hierarchy],
   );
-
-  const addBlank = () => {
-    onAdd({
-      id: crypto.randomUUID(),
-      name: 'Nuevo cliente',
-      paymentDay: { kind: 'DOW', days: [5] },
-      frequency: 'Mensual',
-      creditDays: 30,
-      monthlyBilling: new Array(12).fill(0),
-      ivaRate: 16,
-    });
-  };
 
   const handleExport = () => {
     const groupByClientId = new Map<string, ClientGroupNode>();
@@ -241,30 +255,6 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
     });
   };
 
-  const createGroupFromSelected = () => {
-    const name = groupNameDraft.trim();
-    if (!name || selectedIds.size === 0) return;
-    const id = commercialGroupId(name);
-    onReplace(clients.map(client => selectedIds.has(client.id)
-      ? { ...client, commercialGroupName: name, commercialGroupId: id }
-      : client
-    ));
-    setGroupNameDraft('');
-    setSelectedIds(new Set());
-    setExpandedGroups(prev => new Set(prev).add(id));
-  };
-
-  const moveSelectedToGroup = (groupId: string) => {
-    const target = hierarchy.find(group => group.id === groupId);
-    if (!target || selectedIds.size === 0) return;
-    onReplace(clients.map(client => selectedIds.has(client.id)
-      ? { ...client, commercialGroupName: target.name, commercialGroupId: target.id }
-      : client
-    ));
-    setSelectedIds(new Set());
-    setExpandedGroups(prev => new Set(prev).add(target.id));
-  };
-
   const moveAccountToGroup = (clientId: string, groupId: string) => {
     if (groupId === '__auto__') {
       const client = clients.find(c => c.id === clientId);
@@ -291,19 +281,6 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
       : client
     ));
     setExpandedAccountId(null);
-  };
-
-  const separateSelected = () => {
-    if (selectedIds.size === 0) return;
-    onReplace(clients.map(client => selectedIds.has(client.id)
-      ? {
-          ...client,
-          commercialGroupName: client.name,
-          commercialGroupId: `client-single-${client.id}`,
-        }
-      : client
-    ));
-    setSelectedIds(new Set());
   };
 
   const renameGroup = (group: ClientGroupNode) => {
@@ -341,7 +318,17 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
       <PageHeader
         title="Clientes"
         actions={
-          <>
+          <div className="flex items-center gap-2">
+            {(matcherReview.needsReview.length + matcherReview.orphanNoClientes.length) > 0 && (
+              <button
+                onClick={() => setWizardOpen(true)}
+                className="h-9 inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+                title="Revisar matches cobranza ↔ catálogo"
+              >
+                <Info className="h-3.5 w-3.5" />
+                Revisar matches ({matcherReview.needsReview.length + matcherReview.orphanNoClientes.length})
+              </button>
+            )}
             <button
               onClick={handleExport}
               title="Exportar catálogo"
@@ -349,42 +336,22 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
             >
               <Download className="w-4 h-4" strokeWidth={1.5} />
             </button>
-            <button
-              onClick={addBlank}
-              className="flex items-center gap-1.5 px-4 h-9 rounded-[var(--radius-md)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary-hover)] hover-press"
-            >
-              <Plus className="w-4 h-4" strokeWidth={1.5} /> Nuevo cliente
-            </button>
-          </>
+          </div>
         }
+      />
+
+      <ClientMatchWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        clients={clients}
+        matcherReview={matcherReview}
+        onConfirmSuggestion={(s, targetClientId) => onConfirmMatch(s, targetClientId)}
+        onIgnoreOrphan={onIgnoreOrphan}
+        onCreateClientFromOrphan={onCreateClientFromOrphan}
       />
 
       {/* Issues panel */}
       {issues.length > 0 && <div className="animate-slide-down"><IssuesPanel issues={issues} onDismiss={() => setIssues([])} /></div>}
-
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
-        <SummaryMetric
-          icon={Users}
-          label="Grupos comerciales"
-          value={isFiltered ? filteredAggregates.groups : hierarchy.length}
-          sub={isFiltered
-            ? `${filteredAggregates.accounts} de ${clients.length} cuentas`
-            : `${clients.length} cuentas`}
-        />
-        <SummaryMetric
-          icon={Building2}
-          label="Ventas anuales"
-          value={fmt(isFiltered ? filteredAggregates.annual : totalAnnual)}
-          sub={`IVA estimado ${fmt(isFiltered ? filteredAggregates.iva : totalIva)}${isFiltered ? ' · vista filtrada' : ''}`}
-        />
-        <SummaryMetric
-          icon={AlertTriangle}
-          label="Por cobrar proyectado"
-          value={fmt(isFiltered ? filteredAggregates.receivable : totalReceivable)}
-          sub={`${isFiltered ? filteredAggregates.pendingInvoices : totalPendingInvoices} eventos pendientes${isFiltered ? ' · vista filtrada' : ''}`}
-        />
-        <SummaryMetric icon={Check} label="Correcciones manuales" value={clients.filter(c => c.commercialGroupName).length} sub="cuentas con grupo fijo" />
-      </div>
 
       {/* Search + grouping actions */}
       <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3 shadow-sm">
@@ -398,42 +365,20 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
               className="input pl-9 w-full"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <input
-              value={groupNameDraft}
-              onChange={e => setGroupNameDraft(e.target.value)}
-              placeholder="Nuevo grupo"
-              className="input h-9 w-64"
-            />
-            <button
-              onClick={createGroupFromSelected}
-              disabled={selectedIds.size === 0 || !groupNameDraft.trim()}
-              className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white transition hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
-              title="Crear un grupo con las cuentas seleccionadas"
-            >
-              <Link2 className="h-3.5 w-3.5" /> Crear grupo
-            </button>
-            <select
-              value=""
-              onChange={e => {
-                if (e.target.value) moveSelectedToGroup(e.target.value);
-              }}
-              disabled={selectedIds.size === 0}
-              className="input h-9 w-48 text-[12px] disabled:cursor-not-allowed disabled:opacity-40"
-              title="Mover las cuentas seleccionadas a un grupo existente"
-            >
-              <option value="">Mover a...</option>
-              {groupOptions.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}
-            </select>
-            <button
-              onClick={separateSelected}
-              disabled={selectedIds.size === 0}
-              className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--gray-200)] px-3 text-[12px] font-medium text-[var(--gray-500)] transition hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40"
-              title="Separar las cuentas seleccionadas de su grupo actual"
-            >
-              <Unlink className="h-3.5 w-3.5" /> Separar
-            </button>
-          </div>
+          <select
+            value={sortKey}
+            onChange={e => setSortKey(e.target.value as SortKey)}
+            className="input h-9 text-[12px] w-56"
+            title="Ordenar grupos"
+          >
+            <option value="sales-desc">Ingresos: mayor a menor</option>
+            <option value="sales-asc">Ingresos: menor a mayor</option>
+            <option value="credit-desc">Días crédito: mayor a menor</option>
+            <option value="credit-asc">Días crédito: menor a mayor</option>
+            <option value="real-credit-desc">Crédito real: mayor a menor</option>
+            <option value="real-credit-asc">Crédito real: menor a mayor</option>
+            <option value="name-asc">Nombre A–Z</option>
+          </select>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[var(--gray-400)]">
           <FolderPlus className="h-3.5 w-3.5" />
@@ -543,6 +488,10 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
                           </div>
                         </td>
                       </tr>
+                      <GroupBillingRow
+                        group={group}
+                        billingMap={billingMap}
+                      />
                       {group.accounts.map(account => (
                         <AccountRows
                           key={account.client.id}
@@ -550,6 +499,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
                           isSelected={selectedIds.has(account.client.id)}
                           isOpen={expandedAccountId === account.client.id}
                           avgLag={lagMap.get(account.client.id) ?? account.avgLagDays}
+                          billing={billingMap.get(account.client.id) ?? null}
                           onToggleSelected={() => toggleSelected(account.client.id)}
                           onToggleOpen={() => setExpandedAccountId(expandedAccountId === account.client.id ? null : account.client.id)}
                           groupOptions={groupOptions}
@@ -573,29 +523,6 @@ export default function Clients({ clients, assumptions, confirmedPayments, onRep
   );
 }
 
-function SummaryMetric({
-  icon: Icon,
-  label,
-  value,
-  sub,
-}: {
-  icon: ElementType;
-  label: string;
-  value: string | number;
-  sub: string;
-}) {
-  return (
-    <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
-        <Icon className="h-4 w-4 text-[var(--gray-400)]" />
-      </div>
-      <p className="mt-2 font-mono text-[22px] font-bold text-[var(--gray-950)]">{value}</p>
-      <p className="mt-1 text-[11px] text-[var(--gray-400)]">{sub}</p>
-    </div>
-  );
-}
-
 function sourceLabel(source: ClientGroupSource): string {
   switch (source) {
     case 'manual': return 'Manual';
@@ -612,6 +539,7 @@ function AccountRows({
   isSelected,
   isOpen,
   avgLag,
+  billing,
   onToggleSelected,
   onToggleOpen,
   groupOptions,
@@ -625,6 +553,7 @@ function AccountRows({
   isSelected: boolean;
   isOpen: boolean;
   avgLag: number;
+  billing: ClientMonthlyBilling | null;
   onToggleSelected: () => void;
   onToggleOpen: () => void;
   groupOptions: Array<{ id: string; name: string }>;
@@ -721,7 +650,7 @@ function AccountRows({
                 <div className="font-mono font-bold text-[var(--gray-950)]">{account.confirmedInvoices}</div>
               </div>
             </div>
-            <ClientEditor client={c} onChange={onUpdate} />
+            <ClientEditor client={c} billing={billing} onChange={onUpdate} />
           </td>
         </tr>
       )}
@@ -730,9 +659,86 @@ function AccountRows({
 }
 
 // ---------------------------------------------------------------------------
+// Aggregated billing row (rendered between "Renombrar" and accounts)
+// ---------------------------------------------------------------------------
+function GroupBillingRow({
+  group,
+  billingMap,
+}: {
+  group: ClientGroupNode;
+  billingMap: Map<string, ClientMonthlyBilling>;
+}) {
+  // Suma por mes sobre todas las cuentas del grupo. Histórico solo si TODAS
+  // las cuentas con datos coinciden en marcar ese mes como histórico (criterio
+  // estricto evita mezclar real + proyectado en un solo segmento).
+  const sum = new Array<number>(12).fill(0);
+  const histMonth = new Array<boolean>(12).fill(false);
+  let anyHist = false;
+  let totalInvoices = 0;
+  for (const acc of group.accounts) {
+    const b = billingMap.get(acc.client.id);
+    if (!b) continue;
+    totalInvoices += b.invoiceCount;
+    for (let i = 0; i < 12; i++) {
+      sum[i] += b.values[i] ?? 0;
+      if (b.isHistorical[i]) { histMonth[i] = true; anyHist = true; }
+    }
+  }
+  if (group.accounts.length <= 1) return null;
+  const maxVal = Math.max(1, ...sum);
+  return (
+    <tr className="bg-[var(--surface-alt)] border-t border-[var(--gray-200)]/20">
+      <td colSpan={8} className="px-4 py-2">
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] uppercase tracking-wide text-[var(--gray-400)] whitespace-nowrap">
+            Facturación grupo (sin IVA)
+          </span>
+          <div className="flex flex-1 items-end gap-0.5">
+            {sum.map((v, i) => {
+              const hist = histMonth[i];
+              const h = Math.max(2, Math.round((v / maxVal) * 100));
+              return (
+                <div
+                  key={i}
+                  className="flex-1 rounded-sm"
+                  style={{
+                    height: `${Math.max(4, h * 0.24)}px`,
+                    backgroundColor: hist ? 'var(--gray-950)' : 'var(--primary)',
+                    opacity: hist ? 1 : 0.55,
+                  }}
+                  title={`${MONTHS[i]}: ${fmt(v)}${hist ? ' (histórico)' : ' (proyección)'}`}
+                />
+              );
+            })}
+          </div>
+          <span className="text-[11px] tabular-nums text-[var(--gray-500)] whitespace-nowrap">
+            {anyHist ? `${totalInvoices} fac. · ${fmt(sum.reduce((s, v) => s + v, 0))} anual` : `${fmt(sum.reduce((s, v) => s + v, 0))} anual proyectada`}
+          </span>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Inline editor (expanded row)
 // ---------------------------------------------------------------------------
-function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Client) => void }) {
+function ClientEditor({
+  client,
+  billing,
+  onChange,
+}: {
+  client: Client;
+  billing: ClientMonthlyBilling | null;
+  onChange: (c: Client) => void;
+}) {
+  const removeJdeLink = (cia: string, noCliente: string) => {
+    if (!client.jdeAccounts) return;
+    onChange({
+      ...client,
+      jdeAccounts: client.jdeAccounts.filter(a => !(a.cia === cia && a.noCliente === noCliente)),
+    });
+  };
   const update = (patch: Partial<Client>) => onChange({ ...client, ...patch });
   const updateOptionalText = (key: 'legalName' | 'rfc' | 'emailDomain' | 'address', value: string) => {
     update({ [key]: value.trim() ? value : undefined });
@@ -746,136 +752,282 @@ function ClientEditor({ client, onChange }: { client: Client; onChange: (c: Clie
   };
   const ivaRate = (client.ivaRate ?? 16) / 100;
 
-  return (
-    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1fr]">
-      {/* Left column — catalog fields */}
-      <div className="space-y-3">
-        <Field label="Nombre">
-          <input value={client.name} onChange={e => update({ name: e.target.value })} className="input w-full" />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Razón social">
-            <input
-              value={client.legalName ?? ''}
-              onChange={e => updateOptionalText('legalName', e.target.value)}
-              className="input w-full"
-            />
-          </Field>
-          <Field label="RFC">
-            <input
-              value={client.rfc ?? ''}
-              onChange={e => updateOptionalText('rfc', e.target.value.toUpperCase())}
-              className="input w-full"
-            />
-          </Field>
-          <Field label="Dominio">
-            <input
-              value={client.emailDomain ?? ''}
-              onChange={e => updateOptionalText('emailDomain', e.target.value.toLowerCase())}
-              className="input w-full"
-            />
-          </Field>
-          <Field label="Grupo comercial fijo">
-            <input
-              value={client.commercialGroupName ?? ''}
-              onChange={e => updateManualGroup(e.target.value)}
-              className="input w-full"
-            />
-          </Field>
-        </div>
-        <Field label="Dirección fiscal">
-          <input
-            value={client.address ?? ''}
-            onChange={e => updateOptionalText('address', e.target.value)}
-            className="input w-full"
-          />
-        </Field>
-        <Field label="Patrón de pago">
-          <PatternEditor pattern={client.paymentDay} onChange={p => update({ paymentDay: p })} />
-        </Field>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Frecuencia">
-            <select
-              value={client.frequency}
-              onChange={e => update({ frequency: e.target.value as Frequency })}
-              className="input w-full"
-            >
-              {FREQUENCIES.map(f => <option key={f} value={f}>{f}</option>)}
-            </select>
-          </Field>
-          <Field label="Días crédito">
-            <input
-              type="number"
-              value={client.creditDays}
-              onChange={e => update({ creditDays: Number(e.target.value) })}
-              className="input w-full"
-            />
-          </Field>
-          <Field label="Tasa IVA">
-            <select
-              value={client.ivaRate ?? 16}
-              onChange={e => update({ ivaRate: Number(e.target.value) as 8 | 16 })}
-              className="input w-full"
-            >
-              <option value={16}>16% — General</option>
-              <option value={8}>8% — Frontera Norte</option>
-            </select>
-          </Field>
-        </div>
-        <label className="flex items-center gap-2 text-[13px]">
-          <input
-            type="checkbox"
-            checked={!!client.factoraje}
-            onChange={e => update({ factoraje: e.target.checked })}
-          />
-          Factoraje (ignora patrón, paga a los pocos días)
-        </label>
-      </div>
+  // Prefer derived billing for display; fall back to whatever's on the client.
+  const values = billing?.values ?? client.monthlyBilling;
+  const isHistorical = billing?.isHistorical ?? new Array(12).fill(false);
+  const total = values.reduce((s, v) => s + v, 0);
+  const hasData = billing != null && billing.historicalMonths > 0;
+  const maxVal = Math.max(1, ...values);
 
-      {/* Right column — seasonality + IVA */}
-      <div className="space-y-3">
-        <div>
-          <div className="text-[12px] text-[var(--gray-400)] mb-1.5">Facturación mensual (sin IVA)</div>
-          <div className="grid grid-cols-6 gap-1.5">
-            {MONTHS.map((m, i) => (
-              <label key={m} className="flex flex-col">
-                <span className="text-[11px] text-[var(--gray-400)] text-center">{m}</span>
+  return (
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+      {/* Left column — catalog fields */}
+      <div className="space-y-4">
+        <section className="rounded-[var(--radius-md)] border border-[var(--gray-200)]/60 bg-white p-3">
+          <SectionTitle>Identificación</SectionTitle>
+          <div className="mt-2 space-y-3">
+            <Field label="Nombre">
+              <input value={client.name} onChange={e => update({ name: e.target.value })} className="input w-full" />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Razón social">
+                <input
+                  value={client.legalName ?? ''}
+                  onChange={e => updateOptionalText('legalName', e.target.value)}
+                  className="input w-full"
+                />
+              </Field>
+              <Field label="RFC">
+                <input
+                  value={client.rfc ?? ''}
+                  onChange={e => updateOptionalText('rfc', e.target.value.toUpperCase())}
+                  className="input w-full"
+                />
+              </Field>
+              <Field label="Dominio">
+                <input
+                  value={client.emailDomain ?? ''}
+                  onChange={e => updateOptionalText('emailDomain', e.target.value.toLowerCase())}
+                  className="input w-full"
+                />
+              </Field>
+              <Field label="Grupo comercial fijo">
+                <input
+                  value={client.commercialGroupName ?? ''}
+                  onChange={e => updateManualGroup(e.target.value)}
+                  className="input w-full"
+                />
+              </Field>
+            </div>
+            <Field label="Dirección fiscal">
+              <input
+                value={client.address ?? ''}
+                onChange={e => updateOptionalText('address', e.target.value)}
+                className="input w-full"
+              />
+            </Field>
+          </div>
+        </section>
+
+        <section className="rounded-[var(--radius-md)] border border-[var(--gray-200)]/60 bg-white p-3">
+          <SectionTitle>Cuentas JDE</SectionTitle>
+          <div className="mt-2 space-y-2">
+            {client.jdeAccounts === undefined && (
+              <div className="rounded bg-[var(--gray-50)] px-2 py-1.5 text-[11.5px] text-[var(--gray-500)]">
+                Esperando matcher…
+              </div>
+            )}
+            {client.jdeAccounts && client.jdeAccounts.length === 0 && (
+              <div className="rounded bg-[var(--gray-50)] px-2 py-1.5 text-[11.5px] text-[var(--gray-500)]">
+                Sin cuentas JDE asignadas. Asigna desde "Revisar matches".
+              </div>
+            )}
+            {client.jdeAccounts && client.jdeAccounts.length > 0 && (
+              <ul className="space-y-1">
+                {client.jdeAccounts.map(a => (
+                  <li key={`${a.cia}::${a.noCliente}`} className="flex items-center justify-between gap-2 rounded border border-[var(--gray-200)] bg-white px-2 py-1.5 text-[12px]">
+                    <div className="min-w-0">
+                      <span className="font-mono text-[var(--gray-950)]">{a.cia} · {a.noCliente}</span>
+                      <span className="ml-2 truncate text-[var(--gray-500)]">{a.nombreCliente}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                        style={{
+                          backgroundColor: a.matchedBy === 'user' ? 'var(--gray-950)' : 'var(--gray-50)',
+                          color: a.matchedBy === 'user' ? 'white' : 'var(--gray-500)',
+                        }}
+                        title={a.matchedBy === 'user' ? 'Confirmado por el usuario' : `Auto · ${a.tier ?? ''} · ${Math.round((a.confidence ?? 0) * 100)}%`}
+                      >
+                        {a.matchedBy === 'user' ? 'user' : `auto ${Math.round((a.confidence ?? 0) * 100)}%`}
+                      </span>
+                      <button
+                        onClick={() => removeJdeLink(a.cia, a.noCliente)}
+                        className="rounded p-1 text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--danger)]"
+                        title="Quitar enlace"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-[var(--radius-md)] border border-[var(--gray-200)]/60 bg-white p-3">
+          <SectionTitle>Cobranza</SectionTitle>
+          <div className="mt-2 space-y-3">
+            <Field label="Patrón de pago">
+              <PatternEditor pattern={client.paymentDay} onChange={p => update({ paymentDay: p })} />
+            </Field>
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Frecuencia">
+                <select
+                  value={client.frequency}
+                  onChange={e => update({ frequency: e.target.value as Frequency })}
+                  className="input w-full"
+                >
+                  {FREQUENCIES.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </Field>
+              <Field label="Días crédito">
                 <input
                   type="number"
-                  value={client.monthlyBilling[i] ?? 0}
-                  onChange={e => {
-                    const next = [...client.monthlyBilling];
-                    next[i] = Number(e.target.value);
-                    update({ monthlyBilling: next });
-                  }}
-                  className="input text-right tabular-nums text-[12px] px-1.5"
+                  value={client.creditDays}
+                  onChange={e => update({ creditDays: Number(e.target.value) })}
+                  className="input w-full"
                 />
-              </label>
-            ))}
+              </Field>
+              <Field label="Tasa IVA">
+                <select
+                  value={client.ivaRate ?? 16}
+                  onChange={e => update({ ivaRate: Number(e.target.value) as 8 | 16 })}
+                  className="input w-full"
+                >
+                  <option value={16}>16% — General</option>
+                  <option value={8}>8% — Frontera Norte</option>
+                </select>
+              </Field>
+            </div>
+            <label className="flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={!!client.factoraje}
+                onChange={e => update({ factoraje: e.target.checked })}
+              />
+              Factoraje (ignora patrón, paga a los pocos días)
+            </label>
+          </div>
+        </section>
+      </div>
+
+      {/* Right column — facturación mensual (read-only, derived) */}
+      <section className="rounded-[var(--radius-md)] border border-[var(--gray-200)]/60 bg-white p-3">
+        <div className="flex items-center justify-between gap-2">
+          <SectionTitle>
+            <span className="inline-flex items-center gap-1.5">
+              Facturación mensual (sin IVA)
+              <Lock className="h-3 w-3 text-[var(--gray-400)]" />
+            </span>
+          </SectionTitle>
+          <div className="flex items-center gap-3 text-[10.5px] text-[var(--gray-400)]">
+            <span className="inline-flex items-center gap-1">
+              <span
+                className="inline-block h-2 w-2 rounded-sm"
+                style={{ backgroundColor: 'var(--gray-950)' }}
+              />
+              Histórico
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span
+                className="inline-block h-2 w-2 rounded-sm"
+                style={{ backgroundColor: 'var(--primary)', opacity: 0.6 }}
+              />
+              Proyección
+            </span>
           </div>
         </div>
-        <div className="bg-[var(--gray-50)] rounded-[var(--radius-md)] px-3 py-2 text-[12px] grid grid-cols-3 gap-x-4">
+
+        {/* Chip de estado del enlace JDE */}
+        <div className="mt-2">
+          {(() => {
+            const jde = client.jdeAccounts ?? [];
+            const linked = jde.length;
+            if (linked === 0) {
+              return (
+                <div className="flex items-start gap-2 rounded bg-[var(--gray-50)] px-2 py-1.5 text-[11.5px] text-[var(--gray-500)]">
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--gray-400)]" />
+                  <span>Sin conectar a JDE. La facturación mostrada viene del catálogo. Asigna cuentas JDE desde "Revisar matches".</span>
+                </div>
+              );
+            }
+            const invoiceCount = billing?.invoiceCount ?? 0;
+            return (
+              <div className="flex items-center gap-2 rounded bg-[var(--gray-50)] px-2 py-1.5 text-[11.5px] text-[var(--gray-700)]">
+                <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: 'var(--success, #22c55e)' }} />
+                Conectado a {linked} cuenta{linked !== 1 ? 's' : ''} JDE · {invoiceCount} factura{invoiceCount !== 1 ? 's' : ''} contabilizada{invoiceCount !== 1 ? 's' : ''}
+              </div>
+            );
+          })()}
+        </div>
+        {/* Aviso adicional cuando el cliente está conectado pero aún no hay
+            facturas históricas en el año activo (cobranza muy reciente o no sincronizada). */}
+        {(client.jdeAccounts?.length ?? 0) > 0 && !hasData && (
+          <div className="mt-2 flex items-start gap-2 rounded bg-[var(--gray-50)] px-2 py-1.5 text-[11.5px] text-[var(--gray-500)]">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--gray-400)]" />
+            <span>Conectado a JDE pero sin facturas del año en curso; la proyección se construirá cuando llegue cobranza.</span>
+          </div>
+        )}
+
+        <div className="mt-3 grid grid-cols-12 gap-1">
+          {MONTHS.map((m, i) => {
+            const v = values[i] ?? 0;
+            const hist = isHistorical[i];
+            const heightPct = Math.max(2, Math.round((v / maxVal) * 100));
+            return (
+              <div key={m} className="flex flex-col items-center">
+                <div
+                  className="relative h-14 w-full overflow-hidden rounded-sm"
+                  style={{ backgroundColor: 'var(--gray-100, #f1f5f9)' }}
+                >
+                  <div
+                    className="absolute bottom-0 left-0 right-0"
+                    style={{
+                      height: `${heightPct}%`,
+                      backgroundColor: hist ? 'var(--gray-950)' : 'var(--primary)',
+                      opacity: hist ? 1 : 0.6,
+                    }}
+                    title={hist ? 'Histórico (cobranza)' : 'Proyección (regresión lineal)'}
+                  />
+                </div>
+                <span className="mt-1 text-[10px] text-[var(--gray-400)]">{m}</span>
+                <span
+                  className="tabular-nums text-[10.5px]"
+                  style={{
+                    color: hist ? 'var(--gray-950)' : 'var(--primary)',
+                    fontWeight: hist ? 600 : 400,
+                  }}
+                  title={hist ? 'Facturado histórico' : 'Proyectado por regresión'}
+                >
+                  {fmt(v)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-3 grid grid-cols-3 gap-x-4 rounded-[var(--radius-md)] bg-[var(--gray-50)] px-3 py-2 text-[12px]">
           <div>
             <div className="text-[var(--gray-400)]">Base gravable anual</div>
-            <div className="font-bold tabular-nums text-[var(--gray-950)]">
-              {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0))}
-            </div>
+            <div className="font-bold tabular-nums text-[var(--gray-950)]">{fmt(total)}</div>
           </div>
           <div>
             <div className="text-[var(--gray-400)]">IVA ({(client.ivaRate ?? 16)}%)</div>
-            <div className="font-bold tabular-nums text-[var(--primary)]">
-              {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * ivaRate)}
-            </div>
+            <div className="font-bold tabular-nums text-[var(--primary)]">{fmt(total * ivaRate)}</div>
           </div>
           <div>
             <div className="text-[var(--gray-400)]">Total con IVA</div>
-            <div className="font-bold tabular-nums text-[var(--gray-950)]">
-              {fmt(client.monthlyBilling.reduce((s, v) => s + v, 0) * (1 + ivaRate))}
-            </div>
+            <div className="font-bold tabular-nums text-[var(--gray-950)]">{fmt(total * (1 + ivaRate))}</div>
           </div>
         </div>
-      </div>
+
+        {hasData && (
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--gray-400)]">
+            <TrendingUp className="h-3 w-3" />
+            {billing!.historicalMonths} mes{billing!.historicalMonths === 1 ? '' : 'es'} de histórico ·
+            tendencia {billing!.slope > 0 ? '+' : ''}{fmt(billing!.slope)}/mes
+          </div>
+        )}
+      </section>
     </div>
+  );
+}
+
+function SectionTitle({ children }: { children: ReactNode }) {
+  return (
+    <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{children}</div>
   );
 }
 

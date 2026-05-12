@@ -10,9 +10,9 @@ interface PageHeaderProps {
 }
 
 /**
- * PageHeader vive sobre el canvas de marca (skin federal/corporativo) —
- * texto en blanco. En el skin `citi` el canvas es blanco y este header
- * se reusa con `currentColor` heredando el contexto del contenedor.
+ * PageHeader vive sobre canvas claro. La versión previa asumía un shell
+ * oscuro (texto blanco sobre slate-900) — se eliminó el dark skin global
+ * por feedback del usuario. Ahora todo es slate-950 sobre superficie clara.
  *
  * Senda DS:
  *   - Tipografía Roboto, weights 400 / 500 / 700.
@@ -28,15 +28,24 @@ export default function PageHeader({ title, meta, subtitle, actions }: PageHeade
     <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
       <div className="min-w-0 flex-1">
         {meta && (
-          <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-white/70">
+          <p
+            className="mb-1 text-[10px] font-medium uppercase tracking-[0.08em]"
+            style={{ color: 'var(--gray-500)' }}
+          >
             {meta}
           </p>
         )}
-        <h1 className="truncate text-[22px] font-bold leading-tight tracking-tight text-white">
+        <h1
+          className="truncate text-[22px] font-bold leading-tight tracking-tight"
+          style={{ color: 'var(--gray-950)' }}
+        >
           {title}
         </h1>
         {subtitle && (
-          <p className="mt-1 text-[12px] font-normal leading-snug text-white/75">
+          <p
+            className="mt-1 text-[12px] font-normal leading-snug"
+            style={{ color: 'var(--gray-500)' }}
+          >
             {subtitle}
           </p>
         )}

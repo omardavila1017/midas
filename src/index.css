@@ -104,26 +104,44 @@
 
   --tracking-meta: 0.05em;
 
+  /* ── Tone tokens (OKLCH-based, slightly desaturated for data UIs) ──
+     Used by shared-finance/components/tone.ts. Resolves via fallback to
+     legacy `--success`/`--warning`/`--danger` so consumers don't break
+     during the migration. Tints are biased toward Senda slate hue
+     (~248deg) by mixing 3% slate into each accent — gives subtle
+     cohesion between status colors and the corporate canvas. */
+  --tone-success: oklch(58% 0.14 152);
+  --tone-success-soft: oklch(95% 0.04 152);
+  --tone-warning: oklch(66% 0.16 65);
+  --tone-warning-soft: oklch(95% 0.06 75);
+  --tone-danger: oklch(58% 0.20 25);
+  --tone-danger-soft: oklch(95% 0.05 25);
+  --tone-info: oklch(56% 0.10 248);
+  --tone-info-soft: oklch(95% 0.02 248);
 }
 
-[data-skin="corporativo"] {
-  --background: #1e293b;
-  --foreground: #ffffff;
-  --primary: #1e293b;
-  --primary-foreground: #ffffff;
-  --secondary: #0f172a;
-  --secondary-foreground: #ffffff;
+/* Light-shell tokens.
+   The previous `[data-skin="corporativo"]` block forced a dark navy canvas
+   that the user explicitly rejected. Everything now resolves to a light
+   surface with dark slate text. `--secondary` is kept as a token (used by
+   splash gradient + a few legacy references) but resolves to a near-white
+   tone so any consumer reading it stays light. */
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --secondary: #ffffff;
+  --secondary-foreground: #0f172a;
   --accent: #334155;
-  --accent-foreground: #ffffff;
-  --ring: #475569;
-  --shell-text: #ffffff;
-  --shell-text-muted: rgba(255, 255, 255, 0.75);
-  --shell-border: rgba(255, 255, 255, 0.15);
+  --accent-foreground: #0f172a;
+  --ring: #1e293b;
+  --shell-text: var(--gray-950);
+  --shell-text-muted: var(--gray-500);
+  --shell-border: var(--gray-200);
   --chart-1: #0f172a;
-  --chart-2: #1e293b;
-  --chart-3: #334155;
-  --chart-4: #475569;
-  --chart-5: #64748b;
+  --chart-2: #334155;
+  --chart-3: #475569;
+  --chart-4: #64748b;
+  --chart-5: #94a3b8;
 }
 
 /* ─── Base ─── */
@@ -403,11 +421,71 @@ kbd {
   animation: progressFill var(--motion-layout) var(--ease-smooth) both;
 }
 
-/* Skeleton loader — shimmer effect */
+/* Navigation affordance for clickable KpiCard.
+   Coarse pointers (touch) need persistent visibility — no hover available.
+   Fine pointers (desktop) reveal on hover/focus to keep the scan calm. */
+.kpi-nav-glyph { opacity: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .group:hover .kpi-nav-glyph,
+  .group:focus-visible .kpi-nav-glyph { opacity: 1; }
+}
+@media (hover: none), (pointer: coarse) {
+  .kpi-nav-glyph { opacity: 0.6; }
+}
+
+/* Skeleton loader — soft pulse fallback (kept for legacy callers). */
 .skeleton {
   background: var(--gray-100);
   animation: skeletonPulse 1.8s ease-in-out infinite;
   border-radius: var(--radius-sm);
+}
+
+/* Skeleton loader — shimmer bar (canonical for DashboardLoadingShell).
+   A subtle traveling highlight reads as "we are loading" without the
+   nervous pulsing of the legacy `.skeleton` class. Performance: animates
+   `background-position` only (no layout, no opacity flicker). */
+.shimmer-bar {
+  background-color: var(--gray-100);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.75) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  background-position: -200% 0;
+  animation: shimmer 1.6s var(--ease-smooth) infinite;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-bar {
+    animation: skeletonPulse 2.4s ease-in-out infinite;
+    background-image: none;
+  }
+  /* Disable transform-based entrance animations; keep opacity only so the
+     UI still confirms a state change without movement. WCAG 2.3.3. */
+  .animate-page-in,
+  .animate-card-in,
+  .animate-fade-in,
+  .animate-slide-down,
+  .animate-slide-up,
+  .animate-scale-in,
+  .animate-view-swap,
+  .animate-count-up {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+  }
+  .animate-soft-pulse,
+  .animate-pulse-ring,
+  .animate-row-highlight {
+    animation: none;
+  }
+  .stagger-1, .stagger-2, .stagger-3, .stagger-4, .stagger-5,
+  .stagger-6, .stagger-7, .stagger-8, .stagger-9, .stagger-10 {
+    animation-delay: 0ms;
+  }
 }
 
 /* Stagger delays kept short so dense tables do not feel theatrical. */
@@ -660,30 +738,34 @@ input[type="range"]::-moz-range-thumb {
 /* Senda wordmark inverted for the dark corporativo shell.
    The burgundy SVG becomes white on the dark header so
    contrast & hierarchy mirror the Midas spec. */
+/* Brand mark on light shell — render the Senda SVG in slate-900.
+   `brightness(0)` collapses the multi-color SVG to pure black, then we
+   rely on opacity for the subtle hover lift. Light-shell pivot from
+   dark navy navy. */
 .senda-mark-inverted {
-  filter: brightness(0) invert(1);
-  opacity: 0.95;
+  filter: brightness(0);
+  opacity: 0.88;
   transition: opacity var(--motion-feedback) var(--ease-smooth);
 }
 .senda-lockup-dark:hover .senda-mark-inverted {
   opacity: 1;
 }
 
-/* Header icon button (bell, download) for the dark shell. */
+/* Header icon button (bell, download) on the light shell. */
 .shell-icon-btn {
   background: transparent;
   color: var(--shell-text-muted);
   border: 1px solid transparent;
 }
 .shell-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--gray-100);
   color: var(--shell-text);
-  border-color: var(--shell-border);
+  border-color: var(--gray-200);
 }
 
-/* Company picker button on dark shell. */
+/* Company picker button on light shell. */
 .shell-picker-btn:hover {
-  background: rgba(255, 255, 255, 0.14) !important;
+  background: var(--gray-100) !important;
 }
 
 /* ═══════════════════════════════════════════════

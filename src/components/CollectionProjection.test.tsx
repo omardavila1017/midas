@@ -334,7 +334,7 @@ describe('<CollectionProjection />', () => {
     expect(screen.getByText(/Facturas JDE emitidas/i)).toBeTruthy();
     expect(screen.getByText(/Pagado JDE sin banco/i)).toBeTruthy();
     expect(screen.getByText(/Por cobrar JDE/i)).toBeTruthy();
-    expect(screen.getByText(/Proyección sin factura/i)).toBeTruthy();
+    expect(screen.getByText(/Proyectado/i)).toBeTruthy();
   });
 
   it('al hacer click en un evento muestra fuente, estado y regla aplicada', () => {
@@ -343,7 +343,7 @@ describe('<CollectionProjection />', () => {
     fireEvent.click(screen.getByRole('button', { name: new RegExp(`${jdeDate}: 1 evento`) }));
 
     expect(screen.getByText(/Fuente del dato/i)).toBeTruthy();
-    expect(screen.getAllByText(/JDE cobrado/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Ingreso/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/JDE reporta Fecha_Pago/i)).toBeTruthy();
     expect(screen.getByText(/Fecha confirmada por JDE/i)).toBeTruthy();
   });
@@ -408,7 +408,7 @@ describe('<CollectionProjection />', () => {
     expect(csv).toContain('EstadoCalendario');
     expect(csv).toContain('ReglaAplicada');
     expect(csv).toContain('MotivoFecha');
-    expect(csv).toContain('JDE cobrado');
+    expect(csv).toContain('Ingreso');
   });
 
   it('muestra recibos JDE conciliados con banco, detalle de facturas y filtro sin banco', () => {

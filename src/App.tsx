@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
+import { MidasStore, loadStore, saveStore, CXPRecord } from './domain/persistence';
+import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
+import { clearAuth } from './components/Login';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import {
   fetchCompanies,
@@ -29,6 +31,7 @@ const CashFlowDetail = lazy(() => import('./components/CashFlowDetail'));
 const CXP = lazy(() => import('./components/CXP'));
 const Bancos = lazy(() => import('./components/Bancos'));
 const CollectionProjection = lazy(() => import('./components/CollectionProjection'));
+const FideicomisoDashboard = lazy(() => import('./components/FideicomisoDashboard'));
 const FinancialProjectionDashboard = lazy(() => import('./modules/financial-projection/pages/FinancialProjectionDashboard'));
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
@@ -38,14 +41,16 @@ import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette, { type CommandPaletteAction } from './components/CommandPalette';
 import { loadPlanningScenarios, loadPlanningAdjustments } from './modules/financial-planning/services/financialPlanningStorage';
+import { NavigationProvider, type AppTabId, type NavTarget } from './modules/shared-finance/components/NavigationContext';
+import DashboardLoadingShell from './modules/shared-finance/components/DashboardLoadingShell';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
   LayoutDashboard,
-  Users, UserSquare, Download,
+  Users, UserSquare,
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
   HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
-  Bell, ClipboardList, BarChart3,
+  LogOut, ClipboardList, BarChart3, ShieldCheck,
   type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
@@ -65,7 +70,13 @@ import {
   applyManualConfirmations,
   useConfirmedReviewKeys,
 } from './domain/reconciliationConfirmations';
+import { enrichReconciliationResult } from './domain/reconciliationCatalogEnrichment';
 import type { RealReconciliationWorkerResponse } from './workers/realReconciliationWorkerTypes';
+import {
+  buildMatchSuggestions,
+  suggestionToLink,
+  type MatcherOutput,
+} from './domain/clientCobranzaMatcher';
 
 const STORE_SAVE_DEBOUNCE_MS = 900;
 const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
@@ -88,35 +99,48 @@ const RECONCILIATION_TABS = new Set<TabId>([
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
+/**
+ * Section + tab order is the canonical sidebar/keyboard ordering.
+ *
+ * Mental model: treasury opens the Dashboard daily, drills into Operación
+ * (Flujo Neto → CXP → Cobranza) when the numbers move, and only touches
+ * Catálogos when onboarding new entities. So:
+ *   - Proyección (daily workspace) first → numeric shortcuts 1-4
+ *   - Operación (drilldowns) middle    → shortcuts 5-8
+ *   - Catálogos (maintenance) last     → shortcuts 9-11
+ * `TAB_IDS` is derived from SUB_TABS so the keyboard order can never drift
+ * from the visible sidebar order again.
+ */
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: string }[] = [
-  { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes, proveedores y bancos' },
-  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo neto, CXP y cobranza' },
   { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, pronóstico y escenarios' },
+  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo neto, CXP y cobranza' },
+  { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes, proveedores y bancos' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
-  catalogos: [
-    { id: 'clients',   label: 'Clientes',     icon: UserSquare },
-    { id: 'providers', label: 'Proveedores',  icon: Users },
-    { id: 'bancos',    label: 'Bancos',       icon: Landmark },
+  proyeccion: [
+    { id: 'dashboard',           label: 'Dashboard',             icon: LayoutDashboard },
+    { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
+    { id: 'financialPlanning',   label: 'Planeación Financiera', icon: ClipboardList },
+    { id: 'taxes',               label: 'Impuestos',             icon: Landmark },
   ],
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
+    { id: 'fideicomiso', label: 'Fideicomiso', icon: ShieldCheck },
   ],
-  proyeccion: [
-    { id: 'dashboard',   label: 'Dashboard',   icon: LayoutDashboard },
-    { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
-    { id: 'financialPlanning', label: 'Planeación Financiera', icon: ClipboardList },
-    { id: 'taxes', label: 'Impuestos', icon: Landmark },
+  catalogos: [
+    { id: 'clients',   label: 'Clientes',     icon: UserSquare },
+    { id: 'providers', label: 'Proveedores',  icon: Users },
+    { id: 'bancos',    label: 'Bancos',       icon: Landmark },
   ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
   netflow: 'operacion',
-  cxp: 'operacion', collections: 'operacion',
+  cxp: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
 };
@@ -159,30 +183,9 @@ const DEMO_BANK_CONCEPTS = [
  * skeleton chassis the user is about to interact with.
  */
 function LazyTabFallback({ label }: { label: string }) {
-  return (
-    <div className="space-y-4 animate-page-in" aria-busy="true" aria-label={`Cargando ${label}`}>
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="skeleton h-4 w-44 rounded opacity-60" />
-          <div className="skeleton mt-2 h-3 w-64 rounded opacity-50" />
-        </div>
-        <div className="skeleton h-10 w-48 rounded-[var(--radius)] opacity-50" />
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {Array.from({ length: 4 }).map((_, idx) => (
-          <div key={idx} className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-4">
-            <div className="skeleton h-3 w-1/2 rounded opacity-50" />
-            <div className="skeleton mt-3 h-5 w-3/4 rounded opacity-60" />
-            <div className="skeleton mt-2 h-3 w-2/3 rounded opacity-40" />
-          </div>
-        ))}
-      </div>
-      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
-        <div className="skeleton h-3 w-40 rounded opacity-50" />
-        <div className="skeleton mt-3 h-[280px] w-full rounded-[var(--radius)] opacity-50" />
-      </div>
-    </div>
-  );
+  // Delegates to the canonical shell so Suspense fallbacks and runtime
+  // dashboard skeletons share one motion language.
+  return <DashboardLoadingShell kpis={4} showFilterBar showChart label={`Cargando ${label}`} />;
 }
 
 function containsDemoBankData(statements: BankAccountStatement[] | undefined | null): boolean {
@@ -306,6 +309,13 @@ export default function App() {
     factorajeDays: 30,
   });
   const [confirmedPayments, setConfirmedPayments] = useState<ConfirmedPayment[]>([]);
+  // Sugerencias del matcher cliente↔cobranza pendientes de revisión.
+  // No se persisten: se recomputan en cada cambio de clients/cobranzaRecords.
+  const [matcherReview, setMatcherReview] = useState<MatcherOutput>({
+    autoAccepted: [],
+    needsReview: [],
+    orphanNoClientes: [],
+  });
 
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
@@ -324,7 +334,33 @@ export default function App() {
   const [cobranzaError, setCobranzaError] = useState<string | null>(null);
   const [cobranzaRefreshing, setCobranzaRefreshing] = useState(false);
   const [cashFlowOverrides, setCashFlowOverrides] = useState<CashFlowOverrides>({});
-  const [activeTab, setActiveTab] = useState<TabId>('netflow');
+  // Dashboard is the daily landing surface for treasury — opens to the same
+  // numbers that match keyboard `1`. Previously defaulted to 'netflow' which
+  // dropped users into a raw movements table on every boot.
+  const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  /**
+   * Stable navigation handler.
+   *
+   * The previous inline arrow recreated `goTo` every parent render, which
+   * churned the `NavigationProvider` context value on every keystroke /
+   * background poll. Combined with the `<div key={pageKey}>` remount, that
+   * caused descendants to receive a fresh context, re-Suspend, and (under
+   * heavy compute on FinancialProjectionDashboard) eventually lock the
+   * main thread. `useCallback` here + hoisting the provider above the
+   * remount wrapper is the fix.
+   */
+  const goTo = useCallback((target: AppTabId | NavTarget) => {
+    const next = typeof target === 'string' ? target : target.tab;
+    const focus = typeof target === 'string' ? undefined : target.focus;
+    setActiveTab(next as TabId);
+    if (focus) {
+      try {
+        sessionStorage.setItem('midas.navFocus', `${next}:${focus}`);
+      } catch {
+        /* private mode */
+      }
+    }
+  }, []);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   // ── Boot splash state ──
@@ -436,8 +472,11 @@ export default function App() {
   );
   const confirmedReviewKeys = useConfirmedReviewKeys();
   const cobranzaReconciliation = useMemo(
-    () => applyManualConfirmations(rawCobranzaReconciliation, confirmedReviewKeys),
-    [rawCobranzaReconciliation, confirmedReviewKeys],
+    () => enrichReconciliationResult(
+      applyManualConfirmations(rawCobranzaReconciliation, confirmedReviewKeys),
+      clients,
+    ),
+    [rawCobranzaReconciliation, confirmedReviewKeys, clients],
   );
   const shouldComputeCobranzaReconciliation =
     (cobranzaRecords.length > 0 || cobranzaPayments.length > 0) && RECONCILIATION_TABS.has(activeTab);
@@ -578,7 +617,14 @@ export default function App() {
     },
   ], []);
 
-  const TAB_IDS: TabId[] = ['clients', 'providers', 'netflow', 'bancos', 'dashboard', 'financialProjection', 'financialPlanning', 'collections', 'cxp'];
+  // Derived from SUB_TABS in section order so keyboard shortcuts (1-N) always
+  // match the sidebar order. Previously hardcoded — bancos at #4 was a
+  // catálogos tab leaking into the operación block; fideicomiso/taxes were
+  // unreachable by number entirely.
+  const TAB_IDS: TabId[] = useMemo(
+    () => SECTIONS.flatMap((section) => SUB_TABS[section.id].map((tab) => tab.id)),
+    [],
+  );
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
@@ -601,6 +647,54 @@ export default function App() {
       setCatalogLoaded(true);
     }
   }, []);
+
+  // ── Auto-seed matcher cliente↔cobranza ───────────────────────────────────
+  // Corre **una sola vez** cuando llegan cobranza + clients, persistiendo
+  // autoAccepted y guardando needsReview/orphanNoClientes para el wizard.
+  // Re-corre solamente si llegan nuevas cuentas JDE no vistas, evitando
+  // recomputar O(600×7000) en cada render.
+  const matcherLastSig = useRef<string>('');
+  useEffect(() => {
+    if (clients.length === 0 || cobranzaRecords.length === 0) return;
+    const needsSeed = clients.some(c => c.jdeAccounts === undefined);
+    // Signature: cantidad de cuentas JDE únicas + cantidad de clientes.
+    // Cambia solo cuando JDE devuelve nuevas (cia, noCliente) o cuando se
+    // edita el catálogo de clientes (alta/baja).
+    const accountKeys = new Set<string>();
+    for (const r of cobranzaRecords) accountKeys.add(`${r.cia}::${r.noCliente}`);
+    const sig = `${clients.length}|${accountKeys.size}|${needsSeed ? 'seed' : 'done'}`;
+    if (sig === matcherLastSig.current && !needsSeed) return;
+    matcherLastSig.current = sig;
+
+    const out = buildMatchSuggestions(clients, cobranzaRecords);
+    if (needsSeed) {
+      const byClientId = new Map<string, ReturnType<typeof suggestionToLink>[]>();
+      for (const s of out.autoAccepted) {
+        const link = suggestionToLink(s, 'auto');
+        const arr = byClientId.get(s.clientId) ?? [];
+        arr.push(link);
+        byClientId.set(s.clientId, arr);
+      }
+      setClients(prev => prev.map(c => {
+        if (c.jdeAccounts !== undefined) return c;
+        const links = byClientId.get(c.id);
+        return { ...c, jdeAccounts: links ?? [] };
+      }));
+    }
+    setMatcherReview(out);
+    // eslint-disable-next-line no-console
+    console.info(
+      `[matcher] auto-seed: ${out.autoAccepted.length} aceptados · ${out.needsReview.length} para revisar · ${out.orphanNoClientes.length} huérfanos`,
+    );
+  }, [clients, cobranzaRecords]);
+
+  // Auto-actualiza `creditDays` por cliente con el lag observado de pagos
+  // reales (fechaCobro - fechaFactura). El cliente queda igual cuando no hay
+  // facturas pagadas o el promedio coincide con el valor previo.
+  useEffect(() => {
+    if (cobranzaRecords.length === 0) return;
+    setClients(prev => recomputeClientCreditDaysFromCobranza(prev, cobranzaRecords));
+  }, [cobranzaRecords]);
 
   // Catalog bootstrap tracking — splash waits for both bundled CSVs to settle.
   const [clientsCatalogDone, setClientsCatalogDone] = useState(false);
@@ -1328,13 +1422,14 @@ export default function App() {
       {/* Skip link — keyboard-only shortcut to main content */}
       <a href="#main-content" className="skip-link">Saltar al contenido</a>
 
-      {/* ─── HEADER (Midas corporativo — dark slate shell) ─── */}
+      {/* ─── HEADER (Midas — light shell after dark-mode removal) ─── */}
       <header
         role="banner"
         className="border-b sticky top-0 z-50"
         style={{
-          borderColor: 'var(--shell-border)',
-          background: 'var(--secondary)',
+          borderColor: 'var(--gray-200)',
+          background: 'var(--surface)',
+          boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
         }}
       >
         <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between gap-4">
@@ -1372,7 +1467,7 @@ export default function App() {
             role="navigation"
             aria-label="Secciones principales"
             className="flex items-center rounded-[var(--radius-md)] p-0.5 gap-0.5"
-            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--shell-border)' }}
+            style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)' }}
           >
             {SECTIONS.map(s => {
               const isActive = activeSection === s.id;
@@ -1427,50 +1522,28 @@ export default function App() {
               groups={companyGroups}
               onGroupsChange={setCompanyGroups}
             />
-            {/* Activity feed bell */}
-            <button
-              onClick={() => setActivityOpen(true)}
-              title="Actividad reciente"
-              aria-label="Ver actividad reciente"
-              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
-            >
-              <Bell className="w-4 h-4" strokeWidth={1.5} />
-            </button>
             <button
               onClick={() => {
-                const json = exportStore({
-                  providers, clients,
-                  assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
-                  cobranzaRecords, cobranzaLoadedCias,
-                  cobranzaPayments, cobranzaPaymentsLoadedCias,
-                  cashFlowOverrides,
-                  lastSaved: new Date().toISOString(),
-                });
-                const blob = new Blob([json], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `midas-backup-${new Date().toISOString().slice(0,10)}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
+                clearAuth();
+                window.location.reload();
               }}
-              title="Descargar respaldo"
-              aria-label="Descargar respaldo JSON"
+              title="Cerrar sesión"
+              aria-label="Cerrar sesión"
               className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
             >
-              <Download className="w-4 h-4" strokeWidth={1.5} />
+              <LogOut className="w-4 h-4" strokeWidth={1.5} />
             </button>
           </div>
         </div>
       </header>
 
-      {/* ─── SUB-TABS with context breadcrumb (dark shell) ─── */}
+      {/* ─── SUB-TABS with context breadcrumb (light shell) ─── */}
       {subTabs.length > 0 && (
-        <div className="border-b" style={{ background: 'var(--primary)', borderColor: 'var(--shell-border)' }}>
+        <div className="border-b" style={{ background: 'var(--gray-50)', borderColor: 'var(--gray-200)' }}>
           <div className="max-w-[1400px] mx-auto px-8">
             <div className="flex items-center gap-1 py-1.5">
               {/* Breadcrumb context */}
-              <span className="text-[12px] font-medium mr-2 flex items-center gap-1" style={{ color: 'var(--shell-text-muted)' }}>
+              <span className="text-[12px] font-medium mr-2 flex items-center gap-1" style={{ color: 'var(--gray-500)' }}>
                 {SECTIONS.find(s => s.id === activeSection)?.label}
                 <ChevronRight className="w-3 h-3" strokeWidth={1.5} />
               </span>
@@ -1483,9 +1556,10 @@ export default function App() {
                     aria-current={isActive ? 'page' : undefined}
                     className="min-h-9 px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors duration-150"
                     style={{
-                      background: isActive ? 'rgba(255,255,255,0.12)' : 'transparent',
-                      color: isActive ? 'var(--shell-text)' : 'var(--shell-text-muted)',
-                      border: isActive ? '1px solid var(--shell-border)' : '1px solid transparent',
+                      background: isActive ? 'var(--surface)' : 'transparent',
+                      color: isActive ? 'var(--gray-950)' : 'var(--gray-500)',
+                      border: isActive ? '1px solid var(--gray-200)' : '1px solid transparent',
+                      boxShadow: isActive ? '0 1px 2px rgba(15, 23, 42, 0.04)' : 'none',
                     }}
                   >
                     {t.label}
@@ -1497,9 +1571,15 @@ export default function App() {
         </div>
       )}
 
-      {/* ─── MAIN CONTENT ─── */}
+      {/* ─── MAIN CONTENT ───
+         NavigationProvider is hoisted ABOVE the `key={pageKey}` remount
+         wrapper so cross-module navigation does not lose its context value
+         every time the user switches tabs. The previous nesting plus an
+         inline `goTo` arrow caused a re-render loop and ~minute-long crash
+         under heavy projection compute. */}
       <main id="main-content" role="main" className="max-w-[1400px] mx-auto px-8 py-4">
-        <div key={pageKey} className="animate-page-in">
+        <NavigationProvider goTo={goTo}>
+          <div key={pageKey} className="animate-page-in">
           <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
             {activeTab === 'dashboard' && (
               <Suspense fallback={<LazyTabFallback label="Dashboard" />}>
@@ -1574,10 +1654,60 @@ export default function App() {
                   clients={clients}
                   assumptions={assumptions}
                   confirmedPayments={confirmedPayments}
+                  cobranzaRecords={cobranzaRecords}
+                  matcherReview={matcherReview}
                   onReplace={setClients}
                   onAdd={addClient}
                   onUpdate={updateClient}
                   onDelete={deleteClient}
+                  onConfirmMatch={(s, targetClientId) => {
+                    const clientId = targetClientId ?? s.clientId;
+                    setClients(prev => prev.map(c => {
+                      if (c.id !== clientId) return c;
+                      const existing = c.jdeAccounts ?? [];
+                      if (existing.some(a => a.cia === s.cia && a.noCliente === s.noCliente)) return c;
+                      return { ...c, jdeAccounts: [...existing, suggestionToLink(s, 'user')] };
+                    }));
+                    setMatcherReview(prev => ({
+                      autoAccepted: prev.autoAccepted,
+                      needsReview: prev.needsReview.filter(x => !(x.cia === s.cia && x.noCliente === s.noCliente)),
+                      orphanNoClientes: prev.orphanNoClientes.filter(o => !(o.cia === s.cia && o.noCliente === s.noCliente)),
+                    }));
+                  }}
+                  onIgnoreOrphan={(cia, noCliente) => {
+                    setMatcherReview(prev => ({
+                      autoAccepted: prev.autoAccepted,
+                      needsReview: prev.needsReview.filter(x => !(x.cia === cia && x.noCliente === noCliente)),
+                      orphanNoClientes: prev.orphanNoClientes.filter(o => !(o.cia === cia && o.noCliente === noCliente)),
+                    }));
+                  }}
+                  onCreateClientFromOrphan={(o) => {
+                    const slug = o.nombreCliente.slice(0, 20).replace(/\s+/g, '-').toLowerCase();
+                    const newClient: Client = {
+                      id: `manual-${o.cia}-${o.noCliente}-${slug}`,
+                      name: o.nombreCliente,
+                      rfc: o.rfc,
+                      monthlyBilling: new Array(12).fill(0),
+                      frequency: 'Mensual',
+                      creditDays: 30,
+                      paymentDay: { kind: 'ANY' },
+                      jdeAccounts: [{
+                        cia: o.cia,
+                        noCliente: o.noCliente,
+                        nombreCliente: o.nombreCliente,
+                        rfc: o.rfc,
+                        matchedAt: new Date().toISOString(),
+                        matchedBy: 'user',
+                        confidence: 1,
+                      }],
+                    };
+                    setClients(prev => prev.some(c => c.id === newClient.id) ? prev : [...prev, newClient]);
+                    setMatcherReview(prev => ({
+                      autoAccepted: prev.autoAccepted,
+                      needsReview: prev.needsReview.filter(x => !(x.cia === o.cia && x.noCliente === o.noCliente)),
+                      orphanNoClientes: prev.orphanNoClientes.filter(x => !(x.cia === o.cia && x.noCliente === o.noCliente)),
+                    }));
+                  }}
                 />
               </Suspense>
             )}
@@ -1604,6 +1734,21 @@ export default function App() {
                   selectedCia={selectedCia}
                   onEnsureBankCoverage={ensureBankCoverageForCollections}
                   bankCoverageLoading={bankCoverageLoading}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'fideicomiso' && (
+              <Suspense fallback={<LazyTabFallback label="Fideicomiso" />}>
+                <FideicomisoDashboard
+                  bankStatements={bankStatements}
+                  cobranzaRecords={cobranzaRecords}
+                  cobranzaPayments={cobranzaPayments}
+                  companies={companies}
+                  selectedCia={selectedCia}
+                  onRefreshBanks={() => refreshBankStatementsRange(true, true)}
+                  onRefreshCobranza={refreshCobranza}
+                  bankFetchStatus={bankFetchStatus}
+                  cobranzaRefreshing={cobranzaRefreshing}
                 />
               </Suspense>
             )}
@@ -1670,7 +1815,8 @@ export default function App() {
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}
           </ErrorBoundary>
-        </div>
+          </div>
+        </NavigationProvider>
       </main>
 
       {/* ── Global overlays ── */}

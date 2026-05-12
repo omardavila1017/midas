@@ -19,6 +19,14 @@ import type { RealReconciliationResult } from '../../../domain/realReconciliatio
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import EmptyState from '../../shared-finance/components/EmptyState';
+import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
+import {
+  toneByOutstanding,
+  toneByRequirement,
+  TONE_SUCCESS,
+  TONE_NEUTRAL,
+} from '../../shared-finance/components/tone';
 import { buildFinancialProjectionSourceData } from '../../financial-projection/services/financialProjectionService';
 import type {
   PayrollCostRecord,
@@ -226,9 +234,13 @@ export default function TaxDashboard(props: Props) {
     return (
       <div className="space-y-5">
         <PageHeader title="Impuestos" />
-        <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-10 text-center text-[12px] text-[var(--gray-500)]">
-          Carga clientes, CXP o captura una obligación manual para calcular el seguimiento fiscal.
-        </div>
+        <EmptyState
+          tone="info"
+          align="center"
+          icon={<FileText className="h-5 w-5" strokeWidth={1.5} />}
+          title="Sin datos fiscales todavía"
+          description="Carga clientes, CXP o captura una obligación manual para calcular el seguimiento fiscal."
+        />
       </div>
     );
   }
@@ -362,6 +374,7 @@ function buildTaxPaymentSchedule(obligations: TaxObligation[]): TaxPaymentSchedu
 }
 
 function TaxOperationalOverview({ view, today }: { view: TaxDashboardView; today: string }) {
+  const goTo = useNavigateToTab();
   const scheduledCash = view.totals.cashImpact;
   const unscheduled = view.obligations.reduce((sum, obligation) => {
     const committed = obligation.paymentPlan
@@ -380,28 +393,30 @@ function TaxOperationalOverview({ view, today }: { view: TaxDashboardView; today
         label="Por pagar"
         value={fmtCurrency(view.totals.totalWithOverdue)}
         icon={<Wallet className="w-4 h-4" />}
-        color="var(--danger)"
+        color={toneByOutstanding(view.totals.totalWithOverdue)}
         sublabel="Vencido + periodos visibles"
       />
       <KpiCard
         label="Vence pronto"
         value={fmtCurrency(dueSoon)}
         icon={<CalendarDays className="w-4 h-4" />}
-        color={dueSoon > 0 ? 'var(--warning)' : 'var(--gray-950)'}
+        color={toneByRequirement(dueSoon)}
         sublabel="Próximos 15 días"
       />
       <KpiCard
         label="Programado en caja"
         value={fmtCurrency(scheduledCash)}
         icon={<Check className="w-4 h-4" />}
-        color="var(--success)"
-        sublabel="Aprobado o pagado"
+        color={scheduledCash > 0 ? TONE_SUCCESS : TONE_NEUTRAL}
+        sublabel="Aprobado o pagado · impacta Proyección"
+        onClick={() => goTo({ tab: 'financialProjection', focus: 'tax-cash' })}
+        navHint="Ver en Proyección"
       />
       <KpiCard
         label="Sin programar"
         value={fmtCurrency(unscheduled)}
         icon={<FileText className="w-4 h-4" />}
-        color={unscheduled > 0 ? 'var(--danger)' : 'var(--success)'}
+        color={toneByOutstanding(unscheduled)}
         sublabel="Pendiente de calendarizar"
       />
     </section>

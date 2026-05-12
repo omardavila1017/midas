@@ -16,6 +16,7 @@ export type TabId =
   | 'operating'
   | 'providers'
   | 'collections'
+  | 'fideicomiso'
   | 'clients'
   | 'cxp'
   | 'bancos'

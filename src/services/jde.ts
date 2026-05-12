@@ -313,20 +313,34 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
   const ciaExplicit = toStr(pick(raw, ['cia', 'compania']));
   const cia = ciaExplicit ? normalizeCia(ciaExplicit) : extractCiaFromCuentaContable(cuentaContable);
 
-  // ── Banco ── nombre extraído de Nombre_cuenta_Contable + tipo de cuenta (DESC039)
+  // ── Banco ── nombre extraído de Nombre_cuenta_Contable.
+  // Antes concatenábamos `· ${desc039}` (e.g. "BANORTE · Pagadora") pero eso
+  // fragmenta el mismo banco en grupos distintos cuando tiene cuentas de
+  // varios tipos. Hoy `nombreBanco` es solo el banco; el tipo de cuenta
+  // (`desc039` / `tipoCuentaBancos`) queda disponible en la cuenta para que
+  // la UI lo muestre en la fila individual.
   const nombreBancoRaw = toStr(
     nombreCuentaContable || pick(raw, ['nombreBanco', 'nombre_banco', 'bankName']),
   );
   const bankNameOnly = extractBankName(nombreBancoRaw);
-  const tipoCuenta = desc039;
-  const nombreBanco = bankNameOnly
-    ? (tipoCuenta ? `${bankNameOnly} · ${tipoCuenta}` : bankNameOnly)
-    : (tipoCuenta || undefined);
+  const nombreBanco = bankNameOnly || desc039 || undefined;
 
   // ── Cuenta bancaria ──
-  const cuenta = toStr(
-    cuentaBancos || pick(raw, ['cuenta', 'numeroCuenta', 'numero_cuenta', 'account']),
-  );
+  // Para la mayoría de bancos (Banamex, Santander, etc.) `Cuenta_Bancos` viene
+  // estable por cuenta real. Para BANBAJIO el API devuelve un `Cuenta_Bancos`
+  // distinto en cada línea (es el folio SPEI / clave de rastreo del recibo),
+  // lo que rompe el agrupamiento y produce "74 cuentas" cuando en realidad
+  // es 1 cuenta con 74 movimientos. Como Cuenta_Contable también viene vacío
+  // para Bajío, forzamos un cuenta-sentinela "BANBAJIO" para que todas las
+  // líneas colapsen al mismo (cia, cuenta, moneda) en groupByAccount, y
+  // groupByAccount suma los saldos por cuentaBancos único (ver allí).
+  const bankIsBajio =
+    /BAJIO|BAJÍO/i.test(toStr(nombreCuentaContable)) ||
+    /BAJIO|BAJÍO/i.test(toStr(nombreBancoRaw));
+  const fallbackCuenta = toStr(pick(raw, ['cuenta', 'numeroCuenta', 'numero_cuenta', 'account']));
+  const cuenta = bankIsBajio
+    ? 'BANBAJIO'
+    : toStr(cuentaBancos || fallbackCuenta);
 
   // ── Concepto (parsing inteligente de InF_ADI) ──
   const concepto = parseConcepto(
@@ -394,8 +408,16 @@ function groupByAccount(
 ): BankAccountStatement[] {
   const map = new Map<string, {
     acc: BankAccountStatement;
-    saldoInicial: number | undefined;
-    saldoFinal: number | undefined;
+    saldoInicial: number;
+    saldoFinal: number;
+    saldoSeen: boolean;
+    /**
+     * Sub-cuentas únicas dentro del grupo. Para la mayoría de bancos esto
+     * tiene 1 elemento (cada cuenta real = un Cuenta_Bancos estable). Para
+     * Bajío colapsamos N líneas en una cuenta sentinela, así que aquí se
+     * acumulan los Cuenta_Bancos / saldos por sub-cuenta original.
+     */
+    sources: Map<string, { saldoInicial?: number; saldoFinal?: number }>;
   }>();
 
   for (let i = 0; i < mappedLines.length; i++) {
@@ -405,9 +427,6 @@ function groupByAccount(
 
     let entry = map.get(key);
     if (!entry) {
-      // Tomar saldos del primer registro raw del grupo
-      const si = pick(r, ['Saldo_Inicial', 'saldoInicial', 'saldo_inicial']);
-      const sf = pick(r, ['Saldo_Final', 'saldoFinal', 'saldo_final']);
       entry = {
         acc: {
           cia: l.cia,
@@ -424,18 +443,35 @@ function groupByAccount(
           desc036: l.desc036,
           movimientos: [],
         },
-        saldoInicial: si !== undefined && si !== null ? toNum(si) : undefined,
-        saldoFinal: sf !== undefined && sf !== null ? toNum(sf) : undefined,
+        saldoInicial: 0,
+        saldoFinal: 0,
+        saldoSeen: false,
+        sources: new Map(),
       };
       map.set(key, entry);
     }
     entry.acc.movimientos.push(l);
+
+    // Sumar saldos por sub-cuenta única: para Bajío esto suma 74 saldos
+    // distintos en una sola "cuenta"; para Banamex (mismo Cuenta_Bancos en
+    // todas las líneas) sigue siendo el valor único de esa cuenta.
+    const sourceKey = toStr(pick(r, ['Cuenta_Bancos', 'cuenta_bancos']))
+      || toStr(pick(r, ['gsaid', 'GSAID']))
+      || String(i);
+    if (!entry.sources.has(sourceKey)) {
+      const si = pick(r, ['Saldo_Inicial', 'saldoInicial', 'saldo_inicial']);
+      const sf = pick(r, ['Saldo_Final', 'saldoFinal', 'saldo_final']);
+      const siNum = si !== undefined && si !== null ? toNum(si) : undefined;
+      const sfNum = sf !== undefined && sf !== null ? toNum(sf) : undefined;
+      entry.sources.set(sourceKey, { saldoInicial: siNum, saldoFinal: sfNum });
+      if (siNum !== undefined) { entry.saldoInicial += siNum; entry.saldoSeen = true; }
+      if (sfNum !== undefined) { entry.saldoFinal += sfNum; entry.saldoSeen = true; }
+    }
   }
 
-  // Asignar saldos y ordenar movimientos
-  for (const { acc, saldoInicial, saldoFinal } of map.values()) {
-    acc.saldoInicial = saldoInicial;
-    acc.saldoFinal = saldoFinal;
+  for (const { acc, saldoInicial, saldoFinal, saldoSeen } of map.values()) {
+    acc.saldoInicial = saldoSeen ? saldoInicial : undefined;
+    acc.saldoFinal = saldoSeen ? saldoFinal : undefined;
     acc.movimientos.sort((a, b) => a.fechaOperacion.localeCompare(b.fechaOperacion));
   }
 
