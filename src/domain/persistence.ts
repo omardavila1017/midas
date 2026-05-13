@@ -37,6 +37,7 @@
 import { CashFlowOverrides } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 import type { CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
+import type { PayrollCostRecord } from '../modules/shared-finance/types';
 
 export interface CXPRecord {
   cia: string;
@@ -95,6 +96,19 @@ export interface MidasStore {
   cobranzaPayments: CobranzaPayment[];
   /** Per-cia ISO timestamp del último refresh exitoso de IndicadoresCobranza. */
   cobranzaPaymentsLoadedCias: Record<string, string>;
+  /**
+   * Registros de nómina TRESS normalizados (POST /v1/erp/tress/nomina).
+   * Cache aditivo: el módulo de Nómina hace fetch por (idEmpresa, tipoNomina,
+   * anio, mes) y mergea los registros nuevos sobre los existentes. Reset por
+   * `clearStore()`.
+   */
+  nominaRecords: PayrollCostRecord[];
+  /**
+   * ISO timestamp del último fetch exitoso, indexado por la llave compuesta
+   * `${idEmpresa}:${tipoNomina}:${anio}:${mes}`. El módulo lo consulta para
+   * decidir si refresca o sirve cache.
+   */
+  nominaLoadedKeys: Record<string, string>;
   cashFlowOverrides: CashFlowOverrides;
   lastSaved: string;
 }
@@ -142,6 +156,8 @@ export function getDefaultStore(): MidasStore {
     cobranzaLoadedCias: {},
     cobranzaPayments: [],
     cobranzaPaymentsLoadedCias: {},
+    nominaRecords: [],
+    nominaLoadedKeys: {},
     cashFlowOverrides: {},
     lastSaved: isoNow(),
   };
@@ -244,6 +260,19 @@ function normalizeStore(raw: unknown): MidasStore {
     }
   }
 
+  // Nómina TRESS — aditivo desde el primer boot post-PR. Stores legacy
+  // simplemente no traen estas keys y caen al default vacío; el módulo de
+  // Nómina hará fetch on-demand en su primera apertura.
+  const nominaRecords = Array.isArray(o.nominaRecords)
+    ? (o.nominaRecords.filter((r) => !!r && typeof r === 'object') as PayrollCostRecord[])
+    : [];
+  const nominaLoadedKeys: Record<string, string> = {};
+  if (o.nominaLoadedKeys && typeof o.nominaLoadedKeys === 'object') {
+    for (const [k, val] of Object.entries(o.nominaLoadedKeys as Record<string, unknown>)) {
+      if (typeof val === 'string') nominaLoadedKeys[k] = val;
+    }
+  }
+
   return {
     providers,
     clients,
@@ -254,6 +283,8 @@ function normalizeStore(raw: unknown): MidasStore {
     cobranzaLoadedCias,
     cobranzaPayments,
     cobranzaPaymentsLoadedCias,
+    nominaRecords,
+    nominaLoadedKeys,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
     assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
     lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,

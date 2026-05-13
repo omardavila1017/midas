@@ -15,6 +15,7 @@
  */
 
 import { jdeClient, JdeClientConfig } from './jdeClient';
+import { apiConfig } from '../config/api.config';
 import {
   AgedBalanceRecord,
   AgedBalanceRequest,
@@ -28,7 +29,12 @@ import {
   CobranzaRecord,
   CobranzaRequest,
   Company,
+  NominaRequest,
 } from './jdeTypes';
+import type {
+  PayrollCashTreatment,
+  PayrollCostRecord,
+} from '../modules/shared-finance/types';
 
 // ───────────────────────────────────────────────────────────────
 // Helpers de normalización
@@ -1013,6 +1019,128 @@ export async function fetchIndicadoresCobranza(
 // Flag para que el log de shape solo aparezca una vez por sesión.
 let cobranzaShapeLogged = false;
 
+// ───────────────────────────────────────────────────────────────
+// 6. Nómina (TRESS)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Mapping naive (basado solo en `TipoConcepto`) hacia `PayrollCashTreatment`.
+ *
+ * Esta es la primera capa de clasificación que aplica el mapper. Una segunda
+ * capa más fina vive en `payrollModuleService` (PR2) y refina por
+ * `Concepto`/`IDConcepto` para separar:
+ *   - Deducción ISR / IMSS empleado → WITHHOLDING_PAYABLE (lo entera la
+ *     empresa al SAT/IMSS en la fecha de entero, no el día de la nómina).
+ *   - Deducción préstamo / pensión alimenticia → DEDUCTION (resta del neto
+ *     que recibe el empleado en FechaPago).
+ *   - Vales / provisiones registradas como percepción pero no efectivo →
+ *     NON_CASH.
+ *
+ * Por defecto el mapper asigna el tratamiento más conservador para que el
+ * flujo de efectivo no se subestime mientras la tabla fina no esté cargada.
+ */
+const TIPO_CONCEPTO_TO_CASH_TREATMENT: Record<string, PayrollCashTreatment> = {
+  'percepcion': 'CASH_OUT',
+  'percepción': 'CASH_OUT',
+  'deduccion': 'DEDUCTION',
+  'deducción': 'DEDUCTION',
+  'aportacion': 'EMPLOYER_TAX',
+  'aportación': 'EMPLOYER_TAX',
+  'patronal': 'EMPLOYER_TAX',
+  'informativo': 'NON_CASH',
+};
+
+function inferCashTreatment(tipoConcepto: string): PayrollCashTreatment {
+  const key = tipoConcepto.trim().toLowerCase();
+  if (!key) return 'NON_CASH';
+  const direct = TIPO_CONCEPTO_TO_CASH_TREATMENT[key];
+  if (direct) return direct;
+  // Substring match para tolerar variantes ("Aportación Patronal", "Deducción Empleado", etc.).
+  for (const token of Object.keys(TIPO_CONCEPTO_TO_CASH_TREATMENT)) {
+    if (key.includes(token)) return TIPO_CONCEPTO_TO_CASH_TREATMENT[token];
+  }
+  return 'NON_CASH';
+}
+
+function mapNominaRow(raw: RawRecord): PayrollCostRecord {
+  const idEmpresaRaw = pick(raw, ['IDEmpresa', 'idEmpresa', 'id_empresa', 'cia', 'compania']);
+  const empresa = toStr(pick(raw, ['Empresa', 'empresa', 'nombreEmpresa', 'razonSocial']));
+  const monto = toNum(pick(raw, ['Monto', 'monto', 'importe', 'amount']));
+  const periodo = pick(raw, ['Periodo', 'periodo', 'numPeriodo']);
+  const mes = toStr(pick(raw, ['Mes', 'mes']));
+  const idConcepto = pick(raw, ['IDConcepto', 'idConcepto', 'id_concepto']);
+  const concepto = toStr(pick(raw, ['Concepto', 'concepto', 'nombreConcepto']));
+  const tipoNomina = toStr(pick(raw, ['TipoNomina', 'tipoNomina', 'tipo_nomina']));
+  const tipoConcepto = toStr(pick(raw, ['TipoConcepto', 'tipoConcepto', 'tipo_concepto']));
+
+  // Aliases defensivos para el typo `Fechainical` en producción.
+  const fechaInicial = trimIsoDate(
+    pick(raw, ['Fechainical', 'fechainical', 'FechaInicial', 'fechaInicial', 'fecha_inicial']),
+  );
+  const fechaFinal = trimIsoDate(pick(raw, ['FechaFinal', 'fechaFinal', 'fecha_final']));
+  const fechaPago = trimIsoDate(pick(raw, ['FechaPago', 'fechaPago', 'fecha_pago']));
+
+  // Año/mes derivados de la fecha de pago (la fuente más confiable para
+  // alinear el evento de cash con el calendario fiscal). Si falta, intentamos
+  // parsear desde el body de la request via campos auxiliares.
+  let year = 0;
+  let month = 0;
+  if (fechaPago) {
+    const parts = fechaPago.split('-');
+    year = toNum(parts[0]);
+    month = toNum(parts[1]);
+  }
+  if (!year) year = toNum(pick(raw, ['anio', 'Anio', 'year']));
+  if (!month) month = toNum(pick(raw, ['mes_num', 'numMes', 'monthNumber']));
+
+  return {
+    // `cia` se normaliza al mismo padding de 5 dígitos que usan CXP/bancos
+    // para garantizar joins por compañía a nivel store.
+    cia: normalizeCia(idEmpresaRaw),
+    empresaNomina: empresa,
+    year,
+    month,
+    paymentDate: fechaPago,
+    periodStartDate: fechaInicial || undefined,
+    periodEndDate: fechaFinal || undefined,
+    payrollPeriod: typeof periodo === 'number' ? periodo : toStr(periodo) || mes,
+    payrollType: tipoNomina,
+    conceptId: typeof idConcepto === 'number' ? idConcepto : toStr(idConcepto),
+    conceptName: concepto,
+    conceptType: tipoConcepto,
+    cashTreatment: inferCashTreatment(tipoConcepto),
+    amount: monto,
+  };
+}
+
+/**
+ * POST /nomina (TRESS) — devuelve registros normalizados a `PayrollCostRecord`.
+ *
+ * Nota sobre `idEmpresa=99` y `tipoNomina=99`: ambos valores funcionan como
+ * comodín ("Todas") según el contrato del API. Para backfill anual basta con
+ * 12 requests, una por mes. Cada request puede tardar parecido a los
+ * endpoints de tesorería (varios segundos a >1min) — el cliente comparte el
+ * timeout de 180s configurado en `jdeClient.ts`.
+ */
+export async function fetchNomina(
+  req: NominaRequest,
+  config: JdeClientConfig = {},
+): Promise<PayrollCostRecord[]> {
+  const merged: JdeClientConfig = {
+    baseUrl: apiConfig.tress.baseUrl,
+    ...config,
+  };
+  const raw = await jdeClient.post<unknown>('/nomina', req, merged);
+  return unwrapList(raw).map(mapNominaRow);
+}
+
+// Exporta helpers internos para que los unit tests puedan ejercitarlos sin
+// montar un mock del cliente HTTP.
+export const __internal = {
+  mapNominaRow,
+  inferCashTreatment,
+};
+
 // Re-exports convenientes
 export type {
   AgedBalanceRecord,
@@ -1028,5 +1156,7 @@ export type {
   CobranzaRecord,
   CobranzaRequest,
   Company,
+  NominaRequest,
+  NominaRawRecord,
 } from './jdeTypes';
 export { JdeApiError } from './jdeTypes';
