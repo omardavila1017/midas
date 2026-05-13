@@ -26,15 +26,15 @@ describe('supplierPaymentSchedule', () => {
     const dailyRow = result.plan.dailyRows.find((row) => row.date === '2026-05-02');
 
     expect(highDecision).toMatchObject({ status: 'PAID', estimatedDate: '2026-05-02', paidAmount: 700, score: 100 });
-    expect(lowDecision).toMatchObject({ status: 'PENDING', paidAmount: 0, pendingAmount: 500, score: 10 });
+    expect(lowDecision).toMatchObject({ status: 'PARTIAL', paidAmount: 200, pendingAmount: 300, score: 10 });
     expect(dailyRow?.clientNamesExpected).toContain('Cliente · CXC-i-1');
     expect(dailyRow?.supplierNamesScheduled).toEqual(['Proveedor Alto', 'Proveedor Bajo']);
     expect(dailyRow?.outflowConcepts).toContain('Proveedor Alto · Factura m-high · F-m-high');
-    expect(dailyRow?.supplierNamesPaid).toEqual(['Proveedor Alto']);
+    expect(dailyRow?.supplierNamesPaid).toEqual(['Proveedor Alto', 'Proveedor Bajo']);
     expect(dailyRow?.supplierNamesPending).toEqual(['Proveedor Bajo']);
   });
 
-  it('moves a supplier to a future date when later inflow makes the payment feasible', () => {
+  it('splits a supplier across dates when later inflow completes the payment', () => {
     const payment = movement('m-high', 'Proveedor Alto', 'p-high', 100, 700, '2026-05-02');
 
     const result = scheduleSupplierPaymentsByScore({
@@ -48,10 +48,20 @@ describe('supplierPaymentSchedule', () => {
     });
 
     const decision = result.plan.decisions.find((item) => item.movementId === 'm-high');
-    const scheduled = result.movements.find((item) => item.id === 'm-high');
+    const scheduled = result.movements.filter((item) => item.id.startsWith('m-high:partial:'));
 
-    expect(decision).toMatchObject({ status: 'DEFERRED', originalDate: '2026-05-02', estimatedDate: '2026-05-04' });
-    expect(scheduled?.adjustedDate).toBe('2026-05-04');
+    expect(decision).toMatchObject({
+      status: 'PARTIAL',
+      originalDate: '2026-05-02',
+      estimatedDate: '2026-05-04',
+      paidAmount: 700,
+      pendingAmount: 0,
+    });
+    expect(decision?.installments).toEqual([
+      { date: '2026-05-02', amount: 300 },
+      { date: '2026-05-04', amount: 400 },
+    ]);
+    expect(scheduled.map((item) => item.adjustedDate)).toEqual(['2026-05-02', '2026-05-04']);
   });
 
   it('manages non-JDE supplier AP payments and keeps the original due date', () => {
@@ -102,11 +112,50 @@ describe('supplierPaymentSchedule', () => {
 
     expect(earlyRow?.suppliersPaid).toBe(0);
     expect(highDecision).toMatchObject({ status: 'PAID', estimatedDate: '2026-05-04', score: 100 });
-    expect(lowDecision).toMatchObject({ status: 'PENDING', score: 10 });
+    expect(lowDecision).toMatchObject({ status: 'PARTIAL', paidAmount: 200, pendingAmount: 300, score: 10 });
+  });
+
+  it('keeps critical suppliers untouched even when liquidity is short', () => {
+    const critical = movement('m-critical', 'Proveedor Critico', 'p-critical', 100, 900, '2026-05-02');
+    const result = scheduleSupplierPaymentsByScore({
+      movements: [inflow('i-1', 500, '2026-05-02'), critical],
+      providers: [provider('p-critical', 'Proveedor Critico', 100, { clasificacionAlberto: 'CRITICO' })],
+      startDate: '2026-05-01',
+      endDate: '2026-05-03',
+      initialCash: 0,
+      minimumCash: 100,
+      scenarioId: 'base',
+    });
+
+    expect(result.plan.decisions).toHaveLength(0);
+    expect(result.movements.find((item) => item.id === 'm-critical')).toBeTruthy();
+    expect(result.plan.dailyRows.find((row) => row.date === '2026-05-02')?.closingCash).toBe(0);
+  });
+
+  it('partially schedules unlocked tax outflows while locked taxes remain fixed', () => {
+    const movableTax = taxMovement('tax-iva', 700, '2026-05-02', 'RESTRICTED');
+    const lockedTax = taxMovement('tax-imss', 300, '2026-05-02', 'LOCKED');
+    const result = scheduleSupplierPaymentsByScore({
+      movements: [inflow('i-1', 1_000, '2026-05-02'), movableTax, lockedTax],
+      providers: [],
+      startDate: '2026-05-01',
+      endDate: '2026-05-03',
+      initialCash: 0,
+      minimumCash: 100,
+      scenarioId: 'base',
+    });
+
+    expect(result.plan.decisions[0]).toMatchObject({
+      movementId: 'tax-iva',
+      status: 'PARTIAL',
+      paidAmount: 600,
+      pendingAmount: 100,
+    });
+    expect(result.movements.some((item) => item.id === 'tax-imss')).toBe(true);
   });
 });
 
-function provider(id: string, name: string, score: number): Provider {
+function provider(id: string, name: string, score: number, patch: Partial<Provider> = {}): Provider {
   return {
     id,
     name,
@@ -114,6 +163,38 @@ function provider(id: string, name: string, score: number): Provider {
     risk: 'Alto',
     paymentPeriod: '30 días',
     score,
+    ...patch,
+  };
+}
+
+function taxMovement(
+  id: string,
+  amount: number,
+  date: string,
+  lockState: FinancialMovement['lockState'],
+): FinancialMovement {
+  return {
+    id,
+    sourceSystem: 'TAX',
+    sourceObjectId: id,
+    type: 'OUTFLOW',
+    category: 'TAX',
+    counterpartyName: 'SAT',
+    counterpartyType: 'TAX_AUTHORITY',
+    concept: id,
+    currency: 'MXN',
+    originalAmount: amount,
+    baseAmount: amount,
+    projectedAmount: amount,
+    projectedDate: date,
+    dueDate: date,
+    confidenceScore: 80,
+    confidenceBand: 'HIGH',
+    forecastMethod: 'RULE',
+    status: 'PROJECTED_BASE',
+    lockState,
+    createdAt: '2026-05-01T00:00:00.000Z',
+    updatedAt: '2026-05-01T00:00:00.000Z',
   };
 }
 

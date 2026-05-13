@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import {
+  Area,
   Bar,
   CartesianGrid,
   ComposedChart,
@@ -12,7 +13,12 @@ import {
 } from 'recharts';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
-import type { FinancialMovement, ForecastRun, ProjectionBucket } from '../../shared-finance/types';
+import type {
+  FinancialMovement,
+  ForecastRun,
+  ProbabilisticForecastRun,
+  ProjectionBucket,
+} from '../../shared-finance/types';
 import {
   effectiveAmount,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
@@ -87,11 +93,13 @@ function CashFlowChartImpl({
   projection,
   baseProjection,
   comparisonProjection,
+  probabilisticProjection,
   onNavigateToTax,
 }: {
   projection: ForecastRun;
   baseProjection?: ForecastRun;
   comparisonProjection?: ForecastRun;
+  probabilisticProjection?: ProbabilisticForecastRun | null;
   onNavigateToTax?: () => void;
 }) {
   const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null);
@@ -111,6 +119,9 @@ function CashFlowChartImpl({
       : null;
     const comparisonByDate = comparisonProjection?.buckets.length
       ? new Map(comparisonProjection.buckets.map((bucket) => [bucket.date, bucket.closingCash]))
+      : null;
+    const probabilisticByDate = probabilisticProjection?.buckets.length
+      ? new Map(probabilisticProjection.buckets.map((bucket) => [bucket.date, bucket]))
       : null;
     const movementById = new Map<string, FinancialMovement>();
     for (const m of projection.movements) movementById.set(m.id, m);
@@ -149,10 +160,23 @@ function CashFlowChartImpl({
         minimo: bucket.minimumCash,
         base: baseByDate ? baseByDate.get(bucket.date) : undefined,
         comparison: comparisonByDate ? comparisonByDate.get(bucket.date) : undefined,
+        riskBand: probabilisticByDate?.get(bucket.date)
+          ? [
+            probabilisticByDate.get(bucket.date)?.cash.p10 ?? bucket.closingCash,
+            probabilisticByDate.get(bucket.date)?.cash.p90 ?? bucket.closingCash,
+          ]
+          : undefined,
+        p50: probabilisticByDate?.get(bucket.date)?.cash.p50,
       };
     }
     return out;
-  }, [projection.buckets, projection.movements, baseProjection?.buckets, comparisonProjection?.buckets]);
+  }, [
+    projection.buckets,
+    projection.movements,
+    baseProjection?.buckets,
+    comparisonProjection?.buckets,
+    probabilisticProjection?.buckets,
+  ]);
 
   // Reset the open breakdown when the underlying buckets change shape (e.g.
   // granularity flipped) — the previous index would point to the wrong row.
@@ -231,7 +255,10 @@ function CashFlowChartImpl({
               width={72}
             />
             <Tooltip
-              formatter={(value: number, name: string) => [fmtCurrency(value), name]}
+              formatter={(value: number | [number, number], name: string) => {
+                if (Array.isArray(value)) return [`${fmtCurrency(value[0])} a ${fmtCurrency(value[1])}`, name];
+                return [fmtCurrency(value), name];
+              }}
               labelFormatter={(_, payload) => payload?.[0]?.payload?.rawDate ?? ''}
               isAnimationActive={false}
               contentStyle={{
@@ -241,6 +268,18 @@ function CashFlowChartImpl({
               }}
             />
             <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+            {probabilisticProjection && (
+              <Area
+                type="monotone"
+                dataKey="riskBand"
+                name="Rango P10-P90"
+                fill="#dbeafe"
+                fillOpacity={0.8}
+                stroke="none"
+                isAnimationActive={false}
+                connectNulls={false}
+              />
+            )}
             <Bar
               dataKey="entradasReal"
               stackId="entradas"
@@ -298,6 +337,18 @@ function CashFlowChartImpl({
               dot={false}
               isAnimationActive={false}
             />
+            {probabilisticProjection && (
+              <Line
+                type="monotone"
+                dataKey="p50"
+                name="Caja P50"
+                stroke="#7c3aed"
+                strokeWidth={1.5}
+                strokeDasharray="5 4"
+                dot={false}
+                isAnimationActive={false}
+              />
+            )}
             {baseProjection && (
               <Line
                 type="monotone"
@@ -348,6 +399,7 @@ export const CashFlowChart = memo(CashFlowChartImpl, (prev, next) =>
   prev.projection === next.projection
   && prev.baseProjection === next.baseProjection
   && prev.comparisonProjection === next.comparisonProjection
+  && prev.probabilisticProjection === next.probabilisticProjection
   && prev.onNavigateToTax === next.onNavigateToTax,
 );
 

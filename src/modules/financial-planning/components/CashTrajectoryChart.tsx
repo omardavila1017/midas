@@ -14,12 +14,13 @@ import {
 } from 'recharts';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
 import AnimatedNumber from '../../../components/ui/AnimatedNumber';
-import type { ForecastRun } from '../../shared-finance/types';
+import type { ForecastRun, ProbabilisticForecastRun } from '../../shared-finance/types';
 import { aggregateProjectionToMonths } from './cashTrajectoryAggregation';
 
 interface Props {
   projection: ForecastRun;
   baseProjection?: ForecastRun;
+  probabilisticProjection?: ProbabilisticForecastRun | null;
 }
 
 const COLOR = {
@@ -55,6 +56,8 @@ const TOOLTIP_SERIES: Record<string, { label: string; color: string }> = {
   'Caja final': { label: 'Caja final', color: '#0f172a' },
   deltaAbove: { label: 'Δ positivo', color: '#16a34a' },
   deltaBelow: { label: 'Δ negativo', color: '#dc2626' },
+  riskBand: { label: 'Rango P10-P90', color: '#7c3aed' },
+  p50: { label: 'Caja P50', color: '#7c3aed' },
 };
 
 const ChartTooltip: React.FC<{
@@ -81,19 +84,19 @@ const ChartTooltip: React.FC<{
         const name = p.name ?? '';
         const meta = TOOLTIP_SERIES[name];
         if (!meta) return null;
-        let amount: number | null = null;
+        let amount: number | string | null = null;
         if (Array.isArray(p.value) && p.value.length === 2) {
           const [lo, hi] = p.value;
           if (typeof lo === 'number' && typeof hi === 'number') {
-            amount = Math.abs(hi - lo);
+            amount = `${fmtCurrency(lo)} a ${fmtCurrency(hi)}`;
           }
         } else if (typeof p.value === 'number') {
-          amount = p.value;
+          amount = fmtCurrency(p.value);
         }
         if (amount === null) return null;
         return (
           <div key={i} style={{ padding: '2px 0', color: meta.color, fontWeight: 500 }}>
-            {meta.label} : {fmtCurrency(amount)}
+            {meta.label} : {amount}
           </div>
         );
       })}
@@ -112,7 +115,7 @@ const LastPointDot: React.FC<{ cx?: number; cy?: number }> = ({ cx, cy }) => {
   );
 };
 
-export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjection }) => {
+export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjection, probabilisticProjection }) => {
   const months = useMemo(
     () => aggregateProjectionToMonths(projection, baseProjection),
     [projection, baseProjection],
@@ -120,17 +123,29 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
 
   const hasBaseline = Boolean(baseProjection) && projection.scenarioId !== baseProjection?.scenarioId;
 
+  const probabilisticByMonth = useMemo(() => {
+    const grouped = new Map<string, ProbabilisticForecastRun['buckets'][number]>();
+    for (const bucket of probabilisticProjection?.buckets ?? []) {
+      const ym = bucket.date.slice(0, 7);
+      grouped.set(ym, bucket);
+    }
+    return grouped;
+  }, [probabilisticProjection?.buckets]);
+
   const chartData = useMemo(() => months.map((m) => {
     const base = m.baseClosingCash;
     const forecast = m.forecastClosingCash;
+    const probabilistic = probabilisticByMonth.get(m.yearMonth);
     return {
       yearMonth: m.yearMonth,
       base,
       forecast,
       deltaAbove: hasBaseline && forecast > base ? [base, forecast] : null,
       deltaBelow: hasBaseline && forecast < base ? [forecast, base] : null,
+      riskBand: probabilistic ? [probabilistic.cash.p10, probabilistic.cash.p90] : null,
+      p50: probabilistic?.cash.p50,
     };
-  }), [months, hasBaseline]);
+  }), [months, hasBaseline, probabilisticByMonth]);
 
   const crossesZero = useMemo(
     () => chartData.some((d) => d.base < 0 || d.forecast < 0),
@@ -265,6 +280,12 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
                     ]
                   : [
                       { value: 'Caja final', type: 'plainline', id: 'forecast', color: COLOR.forecast, payload: { strokeDasharray: '0' } },
+                      ...(probabilisticProjection
+                        ? [
+                          { value: 'Rango P10-P90', type: 'plainline' as const, id: 'riskBand', color: '#7c3aed', payload: { strokeDasharray: '0' } },
+                          { value: 'Caja P50', type: 'plainline' as const, id: 'p50', color: '#7c3aed', payload: { strokeDasharray: '5 4' } },
+                        ]
+                        : []),
                       ...(minimumCash > 0
                         ? [{ value: 'Caja mínima', type: 'plainline' as const, id: 'min', color: COLOR.warning, payload: { strokeDasharray: '3 3' } }]
                         : []),
@@ -283,6 +304,21 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
                 animationDuration={500}
                 animationEasing="ease-out"
                 name="deltaAbove"
+                legendType="none"
+                connectNulls={false}
+              />
+            )}
+            {probabilisticProjection && (
+              <Area
+                type="monotone"
+                dataKey="riskBand"
+                fill="#ede9fe"
+                fillOpacity={0.85}
+                stroke="none"
+                isAnimationActive
+                animationDuration={450}
+                animationEasing="ease-out"
+                name="riskBand"
                 legendType="none"
                 connectNulls={false}
               />
@@ -357,6 +393,21 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
               animationBegin={hasBaseline ? 200 : 0}
               animationEasing="ease-out"
             />
+            {probabilisticProjection && (
+              <Line
+                type="monotone"
+                dataKey="p50"
+                stroke="#7c3aed"
+                strokeWidth={1.5}
+                strokeDasharray="5 4"
+                dot={false}
+                name="Caja P50"
+                isAnimationActive
+                animationDuration={480}
+                animationBegin={120}
+                animationEasing="ease-out"
+              />
+            )}
 
             {lastPoint && (
               <ReferenceDot

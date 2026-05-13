@@ -158,10 +158,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   const { base, baseline, projection } = useMemo(
     () => computeBaseCashFlow({
       bankStatements, aged, clients, providers, cxpRecords, assumptions,
-      companyCode, today, overrides, budget: null,
+      companyCode, today, overrides, budget,
       startingBalance,
     }),
-    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance],
+    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, budget, startingBalance],
   );
 
   // Antes el Dashboard pasaba por `evaluateCashFlow` (motor de Simulación) con
@@ -951,7 +951,19 @@ export function computeBankStartingBalance(statements: BankAccountStatement[]): 
 }
 
 export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
-  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance } = inputs;
+  const {
+    bankStatements,
+    aged,
+    clients,
+    providers,
+    cxpRecords,
+    assumptions,
+    companyCode,
+    today,
+    overrides,
+    budget,
+    startingBalance,
+  } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
@@ -969,10 +981,11 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
 
   const todayYm = toYearMonth(today);
 
-  // Horizonte: diciembre del año en curso. Cortamos el horizonte al fin del
-  // año calendario actual en vez de usar 12 meses rolling.
-  const todayYear = Number(todayYm.slice(0, 4));
-  const endOfYearYm = `${todayYear}-12`;
+  // Horizonte operativo: 12 meses rodantes incluyendo el mes actual.
+  // La UI de Proyección/Planeación ya trabaja así; si aquí cortamos en
+  // diciembre, los meses del siguiente año quedan con buckets vacíos y la
+  // caja se aplana artificialmente justo donde más importa sostener egresos.
+  const rollingEndYm = addMonths(todayYm, 11);
   const lastHistoricalYm = historical.length > 0
     ? historical[historical.length - 1].yearMonth
     : todayYm;
@@ -980,10 +993,10 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
     1,
   );
-  // Si el horizonte calendario ya quedó atrás del último histórico, no hay
+  // Si el horizonte rolling ya quedó atrás del último histórico, no hay
   // proyección — sólo rendiremos el histórico.
-  const lastFutureYm = compareYearMonth(endOfYearYm, firstFutureYm) >= 0
-    ? endOfYearYm
+  const lastFutureYm = compareYearMonth(rollingEndYm, firstFutureYm) >= 0
+    ? rollingEndYm
     : null;
 
   // Proyección operativa per-cliente / per-proveedor. Esta es la fuente para
@@ -999,7 +1012,7 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     baselineExpense: 0,
     assumptions,
     today,
-    budget: null,
+    budget,
   });
   const projectionByYm = new Map(projection.months.map((m) => [m.yearMonth, m]));
 

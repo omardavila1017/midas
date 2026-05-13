@@ -118,6 +118,7 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.payrollCosts),
     refId(input.cobranzaReconciliation),
     refId(input.assumptions),
+    refId(input.budget),
   ];
   return [
     input.companyCode,
@@ -163,7 +164,7 @@ export function buildFinancialProjectionSourceData(
     payrollCosts: input.payrollCosts ?? [],
     cobranzaReconciliation: input.cobranzaReconciliation,
     assumptions: input.assumptions,
-    budget: null,
+    budget: input.budget,
     startingBalance: input.startingBalance,
     asOfDate,
   };

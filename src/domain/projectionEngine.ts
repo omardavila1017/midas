@@ -259,16 +259,24 @@ export function resolveExpenseForMonth(
   budgetValue: number | null = null,
   budgetLines: Array<{ concept: string; amount: number }> = [],
 ): ExpenseProjectionBreakdown {
+  const operationalTotal = Math.max(scheduled, recurring, baseline);
   if (budgetValue !== null) {
+    const total = Math.max(operationalTotal, budgetValue);
     return {
       scheduled, recurring, baseline,
       fromBudget: budgetValue,
-      total: budgetValue,
-      source: 'budget',
+      total,
+      source: budgetValue >= operationalTotal
+        ? 'budget'
+        : operationalTotal === scheduled && scheduled > 0
+          ? 'scheduled'
+          : operationalTotal === recurring && recurring > 0
+            ? 'recurring'
+            : 'baseline',
       topRecurring, providerLines, budgetLines,
     };
   }
-  const total = Math.max(scheduled, recurring, baseline);
+  const total = operationalTotal;
   const source = total === scheduled && scheduled > 0 ? 'scheduled'
     : total === recurring && recurring > 0 ? 'recurring'
     : 'baseline';
@@ -367,33 +375,40 @@ export function buildMonthlyProjection(inputs: ProjectionInputs): ProjectionResu
     const [y, m] = cursor.split('-').map(Number);
     const monthIdx = m - 1;
     const budgetApplies = budget && budget.year === y;
-    const budgetIncome = budgetApplies ? (budget!.incomeTotal[monthIdx] ?? null) : null;
     const budgetExpense = budgetApplies ? (budget!.expenseTotal[monthIdx] ?? null) : null;
     const budgetExpenseLines = budgetApplies
       ? budget!.expenseByConcept.map((r) => ({ concept: r.concept, amount: r.monthly[monthIdx] ?? 0 }))
       : [];
 
-    const income = resolveIncomeForMonth(clientIncome, baselineIncome, budgetIncome);
+    const income = resolveIncomeForMonth(clientIncome, baselineIncome, null);
 
     let expense: ExpenseProjectionBreakdown;
     if (usePerProvider) {
       const perProv = perProviderByYm.get(cursor);
       const scheduled = perProv?.scheduledTotal ?? 0;
       const recurring = perProv?.recurringTotal ?? 0;
+      const operationalTotal = Math.max(perProv?.total ?? 0, baselineExpense);
       if (budgetExpense !== null) {
+        const total = Math.max(operationalTotal, budgetExpense);
         expense = {
           scheduled,
           recurring,
           baseline: baselineExpense,
           fromBudget: budgetExpense,
-          total: budgetExpense,
-          source: 'budget',
+          total,
+          source: budgetExpense >= operationalTotal
+            ? 'budget'
+            : operationalTotal === scheduled && scheduled > 0
+              ? 'scheduled'
+              : operationalTotal === recurring && recurring > 0
+                ? 'recurring'
+                : 'baseline',
           topRecurring: [],
           providerLines: perProv?.lines ?? [],
           budgetLines: budgetExpenseLines,
         };
       } else {
-        const total = Math.max(perProv?.total ?? 0, baselineExpense);
+        const total = operationalTotal;
         expense = {
           scheduled,
           recurring,

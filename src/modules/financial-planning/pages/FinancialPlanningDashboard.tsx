@@ -114,6 +114,8 @@ import {
 } from '../../shared-finance/components/tone';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
+import { ProbabilisticRiskStrip } from '../../financial-projection/components/ProbabilisticRiskStrip';
+import { useProbabilisticForecast } from '../../financial-projection/services/probabilisticForecastService';
 
 interface Props {
   companyCode: string;
@@ -153,7 +155,7 @@ export default function FinancialPlanningDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const cacheProbeInput = useMemo(
-    () => ({ ...props, budget: null, asOfDate: today }),
+    () => ({ ...props, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -166,6 +168,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
+      props.budget,
       props.startingBalance,
       today,
     ],
@@ -229,9 +232,8 @@ function PlanningWarmupShell() {
 function PlanningDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
   const goTo = useNavigateToTab();
-  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
-  const yearStart = `${currentYear}-01-01`;
-  const yearEnd = `${currentYear}-12-31`;
+  const yearStart = today;
+  const yearEnd = useMemo(() => addUtcDays(today, 364), [today]);
 
   const sourceBaseScenario = useMemo(
     () => source.scenarios.find((s) => s.kind === 'BASE') ?? source.scenarios[0],
@@ -430,7 +432,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         cxpRecords: props.cxpRecords,
         purchaseReceipts: props.purchaseReceipts,
         payrollCosts: props.payrollCosts,
-        budget: null,
+        budget: props.budget,
         companyCode: props.companyCode,
         startDate: yearStart,
         endDate: yearEnd,
@@ -542,6 +544,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       supplierPlan: activeRunRaw.supplierPlan,
     };
   }, [activeRunRaw, activeOverrides, rows, granularity, today, initialCash, minimumCash]);
+  const probabilistic = useProbabilisticForecast(activeRun, activeRun.summary.minimumCashRequired);
 
   // Approved overrides for the diff and merge logic
   const approvedOverrides = useMemo(
@@ -1256,7 +1259,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           value={fmtCurrency(summary.finalCash)}
           icon={<Wallet className="w-4 h-4" />}
           color={toneByFloor(summary.finalCash, summary.minimumCashRequired)}
-          sublabel={`${currentYear} · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          sublabel={`12 meses · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
           onClick={() => goTo({ tab: 'financialProjection', focus: 'caja-final' })}
           navHint="Ver en Proyección"
         />
@@ -1284,6 +1287,12 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           sublabel={isDraft ? 'Borrador activo' : 'Misma referencia'}
         />
       </div>
+
+      <ProbabilisticRiskStrip
+        run={probabilistic.run}
+        loading={probabilistic.loading}
+        error={probabilistic.error}
+      />
 
       {compareOpen && (
         <ScenarioCompareTable
@@ -1375,6 +1384,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           <CashTrajectoryChart
             projection={activeRun}
             baseProjection={activeScenario.kind === 'BASE' ? undefined : approvedRunWithOverrides}
+            probabilisticProjection={probabilistic.run}
           />
 
           <SupplierPaymentDecisionTable
@@ -1418,7 +1428,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           cxpRecords: props.cxpRecords,
           clients: props.clients,
           assumptions: props.assumptions,
-          budget: null,
+          budget: props.budget,
         }}
       />
 
@@ -1621,6 +1631,12 @@ function taxTreatmentForCommitment(category: ExpectedCommitmentDraft['category']
 function minimumCashFor(): number {
   const fallback = 20_000_000;
   return fallback;
+}
+
+function addUtcDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
 }
 
 function EmptyDataState() {

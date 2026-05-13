@@ -155,6 +155,11 @@ describe('resolveExpenseForMonth', () => {
     expect(r.recurring).toBe(200);
     expect(r.baseline).toBe(150);
   });
+
+  it('uses budget as a floor without cutting a stronger operating projection', () => {
+    expect(resolveExpenseForMonth(100, 200, 150, [], [], 250).total).toBe(250);
+    expect(resolveExpenseForMonth(100, 300, 150, [], [], 250).total).toBe(300);
+  });
 });
 
 describe('buildMonthlyProjection', () => {

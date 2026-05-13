@@ -308,6 +308,74 @@ export interface ForecastRun {
 
 export type ProjectionGranularity = 'daily' | 'weekly' | 'monthly';
 
+export type ProbabilisticModelKind = 'ARIMA' | 'ETS' | 'EMPIRICAL_FALLBACK';
+export type ProbabilisticConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface PercentileBand {
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+export interface ModelDiagnostics {
+  modelKind: ProbabilisticModelKind;
+  confidence: ProbabilisticConfidence;
+  sampleSize: number;
+  inflowVolatility: number;
+  outflowVolatility: number;
+  netResidualStd: number;
+  autocorrelation: number;
+  fallbackReason?: string;
+}
+
+export interface ProbabilisticBucket {
+  date: string;
+  label: string;
+  cash: PercentileBand;
+  probabilityBelowZero: number;
+  probabilityBelowMinimumCash: number;
+  expectedCreditRequired: number;
+  p90CreditRequired: number;
+}
+
+export interface ProbabilisticSummary {
+  probabilityOfDeficit: number;
+  probabilityBelowMinimumCash: number;
+  expectedCreditRequired: number;
+  p90CreditRequired: number;
+  maxRiskDate?: string;
+  confidence: ProbabilisticConfidence;
+}
+
+export interface ProbabilisticForecastRun {
+  id: string;
+  baseForecastId: string;
+  scenarioId: string;
+  granularity: ProjectionGranularity;
+  startDate: string;
+  endDate: string;
+  generatedAt: string;
+  simulations: number;
+  buckets: ProbabilisticBucket[];
+  summary: ProbabilisticSummary;
+  diagnostics: ModelDiagnostics;
+}
+
+export interface ProbabilisticForecastRequest {
+  jobId?: number;
+  baseProjection: ForecastRun;
+  minimumCash: number;
+  simulations?: number;
+  seed?: number;
+  horizonDays?: number;
+}
+
+export interface ProbabilisticForecastResponse {
+  jobId?: number;
+  result?: ProbabilisticForecastRun;
+  error?: string;
+}
+
 export type CellOverrideMode = 'REPLACE' | 'DELTA';
 
 export interface CellOverride {
