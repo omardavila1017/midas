@@ -112,7 +112,7 @@ export function calculateCashBalance(movements: FinancialMovement[], options: Pr
     movements.filter((movement) => inRange(effectiveMovementDate(movement), options.startDate, options.endDate)),
     granularity,
   );
-  let openingCash = options.initialCash;
+  let rollingCash = options.initialCash;
   return bucketDates.map((date) => {
     const bucketMovements = grouped.get(date) ?? [];
     const inflows = bucketMovements
@@ -122,7 +122,9 @@ export function calculateCashBalance(movements: FinancialMovement[], options: Pr
       .filter((movement) => movement.type === 'OUTFLOW')
       .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
     const net = inflows - outflows;
-    const closingCash = openingCash + net;
+    const rawClosingCash = rollingCash + net;
+    const openingCash = Math.max(0, rollingCash);
+    const closingCash = Math.max(0, rawClosingCash);
     const confidenceScore = bucketMovements.length === 0
       ? 100
       : bucketMovements.reduce((sum, movement) => sum + movement.confidenceScore, 0) / bucketMovements.length;
@@ -135,12 +137,12 @@ export function calculateCashBalance(movements: FinancialMovement[], options: Pr
       net,
       closingCash,
       minimumCash: options.minimumCash,
-      deficit: Math.max(0, options.minimumCash - closingCash),
+      deficit: Math.max(0, options.minimumCash - rawClosingCash),
       confidenceScore,
       movementIds: bucketMovements.map((movement) => movement.id),
       alertIds: [],
     };
-    openingCash = closingCash;
+    rollingCash = rawClosingCash;
     return bucket;
   });
 }
@@ -268,16 +270,16 @@ export function applyCellOverridesToBuckets(args: ApplyCellOverridesArgs): Proje
 }
 
 export function recomputeRollingCash(buckets: ProjectionBucket[], initialCash: number): ProjectionBucket[] {
-  let opening = initialCash;
+  let rollingCash = initialCash;
   return buckets.map((bucket) => {
-    const closing = opening + bucket.net;
+    const rawClosing = rollingCash + bucket.net;
     const next: ProjectionBucket = {
       ...bucket,
-      openingCash: opening,
-      closingCash: closing,
-      deficit: Math.max(0, bucket.minimumCash - closing),
+      openingCash: Math.max(0, rollingCash),
+      closingCash: Math.max(0, rawClosing),
+      deficit: Math.max(0, bucket.minimumCash - rawClosing),
     };
-    opening = closing;
+    rollingCash = rawClosing;
     return next;
   });
 }
@@ -538,7 +540,7 @@ function summarizeProjection(
     projectedCash30: bucketForDay(30)?.closingCash ?? lastBucket?.closingCash ?? 0,
     projectedCash90: bucketForDay(90)?.closingCash ?? lastBucket?.closingCash ?? 0,
     minimumCashRequired,
-    deficitDays: buckets.reduce((sum, bucket, i) => sum + (bucket.outflows > bucket.inflows ? bucketDaySpan(bucket, i, buckets) : 0), 0),
+    deficitDays: buckets.reduce((sum, bucket, i) => sum + (bucket.deficit > 0 ? bucketDaySpan(bucket, i, buckets) : 0), 0),
     largestUpcomingInflow,
     largestUpcomingOutflow,
     averageConfidence: movements.length === 0
@@ -549,7 +551,7 @@ function summarizeProjection(
     finalCash: lastBucket?.closingCash ?? 0,
     minCash: minBucket?.closingCash ?? 0,
     maxRiskDate: maxRiskBucket?.deficit ? maxRiskBucket.date : undefined,
-    creditRequired: Math.max(0, minimumCashRequired - (minBucket?.closingCash ?? minimumCashRequired)),
+    creditRequired: maxRiskBucket?.deficit ?? 0,
   };
 }
 

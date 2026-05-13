@@ -123,7 +123,7 @@ export function buildCanonicalProjection(
     companyCode: inputs.companyCode,
     today: inputs.asOfDate,
     overrides: loadCanonicalOverrides(),
-    budget: null,
+    budget: inputs.budget,
     startingBalance: inputs.startingBalance,
   };
   const { base, projection } = computeBaseCashFlow(computeInputs);
@@ -782,6 +782,28 @@ function collectOutflowLines(
         lockState: 'RESTRICTED',
         taxTreatment: 'UNCLASSIFIED',
         comment: 'Gasto recurrente detectado sin proveedor identificado; se agrupa para evitar conceptos bancarios crudos.',
+      });
+    }
+
+    const emittedTotal = lines.reduce((sum, line) => sum + line.amount, 0);
+    const budgetGap = Math.max(0, expenseProjection.total - emittedTotal);
+    if (expenseProjection.fromBudget > 0 && budgetGap > 0) {
+      lines.push({
+        id: `budget-opex-gap:${month.yearMonth}`,
+        amount: budgetGap,
+        date: midMonthDate(month.yearMonth),
+        concept: `Reserva presupuestal de gasto operativo ${month.yearMonth}`,
+        category: 'OPEX',
+        subcategory: 'Presupuesto',
+        ruleApplied: 'Presupuesto mayor al gasto operativo explícito',
+        sourceSystem: 'FORECAST',
+        sourceObjectId: month.yearMonth,
+        companyId: inputs.companyCode !== 'all' ? inputs.companyCode : undefined,
+        forecastMethod: 'DRIVER',
+        confidenceScore: 64,
+        lockState: 'RESTRICTED',
+        taxTreatment: 'UNCLASSIFIED',
+        comment: 'Relleno presupuestal para conservar el total mensual sin inflar compromisos operativos explícitos.',
       });
     }
   }

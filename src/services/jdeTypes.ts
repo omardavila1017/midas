@@ -406,6 +406,50 @@ export interface ComprasRecord {
 }
 
 // ───────────────────────────────────────────────────────────────
+// 7. Nómina (TRESS — namespace upstream /v1/erp/tress)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Request body para POST /nomina (TRESS).
+ *
+ * Documentación de equipo JDE/TRESS (2026-05-12):
+ *   - `idEmpresa`: 1 Federal | 11 SIR | 17 SIT | 33 Multicarga | 42 TICH | 99 Todas
+ *   - `tipoNomina`: 1 Semana y Operadores | 3 Quincena y Ejecutivos | 99 Todas
+ *
+ * Una request por (idEmpresa, tipoNomina, anio, mes). 99 funciona como
+ * comodín en idEmpresa y tipoNomina, así que para backfill anual basta con
+ * 12 requests (uno por mes) con `idEmpresa=99, tipoNomina=99`.
+ */
+export interface NominaRequest {
+  idEmpresa: number;
+  tipoNomina: number;
+  anio: number;
+  mes: number;
+}
+
+/**
+ * Shape crudo devuelto por TRESS. Los campos vienen en PascalCase y existe
+ * un typo conocido en `Fechainical` (sic, con `i` minúscula en el medio).
+ * El mapper en jde.ts es tolerante a variantes via `pick()`.
+ */
+export interface NominaRawRecord {
+  IDEmpresa: number;
+  Empresa: string;
+  Monto: number;
+  Periodo: number;
+  Mes: string;
+  IDConcepto: number;
+  Concepto: string;
+  TipoNomina: string;
+  TipoConcepto: string;
+  /** Typo en el API productivo (debería ser FechaInicial). */
+  Fechainical?: string;
+  FechaInicial?: string;
+  FechaFinal: string;
+  FechaPago: string;
+}
+
+// ───────────────────────────────────────────────────────────────
 // Errores
 // ───────────────────────────────────────────────────────────────
 

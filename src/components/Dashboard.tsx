@@ -68,6 +68,14 @@ interface DashboardProps {
    * KPI "Cobranza cruzada" arriba; si no, ese KPI no aparece.
    */
   cobranzaReconciliation?: RealReconciliationResult;
+  /**
+   * Costo real de nómina del mes en curso traído de TRESS. Cuando se
+   * provee > 0, el KPI de gasto mínimo añade una sub-línea de referencia
+   * "Real TRESS" para que el usuario compare contra el budget. NO
+   * reemplaza el `payrollMonthly` que sale del presupuesto: ese sigue
+   * siendo el piso operativo conservador.
+   */
+  payrollMonthlyActualJDE?: number;
 }
 
 /*
@@ -120,6 +128,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   budget, onOpenFlow,
   startingBalance,
   cobranzaReconciliation,
+  payrollMonthlyActualJDE,
 }) => {
   const goTo = useNavigateToTab();
   const [aged, setAged] = useState<AgedBalanceRecord[]>([]);
@@ -160,10 +169,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   const { base, baseline, projection } = useMemo(
     () => computeBaseCashFlow({
       bankStatements, aged, clients, providers, cxpRecords, assumptions,
-      companyCode, today, overrides, budget: null,
+      companyCode, today, overrides, budget,
       startingBalance,
     }),
-    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance],
+    [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, budget, startingBalance],
   );
 
   // Antes el Dashboard pasaba por `evaluateCashFlow` (motor de Simulación) con
@@ -553,6 +562,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           annual={minimumExpense.totalAnnual}
           providersMonthly={minimumExpense.providersMonthly}
           payrollMonthly={minimumExpense.payrollMonthly}
+          payrollActualJDE={payrollMonthlyActualJDE}
           criticalCount={minimumExpense.criticalCount}
         />
       </div>
@@ -890,8 +900,10 @@ const MinimumExpenseKpi: React.FC<{
   annual: number;
   providersMonthly: number;
   payrollMonthly: number;
+  /** Nómina real del último periodo cargado en TRESS — referencia, no piso. */
+  payrollActualJDE?: number;
   criticalCount: number;
-}> = ({ monthly, annual, providersMonthly, payrollMonthly, criticalCount }) => (
+}> = ({ monthly, annual, providersMonthly, payrollMonthly, payrollActualJDE, criticalCount }) => (
   <div
     className="relative overflow-hidden rounded-[var(--radius)] p-4 floor-kpi"
     title="Piso operativo: proveedores de Operación + nómina/finiquitos. Es el monto que necesitas cubrir cada mes para no afectar operación."
@@ -963,6 +975,16 @@ const MinimumExpenseKpi: React.FC<{
             style={{ color: 'var(--gray-950)' }}
           >
             {fmtCompact(payrollMonthly)}
+          </span>
+        </div>
+      )}
+      {payrollActualJDE !== undefined && payrollActualJDE > 0 && (
+        <div className="flex items-center justify-between text-[10px] pl-3">
+          <span className="text-yellow-800/60">
+            · Real TRESS últ. mes
+          </span>
+          <span className="font-medium tabular-nums text-yellow-800/80">
+            {fmtCompact(payrollActualJDE)}
           </span>
         </div>
       )}

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { BankAccountStatement } from '../../../services/jde';
-import { calculateCurrentBankCash, calculateInitialCash } from './financialProjectionService';
+import type { Budget } from '../../../domain/budget';
+import {
+  __clearProjectionSourceCache,
+  buildFinancialProjectionSourceData,
+  calculateCurrentBankCash,
+  calculateInitialCash,
+} from './financialProjectionService';
 
 describe('financialProjectionService cash helpers', () => {
   it('uses fixed starting balance for annual projection cash', () => {
@@ -18,6 +24,33 @@ describe('financialProjectionService cash helpers', () => {
 
     expect(calculateCurrentBankCash(statements, '00001', 76_300_000)).toBe(1_000_000);
   });
+
+  it('invalidates the source cache when the budget reference changes', () => {
+    __clearProjectionSourceCache();
+    const common = {
+      companyCode: 'all',
+      bankStatements: [] as BankAccountStatement[],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    };
+
+    const first = buildFinancialProjectionSourceData({
+      ...common,
+      budget: budget(100),
+    });
+    const second = buildFinancialProjectionSourceData({
+      ...common,
+      budget: budget(200),
+    });
+
+    expect(first).not.toBe(second);
+    expect(first.canonical.monthly.find((month) => month.yearMonth === '2026-05')?.expense).toBe(100);
+    expect(second.canonical.monthly.find((month) => month.yearMonth === '2026-05')?.expense).toBe(200);
+  });
 });
 
 function statement(patch: Partial<BankAccountStatement> = {}): BankAccountStatement {
@@ -30,5 +63,19 @@ function statement(patch: Partial<BankAccountStatement> = {}): BankAccountStatem
     saldoInicial: patch.saldoInicial,
     saldoFinal: patch.saldoFinal,
     movimientos: patch.movimientos ?? [],
+  };
+}
+
+function budget(expenseMay: number): Budget {
+  const expenseTotal = Array.from({ length: 12 }, () => 0);
+  expenseTotal[4] = expenseMay;
+  return {
+    year: 2026,
+    scale: 'pesos',
+    incomeTotal: Array.from({ length: 12 }, () => 0),
+    incomeByConcept: [],
+    expenseTotal,
+    expenseByConcept: [],
+    uploadedAt: '2026-04-22T00:00:00.000Z',
   };
 }

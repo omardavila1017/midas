@@ -20,12 +20,20 @@
  *   quedaba "cargando" sin datos en producción.
  */
 const DEFAULT_JDE_BASE_URL = '/api/jde';
+const DEFAULT_TRESS_BASE_URL = '/api/tress';
 
 export const apiConfig = {
   jde: {
     baseUrl: import.meta.env.VITE_JDE_BASE_URL || DEFAULT_JDE_BASE_URL,
     authValue: import.meta.env.VITE_JDE_TOKEN ?? '',
     environment: import.meta.env.VITE_JDE_ENVIRONMENT ?? 'DV920',
+  },
+  // TRESS comparte el token JDE pero vive en un namespace upstream distinto
+  // (/v1/erp/tress). El cliente lo consume con `jdeClient` pasando
+  // `baseUrl: apiConfig.tress.baseUrl` — no hay clase aparte.
+  tress: {
+    baseUrl: import.meta.env.VITE_TRESS_BASE_URL || DEFAULT_TRESS_BASE_URL,
+    authValue: import.meta.env.VITE_JDE_TOKEN ?? '',
   },
   cognos: {
     baseUrl: import.meta.env.VITE_COGNOS_BASE_URL ?? '',
@@ -63,6 +71,7 @@ export function validateApiConfig(): string[] {
   // la Vercel Function. Solo flagueamos `VITE_JDE_TOKEN` faltante en dev,
   // donde el proxy de Vite no inyecta credencial.
   if (!apiConfig.jde.baseUrl) missing.push('VITE_JDE_BASE_URL');
+  if (!apiConfig.tress.baseUrl) missing.push('VITE_TRESS_BASE_URL');
   if (import.meta.env.DEV && !apiConfig.jde.authValue) {
     missing.push('VITE_JDE_TOKEN');
   }

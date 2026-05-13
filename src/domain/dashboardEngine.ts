@@ -48,10 +48,25 @@ export function computeBankStartingBalance(statements: BankAccountStatement[]): 
 }
 
 export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
-  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance } = inputs;
+  const {
+    bankStatements,
+    aged,
+    clients,
+    providers,
+    cxpRecords,
+    assumptions,
+    companyCode,
+    today,
+    overrides,
+    budget,
+    startingBalance,
+  } = inputs;
   const filtered = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
+  // CXP ya filtrado por compañía — se suma al aged cuando hay records
+  // cargados para el mismo rango. Nos da granularidad per-factura para la
+  // proyección per-proveedor.
   const filteredCxp = companyCode === 'all' || !companyCode
     ? cxpRecords
     : cxpRecords.filter((r) => r.cia === companyCode);
@@ -60,9 +75,14 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     : filteredCxp as unknown as AgedBalanceRecord[];
 
   const historical = buildHistoricalMonths(filtered);
+
   const todayYm = toYearMonth(today);
-  const todayYear = Number(todayYm.slice(0, 4));
-  const endOfYearYm = `${todayYear}-12`;
+
+  // Horizonte operativo: 12 meses rodantes incluyendo el mes actual.
+  // La UI de Proyección/Planeación ya trabaja así; si aquí cortamos en
+  // diciembre, los meses del siguiente año quedan con buckets vacíos y la
+  // caja se aplana artificialmente justo donde más importa sostener egresos.
+  const rollingEndYm = addMonths(todayYm, 11);
   const lastHistoricalYm = historical.length > 0
     ? historical[historical.length - 1].yearMonth
     : todayYm;
@@ -70,10 +90,14 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
     1,
   );
-  const lastFutureYm = compareYearMonth(endOfYearYm, firstFutureYm) >= 0
-    ? endOfYearYm
+  // Si el horizonte rolling ya quedó atrás del último histórico, no hay
+  // proyección — sólo rendiremos el histórico.
+  const lastFutureYm = compareYearMonth(rollingEndYm, firstFutureYm) >= 0
+    ? rollingEndYm
     : null;
 
+  // Proyección operativa per-cliente / per-proveedor. Esta es la fuente para
+  // los meses futuros; las plantillas externas quedan fuera del runtime normal.
   const projection = buildMonthlyProjection({
     fromYm: todayYm,
     toYm: lastFutureYm ?? todayYm,
@@ -85,11 +109,19 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     baselineExpense: 0,
     assumptions,
     today,
-    budget: null,
+    budget,
   });
   const projectionByYm = new Map(projection.months.map((m) => [m.yearMonth, m]));
+
+  // Baseline queda expuesto como 0 — ya no se calcula linear regression.
   const baseline = { avgIncome: 0, avgExpense: 0 };
 
+  // ── Encadenado de caja con fórmula simple y predecible ──────────────
+  // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
+  //
+  // Los meses históricos SIEMPRE usan sus ingresos/egresos REALES (del banco).
+  // Para la caja inicial, si el usuario no dio override manual, usamos la suma
+  // de saldoInicial de las cuentas.
   const baseStart = typeof startingBalance === 'number'
     ? startingBalance
     : computeBankStartingBalance(filtered);

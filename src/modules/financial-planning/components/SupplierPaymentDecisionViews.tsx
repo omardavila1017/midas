@@ -21,15 +21,16 @@ export function SupplierPaymentDecisionTable({
   const decisions = plan.decisions.slice(0, 160);
   const paid = plan.decisions.filter((decision) => decision.status === 'PAID').length;
   const deferred = plan.decisions.filter((decision) => decision.status === 'DEFERRED').length;
+  const partial = plan.decisions.filter((decision) => decision.status === 'PARTIAL').length;
   const pending = plan.decisions.filter((decision) => decision.status === 'PENDING').length;
 
   return (
     <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
         <div>
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Decisión de pago a proveedores</h3>
+          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Decisión de pagos priorizados</h3>
           <p className="mt-1 text-[11px] text-[var(--gray-500)]">
-            {scenarioName} · {paid} pagados · {deferred} recorridos · {pending} pendientes
+            {scenarioName} · {paid} pagados · {deferred} recorridos · {partial} parciales · {pending} pendientes
           </p>
         </div>
         {comparisonName && (
@@ -84,6 +85,9 @@ export function SupplierPaymentDecisionTable({
                     {decision.estimatedDate ? formatDate(decision.estimatedDate) : 'Fuera de horizonte'}
                     {decision.daysDeferred > 0 && (
                       <div className="text-[10.5px] text-[var(--warning)]">+{decision.daysDeferred} días</div>
+                    )}
+                    {decision.installments.length > 1 && (
+                      <div className="text-[10.5px] text-[var(--gray-400)]">{decision.installments.length} parcialidades</div>
                     )}
                   </td>
                   <td className="px-3 py-3 text-right tabular-nums font-medium text-[var(--gray-950)]">{fmtCurrency(decision.paidAmount)}</td>
@@ -247,6 +251,8 @@ function DecisionBadge({ status }: { status: SupplierPaymentDecision['status'] }
     ? { background: 'var(--success-muted)', color: 'var(--success)' }
     : status === 'DEFERRED'
       ? { background: 'var(--warning-muted)', color: 'var(--warning)' }
+      : status === 'PARTIAL'
+        ? { background: 'var(--primary-muted, var(--gray-100))', color: 'var(--primary, var(--gray-700))' }
       : { background: 'var(--danger-muted)', color: 'var(--danger)' };
   return (
     <span className="inline-flex h-5 items-center rounded-full px-2 text-[10px] font-medium" style={style}>
@@ -258,6 +264,7 @@ function DecisionBadge({ status }: { status: SupplierPaymentDecision['status'] }
 function statusLabel(status: SupplierPaymentDecision['status']): string {
   if (status === 'PAID') return 'Pagado';
   if (status === 'DEFERRED') return 'Recorrido';
+  if (status === 'PARTIAL') return 'Parcial';
   return 'Pendiente';
 }
 

@@ -22,6 +22,25 @@ describe('financialProjectionEngine', () => {
     expect(projection.summary.finalCash).toBe(10_600);
   });
 
+  it('keeps visible projected cash at zero while preserving the real liquidity shortfall', () => {
+    const projection = calculateBaseProjection([
+      movement('out-1', 'OUTFLOW', 'PAYROLL', '2026-05-02', 1_200),
+      movement('out-2', 'OUTFLOW', 'TAX', '2026-05-03', 300),
+    ], {
+      startDate: '2026-05-01',
+      endDate: '2026-05-03',
+      initialCash: 1_000,
+      minimumCash: 100,
+      granularity: 'daily',
+    });
+
+    expect(projection.buckets[1].closingCash).toBe(0);
+    expect(projection.buckets[2].closingCash).toBe(0);
+    expect(projection.summary.minCash).toBe(0);
+    expect(projection.summary.deficitDays).toBe(2);
+    expect(projection.summary.creditRequired).toBe(600);
+  });
+
   it('moves a movement date through a scenario adjustment without mutating the base', () => {
     const baseMovements = [movement('out-1', 'OUTFLOW', 'AP_PAYMENT', '2026-05-02', 1_000)];
     const adjusted = applyAdjustmentsToMovements(baseMovements, [

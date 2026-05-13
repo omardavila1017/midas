@@ -67,7 +67,7 @@ const BASE_INPUTS = {
 };
 
 describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
-  it('cubre de enero a diciembre del año en curso aunque llegue budget legacy', () => {
+  it('cubre el histórico disponible y 12 meses rodantes de operación', () => {
     const statements = [
       mkStmt('2026-01', 100, 40),
       mkStmt('2026-02', 100, 40),
@@ -79,17 +79,17 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
       bankStatements: statements,
       budget: mkBudget(),
     });
-    // 4 meses históricos (ene–abr) + 8 meses proyectados (may–dic) = 12
-    expect(base).toHaveLength(12);
+    // 4 meses históricos (ene–abr) + 11 meses proyectados (may–mar) = 15
+    expect(base).toHaveLength(15);
     expect(base[0].yearMonth).toBe('2026-01');
-    expect(base[base.length - 1].yearMonth).toBe('2026-12');
+    expect(base[base.length - 1].yearMonth).toBe('2027-03');
   });
 
-  it('ignora el budget legacy; sin datos operativos futuros los meses proyectados quedan en cero', () => {
+  it('usa el presupuesto como piso de egreso cuando supera al gasto operativo futuro', () => {
     const statements = [mkStmt('2026-04', 0, 0)];
     const budget = mkBudget({
-      // Año deliberadamente inflado: si la plantilla siguiera activa, mayo tomaría
-      // estos valores. La lógica operativa debe ignorarlos.
+      // Ingresos presupuestados no sustituyen la cobranza operativa, pero el
+      // gasto sí funciona como piso para evitar subproyección.
       incomeTotal: [0, 0, 0, 0, 7777, 7777, 7777, 7777, 7777, 7777, 7777, 7777],
       expenseTotal: [0, 0, 0, 0, 3333, 3333, 3333, 3333, 3333, 3333, 3333, 3333],
     });
@@ -100,7 +100,7 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
     });
     const may = base.find((m) => m.yearMonth === '2026-05');
     expect(may?.income).toBe(0);
-    expect(may?.expense).toBe(0);
+    expect(may?.expense).toBe(3333);
     expect(may?.isHistorical).toBe(false);
   });
 
@@ -116,8 +116,8 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
       bankStatements: statements,
       budget: null,
     });
-    // Sigue llegando a diciembre pero con income/expense en cero.
-    expect(base).toHaveLength(12);
+    // Sigue cubriendo el horizonte rodante pero con income/expense en cero.
+    expect(base).toHaveLength(15);
     const future = base.filter((m) => !m.isHistorical);
     expect(future.length).toBeGreaterThan(0);
     for (const m of future) {
@@ -156,8 +156,10 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
     });
 
     const may = base.find((m) => m.yearMonth === '2026-05');
+    const nextMarch = base.find((m) => m.yearMonth === '2027-03');
     const mayProjection = projection.months.find((m) => m.yearMonth === '2026-05');
     expect(may?.expense).toBe(19_000);
+    expect(nextMarch?.expense).toBe(19_000);
     expect(mayProjection?.expense.providerLines[0]?.providerName).toBe('Proveedor Critico');
     expect(mayProjection?.expense.providerLines[0]?.parts.recurring).toBe(19_000);
   });

@@ -5,7 +5,12 @@ import {
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement } from '../../shared-finance/types';
 
-export type SupplierPaymentStatus = 'PAID' | 'DEFERRED' | 'PENDING';
+export type SupplierPaymentStatus = 'PAID' | 'DEFERRED' | 'PARTIAL' | 'PENDING';
+
+export interface PaymentInstallment {
+  date: string;
+  amount: number;
+}
 
 export interface SupplierPaymentDecision {
   movementId: string;
@@ -20,6 +25,7 @@ export interface SupplierPaymentDecision {
   amount: number;
   paidAmount: number;
   pendingAmount: number;
+  installments: PaymentInstallment[];
   status: SupplierPaymentStatus;
   daysDeferred: number;
   reason: string;
@@ -72,7 +78,8 @@ interface QueueItem {
   movement: FinancialMovement;
   originalDate: string;
   readyDate: string;
-  amount: number;
+  totalAmount: number;
+  remainingAmount: number;
   provider?: Provider;
   score: number;
 }
@@ -95,15 +102,31 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
     if (isPayableMovement(movement)) diagnostics.payableMovements++;
     if (isSupplierPayment(movement)) {
       const provider = providerForMovement(movement, providerIndex);
+      if (isUntouchableSupplierPayment(movement, provider)) {
+        passthrough.push(movement);
+        continue;
+      }
       if (!provider) diagnostics.missingProviderMatches++;
       diagnostics.managedPayableMovements++;
+      const amount = effectiveAmount(movement);
       managed.push({
         movement,
         provider,
         originalDate: originalSupplierDate(movement),
         readyDate: eligibleSupplierDate(movement),
-        amount: effectiveAmount(movement),
+        totalAmount: amount,
+        remainingAmount: amount,
         score: scoreFor(provider, movement),
+      });
+    } else if (isSchedulableTaxPayment(movement)) {
+      const amount = effectiveAmount(movement);
+      managed.push({
+        movement,
+        originalDate: originalSupplierDate(movement),
+        readyDate: eligibleSupplierDate(movement),
+        totalAmount: amount,
+        remainingAmount: amount,
+        score: scoreFor(undefined, movement),
       });
     } else {
       if (isPayableMovement(movement) && isResolvedPayment(movement)) diagnostics.skippedResolvedPayables++;
@@ -127,14 +150,13 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
   }
 
   const pending = [...managed].sort(compareQueueItems);
-  const paidMovementById = new Map<string, FinancialMovement>();
-  const decisions: SupplierPaymentDecision[] = [];
+  const installmentsByMovementId = new Map<string, PaymentInstallment[]>();
   const dates = enumerateDates(args.startDate, args.endDate);
   let cash = args.initialCash;
   const dailyRows: DailyOperatingFlowRow[] = [];
 
   for (const date of dates) {
-    const openingCash = cash;
+    const openingCash = Math.max(0, cash);
     const todaysPassthrough = passthrough.filter((movement) => effectiveMovementDate(movement) === date);
     const inflows = todaysPassthrough
       .filter((movement) => movement.type === 'INFLOW')
@@ -152,34 +174,29 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
     cash += inflows;
     cash -= otherOutflows;
 
-    const paidToday: QueueItem[] = [];
+    const paidToday: Array<{ item: QueueItem; amount: number }> = [];
     const ready = pending
-      .filter((item) => item.readyDate <= date)
+      .filter((item) => item.readyDate <= date && item.remainingAmount > 0)
       .sort(compareQueueItems);
 
     while (ready.length > 0) {
       const candidate = ready[0];
-      if (cash - candidate.amount < args.minimumCash) break;
-      cash -= candidate.amount;
-      paidToday.push(candidate);
-      removeQueueItem(pending, candidate);
-      ready.shift();
+      const available = Math.max(0, cash - args.minimumCash);
+      if (available <= 0) break;
+      const amount = Math.min(candidate.remainingAmount, available);
+      if (amount <= 0) break;
 
-      const deferred = date > candidate.originalDate;
-      paidMovementById.set(candidate.movement.id, {
-      ...candidate.movement,
-      adjustedDate: date,
-      adjustedAmount: candidate.amount,
-        status: deferred ? 'ADJUSTED' : candidate.movement.status,
-        confidenceScore: Math.max(candidate.movement.confidenceScore, Math.min(100, candidate.score)),
-        comments: [
-          ...(candidate.movement.comments ?? []),
-          deferred
-            ? `Reprogramado por flujo en ${args.scenarioId}: ${candidate.originalDate} → ${date}.`
-            : `Pagado según score en ${args.scenarioId}.`,
-        ],
-      });
-      decisions.push(decisionFor(candidate, args.scenarioId, deferred ? 'DEFERRED' : 'PAID', date));
+      cash -= amount;
+      candidate.remainingAmount = Math.max(0, candidate.remainingAmount - amount);
+      paidToday.push({ item: candidate, amount });
+      appendInstallment(installmentsByMovementId, candidate.movement.id, { date, amount });
+
+      if (candidate.remainingAmount <= 0) {
+        removeQueueItem(pending, candidate);
+        ready.shift();
+      } else {
+        break;
+      }
     }
 
     const supplierNamesPending = pending
@@ -189,10 +206,10 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
       .slice(0, 8)
       .map(supplierNameForItem);
 
-    const executedSupplierOutflows = paidToday.reduce((sum, item) => sum + item.amount, 0);
+    const executedSupplierOutflows = paidToday.reduce((sum, payment) => sum + payment.amount, 0);
     const scheduledSupplierOutflows = managed
       .filter((item) => item.readyDate === date)
-      .reduce((sum, item) => sum + item.amount, 0);
+      .reduce((sum, item) => sum + item.totalAmount, 0);
     const executedOutflows = otherOutflows + executedSupplierOutflows;
     const expectedInflows = inflows;
     const scheduledOutflows = otherOutflows + scheduledSupplierOutflows;
@@ -211,37 +228,33 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
         ...scheduledSupplierItems.map(supplierScheduledLabel),
       ]).slice(0, 10),
       supplierNamesScheduled: uniqueLabels(scheduledSupplierItems.map(supplierNameForItem)).slice(0, 8),
-      suppliersPaid: paidToday.length,
+      suppliersPaid: new Set(paidToday.map((payment) => payment.item.movement.id)).size,
       suppliersPending: pending.filter((item) => item.readyDate <= date).length,
-      supplierNamesPaid: uniqueLabels(paidToday.map(supplierNameForItem)),
+      supplierNamesPaid: uniqueLabels(paidToday.map((payment) => supplierNameForItem(payment.item))),
       supplierNamesPending: uniqueLabels(supplierNamesPending),
       net: expectedInflows - executedOutflows,
-      closingCash: cash,
+      closingCash: Math.max(0, cash),
       deficit: Math.max(0, args.minimumCash - cash),
     });
   }
 
-  for (const item of pending) {
-    decisions.push(decisionFor(item, args.scenarioId, 'PENDING', undefined));
-  }
+  const decisions = managed.map((item) => decisionFor(
+    item,
+    args.scenarioId,
+    installmentsByMovementId.get(item.movement.id) ?? [],
+  ));
 
   const beyondRangeDate = addDays(args.endDate, 1);
-  const scheduledMovements = args.movements.map((movement) => {
-    const paid = paidMovementById.get(movement.id);
-    if (paid) return paid;
-    const pendingItem = pending.find((item) => item.movement.id === movement.id);
-    if (!pendingItem) return movement;
-    return {
-      ...movement,
-      adjustedDate: beyondRangeDate,
-      adjustedAmount: pendingItem.amount,
-      status: 'ADJUSTED' as const,
-      comments: [
-        ...(movement.comments ?? []),
-        `Pendiente por falta de flujo en ${args.scenarioId}; no se paga dentro de ${args.startDate}–${args.endDate}.`,
-      ],
-    };
-  });
+  const managedById = new Map(managed.map((item) => [item.movement.id, item]));
+  const scheduledMovements = args.movements.flatMap((movement) => scheduleManagedMovement({
+    movement,
+    item: managedById.get(movement.id),
+    installments: installmentsByMovementId.get(movement.id) ?? [],
+    beyondRangeDate,
+    scenarioId: args.scenarioId,
+    startDate: args.startDate,
+    endDate: args.endDate,
+  }));
 
   return {
     movements: scheduledMovements,
@@ -268,7 +281,7 @@ function buildDailyRows(args: {
 }): SupplierPaymentPlan {
   let cash = args.initialCash;
   const dailyRows = enumerateDates(args.startDate, args.endDate).map((date) => {
-    const openingCash = cash;
+    const openingCash = Math.max(0, cash);
     const movements = args.passthrough.filter((movement) => effectiveMovementDate(movement) === date);
     const expectedInflows = movements
       .filter((movement) => movement.type === 'INFLOW')
@@ -296,7 +309,7 @@ function buildDailyRows(args: {
       supplierNamesPaid: [],
       supplierNamesPending: [],
       net: expectedInflows - executedOutflows,
-      closingCash: cash,
+      closingCash: Math.max(0, cash),
       deficit: Math.max(0, args.minimumCash - cash),
     };
   });
@@ -315,6 +328,23 @@ function isSupplierPayment(movement: FinancialMovement): boolean {
   return isPayableMovement(movement)
     && !isResolvedPayment(movement)
     && (movement.counterpartyType === 'SUPPLIER' || movement.sourceSystem === 'JDE' || Boolean(movement.counterpartyName));
+}
+
+function isSchedulableTaxPayment(movement: FinancialMovement): boolean {
+  return movement.type === 'OUTFLOW'
+    && movement.category === 'TAX'
+    && movement.lockState !== 'LOCKED'
+    && !isResolvedPayment(movement);
+}
+
+function isUntouchableSupplierPayment(
+  movement: FinancialMovement,
+  provider: Provider | undefined,
+): boolean {
+  return movement.lockState === 'LOCKED'
+    || provider?.clasificacionAlberto === 'CRITICO'
+    || provider?.clasificacionAutomatica === 'CRITICO'
+    || provider?.flexibility === 'inamovible';
 }
 
 function originalSupplierDate(movement: FinancialMovement): string {
@@ -368,10 +398,21 @@ function uniqueLabels(values: string[]): string[] {
 function decisionFor(
   item: QueueItem,
   scenarioId: string,
-  status: SupplierPaymentStatus,
-  estimatedDate: string | undefined,
+  installments: PaymentInstallment[],
 ): SupplierPaymentDecision {
-  const paidAmount = status === 'PENDING' ? 0 : item.amount;
+  const paidAmount = installments.reduce((sum, installment) => sum + installment.amount, 0);
+  const pendingAmount = Math.max(0, item.totalAmount - paidAmount);
+  const lastInstallment = installments[installments.length - 1];
+  const estimatedDate = lastInstallment?.date;
+  const status = pendingAmount > 0 && paidAmount > 0
+    ? 'PARTIAL'
+    : paidAmount === 0
+      ? 'PENDING'
+      : installments.length > 1
+        ? 'PARTIAL'
+        : estimatedDate && estimatedDate > item.originalDate
+          ? 'DEFERRED'
+          : 'PAID';
   return {
     movementId: item.movement.id,
     scenarioId,
@@ -382,13 +423,18 @@ function decisionFor(
     originalDate: item.originalDate,
     dueDate: item.movement.dueDate,
     estimatedDate,
-    amount: item.amount,
+    amount: item.totalAmount,
     paidAmount,
-    pendingAmount: item.amount - paidAmount,
+    pendingAmount,
+    installments,
     status,
     daysDeferred: estimatedDate ? daysBetween(item.originalDate, estimatedDate) : 0,
     reason: status === 'PENDING'
       ? 'Sin flujo suficiente dentro del horizonte.'
+      : status === 'PARTIAL'
+        ? pendingAmount > 0
+          ? 'Pago parcial por caja disponible; el remanente queda pendiente.'
+          : 'Pago dividido para respetar caja mínima y prioridad.'
       : estimatedDate && estimatedDate > item.originalDate
         ? 'Recorrido por caja mínima; conserva prioridad por score.'
         : 'Pagado por prioridad de score.',
@@ -399,7 +445,7 @@ function compareQueueItems(a: QueueItem, b: QueueItem): number {
   if (b.score !== a.score) return b.score - a.score;
   if (a.originalDate !== b.originalDate) return a.originalDate.localeCompare(b.originalDate);
   if (a.readyDate !== b.readyDate) return a.readyDate.localeCompare(b.readyDate);
-  return a.amount - b.amount;
+  return a.remainingAmount - b.remainingAmount;
 }
 
 function removeQueueItem(queue: QueueItem[], item: QueueItem): void {
@@ -443,7 +489,115 @@ function scoreFor(provider: Provider | undefined, movement: FinancialMovement): 
 function statusWeight(status: SupplierPaymentStatus): number {
   if (status === 'PAID') return 0;
   if (status === 'DEFERRED') return 1;
-  return 2;
+  if (status === 'PARTIAL') return 2;
+  return 3;
+}
+
+function appendInstallment(
+  map: Map<string, PaymentInstallment[]>,
+  movementId: string,
+  installment: PaymentInstallment,
+): void {
+  const current = map.get(movementId) ?? [];
+  current.push(installment);
+  map.set(movementId, current);
+}
+
+function scheduleManagedMovement(params: {
+  movement: FinancialMovement;
+  item?: QueueItem;
+  installments: PaymentInstallment[];
+  beyondRangeDate: string;
+  scenarioId: string;
+  startDate: string;
+  endDate: string;
+}): FinancialMovement[] {
+  const {
+    movement, item, installments, beyondRangeDate, scenarioId, startDate, endDate,
+  } = params;
+  if (!item) return [movement];
+
+  const paidAmount = installments.reduce((sum, installment) => sum + installment.amount, 0);
+  const pendingAmount = Math.max(0, item.totalAmount - paidAmount);
+  if (installments.length === 0) {
+    return [{
+      ...movement,
+      adjustedDate: beyondRangeDate,
+      adjustedAmount: item.totalAmount,
+      status: 'ADJUSTED',
+      comments: [
+        ...(movement.comments ?? []),
+        `Pendiente por falta de flujo en ${scenarioId}; no se paga dentro de ${startDate}–${endDate}.`,
+      ],
+    }];
+  }
+
+  if (installments.length === 1 && pendingAmount <= 0) {
+    const installment = installments[0];
+    const deferred = installment.date > item.originalDate;
+    return [{
+      ...movement,
+      adjustedDate: installment.date,
+      adjustedAmount: installment.amount,
+      status: deferred ? 'ADJUSTED' : movement.status,
+      confidenceScore: Math.max(movement.confidenceScore, Math.min(100, item.score)),
+      comments: [
+        ...(movement.comments ?? []),
+        deferred
+          ? `Reprogramado por flujo en ${scenarioId}: ${item.originalDate} → ${installment.date}.`
+          : `Pagado según score en ${scenarioId}.`,
+      ],
+    }];
+  }
+
+  const parts = installments.map((installment, index) => scaledMovementPart({
+    movement,
+    amount: installment.amount,
+    date: installment.date,
+    id: `${movement.id}:partial:${index + 1}`,
+    conceptSuffix: `parcial ${index + 1}`,
+    comment: `Parcialidad ${index + 1} programada por flujo en ${scenarioId}.`,
+  }));
+  if (pendingAmount > 0) {
+    parts.push(scaledMovementPart({
+      movement,
+      amount: pendingAmount,
+      date: beyondRangeDate,
+      id: `${movement.id}:pending`,
+      conceptSuffix: 'remanente pendiente',
+      comment: `Remanente pendiente por falta de flujo dentro de ${startDate}–${endDate}.`,
+    }));
+  }
+  return parts;
+}
+
+function scaledMovementPart(params: {
+  movement: FinancialMovement;
+  amount: number;
+  date: string;
+  id: string;
+  conceptSuffix: string;
+  comment: string;
+}): FinancialMovement {
+  const { movement, amount, date, id, conceptSuffix, comment } = params;
+  const baseAmount = effectiveAmount(movement);
+  const scale = baseAmount > 0 ? amount / baseAmount : 0;
+  return {
+    ...movement,
+    id,
+    sourceObjectId: movement.sourceObjectId ?? movement.id,
+    concept: `${movement.concept} · ${conceptSuffix}`,
+    originalAmount: amount,
+    baseAmount: amount,
+    projectedAmount: amount,
+    adjustedAmount: amount,
+    projectedDate: date,
+    adjustedDate: date,
+    taxBaseAmount: movement.taxBaseAmount == null ? undefined : movement.taxBaseAmount * scale,
+    taxAmount: movement.taxAmount == null ? undefined : movement.taxAmount * scale,
+    status: 'ADJUSTED',
+    comments: [...(movement.comments ?? []), comment],
+  };
 }
 
 function enumerateDates(startDate: string, endDate: string): string[] {

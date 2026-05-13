@@ -13,6 +13,7 @@ export type TabId =
   | 'financialProjection'
   | 'financialPlanning'
   | 'taxes'
+  | 'payroll'
   | 'operating'
   | 'providers'
   | 'collections'

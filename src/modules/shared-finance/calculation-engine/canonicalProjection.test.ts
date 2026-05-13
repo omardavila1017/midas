@@ -172,12 +172,18 @@ describe('canonicalProjection IVA metadata', () => {
     const may = canonical.movements.find(
       (item) => item.id === 'recurring-provider:2026-05:provider-nomina',
     );
+    const nextMarch = canonical.movements.find(
+      (item) => item.id === 'recurring-provider:2027-03:provider-nomina',
+    );
     expect(may).toBeTruthy();
+    expect(nextMarch).toBeTruthy();
     expect(may?.category).toBe('AP_PAYMENT');
     expect(may?.counterpartyName).toBe('NOMINA MX');
     expect(may?.providerCategory).toBe('NOMINA');
     expect(may?.projectedAmount).toBe(50_000);
     expect(may?.projectedDate).toBe('2026-05-05');
+    expect(nextMarch?.projectedAmount).toBe(50_000);
+    expect(nextMarch?.projectedDate).toBe('2027-03-05');
   });
 
   it('adds only the recurring complement when CXP is lower than the provider pattern', () => {
@@ -250,7 +256,7 @@ describe('canonicalProjection IVA metadata', () => {
     expect(futureOutflows).toHaveLength(0);
   });
 
-  it('ignores legacy budget-only OPEX lines', () => {
+  it('emits a synthetic OPEX remainder when the budget exceeds explicit operating expenses', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [],
@@ -263,8 +269,10 @@ describe('canonicalProjection IVA metadata', () => {
       asOfDate: '2026-04-22',
     });
 
-    const movement = canonical.movements.find((item) => item.category === 'OPEX');
-    expect(movement).toBeUndefined();
+    const movement = canonical.movements.find((item) => item.id === 'budget-opex-gap:2026-05');
+    expect(movement).toBeTruthy();
+    expect(movement?.category).toBe('OPEX');
+    expect(movement?.projectedAmount).toBe(1160);
   });
 
   it('adds open JDE CXC invoices as projected inflows using the pending balance', () => {

@@ -102,6 +102,8 @@ import {
 } from '../../shared-finance/components/tone';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
+import { ProbabilisticRiskStrip } from '../components/ProbabilisticRiskStrip';
+import { useProbabilisticForecast } from '../services/probabilisticForecastService';
 
 interface Props {
   companyCode: string;
@@ -148,7 +150,7 @@ export default function FinancialProjectionDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const cacheProbeInput = useMemo(
-    () => ({ ...props, budget: null, asOfDate: today }),
+    () => ({ ...props, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -162,6 +164,7 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
+      props.budget,
       props.startingBalance,
       today,
     ],
@@ -253,9 +256,8 @@ function ProjectionWarmupShell() {
 function ProjectionDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
   const goTo = useNavigateToTab();
-  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
-  const yearStart = `${currentYear}-01-01`;
-  const yearEnd = `${currentYear}-12-31`;
+  const yearStart = today;
+  const yearEnd = useMemo(() => addUtcDays(today, 364), [today]);
 
   const [storedScenarios, setStoredScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
   const [storedAdjustments, setStoredAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
@@ -480,7 +482,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
           purchaseReceipts: props.purchaseReceipts,
           payrollCosts: props.payrollCosts,
           cobranzaPayments: props.cobranzaPayments,
-          budget: null,
+          budget: props.budget,
           companyCode: props.companyCode,
           startDate: yearStart,
           endDate: yearEnd,
@@ -637,6 +639,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const comparisonReference = comparisonRun ? comparisonRun.summary.finalCash : baseRun.summary.finalCash;
   const finalCashDelta = summary.finalCash - comparisonReference;
   const comparisonLabel = comparisonRun ? comparisonRun.name : baseRun.name;
+  const probabilistic = useProbabilisticForecast(activeRun, summary.minimumCashRequired);
 
   // Tab strip needs final-cash deltas for *every* draft. We resolve those
   // lazily through the same cache so unselected drafts only build when the
@@ -747,9 +750,9 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
       cobranzaRecords: props.cobranzaRecords ?? [],
       clients: props.clients,
       assumptions: props.assumptions,
-      budget: null,
+      budget: props.budget,
     }),
-    [props.cxpRecords, props.cobranzaRecords, props.clients, props.assumptions],
+    [props.cxpRecords, props.cobranzaRecords, props.clients, props.assumptions, props.budget],
   );
 
   if (!source.hasData) {
@@ -819,7 +822,7 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           value={fmtCurrency(summary.finalCash)}
           icon={<Wallet className="w-4 h-4" strokeWidth={1.5} />}
           color={toneByFloor(summary.finalCash, summary.minimumCashRequired)}
-          sublabel={`${currentYear} · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          sublabel={`12 meses · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
           onClick={() => goTo({ tab: 'financialPlanning', focus: 'caja-final' })}
           navHint="Abrir Planeación"
         />
@@ -841,11 +844,18 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         />
       </div>
 
+      <ProbabilisticRiskStrip
+        run={probabilistic.run}
+        loading={probabilistic.loading}
+        error={probabilistic.error}
+      />
+
       <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
         <CashFlowChart
           projection={activeRun}
           baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
           comparisonProjection={comparisonRun ?? undefined}
+          probabilisticProjection={probabilistic.run}
           onNavigateToTax={props.onNavigateToTax}
         />
       </DeferredMount>
@@ -1027,6 +1037,12 @@ function shiftIsoDate(date: string, days: number, floorDate: string): string {
 function minimumCashFor(): number {
   const fallback = 20_000_000;
   return fallback;
+}
+
+function addUtcDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
 }
 
 function EmptyDataState() {
