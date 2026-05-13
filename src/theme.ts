@@ -8,62 +8,64 @@
  * - Semantic variables for every visual decision
  */
 
-/* Color Palette (OKLCH) */
+/* Color Palette (OKLCH) — slate-blue corporate accent at hue 248. */
 export const color = {
-  // Primary
-  primary:       'oklch(55% 0.22 255)',
-  primaryHover:  'oklch(58% 0.22 255)',    // slightly lighter on hover
-  primaryMuted:  'oklch(95% 0.04 255)',    // tinted background
-  primarySubtle: 'oklch(97% 0.02 255)',    // barely there
+  // Primary — slate-blue accent, perceptually balanced for finance UIs.
+  primary:       'oklch(52% 0.13 248)',
+  primaryHover:  'oklch(58% 0.14 248)',
+  primaryMuted:  'oklch(95% 0.03 248)',
+  primarySubtle: 'oklch(97% 0.015 248)',
 
-  // Neutrals
-  gray950: 'oklch(18% 0.008 255)',   // near-black text
-  gray900: 'oklch(22% 0.008 255)',   // headings
-  gray700: 'oklch(40% 0.008 255)',   // secondary text
-  gray500: 'oklch(50% 0.008 255)',   // secondary text
-  gray400: 'oklch(55% 0.008 255)',   // labels / muted text
-  gray300: 'oklch(78% 0.006 255)',   // borders
-  gray200: 'oklch(88% 0.004 255)',   // subtle borders
-  gray100: 'oklch(94% 0.003 255)',   // surface secondary
-  gray50:  'oklch(97% 0.002 255)',   // surface tertiary / background
+  // Neutrals — chroma 0.008-0.018 tinted toward slate-blue 248.
+  gray950: 'oklch(20% 0.018 248)',
+  gray900: 'oklch(26% 0.020 248)',
+  gray700: 'oklch(38% 0.018 248)',
+  gray500: 'oklch(52% 0.016 248)',
+  gray400: 'oklch(60% 0.014 248)',
+  gray300: 'oklch(72% 0.012 248)',
+  gray200: 'oklch(89% 0.010 248)',
+  gray100: 'oklch(95% 0.008 248)',
+  gray50:  'oklch(98% 0.006 248)',
 
-  // Semantic
-  success:       'oklch(62% 0.19 145)',   // var(--success)
-  successMuted:  'oklch(95% 0.04 145)',
-  warning:       'oklch(72% 0.18 70)',    // var(--warning)
-  warningMuted:  'oklch(95% 0.04 70)',
-  danger:        'oklch(58% 0.22 25)',
-  dangerMuted:   'oklch(95% 0.04 25)',
-  info:          'oklch(68% 0.15 230)',   // lighter blue
-  infoMuted:     'oklch(95% 0.03 230)',
+  // Semantic — status colors hold their natural hue.
+  success:       'oklch(58% 0.14 152)',
+  successMuted:  'oklch(95% 0.04 152)',
+  warning:       'oklch(66% 0.16 65)',
+  warningMuted:  'oklch(95% 0.06 75)',
+  danger:        'oklch(58% 0.20 25)',
+  dangerMuted:   'oklch(95% 0.05 25)',
+  info:          'oklch(56% 0.10 248)',
+  infoMuted:     'oklch(95% 0.02 248)',
 
   // Surfaces
   surface:     'var(--card)',
-  surfaceAlt:  'oklch(97.5% 0.002 255)',
+  surfaceAlt:  'oklch(98% 0.006 248)',
   surfaceRaised: 'var(--card)',
 
-  // Chart palette
+  // Chart palette — slate-blue lead with status accents spaced for
+  // categorical reads. Greens/ambers/reds carry semantic weight so
+  // they appear later in the sequence.
   chart: [
-    'oklch(62% 0.19 145)',  // green
-    'oklch(55% 0.22 255)',  // blue
-    'oklch(68% 0.15 230)',  // sky
-    'oklch(72% 0.18 70)',   // amber
-    'oklch(64% 0.20 45)',   // orange
-    'oklch(58% 0.22 25)',   // red
+    'oklch(52% 0.13 248)',  // slate-blue (primary)
+    'oklch(36% 0.10 248)',  // deep slate-blue
+    'oklch(72% 0.08 248)',  // pale slate-blue
+    'oklch(58% 0.14 152)',  // success green
+    'oklch(66% 0.16 65)',   // warning amber
+    'oklch(58% 0.20 25)',   // danger red
     'oklch(58% 0.18 300)',  // purple
     'oklch(48% 0.16 320)',  // plum
   ] as const,
 
-  // Aging buckets
+  // Aging buckets — escalation through slate-blue → amber → red.
   aging: [
-    'oklch(62% 0.19 145)',  // current (green)
-    'oklch(55% 0.22 255)',  // 1-30 (blue)
-    'oklch(68% 0.15 230)',  // 31-60 (sky)
-    'oklch(72% 0.18 70)',   // 61-90 (amber)
-    'oklch(64% 0.20 45)',   // 91-120 (orange)
-    'oklch(58% 0.22 25)',   // 121+ (red)
-    'oklch(58% 0.18 300)',  // 180+ (purple)
-    'oklch(48% 0.16 320)',  // 360+ (plum)
+    'oklch(58% 0.14 152)',  // current (green)
+    'oklch(52% 0.13 248)',  // 1-30 (slate-blue)
+    'oklch(64% 0.12 248)',  // 31-60 (lighter slate-blue)
+    'oklch(72% 0.16 65)',   // 61-90 (amber)
+    'oklch(66% 0.18 50)',   // 91-120 (orange)
+    'oklch(58% 0.20 25)',   // 121+ (red)
+    'oklch(48% 0.18 25)',   // 180+ (deep red)
+    'oklch(38% 0.14 25)',   // 360+ (oxblood)
   ] as const,
 } as const;
 

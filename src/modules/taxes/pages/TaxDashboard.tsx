@@ -702,9 +702,16 @@ function OverdueBalanceSection({
   };
 
   return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
-      <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Seguimiento de deuda fiscal</h2>
+    <section
+      className="rounded-[var(--radius-lg)] border border-[var(--skeuo-paper-edge)] skeuo-sat-bg"
+      data-stamp="SAT"
+      style={{
+        background: 'var(--skeuo-paper)',
+        boxShadow: 'var(--skeuo-emboss-md)',
+      }}
+    >
+      <div className="border-b border-[var(--skeuo-paper-edge)] px-4 py-3">
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)] skeuo-letterpress">Seguimiento de deuda fiscal</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
           Saldo vencido acumulado + nuevas obligaciones por periodo. Haz clic en el monto para editarlo.
         </p>

@@ -265,7 +265,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
     const target = hierarchy.find(group => group.id === groupId);
     if (!target) return;
     onReplace(clients.map(client => client.id === clientId
-      ? { ...client, commercialGroupName: target.name, commercialGroupId: target.id }
+      ? { ...client, commercialGroupName: target.name, commercialGroupId: target.id, manualGroupOverride: true }
       : client
     ));
     setExpandedGroups(prev => new Set(prev).add(target.id));
@@ -277,6 +277,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
           ...client,
           commercialGroupName: client.name,
           commercialGroupId: `client-single-${client.id}`,
+          manualGroupOverride: true,
         }
       : client
     ));
@@ -289,7 +290,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
     const id = commercialGroupId(name);
     const accountIds = new Set(group.accounts.map(account => account.client.id));
     onReplace(clients.map(client => accountIds.has(client.id)
-      ? { ...client, commercialGroupName: name, commercialGroupId: id }
+      ? { ...client, commercialGroupName: name, commercialGroupId: id, manualGroupOverride: true }
       : client
     ));
     setRenameDrafts(prev => {
@@ -310,6 +311,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
       ...client,
       commercialGroupName: undefined,
       commercialGroupId: undefined,
+      manualGroupOverride: false,
     });
   };
 
@@ -748,6 +750,7 @@ function ClientEditor({
     update({
       commercialGroupName: name || undefined,
       commercialGroupId: name ? commercialGroupId(name) : undefined,
+      manualGroupOverride: name ? true : false,
     });
   };
   const ivaRate = (client.ivaRate ?? 16) / 100;

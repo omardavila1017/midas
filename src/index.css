@@ -51,25 +51,41 @@
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
 
-  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.08),
-                 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-card-hover: 0 8px 20px -12px rgba(15, 23, 42, 0.28),
-                       0 2px 6px rgba(15, 23, 42, 0.08);
+  /* Apple-grade elevation: layered ambient + key shadow tinted with brand hue.
+     Two shadows per level: one tight crisp edge, one diffuse ambient blur.
+     Tints carry slate-blue 248 hue so shadows feel native to the surface
+     instead of generic gray drop-shadows. */
+  --shadow-card: 0 1px 1px rgba(15, 23, 42, 0.04),
+                 0 2px 6px -1px rgba(30, 41, 90, 0.06);
+  --shadow-card-hover: 0 1px 2px rgba(15, 23, 42, 0.05),
+                       0 12px 28px -10px rgba(30, 41, 90, 0.18),
+                       0 4px 10px -6px rgba(30, 41, 90, 0.10);
 
   --primary: #1e293b;
   --primary-hover: #334155;
-  --primary-muted: #f1f5f9;
-  --primary-subtle: #f8fafc;
+  --primary-muted: #eef2f8;
+  --primary-subtle: #f6f8fc;
 
-  --gray-950: #0f172a;
-  --gray-900: #1e293b;
-  --gray-700: #334155;
-  --gray-500: #475569;
-  --gray-400: #64748b;
-  --gray-300: #94a3b8;
-  --gray-200: #e2e8f0;
-  --gray-100: #f1f5f9;
-  --gray-50:  #f8fafc;
+  /* Slate-blue accent — institutional but contemporary. Used for
+     focus rings, links, selected states, KPI deltas, brand strokes.
+     Replaces the prior brass/green hue 158 in all "accent" contexts. */
+  --accent-blue:        oklch(52% 0.13 248);
+  --accent-blue-hover:  oklch(58% 0.14 248);
+  --accent-blue-muted:  oklch(95% 0.03 248);
+  --accent-blue-soft:   oklch(97% 0.015 248);
+
+  /* Neutrals tinted toward slate-blue (hue 248) so backgrounds, borders,
+     and text share subconscious cohesion with the brand accent. Chroma
+     is intentionally low (≤ 0.012) so neutrals still read as gray. */
+  --gray-950: oklch(20% 0.018 248);
+  --gray-900: oklch(26% 0.020 248);
+  --gray-700: oklch(38% 0.018 248);
+  --gray-500: oklch(52% 0.016 248);
+  --gray-400: oklch(60% 0.014 248);
+  --gray-300: oklch(72% 0.012 248);
+  --gray-200: oklch(89% 0.010 248);
+  --gray-100: oklch(95% 0.008 248);
+  --gray-50:  oklch(98% 0.006 248);
 
   --success: #16a34a;
   --success-muted: #dcfce7;
@@ -163,6 +179,45 @@
   --color-floor:         #d97706;
   --color-floor-bg:      #fef3c7;
   --color-floor-pattern: #f59e0b;
+
+  /* ── Skeuomorfismo institucional (sutil) ──
+     Paleta acotada para reforzar metáfora de banca tradicional.
+     Solo deboss/emboss hairline + brass accents + texturas <5% opacity.
+     No imágenes, no blur, no gloss. Light mode primario.
+     Apagar en print: ver bloque @media print abajo. */
+  --skeuo-paper:        oklch(98.5% 0.005 248);
+  --skeuo-paper-edge:   oklch(93% 0.012 248);
+  /* Was hue 158 (brass green). Migrated to slate-blue 248 — same role
+     (institutional accent on plaques, brackets, dividers) but now aligned
+     with the corporate slate-blue identity. Naming kept for compatibility;
+     semantically this is now `--accent-deep`. */
+  --skeuo-brass:        oklch(48% 0.12 248);
+  --skeuo-brass-deep:   oklch(34% 0.11 248);
+  --skeuo-ink-stamp:    oklch(48% 0.18 25);
+
+  --skeuo-deboss-sm:    inset 0 1px 0 rgba(15,23,42,0.06),
+                        inset 0 -1px 0 rgba(255,255,255,0.7);
+  --skeuo-deboss-md:    inset 0 1px 2px rgba(15,23,42,0.08),
+                        inset 0 -1px 0 rgba(255,255,255,0.6),
+                        0 1px 0 rgba(255,255,255,0.9);
+  --skeuo-emboss-md:    inset 0 1px 0 rgba(255,255,255,0.8),
+                        inset 0 -1px 0 rgba(15,23,42,0.06),
+                        0 1px 2px rgba(15,23,42,0.06);
+  --skeuo-letterpress:  0 1px 0 rgba(255,255,255,0.9),
+                        0 -1px 0 rgba(15,23,42,0.04);
+
+  --skeuo-linen:
+    repeating-linear-gradient(45deg,
+      transparent 0 2px,
+      rgba(15,23,42,0.012) 2px 3px),
+    repeating-linear-gradient(-45deg,
+      transparent 0 2px,
+      rgba(15,23,42,0.012) 2px 3px);
+
+  --skeuo-ledger-rule:
+    repeating-linear-gradient(to bottom,
+      transparent 0 31px,
+      rgba(15,23,42,0.04) 31px 32px);
 }
 
 /* Light-shell tokens.
@@ -172,21 +227,24 @@
    splash gradient + a few legacy references) but resolves to a near-white
    tone so any consumer reading it stays light. */
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: oklch(98% 0.006 248);
+  --foreground: var(--gray-950);
   --secondary: #ffffff;
-  --secondary-foreground: #0f172a;
-  --accent: #334155;
-  --accent-foreground: #0f172a;
-  --ring: #1e293b;
+  --secondary-foreground: var(--gray-950);
+  --accent: var(--accent-blue);
+  --accent-foreground: var(--gray-950);
+  --ring: var(--accent-blue);
   --shell-text: var(--gray-950);
   --shell-text-muted: var(--gray-500);
   --shell-border: var(--gray-200);
-  --chart-1: #0f172a;
-  --chart-2: #334155;
-  --chart-3: #475569;
-  --chart-4: #64748b;
-  --chart-5: #94a3b8;
+  /* Chart sequence — slate-blue lead, perceptually-spaced OKLCH steps.
+     Tuned for finance dashboards: stacked bars + lines read distinctly
+     without the rainbow vibe of a default categorical palette. */
+  --chart-1: oklch(36% 0.10 248);
+  --chart-2: oklch(52% 0.13 248);
+  --chart-3: oklch(64% 0.12 248);
+  --chart-4: oklch(72% 0.08 248);
+  --chart-5: oklch(82% 0.05 248);
 }
 
 /* ─── Base ─── */
@@ -392,7 +450,15 @@ kbd {
   z-index: 100;
   display: grid;
   place-items: center;
-  background: var(--surface);
+  background-color: var(--skeuo-paper);
+  background-image: var(--skeuo-linen);
+}
+
+.splash-plaque {
+  padding: 28px 40px;
+  border-radius: var(--radius-md);
+  background: var(--skeuo-paper);
+  box-shadow: var(--skeuo-emboss-md), 0 0 0 1px var(--skeuo-paper-edge);
 }
 
 .splash-logo-enter {
@@ -601,14 +667,27 @@ kbd {
    SCROLLBAR
    ═══════════════════════════════════════════════ */
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Scrollbar — slate-blue tinted thumb, near-invisible until hover.
+   Dark mode lifts thumb opacity so it stays perceivable on slate. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: oklch(70% 0 0 / 0.2);
-  border-radius: 3px;
+  background: color-mix(in oklch, var(--accent-blue) 28%, transparent);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(60% 0 0 / 0.3);
+  background: color-mix(in oklch, var(--accent-blue) 48%, transparent);
+  background-clip: padding-box;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--accent-blue) 42%, transparent);
+  background-clip: padding-box;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklch, var(--accent-blue) 60%, transparent);
+  background-clip: padding-box;
 }
 
 /* ═══════════════════════════════════════════════
@@ -617,8 +696,8 @@ kbd {
 
 input:focus, select:focus, textarea:focus {
   outline: none;
-  box-shadow: 0 0 0 3px oklch(55% 0.22 255 / 0.12);
-  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent-blue) 22%, transparent);
+  border-color: var(--accent-blue) !important;
   transition: box-shadow var(--motion-state) var(--ease-smooth),
               border-color var(--motion-state) var(--ease-smooth);
 }
@@ -706,10 +785,45 @@ input[type="range"]::-moz-range-thumb {
 }
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
-  stroke: var(--gray-100);
+  stroke: var(--gray-200);
+  stroke-opacity: 0.7;
+}
+html.dark .recharts-cartesian-grid-horizontal line,
+html.dark .recharts-cartesian-grid-vertical line {
+  stroke: var(--gray-200);
+  stroke-opacity: 0.5;
+}
+.recharts-cartesian-axis-tick text,
+.recharts-text {
+  fill: var(--gray-500);
+}
+html.dark .recharts-cartesian-axis-tick text,
+html.dark .recharts-text {
+  fill: var(--gray-400);
 }
 .recharts-tooltip-wrapper {
-  filter: drop-shadow(0 4px 12px rgba(0,0,0,0.08));
+  filter: drop-shadow(0 8px 24px rgba(0,0,0,0.12));
+}
+html.dark .recharts-tooltip-wrapper {
+  filter: drop-shadow(0 8px 24px rgba(0,0,0,0.5));
+}
+
+/* Dark-mode chart-stroke overrides — Recharts inline SVG attrs use
+   literal hex from Dashboard.tsx CHART_COLORS; these CSS rules win
+   via specificity + !important and only apply in dark mode so light
+   mode keeps the canonical hex tokens. */
+html.dark .recharts-line-curve {
+  stroke: var(--gray-700) !important;
+}
+html.dark .recharts-default-tooltip {
+  background: var(--popover) !important;
+  border-color: var(--border) !important;
+  color: var(--popover-foreground) !important;
+}
+html.dark .recharts-tooltip-item-name,
+html.dark .recharts-tooltip-item-value,
+html.dark .recharts-tooltip-label {
+  color: var(--popover-foreground) !important;
 }
 
 /* ═══════════════════════════════════════════════
@@ -717,7 +831,7 @@ input[type="range"]::-moz-range-thumb {
    ═══════════════════════════════════════════════ */
 
 ::selection {
-  background: oklch(55% 0.22 255 / 0.15);
+  background: color-mix(in oklch, var(--accent-blue) 22%, transparent);
   color: var(--gray-950);
 }
 
@@ -737,9 +851,11 @@ input[type="range"]::-moz-range-thumb {
    ACCESSIBILITY
    ═══════════════════════════════════════════════ */
 
-/* Focus visible ring for keyboard navigation */
+/* Focus visible ring for keyboard navigation — slate-blue accent
+   stays consistent across light + dark, easier to scan than the
+   near-black primary. */
 *:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--accent-blue);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -773,6 +889,349 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ═══════════════════════════════════════════════
+   SKEUOMORFISMO INSTITUCIONAL — utility classes
+   Consume tokens declared at top of :root.
+   Hairline detail only. No gloss. Print-safe.
+   ═══════════════════════════════════════════════ */
+
+.skeuo-paper {
+  background-color: var(--skeuo-paper);
+  background-image: var(--skeuo-linen);
+}
+.skeuo-emboss {
+  box-shadow: var(--skeuo-emboss-md);
+}
+.skeuo-emboss-bordered {
+  box-shadow: var(--skeuo-emboss-md), 0 0 0 1px var(--skeuo-paper-edge);
+}
+.skeuo-deboss {
+  box-shadow: var(--skeuo-deboss-md);
+}
+.skeuo-letterpress {
+  text-shadow: var(--skeuo-letterpress);
+}
+.skeuo-brass {
+  color: var(--skeuo-brass-deep);
+}
+.skeuo-ledger {
+  background-image: var(--skeuo-ledger-rule);
+}
+
+/* Brass corner brackets (4 corners via pseudo elements).
+   Apply on a positioned container. Hairline 1px so we never
+   trip the BAN against side-stripes >1px. */
+.skeuo-brackets {
+  position: relative;
+}
+.skeuo-brackets::before,
+.skeuo-brackets::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  border-color: var(--skeuo-brass);
+}
+.skeuo-brackets::before {
+  top: 6px; left: 6px;
+  border-top: 1px solid;
+  border-left: 1px solid;
+}
+.skeuo-brackets::after {
+  bottom: 6px; right: 6px;
+  border-bottom: 1px solid;
+  border-right: 1px solid;
+}
+.skeuo-brackets-deep::before,
+.skeuo-brackets-deep::after {
+  border-color: var(--skeuo-brass-deep);
+}
+
+[data-skeuo-card="fideicomiso"] {
+  background: var(--skeuo-paper);
+  background-image: var(--skeuo-linen);
+  box-shadow: var(--skeuo-emboss-md);
+}
+
+/* Brass nameplate eyebrow (institutional plaque feel). */
+.skeuo-nameplate {
+  display: inline-block;
+  background: var(--skeuo-brass);
+  color: var(--skeuo-paper);
+  padding: 2px 8px;
+  border-radius: 2px;
+  box-shadow: var(--skeuo-deboss-sm);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--tracking-meta);
+  text-transform: uppercase;
+}
+
+/* Aged ink stamp (PAGADO / VENCIDO / SAT). Rotated, low-opacity,
+   serif. Use on inline text spans. */
+.skeuo-stamp {
+  display: inline-block;
+  font-family: 'Times New Roman', Georgia, serif;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--skeuo-ink-stamp);
+  border: 1.5px solid var(--skeuo-ink-stamp);
+  padding: 1px 6px;
+  border-radius: 2px;
+  opacity: 0.7;
+  transform: rotate(-4deg);
+  font-size: 11px;
+  line-height: 1;
+}
+.skeuo-stamp[data-tone="danger"] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Background sello fiscal — fill a card corner with a faded SAT
+   stamp. Apply via inline content on a positioned container. */
+.skeuo-sat-bg {
+  position: relative;
+  overflow: hidden;
+}
+.skeuo-sat-bg::after {
+  content: attr(data-stamp);
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-family: 'Times New Roman', Georgia, serif;
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: 0.08em;
+  color: var(--skeuo-ink-stamp);
+  opacity: 0.10;
+  transform: rotate(-8deg);
+  pointer-events: none;
+  text-transform: uppercase;
+}
+
+/* Apague todas las texturas en print — recibos imprimibles deben
+   leer como documento limpio. */
+@media print {
+  .skeuo-paper,
+  .skeuo-ledger,
+  .skeuo-emboss,
+  .skeuo-emboss-bordered,
+  .skeuo-deboss {
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+  .skeuo-stamp,
+  .skeuo-sat-bg::after {
+    opacity: 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   DARK MODE
+   Activado por la clase `.dark` en <html>. Override
+   de tokens base + skeuo. Mantiene paleta institucional:
+   slate profundo + brass más cálido para contraste.
+   ═══════════════════════════════════════════════ */
+html.dark {
+  /* Dark slate-blue canvas. OKLCH ensures perceptually uniform steps
+     between surface, card, popover, raised. Hue 248 carries through
+     every neutral so the entire dark UI feels carved from one slab. */
+  --background: oklch(16% 0.020 248);
+  --foreground: oklch(95% 0.010 248);
+  --surface: oklch(19% 0.022 248);
+  --surface-alt: oklch(17% 0.022 248);
+  --surface-raised: oklch(23% 0.024 248);
+
+  --card: oklch(20% 0.022 248);
+  --card-foreground: oklch(95% 0.010 248);
+  --popover: oklch(24% 0.024 248);
+  --popover-foreground: oklch(95% 0.010 248);
+  --muted: oklch(24% 0.022 248);
+  --muted-foreground: oklch(68% 0.018 248);
+  --border: oklch(28% 0.022 248);
+  --input: oklch(18% 0.022 248);
+
+  /* In dark, primary becomes a luminous slate-blue so CTAs read as
+     branded rather than neutral white-on-slate. */
+  --primary: oklch(72% 0.14 248);
+  --primary-hover: oklch(78% 0.14 248);
+  --primary-muted: oklch(26% 0.030 248);
+  --primary-subtle: oklch(22% 0.025 248);
+
+  --accent-blue:        oklch(72% 0.14 248);
+  --accent-blue-hover:  oklch(78% 0.14 248);
+  --accent-blue-muted:  oklch(26% 0.030 248);
+  --accent-blue-soft:   oklch(22% 0.025 248);
+
+  /* Inverted neutral ramp — gray-950 becomes the lightest text token,
+     gray-50 the darkest surface. Slate-blue tint preserved at 248. */
+  --gray-950: oklch(96% 0.010 248);
+  --gray-900: oklch(92% 0.012 248);
+  --gray-700: oklch(84% 0.014 248);
+  --gray-500: oklch(72% 0.016 248);
+  --gray-400: oklch(62% 0.016 248);
+  --gray-300: oklch(48% 0.018 248);
+  --gray-200: oklch(34% 0.020 248);
+  --gray-100: oklch(24% 0.022 248);
+  --gray-50:  oklch(18% 0.022 248);
+
+  --shell-text: var(--gray-950);
+  --shell-text-muted: var(--gray-400);
+  --shell-border: var(--gray-200);
+
+  /* Tinted muted surfaces for status pills in dark — readable, never harsh. */
+  --success-muted: oklch(28% 0.060 152);
+  --warning-muted: oklch(30% 0.090 65);
+  --danger-muted:  oklch(30% 0.110 25);
+  --info-muted:    oklch(28% 0.050 248);
+
+  /* Dark shadows: heavy ambient + tight ring. Carry slate hue so they
+     never look like a flat black drop-shadow. */
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.45),
+                 0 6px 16px -4px rgba(0,0,0,0.45);
+  --shadow-card-hover: 0 1px 2px rgba(0,0,0,0.6),
+                       0 18px 36px -12px rgba(0,0,0,0.7),
+                       0 8px 16px -8px rgba(0,0,0,0.5);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.35);
+  --shadow-md: var(--shadow-card);
+  --shadow-lg: var(--shadow-card-hover);
+
+  /* Chart palette in dark — slate-blue ramp brightened so series stay
+     distinct on the slate canvas. */
+  --chart-1: oklch(82% 0.10 248);
+  --chart-2: oklch(72% 0.14 248);
+  --chart-3: oklch(62% 0.14 248);
+  --chart-4: oklch(52% 0.12 248);
+  --chart-5: oklch(42% 0.10 248);
+
+  --background-foreground: var(--gray-950);
+  --foreground-muted: var(--gray-400);
+  --accent: var(--accent-blue);
+  --ring: var(--accent-blue);
+
+  /* Skeuo en dark — slate-indigo plaque sobre canvas profundo.
+     Accent (ex-brass) ahora hue 248 — coherente con el sistema. */
+  --skeuo-paper:        oklch(22% 0.022 248);
+  --skeuo-paper-edge:   oklch(32% 0.020 248);
+  --skeuo-brass:        oklch(72% 0.14 248);
+  --skeuo-brass-deep:   oklch(82% 0.12 248);
+  --skeuo-ink-stamp:    oklch(62% 0.18 25);
+
+  --skeuo-deboss-sm:    inset 0 1px 0 rgba(0,0,0,0.4),
+                        inset 0 -1px 0 rgba(255,255,255,0.04);
+  --skeuo-deboss-md:    inset 0 1px 2px rgba(0,0,0,0.5),
+                        inset 0 -1px 0 rgba(255,255,255,0.05),
+                        0 1px 0 rgba(255,255,255,0.04);
+  --skeuo-emboss-md:    inset 0 1px 0 rgba(255,255,255,0.06),
+                        inset 0 -1px 0 rgba(0,0,0,0.4),
+                        0 1px 2px rgba(0,0,0,0.5);
+  --skeuo-letterpress:  0 -1px 0 rgba(0,0,0,0.5),
+                        0 1px 0 rgba(255,255,255,0.04);
+
+  --skeuo-linen:
+    repeating-linear-gradient(45deg,
+      transparent 0 2px,
+      rgba(255,255,255,0.015) 2px 3px),
+    repeating-linear-gradient(-45deg,
+      transparent 0 2px,
+      rgba(255,255,255,0.015) 2px 3px);
+
+  --skeuo-ledger-rule:
+    repeating-linear-gradient(to bottom,
+      transparent 0 31px,
+      rgba(255,255,255,0.04) 31px 32px);
+
+  --modal-overlay: rgba(0,0,0,0.7);
+
+  --color-floor:         #fbbf24;
+  --color-floor-bg:      #422006;
+  --color-floor-pattern: #d97706;
+}
+
+html.dark body {
+  background-color: var(--background);
+  color: var(--gray-700);
+}
+
+/* ═══════════════════════════════════════════════
+   DARK MODE TOGGLE — Uiverse-style metal switch
+   Adaptado a la paleta brass/slate del DS.
+   Knob conic-gradient simula relieve metálico.
+   ═══════════════════════════════════════════════ */
+.dm-toggle__input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+.dm-toggle__switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 56px;
+  height: 28px;
+  background-color: var(--gray-200);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color var(--motion-state) var(--ease-smooth);
+  box-shadow: var(--skeuo-deboss-sm);
+  flex-shrink: 0;
+}
+
+.dm-toggle__switch::after {
+  content: "";
+  position: absolute;
+  height: 26px;
+  width: 26px;
+  left: 1px;
+  background: conic-gradient(
+    var(--skeuo-brass-deep),
+    var(--skeuo-paper),
+    var(--skeuo-brass-deep),
+    var(--skeuo-paper),
+    var(--skeuo-brass-deep)
+  );
+  border-radius: 50%;
+  transition: transform var(--motion-state) var(--ease-smooth);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.3),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+.dm-toggle__input:checked + .dm-toggle__switch {
+  background-color: oklch(35% 0.08 248);
+}
+
+.dm-toggle__input:checked + .dm-toggle__switch::after {
+  transform: translateX(28px);
+}
+
+.dm-toggle__input:focus-visible + .dm-toggle__switch {
+  outline: 2px solid var(--skeuo-brass);
+  outline-offset: 2px;
+}
+
+.dm-toggle__icon {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+  color: var(--shell-text-muted);
+  transition: opacity var(--motion-state) var(--ease-smooth);
+}
+.dm-toggle__icon--sun { left: 8px; }
+.dm-toggle__icon--moon { right: 8px; }
+
+.dm-toggle__input:not(:checked) + .dm-toggle__switch .dm-toggle__icon--moon { opacity: 0.35; }
+.dm-toggle__input:checked + .dm-toggle__switch .dm-toggle__icon--sun { opacity: 0.35; }
+
+/* ═══════════════════════════════════════════════
    DARK SHELL (Midas corporativo header + strip)
    Aligns the top-of-app chrome with
    midas-design-system/project/ui_kits/midas —
@@ -799,6 +1258,12 @@ input[type="range"]::-moz-range-thumb {
 }
 .senda-lockup-dark:hover .senda-mark-inverted {
   opacity: 1;
+}
+
+/* En dark mode el SVG va a blanco. brightness(0) lo colapsa a negro,
+   invert(1) lo flipea a blanco. Stack ambos para mantener el truco. */
+html.dark .senda-mark-inverted {
+  filter: brightness(0) invert(1);
 }
 
 /* Header icon button (bell, download) on the light shell. */
@@ -878,3 +1343,16 @@ input[type="range"]::-moz-range-thumb {
 .midas-card.hover-lift:hover {
   box-shadow: var(--shadow-card-hover);
 }
+
+/* ═══════════════════════════════════════════════
+   SPLASH LOADER (Uiverse — typing dots)
+   ═══════════════════════════════════════════════ */
+.typing-indicator { width: 60px; height: 30px; position: relative; z-index: 4; }
+.typing-circle { width: 8px; height: 8px; position: absolute; border-radius: 50%; background-color: var(--shell-text); left: 15%; transform-origin: 50%; animation: typing-circle7124 0.5s alternate infinite ease; }
+@keyframes typing-circle7124 { 0% { top: 20px; height: 5px; border-radius: 50px 50px 25px 25px; transform: scaleX(1.7); } 40% { height: 8px; border-radius: 50%; transform: scaleX(1); } 100% { top: 0%; } }
+.typing-circle:nth-child(2) { left: 45%; animation-delay: 0.2s; }
+.typing-circle:nth-child(3) { left: auto; right: 15%; animation-delay: 0.3s; }
+.typing-shadow { width: 5px; height: 4px; border-radius: 50%; background-color: color-mix(in oklch, var(--shell-text) 20%, transparent); position: absolute; top: 30px; transform-origin: 50%; z-index: 3; left: 15%; filter: blur(1px); animation: typing-shadow046 0.5s alternate infinite ease; }
+@keyframes typing-shadow046 { 0% { transform: scaleX(1.5); } 40% { transform: scaleX(1); opacity: 0.7; } 100% { transform: scaleX(0.2); opacity: 0.4; } }
+.typing-shadow:nth-child(4) { left: 45%; animation-delay: 0.2s; }
+.typing-shadow:nth-child(5) { left: auto; right: 15%; animation-delay: 0.3s; }

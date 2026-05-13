@@ -33,7 +33,13 @@ export function ScenarioTabs(props: ScenarioTabsProps) {
   const drafts = scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt);
 
   return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5">
+    <section
+      className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] px-3 py-2.5"
+      style={{
+        background: 'var(--skeuo-paper)',
+        borderBottom: '1px solid var(--skeuo-brass)',
+      }}
+    >
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-500)]">
           Escenarios
@@ -101,8 +107,13 @@ function CoreTab({
 }) {
   const Icon = tone === 'base' ? Lock : ShieldCheck;
   const badge = tone === 'base' ? 'base' : 'main';
-  const bg = active ? 'var(--gray-950)' : 'white';
+  const bg = active ? 'var(--gray-950)' : 'var(--skeuo-paper)';
   const color = active ? 'white' : 'var(--gray-700)';
+  const iconColor = active
+    ? 'currentColor'
+    : tone === 'base'
+      ? 'var(--skeuo-brass-deep)'
+      : 'currentColor';
   const tooltip = tone === 'base'
     ? 'Solo lectura · proyección original'
     : 'Solo lectura · cambia mediante merge de un draft';
@@ -113,9 +124,14 @@ function CoreTab({
       aria-pressed={active}
       title={tooltip}
       className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border px-3 text-[12px] font-medium transition-colors"
-      style={{ background: bg, color, borderColor: active ? 'var(--gray-950)' : 'var(--gray-200)' }}
+      style={{
+        background: bg,
+        color,
+        borderColor: active ? 'var(--gray-950)' : 'var(--skeuo-paper-edge)',
+        boxShadow: active ? 'var(--skeuo-emboss-md)' : 'var(--skeuo-deboss-sm)',
+      }}
     >
-      <Icon className="h-3.5 w-3.5" strokeWidth={1.5} />
+      <Icon className="h-3.5 w-3.5" strokeWidth={1.5} style={{ color: iconColor }} />
       <span className="truncate max-w-[160px]">{scenario.name}</span>
       <span
         className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em]"
@@ -185,9 +201,10 @@ function DraftTab({
         aria-pressed={active}
         className="inline-flex h-9 items-center gap-2 rounded-l-[var(--radius)] border-l border-y px-3 text-[12px] font-medium transition-colors"
         style={{
-          background: active ? 'var(--primary)' : 'white',
+          background: active ? 'var(--primary)' : 'var(--skeuo-paper)',
           color: active ? 'white' : 'var(--gray-700)',
-          borderColor: active ? 'var(--primary)' : 'var(--gray-200)',
+          borderColor: active ? 'var(--primary)' : 'var(--skeuo-paper-edge)',
+          boxShadow: active ? 'var(--skeuo-emboss-md)' : 'var(--skeuo-deboss-sm)',
         }}
       >
         <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} />
@@ -227,9 +244,10 @@ function DraftTab({
         aria-label="Acciones del borrador"
         className="inline-flex h-9 w-7 items-center justify-center rounded-r-[var(--radius)] border-r border-y transition-colors"
         style={{
-          background: active ? 'var(--primary)' : 'white',
+          background: active ? 'var(--primary)' : 'var(--skeuo-paper)',
           color: active ? 'white' : 'var(--gray-500)',
-          borderColor: active ? 'var(--primary)' : 'var(--gray-200)',
+          borderColor: active ? 'var(--primary)' : 'var(--skeuo-paper-edge)',
+          boxShadow: active ? 'var(--skeuo-emboss-md)' : 'var(--skeuo-deboss-sm)',
         }}
       >
         <MoreHorizontal className="h-3.5 w-3.5" strokeWidth={1.5} />

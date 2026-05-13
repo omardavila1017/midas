@@ -3,6 +3,7 @@ import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadStore, saveStore, CXPRecord } from './domain/persistence';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
+import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import {
@@ -10,13 +11,15 @@ import {
   fetchBankStatements,
   fetchBankStatementsRange,
   fetchAgedBalances,
-  fetchCobranza,
-  fetchIndicadoresCobranza,
+  fetchCobranzaRange,
+  fetchIndicadoresCobranzaRange,
+  fetchComprasRange,
   type Company,
   type BankAccountStatement,
   type BankStatementFormat,
   type CobranzaPayment,
   type CobranzaRecord,
+  type ComprasRecord,
 } from './services/jde';
 
 const FIXED_STARTING_BALANCE = 76_300_000;
@@ -29,6 +32,7 @@ const Clients = lazy(() => import('./components/Clients'));
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const CashFlowDetail = lazy(() => import('./components/CashFlowDetail'));
 const CXP = lazy(() => import('./components/CXP'));
+const Compras = lazy(() => import('./components/Compras'));
 const Bancos = lazy(() => import('./components/Bancos'));
 const CollectionProjection = lazy(() => import('./components/CollectionProjection'));
 const FideicomisoDashboard = lazy(() => import('./components/FideicomisoDashboard'));
@@ -37,6 +41,7 @@ const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planni
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus } from './components/MidasSplash';
+import DarkModeToggle from './components/ui/DarkModeToggle';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette, { type CommandPaletteAction } from './components/CommandPalette';
@@ -75,14 +80,126 @@ import { enrichReconciliationResult } from './domain/reconciliationCatalogEnrich
 import type { RealReconciliationWorkerResponse } from './workers/realReconciliationWorkerTypes';
 import {
   buildMatchSuggestions,
+  rankClientsForAccount,
   suggestionToLink,
   type MatcherOutput,
+  type OrphanNoCliente,
 } from './domain/clientCobranzaMatcher';
+
+// Umbral más laxo que AUTO_ACCEPT_THRESHOLD (0.85) — todo lo que cae aquí se
+// adjunta solo a la cuenta del catálogo, sin pasar por wizard.
+const AUTO_MERGE_THRESHOLD = 0.70;
+// Regla de buckets por tipo de nombre (Santiago, 2026-05-12 v3):
+//   Persona física (sin marcadores SA/CV/INC ni dígitos, 2-6 tokens) →
+//     Viajes Especiales. Trato como viajero ad-hoc.
+//   Empresa (marcador de razón social, dígitos, o no encaja como persona) →
+//     grupo propio. Intenta colgar de un cliente existente parecido antes
+//     de crear nuevo.
+//   `manualGroupOverride === true` bloquea el reclassify; movimientos del
+//   usuario en la UI se conservan.
+const VIAJES_ESPECIALES_GROUP_ID = 'group-viajes-especiales';
+const VIAJES_ESPECIALES_GROUP_NAME = 'Viajes Especiales';
+// Para orphans <10 fac: umbral mínimo de similitud para colgarlos de un
+// cliente existente vía rankClientsForAccount (que ignora REVIEW_THRESHOLD).
+const FALLBACK_GROUP_THRESHOLD = 0.40;
+
+// Normalización para comparar nombres de empresa (matcher-style, sin acentos,
+// uppercase, alfanumérico). Compacta espacios para substring matching.
+function normalizeCompanyName(s: string | undefined | null): string {
+  if (!s) return '';
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toUpperCase()
+    .replace(/^\d{4,5}\s*[-–]\s*/, '') // strip "00011 - " prefix si viene del API
+    .replace(/\b(SA|SAB|SAPI|SC|AC|RL|DE|CV|S\s*EN\s*C)\b/g, '')
+    .replace(/[^A-Z0-9]/g, '')
+    .trim();
+}
+
+// Marcadores típicos de razón social mexicana — si aparece alguno en el
+// nombre, asumimos empresa (no viajes especiales).
+const COMPANY_MARKERS = new Set([
+  // Razón social
+  'SA', 'SAB', 'SAPI', 'SC', 'AC', 'RL', 'SRL', 'SADECV', 'CV',
+  'COMPANIA', 'COMPANY', 'CORP', 'CORPORATION', 'CO',
+  'INC', 'LLC', 'GMBH', 'LTD', 'LIMITED', 'BV', 'NV',
+  // Tipos de negocio
+  'GRUPO', 'INDUSTRIAS', 'INDUSTRIA', 'INDUSTRIAL',
+  'SERVICIOS', 'SERVICIO', 'CONSTRUCTORA', 'COMERCIALIZADORA',
+  'TRANSPORTES', 'AUTOTRANSPORTES', 'INMOBILIARIA', 'INMUEBLES',
+  'DISTRIBUIDORA', 'DISTRIBUCION', 'SOLUCIONES', 'TECNOLOGIA', 'TECHNOLOGIES',
+  'SISTEMAS', 'CONSULTORES', 'CONSULTORIA', 'INTERNACIONAL',
+  'NACIONAL', 'MEXICANA', 'PRODUCTOS', 'OPERADORA', 'MANUFACTURAS',
+  'COMERCIAL', 'EMPRESA', 'CORPORATIVO', 'AGROPECUARIA',
+  'AUTOMOTRIZ', 'FERRETERA', 'HOTELERA', 'TURISTICA',
+  'BANCO', 'BANCARIA', 'FINANCIERA', 'ASEGURADORA',
+  // Industria viajes / transporte
+  'VIAJES', 'AGENCIA', 'TURISMO', 'TOURS', 'TRAVEL',
+  'BUS', 'BUSES', 'AUTOBUSES', 'AUTOBUS', 'TRANSPORTE',
+  'FERROCARRIL', 'AEROLINEA', 'AEROPUERTO', 'PUERTO', 'TERMINAL',
+  // Gobierno / instituciones
+  'MUNICIPIO', 'GOBIERNO', 'AYUNTAMIENTO', 'SECRETARIA',
+  'INSTITUTO', 'UNIVERSIDAD', 'ESCUELA', 'COLEGIO',
+  'HOSPITAL', 'CLINICA', 'FUNDACION', 'ASOCIACION', 'PARTIDO',
+  'COMISION', 'CONSEJO', 'DIRECCION',
+  // Comercio
+  'CADENA', 'COMERCIO', 'TIENDA', 'TIENDAS', 'CENTRAL', 'CENTRO',
+  'CLUB', 'COOPERATIVA', 'PROMOTORA', 'CONSORCIO', 'HOLDING',
+  'EDITORIAL', 'IMPRENTA', 'FABRICA', 'PLANTA',
+  'SUPERMERCADOS', 'SUPERMERCADO', 'ALMACEN', 'ALMACENES',
+  // Sufijos / términos genéricos de marca
+  'SOLUTIONS', 'NETWORKS', 'NETWORK', 'SYSTEMS', 'GROUP',
+  'INTERNACIONALES', 'NACIONALES', 'MEXICANO', 'MEXICANOS',
+  'MEXICO', 'AMERICA', 'AMERICANA', 'AMERICAS', 'LATAM',
+  'DESARROLLO', 'DESARROLLOS', 'PROYECTOS', 'PROYECTO',
+  'GLOBAL', 'WORLD', 'WORLDWIDE', 'INTERAMERICANA',
+]);
+
+const PERSON_PARTICLES = new Set([
+  'DE', 'DEL', 'LA', 'LOS', 'LAS', 'Y', 'VAN', 'DER', 'VON', 'MAC', 'MC', 'EL',
+]);
+
+function normalizeNameUpper(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toUpperCase()
+    // Junta razones sociales con puntos sueltos: "S.A." → "SA", "S.A.B." → "SAB"
+    .replace(/\b([A-Z])\.\s*([A-Z])\.\s*([A-Z])\.\b/g, '$1$2$3')
+    .replace(/\b([A-Z])\.\s*([A-Z])\.\b/g, '$1$2')
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isCompanyName(rawName: string | undefined): boolean {
+  if (!rawName) return false;
+  const norm = normalizeNameUpper(rawName);
+  if (!norm) return false;
+  if (/\d/.test(norm)) return true;
+  for (const t of norm.split(' ')) {
+    if (COMPANY_MARKERS.has(t)) return true;
+  }
+  return false;
+}
+
+function isPersonName(rawName: string | undefined): boolean {
+  if (!rawName) return false;
+  if (isCompanyName(rawName)) return false;
+  const norm = normalizeNameUpper(rawName);
+  if (!norm) return false;
+  const tokens = norm.split(' ').filter(t => !PERSON_PARTICLES.has(t) && t.length >= 2);
+  return tokens.length >= 2 && tokens.length <= 6;
+}
 
 const STORE_SAVE_DEBOUNCE_MS = 900;
 const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
+const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
+const COMPRAS_LOOKBACK_DAYS = 60;
+const COMPRAS_CACHE_KEY = '__all__';
 // Tabs que dependen del cruce JDE↔banco para mostrar números correctos.
 // Proyección / Planeación / Impuestos consumen `cobranzaReconciliation`
 // vía `buildFinancialProjectionSourceData` para no doblar facturas
@@ -128,6 +245,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
+    { id: 'compras',     label: 'Órdenes de Compras', icon: FolderOpen },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'fideicomiso', label: 'Fideicomiso', icon: ShieldCheck },
   ],
@@ -141,7 +259,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
   netflow: 'operacion',
-  cxp: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
+  cxp: 'operacion', compras: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
 };
@@ -377,6 +495,13 @@ export default function App() {
   const [cobranzaLoadedCias, setCobranzaLoadedCias] = useState<Record<string, string>>({});
   const [cobranzaPayments, setCobranzaPayments] = useState<CobranzaPayment[]>([]);
   const [cobranzaPaymentsLoadedCias, setCobranzaPaymentsLoadedCias] = useState<Record<string, string>>({});
+  // Compras (Órdenes de Compra) — endpoint /v1/erp/tesoreria/compras,
+  // liberado a producción 2026-05-08. Restricción del API: 30 días por
+  // request → fetchComprasRange parte el rango en chunks. Cargamos los
+  // últimos 60 días por default para cubrir OCs con D_Credito alto que aún
+  // no se han facturado.
+  const [comprasRecords, setComprasRecords] = useState<ComprasRecord[]>([]);
+  const [comprasLoadedCias, setComprasLoadedCias] = useState<Record<string, string>>({});
   // Status del auto/manual fetch de cobranza — se muestra en la pestaña
   // Cobranza para que el usuario sepa qué pasó si la lista llega vacía.
   // Antes los errores eran silenciados y resultaba imposible diagnosticar
@@ -443,6 +568,11 @@ export default function App() {
 
   // ── JDE integration state ──
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [companiesLoadedAt, setCompaniesLoadedAt] = useState<string | undefined>(undefined);
+  // True una vez que el cache local hidrató companies. Permite a
+  // loadCompanies() saber que no debe bloquear el splash con 'loading' aunque
+  // se haya disparado antes de que React aplique el set del cache.
+  const companiesHydratedFromCacheRef = useRef(false);
   const [companyGroups, setCompanyGroups] = useState<CompanyGroup[]>(() => loadCompanyGroups());
   const [selectedCia, setSelectedCia] = useState<string>(
     () => localStorage.getItem('midas.selectedCia') ?? 'all'
@@ -593,6 +723,17 @@ export default function App() {
   // Caja inicial fija — decisión de negocio, no editable por el usuario.
   const effectiveStartingBalance = FIXED_STARTING_BALANCE;
 
+  // OCs (Compras) traducidas a PurchaseReceiptRecord para alimentar el motor
+  // canónico de proyección. El adapter filtra cancelados, sin recepción, y
+  // fechas pasadas. El motor canónico hace dedup vs CXP (no doble-conteo) y
+  // matchea por proveedor para que el monto suba la fila del proveedor en el
+  // mapa de Planeación Financiera. Memoizado por (comprasRecords, hoy) para
+  // estabilidad referencial de la prop downstream.
+  const purchaseReceiptsFromCompras = useMemo(
+    () => comprasToPurchaseReceipts(comprasRecords),
+    [comprasRecords],
+  );
+
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
 
@@ -662,51 +803,228 @@ export default function App() {
       if (stored.cobranzaLoadedCias) setCobranzaLoadedCias(stored.cobranzaLoadedCias);
       if (stored.cobranzaPayments?.length) setCobranzaPayments(stored.cobranzaPayments);
       if (stored.cobranzaPaymentsLoadedCias) setCobranzaPaymentsLoadedCias(stored.cobranzaPaymentsLoadedCias);
+      if (stored.comprasRecords?.length) setComprasRecords(stored.comprasRecords);
+      if (stored.comprasLoadedCias) setComprasLoadedCias(stored.comprasLoadedCias);
       if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
+      // Hidratar companies desde cache antes de que JDE responda. Esto
+      // desbloquea el splash inmediatamente (boot slot 'companies' = done)
+      // y permite que CXP/Cobranza auto-fetch arranquen contra el catálogo
+      // conocido sin esperar el /empresas en frío (~60s). El fetch a JDE
+      // sigue corriendo en background y reconcilia si la lista cambió.
+      if (stored.companies?.length) {
+        companiesHydratedFromCacheRef.current = true;
+        setCompanies(stored.companies);
+        setCompaniesLoadedAt(stored.companiesLoadedAt);
+        setBootSlot('companies', 'done');
+      }
     }
   }, []);
 
-  // ── Auto-seed matcher cliente↔cobranza ───────────────────────────────────
-  // Corre **una sola vez** cuando llegan cobranza + clients, persistiendo
-  // autoAccepted y guardando needsReview/orphanNoClientes para el wizard.
-  // Re-corre solamente si llegan nuevas cuentas JDE no vistas, evitando
-  // recomputar O(600×7000) en cada render.
+  // ── Auto-resolución total matcher cliente↔cobranza ──────────────────────
+  // Regla de negocio (Santiago, 2026-05-12):
+  //   • Match ≥70% confianza → adjuntar JDE link a cliente existente.
+  //   • Resto → crear cliente nuevo. Si tiene <10 facturas YTD se manda al
+  //     grupo "Viajes Especiales"; si ≥10 queda como cliente recurrente.
+  //   • Cliente del cubo Viajes Especiales que brinca el umbral se promueve
+  //     (sale del grupo) en la pasada siguiente.
+  // No deja nada para revisar manual — el wizard queda como override.
   const matcherLastSig = useRef<string>('');
   useEffect(() => {
     if (clients.length === 0 || cobranzaRecords.length === 0) return;
-    const needsSeed = clients.some(c => c.jdeAccounts === undefined);
-    // Signature: cantidad de cuentas JDE únicas + cantidad de clientes.
-    // Cambia solo cuando JDE devuelve nuevas (cia, noCliente) o cuando se
-    // edita el catálogo de clientes (alta/baja).
     const accountKeys = new Set<string>();
     for (const r of cobranzaRecords) accountKeys.add(`${r.cia}::${r.noCliente}`);
-    const sig = `${clients.length}|${accountKeys.size}|${needsSeed ? 'seed' : 'done'}`;
-    if (sig === matcherLastSig.current && !needsSeed) return;
+    const sig = `${clients.length}|${accountKeys.size}|${cobranzaRecords.length}|${companies.length}`;
+    if (sig === matcherLastSig.current) return;
     matcherLastSig.current = sig;
 
-    const out = buildMatchSuggestions(clients, cobranzaRecords);
-    if (needsSeed) {
-      const byClientId = new Map<string, ReturnType<typeof suggestionToLink>[]>();
-      for (const s of out.autoAccepted) {
-        const link = suggestionToLink(s, 'auto');
-        const arr = byClientId.get(s.clientId) ?? [];
-        arr.push(link);
-        byClientId.set(s.clientId, arr);
-      }
-      setClients(prev => prev.map(c => {
-        if (c.jdeAccounts !== undefined) return c;
-        const links = byClientId.get(c.id);
-        return { ...c, jdeAccounts: links ?? [] };
-      }));
+    // Blocklist intercompañía: nombres/RFCs de empresas nuestras (catálogo JDE
+    // /empresas). Sirve para no contaminar el catálogo de clientes con cuentas
+    // que en realidad son operaciones inter-cía.
+    const intercoNameSet = new Set<string>();
+    const intercoRfcSet = new Set<string>();
+    for (const co of companies) {
+      const n = normalizeCompanyName(co.nombre);
+      if (n.length >= 4) intercoNameSet.add(n);
+      const rfc = co.rfc?.toUpperCase().trim();
+      if (rfc) intercoRfcSet.add(rfc);
     }
-    setMatcherReview(out);
+    const isInterco = (name: string | undefined, rfc: string | undefined): boolean => {
+      if (rfc && intercoRfcSet.has(rfc.toUpperCase().trim())) return true;
+      const norm = normalizeCompanyName(name);
+      if (!norm) return false;
+      for (const block of intercoNameSet) {
+        if (norm === block) return true;
+        if (norm.length >= 6 && block.length >= 6 && (norm.includes(block) || block.includes(norm))) return true;
+      }
+      return false;
+    };
+
+    const out = buildMatchSuggestions(clients, cobranzaRecords);
+
+    const toAttach = [
+      ...out.autoAccepted,
+      ...out.needsReview.filter(s => s.confidence >= AUTO_MERGE_THRESHOLD),
+    ].filter(s => !isInterco(s.nombreCliente, s.rfc));
+    const toCreate: OrphanNoCliente[] = [
+      ...out.orphanNoClientes,
+      ...out.needsReview
+        .filter(s => s.confidence < AUTO_MERGE_THRESHOLD)
+        .map(s => ({
+          cia: s.cia,
+          noCliente: s.noCliente,
+          nombreCliente: s.nombreCliente,
+          rfc: s.rfc,
+          invoiceCount: s.invoiceCount,
+          bestGuess: s,
+        } as OrphanNoCliente)),
+    ].filter(o => !isInterco(o.nombreCliente, o.rfc));
+
+    const attachByClient = new Map<string, ReturnType<typeof suggestionToLink>[]>();
+    for (const s of toAttach) {
+      const link = suggestionToLink(s, 'auto');
+      const arr = attachByClient.get(s.clientId) ?? [];
+      arr.push(link);
+      attachByClient.set(s.clientId, arr);
+    }
+
+    // Calculamos el resultado completo aquí (sin setState updater) para que los
+    // contadores reflejen lo que realmente se aplicó antes de loguear.
+    let intercoRemoved = 0;
+    const filtered = clients.filter(c => {
+      if (isInterco(c.name, c.rfc) || isInterco(c.legalName, c.rfc)) {
+        intercoRemoved++;
+        return false;
+      }
+      return true;
+    });
+    const existingIds = new Set(filtered.map(c => c.id));
+
+    // Retroactivo: re-clasifica clientes auto-* según la regla nueva por nombre.
+    //   - persona física → Viajes Especiales
+    //   - empresa        → grupo propio (limpia commercialGroupId/Name si caía
+    //                      en Viajes; deja al grouping engine asignarle grupo).
+    //   Respeta `manualGroupOverride === true` (movimientos del usuario).
+    let reclassifiedOutOfViajes = 0;
+    let reclassifiedIntoViajes = 0;
+    const reconciled = filtered.map(c => {
+      let updated = c;
+      const additions = attachByClient.get(c.id);
+      if (additions && additions.length > 0) {
+        const existingKeys = new Set((updated.jdeAccounts ?? []).map(l => `${l.cia}::${l.noCliente}`));
+        const fresh = additions.filter(l => !existingKeys.has(`${l.cia}::${l.noCliente}`));
+        if (fresh.length > 0) {
+          updated = { ...updated, jdeAccounts: [...(updated.jdeAccounts ?? []), ...fresh] };
+        }
+      } else if (updated.jdeAccounts === undefined) {
+        updated = { ...updated, jdeAccounts: [] };
+      }
+      if (updated.id.startsWith('auto-') && updated.manualGroupOverride !== true) {
+        const isInViajes = updated.commercialGroupId === VIAJES_ESPECIALES_GROUP_ID;
+        const shouldBeViaje = isPersonName(updated.name);
+        if (shouldBeViaje && !isInViajes) {
+          reclassifiedIntoViajes++;
+          updated = {
+            ...updated,
+            commercialGroupId: VIAJES_ESPECIALES_GROUP_ID,
+            commercialGroupName: VIAJES_ESPECIALES_GROUP_NAME,
+          };
+        } else if (!shouldBeViaje && isInViajes) {
+          reclassifiedOutOfViajes++;
+          updated = { ...updated, commercialGroupId: undefined, commercialGroupName: undefined };
+        }
+      }
+      return updated;
+    });
+
+    // Para orphans empresa: intenta colgarlos de un cliente similar (catálogo
+    // o auto-*) antes de crear; si no hay match → cliente individual.
+    // Para orphans persona: directo a Viajes Especiales.
+    const extraAttach = new Map<string, ReturnType<typeof suggestionToLink>[]>();
+    let createdRecurrentes = 0;
+    let createdViajes = 0;
+    let attachedByFallback = 0;
+    const created: Client[] = [];
+    for (const o of toCreate) {
+      const id = `auto-${o.cia}-${o.noCliente}`;
+      if (existingIds.has(id)) continue;
+      const goesToViajes = isPersonName(o.nombreCliente);
+
+      // Empresas: intenta colgarlas de un cliente existente parecido (fallback)
+      if (!goesToViajes) {
+        const ranked = rankClientsForAccount(
+          { cia: o.cia, noCliente: o.noCliente, nombreCliente: o.nombreCliente, rfc: o.rfc, invoiceCount: o.invoiceCount },
+          reconciled,
+          1,
+        );
+        const top = ranked[0];
+        if (top && top.confidence >= FALLBACK_GROUP_THRESHOLD) {
+          const link = suggestionToLink(
+            { ...top, cia: o.cia, noCliente: o.noCliente, nombreCliente: o.nombreCliente, rfc: o.rfc, invoiceCount: o.invoiceCount },
+            'auto',
+          );
+          const arr = extraAttach.get(top.clientId) ?? [];
+          arr.push(link);
+          extraAttach.set(top.clientId, arr);
+          attachedByFallback++;
+          continue;
+        }
+      }
+
+      if (goesToViajes) createdViajes++; else createdRecurrentes++;
+      created.push({
+        id,
+        name: o.nombreCliente,
+        rfc: o.rfc,
+        monthlyBilling: new Array(12).fill(0),
+        frequency: 'Mensual',
+        creditDays: 30,
+        paymentDay: { kind: 'ANY' },
+        commercialGroupName: goesToViajes ? VIAJES_ESPECIALES_GROUP_NAME : undefined,
+        commercialGroupId: goesToViajes ? VIAJES_ESPECIALES_GROUP_ID : undefined,
+        jdeAccounts: [{
+          cia: o.cia,
+          noCliente: o.noCliente,
+          nombreCliente: o.nombreCliente,
+          rfc: o.rfc,
+          matchedAt: new Date().toISOString(),
+          matchedBy: 'auto',
+          confidence: o.bestGuess?.confidence,
+          tier: o.bestGuess?.tier,
+        }],
+      });
+    }
+
+    // Aplica los extraAttach del fallback sobre reconciled.
+    const reconciledWithExtras = extraAttach.size === 0
+      ? reconciled
+      : reconciled.map(c => {
+          const extras = extraAttach.get(c.id);
+          if (!extras || extras.length === 0) return c;
+          const existingKeys = new Set((c.jdeAccounts ?? []).map(l => `${l.cia}::${l.noCliente}`));
+          const fresh = extras.filter(l => !existingKeys.has(`${l.cia}::${l.noCliente}`));
+          if (fresh.length === 0) return c;
+          return { ...c, jdeAccounts: [...(c.jdeAccounts ?? []), ...fresh] };
+        });
+
+    const totalChanged =
+      intercoRemoved > 0 ||
+      reclassifiedIntoViajes > 0 ||
+      reclassifiedOutOfViajes > 0 ||
+      created.length > 0 ||
+      toAttach.length > 0 ||
+      attachedByFallback > 0;
+    if (totalChanged) {
+      setClients(created.length > 0 ? [...reconciledWithExtras, ...created] : reconciledWithExtras);
+    }
+    // Todo resuelto → wizard queda vacío (sirve solo como override manual).
+    setMatcherReview({ autoAccepted: [], needsReview: [], orphanNoClientes: [] });
     // eslint-disable-next-line no-console
     console.info(
-      `[matcher] auto-seed: ${out.autoAccepted.length} aceptados · ${out.needsReview.length} para revisar · ${out.orphanNoClientes.length} huérfanos`,
+      `[matcher] auto-resolve: ${toAttach.length} adjuntos · ${attachedByFallback} fallback adj · ${createdRecurrentes} cli. nuevos · ${createdViajes} viajes · ${reclassifiedIntoViajes} →viajes · ${reclassifiedOutOfViajes} ←viajes · ${intercoRemoved} interco quitados`,
     );
-  }, [clients, cobranzaRecords]);
+  }, [clients, cobranzaRecords, companies]);
 
   // Auto-actualiza `creditDays` por cliente con el lag observado de pagos
   // reales (fechaCobro - fechaFactura). El cliente queda igual cuando no hay
@@ -832,6 +1150,8 @@ export default function App() {
       assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
       cobranzaRecords, cobranzaLoadedCias,
       cobranzaPayments, cobranzaPaymentsLoadedCias,
+      comprasRecords, comprasLoadedCias,
+      companies, companiesLoadedAt,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
@@ -849,6 +1169,8 @@ export default function App() {
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
     cobranzaRecords, cobranzaLoadedCias,
     cobranzaPayments, cobranzaPaymentsLoadedCias,
+    comprasRecords, comprasLoadedCias,
+    companies, companiesLoadedAt,
     cashFlowOverrides,
   ]);
 
@@ -868,23 +1190,34 @@ export default function App() {
   }, []);
 
   // ── JDE: load companies on mount (sin fallback demo) ──
+  // Si el cache local ya hidrató la lista, el boot slot ya está en 'done' y
+  // el fetch a JDE corre en background sin volver a bloquear el splash.
+  // Errores en ese caso se reflejan en `companiesError` pero no degradan el
+  // slot — el usuario ya está dentro de la app.
   const loadCompanies = useCallback(async () => {
     setCompaniesLoading(true);
     setCompaniesError(null);
-    setBootSlot('companies', 'loading');
+    const hadCache = companiesHydratedFromCacheRef.current;
+    if (!hadCache) setBootSlot('companies', 'loading');
     try {
       const list = await fetchCompanies();
-      setCompanies(list);
       if (list.length === 0) {
         setCompaniesError('JDE respondió vacío. Revisa conectividad con srv-desarrollo.');
-        setBootSlot('companies', 'error');
+        if (!hadCache) {
+          setCompanies([]);
+          setBootSlot('companies', 'error');
+        }
       } else {
+        setCompanies(list);
+        setCompaniesLoadedAt(new Date().toISOString());
         setBootSlot('companies', 'done');
       }
     } catch (e) {
       setCompaniesError(e instanceof Error ? e.message : 'No se pudo contactar JDE.');
-      setCompanies([]);
-      setBootSlot('companies', 'error');
+      if (!hadCache) {
+        setCompanies([]);
+        setBootSlot('companies', 'error');
+      }
     } finally {
       setCompaniesLoading(false);
     }
@@ -938,40 +1271,60 @@ export default function App() {
   // cache hit for the source layer — saves ~250ms of main-thread work and
   // (more importantly) means the warmup shell doesn't need to wait for the
   // canonical pass to finish before mounting the inner dashboard.
+  //
+  // Wait longer (3 s) and yield before compute so the warmup is genuinely
+  // backgrounded — earlier versions fired ~1.5 s after boot and could
+  // collide with the user's first dashboard interaction, locking the main
+  // thread mid-click.
   useEffect(() => {
     if (!isBooted) return;
     const idleWindow = window as IdleWindow;
     let cancelled = false;
     const run = () => {
       if (cancelled) return;
-      try {
-        buildFinancialProjectionSourceData({
-          companyCode: selectedCia,
-          bankStatements: accountableBankStatements,
-          clients,
-          providers,
-          cxpRecords,
-          cobranzaRecords,
-          cobranzaReconciliation,
-          assumptions,
-          budget: null,
-          startingBalance: effectiveStartingBalance,
-        });
-      } catch {
-        /* pre-warm is best-effort — never block the user on a cache miss */
+      const channel = typeof MessageChannel !== 'undefined' ? new MessageChannel() : null;
+      const fire = () => {
+        if (cancelled) return;
+        try {
+          buildFinancialProjectionSourceData({
+            companyCode: selectedCia,
+            bankStatements: accountableBankStatements,
+            clients,
+            providers,
+            cxpRecords,
+            cobranzaRecords,
+            cobranzaReconciliation,
+            assumptions,
+            budget: null,
+            startingBalance: effectiveStartingBalance,
+          });
+        } catch {
+          /* pre-warm is best-effort — never block the user on a cache miss */
+        }
+      };
+      if (channel) {
+        channel.port1.onmessage = () => { channel.port1.close(); fire(); };
+        channel.port2.postMessage(null);
+      } else {
+        window.setTimeout(fire, 0);
       }
     };
-    if (idleWindow.requestIdleCallback) {
-      const id = idleWindow.requestIdleCallback(run, { timeout: 1500 });
-      return () => {
-        cancelled = true;
-        idleWindow.cancelIdleCallback?.(id);
-      };
-    }
-    const id = window.setTimeout(run, 0);
+    let idleHandle: number | null = null;
+    const debounceId = window.setTimeout(() => {
+      if (cancelled) return;
+      if (idleWindow.requestIdleCallback) {
+        idleHandle = idleWindow.requestIdleCallback(run, { timeout: 3000 });
+      } else {
+        idleHandle = window.setTimeout(run, 0);
+      }
+    }, 3000);
     return () => {
       cancelled = true;
-      window.clearTimeout(id);
+      window.clearTimeout(debounceId);
+      if (idleHandle !== null) {
+        if (idleWindow.cancelIdleCallback) idleWindow.cancelIdleCallback(idleHandle);
+        else window.clearTimeout(idleHandle);
+      }
     };
   }, [
     isBooted,
@@ -1049,6 +1402,42 @@ export default function App() {
     })();
   }, [companies, cxpLoadedCias, setBootSlot]);
 
+  // ── Auto-load Compras (Órdenes de Compra) durante el boot ──
+  // Endpoint global (no por cia, no listado en /empresas). Cargamos los últimos
+  // COMPRAS_LOOKBACK_DAYS días en chunks de 30 vía fetchComprasRange. No
+  // bloquea el splash — corre en segundo plano una vez que companies cargó
+  // (para reusar el mismo signal de "boot avanzado").
+  const comprasAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (comprasAutoFetchDone.current) return;
+    if (companies.length === 0) return;
+    if (isFreshTimestamp(comprasLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
+      comprasAutoFetchDone.current = true;
+      return;
+    }
+    comprasAutoFetchDone.current = true;
+    const today = new Date();
+    const fechaFinal = today.toISOString().slice(0, 10);
+    const lookback = new Date(today);
+    lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
+    const fechaInicial = lookback.toISOString().slice(0, 10);
+    (async () => {
+      try {
+        const records = await fetchComprasRange(fechaInicial, fechaFinal, { concurrency: 2 });
+        if (records.length > 0) {
+          setComprasRecords(records);
+        }
+        setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+      } catch (err) {
+        // Reset the guard so el usuario puede reintentar manualmente desde la
+        // pestaña Compras sin reload. Loggeamos para que la falla no quede
+        // muda — el silencio anterior dejaba "no muestra nada" sin pista.
+        comprasAutoFetchDone.current = false;
+        console.error('[compras] auto-fetch falló', err);
+      }
+    })();
+  }, [companies, comprasLoadedCias]);
+
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /v1/erp/tesoreria/cobranza (productivo desde 2026-05-01).
   //
@@ -1106,8 +1495,8 @@ export default function App() {
           if (idx >= ciasToFetch.length) return;
           const cia = ciasToFetch[idx];
           const [recordsResult, paymentsResult] = await Promise.allSettled([
-            fetchCobranza({ cia, fechaInicial, fechaFinal }),
-            fetchIndicadoresCobranza({ cia, fechaInicial, fechaFinal }),
+            fetchCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 4 }),
+            fetchIndicadoresCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 4 }),
           ]);
           if (recordsResult.status === 'fulfilled') {
             const stamped = recordsResult.value.map(r => ({ ...r, cia: r.cia || cia }));
@@ -1572,6 +1961,7 @@ export default function App() {
 
           {/* Actions */}
           <div className="flex items-center gap-1.5">
+            <DarkModeToggle />
             <CompanySelector
               companies={companies}
               selectedCia={selectedCia}
@@ -1668,6 +2058,7 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  purchaseReceipts={purchaseReceiptsFromCompras}
                   assumptions={assumptions}
                   budget={null}
                   startingBalance={effectiveStartingBalance}
@@ -1685,6 +2076,7 @@ export default function App() {
                   cxpRecords={cxpRecords}
                   cobranzaRecords={cobranzaRecords}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  purchaseReceipts={purchaseReceiptsFromCompras}
                   assumptions={assumptions}
                   budget={null}
                   startingBalance={effectiveStartingBalance}
@@ -1839,6 +2231,17 @@ export default function App() {
                   onMergeCia={mergeCxpForCia}
                   onReplaceAll={replaceAllCxp}
                   onReset={resetCxp}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'compras' && (
+              <Suspense fallback={<LazyTabFallback label="Órdenes de Compras" />}>
+                <Compras
+                  comprasRecords={comprasRecords}
+                  comprasLoadedCias={comprasLoadedCias}
+                  selectedCia={selectedCia}
+                  onComprasChange={setComprasRecords}
+                  onLoadedCiasChange={setComprasLoadedCias}
                 />
               </Suspense>
             )}

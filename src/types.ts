@@ -19,6 +19,7 @@ export type TabId =
   | 'fideicomiso'
   | 'clients'
   | 'cxp'
+  | 'compras'
   | 'bancos'
   | 'netflow';
 

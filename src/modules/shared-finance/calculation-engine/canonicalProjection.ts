@@ -31,8 +31,8 @@
 //     real, lo que da granularidad útil para vistas semanales/diarias.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { computeBaseCashFlow } from '../../../components/Dashboard';
-import type { ComputeInputs } from '../../../components/Dashboard';
+import { computeBaseCashFlow } from '../../../domain/dashboardEngine';
+import type { ComputeInputs } from '../../../domain/dashboardEngine';
 import { compareYearMonth, toYearMonth } from '../../../domain/cashFlowEngine';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 import { isNonOperatingDay } from '../../../domain/bankHolidays';

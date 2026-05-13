@@ -67,13 +67,43 @@ const automaticaLabel = (b: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO' | undefined): 
   return ({ CRITICO: 'Operativo', ALTO: 'Prioritario', MEDIO: 'Negociable', BAJO: 'Flexible' } as const)[b];
 };
 
-const ALBERTO_COLORS: Record<ClasificacionAlberto, { bg: string; text: string; ring: string; tag: string }> = {
-  CRITICO:        { bg: 'var(--danger-muted)', text: 'var(--danger)',  ring: 'oklch(88% 0.08 25)',   tag: 'bg-red-100 text-red-800' },
-  FLEX_ALTO:      { bg: '#FEF3C7',             text: '#92400E',         ring: '#FCD34D',              tag: 'bg-amber-100 text-amber-800' },
-  FLEX_MEDIO:     { bg: '#FFEDD5',             text: '#9A3412',         ring: '#FED7AA',              tag: 'bg-orange-100 text-orange-800' },
-  FLEX_BAJO:      { bg: 'var(--success-muted)',text: 'var(--success)',  ring: 'oklch(88% 0.08 145)',  tag: 'bg-emerald-100 text-emerald-800' },
-  PAUSAR:         { bg: 'var(--gray-100)',     text: 'var(--gray-500)', ring: 'var(--gray-200)',      tag: 'bg-gray-100 text-gray-700' },
-  SIN_CLASIFICAR: { bg: 'var(--gray-50)',      text: 'var(--gray-400)', ring: 'var(--gray-200)',      tag: 'bg-gray-50 text-gray-500' },
+/* All-token surfaces so dark mode inherits automatically. Ring colors use
+   color-mix on the foreground token instead of hard-coded OKLCH so the
+   contrast follows the surface shift. Tags wrap via inline style now —
+   raw tailwind shades (bg-red-100, etc.) didn't respect dark mode. */
+const ALBERTO_COLORS: Record<ClasificacionAlberto, { bg: string; text: string; ring: string; tagBg: string; tagText: string }> = {
+  CRITICO:        {
+    bg: 'var(--danger-muted)',  text: 'var(--danger)',
+    ring: 'color-mix(in oklch, var(--danger) 35%, var(--gray-200))',
+    tagBg: 'var(--danger-muted)', tagText: 'var(--danger)',
+  },
+  FLEX_ALTO:      {
+    bg: 'var(--warning-muted)', text: 'var(--warning)',
+    ring: 'color-mix(in oklch, var(--warning) 40%, var(--gray-200))',
+    tagBg: 'var(--warning-muted)', tagText: 'var(--warning)',
+  },
+  FLEX_MEDIO:     {
+    bg: 'color-mix(in oklch, var(--warning-muted) 60%, var(--gray-100))',
+    text: 'var(--warning)',
+    ring: 'color-mix(in oklch, var(--warning) 28%, var(--gray-200))',
+    tagBg: 'color-mix(in oklch, var(--warning-muted) 60%, var(--gray-100))',
+    tagText: 'var(--warning)',
+  },
+  FLEX_BAJO:      {
+    bg: 'var(--success-muted)', text: 'var(--success)',
+    ring: 'color-mix(in oklch, var(--success) 35%, var(--gray-200))',
+    tagBg: 'var(--success-muted)', tagText: 'var(--success)',
+  },
+  PAUSAR:         {
+    bg: 'var(--gray-100)', text: 'var(--gray-500)',
+    ring: 'var(--gray-200)',
+    tagBg: 'var(--gray-100)', tagText: 'var(--gray-700)',
+  },
+  SIN_CLASIFICAR: {
+    bg: 'var(--gray-50)', text: 'var(--gray-400)',
+    ring: 'var(--gray-200)',
+    tagBg: 'var(--gray-50)', tagText: 'var(--gray-500)',
+  },
 };
 
 export default function ProviderDetailModal({ provider, cxpRecords, onClose }: Props) {

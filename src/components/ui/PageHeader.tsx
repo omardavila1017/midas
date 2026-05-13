@@ -28,15 +28,12 @@ export default function PageHeader({ title, meta, subtitle, actions }: PageHeade
     <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
       <div className="min-w-0 flex-1">
         {meta && (
-          <p
-            className="mb-1 text-[10px] font-medium uppercase tracking-[0.08em]"
-            style={{ color: 'var(--gray-500)' }}
-          >
-            {meta}
+          <p className="mb-1.5">
+            <span className="skeuo-nameplate">{meta}</span>
           </p>
         )}
         <h1
-          className="truncate text-[22px] font-bold leading-tight tracking-tight"
+          className="truncate text-[22px] font-bold leading-tight tracking-tight skeuo-letterpress"
           style={{ color: 'var(--gray-950)' }}
         >
           {title}

@@ -1748,12 +1748,22 @@ function TriageColumn({
               <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
                 {flexibilityLabel(record.providerFlexibility)}
               </span>
-              <span
-                className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]"
-                title={agingTooltip(record.diasVencida)}
-              >
-                {record.diasVencida > 0 ? `${record.diasVencida}d vencido` : 'por vencer'}
-              </span>
+              {record.diasVencida > 0 ? (
+                <span
+                  className="skeuo-stamp"
+                  data-tone="danger"
+                  title={agingTooltip(record.diasVencida)}
+                >
+                  {`${record.diasVencida}d vencido`}
+                </span>
+              ) : (
+                <span
+                  className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]"
+                  title={agingTooltip(record.diasVencida)}
+                >
+                  por vencer
+                </span>
+              )}
               <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
                 vence {dueDateForRecord(record) ?? 'sin fecha'}
               </span>
@@ -1944,10 +1954,10 @@ function PlanningCard({
 }) {
   const toneClass =
     tone === 'danger'
-      ? 'text-[var(--danger)] bg-[var(--danger-muted)] border-red-100'
+      ? 'text-[var(--danger)] bg-[var(--danger-muted)] border-[var(--danger-muted)]'
       : tone === 'success'
-        ? 'text-[var(--success)] bg-[var(--success-muted)] border-green-100'
-        : 'text-[var(--warning)] bg-[var(--warning-muted)] border-yellow-100';
+        ? 'text-[var(--success)] bg-[var(--success-muted)] border-[var(--success-muted)]'
+        : 'text-[var(--warning)] bg-[var(--warning-muted)] border-[var(--warning-muted)]';
 
   return (
     <button

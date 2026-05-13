@@ -1,5 +1,11 @@
 /**
- * Persistence layer for Midas — v9.
+ * Persistence layer for Midas — v10.
+ *
+ * v10 adds Compras (órdenes de compra) cache from POST
+ * /v1/erp/tesoreria/compras, liberado a producción 2026-05-08.
+ *   - `comprasRecords` — registros normalizados por (cia, noOrden, lineaOrden).
+ *   - `comprasLoadedCias` — timestamps por cia (no aplica filtro de cia en el
+ *     endpoint, pero igual lo trackeamos por consistencia con cxp/cobranza).
  *
  * v9 adds Client.jdeAccounts: enlaces persistidos entre el catálogo de
  * clientes y las cuentas JDE de cobranza (cia+noCliente). El primer boot
@@ -36,7 +42,7 @@
 
 import { CashFlowOverrides } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
-import type { CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord, ComprasRecord, Company } from '../services/jdeTypes';
 
 export interface CXPRecord {
   cia: string;
@@ -95,16 +101,36 @@ export interface MidasStore {
   cobranzaPayments: CobranzaPayment[];
   /** Per-cia ISO timestamp del último refresh exitoso de IndicadoresCobranza. */
   cobranzaPaymentsLoadedCias: Record<string, string>;
+  /**
+   * Compras (órdenes de compra) cacheadas de POST /v1/erp/tesoreria/compras.
+   * El endpoint es global (no por cia) y se consume por rangos de 30 días.
+   */
+  comprasRecords: ComprasRecord[];
+  /**
+   * Per-cia ISO timestamp del último refresh de Compras. El endpoint no acepta
+   * filtro por cia, pero como los registros traen cia, lo trackeamos así para
+   * consistencia con el resto del store.
+   */
+  comprasLoadedCias: Record<string, string>;
+  /**
+   * Catálogo de compañías JDE cacheado del último fetch a /empresas. Permite
+   * arrancar la app contra el catálogo conocido mientras la red repuebla en
+   * background. Si está vacío, el boot espera al fetch para hidratar.
+   */
+  companies: Company[];
+  /** ISO timestamp del último refresh exitoso de /empresas. */
+  companiesLoadedAt?: string;
   cashFlowOverrides: CashFlowOverrides;
   lastSaved: string;
 }
 
-const STORE_VERSION = 9;
-const STORAGE_KEY = 'midas-v9';
-// v5-v8 live at compatible shapes minus newer fields — `normalizeStore`
-// defaults them to empty arrays / undefined jdeAccounts, so those payloads
-// load transparently and the first boot runs the matcher auto-seed.
-const SAME_SCHEMA_LEGACY_KEYS = ['midas-v8', 'midas-v7', 'midas-v6', 'midas-v5', 'flowsense-v5'];
+const STORE_VERSION = 10;
+const STORAGE_KEY = 'midas-v10';
+// v5-v9 live at compatible shapes minus newer fields — `normalizeStore`
+// defaults them to empty arrays / undefined jdeAccounts / empty
+// comprasRecords, so those payloads load transparently and los auto-fetch
+// loops del primer boot rellenan los caches faltantes.
+const SAME_SCHEMA_LEGACY_KEYS = ['midas-v9', 'midas-v8', 'midas-v7', 'midas-v6', 'midas-v5', 'flowsense-v5'];
 const LEGACY_KEYS = ['flowsense-v4', 'flowsense-v3', 'flowsense-v2', 'flowsense-v1'];
 
 // Orphan keys de OperatingProjection (módulo eliminado). Se limpian al primer
@@ -142,6 +168,10 @@ export function getDefaultStore(): MidasStore {
     cobranzaLoadedCias: {},
     cobranzaPayments: [],
     cobranzaPaymentsLoadedCias: {},
+    comprasRecords: [],
+    comprasLoadedCias: {},
+    companies: [],
+    companiesLoadedAt: undefined,
     cashFlowOverrides: {},
     lastSaved: isoNow(),
   };
@@ -244,6 +274,31 @@ function normalizeStore(raw: unknown): MidasStore {
     }
   }
 
+  // Compras (Órdenes de Compra) — v10+. Payloads más viejos no traen estos
+  // campos; el auto-fetch del boot los rellena en el primer arranque.
+  const comprasRecords = Array.isArray(o.comprasRecords)
+    ? (o.comprasRecords.filter((r) => !!r && typeof r === 'object') as ComprasRecord[])
+    : [];
+  const comprasLoadedCias: Record<string, string> = {};
+  if (o.comprasLoadedCias && typeof o.comprasLoadedCias === 'object') {
+    for (const [k, val] of Object.entries(o.comprasLoadedCias as Record<string, unknown>)) {
+      if (typeof val === 'string') comprasLoadedCias[k] = val;
+    }
+  }
+
+  // Companies cache — payloads v10 y anteriores no traen este campo; default
+  // a [] dispara el fetch normal en el primer boot tras el upgrade.
+  const companies = Array.isArray(o.companies)
+    ? (o.companies.filter((c) => {
+        if (!c || typeof c !== 'object') return false;
+        const rec = c as Record<string, unknown>;
+        return typeof rec.cia === 'string' && typeof rec.nombre === 'string';
+      }) as Company[])
+    : [];
+  const companiesLoadedAt = typeof o.companiesLoadedAt === 'string'
+    ? o.companiesLoadedAt
+    : undefined;
+
   return {
     providers,
     clients,
@@ -254,6 +309,10 @@ function normalizeStore(raw: unknown): MidasStore {
     cobranzaLoadedCias,
     cobranzaPayments,
     cobranzaPaymentsLoadedCias,
+    comprasRecords,
+    comprasLoadedCias,
+    companies,
+    companiesLoadedAt,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
     assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
     lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,

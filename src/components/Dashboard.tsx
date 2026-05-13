@@ -22,16 +22,17 @@ import type { CXPRecord } from '../domain/persistence';
 import type { Budget } from '../domain/budget';
 import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
 import {
-  buildHistoricalMonths,
   toYearMonth,
-  addMonths,
   compareYearMonth,
 } from '../domain/cashFlowEngine';
 import {
-  buildMonthlyProjection,
   type ProjectionOverrides,
   type MonthlyProjection,
 } from '../domain/projectionEngine';
+import {
+  computeBaseCashFlow,
+  computeBankStartingBalance,
+} from '../domain/dashboardEngine';
 import type { CashFlowMonth } from '../types';
 import {
   fetchAgedBalances,
@@ -70,20 +71,21 @@ interface DashboardProps {
 }
 
 /*
- * Chart hex literals. Recharts SVG primitives accept hex strings only —
- * CSS variables would require getComputedStyle reads on every render.
- * Aligned with --chart-income / --chart-expense tokens in index.css;
- * keep in sync if those tokens move. When a dark-mode token set ships,
- * resolve these from theme context instead of literals.
+ * Chart hex literals. Recharts forwards these to SVG `stroke=` / `fill=`
+ * attributes which can't resolve `var(--token)`. Dark-mode adjustments
+ * for stroke colors (cash line, grid) live as `!important` overrides in
+ * index.css targeting `.recharts-line-curve` / `.recharts-cartesian-grid`
+ * inside `html.dark`. Semantic fills (success/danger) stay saturated
+ * enough to read on both light and dark slate canvases.
  */
 const CHART_COLORS = {
-  income:         '#16a34a', // var(--success)
+  income:         '#16a34a',
   incomePattern:  '#22c55e',
-  incomeBg:       '#dcfce7', // var(--success-muted)
-  expense:        '#dc2626', // var(--danger)
+  incomeBg:       '#dcfce7',
+  expense:        '#dc2626',
   expensePattern: '#ef4444',
-  expenseBg:      '#fee2e2', // var(--danger-muted)
-  cash:           '#1e293b', // var(--primary)
+  expenseBg:      '#fee2e2',
+  cash:           '#1e293b',
 } as const;
 
 const OVERRIDES_KEY = 'midas.dashboard.projectionOverrides.v1';
@@ -315,7 +317,11 @@ const Dashboard: React.FC<DashboardProps> = ({
       };
     }
     if (cmp > 0) {
-      const parts = partitionExpense(0, m.baseExpense, ym);
+      // Meses futuros: la proyección entera se rinde como barra "Egresos
+      // (proy.)" (roja rayada). El piso operativo NO se apila — ya está
+      // implícito en la proyección. Se rinde aparte como marker horizontal
+      // de referencia en `OverrunMarkers` cuando `floorReference` > 0.
+      const floor = floorForMonth(ym, minimumExpense.providersMonthly, null);
       return {
         yearMonth: ym,
         realIncome: 0,
@@ -324,7 +330,11 @@ const Dashboard: React.FC<DashboardProps> = ({
         realExpense: 0,
         projExpenseGap: m.baseExpense,
         projExpenseTotal: m.baseExpense,
-        ...parts,
+        gastoMinFloor: 0,
+        realExpenseAboveFloor: 0,
+        projExpenseGapAboveFloor: m.baseExpense,
+        monthlyFloor: floor,
+        floorReference: m.baseExpense > 0 ? floor : null,
         projIncomeOverrun: null,
         projExpenseOverrun: null,
         cashBase: m.baseClosingCash,
@@ -433,8 +443,8 @@ const Dashboard: React.FC<DashboardProps> = ({
             <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.expensePattern} strokeWidth="2.5" />
           </pattern>
           <pattern id="hatchMinimum" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
-            <rect width="8" height="8" fill="#FEF3C7" />
-            <line x1="0" y1="0" x2="0" y2="8" stroke="#F59E0B" strokeWidth="3" opacity="0.95" />
+            <rect width="8" height="8" fill="#D1FAE5" />
+            <line x1="0" y1="0" x2="0" y2="8" stroke="#059669" strokeWidth="3" opacity="0.95" />
           </pattern>
         </defs>
       </svg>
@@ -609,8 +619,8 @@ const Dashboard: React.FC<DashboardProps> = ({
               <Bar
                 dataKey="gastoMinFloor"
                 stackId="expense"
-                fill="#FCD34D"
-                stroke="#F59E0B"
+                fill="#34D399"
+                stroke="#059669"
                 strokeWidth={1.5}
                 name="Piso operativo"
                 radius={[0, 0, 0, 0]}
@@ -620,7 +630,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 {chartData.map((row) => (
                   <Cell
                     key={`floor-${row.yearMonth}`}
-                    fill={row.phase === 'past' ? '#FCD34D' : 'url(#hatchMinimum)'}
+                    fill={row.phase === 'past' ? '#34D399' : 'url(#hatchMinimum)'}
                   />
                 ))}
               </Bar>
@@ -766,6 +776,27 @@ const OverrunMarkers: React.FC<any> = (props) => {
       />,
     );
   });
+  // Marcador de piso operativo para meses futuros. La proyección futura ya
+  // no apila el piso; aquí lo dibujamos como línea horizontal de referencia
+  // sobre la barra de proyección para señalar "¿cubre el mes el piso?".
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  expenseBar?.props?.data?.forEach((bar: any, idx: number) => {
+    const v = bar?.payload?.floorReference;
+    if (v == null || v <= 0) return;
+    const y = yScale(v);
+    lines.push(
+      <line
+        key={`floorref-${idx}`}
+        x1={bar.x}
+        x2={bar.x + bar.width}
+        y1={y}
+        y2={y}
+        stroke="#059669"
+        strokeWidth={2}
+        strokeDasharray="4 2"
+      />,
+    );
+  });
   return <g>{lines}</g>;
 };
 
@@ -862,50 +893,75 @@ const MinimumExpenseKpi: React.FC<{
   criticalCount: number;
 }> = ({ monthly, annual, providersMonthly, payrollMonthly, criticalCount }) => (
   <div
-    className="relative overflow-hidden rounded-[var(--radius)] border-2 border-yellow-300 bg-yellow-50 p-4"
+    className="relative overflow-hidden rounded-[var(--radius)] p-4 floor-kpi"
+    title="Piso operativo: proveedores de Operación + nómina/finiquitos. Es el monto que necesitas cubrir cada mes para no afectar operación."
     style={{
+      background: 'var(--color-floor-bg)',
+      border: '1px solid color-mix(in oklch, var(--color-floor) 35%, transparent)',
+      boxShadow: 'var(--shadow-card)',
       backgroundImage: `repeating-linear-gradient(
         45deg,
-        rgba(251, 191, 36, 0.12) 0px,
-        rgba(251, 191, 36, 0.12) 8px,
+        color-mix(in oklch, var(--color-floor-pattern) 14%, transparent) 0px,
+        color-mix(in oklch, var(--color-floor-pattern) 14%, transparent) 8px,
         transparent 8px,
         transparent 16px
       )`,
     }}
-    title="Piso operativo: proveedores de Operación + nómina/finiquitos. Es el monto que necesitas cubrir cada mes para no afectar operación."
   >
     <div className="flex items-center justify-between mb-2">
-      <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-yellow-800">
+      <p
+        className="text-[11px] font-bold uppercase tracking-[0.08em]"
+        style={{ color: 'var(--color-floor)' }}
+      >
         Gasto mín. operativo
       </p>
-      <span className="text-yellow-700">
+      <span style={{ color: 'var(--color-floor)' }}>
         <ShieldAlert className="w-4 h-4" />
       </span>
     </div>
-    <p className="text-[20px] font-bold tabular-nums text-yellow-900 leading-tight">
+    <p
+      className="text-[20px] font-bold tabular-nums leading-tight"
+      style={{ color: 'var(--gray-950)' }}
+    >
       {fmtCurrency(monthly)}
-      <span className="text-[11px] font-normal text-yellow-800/80 ml-1">/ mes</span>
+      <span
+        className="text-[11px] font-normal ml-1"
+        style={{ color: 'var(--gray-500)' }}
+      >
+        / mes
+      </span>
     </p>
-    <p className="text-[10px] text-yellow-800/70 mt-0.5">
+    <p
+      className="text-[10px] mt-0.5"
+      style={{ color: 'var(--gray-500)' }}
+    >
       {fmtCompact(annual)} anualizado
     </p>
-    {/* Desglose con jerarquía clara: una línea por componente */}
-    <div className="mt-2.5 space-y-1 border-t border-yellow-200/70 pt-2">
+    <div
+      className="mt-2.5 space-y-1 pt-2"
+      style={{ borderTop: '1px solid color-mix(in oklch, var(--color-floor) 25%, transparent)' }}
+    >
       <div className="flex items-center justify-between text-[11px]">
-        <span className="text-yellow-800/80">
+        <span style={{ color: 'var(--gray-700)' }}>
           Proveedores Operación
-          <span className="text-yellow-700/60 ml-1">· {criticalCount}</span>
+          <span className="ml-1" style={{ color: 'var(--gray-500)' }}>· {criticalCount}</span>
         </span>
-        <span className="font-medium tabular-nums text-yellow-900">
+        <span
+          className="font-medium tabular-nums"
+          style={{ color: 'var(--gray-950)' }}
+        >
           {fmtCompact(providersMonthly)}
         </span>
       </div>
       {payrollMonthly > 0 && (
         <div className="flex items-center justify-between text-[11px]">
-          <span className="text-yellow-800/80">
+          <span style={{ color: 'var(--gray-700)' }}>
             Nómina + finiquitos
           </span>
-          <span className="font-medium tabular-nums text-yellow-900">
+          <span
+            className="font-medium tabular-nums"
+            style={{ color: 'var(--gray-950)' }}
+          >
             {fmtCompact(payrollMonthly)}
           </span>
         </div>
@@ -914,140 +970,8 @@ const MinimumExpenseKpi: React.FC<{
   </div>
 );
 
-export interface ComputeInputs {
-  bankStatements: BankAccountStatement[];
-  aged: AgedBalanceRecord[];
-  clients: Client[];
-  providers: Provider[];
-  cxpRecords: CXPRecord[];
-  assumptions: CashFlowAssumptions;
-  companyCode: string;
-  today: string;
-  overrides: ProjectionOverrides;
-  budget: Budget | null;
-  /**
-   * Caja inicial (pesos) para el primer mes histórico. Si es undefined se
-   * usa la suma de saldoInicial reportado por JDE. Esta es la base del
-   * encadenado: todas las cajas finales salen de la fórmula
-   * caja_inicial + ingresos - egresos.
-   */
-  startingBalance?: number;
-}
-
-export interface ComputeOutput {
-  base: CashFlowMonth[];
-  baseline: { avgIncome: number; avgExpense: number };
-  projection: ReturnType<typeof buildMonthlyProjection>;
-}
-
-/**
- * Caja inicial derivada del banco: suma de saldoInicial de todas las
- * cuentas en el scope. Si una cuenta no reporta saldoInicial, vale 0 y
- * se refleja como tal en la caja encadenada; el usuario puede sobreescribir
- * este valor desde la UI para ajustarlo al dato real de contabilidad.
- */
-export function computeBankStartingBalance(statements: BankAccountStatement[]): number {
-  return statements.reduce((s, acc) => s + (acc.saldoInicial ?? 0), 0);
-}
-
-export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
-  const { bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, startingBalance } = inputs;
-  const filtered = companyCode === 'all' || !companyCode
-    ? bankStatements
-    : bankStatements.filter((s) => s.cia === companyCode);
-  // CXP ya filtrado por compañía — se suma al aged cuando hay records
-  // cargados para el mismo rango. Nos da granularidad per-factura para la
-  // proyección per-proveedor.
-  const filteredCxp = companyCode === 'all' || !companyCode
-    ? cxpRecords
-    : cxpRecords.filter((r) => r.cia === companyCode);
-  const combinedAged: AgedBalanceRecord[] = aged.length > 0
-    ? aged
-    : filteredCxp as unknown as AgedBalanceRecord[];
-
-  const historical = buildHistoricalMonths(filtered);
-
-  const todayYm = toYearMonth(today);
-
-  // Horizonte: diciembre del año en curso. Cortamos el horizonte al fin del
-  // año calendario actual en vez de usar 12 meses rolling.
-  const todayYear = Number(todayYm.slice(0, 4));
-  const endOfYearYm = `${todayYear}-12`;
-  const lastHistoricalYm = historical.length > 0
-    ? historical[historical.length - 1].yearMonth
-    : todayYm;
-  const firstFutureYm = addMonths(
-    compareYearMonth(lastHistoricalYm, todayYm) > 0 ? lastHistoricalYm : todayYm,
-    1,
-  );
-  // Si el horizonte calendario ya quedó atrás del último histórico, no hay
-  // proyección — sólo rendiremos el histórico.
-  const lastFutureYm = compareYearMonth(endOfYearYm, firstFutureYm) >= 0
-    ? endOfYearYm
-    : null;
-
-  // Proyección operativa per-cliente / per-proveedor. Esta es la fuente para
-  // los meses futuros; las plantillas externas quedan fuera del runtime normal.
-  const projection = buildMonthlyProjection({
-    fromYm: todayYm,
-    toYm: lastFutureYm ?? todayYm,
-    clients,
-    providers,
-    aged: combinedAged,
-    bankStatements: filtered,
-    baselineIncome: 0,
-    baselineExpense: 0,
-    assumptions,
-    today,
-    budget: null,
-  });
-  const projectionByYm = new Map(projection.months.map((m) => [m.yearMonth, m]));
-
-  // Baseline queda expuesto como 0 — ya no se calcula linear regression.
-  const baseline = { avgIncome: 0, avgExpense: 0 };
-
-  // ── Encadenado de caja con fórmula simple y predecible ──────────────
-  // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
-  //
-  // Los meses históricos SIEMPRE usan sus ingresos/egresos REALES (del banco).
-  // Para la caja inicial, si el usuario no dio override manual, usamos la suma
-  // de saldoInicial de las cuentas.
-  const baseStart = typeof startingBalance === 'number'
-    ? startingBalance
-    : computeBankStartingBalance(filtered);
-  const historicalChained: CashFlowMonth[] = [];
-  let runningHist = baseStart;
-  for (const m of historical) {
-    runningHist = runningHist + m.income - m.expense;
-    historicalChained.push({ ...m, closingCash: runningHist });
-  }
-
-  // Meses futuros: overrides manuales si existen; si no, proyección operativa
-  // desde clientes, CXP/JDE, proveedores recurrentes y bancos.
-  const months: CashFlowMonth[] = [...historicalChained];
-  let running = historicalChained.length > 0
-    ? historicalChained[historicalChained.length - 1].closingCash
-    : baseStart;
-  if (lastFutureYm !== null) {
-    let cursor = firstFutureYm;
-    while (compareYearMonth(cursor, lastFutureYm) <= 0) {
-      const ov = overrides[cursor];
-      const projected = projectionByYm.get(cursor);
-      const income = ov?.income ?? projected?.income.total ?? 0;
-      const expense = ov?.expense ?? projected?.expense.total ?? 0;
-      running = running + income - expense;
-      months.push({
-        yearMonth: cursor,
-        isHistorical: false,
-        income,
-        expense,
-        closingCash: running,
-      });
-      cursor = addMonths(cursor, 1);
-    }
-  }
-  return { base: months, baseline, projection };
-}
+export type { ComputeInputs, ComputeOutput } from '../domain/dashboardEngine';
+export { computeBaseCashFlow, computeBankStartingBalance };
 
 /**
  * Tarjeta de KPI para Cobranza ↔ Bancos.

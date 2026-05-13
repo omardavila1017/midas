@@ -332,7 +332,8 @@ export default function FideicomisoDashboard({
 
       {/* Próxima obligación — tarjeta detallada */}
       <section
-        className="rounded-[var(--radius-lg)] border bg-white p-5"
+        className="rounded-[var(--radius-lg)] border p-5 skeuo-brackets skeuo-brackets-deep"
+        data-skeuo-card="fideicomiso"
         style={{ borderColor: 'var(--gray-200)' }}
       >
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -384,7 +385,8 @@ export default function FideicomisoDashboard({
 
       {/* Cobranza CORNING */}
       <section
-        className="rounded-[var(--radius-lg)] border bg-white p-5"
+        className="rounded-[var(--radius-lg)] border p-5 skeuo-brackets skeuo-brackets-deep"
+        data-skeuo-card="fideicomiso"
         style={{ borderColor: 'var(--gray-200)' }}
       >
         <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
@@ -457,7 +459,8 @@ export default function FideicomisoDashboard({
 
       {/* Movimientos: Bajío / Pagos DINA / Retornos SIR */}
       <section
-        className="rounded-[var(--radius-lg)] border bg-white p-5"
+        className="rounded-[var(--radius-lg)] border p-5 skeuo-brackets skeuo-brackets-deep"
+        data-skeuo-card="fideicomiso"
         style={{ borderColor: 'var(--gray-200)' }}
       >
         <div className="flex items-center justify-between gap-4 mb-3 flex-wrap">
@@ -536,7 +539,8 @@ export default function FideicomisoDashboard({
       {/* Pagos recientes Corning (CobranzaIndicadores) */}
       {corningPayments.length > 0 && (
         <section
-          className="rounded-[var(--radius-lg)] border bg-white p-5"
+          className="rounded-[var(--radius-lg)] border p-5 skeuo-brackets skeuo-brackets-deep"
+        data-skeuo-card="fideicomiso"
           style={{ borderColor: 'var(--gray-200)' }}
         >
           <h2 className="text-[14px] font-semibold mb-1" style={{ color: 'var(--gray-950)' }}>

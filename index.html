@@ -11,6 +11,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#ffffff" />
     <title>Midas</title>
+    <script>
+      // Aplica el tema antes del primer paint para evitar FOUC.
+      // Lee localStorage; si no hay preferencia, respeta prefers-color-scheme.
+      (function () {
+        try {
+          var stored = localStorage.getItem('midas.theme');
+          var theme = stored === 'light' || stored === 'dark'
+            ? stored
+            : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (theme === 'dark') document.documentElement.classList.add('dark');
+        } catch (e) { /* noop */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

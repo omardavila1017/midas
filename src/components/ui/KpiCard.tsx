@@ -73,7 +73,11 @@ export const KpiCard: React.FC<KpiCardProps> = ({
   onClick,
   navHint,
 }) => {
-  const surfaceStyles = TONE_SURFACE[tone];
+  const surfaceStyles = {
+    ...TONE_SURFACE[tone],
+    backgroundImage: tone === 'neutral' ? 'var(--skeuo-linen)' : undefined,
+    boxShadow: 'var(--skeuo-emboss-md)',
+  };
   const isInteractive = typeof onClick === 'function';
 
   const body = (
@@ -110,7 +114,7 @@ export const KpiCard: React.FC<KpiCardProps> = ({
         </div>
       </div>
       <p
-        className="text-[22px] font-bold tabular-nums leading-[1.1]"
+        className="text-[22px] font-bold tabular-nums leading-[1.1] skeuo-letterpress"
         style={{ color }}
       >
         {value}
@@ -147,9 +151,11 @@ export const KpiCard: React.FC<KpiCardProps> = ({
   );
 
   const baseClasses =
-    'group flex flex-col rounded-[var(--radius-lg)] border p-4 text-left transition-all duration-150';
+    `group flex flex-col rounded-[var(--radius-lg)] border p-4 text-left transition-all duration-150${
+      tone === 'neutral' ? ' skeuo-brackets' : ''
+    }`;
   const interactiveClasses = isInteractive
-    ? 'cursor-pointer hover:border-[var(--gray-400)] hover:-translate-y-[1px] hover:shadow-[var(--shadow-card-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] focus-visible:ring-offset-2'
+    ? 'cursor-pointer hover:border-[var(--accent-blue)] hover:-translate-y-[1px] hover:shadow-[var(--shadow-card-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-blue)] focus-visible:ring-offset-2'
     : 'hover:border-[var(--gray-300)]';
 
   if (isInteractive) {

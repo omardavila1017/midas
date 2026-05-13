@@ -63,13 +63,29 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[var(--gray-50)] via-white to-[var(--gray-100)] px-4">
-      <div className="w-full max-w-sm bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-[var(--shadow-card-hover)] p-8">
+    <div
+      className="min-h-screen flex items-center justify-center px-4 skeuo-paper"
+    >
+      <div
+        className="w-full max-w-sm rounded-[var(--radius-lg)] p-8 skeuo-emboss-bordered"
+        style={{ background: 'var(--skeuo-paper)' }}
+      >
         <div className="flex flex-col items-center text-center mb-6">
-          <div className="w-12 h-12 rounded-[var(--radius-lg)] bg-[var(--primary)] text-white flex items-center justify-center mb-3">
+          <div
+            className="w-12 h-12 rounded-[var(--radius-lg)] flex items-center justify-center mb-3"
+            style={{
+              background: 'var(--skeuo-paper)',
+              boxShadow: 'var(--skeuo-deboss-md)',
+              color: 'var(--skeuo-brass-deep)',
+            }}
+          >
             <Lock className="w-5 h-5" />
           </div>
-          <h1 className="text-[18px] font-bold text-[var(--gray-950)]">Midas</h1>
+          <h1
+            className="text-[18px] font-bold text-[var(--gray-950)] skeuo-letterpress"
+          >
+            Midas
+          </h1>
           <p className="text-[13px] text-[var(--gray-400)] mt-1">
             Ingresa tus credenciales para continuar
           </p>
@@ -89,7 +105,8 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
                   setUser(event.target.value);
                   if (error) setError(null);
                 }}
-                className="w-full h-10 pl-9 pr-3 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--input)] text-[14px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
+                className="w-full h-10 pl-9 pr-3 rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] text-[14px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
+                style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
                 placeholder="admin"
               />
             </div>
@@ -107,7 +124,8 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
                   setPassword(event.target.value);
                   if (error) setError(null);
                 }}
-                className="w-full h-10 pl-9 pr-9 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--input)] text-[14px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
+                className="w-full h-10 pl-9 pr-9 rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] text-[14px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
+                style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
                 placeholder="••••••••"
               />
               <button
@@ -122,7 +140,14 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
           </label>
 
           {error && (
-            <div className="flex items-center gap-2 text-[12px] text-[var(--destructive)] bg-red-50 border border-red-100 rounded-[var(--radius-md)] px-3 py-2">
+            <div
+              className="flex items-center gap-2 text-[12px] rounded-[var(--radius-md)] px-3 py-2"
+              style={{
+                color: 'var(--danger)',
+                background: 'var(--danger-muted)',
+                border: '1px solid color-mix(in oklch, var(--danger) 22%, transparent)',
+              }}
+            >
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span>{error}</span>
             </div>
@@ -131,6 +156,10 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
           <button
             type="submit"
             className="w-full h-10 rounded-[var(--radius-md)] bg-[var(--primary)] hover:bg-[var(--primary-hover)] text-white text-[14px] font-medium transition-colors"
+            style={{
+              boxShadow: 'var(--skeuo-emboss-md)',
+              border: '1px solid var(--skeuo-brass-deep)',
+            }}
           >
             Entrar
           </button>

@@ -12,6 +12,7 @@
 
 import { CollectionEvent, ConfirmedPayment, eventKey } from './types';
 import { CXPRecord } from './persistence';
+import type { ComprasRecord } from '../services/jdeTypes';
 import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
 import type { BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 
@@ -1026,6 +1027,51 @@ export function extractPaymentEvents(
   // Sort by date for efficient grouping
   events.sort((a, b) => a.date.localeCompare(b.date));
 
+  return events;
+}
+
+/**
+ * Convierte órdenes de compra (Compras / `/v1/erp/tesoreria/compras`) en
+ * eventos de pago proyectado.
+ *
+ * Una OC representa un compromiso de egreso **antes** de que JDE genere la
+ * factura (CXP). Esto permite anticipar el egreso 0-30 días antes que CXP
+ * lo refleje. Reglas:
+ *   - Si `cancelada` → ignorada.
+ *   - Si `facturada` → ignorada (CXP / API Facturas la cubrirá; evita doble
+ *     conteo cuando se concatena con `extractPaymentEvents(cxp,...)`).
+ *   - Si `fechaPagoProyectada` vacía (OC sin recepción) → ignorada para cash
+ *     flow; la UI puede mostrar el bucket "Pendiente recepción" por su lado.
+ *   - Resto → evento `kind: 'pending'` con monto = `importeTotal` en
+ *     `fechaPagoProyectada` = `fechaRecepcion + diasCredito`.
+ *
+ * El catálogo de proveedores se consulta vía `enrichFromCatalog` igual que
+ * en `extractPaymentEvents` para que la flexibilidad y criticidad estén
+ * disponibles en la proyección.
+ */
+export function extractComprasPaymentEvents(
+  comprasRecords: ComprasRecord[],
+): PaymentEvent[] {
+  const events: PaymentEvent[] = [];
+  for (const record of comprasRecords) {
+    if (record.cancelada || record.facturada) continue;
+    if (!record.fechaPagoProyectada) continue;
+    const amount = record.importeTotal || 0;
+    if (amount <= 0) continue;
+    const supplier = record.nombreProveedor || 'Unknown';
+    const classification = record.descFamilia || record.descCategoria || 'Uncategorized';
+    const enrich = enrichFromCatalog({ supplier, classification });
+    events.push({
+      date: record.fechaPagoProyectada,
+      amount,
+      supplier,
+      classification,
+      kind: 'pending',
+      flexibility: enrich.flexibility,
+      criticidad: enrich.criticidad,
+    });
+  }
+  events.sort((a, b) => a.date.localeCompare(b.date));
   return events;
 }
 

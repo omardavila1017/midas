@@ -648,7 +648,14 @@ const BancosDashboard = ({
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           return (
-            <div key={i} className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-4 shadow-sm">
+            <div
+              key={i}
+              className="rounded-[var(--radius-lg)] border border-[var(--skeuo-paper-edge)] p-4 skeuo-brackets"
+              style={{
+                background: 'var(--skeuo-paper)',
+                boxShadow: 'var(--skeuo-emboss-md)',
+              }}
+            >
               <div className="flex items-center justify-between mb-2">
                 <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-[0.08em]">{kpi.label}</p>
                 <div className="w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
@@ -674,7 +681,13 @@ const BancosDashboard = ({
       )}
 
       {/* ── Accounts list ── */}
-      <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden">
+      <div
+        className="rounded-[var(--radius-lg)] border border-[var(--skeuo-paper-edge)] overflow-hidden"
+        style={{
+          background: 'var(--skeuo-paper)',
+          boxShadow: 'var(--skeuo-emboss-md)',
+        }}
+      >
         <div className="p-4 border-b border-[var(--gray-100)]">
           <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
             Cuentas <span className="text-[var(--gray-400)] font-normal ml-1">({accountsView.length.toLocaleString()})</span>

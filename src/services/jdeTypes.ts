@@ -299,6 +299,113 @@ export interface CobranzaPayment {
 }
 
 // ───────────────────────────────────────────────────────────────
+// 6. Compras (Órdenes de Compra)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Request body para POST /v1/erp/tesoreria/compras.
+ *
+ * Endpoint liberado a producción el 2026-05-08 por el equipo JDE.
+ *
+ * Restricción documentada por JDE: el endpoint solo procesa rangos de hasta
+ * 30 días por request. Para periodos mayores, partir en bloques y mergear
+ * (ver `fetchComprasRange` en jde.ts).
+ *
+ * El payload de respuesta trae ~40 campos por OC. Tras revisión del equipo
+ * de tesorería (2026-05-12) consumimos todos los campos pero solo usamos
+ * un subset para proyectar egreso a corto plazo:
+ *   - núcleo: C_Proveedor, N_Proveedor, Precio_T, F_Recepcion, D_Credito
+ *   - filtros: N_Orden, N_Factura, F_Cancelada, Compañia
+ *   - agrupación/UI: T_Moneda, Tipo_Cambio, Categoria/Familia, Centro_Costos
+ */
+export interface ComprasRequest {
+  /** Fecha inicial inclusive (YYYY-MM-DD). */
+  fechaInicial: string;
+  /** Fecha final inclusive (YYYY-MM-DD). Máx 30 días respecto a fechaInicial. */
+  fechaFinal: string;
+}
+
+/**
+ * Registro normalizado de una orden de compra (OC).
+ *
+ * `fechaPagoProyectada` se computa local: si hay F_Recepcion válida →
+ * `F_Recepcion + D_Credito días`. Si F_Recepcion = "1899-12-31" → '' y la OC
+ * cae en el bucket "Pendiente recepción" en la UI (no se cuenta en cash flow
+ * proyectado hasta que se reciba).
+ *
+ * `cancelada` y `facturada` son flags derivados:
+ *   - cancelada: F_Cancelada ≠ 1899-12-31.
+ *   - facturada: N_Factura no vacío (CXP / módulo Facturas la cubrirá).
+ */
+export interface ComprasRecord {
+  /** Compañía JDE normalizada a 5 dígitos (p.ej. "00001"). */
+  cia: string;
+  /** Código numérico de proveedor (C_Proveedor). */
+  noProveedor: string;
+  /** Nombre del proveedor (N_Proveedor, trim). */
+  nombreProveedor: string;
+  /** Número de orden de compra (N_Orden). */
+  noOrden: string;
+  /** Tipo de orden raw (T_Orden). */
+  tipoOrden: string;
+  /** Descripción del tipo de orden (D_T_Orden, trim). */
+  descTipoOrden: string;
+  /** Línea de la orden (L_Orden) — para distinguir OCs multi-producto. */
+  lineaOrden: number;
+  /** Producto (C_Producto, trim). */
+  noProducto: string;
+  /** Descripción del producto (D_Producto, trim). */
+  descProducto: string;
+  /** Concepto raw de la OC (trim). */
+  concepto: string;
+  /** Cantidad ordenada. */
+  cantidad: number;
+  /** Precio unitario. */
+  precioUnitario: number;
+  /** Importe total (Precio_T) — base del egreso proyectado. */
+  importeTotal: number;
+  /** Moneda (T_Moneda). MXP / USD / etc. */
+  moneda: string;
+  /** Tipo de cambio (1 cuando moneda = MXP). */
+  tipoCambio: number;
+  /** Fecha de pedido (F_Pedido, YYYY-MM-DD). */
+  fechaPedido: string;
+  /**
+   * Fecha de recepción (F_Recepcion, YYYY-MM-DD). Vacía si la OC aún no se
+   * ha recibido (JDE manda "1899-12-31" para "no recibida").
+   */
+  fechaRecepcion: string;
+  /** Días de crédito (D_Credito). */
+  diasCredito: number;
+  /**
+   * Fecha proyectada de pago = fechaRecepcion + diasCredito. Vacía si la OC
+   * aún no se ha recibido.
+   */
+  fechaPagoProyectada: string;
+  /** Número de factura asociada (vacío si la OC aún no se ha facturado). */
+  noFactura: string;
+  /** Centro de costos (trim). */
+  centroCostos: string;
+  /** Categoría / Desc_Categoria. */
+  categoria: string;
+  descCategoria: string;
+  /** Familia / Desc_Familia. */
+  familia: string;
+  descFamilia: string;
+  /** SubFamilia / Desc_SubFamilia. */
+  subFamilia: string;
+  descSubFamilia: string;
+  /** Estado workflow siguiente (Edo_Sig). 380 = recibido facturado, etc. */
+  estadoSiguiente: string;
+  /** Tasa fiscal raw (IVA16, etc.). */
+  tasaFiscal: string;
+  /** Flag derivado: F_Cancelada ≠ 1899-12-31. */
+  cancelada: boolean;
+  /** Flag derivado: N_Factura no vacío. */
+  facturada: boolean;
+}
+
+// ───────────────────────────────────────────────────────────────
 // Errores
 // ───────────────────────────────────────────────────────────────
 

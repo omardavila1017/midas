@@ -1,12 +1,10 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   AlertTriangle,
-  Banknote,
   CalendarClock,
   Copy,
   GitCompare,
   Plus,
-  ShieldAlert,
   Split,
   TrendingDown,
   TrendingUp,
@@ -19,7 +17,7 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
-import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
+import { fmtCompact, fmtCurrency } from '../../../formatters';
 import {
   applyAdjustmentsToMovements,
   applyCellOverridesToBuckets,
@@ -32,15 +30,12 @@ import type {
   CellOverride,
   FinancialAdjustment,
   FinancialMovement,
-  FinancialMovementCategory,
   FinancialScenario,
   ForecastRun,
-  ManualPlanningCategory,
   ManualPlanningEntry,
   PayrollCostRecord,
   PlanningCustomRow,
   PlanningRow,
-  ProjectionAlert,
   ProjectionGranularity,
   PurchaseReceiptRecord,
 } from '../../shared-finance/types';
@@ -54,12 +49,8 @@ import { CashFlowChart } from '../components/CashFlowChart';
 import { MovementDrillDownDrawer } from '../components/MovementDrillDownDrawer';
 import { ScenarioReadOnlyTabs } from '../components/ScenarioReadOnlyTabs';
 import { ComparisonControl } from '../components/ComparisonControl';
-import { CollapsibleSection } from '../components/CollapsibleSection';
-import { BucketDetailTable } from '../components/BucketDetailTable';
-import { AlertsPanel } from '../components/AlertsPanel';
-import { MovementsTable } from '../components/MovementsTable';
 import { DeferredMount } from '../components/DeferredMount';
-import { ChartSkeleton, TableSkeleton } from '../components/SectionSkeletons';
+import { ChartSkeleton } from '../components/SectionSkeletons';
 import { cachedRun, fingerprintArray } from '../services/projectionCache';
 import {
   buildFinancialProjectionSourceData,
@@ -68,11 +59,11 @@ import {
   tryGetCachedFinancialProjectionSourceData,
   type FinancialProjectionSourceData,
 } from '../services/financialProjectionService';
+import { yieldToMain } from '../services/yieldToMain';
 import {
   loadManualPlanningEntries,
   saveManualPlanningEntries,
   expandManualPlanningEntriesToMovements,
-  createManualPlanningEntry,
 } from '../../financial-planning/services/manualPlanningEntries';
 import {
   loadPlanningAdjustments,
@@ -86,12 +77,7 @@ import { buildPlanningRows, conceptKeyForMovement } from '../../financial-planni
 import { createNewDraft, duplicateDraft } from '../../financial-planning/services/scenarioDuplicate';
 import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
 import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
-import { DailyOperatingFlowTable, SupplierPaymentDecisionTable } from '../../financial-planning/components/SupplierPaymentDecisionViews';
 import { scheduleSupplierPaymentsByScore } from '../../financial-planning/services/supplierPaymentSchedule';
-import {
-  buildSupplierCriticalAlerts,
-  type SupplierCriticalAlert,
-} from '../services/supplierCriticalAlerts';
 import {
   createQuickMovementAdjustment,
 } from '../services/projectionPredictionEngine';
@@ -113,7 +99,6 @@ import {
   toneByFloor,
   toneByCount,
   toneByDelta,
-  toneByRequirement,
 } from '../../shared-finance/components/tone';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
@@ -192,32 +177,47 @@ export default function FinancialProjectionDashboard(props: Props) {
 
   // If we don't have the source cached, schedule the canonical build for
   // *after* the first paint so the user sees the chrome immediately.
+  //
+  // Cancellation: synchronous compute can't be interrupted mid-flight, so
+  // the only safe interrupt window is *before* it starts. We yield to the
+  // main thread twice (rAF then MessageChannel macrotask) so any queued
+  // tab-switch click is processed first. If the user navigates away during
+  // that window, `cancelled` flips and we never enter the heavy block.
   useEffect(() => {
     if (cachedSource) {
       setSource(cachedSource);
       return;
     }
     let cancelled = false;
-    const ric = (window as unknown as {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    });
-    const run = () => {
+    let rafId: number | null = null;
+    let timeoutId: number | null = null;
+
+    const run = async () => {
+      // Yield once more so the warm-up shell has actually painted and any
+      // queued input gets processed before we lock the main thread.
+      await yieldToMain();
       if (cancelled) return;
-      const built = buildFinancialProjectionSourceData(cacheProbeInput);
-      if (!cancelled) setSource(built);
+      try {
+        const built = buildFinancialProjectionSourceData(cacheProbeInput);
+        if (!cancelled) setSource(built);
+      } catch {
+        // Compute failures must not crash the dashboard — caller surfaces
+        // the empty state via `source.hasData`.
+      }
     };
-    if (typeof ric.requestIdleCallback === 'function') {
-      const id = ric.requestIdleCallback(run, { timeout: 200 });
-      return () => {
-        cancelled = true;
-        if (typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(id);
-      };
-    }
-    const id = window.setTimeout(run, 0);
+
+    // Double rAF guarantees one paint of the warm-up shell first.
+    rafId = window.requestAnimationFrame(() => {
+      rafId = window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        timeoutId = window.setTimeout(run, 0);
+      });
+    });
+
     return () => {
       cancelled = true;
-      window.clearTimeout(id);
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
     };
   }, [cachedSource, cacheProbeInput]);
 
@@ -259,18 +259,47 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
 
   const [storedScenarios, setStoredScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
   const [storedAdjustments, setStoredAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
-  const [manualEntries, setManualEntries] = useState<ManualPlanningEntry[]>(() => loadManualPlanningEntries([]));
+  const [manualEntries] = useState<ManualPlanningEntry[]>(() => loadManualPlanningEntries([]));
   const [cellOverrides, setCellOverrides] = useState<CellOverride[]>(() => loadCellOverrides([]));
   const [customRows, setCustomRows] = useState<PlanningCustomRow[]>(() => loadCustomRows([]));
   const [changeLog, setChangeLog] = useState(() => loadChangeLog([]));
   const [taxStore, setTaxStore] = useState(() => loadTaxStore(defaultTaxStore()));
 
-  useEffect(() => { savePlanningScenarios(storedScenarios); }, [storedScenarios]);
-  useEffect(() => { savePlanningAdjustments(storedAdjustments); }, [storedAdjustments]);
-  useEffect(() => { saveManualPlanningEntries(manualEntries); }, [manualEntries]);
-  useEffect(() => { saveCellOverrides(cellOverrides); }, [cellOverrides]);
-  useEffect(() => { saveCustomRows(customRows); }, [customRows]);
-  useEffect(() => { saveChangeLog(changeLog); }, [changeLog]);
+  // Skip the first invocation of each save effect. The state was just
+  // hydrated from localStorage; re-serializing the same payload on mount
+  // costs main-thread time during the projection's heaviest frame. Each
+  // ref starts false and flips after the first commit — the saver only
+  // fires on genuine changes.
+  const savedScenariosRef = useRef(false);
+  const savedAdjustmentsRef = useRef(false);
+  const savedManualRef = useRef(false);
+  const savedOverridesRef = useRef(false);
+  const savedCustomRowsRef = useRef(false);
+  const savedChangeLogRef = useRef(false);
+  useEffect(() => {
+    if (!savedScenariosRef.current) { savedScenariosRef.current = true; return; }
+    savePlanningScenarios(storedScenarios);
+  }, [storedScenarios]);
+  useEffect(() => {
+    if (!savedAdjustmentsRef.current) { savedAdjustmentsRef.current = true; return; }
+    savePlanningAdjustments(storedAdjustments);
+  }, [storedAdjustments]);
+  useEffect(() => {
+    if (!savedManualRef.current) { savedManualRef.current = true; return; }
+    saveManualPlanningEntries(manualEntries);
+  }, [manualEntries]);
+  useEffect(() => {
+    if (!savedOverridesRef.current) { savedOverridesRef.current = true; return; }
+    saveCellOverrides(cellOverrides);
+  }, [cellOverrides]);
+  useEffect(() => {
+    if (!savedCustomRowsRef.current) { savedCustomRowsRef.current = true; return; }
+    saveCustomRows(customRows);
+  }, [customRows]);
+  useEffect(() => {
+    if (!savedChangeLogRef.current) { savedChangeLogRef.current = true; return; }
+    saveChangeLog(changeLog);
+  }, [changeLog]);
 
   useEffect(() => {
     const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));
@@ -305,7 +334,6 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const [drillMovement, setDrillMovement] = useState<FinancialMovement | null>(null);
   const [drillAnchor, setDrillAnchor] = useState<DOMRect | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [quickEntryType, setQuickEntryType] = useState<'INFLOW' | 'OUTFLOW' | null>(null);
 
   // Granularity flips run inside a transition so React keeps the previous
   // chart/tables on screen while the new data warms up — no stutter, no
@@ -564,11 +592,11 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   }, [buildRun, comparisonScenarioId, baseScenario.id, baseRun, activeScenarioId, activeRun, deferredGranularity]);
 
   // Pre-warm the *other* two granularities for the active scenario in idle
-  // time. Once the initial paint settles, we silently build the alternate
-  // weekly/daily runs and stash them in the LRU. Result: when the user
-  // actually flips the segmented control, it's a sub-millisecond cache hit
-  // instead of a 50–150ms compute. Cancellation prevents wasted work if
-  // the user changes scenario mid-warm.
+  // time. We hold off until the page has been visible long enough that
+  // initial compute + first interaction has settled — otherwise the
+  // pre-warm tasks fight the heavy first paint and cause exactly the kind
+  // of mid-load freeze that traps tab-switch clicks. 2.5 s + yields gives
+  // the user a real window to navigate away cheaply.
   useEffect(() => {
     const others: ProjectionGranularity[] = ['monthly', 'weekly', 'daily']
       .filter((g): g is ProjectionGranularity => g !== deferredGranularity);
@@ -578,17 +606,20 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       cancelIdleCallback?: (handle: number) => void;
     });
     const handles: Array<number | ReturnType<typeof setTimeout>> = [];
-    others.forEach((gran, i) => {
-      const run = () => {
+    const scheduleRun = (gran: ProjectionGranularity, delay: number) => {
+      const fire = async () => {
         if (cancelled) return;
-        try { buildRun(activeScenarioId, gran); } catch { /* swallow — pre-warm is best-effort */ }
+        await yieldToMain();
+        if (cancelled) return;
+        try { buildRun(activeScenarioId, gran); } catch { /* best-effort */ }
       };
       if (typeof ric.requestIdleCallback === 'function') {
-        handles.push(ric.requestIdleCallback(run, { timeout: 800 + i * 400 }));
+        handles.push(ric.requestIdleCallback(fire, { timeout: delay + 2000 }));
       } else {
-        handles.push(setTimeout(run, 200 + i * 200));
+        handles.push(setTimeout(fire, delay));
       }
-    });
+    };
+    others.forEach((gran, i) => scheduleRun(gran, 2500 + i * 1500));
     return () => {
       cancelled = true;
       handles.forEach((h) => {
@@ -622,55 +653,6 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       }
     },
     [buildRun, baseScenario.id, baseRun, activeScenarioId, activeRun, comparisonRun, deferredGranularity],
-  );
-
-  // Auxiliary computations.
-  const taxView = useMemo(
-    () => buildTaxDashboardView({
-      projection: activeRun,
-      store: taxStore,
-      providers: props.providers,
-      cxpRecords: props.cxpRecords,
-      purchaseReceipts: props.purchaseReceipts,
-      payrollCosts: props.payrollCosts,
-      cobranzaPayments: props.cobranzaPayments,
-      today,
-    }),
-    [activeRun, props.cobranzaPayments, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, taxStore, today],
-  );
-  const supplierAlerts = useMemo(
-    () => buildSupplierCriticalAlerts({
-      providers: props.providers,
-      cxpRecords: props.cxpRecords,
-      movements: activeRun.movements,
-      manualEntries,
-      bankStatements: props.bankStatements,
-      scenarioId: activeScenarioId,
-      today,
-    }),
-    [activeRun.movements, activeScenarioId, manualEntries, props.bankStatements, props.cxpRecords, props.providers, today],
-  );
-
-const tableMovements = useMemo(
-    () => activeRun.movements
-      .filter((movement) => {
-        const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
-        return date >= yearStart && date <= yearEnd;
-      })
-      .sort((a, b) => {
-        const da = a.actualDate ?? a.adjustedDate ?? a.projectedDate;
-        const db = b.actualDate ?? b.adjustedDate ?? b.projectedDate;
-        return da.localeCompare(db);
-      }),
-    [activeRun.movements, yearStart, yearEnd],
-  );
-
-  const handleSelectMovement = useMemo(
-    () => (movement: FinancialMovement, anchor: DOMRect) => {
-      setDrillMovement(movement);
-      setDrillAnchor(anchor);
-    },
-    [],
   );
 
   const handleCloseDrawer = useMemo(
@@ -759,50 +741,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
     setStatusMessage('Ajuste aplicado. La proyección se recalculó.');
   }, [ensureEditableScenario, today]);
 
-  const handleCreateQuickEntry = useCallback((input: {
-    type: 'INFLOW' | 'OUTFLOW';
-    name: string;
-    amount: number;
-    date: string;
-    category: FinancialMovementCategory;
-    counterpartyName?: string;
-  }) => {
-    const scenarioId = ensureEditableScenario('Entrada manual desde Proyección');
-    const entry = createManualPlanningEntry({
-      scenarioIds: [scenarioId],
-      type: input.type,
-      category: manualCategoryForQuickEntry(input.type, input.category),
-      name: input.name,
-      amount: input.amount,
-      startDate: input.date,
-      recurrence: 'ONE_TIME',
-      counterpartyName: input.counterpartyName,
-      description: `Alta rápida desde Proyección · ${input.category}`,
-      status: 'DRAFT',
-      createdBy: 'tesoreria@senda.local',
-    });
-    setManualEntries((current) => [...current, entry]);
-    setChangeLog((current) => [
-      newChangeLogEntry({
-        scenarioId,
-        kind: 'ADD_ROW',
-        autoDescription: `${input.type === 'INFLOW' ? 'Ingreso' : 'Egreso'} estimado agregado desde Proyección.`,
-        payload: {
-          manualEntryId: entry.id,
-          name: entry.name,
-          amount: entry.amount,
-          date: entry.startDate,
-          category: input.category,
-          counterpartyName: entry.counterpartyName,
-        },
-        createdBy: 'tesoreria@senda.local',
-      }),
-      ...current,
-    ]);
-    setQuickEntryType(null);
-    setStatusMessage(`${entry.name} agregado al escenario.`);
-  }, [ensureEditableScenario]);
-
   const drawerInvoiceContext = useMemo(
     () => ({
       cxpRecords: props.cxpRecords,
@@ -875,7 +813,7 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         onSelect={setActiveScenarioId}
       />
 
-<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <KpiCard
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
@@ -895,13 +833,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           navHint="Ver días en déficit"
         />
         <KpiCard
-          label="Crédito requerido"
-          value={fmtCurrency(summary.creditRequired)}
-          icon={<Banknote className="w-4 h-4" strokeWidth={1.5} />}
-          color={toneByRequirement(summary.creditRequired)}
-          sublabel={`Ingresos ${fmtCompact(summary.totalInflows)} · egresos ${fmtCompact(summary.totalOutflows)}`}
-        />
-        <KpiCard
           label={`Δ vs ${comparisonLabel}`}
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
           icon={<GitCompare className="w-4 h-4" strokeWidth={1.5} />}
@@ -919,142 +850,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         />
       </DeferredMount>
 
-      <CollapsibleSection
-        title="Detalle por período"
-        storageKey="proyeccion.section.bucket"
-        description="Cada período se desglosa en conceptos de Planeación al expandir."
-        count={activeRun.buckets.length}
-        lazy
-      >
-        <DeferredMount delayMs={140} fallback={<TableSkeleton rows={6} />}>
-          <BucketDetailTable
-            buckets={activeRun.buckets}
-            movements={activeRun.movements}
-            rows={activeRun.rows}
-            overrides={activeRun.overrides}
-            granularity={deferredGranularity}
-            comparisonBuckets={comparisonRun?.buckets}
-            onSelectMovement={handleSelectMovement}
-          />
-        </DeferredMount>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Movimientos"
-        storageKey="proyeccion.section.movements"
-        description="Lista filtrable. Clic en una fila para ver factura y origen."
-        count={tableMovements.length}
-        actions={
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setQuickEntryType('INFLOW')}
-              className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-600)] hover:bg-[var(--gray-50)]"
-            >
-              <TrendingUp className="h-3 w-3" strokeWidth={1.75} />
-              Ingreso
-            </button>
-            <button
-              type="button"
-              onClick={() => setQuickEntryType('OUTFLOW')}
-              className="inline-flex h-7 items-center gap-1 rounded-lg border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-600)] hover:bg-[var(--gray-50)]"
-            >
-              <TrendingDown className="h-3 w-3" strokeWidth={1.75} />
-              Egreso
-            </button>
-          </div>
-        }
-        lazy
-      >
-        <DeferredMount delayMs={220} fallback={<TableSkeleton rows={5} />}>
-          <MovementsTable
-            movements={tableMovements}
-            granularity={deferredGranularity}
-            today={today}
-            onSelectMovement={handleSelectMovement}
-          />
-        </DeferredMount>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Decisión de pagos CXP"
-        storageKey="proyeccion.section.supplier-payment-decisions"
-        description="Pagados, pendientes y recorridos por score de proveedor dentro del escenario activo."
-        count={activeRun.supplierPlan.decisions.length}
-        lazy
-      >
-        <div className="p-4">
-          <SupplierPaymentDecisionTable
-            plan={activeRun.supplierPlan}
-            comparisonPlan={comparisonRun?.supplierPlan}
-            scenarioName={activeScenario.name}
-            comparisonName={comparisonRun?.name}
-          />
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Flujo operativo diario"
-        storageKey="proyeccion.section.daily-operating-flow"
-        description="Ingresos esperados/confirmados, pagos programados/ejecutados y déficit diario."
-        count={activeRun.supplierPlan.dailyRows.length}
-        lazy
-      >
-        <div className="p-4">
-          <DailyOperatingFlowTable rows={activeRun.supplierPlan.dailyRows} />
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Proveedores críticos"
-        storageKey="proyeccion.section.suppliers"
-        defaultOpen={false}
-        lazy
-        count={supplierAlerts.length}
-        badge={supplierAlerts.some((alert) => alert.severity === 'CRITICAL') ? <ShieldAlert className="h-3.5 w-3.5 text-[var(--danger)]" strokeWidth={1.5} /> : undefined}
-        description="Estatus de pago consolidado: real, programado, manual o pendiente."
-      >
-        <SupplierAlertsList alerts={supplierAlerts} />
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Impuestos"
-        storageKey="proyeccion.section.taxes"
-        defaultOpen={false}
-        lazy
-        description="IVA neto, ISN, IMSS y total con saldo vencido."
-        actions={props.onNavigateToTax ? (
-          <button
-            type="button"
-            onClick={props.onNavigateToTax}
-            className="text-[11px] font-medium text-[var(--primary)] hover:underline"
-          >
-            Abrir módulo →
-          </button>
-        ) : undefined}
-      >
-        <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
-          <TaxStat label="Saldo vencido" value={fmtCompact(taxView.overdueBalance)} tone="danger" />
-          <TaxStat label="IVA período" value={fmtCompact(taxView.totals.ivaNet)} tone={taxView.totals.ivaNet > 0 ? 'warning' : 'neutral'} />
-          <TaxStat label="ISN/IMSS" value={fmtCompact(taxView.totals.isn + taxView.totals.imss)} tone="warning" />
-          <TaxStat label="Total acumulado" value={fmtCompact(taxView.totals.totalWithOverdue)} tone="danger" />
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Alertas"
-        storageKey="proyeccion.section.alerts"
-        defaultOpen={false}
-        lazy
-        count={activeRun.alerts.length}
-        badge={activeRun.alerts.some((alert) => alert.severity === 'CRITICAL')
-          ? <span className="rounded-full bg-[var(--danger)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-white">crítica</span>
-          : undefined}
-        description="Caja bajo mínimo, confianza baja, impuestos vencidos."
-      >
-        <AlertsPanel alerts={activeRun.alerts as ProjectionAlert[]} />
-      </CollapsibleSection>
-
       <MovementDrillDownDrawer
         movement={drillMovement}
         anchor={drillAnchor}
@@ -1070,15 +865,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           />
         ) : undefined}
       />
-
-      {quickEntryType && (
-        <QuickEntryModal
-          type={quickEntryType}
-          defaultDate={today}
-          onClose={() => setQuickEntryType(null)}
-          onCreate={handleCreateQuickEntry}
-        />
-      )}
 
       <MidasBubble
         cia={props.companyCode}
@@ -1228,180 +1014,6 @@ function QuickMovementActions({
   );
 }
 
-function QuickEntryModal({
-  type,
-  defaultDate,
-  onClose,
-  onCreate,
-}: {
-  type: 'INFLOW' | 'OUTFLOW';
-  defaultDate: string;
-  onClose: () => void;
-  onCreate: (input: {
-    type: 'INFLOW' | 'OUTFLOW';
-    name: string;
-    amount: number;
-    date: string;
-    category: FinancialMovementCategory;
-    counterpartyName?: string;
-  }) => void;
-}) {
-  const [name, setName] = useState('');
-  const [counterpartyName, setCounterpartyName] = useState('');
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(defaultDate);
-  const [category, setCategory] = useState<FinancialMovementCategory>(type === 'INFLOW' ? 'AR_COLLECTION' : 'OPEX');
-  const [error, setError] = useState<string | null>(null);
-  const categories: FinancialMovementCategory[] = type === 'INFLOW'
-    ? ['AR_COLLECTION', 'TRANSFER', 'MANUAL']
-    : ['AP_PAYMENT', 'OPEX', 'CAPEX', 'TAX', 'DEBT', 'MANUAL'];
-  const submit = () => {
-    const parsedAmount = Number(amount.replace(/,/g, ''));
-    if (!name.trim()) {
-      setError('El nombre es obligatorio.');
-      return;
-    }
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      setError('El monto debe ser mayor a cero.');
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      setError('La fecha debe estar en formato YYYY-MM-DD.');
-      return;
-    }
-    onCreate({
-      type,
-      name: name.trim(),
-      amount: parsedAmount,
-      date,
-      category,
-      counterpartyName: counterpartyName.trim() || undefined,
-    });
-  };
-  return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center p-4" style={{ background: 'var(--modal-overlay)' }} role="dialog" aria-modal="true" aria-label="Agregar estimado">
-      <div className="w-full max-w-[420px] rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-xl">
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-[14px] font-semibold text-[var(--gray-950)]">
-              {type === 'INFLOW' ? 'Agregar ingreso estimado' : 'Agregar egreso estimado'}
-            </h3>
-            <p className="mt-0.5 text-[11px] text-[var(--gray-500)]">
-              Se guardará como movimiento manual en el escenario activo.
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]">
-            Cerrar
-          </button>
-        </div>
-        <div className="grid gap-3">
-          <label className="grid gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Concepto</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} className="h-10 rounded-xl border border-[var(--gray-200)] px-3 text-[13px] outline-none focus:border-[var(--primary)]" />
-          </label>
-          <label className="grid gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
-              {type === 'INFLOW' ? 'Cliente' : 'Proveedor'}
-            </span>
-            <input value={counterpartyName} onChange={(event) => setCounterpartyName(event.target.value)} className="h-10 rounded-xl border border-[var(--gray-200)] px-3 text-[13px] outline-none focus:border-[var(--primary)]" />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="grid gap-1">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Monto</span>
-              <input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" className="h-10 rounded-xl border border-[var(--gray-200)] px-3 text-[13px] outline-none focus:border-[var(--primary)]" />
-            </label>
-            <label className="grid gap-1">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Fecha</span>
-              <input value={date} onChange={(event) => setDate(event.target.value)} type="date" className="h-10 rounded-xl border border-[var(--gray-200)] px-3 text-[13px] outline-none focus:border-[var(--primary)]" />
-            </label>
-          </div>
-          <label className="grid gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Categoría</span>
-            <select value={category} onChange={(event) => setCategory(event.target.value as FinancialMovementCategory)} className="h-10 rounded-xl border border-[var(--gray-200)] px-3 text-[13px] outline-none focus:border-[var(--primary)]">
-              {categories.map((option) => <option key={option} value={option}>{option}</option>)}
-            </select>
-          </label>
-        </div>
-        {error && <p className="mt-2 text-[11px] font-medium text-[var(--danger)]">{error}</p>}
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="h-9 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]">
-            Cancelar
-          </button>
-          <button type="button" onClick={submit} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">
-            <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
-            Agregar
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SupplierAlertsList({ alerts }: { alerts: SupplierCriticalAlert[] }) {
-  if (alerts.length === 0) {
-    return (
-      <div className="px-4 py-8 text-center text-[12px] text-[var(--gray-400)]">
-        Sin proveedores críticos pendientes.
-      </div>
-    );
-  }
-  return (
-    <ul className="divide-y divide-[var(--gray-100)]">
-      {alerts.slice(0, 12).map((alert) => (
-        <li key={alert.id} className="px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-medium text-[var(--gray-950)]">{alert.providerName}</div>
-              <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
-                {alert.invoiceNumber ? `Factura ${alert.invoiceNumber}` : 'Factura s/n'} · {alert.dueDate ? `vence ${fmtDate(alert.dueDate)}` : 'sin vencimiento'}
-              </div>
-              {alert.detail && (
-                <div className="mt-1 text-[11px] text-[var(--gray-500)] leading-snug">{alert.detail}</div>
-              )}
-            </div>
-            <div className="shrink-0 text-right">
-              <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${supplierAlertClass(alert.severity)}`}>
-                {alert.statusLabel}
-              </span>
-              <div className="mt-1 text-[12px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCompact(alert.pendingAmount)}</div>
-            </div>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function supplierAlertClass(severity: SupplierCriticalAlert['severity']): string {
-  if (severity === 'CRITICAL') return 'bg-[var(--danger)]/10 text-[var(--danger)]';
-  if (severity === 'WARNING') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
-  return 'bg-[var(--success)]/10 text-[var(--success)]';
-}
-
-function TaxStat({
-  label,
-  value,
-  tone: statTone,
-}: {
-  label: string;
-  value: string;
-  tone: 'success' | 'warning' | 'danger' | 'neutral';
-}) {
-  const toneClass = statTone === 'success'
-    ? 'text-[var(--success)]'
-    : statTone === 'warning'
-      ? 'text-[var(--warning)]'
-      : statTone === 'danger'
-        ? 'text-[var(--danger)]'
-        : 'text-[var(--gray-950)]';
-  return (
-    <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</div>
-      <div className={`mt-1 text-[14px] font-bold tabular-nums ${toneClass}`}>{value}</div>
-    </div>
-  );
-}
-
 // Tone helpers moved to ../../shared-finance/components/tone.ts.
 
 function shiftIsoDate(date: string, days: number, floorDate: string): string {
@@ -1410,17 +1022,6 @@ function shiftIsoDate(date: string, days: number, floorDate: string): string {
   parsed.setUTCDate(parsed.getUTCDate() + days);
   const shifted = parsed.toISOString().slice(0, 10);
   return days < 0 && shifted < floorDate ? floorDate : shifted;
-}
-
-function manualCategoryForQuickEntry(
-  type: 'INFLOW' | 'OUTFLOW',
-  category: FinancialMovementCategory,
-): ManualPlanningCategory {
-  if (category === 'AP_PAYMENT') return 'SUPPLIER_PAYMENT';
-  if (category === 'TAX') return 'TAX_PAYMENT';
-  if (category === 'PAYROLL' || category === 'CAPEX' || category === 'OPEX') return category;
-  if (type === 'INFLOW') return 'MANUAL_INFLOW';
-  return 'MANUAL_OUTFLOW';
 }
 
 function minimumCashFor(): number {

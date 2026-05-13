@@ -102,7 +102,7 @@ export interface FinancialProjectionSourceData {
 
 type CacheKey = string;
 const SOURCE_CACHE = new Map<CacheKey, FinancialProjectionSourceData>();
-const SOURCE_CACHE_LIMIT = 6;
+const SOURCE_CACHE_LIMIT = 20;
 
 function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string): CacheKey {
   // We mix array references via WeakRef-like identity sentinels: each

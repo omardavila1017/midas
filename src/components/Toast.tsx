@@ -200,10 +200,11 @@ function ToastItem({ toast, onRemove, onUndo, isLast }: ToastItemProps) {
       }}
     >
       <div
-        className="flex gap-3 rounded-[var(--radius-md)] p-4 border border-[var(--gray-200)]/40"
+        className="flex gap-3 rounded-[var(--radius-md)] p-4 border border-[var(--skeuo-paper-edge)]"
         style={{
           backgroundColor: styles.bgColor,
-          boxShadow: 'var(--shadow-md)',
+          boxShadow: 'var(--skeuo-emboss-md), 0 8px 20px -12px rgba(15,23,42,0.28)',
+          borderTop: `1px solid var(--skeuo-brass)`,
           animation: 'slideUp 0.3s var(--spring) both',
         }}
       >

@@ -85,6 +85,11 @@ export interface Client {
   commercialGroupName?: string;
   /** Stable group ID for manual overrides. Accounts sharing this ID render together. */
   commercialGroupId?: string;
+  /** Marca al cliente como "tocado por el usuario" — mover, separar, renombrar
+   *  o asignar grupo a mano. El matcher automático NO modifica `commercialGroup*`
+   *  mientras este flag esté en true. Vuelve a `false` cuando el usuario
+   *  selecciona "Automático". */
+  manualGroupOverride?: boolean;
   /** Email/web domain used as a grouping signal when available. */
   emailDomain?: string;
   /** Fiscal or delivery address used as a weak grouping signal when available. */

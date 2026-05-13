@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import FinancialProjectionDashboard from './FinancialProjectionDashboard';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
@@ -38,36 +38,8 @@ describe('<FinancialProjectionDashboard />', () => {
     renderDashboard();
     await flushProjectionWarmup();
 
-    await waitFor(() => expect(screen.getByText('Detalle por período')).toBeTruthy());
-    expect(screen.getByText('Movimientos')).toBeTruthy();
-  });
-
-  it('saves quick estimated supplier outflows through planning manual entries', async () => {
-    renderDashboard();
-    await flushProjectionWarmup();
-
-    await waitFor(() => expect(screen.getByText('Movimientos')).toBeTruthy());
-    const outflowButton = screen.getAllByRole('button')
-      .find((button) => button.textContent?.trim() === 'Egreso');
-    expect(outflowButton).toBeTruthy();
-    fireEvent.click(outflowButton!);
-
-    const dialog = screen.getByRole('dialog', { name: /Agregar estimado/i });
-    fireEvent.change(within(dialog).getByLabelText('Concepto'), { target: { value: 'Pago diesel estimado' } });
-    fireEvent.change(within(dialog).getByLabelText('Proveedor'), { target: { value: 'Proveedor Flexible' } });
-    fireEvent.change(within(dialog).getByLabelText('Monto'), { target: { value: '150000' } });
-    fireEvent.change(within(dialog).getByLabelText('Fecha'), { target: { value: '2026-06-12' } });
-    fireEvent.change(within(dialog).getByLabelText('Categoría'), { target: { value: 'AP_PAYMENT' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: /Agregar/i }));
-
-    const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.manualEntries.v1') ?? '[]');
-    expect(stored).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        category: 'SUPPLIER_PAYMENT',
-        counterpartyName: 'Proveedor Flexible',
-        name: 'Pago diesel estimado',
-      }),
-    ]));
+    await waitFor(() => expect(screen.getByText('Caja final')).toBeTruthy());
+    expect(screen.getByText('Días en déficit')).toBeTruthy();
   });
 });
 

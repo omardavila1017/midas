@@ -15,6 +15,7 @@
  */
 
 import { jdeClient, JdeClientConfig } from './jdeClient';
+import { fetchRangeWithDailyCache, getDailyCached, setDailyCached } from './dailyApiCache';
 import {
   AgedBalanceRecord,
   AgedBalanceRequest,
@@ -27,6 +28,8 @@ import {
   CobranzaPaymentRequest,
   CobranzaRecord,
   CobranzaRequest,
+  ComprasRecord,
+  ComprasRequest,
   Company,
 } from './jdeTypes';
 
@@ -550,29 +553,47 @@ export async function fetchBankStatementsRange(
     dates.push(d.toISOString().slice(0, 10));
   }
 
-  // Parallel fetch with a simple worker pool.
+  // Parallel fetch with a simple worker pool, gated por cache por día.
+  // El cache (`midas.daily.banks.{formato}.{day}`) sirve días pasados sin
+  // tocar la red. "Hoy" siempre se re-fetch. Días que no estaban en cache
+  // se guardan al regresar.
   // Cada día puede fallar por timeout transitorio del proxy serverless o
   // por contención del API JDE (devuelve 500 cuando se le encima la cola).
-  // Reintentamos hasta 2 veces con backoff antes de aceptar 0 movimientos —
-  // en producción esto recupera la mayoría de días que de otro modo se
-  // perderían y dejaban al usuario viendo solo los pocos días que pasaron
-  // a la primera.
+  // Reintentamos hasta 2 veces con backoff antes de aceptar 0 movimientos.
+  const cacheApiKey = `banks.${formato}`;
+  const today = new Date().toISOString().slice(0, 10);
   const results: BankAccountStatement[][] = new Array(dates.length);
+  const needsFetch: number[] = [];
+  for (let i = 0; i < dates.length; i++) {
+    if (dates[i] < today) {
+      const cached = getDailyCached<BankAccountStatement>(cacheApiKey, dates[i]);
+      if (cached !== null) {
+        results[i] = cached;
+        continue;
+      }
+    }
+    needsFetch.push(i);
+  }
+  let done = dates.length - needsFetch.length;
+  options.onProgress?.(done, dates.length);
+
   let cursor = 0;
-  let done = 0;
   const MAX_ATTEMPTS = 3;
   const worker = async () => {
     while (true) {
-      const idx = cursor++;
-      if (idx >= dates.length) return;
+      const slot = cursor++;
+      if (slot >= needsFetch.length) return;
+      const idx = needsFetch[slot];
       let attempt = 0;
       let dayResult: BankAccountStatement[] = [];
+      let succeeded = false;
       while (attempt < MAX_ATTEMPTS) {
         try {
           dayResult = await fetchBankStatements(
             { fechaEstadoCuenta: dates[idx], formatoElectronico: formato },
             config,
           );
+          succeeded = true;
           break;
         } catch {
           attempt++;
@@ -587,12 +608,15 @@ export async function fetchBankStatementsRange(
         }
       }
       results[idx] = dayResult;
+      if (succeeded) {
+        setDailyCached(cacheApiKey, dates[idx], dayResult);
+      }
       done++;
       options.onProgress?.(done, dates.length);
     }
   };
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, dates.length) }, worker),
+    Array.from({ length: Math.min(concurrency, needsFetch.length || 1) }, worker),
   );
 
   // Merge by (cia, cuenta, moneda).
@@ -1010,6 +1034,222 @@ export async function fetchIndicadoresCobranza(
   return normalizeCobranzaPayments(unwrapList(raw), req.cia);
 }
 
+// ───────────────────────────────────────────────────────────────
+// 6. Compras (Órdenes de Compra)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * JDE marca fechas "vacías" como 1899-12-31. Para F_Recepcion eso significa
+ * "OC todavía no recibida"; para F_Cancelada significa "no cancelada".
+ * Tratamos ese centinela como ausencia.
+ */
+function isSentinelJdeDate(iso: string): boolean {
+  if (!iso) return true;
+  return iso.startsWith('1899-') || iso.startsWith('0001-');
+}
+
+/** Suma N días a un YYYY-MM-DD; devuelve '' si la entrada no es parseable. */
+function addDaysIso(iso: string, days: number): string {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime())) return '';
+  d.setUTCDate(d.getUTCDate() + (Number.isFinite(days) ? Math.floor(days) : 0));
+  return d.toISOString().slice(0, 10);
+}
+
+function mapCompras(raw: RawRecord): ComprasRecord {
+  const fechaPedido = trimIsoDate(pick(raw, ['F_Pedido', 'f_pedido', 'fechaPedido']));
+  const fechaRecepcionRaw = trimIsoDate(pick(raw, ['F_Recepcion', 'F_Recepción', 'f_recepcion', 'fechaRecepcion']));
+  const fechaRecepcion = isSentinelJdeDate(fechaRecepcionRaw) ? '' : fechaRecepcionRaw;
+  const fechaCanceladaRaw = trimIsoDate(pick(raw, ['F_Cancelada', 'f_cancelada', 'fechaCancelada']));
+  const cancelada = !isSentinelJdeDate(fechaCanceladaRaw);
+  const noFactura = toStr(pick(raw, ['N_Factura', 'n_factura', 'noFactura']));
+  const facturada = noFactura.length > 0;
+  const diasCredito = toNum(pick(raw, ['D_Credito', 'd_credito', 'diasCredito']));
+  const fechaPagoProyectada = fechaRecepcion ? addDaysIso(fechaRecepcion, diasCredito) : '';
+
+  return {
+    cia:               normalizeCia(pick(raw, ['Compañia', 'Compania', 'compania', 'cia', 'company'])),
+    noProveedor:       toStr(pick(raw, ['C_Proveedor', 'c_proveedor', 'noProveedor'])),
+    nombreProveedor:   toStr(pick(raw, ['N_Proveedor', 'n_proveedor', 'nombreProveedor'])),
+    noOrden:           toStr(pick(raw, ['N_Orden', 'n_orden', 'noOrden'])),
+    tipoOrden:         toStr(pick(raw, ['T_Orden', 't_orden', 'tipoOrden'])),
+    descTipoOrden:     toStr(pick(raw, ['D_T_Orden', 'd_t_orden', 'descTipoOrden'])),
+    lineaOrden:        toNum(pick(raw, ['L_Orden', 'l_orden', 'lineaOrden'])),
+    noProducto:        toStr(pick(raw, ['C_Producto', 'c_producto', 'noProducto'])),
+    descProducto:      toStr(pick(raw, ['D_Producto', 'd_producto', 'descProducto'])),
+    concepto:          toStr(pick(raw, ['Concepto', 'concepto'])),
+    cantidad:          toNum(pick(raw, ['Cantidad', 'cantidad'])),
+    precioUnitario:    toNum(pick(raw, ['Precio_U', 'precio_u', 'precioUnitario'])),
+    importeTotal:      toNum(pick(raw, ['Precio_T', 'precio_t', 'importeTotal', 'importe'])),
+    moneda:            toStr(pick(raw, ['T_Moneda', 't_moneda', 'moneda', 'currency'])) || 'MXP',
+    tipoCambio:        toNum(pick(raw, ['Tipo_Cambio', 'tipo_cambio', 'tipoCambio'])) || 1,
+    fechaPedido,
+    fechaRecepcion,
+    diasCredito,
+    fechaPagoProyectada,
+    noFactura,
+    centroCostos:      toStr(pick(raw, ['Centro_Costos', 'centro_costos', 'centroCostos'])),
+    categoria:         toStr(pick(raw, ['Categoria', 'categoria'])),
+    descCategoria:     toStr(pick(raw, ['Desc_Categoria', 'desc_categoria', 'descCategoria'])),
+    familia:           toStr(pick(raw, ['Familia', 'familia'])),
+    descFamilia:       toStr(pick(raw, ['Desc_Familia', 'desc_familia', 'descFamilia'])),
+    subFamilia:        toStr(pick(raw, ['SubFamilia', 'sub_familia', 'subFamilia'])),
+    descSubFamilia:    toStr(pick(raw, ['Desc_SubFamilia', 'desc_sub_familia', 'descSubFamilia'])),
+    estadoSiguiente:   toStr(pick(raw, ['Edo_Sig', 'edo_sig', 'estadoSiguiente'])),
+    tasaFiscal:        toStr(pick(raw, ['Tasa_Fiscal', 'tasa_fiscal', 'tasaFiscal'])),
+    cancelada,
+    facturada,
+  };
+}
+
+/**
+ * POST /v1/erp/tesoreria/compras
+ *
+ * Devuelve las órdenes de compra del rango indicado. JDE solo procesa hasta
+ * 30 días por request — para rangos mayores usar `fetchComprasRange`.
+ *
+ * El payload trae ~40 campos por OC; consumimos todos pero solo proyectamos
+ * egreso a corto plazo con un subset (ver `ComprasRecord`).
+ */
+export async function fetchCompras(
+  req: ComprasRequest,
+  config: JdeClientConfig = {},
+): Promise<ComprasRecord[]> {
+  const raw = await jdeClient.post<unknown>('/compras', req, config);
+  return unwrapList(raw).map(mapCompras);
+}
+
+/**
+ * Fetch órdenes de compra en bloques de 1 día con cache por día en localStorage.
+ *
+ * JDE limita /compras a rangos pequeños; usamos 1 día por request para poder
+ * cachear cada día individualmente bajo `midas.daily.compras.__all__.{YYYY-MM-DD}`.
+ * Días pasados se sirven del cache sin pegar al endpoint. "Hoy" siempre se
+ * re-fetch (los datos del día cambian intradía).
+ *
+ * Deduplica por `(cia, noOrden, lineaOrden)` para tolerar registros repetidos
+ * entre días contiguos (raro, pero el chunker viejo de 30 días lo manejaba y
+ * lo mantenemos por seguridad).
+ *
+ * @param from   YYYY-MM-DD inclusive.
+ * @param to     YYYY-MM-DD inclusive.
+ * @param options Concurrencia (default 3), callback de progreso, config JDE.
+ */
+export async function fetchComprasRange(
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<ComprasRecord[]> {
+  const config = options.config ?? {};
+
+  // JDE /compras devuelve 500 intermitente. Reintentar con backoff exponencial
+  // cubre el flakeo upstream sin perder días enteros.
+  const MAX_ATTEMPTS = 3;
+  const fetchDayWithRetry = async (day: string): Promise<ComprasRecord[]> => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await fetchCompras({ fechaInicial: day, fechaFinal: day }, config);
+      } catch (err) {
+        lastErr = err;
+        if (attempt === MAX_ATTEMPTS) break;
+        const delayMs = 500 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    throw lastErr;
+  };
+
+  const all = await fetchRangeWithDailyCache<ComprasRecord>('compras', {
+    from,
+    to,
+    fetchDay: fetchDayWithRetry,
+    onProgress: options.onProgress,
+    concurrency: options.concurrency ?? 3,
+  });
+
+  const seen = new Set<string>();
+  const merged: ComprasRecord[] = [];
+  for (const rec of all) {
+    const key = `${rec.cia}::${rec.noOrden}::${rec.lineaOrden}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+  }
+  return merged;
+}
+
+/**
+ * Fetch cobranza (CXC) para una cía en rango de fechas con cache por día.
+ *
+ * El endpoint /cobranza toma (cia, fechaInicial, fechaFinal). Aquí lo
+ * chunkeamos por día para alimentar el cache `midas.daily.cobranza.{cia}.{day}`.
+ * Días pasados se sirven del cache; "hoy" siempre se re-fetch.
+ *
+ * Semánticamente: cada día devuelve invoices con fechaFactura en ese día. La
+ * unión de los días cubre el mismo conjunto que el viejo fetch de rango.
+ */
+export async function fetchCobranzaRange(
+  cia: string,
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<CobranzaRecord[]> {
+  const config = options.config ?? {};
+  const fetchDay = async (day: string): Promise<CobranzaRecord[]> => {
+    return await fetchCobranza({ cia, fechaInicial: day, fechaFinal: day }, config);
+  };
+
+  return await fetchRangeWithDailyCache<CobranzaRecord>('cobranza', {
+    from,
+    to,
+    cia,
+    fetchDay,
+    onProgress: options.onProgress,
+    concurrency: options.concurrency ?? 3,
+  });
+}
+
+/**
+ * Fetch indicadores de cobranza (recibos/pagos) para una cía con cache por día.
+ *
+ * Mismo patrón que fetchCobranzaRange. El endpoint toma rango de fechas y lo
+ * partimos por día para cachear bajo `midas.daily.indicadores.{cia}.{day}`.
+ */
+export async function fetchIndicadoresCobranzaRange(
+  cia: string,
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<CobranzaPayment[]> {
+  const config = options.config ?? {};
+  const fetchDay = async (day: string): Promise<CobranzaPayment[]> => {
+    return await fetchIndicadoresCobranza({ cia, fechaInicial: day, fechaFinal: day }, config);
+  };
+
+  return await fetchRangeWithDailyCache<CobranzaPayment>('indicadores', {
+    from,
+    to,
+    cia,
+    fetchDay,
+    onProgress: options.onProgress,
+    concurrency: options.concurrency ?? 3,
+  });
+}
+
 // Flag para que el log de shape solo aparezca una vez por sesión.
 let cobranzaShapeLogged = false;
 
@@ -1027,6 +1267,8 @@ export type {
   CobranzaPaymentRequest,
   CobranzaRecord,
   CobranzaRequest,
+  ComprasRecord,
+  ComprasRequest,
   Company,
 } from './jdeTypes';
 export { JdeApiError } from './jdeTypes';
