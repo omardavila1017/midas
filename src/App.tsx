@@ -12,6 +12,7 @@ import {
   fetchAgedBalances,
   fetchCobranza,
   fetchIndicadoresCobranza,
+  fetchNomina,
   type Company,
   type BankAccountStatement,
   type BankStatementFormat,
@@ -35,6 +36,7 @@ const FideicomisoDashboard = lazy(() => import('./components/FideicomisoDashboar
 const FinancialProjectionDashboard = lazy(() => import('./modules/financial-projection/pages/FinancialProjectionDashboard'));
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
+const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus } from './components/MidasSplash';
 import { ActivityFeedPanel } from './components/ActivityFeed';
@@ -44,6 +46,8 @@ import { loadPlanningScenarios, loadPlanningAdjustments } from './modules/financ
 import { buildFinancialProjectionSourceData } from './modules/financial-projection/services/financialProjectionService';
 import { NavigationProvider, type AppTabId, type NavTarget } from './modules/shared-finance/components/NavigationContext';
 import DashboardLoadingShell from './modules/shared-finance/components/DashboardLoadingShell';
+import type { PayrollCostRecord } from './modules/shared-finance/types';
+import { mergeNominaBatch, nominaCacheKey } from './modules/payroll/services/payrollModuleService';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
   LayoutDashboard,
@@ -124,6 +128,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
     { id: 'financialPlanning',   label: 'Planeación Financiera', icon: ClipboardList },
     { id: 'taxes',               label: 'Impuestos',             icon: Landmark },
+    { id: 'payroll',             label: 'Nómina',                icon: Users },
   ],
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
@@ -144,6 +149,7 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   cxp: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
+  payroll: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -377,6 +383,11 @@ export default function App() {
   const [cobranzaLoadedCias, setCobranzaLoadedCias] = useState<Record<string, string>>({});
   const [cobranzaPayments, setCobranzaPayments] = useState<CobranzaPayment[]>([]);
   const [cobranzaPaymentsLoadedCias, setCobranzaPaymentsLoadedCias] = useState<Record<string, string>>({});
+  // Nómina TRESS — cache aditivo on-demand. Se hidrata por interacción del
+  // usuario en el módulo de Nómina; no hay auto-fetch al boot porque el
+  // endpoint puede tomar varios segundos por (cia, tipoNomina, año, mes).
+  const [nominaRecords, setNominaRecords] = useState<PayrollCostRecord[]>([]);
+  const [nominaLoadedKeys, setNominaLoadedKeys] = useState<Record<string, string>>({});
   // Status del auto/manual fetch de cobranza — se muestra en la pestaña
   // Cobranza para que el usuario sepa qué pasó si la lista llega vacía.
   // Antes los errores eran silenciados y resultaba imposible diagnosticar
@@ -423,17 +434,19 @@ export default function App() {
     banks: BootTaskStatus;
     cxp: BootTaskStatus;
     cobranza: BootTaskStatus;
+    nomina: BootTaskStatus;
   }>({
     catalog: 'loading',
     companies: 'loading',
     banks: 'loading',
     cxp: 'pending',
     cobranza: 'pending',
+    nomina: 'pending',
   });
   const [cxpBootProgress, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [cobranzaBootProgress, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
   const setBootSlot = useCallback(
-    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza', status: BootTaskStatus) => {
+    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'nomina', status: BootTaskStatus) => {
       setBootStatus(prev => (prev[slot] === status ? prev : { ...prev, [slot]: status }));
     },
     [],
@@ -593,6 +606,39 @@ export default function App() {
   // Caja inicial fija — decisión de negocio, no editable por el usuario.
   const effectiveStartingBalance = FIXED_STARTING_BALANCE;
 
+  // Nómina real del último mes cargado en TRESS para el tile de comparación
+  // en el Dashboard. Filtra por la cia activa (si la hay) y suma solo los
+  // conceptos que efectivamente salen como cash en FechaPago (Σ Percepciones
+  // − Σ Deducciones que reducen el neto). NO reemplaza el `payrollMonthly`
+  // del presupuesto: es solo referencia.
+  const payrollMonthlyActualJDE = useMemo(() => {
+    if (nominaRecords.length === 0) return undefined;
+    const ciaFilter = selectedCia ? selectedCia.replace(/\D/g, '').padStart(5, '0') : '';
+    // Identifica el (year, month) más reciente cargado.
+    let latestYear = 0;
+    let latestMonth = 0;
+    for (const r of nominaRecords) {
+      if (ciaFilter && r.cia !== ciaFilter) continue;
+      if (r.year > latestYear || (r.year === latestYear && r.month > latestMonth)) {
+        latestYear = r.year;
+        latestMonth = r.month;
+      }
+    }
+    if (!latestYear) return undefined;
+    let gross = 0;
+    let netReducing = 0;
+    for (const r of nominaRecords) {
+      if (ciaFilter && r.cia !== ciaFilter) continue;
+      if (r.year !== latestYear || r.month !== latestMonth) continue;
+      if (r.cashTreatment === 'CASH_OUT') gross += r.amount;
+      else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
+        netReducing += r.amount;
+      }
+    }
+    const net = gross - netReducing;
+    return net > 0 ? net : undefined;
+  }, [nominaRecords, selectedCia]);
+
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
 
@@ -662,6 +708,8 @@ export default function App() {
       if (stored.cobranzaLoadedCias) setCobranzaLoadedCias(stored.cobranzaLoadedCias);
       if (stored.cobranzaPayments?.length) setCobranzaPayments(stored.cobranzaPayments);
       if (stored.cobranzaPaymentsLoadedCias) setCobranzaPaymentsLoadedCias(stored.cobranzaPaymentsLoadedCias);
+      if (stored.nominaRecords?.length) setNominaRecords(stored.nominaRecords);
+      if (stored.nominaLoadedKeys) setNominaLoadedKeys(stored.nominaLoadedKeys);
       if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
@@ -832,6 +880,7 @@ export default function App() {
       assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
       cobranzaRecords, cobranzaLoadedCias,
       cobranzaPayments, cobranzaPaymentsLoadedCias,
+      nominaRecords, nominaLoadedKeys,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
@@ -849,6 +898,7 @@ export default function App() {
     assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
     cobranzaRecords, cobranzaLoadedCias,
     cobranzaPayments, cobranzaPaymentsLoadedCias,
+    nominaRecords, nominaLoadedKeys,
     cashFlowOverrides,
   ]);
 
@@ -904,6 +954,7 @@ export default function App() {
       { id: 'banks', label: 'Bancos · estado reciente', status: bootStatus.banks, progress: bankFetchProgress },
       { id: 'cxp', label: 'CXP · antigüedad de saldos', status: bootStatus.cxp, progress: cxpBootProgress },
       { id: 'cobranza', label: 'Cobranza · cartera y pagos', status: bootStatus.cobranza, progress: cobranzaBootProgress },
+      { id: 'nomina', label: 'Nómina · TRESS mes en curso', status: bootStatus.nomina },
     ],
     [bootStatus, bankFetchProgress, cxpBootProgress, cobranzaBootProgress],
   );
@@ -1210,7 +1261,42 @@ export default function App() {
     if (bootStatus.companies !== 'error') return;
     if (bootStatus.cxp === 'pending') setBootSlot('cxp', 'error');
     if (bootStatus.cobranza === 'pending') setBootSlot('cobranza', 'error');
-  }, [bootStatus.companies, bootStatus.cxp, bootStatus.cobranza, setBootSlot]);
+    if (bootStatus.nomina === 'pending') setBootSlot('nomina', 'error');
+  }, [bootStatus.companies, bootStatus.cxp, bootStatus.cobranza, bootStatus.nomina, setBootSlot]);
+
+  // ── Nómina (TRESS): boot fetch del mes en curso ──
+  // 1 request con `idEmpresa=99, tipoNomina=99` cubre todas las cías y ambos
+  // tipos de nómina. Más barato que iterar por cía (a diferencia de CXP /
+  // cobranza). Si la llave de cache ya está fresca, skip silencioso. El error
+  // no bloquea el boot — el módulo de Nómina permite refrescar manualmente.
+  useEffect(() => {
+    if (companies.length === 0) return;
+    const today = new Date();
+    const anio = today.getFullYear();
+    const mes = today.getMonth() + 1;
+    const cacheKey = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio, mes });
+    if (nominaLoadedKeys[cacheKey]) {
+      // Cache hit — ya hay datos del mes; el módulo decidirá si refresca.
+      setBootSlot('nomina', 'done');
+      return;
+    }
+    setBootSlot('nomina', 'loading');
+    (async () => {
+      try {
+        const fresh = await fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio, mes });
+        setNominaRecords(prev => mergeNominaBatch(prev, fresh));
+        setNominaLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
+        setBootSlot('nomina', 'done');
+      } catch {
+        // Marcamos error pero seguimos: el dashboard sigue siendo usable sin
+        // nómina cargada; el usuario puede reintentar desde el módulo.
+        setBootSlot('nomina', 'error');
+      }
+    })();
+    // Disparamos una sola vez al obtener compañías; los refreshes posteriores
+    // los maneja el módulo de Nómina (botón "Refrescar TRESS").
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companies.length]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
@@ -1654,6 +1740,7 @@ export default function App() {
                   onOpenFlow={() => setActiveTab('financialPlanning')}
                   startingBalance={effectiveStartingBalance}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  payrollMonthlyActualJDE={payrollMonthlyActualJDE}
                 />
               </Suspense>
             )}
@@ -1668,6 +1755,7 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
                   startingBalance={effectiveStartingBalance}
@@ -1685,6 +1773,7 @@ export default function App() {
                   cxpRecords={cxpRecords}
                   cobranzaRecords={cobranzaRecords}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
                   startingBalance={effectiveStartingBalance}
@@ -1702,9 +1791,23 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
                   startingBalance={effectiveStartingBalance}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'payroll' && (
+              <Suspense fallback={<LazyTabFallback label="Nómina" />}>
+                <PayrollDashboard
+                  companyCode={selectedCia}
+                  nominaRecords={nominaRecords}
+                  nominaLoadedKeys={nominaLoadedKeys}
+                  onNominaFetched={(merged, cacheKey, fetchedAt) => {
+                    setNominaRecords(merged);
+                    setNominaLoadedKeys(prev => ({ ...prev, [cacheKey]: fetchedAt }));
+                  }}
                 />
               </Suspense>
             )}
