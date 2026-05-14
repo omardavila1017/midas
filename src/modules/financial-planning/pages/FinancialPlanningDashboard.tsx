@@ -209,7 +209,39 @@ export default function FinancialPlanningDashboard(props: Props) {
     };
   }, [cachedSource, cacheProbeInput]);
 
-  if (!source) {
+  // Segundo paint gate: una vez `source` está listo, esperamos un frame
+  // adicional antes de montar el inner. El inner corre 2-3 buildScenarioRun
+  // SÍNCRONOS en su primer render (cada uno = applyAdjustments + taxView +
+  // scheduleSupplier + calculateBaseProjection); sin este gate el browser
+  // commitea el inner en el mismo frame que setSource y bloquea el main
+  // thread cientos de ms — el usuario ve un freeze indistinguible de un
+  // crash. Con el gate, la shell pinta primero, luego el work pesado corre,
+  // y los siguientes paint los sirve el `projectionRunCache` (warm).
+  const [innerReady, setInnerReady] = useState(false);
+  useEffect(() => {
+    if (!source) return;
+    if (innerReady) return;
+    let cancelled = false;
+    const fire = () => { if (!cancelled) setInnerReady(true); };
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    });
+    if (typeof ric.requestIdleCallback === 'function') {
+      const id = ric.requestIdleCallback(fire, { timeout: 120 });
+      return () => {
+        cancelled = true;
+        if (typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(id);
+      };
+    }
+    const raf = window.requestAnimationFrame(() => window.setTimeout(fire, 0));
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+    };
+  }, [source, innerReady]);
+
+  if (!source || !innerReady) {
     return <PlanningWarmupShell />;
   }
 

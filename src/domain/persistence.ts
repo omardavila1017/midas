@@ -476,6 +476,16 @@ function stripHeavy(store: MidasStore): MidasStore {
  * debe coalescer las llamadas (debounce) para no saturarlo.
  */
 export function saveStore(store: MidasStore): void {
+  saveLightStore(store);
+  void saveHeavyStoreToIDB(pickHeavy(store));
+}
+
+/**
+ * Persiste SOLO el light (a localStorage). NO toca IDB heavy. Útil cuando
+ * sabes que solo cambió data ligera (assumptions, providers, etc.) y quieres
+ * evitar el costo de re-serializar los heavies (que cargan 100k+ records).
+ */
+export function saveLightStore(store: MidasStore): void {
   const light = stripHeavy({ ...store, lastSaved: new Date().toISOString() });
   const payload = { version: STORE_VERSION, data: light };
   try {
@@ -485,9 +495,8 @@ export function saveStore(store: MidasStore): void {
     // Con v12 esto solo debería pasar si el catálogo de clientes/providers
     // crece a megabytes; si pasa, hay que mover esos también a IDB.
     // eslint-disable-next-line no-console
-    console.warn('[persistence] saveStore (light) failed:', err);
+    console.warn('[persistence] saveLightStore failed:', err);
   }
-  void saveHeavyStoreToIDB(pickHeavy(store));
 }
 
 /**
@@ -546,7 +555,15 @@ export async function loadStore(): Promise<MidasStore | null> {
         // perder datos si IDB falla. Si el await no resuelve heavy a tiempo,
         // legacy queda intacto y el siguiente boot reintenta migración.
         await saveHeavyStoreToIDB(pickHeavy(migrated));
-        // Light → localStorage como v12.
+        // CRÍTICO: borrar legacy ANTES de intentar escribir v12. El v11 ocupa
+        // hasta 50MB en localStorage (heavies inline) — escribir v12 con v11
+        // todavía dentro tira QuotaExceededError, el v12 se pierde y el boot
+        // siguiente repite la migración en loop, congelando la app.
+        // El v11 ya quedó copiado a IDB (heavies) + memoria (`migrated`); es
+        // seguro borrarlo. Si crasheamos entre estos pasos, perdemos light
+        // (clients/providers metadata) pero IDB sobrevive y el next-boot hace
+        // cold-fetch desde JDE — degradación graceful, no estado corrupto.
+        try { localStorage.removeItem(legacyKey); } catch { /* ignore */ }
         const lightPayload = { version: STORE_VERSION, data: stripHeavy(migrated) };
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(lightPayload));
@@ -554,7 +571,6 @@ export async function loadStore(): Promise<MidasStore | null> {
           // eslint-disable-next-line no-console
           console.warn('[persistence] no se pudo escribir v12 light tras migración:', err);
         }
-        try { localStorage.removeItem(legacyKey); } catch { /* ignore */ }
         return migrated;
       }
     } catch {

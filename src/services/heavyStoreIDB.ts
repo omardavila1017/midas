@@ -130,7 +130,11 @@ function openDb(): Promise<IDBDatabase | null> {
 export async function loadHeavyStore(): Promise<HeavyStore> {
   const out = emptyHeavyStore();
   const db = await openDb();
-  if (!db) return out;
+  if (!db) {
+    // eslint-disable-next-line no-console
+    console.warn('[heavyStoreIDB] loadHeavyStore: DB no disponible — boot cold start');
+    return out;
+  }
   await new Promise<void>((resolve) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readonly');
@@ -157,6 +161,8 @@ export async function loadHeavyStore(): Promise<HeavyStore> {
       resolve();
     }
   });
+  // eslint-disable-next-line no-console
+  console.info(`[heavyStoreIDB] loadHeavyStore · ${HEAVY_KEYS.map(k => `${k}=${out[k].length}`).join(' · ')}`);
   return out;
 }
 
@@ -179,14 +185,88 @@ export async function saveHeavyRecords(key: HeavyKey, records: unknown[]): Promi
 
 export async function saveHeavyStore(store: HeavyStore): Promise<void> {
   const db = await openDb();
-  if (!db) return;
-  await new Promise<void>((resolve) => {
+  if (!db) {
+    // eslint-disable-next-line no-console
+    console.warn('[heavyStoreIDB] saveHeavyStore: DB no disponible — heavies no persisten esta sesión');
+    return;
+  }
+  // Anti-wipe: si TODOS los heavies están vacíos, casi siempre es state-en-tránsito
+  // durante boot (loadStore no terminó / refetch no llegó). Persistir ceros pisaría
+  // la copia buena que ya está en IDB. Skip silencioso — la próxima save con
+  // datos reales sí escribe. Para borrar intencional usar `clearHeavyStore()`.
+  const allEmpty = HEAVY_KEYS.every(key => (store[key]?.length ?? 0) === 0);
+  if (allEmpty) {
+    // eslint-disable-next-line no-console
+    console.info('[heavyStoreIDB] saveHeavyStore: state vacío, skip para no pisar IDB existente');
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const os = tx.objectStore(STORE_NAME);
       for (const key of HEAVY_KEYS) {
         os.put({ key, records: store[key] });
       }
+      tx.oncomplete = () => {
+        // eslint-disable-next-line no-console
+        console.info(`[heavyStoreIDB] saveHeavyStore ok · ${HEAVY_KEYS.map(k => `${k}=${store[k]?.length ?? 0}`).join(' · ')}`);
+        resolve();
+      };
+      tx.onerror = () => {
+        // eslint-disable-next-line no-console
+        console.warn('[heavyStoreIDB] saveHeavyStore tx error:', tx.error);
+        reject(tx.error);
+      };
+      tx.onabort = () => {
+        // eslint-disable-next-line no-console
+        console.warn('[heavyStoreIDB] saveHeavyStore tx aborted:', tx.error);
+        reject(tx.error);
+      };
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[heavyStoreIDB] saveHeavyStore throw:', err);
+      reject(err);
+    }
+  }).catch(() => { /* swallow, ya loggeado arriba */ });
+}
+
+// ── Bank statements ────────────────────────────────────────────────────
+// Comparten DB con los heavies de MidasStore, pero NO viven en MidasStore
+// — los maneja App.tsx directamente. Antes vivían en localStorage
+// `midas.bankStatements.v2` y `midas.bankSupplementalStatements.v1`, que
+// reventaban la cuota ~5MB con 2 años de movimientos y dejaban al usuario
+// con un cache truncado. IDB tiene cuota dinámica en GB.
+
+export const BANK_JDE_IDB_KEY = 'bankJdeStatements';
+export const BANK_SUPPLEMENTAL_IDB_KEY = 'bankSupplementalStatements';
+
+export interface BankStatementsCache {
+  jde: unknown[];
+  supplemental: unknown[];
+}
+
+export async function loadBankStatementsFromIDB(): Promise<BankStatementsCache> {
+  const out: BankStatementsCache = { jde: [], supplemental: [] };
+  const db = await openDb();
+  if (!db) {
+    // eslint-disable-next-line no-console
+    console.warn('[heavyStoreIDB] loadBankStatementsFromIDB: DB no disponible');
+    return out;
+  }
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const os = tx.objectStore(STORE_NAME);
+      const jdeReq = os.get(BANK_JDE_IDB_KEY);
+      const supReq = os.get(BANK_SUPPLEMENTAL_IDB_KEY);
+      jdeReq.onsuccess = () => {
+        const v = jdeReq.result as { key: string; records: unknown[] } | undefined;
+        if (v && Array.isArray(v.records)) out.jde = v.records;
+      };
+      supReq.onsuccess = () => {
+        const v = supReq.result as { key: string; records: unknown[] } | undefined;
+        if (v && Array.isArray(v.records)) out.supplemental = v.records;
+      };
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
       tx.onabort = () => resolve();
@@ -194,6 +274,60 @@ export async function saveHeavyStore(store: HeavyStore): Promise<void> {
       resolve();
     }
   });
+  // eslint-disable-next-line no-console
+  console.info(`[heavyStoreIDB] loadBankStatementsFromIDB · jde=${out.jde.length} · supplemental=${out.supplemental.length}`);
+  return out;
+}
+
+async function saveBankKey(key: string, records: unknown[]): Promise<void> {
+  const db = await openDb();
+  if (!db) {
+    // eslint-disable-next-line no-console
+    console.warn(`[heavyStoreIDB] saveBankKey(${key}): DB no disponible`);
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const os = tx.objectStore(STORE_NAME);
+      os.put({ key, records });
+      tx.oncomplete = () => {
+        // eslint-disable-next-line no-console
+        console.info(`[heavyStoreIDB] saveBankKey(${key}) ok · count=${records.length}`);
+        resolve();
+      };
+      tx.onerror = () => {
+        // eslint-disable-next-line no-console
+        console.warn(`[heavyStoreIDB] saveBankKey(${key}) tx error:`, tx.error);
+        resolve();
+      };
+      tx.onabort = () => {
+        // eslint-disable-next-line no-console
+        console.warn(`[heavyStoreIDB] saveBankKey(${key}) tx aborted:`, tx.error);
+        resolve();
+      };
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[heavyStoreIDB] saveBankKey(${key}) throw:`, err);
+      resolve();
+    }
+  });
+}
+
+export async function saveBankJdeStatementsToIDB(records: unknown[]): Promise<void> {
+  // Anti-wipe: si state está vacío durante boot, no pisar IDB existente.
+  if (records.length === 0) {
+    // eslint-disable-next-line no-console
+    console.info('[heavyStoreIDB] saveBankJdeStatementsToIDB: state vacío, skip');
+    return;
+  }
+  await saveBankKey(BANK_JDE_IDB_KEY, records);
+}
+
+export async function saveBankSupplementalStatementsToIDB(records: unknown[]): Promise<void> {
+  // A diferencia del JDE: aquí sí permitimos guardar vacío. El usuario puede
+  // borrar todos los uploads supplemental — ese estado debe persistir.
+  await saveBankKey(BANK_SUPPLEMENTAL_IDB_KEY, records);
 }
 
 export async function clearHeavyStore(): Promise<void> {

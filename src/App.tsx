@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { MidasStore, loadStore, saveStore, CXPRecord } from './domain/persistence';
+import { MidasStore, loadStore, saveStore, saveLightStore, CXPRecord } from './domain/persistence';
+import { saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
 import { buildProviderSpendIndex, enrichProvidersWithRecentSpend } from './domain/providerRecentSpend';
@@ -13,6 +14,11 @@ import {
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import { primeDailyCache, getMaxCachedDay, nextIsoDay } from './services/dailyApiCache';
+import {
+  loadBankStatementsFromIDB,
+  saveBankJdeStatementsToIDB,
+  saveBankSupplementalStatementsToIDB,
+} from './services/heavyStoreIDB';
 import {
   fetchCompanies,
   fetchBankStatements,
@@ -357,45 +363,75 @@ interface BankCacheLoad {
   bankLastQuery: BankQueryState | null;
 }
 
-// Single-pass read of the three bank-statement localStorage caches. The
-// previous code ran 3 separate `useState(() => ...)` lazy initializers on the
-// sync render path, each re-parsing multi-MB JSON. Consolidated here and
-// invoked from a deferred useEffect so it never blocks first paint.
-function loadBankCaches(): BankCacheLoad {
+// Carga los caches de bancos: bankLastQuery sigue en localStorage (es chico),
+// pero bankJdeStatements y bankSupplementalStatements ahora viven en IDB
+// (heavy-store) porque la cuota de localStorage (~5MB) se rompía con 2 años
+// de movimientos y dejaba al usuario con un cache truncado.
+//
+// Migración: si hay datos en localStorage (legacy), los lee, los mueve a IDB
+// y borra las llaves legacy. Idempotente — un boot post-migración encuentra
+// IDB poblada y localStorage vacía.
+async function loadBankCaches(): Promise<BankCacheLoad> {
   try {
     const rawQuery = localStorage.getItem('midas.bankLastQuery.v2');
-    const rawStatements = localStorage.getItem('midas.bankStatements.v2');
-    const rawSupplemental = localStorage.getItem('midas.bankSupplementalStatements.v1');
-
     const parsedQuery = rawQuery ? (JSON.parse(rawQuery) as BankQueryState) : null;
-    const parsedStatements = rawStatements ? (JSON.parse(rawStatements) as BankAccountStatement[]) : [];
-    let parsedSupplemental: BankAccountStatement[] | null = rawSupplemental
-      ? (JSON.parse(rawSupplemental) as BankAccountStatement[])
-      : null;
 
-    if (containsDemoBankData(parsedStatements)) {
-      localStorage.removeItem('midas.bankStatements.v2');
-      localStorage.removeItem('midas.bankLastQuery.v2');
-      localStorage.removeItem('midas.bankSupplementalStatements.v1');
-      return { bankJdeStatements: [], bankSupplementalStatements: [], bankLastQuery: null };
+    // IDB primero. Si está poblada, esa es la fuente de verdad.
+    const idb = await loadBankStatementsFromIDB();
+    let jdeFromIdb = idb.jde as BankAccountStatement[];
+    let supplementalFromIdb = idb.supplemental as BankAccountStatement[];
+
+    // Migración legacy: si IDB está vacía pero localStorage tiene datos,
+    // mueve a IDB y borra localStorage.
+    if (jdeFromIdb.length === 0 || supplementalFromIdb.length === 0) {
+      const rawStatements = localStorage.getItem('midas.bankStatements.v2');
+      const rawSupplemental = localStorage.getItem('midas.bankSupplementalStatements.v1');
+      const legacyJde = rawStatements ? (JSON.parse(rawStatements) as BankAccountStatement[]) : [];
+      const legacySupplemental = rawSupplemental ? (JSON.parse(rawSupplemental) as BankAccountStatement[]) : [];
+      if (legacyJde.length > 0 && jdeFromIdb.length === 0) {
+        // eslint-disable-next-line no-console
+        console.info(`[loadBankCaches] migrando bankJdeStatements localStorage→IDB · ${legacyJde.length} accounts`);
+        await saveBankJdeStatementsToIDB(legacyJde);
+        jdeFromIdb = legacyJde;
+      }
+      if (legacySupplemental.length > 0 && supplementalFromIdb.length === 0) {
+        // eslint-disable-next-line no-console
+        console.info(`[loadBankCaches] migrando bankSupplementalStatements localStorage→IDB · ${legacySupplemental.length} accounts`);
+        await saveBankSupplementalStatementsToIDB(legacySupplemental);
+        supplementalFromIdb = legacySupplemental;
+      }
+      // Borra localStorage post-migración (idempotente — un boot futuro
+      // encuentra IDB poblada y skippea esta rama).
+      try { localStorage.removeItem('midas.bankStatements.v2'); } catch { /* ignore */ }
+      try { localStorage.removeItem('midas.bankSupplementalStatements.v1'); } catch { /* ignore */ }
     }
-    if (parsedSupplemental && containsDemoBankData(parsedSupplemental)) {
-      localStorage.removeItem('midas.bankSupplementalStatements.v1');
-      parsedSupplemental = null;
+
+    // Demo-data guard: si lo cargado coincide con un patrón de datos demo
+    // viejos (cuentas hardcoded), limpiamos. Aplicar después de migrar.
+    if (containsDemoBankData(jdeFromIdb)) {
+      await saveBankJdeStatementsToIDB([]);
+      jdeFromIdb = [];
+      localStorage.removeItem('midas.bankLastQuery.v2');
+    }
+    if (containsDemoBankData(supplementalFromIdb)) {
+      await saveBankSupplementalStatementsToIDB([]);
+      supplementalFromIdb = [];
     }
 
     const isSantander = parsedQuery?.formatoElectronico === SANTANDER_FILE_FORMAT;
-    const bankJdeStatements: BankAccountStatement[] = isSantander ? [] : parsedStatements;
+    const bankJdeStatements: BankAccountStatement[] = isSantander ? [] : jdeFromIdb;
     const bankSupplementalStatements: BankAccountStatement[] =
-      parsedSupplemental ?? (isSantander ? parsedStatements : []);
+      supplementalFromIdb.length > 0 ? supplementalFromIdb : (isSantander ? jdeFromIdb : []);
     const bankLastQuery: BankQueryState | null = parsedQuery
-      ? (isSantander || parsedSupplemental !== null
+      ? (isSantander || supplementalFromIdb.length > 0
           ? { ...parsedQuery, hasUploadedSantander: true }
           : parsedQuery)
       : null;
 
     return { bankJdeStatements, bankSupplementalStatements, bankLastQuery };
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[loadBankCaches] failed:', err);
     return { bankJdeStatements: [], bankSupplementalStatements: [], bankLastQuery: null };
   }
 }
@@ -579,6 +615,13 @@ export default function App() {
     }
   }, []);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
+  // Flag aparte de catalogLoaded — éste indica que loadStore() (light de
+  // localStorage v12 + heavies de IDB) terminó de hidratar el state. Los boot
+  // effects que necesitan saber si hay registros previos (compras, pago,
+  // banks, cxp, cobranza) gatean en esto para no disparar fetches con state
+  // vacío y luego sobreescribirlo. catalogLoaded se setea cuando los CSVs
+  // de clients/providers terminan, no cuando loadStore terminó.
+  const [storeHydrated, setStoreHydrated] = useState(false);
 
   // ── Boot splash state ──
   // All boot APIs (catalog, companies, banks, CXP, cobranza) run in parallel.
@@ -633,16 +676,20 @@ export default function App() {
   const [bankJdeStatements, setBankJdeStatements] = useState<BankAccountStatement[]>([]);
   const [bankSupplementalStatements, setBankSupplementalStatements] = useState<BankAccountStatement[]>([]);
   const [bankLastQuery, setBankLastQuery] = useState<BankQueryState | null>(null);
-  // Hydrate bank caches on idle. The splash screen covers the UI until JDE
-  // boot tasks finish, so a one-tick delay before localStorage is parsed has
-  // no observable cost — and pulling multi-MB JSON.parse out of the sync
-  // mount keeps the LCP under the budget the perf audit flagged.
+  const [bankCacheLoaded, setBankCacheLoaded] = useState(false);
+  // Hydrate bank caches on idle. Las statements (jde + supplemental) viven en
+  // IDB heavy-store. bankLastQuery sigue en localStorage (es chico). Diferido
+  // a idle para no bloquear LCP — el splash cubre la UI hasta que el boot de
+  // bancos termina. Signal `bankCacheLoaded` para que el step 2 del backfill
+  // sepa cuándo arrancar.
   useEffect(() => {
     return scheduleIdleTask(() => {
-      const caches = loadBankCaches();
-      if (caches.bankJdeStatements.length) setBankJdeStatements(caches.bankJdeStatements);
-      if (caches.bankSupplementalStatements.length) setBankSupplementalStatements(caches.bankSupplementalStatements);
-      if (caches.bankLastQuery) setBankLastQuery(caches.bankLastQuery);
+      void loadBankCaches().then((caches) => {
+        if (caches.bankJdeStatements.length) setBankJdeStatements(caches.bankJdeStatements);
+        if (caches.bankSupplementalStatements.length) setBankSupplementalStatements(caches.bankSupplementalStatements);
+        if (caches.bankLastQuery) setBankLastQuery(caches.bankLastQuery);
+        setBankCacheLoaded(true);
+      });
     });
   }, []);
   const bankStatements = useMemo(
@@ -969,39 +1016,77 @@ export default function App() {
   // persistir, causando refetch JDE en cada boot. Ver persistence.ts:saveStore.
   useEffect(() => {
     let cancelled = false;
-    void loadStore().then((stored) => {
-      if (cancelled || !stored) return;
-      if (stored.providers.length) setProviders(stored.providers);
-      if (stored.clients.length) setClients(stored.clients);
-      if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
-      if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
-      if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
-      if (stored.cobranzaRecords?.length) setCobranzaRecords(stored.cobranzaRecords);
-      if (stored.cobranzaLoadedCias) setCobranzaLoadedCias(stored.cobranzaLoadedCias);
-      if (stored.cobranzaPayments?.length) setCobranzaPayments(stored.cobranzaPayments);
-      if (stored.cobranzaPaymentsLoadedCias) setCobranzaPaymentsLoadedCias(stored.cobranzaPaymentsLoadedCias);
-      if (stored.comprasRecords?.length) setComprasRecords(stored.comprasRecords);
-      if (stored.comprasLoadedCias) setComprasLoadedCias(stored.comprasLoadedCias);
-      if (stored.pagoProveedorRecords?.length) setPagoProveedorRecords(stored.pagoProveedorRecords);
-      if (stored.pagoProveedorLoadedCias) setPagoProveedorLoadedCias(stored.pagoProveedorLoadedCias);
-      if (stored.nominaRecords?.length) setNominaRecords(stored.nominaRecords);
-      if (stored.nominaLoadedKeys) setNominaLoadedKeys(stored.nominaLoadedKeys);
-      if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
-      setAssumptions(stored.assumptions);
-      setCatalogLoaded(true);
-      // Hidratar companies desde cache antes de que JDE responda. Esto
-      // desbloquea el splash inmediatamente (boot slot 'companies' = done)
-      // y permite que CXP/Cobranza auto-fetch arranquen contra el catálogo
-      // conocido sin esperar el /empresas en frío (~60s). El fetch a JDE
-      // sigue corriendo en background y reconcilia si la lista cambió.
-      if (stored.companies?.length) {
-        companiesHydratedFromCacheRef.current = true;
-        setCompanies(stored.companies);
-        setCompaniesLoadedAt(stored.companiesLoadedAt);
-        setBootSlot('companies', 'done');
+    // CRÍTICO: storeHydrated debe dispararse SIEMPRE, aún si loadStore truena
+    // o algún setter falla. Si no, los boot effects (compras/pago/banks/cxp/
+    // cobranza/nomina) quedan deadlockeados esperando el flag y la app
+    // congela en el splash. Por eso envolvemos cada setter en try/catch y
+    // usamos .finally() para el flag. Fallback adicional de 8s por si la
+    // promesa entera nunca resuelve (IDB locked + sin timeout efectivo).
+    const fallbackTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        // eslint-disable-next-line no-console
+        console.warn('[loadStore] timeout 8s — disparando storeHydrated forzado para no congelar boot');
+        setStoreHydrated(true);
       }
-    });
-    return () => { cancelled = true; };
+    }, 8000);
+    const safeSet = <T,>(setter: (v: T) => void, value: T, name: string) => {
+      try { setter(value); } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[loadStore] setter ${name} threw:`, err);
+      }
+    };
+    void loadStore()
+      .then((stored) => {
+        if (cancelled) return;
+        if (stored) {
+          if (stored.providers.length) safeSet(setProviders, stored.providers, 'providers');
+          if (stored.clients.length) safeSet(setClients, stored.clients, 'clients');
+          if (stored.confirmedPayments.length) safeSet(setConfirmedPayments, stored.confirmedPayments, 'confirmedPayments');
+          if (stored.cxpRecords.length) safeSet(setCxpRecords, stored.cxpRecords, 'cxpRecords');
+          if (stored.cxpLoadedCias) safeSet(setCxpLoadedCias, stored.cxpLoadedCias, 'cxpLoadedCias');
+          if (stored.cobranzaRecords?.length) safeSet(setCobranzaRecords, stored.cobranzaRecords, 'cobranzaRecords');
+          if (stored.cobranzaLoadedCias) safeSet(setCobranzaLoadedCias, stored.cobranzaLoadedCias, 'cobranzaLoadedCias');
+          if (stored.cobranzaPayments?.length) safeSet(setCobranzaPayments, stored.cobranzaPayments, 'cobranzaPayments');
+          if (stored.cobranzaPaymentsLoadedCias) safeSet(setCobranzaPaymentsLoadedCias, stored.cobranzaPaymentsLoadedCias, 'cobranzaPaymentsLoadedCias');
+          if (stored.comprasRecords?.length) safeSet(setComprasRecords, stored.comprasRecords, 'comprasRecords');
+          if (stored.comprasLoadedCias) safeSet(setComprasLoadedCias, stored.comprasLoadedCias, 'comprasLoadedCias');
+          if (stored.pagoProveedorRecords?.length) safeSet(setPagoProveedorRecords, stored.pagoProveedorRecords, 'pagoProveedorRecords');
+          if (stored.pagoProveedorLoadedCias) safeSet(setPagoProveedorLoadedCias, stored.pagoProveedorLoadedCias, 'pagoProveedorLoadedCias');
+          if (stored.nominaRecords?.length) safeSet(setNominaRecords, stored.nominaRecords, 'nominaRecords');
+          if (stored.nominaLoadedKeys) safeSet(setNominaLoadedKeys, stored.nominaLoadedKeys, 'nominaLoadedKeys');
+          if (stored.cashFlowOverrides) safeSet(setCashFlowOverrides, stored.cashFlowOverrides, 'cashFlowOverrides');
+          safeSet(setAssumptions, stored.assumptions, 'assumptions');
+          // eslint-disable-next-line no-console
+          console.info(`[loadStore] hidratado · cobranza=${stored.cobranzaRecords?.length ?? 0} · cxp=${stored.cxpRecords?.length ?? 0} · compras=${stored.comprasRecords?.length ?? 0} · pagoProv=${stored.pagoProveedorRecords?.length ?? 0} · nomina=${stored.nominaRecords?.length ?? 0} · companies=${stored.companies?.length ?? 0}`);
+          // Hidratar companies desde cache antes de que JDE responda. Esto
+          // desbloquea el splash inmediatamente (boot slot 'companies' = done)
+          // y permite que CXP/Cobranza auto-fetch arranquen contra el catálogo
+          // conocido sin esperar el /empresas en frío (~60s).
+          if (stored.companies?.length) {
+            companiesHydratedFromCacheRef.current = true;
+            safeSet(setCompanies, stored.companies, 'companies');
+            safeSet(setCompaniesLoadedAt, stored.companiesLoadedAt, 'companiesLoadedAt');
+            setBootSlot('companies', 'done');
+          }
+        } else {
+          // eslint-disable-next-line no-console
+          console.info('[loadStore] sin datos previos · cold boot, todo se fetchea de JDE');
+        }
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn('[loadStore] falló:', err);
+      })
+      .finally(() => {
+        window.clearTimeout(fallbackTimer);
+        if (!cancelled) {
+          setStoreHydrated(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fallbackTimer);
+    };
   }, []);
 
   // ── Auto-resolución total matcher cliente↔cobranza ──────────────────────
@@ -1322,12 +1407,25 @@ export default function App() {
       .finally(() => setProvidersCatalogDone(true));
   }, []);
 
-  // Save to localStorage after changes. Debounce coalesces bursts, but we also
-  // flush synchronously on tab hide/close so the last change never gets lost
-  // if the user navigates away within the debounce window.
+  // Save state changes — strategy v2 (post Page-Unresponsive fix):
+  //
+  // ANTES: una sola useEffect con TODOS los heavies como deps. Cada cambio
+  // en cualquiera (cobranza, compras, nómina, etc.) disparaba saveStore que
+  // reserializa TODOS los heavies a IDB. Compras=334k records × clone IDB
+  // por cada save = main thread bloqueado segundos durante el storm de boot
+  // → Chrome muestra "Page Unresponsive".
+  //
+  // AHORA: split en effects por-tipo:
+  //   - Light effect (providers, clients, assumptions, etc.) → solo localStorage,
+  //     fast porque payload chico.
+  //   - Per-heavy effects (uno por key) → solo escribe SU heavy a IDB cuando
+  //     ESE heavy cambió. No re-serializa los otros.
+  //
+  // latestStoreRef sigue siendo el snapshot completo para el flush en
+  // beforeunload (caso edge: usuario cierra antes que dispare debounce).
   const latestStoreRef = useRef<MidasStore | null>(null);
   useEffect(() => {
-    const snapshot: MidasStore = {
+    latestStoreRef.current = {
       providers, clients,
       assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
       cobranzaRecords, cobranzaLoadedCias,
@@ -1339,26 +1437,54 @@ export default function App() {
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
-    latestStoreRef.current = snapshot;
+  });
+
+  // Light save: localStorage only. Deps son solo light fields → no re-fires
+  // por cambios en heavies.
+  useEffect(() => {
+    if (latestStoreRef.current === null) return;
+    const snapshot = latestStoreRef.current;
     let cancelIdle: (() => void) | null = null;
     const timer = window.setTimeout(() => {
-      cancelIdle = scheduleIdleTask(() => saveStore(snapshot), 2500);
+      cancelIdle = scheduleIdleTask(() => saveLightStore(snapshot), 2500);
     }, STORE_SAVE_DEBOUNCE_MS);
     return () => {
       window.clearTimeout(timer);
       cancelIdle?.();
     };
   }, [
-    providers, clients,
-    assumptions, confirmedPayments, cxpRecords, cxpLoadedCias,
-    cobranzaRecords, cobranzaLoadedCias,
-    cobranzaPayments, cobranzaPaymentsLoadedCias,
-    comprasRecords, comprasLoadedCias,
-    pagoProveedorRecords, pagoProveedorLoadedCias,
-    companies, companiesLoadedAt,
-    nominaRecords, nominaLoadedKeys,
-    cashFlowOverrides,
+    providers, clients, assumptions, confirmedPayments,
+    cxpLoadedCias, cobranzaLoadedCias, cobranzaPaymentsLoadedCias,
+    comprasLoadedCias, pagoProveedorLoadedCias,
+    companies, companiesLoadedAt, nominaLoadedKeys, cashFlowOverrides,
   ]);
+
+  // Per-heavy saves: cada uno solo dispara cuando su key cambia. saveHeavyRecords
+  // hace UN solo put de UN solo array, no re-serializa los 6.
+  const useHeavySaver = (key: HeavyKey, records: unknown[]) => {
+    useEffect(() => {
+      let cancelIdle: (() => void) | null = null;
+      const timer = window.setTimeout(() => {
+        cancelIdle = scheduleIdleTask(() => {
+          // Anti-wipe: skip si records vacío (state probablemente en tránsito
+          // durante boot, no queremos pisar IDB existente).
+          if (records.length === 0) return;
+          void saveHeavyRecords(key, records);
+        }, 2500);
+      }, STORE_SAVE_DEBOUNCE_MS);
+      return () => {
+        window.clearTimeout(timer);
+        cancelIdle?.();
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [records]);
+  };
+  useHeavySaver('cxpRecords', cxpRecords);
+  useHeavySaver('cobranzaRecords', cobranzaRecords);
+  useHeavySaver('cobranzaPayments', cobranzaPayments);
+  useHeavySaver('comprasRecords', comprasRecords);
+  useHeavySaver('pagoProveedorRecords', pagoProveedorRecords);
+  useHeavySaver('nominaRecords', nominaRecords);
 
   useEffect(() => {
     const flush = () => {
@@ -1483,6 +1609,12 @@ export default function App() {
             cobranzaReconciliation,
             paidCxpKeys,
             cargoEnrichments: paymentReconciliation.cargoEnrichments,
+            // Planning pasa purchaseReceipts + payrollCosts; el prewarm DEBE
+            // incluirlos para que el cache key empate (refId() los suma). Sin
+            // esto, planning entra en cache miss, rebuildea canonical sync en
+            // idle y congela el primer frame del módulo.
+            purchaseReceipts: purchaseReceiptsFromCompras,
+            payrollCosts: nominaRecords,
             assumptions,
             budget: null,
             startingBalance: effectiveStartingBalance,
@@ -1526,6 +1658,8 @@ export default function App() {
     cobranzaReconciliation,
     paidCxpKeys,
     paymentReconciliation,
+    purchaseReceiptsFromCompras,
+    nominaRecords,
     assumptions,
     effectiveStartingBalance,
   ]);
@@ -1537,6 +1671,7 @@ export default function App() {
   const cxpAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cxpAutoFetchDone.current) return;
+    if (!storeHydrated) return;
     if (companies.length === 0) return;
     const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
     if (activeCias.length === 0) {
@@ -1545,6 +1680,8 @@ export default function App() {
       return;
     }
     const ciasToFetch = activeCias.filter(cia => !isFreshTimestamp(cxpLoadedCias[cia], CXP_AUTO_REFRESH_TTL_MS));
+    // eslint-disable-next-line no-console
+    console.info(`[cxp] boot sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (TTL ${Math.round(CXP_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cxpRecords.length}`);
     if (ciasToFetch.length === 0) {
       cxpAutoFetchDone.current = true;
       setBootSlot('cxp', 'done');
@@ -1591,7 +1728,7 @@ export default function App() {
       }
       setBootSlot('cxp', errors === ciasToFetch.length ? 'error' : 'done');
     })();
-  }, [companies, cxpLoadedCias, setBootSlot]);
+  }, [storeHydrated, companies, cxpLoadedCias, setBootSlot]);
 
   // ── Auto-load Compras (Órdenes de Compra) durante el boot ──
   // Endpoint global (no por cia, no listado en /empresas). Cargamos los últimos
@@ -1601,6 +1738,7 @@ export default function App() {
   const comprasAutoFetchDone = useRef(false);
   useEffect(() => {
     if (comprasAutoFetchDone.current) return;
+    if (!storeHydrated) return;
     if (companies.length === 0) return;
     if (isFreshTimestamp(comprasLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
       comprasAutoFetchDone.current = true;
@@ -1627,29 +1765,29 @@ export default function App() {
         const fechaInicial = (hasHydratedRecords && maxCached && candidateFrom >= lookbackStart)
           ? candidateFrom
           : lookbackStart;
+        // eslint-disable-next-line no-console
+        console.info(`[compras] boot sync · maxCachedIDB=${maxCached ?? 'none'} · hydratedState=${comprasRecords.length} · fetch ${fechaInicial}→${fechaFinal} (${fechaInicial === lookbackStart ? 'FULL' : 'DELTA'})`);
 
         if (fechaInicial > fechaFinal) {
           // Nada que sincronizar: el cache ya cubre hasta hoy.
+          // eslint-disable-next-line no-console
+          console.info('[compras] boot sync · nada nuevo, cache cubre hasta hoy');
           setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
           return;
         }
 
         const fetched = await fetchComprasRange(fechaInicial, fechaFinal, { concurrency: 2 });
         if (fetched.length > 0) {
-          if (fechaInicial === lookbackStart) {
-            // Full backfill: reemplaza state (limpia datos viejos fuera del
-            // lookback).
-            setComprasRecords(fetched);
-          } else {
-            // Delta: merge con prev por `cia::noOrden::lineaOrden` para
-            // preservar la historia hidratada desde el store.
-            setComprasRecords(prev => {
-              const map = new Map<string, ComprasRecord>();
-              for (const r of prev) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
-              for (const r of fetched) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
-              return Array.from(map.values());
-            });
-          }
+          // Siempre merge — nunca reemplazar. Si loadStore.then() hidrató
+          // registros viejos (fuera de la ventana de lookback actual) durante
+          // el fetch, no los queremos perder. La ventana solo determina QUÉ
+          // se pide a JDE, no qué se conserva en state.
+          setComprasRecords(prev => {
+            const map = new Map<string, ComprasRecord>();
+            for (const r of prev) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
+            for (const r of fetched) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
+            return Array.from(map.values());
+          });
         }
         setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
       } catch (err) {
@@ -1660,7 +1798,7 @@ export default function App() {
         console.error('[compras] auto-fetch falló', err);
       }
     })();
-  }, [companies, comprasLoadedCias, comprasRecords.length]);
+  }, [storeHydrated, companies, comprasLoadedCias, comprasRecords.length]);
 
   // ── Auto-load PagoProveedor durante el boot ──
   // Endpoint global (no filtra por cia, igual que /compras). Cargamos los
@@ -1670,6 +1808,7 @@ export default function App() {
   const pagoProveedorAutoFetchDone = useRef(false);
   useEffect(() => {
     if (pagoProveedorAutoFetchDone.current) return;
+    if (!storeHydrated) return;
     if (companies.length === 0) return;
     if (isFreshTimestamp(pagoProveedorLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
       pagoProveedorAutoFetchDone.current = true;
@@ -1691,24 +1830,25 @@ export default function App() {
         const fechaInicial = (hasHydratedRecords && maxCached && candidateFrom >= lookbackStart)
           ? candidateFrom
           : lookbackStart;
+        // eslint-disable-next-line no-console
+        console.info(`[pagoproveedor] boot sync · maxCachedIDB=${maxCached ?? 'none'} · hydratedState=${pagoProveedorRecords.length} · fetch ${fechaInicial}→${fechaFinal} (${fechaInicial === lookbackStart ? 'FULL' : 'DELTA'})`);
 
         if (fechaInicial > fechaFinal) {
+          // eslint-disable-next-line no-console
+          console.info('[pagoproveedor] boot sync · nada nuevo, cache cubre hasta hoy');
           setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
           return;
         }
 
         const fetched = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 2 });
         if (fetched.length > 0) {
-          if (fechaInicial === lookbackStart) {
-            setPagoProveedorRecords(fetched);
-          } else {
-            setPagoProveedorRecords(prev => {
-              const map = new Map<string, PagoProveedorRecord>();
-              for (const r of prev) map.set(`${r.cia}::${r.noPago}`, r);
-              for (const r of fetched) map.set(`${r.cia}::${r.noPago}`, r);
-              return Array.from(map.values());
-            });
-          }
+          // Siempre merge para preservar historia hidratada desde el store.
+          setPagoProveedorRecords(prev => {
+            const map = new Map<string, PagoProveedorRecord>();
+            for (const r of prev) map.set(`${r.cia}::${r.noPago}`, r);
+            for (const r of fetched) map.set(`${r.cia}::${r.noPago}`, r);
+            return Array.from(map.values());
+          });
         }
         setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
       } catch (err) {
@@ -1716,7 +1856,7 @@ export default function App() {
         console.error('[pagoproveedor] auto-fetch falló', err);
       }
     })();
-  }, [companies, pagoProveedorLoadedCias, pagoProveedorRecords.length]);
+  }, [storeHydrated, companies, pagoProveedorLoadedCias, pagoProveedorRecords.length]);
 
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /JDEdwards/cobranza (productivo desde 2026-05-01).
@@ -1743,6 +1883,8 @@ export default function App() {
           !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
           || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
         );
+      // eslint-disable-next-line no-console
+      console.info(`[cobranza] sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (force=${force}, TTL ${Math.round(COBRANZA_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cobranzaRecords.length}`);
       if (ciasToFetch.length === 0) return;
 
       setCobranzaRefreshing(true);
@@ -1851,6 +1993,7 @@ export default function App() {
   const cobranzaAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cobranzaAutoFetchDone.current) return;
+    if (!storeHydrated) return;
     if (companies.length === 0) return;
     const activeCias = companies.filter(c => c.activa !== false);
     if (activeCias.length === 0) {
@@ -1873,7 +2016,7 @@ export default function App() {
         setBootSlot('cobranza', 'error');
       }
     })();
-  }, [companies, refreshCobranza, setBootSlot]);
+  }, [storeHydrated, companies, refreshCobranza, setBootSlot]);
 
   // Si JDE no devuelve compañías (companies en error), CXP y cobranza nunca
   // se dispararon — marcamos los slots como error para destrabar el boot.
@@ -1889,8 +2032,18 @@ export default function App() {
   // tipos de nómina. Más barato que iterar por cía (a diferencia de CXP /
   // cobranza). Si la llave de cache ya está fresca, skip silencioso. El error
   // no bloquea el boot — el módulo de Nómina permite refrescar manualmente.
+  //
+  // Ref guard `nominaBootDone` evita doble ejecución por StrictMode (dev) o
+  // por cambios subsecuentes en companies (fetch JDE → store hydrate, etc.).
+  // Sin guard, dos fetch loops concurrentes interfieren: la última respuesta
+  // de TRESS reemplaza fingerprints, haciendo oscilar el conteo de records
+  // (11189 → 14437 → 13879 → 11189) y persistiendo el snapshot equivocado.
+  const nominaBootDone = useRef(false);
   useEffect(() => {
+    if (nominaBootDone.current) return;
+    if (!storeHydrated) return;
     if (companies.length === 0) return;
+    nominaBootDone.current = true;
     // Fetch últimos 24 meses de nómina TRESS para alimentar predictor
     // estacional Y el piso operativo (avg 3m de meses cerrados). Iteramos
     // (año, mes) hacia atrás; cada mes ya cargado se skippea sin red.
@@ -1969,7 +2122,7 @@ export default function App() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companies.length]);
+  }, [storeHydrated, companies.length]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
@@ -1983,13 +2136,16 @@ export default function App() {
     }
   }, [companies, selectedCia, companyGroups]);
 
-  // Persist bank statements + last query
+  // Persist bank statements (JDE + supplemental) → IDB heavy-store.
+  // Antes vivían en localStorage `midas.bankStatements.v2` y
+  // `midas.bankSupplementalStatements.v1` pero la cuota ~5MB se rompía con
+  // 2 años de movimientos y dejaba el state truncado. IDB tiene cuota
+  // dinámica en GB.
   useEffect(() => {
     let cancelIdle: (() => void) | null = null;
     const timer = window.setTimeout(() => {
       cancelIdle = scheduleIdleTask(() => {
-        try { localStorage.setItem('midas.bankStatements.v2', JSON.stringify(bankJdeStatements)); }
-        catch { /* quota or serialization issue; ignore */ }
+        void saveBankJdeStatementsToIDB(bankJdeStatements);
       }, 2500);
     }, BANK_STORAGE_SAVE_DEBOUNCE_MS);
     return () => {
@@ -2001,10 +2157,7 @@ export default function App() {
     let cancelIdle: (() => void) | null = null;
     const timer = window.setTimeout(() => {
       cancelIdle = scheduleIdleTask(() => {
-        try {
-          if (bankSupplementalStatements.length > 0) localStorage.setItem('midas.bankSupplementalStatements.v1', JSON.stringify(bankSupplementalStatements));
-          else localStorage.removeItem('midas.bankSupplementalStatements.v1');
-        } catch { /* ignore */ }
+        void saveBankSupplementalStatementsToIDB(bankSupplementalStatements);
       }, 2500);
     }, BANK_STORAGE_SAVE_DEBOUNCE_MS);
     return () => {
@@ -2105,11 +2258,14 @@ export default function App() {
       return { primed, ranged: false };
     }
 
-    // ── Step 2: Backfill año-a-la-fecha (delta-aware) ──
-    // Si el cache diario en IDB ya cubre hasta ayer y tenemos statements
-    // hidratados desde localStorage, sólo pedimos JDE desde (maxCached+1)
-    // hasta hoy. Si no hay cache o el max está fuera del lookback, full
-    // backfill. force=true salta el delta para forzar refresh manual completo.
+    // ── Step 2: Backfill año-a-la-fecha (siempre full range) ──
+    // NO usamos delta aquí: bankJdeStatements vive en localStorage v2, que
+    // tiene cuota ~5MB y se trunca con 2 años de movimientos. Un boot con
+    // state truncado seguido de delta dejaría la app con sólo los días
+    // recientes. En cambio, el IDB daily cache (`midas-daily-cache` keys
+    // `banks.SWIFT.YYYY-MM-DD`) absorbe el rango entero sin tocar JDE para
+    // días pasados, así que el "full" range es rápido. Merge con prev para
+    // no perder lo que ya estaba hidratado.
     setBankFetchStatus('ranging');
     setBankFetchProgress({ done: 0, total: 0 });
     let ranged = false;
@@ -2118,52 +2274,36 @@ export default function App() {
     try {
       await primeDailyCache();
       const maxCachedBanks = getMaxCachedDay(`banks.${defaultFormat}`);
-      const candidateFrom = maxCachedBanks ? nextIsoDay(maxCachedBanks) : yearStart;
-      const hasHydratedStatements = bankJdeStatements.length > 0;
-      const backfillFrom = (!force && hasHydratedStatements && maxCachedBanks && candidateFrom >= yearStart)
-        ? candidateFrom
-        : yearStart;
+      // eslint-disable-next-line no-console
+      console.info(`[banks] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} · hydratedState=${bankJdeStatements.length} · force=${force} · range ${yearStart}→${today} (FULL via daily cache)`);
 
-      if (backfillFrom > today) {
-        // Cache cubre hasta hoy — nada que pedir.
+      const full = await fetchBankStatementsRange(
+        yearStart,
+        today,
+        defaultFormat,
+        {
+          concurrency: 6,
+          onProgress: (done, total) => {
+            lastTotal = total;
+            const now = performance.now();
+            if (done === total || now - lastProgressPaint > 250) {
+              lastProgressPaint = now;
+              setBankFetchProgress({ done, total });
+            }
+          },
+        },
+      );
+      if (full.length > 0) {
+        // Merge en lugar de replace: preserva cualquier statement adicional
+        // que loadStore haya hidratado, y dedupea movimientos por (cia,
+        // cuenta, moneda).
+        setBankJdeStatements(prev => mergeBankStatements(prev, full));
         setBankLastQuery({
           fechaEstadoCuenta: today,
           formatoElectronico: defaultFormat,
           hasUploadedSantander: bankSupplementalStatements.length > 0,
         });
         ranged = true;
-      } else {
-        const full = await fetchBankStatementsRange(
-          backfillFrom,
-          today,
-          defaultFormat,
-          {
-            concurrency: 6,
-            onProgress: (done, total) => {
-              lastTotal = total;
-              const now = performance.now();
-              if (done === total || now - lastProgressPaint > 250) {
-                lastProgressPaint = now;
-                setBankFetchProgress({ done, total });
-              }
-            },
-          },
-        );
-        if (full.length > 0) {
-          if (backfillFrom === yearStart) {
-            // Full backfill: reemplaza para limpiar statements fuera del lookback.
-            setBankJdeStatements(full);
-          } else {
-            // Delta: merge para preservar historia hidratada.
-            setBankJdeStatements(prev => mergeBankStatements(prev, full));
-          }
-          setBankLastQuery({
-            fechaEstadoCuenta: today,
-            formatoElectronico: defaultFormat,
-            hasUploadedSantander: bankSupplementalStatements.length > 0,
-          });
-          ranged = true;
-        }
       }
     } catch {
       // Keep the last known state visible when the range refresh fails.
@@ -2209,12 +2349,19 @@ export default function App() {
     }
   }, [bankSupplementalStatements.length]);
 
+  const banksBootDone = useRef(false);
   useEffect(() => {
+    if (banksBootDone.current) return;
+    if (!storeHydrated) return;
+    if (!bankCacheLoaded) return;
+    banksBootDone.current = true;
     (async () => {
       // Backfill anual al boot. force=false para que la lógica delta-aware
       // dentro de refreshBankStatementsRange decida qué pedir: si tenemos
       // cache hasta ayer, sólo pega JDE para hoy en vez de los 730 días.
       // includeRange=true dispara el rango año-a-la-fecha con concurrencia 6.
+      // Gateado en storeHydrated + bankCacheLoaded para que bankJdeStatements
+      // ya esté hidratado desde localStorage antes de evaluar la rama delta.
       setBootSlot('banks', 'loading');
       try {
         await refreshBankStatementsRange(false, true);
@@ -2224,7 +2371,7 @@ export default function App() {
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [storeHydrated, bankCacheLoaded]);
 
   /* ── Animated page key for re-mount on tab change ── */
   const [pageKey, setPageKey] = useState(0);
