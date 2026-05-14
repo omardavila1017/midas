@@ -49,7 +49,7 @@ git log --all --full-history -p --pickaxe-regex -S 'Smv9xKp2rNqLwA4jTdYe7BhCuZoV
 ```
 
 **Impacto**: cualquiera con acceso al repositorio (público en GitHub) puede
-extraer el token y golpear los endpoints `/v1/erp/tesoreria/*` con privilegios
+extraer el token y golpear los endpoints `/JDEdwards/*` con privilegios
 de tesorería: leer antigüedad de saldos, estados de cuenta bancarios y
 catálogos de empresas de Grupo Senda.
 
@@ -144,7 +144,7 @@ y no expone credenciales.
 La configuración previa:
 
 ```json
-{ "source": "/api/jde/:path*", "destination": "https://api.gruposenda.com/v1/erp/tesoreria/:path*" }
+{ "source": "/api/jde/:path*", "destination": "https://api.gruposenda.com/JDEdwards/:path*" }
 ```
 
 es un rewrite Edge: Vercel solo cambia la URL, no inyecta headers ni hace

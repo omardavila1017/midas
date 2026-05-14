@@ -13,7 +13,7 @@
  * los empuja a IDB en background, re-escribe v12 light-only y elimina v11.
  *
  * v11 adds PagoProveedor (pagos ejecutados a proveedores) cache from POST
- * /v1/erp/tesoreria/pagoproveedor, liberado a producción 2026-05-13. Es el
+ * /JDEdwards/pagoproveedor, liberado a producción 2026-05-13. Es el
  * espejo egreso de cobranza: cierra el loop CXP/OC ↔ banco al traer los
  * pagos reales ya ejecutados.
  *   - `pagoProveedorRecords` — registros normalizados por (cia, noPago).
@@ -21,7 +21,7 @@
  *     no acepta filtro por cia; tracking global con la llave `__all__`).
  *
  * v10 adds Compras (órdenes de compra) cache from POST
- * /v1/erp/tesoreria/compras, liberado a producción 2026-05-08.
+ * /JDEdwards/compras, liberado a producción 2026-05-08.
  *   - `comprasRecords` — registros normalizados por (cia, noOrden, lineaOrden).
  *   - `comprasLoadedCias` — timestamps por cia (no aplica filtro de cia en el
  *     endpoint, pero igual lo trackeamos por consistencia con cxp/cobranza).
@@ -35,7 +35,7 @@
  * bridge between bank deposits and CXC invoices.
  *
  * v7 adds CXC support (cobranza) alongside the existing CXP records. The
- * cobranza endpoint (POST /v1/erp/tesoreria/cobranza) was liberated to
+ * cobranza endpoint (POST /JDEdwards/cobranza) was liberated to
  * production on 2026-05-01 by the JDE team; we persist the response so the
  * dashboard can show real receivables (and cross them against bank
  * movements) without re-fetching every load.
@@ -122,7 +122,7 @@ export interface MidasStore {
   cxpRecords: CXPRecord[];
   cxpLoadedCias: Record<string, string>;
   /**
-   * Cobranza (CXC) records cached from POST /v1/erp/tesoreria/cobranza.
+   * Cobranza (CXC) records cached from POST /JDEdwards/cobranza.
    * One row per (cia, noFactura). Reset by clearStore() and refreshed
    * sequentially per cia at app boot — same pattern as cxpRecords.
    */
@@ -141,7 +141,7 @@ export interface MidasStore {
   /** Per-cia ISO timestamp del último refresh exitoso de IndicadoresCobranza. */
   cobranzaPaymentsLoadedCias: Record<string, string>;
   /**
-   * Compras (órdenes de compra) cacheadas de POST /v1/erp/tesoreria/compras.
+   * Compras (órdenes de compra) cacheadas de POST /JDEdwards/compras.
    * El endpoint es global (no por cia) y se consume por rangos de 30 días.
    */
   comprasRecords: ComprasRecord[];
@@ -152,7 +152,7 @@ export interface MidasStore {
    */
   comprasLoadedCias: Record<string, string>;
   /**
-   * Pagos a proveedor cacheados de POST /v1/erp/tesoreria/pagoproveedor.
+   * Pagos a proveedor cacheados de POST /JDEdwards/pagoproveedor.
    * Espejo egreso de cobranza. Endpoint global (no filtra por cia). Una row
    * por (cia, noPago). El loop banco↔CXP↔OC se cierra con estos datos.
    */

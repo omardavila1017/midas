@@ -1075,7 +1075,7 @@ export function extractPaymentEvents(
 }
 
 /**
- * Convierte órdenes de compra (Compras / `/v1/erp/tesoreria/compras`) en
+ * Convierte órdenes de compra (Compras / `/JDEdwards/compras`) en
  * eventos de pago proyectado.
  *
  * Una OC representa un compromiso de egreso **antes** de que JDE genere la

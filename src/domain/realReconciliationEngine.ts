@@ -3,7 +3,7 @@
  *
  * A diferencia de `reconciliationEngine.ts` (que cruza eventos PROYECTADOS
  * heurísticos contra abonos), este motor cruza FACTURAS REALES extraídas
- * del API /v1/erp/tesoreria/cobranza contra ABONOs reales del estado de
+ * del API /JDEdwards/cobranza contra ABONOs reales del estado de
  * cuenta. Es el ground truth de la operación.
  *
  * Algoritmo en 4 capas (de más estricta a más laxa):
