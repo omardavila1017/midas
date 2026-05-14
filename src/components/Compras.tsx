@@ -25,9 +25,19 @@ interface ComprasProps {
 
 type FacturaFilter = 'all' | 'sinFacturar' | 'facturadas';
 type ReceiptFilter = 'all' | 'recibidas' | 'pendienteRecepcion';
+type CompraStatusFilter = 'active' | 'all' | 'cancelled';
+type CompraDateField = 'fechaPedido' | 'fechaRecepcion' | 'fechaPagoProyectada';
+type CompraSortKey = CompraDateField | 'importeTotal';
+type SortDirection = 'asc' | 'desc';
+
+interface CompraSort {
+  key: CompraSortKey;
+  direction: SortDirection;
+}
 
 const COMPRAS_CACHE_KEY = '__all__';
 const ROW_CAP = 500;
+const DEFAULT_SORT: CompraSort = { key: 'fechaPedido', direction: 'desc' };
 
 interface ChipStyle {
   bg: string;
@@ -54,6 +64,12 @@ const STATUS_POR_RECIBIR: ChipStyle = {
   text: 'var(--info)',
   dot: 'var(--info)',
 };
+const STATUS_CANCELADA: ChipStyle = {
+  bg: 'var(--danger-muted)',
+  border: 'var(--gray-200)',
+  text: 'var(--danger)',
+  dot: 'var(--danger)',
+};
 
 export default function Compras({
   comprasRecords,
@@ -64,24 +80,66 @@ export default function Compras({
   const [search, setSearch] = useState('');
   const [facturaFilter, setFacturaFilter] = useState<FacturaFilter>('all');
   const [receiptFilter, setReceiptFilter] = useState<ReceiptFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<CompraStatusFilter>('active');
+  const [dateField, setDateField] = useState<CompraDateField>('fechaPedido');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [sort, setSort] = useState<CompraSort>(DEFAULT_SORT);
 
   const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
 
   const lastLoadedAt = comprasLoadedCias[COMPRAS_CACHE_KEY];
-  const filtersActive = search.trim() !== '' || facturaFilter !== 'all' || receiptFilter !== 'all';
+  const filtersActive =
+    search.trim() !== ''
+    || facturaFilter !== 'all'
+    || receiptFilter !== 'all'
+    || statusFilter !== 'active'
+    || dateField !== 'fechaPedido'
+    || dateFrom !== ''
+    || dateTo !== ''
+    || amountMin !== ''
+    || amountMax !== ''
+    || categoryFilter !== 'all'
+    || sort.key !== DEFAULT_SORT.key
+    || sort.direction !== DEFAULT_SORT.direction;
+
+  const categoriasDisponibles = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of comprasRecords) {
+      const category = r.descCategoria || r.descFamilia || r.categoria || r.familia;
+      if (category) set.add(category);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [comprasRecords]);
 
   const filteredRecords = useMemo(() => {
     const q = search.trim().toUpperCase();
+    const min = parseAmountInput(amountMin);
+    const max = parseAmountInput(amountMax);
     return comprasRecords.filter((r) => {
-      if (r.cancelada) return false;
+      if (statusFilter === 'active' && r.cancelada) return false;
+      if (statusFilter === 'cancelled' && !r.cancelada) return false;
       if (selectedCia !== 'all' && r.cia !== selectedCia) return false;
       if (facturaFilter === 'sinFacturar' && r.facturada) return false;
       if (facturaFilter === 'facturadas' && !r.facturada) return false;
       if (receiptFilter === 'recibidas' && !r.fechaRecepcion) return false;
       if (receiptFilter === 'pendienteRecepcion' && r.fechaRecepcion) return false;
+      if (categoryFilter !== 'all') {
+        const category = r.descCategoria || r.descFamilia || r.categoria || r.familia;
+        if (category !== categoryFilter) return false;
+      }
+      const dateValue = r[dateField] || '';
+      if (dateFrom && (!dateValue || dateValue < dateFrom)) return false;
+      if (dateTo && (!dateValue || dateValue > dateTo)) return false;
+      if (min !== undefined && r.importeTotal < min) return false;
+      if (max !== undefined && r.importeTotal > max) return false;
       if (q) {
         const hay =
           r.nombreProveedor.toUpperCase().includes(q) ||
+          r.noProveedor.toUpperCase().includes(q) ||
           r.noOrden.toUpperCase().includes(q) ||
           r.descProducto.toUpperCase().includes(q) ||
           r.descCategoria.toUpperCase().includes(q) ||
@@ -90,8 +148,22 @@ export default function Compras({
         if (!hay) return false;
       }
       return true;
-    });
-  }, [comprasRecords, search, facturaFilter, receiptFilter, selectedCia]);
+    }).sort((a, b) => compareCompraRecords(a, b, sort));
+  }, [
+    comprasRecords,
+    search,
+    facturaFilter,
+    receiptFilter,
+    statusFilter,
+    dateField,
+    dateFrom,
+    dateTo,
+    amountMin,
+    amountMax,
+    categoryFilter,
+    selectedCia,
+    sort,
+  ]);
 
   const kpis = useMemo(() => {
     let totalAmount = 0;
@@ -125,6 +197,14 @@ export default function Compras({
     setSearch('');
     setFacturaFilter('all');
     setReceiptFilter('all');
+    setStatusFilter('active');
+    setDateField('fechaPedido');
+    setDateFrom('');
+    setDateTo('');
+    setAmountMin('');
+    setAmountMax('');
+    setCategoryFilter('all');
+    setSort(DEFAULT_SORT);
   };
 
   return (
@@ -216,7 +296,7 @@ export default function Compras({
             />
           </div>
           <select
-            className="input max-w-[170px]"
+            className="input max-w-[160px]"
             value={facturaFilter}
             onChange={(e) => setFacturaFilter(e.target.value as FacturaFilter)}
             title="Filtrar por estado de factura"
@@ -226,7 +306,7 @@ export default function Compras({
             <option value="facturadas">Ya facturadas</option>
           </select>
           <select
-            className="input max-w-[180px]"
+            className="input max-w-[170px]"
             value={receiptFilter}
             onChange={(e) => setReceiptFilter(e.target.value as ReceiptFilter)}
             title="Filtrar por estado de recepción"
@@ -234,6 +314,87 @@ export default function Compras({
             <option value="all">Todas (recepción)</option>
             <option value="recibidas">Recibidas</option>
             <option value="pendienteRecepcion">Pendiente recepción</option>
+          </select>
+          <select
+            className="input max-w-[145px]"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as CompraStatusFilter)}
+            title="Filtrar por estado de la OC"
+          >
+            <option value="active">Activas</option>
+            <option value="all">Activas + canceladas</option>
+            <option value="cancelled">Canceladas</option>
+          </select>
+          <select
+            className="input max-w-[160px]"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            title="Filtrar por categoría"
+          >
+            <option value="all">Todas las categorías</option>
+            {categoriasDisponibles.map((category) => (
+              <option key={category} value={category}>{category}</option>
+            ))}
+          </select>
+          <select
+            className="input max-w-[145px]"
+            value={dateField}
+            onChange={(e) => setDateField(e.target.value as CompraDateField)}
+            title="Campo de fecha para rango"
+          >
+            <option value="fechaPedido">Fecha pedido</option>
+            <option value="fechaRecepcion">Recepción</option>
+            <option value="fechaPagoProyectada">Pago proy.</option>
+          </select>
+          <input
+            type="date"
+            className="input max-w-[145px]"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            title="Fecha desde"
+          />
+          <input
+            type="date"
+            className="input max-w-[145px]"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            title="Fecha hasta"
+          />
+          <input
+            type="number"
+            className="input max-w-[120px]"
+            placeholder="Importe mín."
+            value={amountMin}
+            onChange={(e) => setAmountMin(e.target.value)}
+            min="0"
+            title="Importe mínimo"
+          />
+          <input
+            type="number"
+            className="input max-w-[120px]"
+            placeholder="Importe máx."
+            value={amountMax}
+            onChange={(e) => setAmountMax(e.target.value)}
+            min="0"
+            title="Importe máximo"
+          />
+          <select
+            className="input max-w-[185px]"
+            value={`${sort.key}:${sort.direction}`}
+            onChange={(e) => {
+              const [key, direction] = e.target.value.split(':') as [CompraSortKey, SortDirection];
+              setSort({ key, direction });
+            }}
+            title="Ordenar registros"
+          >
+            <option value="fechaPedido:desc">Pedido reciente primero</option>
+            <option value="fechaPedido:asc">Pedido antiguo primero</option>
+            <option value="fechaRecepcion:desc">Recepción reciente primero</option>
+            <option value="fechaRecepcion:asc">Recepción antigua primero</option>
+            <option value="fechaPagoProyectada:desc">Pago reciente primero</option>
+            <option value="fechaPagoProyectada:asc">Pago antiguo primero</option>
+            <option value="importeTotal:desc">Importe mayor primero</option>
+            <option value="importeTotal:asc">Importe menor primero</option>
           </select>
           {filtersActive && (
             <button
@@ -366,7 +527,11 @@ export default function Compras({
                         )}
                       </Td>
                       <Td>
-                        {r.facturada ? (
+                        {r.cancelada ? (
+                          <StatusChip style={STATUS_CANCELADA} icon={X}>
+                            Cancelada
+                          </StatusChip>
+                        ) : r.facturada ? (
                           <StatusChip style={STATUS_FACTURADA} icon={CheckCircle2}>
                             Facturada
                           </StatusChip>
@@ -469,6 +634,25 @@ function Td({
       {children}
     </td>
   );
+}
+
+function parseAmountInput(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function compareCompraRecords(a: ComprasRecord, b: ComprasRecord, sort: CompraSort): number {
+  const direction = sort.direction === 'asc' ? 1 : -1;
+  if (sort.key === 'importeTotal') {
+    return (a.importeTotal - b.importeTotal) * direction;
+  }
+  const av = a[sort.key] || '';
+  const bv = b[sort.key] || '';
+  if (!av && !bv) return 0;
+  if (!av) return 1;
+  if (!bv) return -1;
+  return av.localeCompare(bv) * direction;
 }
 
 function StatusChip({

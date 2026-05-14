@@ -131,6 +131,12 @@ function normalizeCompanyName(s: string | undefined | null): string {
     .trim();
 }
 
+function addMonthsIso(date: Date, months: number): string {
+  const next = new Date(date);
+  next.setUTCMonth(next.getUTCMonth() + months);
+  return next.toISOString().slice(0, 10);
+}
+
 // Marcadores típicos de razón social mexicana — si aparece alguno en el
 // nombre, asumimos empresa (no viajes especiales).
 const COMPANY_MARKERS = new Set([
@@ -213,12 +219,13 @@ const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 // Boot auto-fetch lookback. Con chunks de 1 día (requisito del usuario para
-// alimentar el cache diario), N días = N calls a /compras + N a /pagoproveedor.
-// 730 días (2 años) son ~1460 calls a JDE — mucho pero necesario para
-// alimentar el motor predictivo Holt-Winters que requiere ≥24 meses para
-// detectar estacionalidad. El cache IDB persistente sirve días pasados sin
-// tocar JDE en boot subsecuentes — solo el primer arranque pega duro.
+// alimentar el cache diario), 730 días históricos dan base suficiente al
+// motor predictivo Holt-Winters (≥24 meses). Compras agrega además 3 meses
+// futuros para OCs ya capturadas; PagoProveedor se queda histórico porque son
+// pagos ejecutados. El cache IDB persistente sirve días pasados sin tocar JDE
+// en boot subsecuentes — solo el primer arranque pega duro.
 const COMPRAS_LOOKBACK_DAYS = 730;
+const COMPRAS_FUTURE_LOOKAHEAD_MONTHS = 3;
 const COMPRAS_CACHE_KEY = '__all__';
 // Tabs que dependen del cruce JDE↔banco para mostrar números correctos.
 // Proyección / Planeación / Impuestos consumen `cobranzaReconciliation`
@@ -520,9 +527,9 @@ export default function App() {
   const [cobranzaPaymentsLoadedCias, setCobranzaPaymentsLoadedCias] = useState<Record<string, string>>({});
   // Compras (Órdenes de Compra) — endpoint /JDEdwards/compras,
   // liberado a producción 2026-05-08. Restricción del API: 30 días por
-  // request → fetchComprasRange parte el rango en chunks. Cargamos los
-  // últimos 60 días por default para cubrir OCs con D_Credito alto que aún
-  // no se han facturado.
+  // request → fetchComprasRange parte el rango en chunks. Cargamos 2 años
+  // hacia atrás para entrenar predictor y 3 meses hacia adelante para ver
+  // OCs futuras ya capturadas en JDE.
   const [comprasRecords, setComprasRecords] = useState<ComprasRecord[]>([]);
   const [comprasLoadedCias, setComprasLoadedCias] = useState<Record<string, string>>({});
   // PagoProveedor — endpoint /JDEdwards/pagoproveedor, liberado a
@@ -790,8 +797,15 @@ export default function App() {
   // pasadas. El motor canónico hace dedup vs CXP (no doble-conteo). Memoizado
   // por comprasRecords.
   const purchaseReceiptsFromCompras = useMemo(
-    () => comprasToPurchaseReceipts(comprasRecords, { includeProjected: true }),
-    [comprasRecords],
+    () => comprasToPurchaseReceipts(comprasRecords, {
+      asOfDate: new Date().toISOString().slice(0, 10),
+      includeProjected: true,
+      excludePastUnexecuted: true,
+      futureOrderLookaheadMonths: COMPRAS_FUTURE_LOOKAHEAD_MONTHS,
+      cxpRecords,
+      pagoProveedorRecords,
+    }),
+    [comprasRecords, cxpRecords, pagoProveedorRecords],
   );
 
   // Promedio de gasto por proveedor en los últimos 3 meses calendario,
@@ -1580,7 +1594,7 @@ export default function App() {
 
   // ── Auto-load Compras (Órdenes de Compra) durante el boot ──
   // Endpoint global (no por cia, no listado en /empresas). Cargamos los últimos
-  // COMPRAS_LOOKBACK_DAYS días en chunks de 30 vía fetchComprasRange. No
+  // COMPRAS_LOOKBACK_DAYS hacia atrás + 3 meses a futuro vía fetchComprasRange. No
   // bloquea el splash — corre en segundo plano una vez que companies cargó
   // (para reusar el mismo signal de "boot avanzado").
   const comprasAutoFetchDone = useRef(false);
@@ -1593,7 +1607,7 @@ export default function App() {
     }
     comprasAutoFetchDone.current = true;
     const today = new Date();
-    const fechaFinal = today.toISOString().slice(0, 10);
+    const fechaFinal = addMonthsIso(today, COMPRAS_FUTURE_LOOKAHEAD_MONTHS);
     const lookback = new Date(today);
     lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
     const fechaInicial = lookback.toISOString().slice(0, 10);
@@ -1616,7 +1630,7 @@ export default function App() {
 
   // ── Auto-load PagoProveedor durante el boot ──
   // Endpoint global (no filtra por cia, igual que /compras). Cargamos los
-  // últimos 60 días — mismo lookback que compras, para que la ventana de
+  // últimos 2 años — mismo lookback histórico que compras, para que la ventana de
   // conciliación pagos↔CXP↔banco sea coherente. Reusa COMPRAS_* constants:
   // el endpoint tiene la misma forma de cache + TTL.
   const pagoProveedorAutoFetchDone = useRef(false);

@@ -56,6 +56,23 @@ describe('comprasToPurchaseReceipts — CONFIRMED path', () => {
     expect(out).toHaveLength(0);
   });
 
+  it('keeps OCs with fechaPagoProyectada in the past when still inside the 1-month grace window', () => {
+    const out = comprasToPurchaseReceipts(
+      [record({ fechaPagoProyectada: '2026-04-20' })],
+      { asOfDate: '2026-05-13', excludePastUnexecuted: true },
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].estimatedDueDate).toBe('2026-04-20');
+  });
+
+  it('drops OCs whose fechaPagoProyectada is more than 1 month past', () => {
+    const out = comprasToPurchaseReceipts(
+      [record({ noOrden: '13082', fechaPedido: '2024-11-25', fechaPagoProyectada: '2025-01-22' })],
+      { asOfDate: '2026-05-13', excludePastUnexecuted: true },
+    );
+    expect(out).toHaveLength(0);
+  });
+
   it('drops cancelled OCs', () => {
     const out = comprasToPurchaseReceipts(
       [record({ cancelada: true })],
@@ -145,6 +162,56 @@ describe('comprasToPurchaseReceipts — PROJECTED path', () => {
     });
     const out = comprasToPurchaseReceipts([unreceived], { asOfDate: '2026-04-15' });
     expect(out).toHaveLength(0);
+  });
+
+  it('emits future OCs whose order date is inside the configured 3-month lookahead', () => {
+    const unreceived = record({
+      noOrden: 'FUTURE-IN',
+      fechaPedido: '2026-06-01',
+      fechaRecepcion: '',
+      fechaPagoProyectada: '',
+      diasCredito: 30,
+    });
+    const out = comprasToPurchaseReceipts([unreceived], {
+      asOfDate: '2026-05-13',
+      excludePastUnexecuted: true,
+      futureOrderLookaheadMonths: 3,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].purchaseOrderNo).toBe('FUTURE-IN');
+  });
+
+  it('drops future OCs whose order date is outside the configured 3-month lookahead', () => {
+    const unreceived = record({
+      noOrden: 'FUTURE-OUT',
+      fechaPedido: '2026-08-14',
+      fechaRecepcion: '',
+      fechaPagoProyectada: '',
+      diasCredito: 30,
+    });
+    const out = comprasToPurchaseReceipts([unreceived], {
+      asOfDate: '2026-05-13',
+      excludePastUnexecuted: true,
+      futureOrderLookaheadMonths: 3,
+    });
+    expect(out).toHaveLength(0);
+  });
+
+  it('keeps past OCs when their projected payment date is still valid', () => {
+    const oldUnexecuted = record({
+      noOrden: 'OLD-OPEN',
+      fechaPedido: '2026-04-01',
+      fechaRecepcion: '2026-05-20',
+      fechaPagoProyectada: '2026-06-20',
+      diasCredito: 30,
+    });
+    const out = comprasToPurchaseReceipts([oldUnexecuted], {
+      asOfDate: '2026-05-13',
+      excludePastUnexecuted: true,
+      futureOrderLookaheadMonths: 3,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].purchaseOrderNo).toBe('OLD-OPEN');
   });
 });
 

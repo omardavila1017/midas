@@ -15,14 +15,15 @@
  *   - `cancelada === false` (F_Cancelada válida)
  *   - importe > 0
  *   - workflow JDE no cerrado/cancelado (ver `isWorkflowStateClosed`)
- *   - `estimatedDueDate >= asOfDate` (las que ya pasaron asumimos pagadas)
+ *   - fecha de pago proyectada vencida por más de 1 mes ya no se proyecta
  *
  * El dedup contra CXP se hace downstream en `buildPurchaseReceiptMovements`
  * (`sourceRecords.ts`), no acá — porque el motor canónico tiene contexto
  * de toda la CXP del scope, mientras que este adapter solo ve compras.
  */
 
-import type { ComprasRecord } from '../services/jdeTypes';
+import type { CXPRecord } from './persistence';
+import type { ComprasRecord, PagoProveedorRecord } from '../services/jdeTypes';
 import type {
   PurchaseReceiptRecord,
   FinancialTaxRate,
@@ -78,6 +79,24 @@ function addDays(date: string, days: number): string {
   const parsed = new Date(`${date}T00:00:00.000Z`);
   parsed.setUTCDate(parsed.getUTCDate() + days);
   return parsed.toISOString().slice(0, 10);
+}
+
+function addMonths(date: string, months: number): string {
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setUTCMonth(parsed.getUTCMonth() + months);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function cleanIsoDate(value: string | undefined): string | undefined {
+  const trimmed = (value ?? '').trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(trimmed) ? trimmed.slice(0, 10) : undefined;
+}
+
+function isPastPaymentGrace(paymentDate: string, asOfDate: string): boolean {
+  const cleanPaymentDate = cleanIsoDate(paymentDate);
+  if (!cleanPaymentDate) return false;
+  return addMonths(cleanPaymentDate, 1) < asOfDate;
 }
 
 function buildRecord(
@@ -153,6 +172,24 @@ export interface ComprasToPurchaseReceiptsOptions {
    * true. Útil para callers que solo quieren el set comprometido.
    */
   includeProjected?: boolean;
+  /**
+   * Si true, una OC cuya fecha de pago proyectada ya venció por más de un
+   * mes no se emite desde Compras. Si sigue abierta debe venir por CXP; si se
+   * ejecutó, PagoProveedor y banco ya la cubren como histórico real.
+   */
+  excludePastUnexecuted?: boolean;
+  /**
+   * Contexto disponible para callers que necesitan aplicar la regla anterior
+   * con trazabilidad. El adapter no emite OCs pasadas desde compras para evitar
+   * doble conteo contra CXP/PagoProveedor.
+   */
+  cxpRecords?: CXPRecord[];
+  pagoProveedorRecords?: PagoProveedorRecord[];
+  /**
+   * Límite por fecha de pedido para OCs futuras. Ej. `3` conserva sólo OCs con
+   * `fechaPedido <= asOfDate + 3 meses`.
+   */
+  futureOrderLookaheadMonths?: number;
 }
 
 export function comprasToPurchaseReceipts(
@@ -166,6 +203,9 @@ export function comprasToPurchaseReceipts(
   const asOfDate = options.asOfDate ?? todayIso();
   const includeProjected = options.includeProjected !== false;
   const stats = options.leadTimeStats ?? (includeProjected ? computeLeadTimeStats(comprasRecords) : undefined);
+  const futureOrderCutoff = typeof options.futureOrderLookaheadMonths === 'number'
+    ? addMonths(asOfDate, Math.max(0, options.futureOrderLookaheadMonths))
+    : undefined;
 
   const out: PurchaseReceiptRecord[] = [];
 
@@ -175,10 +215,13 @@ export function comprasToPurchaseReceipts(
 
     const amount = r.importeTotal || 0;
     if (amount <= 0) continue;
+    const orderDate = cleanIsoDate(r.fechaPedido);
+    if (futureOrderCutoff && orderDate && orderDate > futureOrderCutoff) continue;
 
     if (r.fechaRecepcion && r.fechaPagoProyectada) {
       // CONFIRMED: ya recibida, fecha de pago cierta.
-      if (r.fechaPagoProyectada < asOfDate) continue;
+      if (options.excludePastUnexecuted && isPastPaymentGrace(r.fechaPagoProyectada, asOfDate)) continue;
+      if (!options.excludePastUnexecuted && r.fechaPagoProyectada < asOfDate) continue;
       const record = buildRecord(r, r.fechaPagoProyectada, 'CONFIRMED');
       if (record) out.push(record);
     } else if (includeProjected && stats && r.fechaPedido) {
@@ -191,7 +234,8 @@ export function comprasToPurchaseReceipts(
       });
       const projectedReceipt = addDays(r.fechaPedido, lt.days);
       const projectedDue = addDays(projectedReceipt, Math.max(0, r.diasCredito || 0));
-      if (projectedDue < asOfDate) continue;
+      if (options.excludePastUnexecuted && isPastPaymentGrace(projectedDue, asOfDate)) continue;
+      if (!options.excludePastUnexecuted && projectedDue < asOfDate) continue;
       const record = buildRecord(r, projectedDue, 'PROJECTED', lt);
       if (record) out.push(record);
     }
