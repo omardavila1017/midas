@@ -36,6 +36,49 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_RETRIES = 2;
 const RETRY_STATUSES = new Set([408, 502, 503, 504]);
 
+// ── Semáforo global de concurrencia ─────────────────────────────────────
+//
+// JDE backend trona cuando el boot lanza 12+ requests en paralelo (CXP ×
+// cias + cobranza × cias × 2 endpoints + compras + pagoproveedor + banks
+// + nómina + antigüedades). El servidor responde 504 cuando se satura,
+// lo que dispara retries en cliente y empeora el storm.
+//
+// Solución: cap GLOBAL de requests concurrentes a JDE. Los endpoints
+// siguen lanzando sus tareas en paralelo internamente, pero el cuello
+// está aquí — solo MAX_CONCURRENT cruzan la red a la vez. El resto
+// espera en FIFO.
+//
+// Default 3 = balance entre throughput y no romper JDE. Sube si el
+// upstream demuestra que aguanta más, baja si sigue tronando.
+const MAX_CONCURRENT_JDE = (() => {
+  const raw = (import.meta.env?.VITE_JDE_MAX_CONCURRENT as string | undefined) ?? '3';
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 3;
+})();
+
+let activeJdeRequests = 0;
+const jdeWaitQueue: Array<() => void> = [];
+
+function acquireJdeSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    if (activeJdeRequests < MAX_CONCURRENT_JDE) {
+      activeJdeRequests += 1;
+      resolve();
+    } else {
+      jdeWaitQueue.push(() => {
+        activeJdeRequests += 1;
+        resolve();
+      });
+    }
+  });
+}
+
+function releaseJdeSlot(): void {
+  activeJdeRequests = Math.max(0, activeJdeRequests - 1);
+  const next = jdeWaitQueue.shift();
+  if (next) next();
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -87,6 +130,9 @@ async function request<T>(
   let lastErr: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // El semáforo va POR ATTEMPT — soltamos slot durante el backoff para
+    // que otra request no quede bloqueada esperando un retry dormido.
+    await acquireJdeSlot();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
@@ -104,6 +150,7 @@ async function request<T>(
       });
     } catch (e) {
       clearTimeout(timeout);
+      releaseJdeSlot();
       const isAbort = e instanceof DOMException && e.name === 'AbortError';
       lastErr = isAbort
         ? new JdeApiError(`Timeout llamando ${path}`, 408, path)
@@ -123,6 +170,7 @@ async function request<T>(
     if (!res.ok) {
       let errBody: unknown;
       try { errBody = await res.json(); } catch { errBody = await res.text().catch(() => undefined); }
+      releaseJdeSlot();
       const err = new JdeApiError(
         `JDE ${path} respondió ${res.status} ${res.statusText}`,
         res.status,
@@ -138,8 +186,11 @@ async function request<T>(
     }
 
     try {
-      return (await res.json()) as T;
+      const json = (await res.json()) as T;
+      releaseJdeSlot();
+      return json;
     } catch (e) {
+      releaseJdeSlot();
       throw new JdeApiError(
         `Respuesta no es JSON válido (${path}): ${e instanceof Error ? e.message : String(e)}`,
         res.status,

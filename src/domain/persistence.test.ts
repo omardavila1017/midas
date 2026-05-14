@@ -1,19 +1,19 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { saveStore, loadStore, importStore, exportStore, getDefaultStore, clearStore } from './persistence';
 
-describe('persistence v9', () => {
+describe('persistence v12', () => {
   beforeEach(() => {
     clearStore();
   });
 
-  it('round-trips catalogs and assumptions through save/load', () => {
+  it('round-trips catalogs and assumptions through save/load', async () => {
     const store = {
       ...getDefaultStore(),
       providers: [{ id: 'prov1', name: 'Prov' } as never],
       clients: [{ id: 'c1', name: 'Cliente' } as never],
     };
     saveStore(store);
-    const loaded = loadStore();
+    const loaded = await loadStore();
     expect(loaded).not.toBeNull();
     expect(loaded!.providers).toHaveLength(1);
     expect(loaded!.clients).toHaveLength(1);
@@ -26,7 +26,7 @@ describe('persistence v9', () => {
     expect(imported.assumptions.year).toBe(store.assumptions.year);
   });
 
-  it('migrates midas-v5 store: drops proposals/scenarios/activeScenarioId, keeps the rest', () => {
+  it('migrates midas-v5 store: drops proposals/scenarios/activeScenarioId, keeps the rest', async () => {
     const v5Payload = {
       version: 5,
       data: {
@@ -45,7 +45,7 @@ describe('persistence v9', () => {
     };
     localStorage.setItem('midas-v5', JSON.stringify(v5Payload));
 
-    const loaded = loadStore();
+    const loaded = await loadStore();
     expect(loaded).not.toBeNull();
     expect((loaded as unknown as Record<string, unknown>).proposals).toBeUndefined();
     expect((loaded as unknown as Record<string, unknown>).scenarios).toBeUndefined();
@@ -53,10 +53,10 @@ describe('persistence v9', () => {
     expect(loaded!.clients).toHaveLength(1);
     expect(loaded!.cashFlowOverrides['2026-05']).toEqual({ income: 1000 });
     expect(localStorage.getItem('midas-v5')).toBeNull();
-    expect(localStorage.getItem('midas-v9')).not.toBeNull();
+    expect(localStorage.getItem('midas-v12')).not.toBeNull();
   });
 
-  it('migrates legacy v4 store: keeps clients/providers, drops everything simulation-y', () => {
+  it('migrates legacy v4 store: keeps clients/providers, drops everything simulation-y', async () => {
     const legacyPayload = {
       version: 4,
       data: {
@@ -74,14 +74,14 @@ describe('persistence v9', () => {
     };
     localStorage.setItem('flowsense-v4', JSON.stringify(legacyPayload));
 
-    const loaded = loadStore();
+    const loaded = await loadStore();
     expect(loaded).not.toBeNull();
     expect(loaded!.clients).toHaveLength(1);
     expect(loaded!.providers).toHaveLength(1);
     expect(localStorage.getItem('flowsense-v4')).toBeNull();
   });
 
-  it('clamps invalid assumptions back to sane defaults', () => {
+  it('clamps invalid assumptions back to sane defaults', async () => {
     const payload = {
       version: 6,
       data: {
@@ -94,14 +94,14 @@ describe('persistence v9', () => {
       },
     };
     localStorage.setItem('midas-v6', JSON.stringify(payload));
-    const loaded = loadStore();
+    const loaded = await loadStore();
     expect(loaded).not.toBeNull();
     expect(loaded!.assumptions.year).toBeGreaterThan(1900);
     expect(loaded!.assumptions.globalCompliance).toBe(1);
     expect(loaded!.assumptions.factorajeDays).toBe(30);
   });
 
-  it('drops providers/clients without a string id', () => {
+  it('drops providers/clients without a string id', async () => {
     const payload = {
       version: 6,
       data: {
@@ -118,12 +118,12 @@ describe('persistence v9', () => {
       },
     };
     localStorage.setItem('midas-v6', JSON.stringify(payload));
-    const loaded = loadStore();
+    const loaded = await loadStore();
     expect(loaded!.providers).toHaveLength(1);
     expect(loaded!.clients).toHaveLength(1);
   });
 
-  it('drops malformed confirmedPayments but keeps the valid ones', () => {
+  it('drops malformed confirmedPayments but keeps the valid ones', async () => {
     const valid = {
       key: 'c1::2026-05-01::2026-04-01',
       clientId: 'c1',
@@ -144,12 +144,12 @@ describe('persistence v9', () => {
       },
     };
     localStorage.setItem('midas-v6', JSON.stringify(payload));
-    const loaded = loadStore();
+    const loaded = await loadStore();
     expect(loaded!.confirmedPayments).toHaveLength(1);
     expect(loaded!.confirmedPayments[0].key).toBe(valid.key);
   });
 
-  it('does not let unknown fields leak into the store', () => {
+  it('does not let unknown fields leak into the store', async () => {
     const payload = {
       version: 6,
       data: {
@@ -159,7 +159,7 @@ describe('persistence v9', () => {
       },
     };
     localStorage.setItem('midas-v6', JSON.stringify(payload));
-    const loaded = loadStore();
+    const loaded = await loadStore();
     expect(loaded).not.toBeNull();
     expect((loaded as unknown as Record<string, unknown>).maliciousField).toBeUndefined();
   });

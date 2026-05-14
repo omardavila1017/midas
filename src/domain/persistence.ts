@@ -1,5 +1,16 @@
 /**
- * Persistence layer for Midas — v11.
+ * Persistence layer for Midas — v12.
+ *
+ * v12 splits heavy record collections out of localStorage into IndexedDB.
+ * localStorage tiene cuota ~5MB por origin y los heavies (cobranza 2 años ×
+ * N cías + CXP + compras + pagoproveedor + nómina + payments) la rompían:
+ * `setItem` lanzaba QuotaExceededError, persistence.saveStore lo silenciaba,
+ * y el siguiente boot encontraba el store stale o vacío — refetcheaba JDE
+ * desde cero. Ahora los heavies viven en `heavyStoreIDB` (cuota dinámica en
+ * GB) y localStorage solo guarda configs ligeros + timestamps.
+ *
+ * Migración v11 → v12: al primer load detecta heavies embebidos en v11,
+ * los empuja a IDB en background, re-escribe v12 light-only y elimina v11.
  *
  * v11 adds PagoProveedor (pagos ejecutados a proveedores) cache from POST
  * /v1/erp/tesoreria/pagoproveedor, liberado a producción 2026-05-13. Es el
@@ -36,16 +47,15 @@
  * cash-flow overrides).
  *
  * Migrations:
- *   - midas-v7 → midas-v8: ADD cobranzaPayments /
- *     cobranzaPaymentsLoadedCias as empty defaults.
- *   - midas-v6 → midas-v8: ADD cobranzaRecords/cobranzaLoadedCias and
- *     cobranzaPayments/cobranzaPaymentsLoadedCias as empty defaults.
- *   - midas-v5 → midas-v8: drop proposals/scenarios/activeScenarioId, keep
- *     the rest as-is and add the new cobranza caches.
- *   - flowsense-v5 → midas-v8: same shape rebrand, dropping the simulation
- *     fields and adding cobranza caches.
- *   - flowsense-v1..v4 → midas-v8: incompatible simulation models; keep only
- *     the catalog/CXP/assumptions data.
+ *   - midas-v11 → midas-v12: heavies (cxp/cobranza/compras/pagoproveedor/
+ *     nómina/payments) salen de localStorage a IndexedDB. Pasada idempotente
+ *     en background; el v11 se borra hasta que IDB confirma write.
+ *   - midas-v7..v10 → midas-v12: misma migración + heavies vacíos seedean
+ *     auto-fetch del boot.
+ *   - midas-v5/v6 → midas-v12: drop legacy simulation, mismo path heavy.
+ *   - flowsense-v5 → midas-v12: rebrand + drop simulation + heavy split.
+ *   - flowsense-v1..v4 → midas-v12: incompatibles; preservar solo
+ *     catálogos / CXP / assumptions (sin heavies).
  */
 
 import { CashFlowOverrides } from '../types';
@@ -58,6 +68,20 @@ import type {
   PagoProveedorRecord,
 } from '../services/jdeTypes';
 import type { PayrollCostRecord } from '../modules/shared-finance/types';
+import {
+  emptyHeavyStore,
+  loadHeavyStore as loadHeavyStoreFromIDB,
+  saveHeavyStore as saveHeavyStoreToIDB,
+  type HeavyStore,
+} from '../services/heavyStoreIDB';
+
+export type { HeavyKey, HeavyStore } from '../services/heavyStoreIDB';
+export {
+  loadHeavyStore,
+  saveHeavyStore,
+  saveHeavyRecords,
+  clearHeavyStore,
+} from '../services/heavyStoreIDB';
 
 export interface CXPRecord {
   cia: string;
@@ -163,13 +187,16 @@ export interface MidasStore {
   lastSaved: string;
 }
 
-const STORE_VERSION = 11;
-const STORAGE_KEY = 'midas-v11';
-// v5-v10 live at compatible shapes minus newer fields — `normalizeStore`
+const STORE_VERSION = 12;
+const STORAGE_KEY = 'midas-v12';
+// v5-v11 live at compatible shapes minus newer fields — `normalizeStore`
 // defaults them to empty arrays / undefined jdeAccounts / empty compras /
 // pagoProveedor caches, so those payloads load transparently y los auto-fetch
-// loops del primer boot rellenan los caches faltantes.
+// loops del primer boot rellenan los caches faltantes. v11 además incluye los
+// heavies inline en localStorage; el migrador los extrae a IDB y vuelve a
+// escribir como v12 light-only.
 const SAME_SCHEMA_LEGACY_KEYS = [
+  'midas-v11',
   'midas-v10',
   'midas-v9',
   'midas-v8',
@@ -416,39 +443,87 @@ function normalizeOverrides(v: unknown): CashFlowOverrides {
 
 // ── API pública ──────────────────────────────────────────────────────────
 
+/**
+ * Extrae los campos heavy de un MidasStore para snapshotearlos por separado.
+ * Los heavies viven en IDB (cuota dinámica en GB); el resto vive en
+ * localStorage (cuota ~5MB pero suficiente para configs + timestamps).
+ */
+function pickHeavy(store: MidasStore): HeavyStore {
+  return {
+    cxpRecords: store.cxpRecords,
+    cobranzaRecords: store.cobranzaRecords,
+    cobranzaPayments: store.cobranzaPayments,
+    comprasRecords: store.comprasRecords,
+    pagoProveedorRecords: store.pagoProveedorRecords,
+    nominaRecords: store.nominaRecords,
+  };
+}
+
+/**
+ * Reemplaza los heavies de un MidasStore con arrays vacíos. Lo que va a
+ * localStorage en v12 — los heavies salen a IDB vía `saveHeavyStore`.
+ */
+function stripHeavy(store: MidasStore): MidasStore {
+  return { ...store, ...emptyHeavyStore() };
+}
+
+/**
+ * Persiste el store. En v12 los heavies salen a IndexedDB; localStorage
+ * solo guarda configs ligeros (catalogs, timestamps, assumptions). Si
+ * IDB falla, los heavies se pierden pero el resto de la app sigue viva.
+ *
+ * El write a IDB es fire-and-forget (la promesa se descarta); el caller
+ * debe coalescer las llamadas (debounce) para no saturarlo.
+ */
 export function saveStore(store: MidasStore): void {
-  const payload = { version: STORE_VERSION, data: store };
+  const light = stripHeavy({ ...store, lastSaved: new Date().toISOString() });
+  const payload = { version: STORE_VERSION, data: light };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch (err) {
     // Silenciar quota — la app debe seguir viva aunque persistencia falle.
+    // Con v12 esto solo debería pasar si el catálogo de clientes/providers
+    // crece a megabytes; si pasa, hay que mover esos también a IDB.
     // eslint-disable-next-line no-console
-    console.warn('[persistence] saveStore failed:', err);
+    console.warn('[persistence] saveStore (light) failed:', err);
   }
+  void saveHeavyStoreToIDB(pickHeavy(store));
 }
 
-export function loadStore(): MidasStore | null {
+/**
+ * Carga el store completo. Async porque los heavies viven en IDB.
+ *
+ * Migración v11 → v12:
+ *   1. Detecta payload v11 (legacy) en localStorage con heavies inline.
+ *   2. Construye MidasStore desde v11.
+ *   3. Escribe heavies a IDB (await).
+ *   4. Re-escribe v12 light-only a localStorage.
+ *   5. Borra v11.
+ *
+ * En boots normales (v12 ya existente), lee light de localStorage + heavies
+ * de IDB en paralelo y los une.
+ */
+export async function loadStore(): Promise<MidasStore | null> {
   purgeOrphanKeys();
+
+  // Path 1: v12 light-only en localStorage + heavies en IDB.
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const payload = JSON.parse(raw) as { version?: number; data?: unknown };
       if (payload && typeof payload === 'object' && payload.data !== undefined) {
-        return normalizeStore(payload.data);
+        const light = normalizeStore(payload.data);
+        const heavy = await loadHeavyStoreFromIDB();
+        return { ...light, ...heavy };
       }
     }
   } catch {
     // fallthrough
   }
 
-  // Same-shape migrations — el normalizer ya rellena los campos nuevos
-  // (cobranzaRecords/cobranzaLoadedCias y cobranzaPayments/
-  // cobranzaPaymentsLoadedCias) con defaults vacíos, así que basta con
-  // re-guardar bajo la nueva clave y limpiar la vieja.
-  //
-  //   midas-v6/v7 → midas-v8: solo agregamos caches de cobranza faltantes.
-  //   midas-v5 / flowsense-v5 → midas-v8: descartar propuestas/escenarios
-  //     legacy (`normalizeStore` los ignora) y agregar caches vacíos.
+  // Path 2: Same-shape migrations (v5..v11 + flowsense-v5). v11 trae
+  // heavies inline en localStorage; los movemos a IDB antes de marcar
+  // la migración como completa (delete v11 tras IDB confirmar write).
   for (const legacyKey of SAME_SCHEMA_LEGACY_KEYS) {
     try {
       const raw = localStorage.getItem(legacyKey);
@@ -456,15 +531,29 @@ export function loadStore(): MidasStore | null {
       const payload = JSON.parse(raw) as { version?: number; data?: unknown };
       if (payload && typeof payload === 'object' && payload.data !== undefined) {
         const dropsLegacySimulation = legacyKey === 'midas-v5' || legacyKey === 'flowsense-v5';
+        const isV11Heavy = legacyKey === 'midas-v11';
         // eslint-disable-next-line no-console
         console.info(
           `[persistence] migrando ${legacyKey} → ${STORAGE_KEY}` +
             (dropsLegacySimulation
               ? '; descartando propuestas/escenarios legacy.'
-              : '; agregando caches/jdeAccounts faltantes.'),
+              : isV11Heavy
+                ? '; moviendo heavies (cobranza/cxp/compras/pagoproveedor/nómina) a IndexedDB.'
+                : '; agregando caches/jdeAccounts faltantes.'),
         );
         const migrated = normalizeStore(payload.data);
-        saveStore(migrated);
+        // Escribimos heavies a IDB ANTES de borrar legacy key, para no
+        // perder datos si IDB falla. Si el await no resuelve heavy a tiempo,
+        // legacy queda intacto y el siguiente boot reintenta migración.
+        await saveHeavyStoreToIDB(pickHeavy(migrated));
+        // Light → localStorage como v12.
+        const lightPayload = { version: STORE_VERSION, data: stripHeavy(migrated) };
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(lightPayload));
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[persistence] no se pudo escribir v12 light tras migración:', err);
+        }
         try { localStorage.removeItem(legacyKey); } catch { /* ignore */ }
         return migrated;
       }
@@ -473,7 +562,7 @@ export function loadStore(): MidasStore | null {
     }
   }
 
-  // Stores legacy v1..v4: modelo de propuestas/escenarios totalmente
+  // Path 3: Stores legacy v1..v4: modelo de propuestas/escenarios totalmente
   // incompatible. Conservamos los datos independientes (clientes, proveedores,
   // cxp, assumptions, confirmedPayments).
   for (const legacyKey of LEGACY_KEYS) {
@@ -498,6 +587,7 @@ export function loadStore(): MidasStore | null {
           ? (legacy.assumptions as CashFlowAssumptions)
           : getDefaultStore().assumptions),
       };
+      await saveHeavyStoreToIDB(pickHeavy(seed));
       saveStore(seed);
       try { localStorage.removeItem(legacyKey); } catch { /* ignore */ }
       return seed;
@@ -519,6 +609,10 @@ export function clearStore(): void {
   }
 }
 
+/**
+ * Export incluye heavies en el blob — los respaldos son user-driven y deben
+ * preservar todo. El consumer (download as JSON) puede manejar el tamaño.
+ */
 export function exportStore(store: MidasStore): string {
   return JSON.stringify({ version: STORE_VERSION, data: store }, null, 2);
 }
@@ -530,3 +624,4 @@ export function importStore(json: string): MidasStore {
   }
   return normalizeStore(parsed.data);
 }
+
