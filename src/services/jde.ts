@@ -1374,7 +1374,7 @@ export async function fetchNomina(
     baseUrl: apiConfig.tress.baseUrl,
     ...config,
   };
-  const raw = await jdeClient.post<unknown>('/nomina', req, merged);
+  const raw = await jdeClient.post<unknown>('/Nomina', req, merged);
   return unwrapList(raw).map(mapNominaRow);
 }
 
