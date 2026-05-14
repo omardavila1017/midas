@@ -32,6 +32,36 @@ function rows(container: HTMLElement): HTMLTableRowElement[] {
 }
 
 describe('<Pagos /> filters and sorting', () => {
+  it('hides payments marked as internal from the visible table and totals', () => {
+    const records = [
+      pago({
+        noPago: '100',
+        nombreProveedor: 'Proveedor Visible',
+        importePesos: 1000,
+      }),
+      pago({
+        noPago: '200',
+        nombreProveedor: 'Proveedor Interno',
+        importePesos: 9000,
+      }),
+    ];
+
+    const { container } = render(
+      <Pagos
+        pagoProveedorRecords={records}
+        pagoProveedorLoadedCias={{ __all__: '2026-06-02T00:00:00Z' }}
+        selectedCia="all"
+        providers={[]}
+        internalPaymentKeys={new Set(['00001::200'])}
+      />,
+    );
+
+    expect(rows(container)).toHaveLength(1);
+    expect(screen.getByText('Proveedor Visible')).toBeTruthy();
+    expect(screen.queryByText('Proveedor Interno')).toBeNull();
+    expect(screen.getByText('1 total')).toBeTruthy();
+  });
+
   it('searches, filters by ranges, sorts, and clears back to the default order', () => {
     const records = [
       pago({

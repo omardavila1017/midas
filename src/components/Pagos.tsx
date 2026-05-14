@@ -40,6 +40,7 @@ interface PagosProps {
   pagoProveedorLoadedCias: Record<string, string>;
   selectedCia: string;
   providers: Provider[];
+  internalPaymentKeys?: Set<string>;
 }
 
 type TipoBusquedaFilter = 'all' | 'employees' | 'suppliers';
@@ -90,6 +91,7 @@ export default function Pagos({
   pagoProveedorLoadedCias,
   selectedCia,
   providers,
+  internalPaymentKeys,
 }: PagosProps) {
   const [search, setSearch] = useState('');
   const [tipoFilter, setTipoFilter] = useState<TipoBusquedaFilter>('all');
@@ -103,6 +105,10 @@ export default function Pagos({
   const [sort, setSort] = useState<PagoSort>(DEFAULT_SORT);
 
   const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
+  const visiblePagoProveedorRecords = useMemo(() => {
+    if (!internalPaymentKeys || internalPaymentKeys.size === 0) return pagoProveedorRecords;
+    return pagoProveedorRecords.filter((record) => !internalPaymentKeys.has(`${record.cia}::${record.noPago}`));
+  }, [pagoProveedorRecords, internalPaymentKeys]);
 
   const lastLoadedAt = pagoProveedorLoadedCias[PAGOS_CACHE_KEY];
   const filtersActive =
@@ -121,35 +127,35 @@ export default function Pagos({
   // Lista única de bancos para el filtro (extraída de los datos visibles).
   const bancosDisponibles = useMemo(() => {
     const set = new Set<string>();
-    for (const r of pagoProveedorRecords) {
+    for (const r of visiblePagoProveedorRecords) {
       const b = bancoLabel(r.cuentaBancaria);
       if (b) set.add(b);
     }
     return Array.from(set).sort();
-  }, [pagoProveedorRecords]);
+  }, [visiblePagoProveedorRecords]);
 
   const monedasDisponibles = useMemo(() => {
     const set = new Set<string>();
-    for (const r of pagoProveedorRecords) {
+    for (const r of visiblePagoProveedorRecords) {
       if (r.moneda) set.add(r.moneda);
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [pagoProveedorRecords]);
+  }, [visiblePagoProveedorRecords]);
 
   const clasificacionesDisponibles = useMemo(() => {
     const set = new Set<string>();
-    for (const r of pagoProveedorRecords) {
+    for (const r of visiblePagoProveedorRecords) {
       const classification = r.clasificacionProveedorFinanciera || r.clasificacionProveedor;
       if (classification) set.add(classification);
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [pagoProveedorRecords]);
+  }, [visiblePagoProveedorRecords]);
 
   const filteredRecords = useMemo(() => {
     const q = search.trim().toUpperCase();
     const min = parseAmountInput(amountMin);
     const max = parseAmountInput(amountMax);
-    return pagoProveedorRecords.filter((r) => {
+    return visiblePagoProveedorRecords.filter((r) => {
       if (selectedCia !== 'all' && r.cia !== selectedCia) return false;
       if (tipoFilter === 'employees' && !isEmployeePayment(r)) return false;
       if (tipoFilter === 'suppliers' && isEmployeePayment(r)) return false;
@@ -177,7 +183,7 @@ export default function Pagos({
       return true;
     }).sort((a, b) => comparePagoRecords(a, b, sort));
   }, [
-    pagoProveedorRecords,
+    visiblePagoProveedorRecords,
     search,
     tipoFilter,
     bancoFilter,
@@ -249,7 +255,7 @@ export default function Pagos({
             </span>
             <span className="text-[var(--gray-300)]">·</span>
             <span className="tabular-nums">
-              {pagoProveedorRecords.length.toLocaleString()} pagos
+              {visiblePagoProveedorRecords.length.toLocaleString()} pagos
             </span>
           </div>
         </div>
@@ -427,9 +433,9 @@ export default function Pagos({
             </button>
           )}
           <div className="ml-auto text-[12px] text-[var(--gray-400)] tabular-nums">
-            {filteredRecords.length === pagoProveedorRecords.length
-              ? `${pagoProveedorRecords.length.toLocaleString()} total`
-              : `${filteredRecords.length.toLocaleString()} de ${pagoProveedorRecords.length.toLocaleString()}`}
+            {filteredRecords.length === visiblePagoProveedorRecords.length
+              ? `${visiblePagoProveedorRecords.length.toLocaleString()} total`
+              : `${filteredRecords.length.toLocaleString()} de ${visiblePagoProveedorRecords.length.toLocaleString()}`}
           </div>
         </div>
 
@@ -455,7 +461,7 @@ export default function Pagos({
                   <tr>
                     <td colSpan={9} className="text-center text-[var(--gray-400)] py-14">
                       <div className="flex flex-col items-center gap-2">
-                        {pagoProveedorRecords.length === 0 ? (
+                        {visiblePagoProveedorRecords.length === 0 ? (
                           <>
                             <CreditCard className="w-5 h-5 text-[var(--gray-300)]" />
                             <div className="text-[13px]">Sin pagos cargados.</div>

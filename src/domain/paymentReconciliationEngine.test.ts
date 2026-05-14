@@ -70,7 +70,7 @@ function cargo(overrides: Partial<BankStatementLine> = {}): BankStatementLine {
   };
 }
 
-function statement(movs: BankStatementLine[]): BankAccountStatement {
+function statement(movs: BankStatementLine[], overrides: Partial<BankAccountStatement> = {}): BankAccountStatement {
   return {
     cia: '00038',
     banco: 'BANAMEX',
@@ -78,6 +78,7 @@ function statement(movs: BankStatementLine[]): BankAccountStatement {
     moneda: 'MXN',
     fechaEstadoCuenta: '2026-05-04',
     movimientos: movs,
+    ...overrides,
   };
 }
 
@@ -203,6 +204,53 @@ describe('reconcilePayments — CARGO matching', () => {
     });
     expect(result.paymentMatches[0].cargoMatch).toBeUndefined();
     expect(result.cargoEnrichments.size).toBe(0);
+  });
+
+  it('marks payments that match internal CARGOs and excludes those cargos from enrichment', () => {
+    const result = reconcilePayments({
+      payments: [pago()],
+      cxpRecords: [],
+      bankStatements: [statement([cargo({ concepto: 'TRASPASO REF 123' })])],
+    });
+
+    expect(result.internalPaymentKeys.has('00038::393866')).toBe(true);
+    expect(result.paymentMatches[0].cargoMatch).toBeUndefined();
+    expect(result.cargoEnrichments.size).toBe(0);
+    expect(result.totals.internalPayments).toBe(1);
+    expect(result.totals.totalPaidPesos).toBe(0);
+    expect(result.totals.totalInternalPesos).toBe(8695);
+  });
+
+  it('treats pair-matched CARGO/ABONO transfers as internal, not provider payments', () => {
+    const internalCargo = cargo({
+      importe: 5000,
+      concepto: 'Movimiento interno salida',
+      referencia: 'INT-1',
+      cuenta: '70138708851',
+    });
+    const internalAbono: BankStatementLine = {
+      ...cargo({
+        tipoMovimiento: 'ABONO',
+        importe: 5000,
+        concepto: 'Movimiento interno entrada',
+        referencia: 'INT-2',
+        cuenta: '22222222222',
+      }),
+    };
+
+    const result = reconcilePayments({
+      payments: [pago({ importePesos: 5000 })],
+      cxpRecords: [],
+      bankStatements: [
+        statement([internalCargo]),
+        statement([internalAbono], { cuenta: '22222222222' }),
+      ],
+    });
+
+    expect(result.internalPaymentKeys.has('00038::393866')).toBe(true);
+    expect(result.paymentMatches[0].cargoMatch).toBeUndefined();
+    expect(result.cargoEnrichments.size).toBe(0);
+    expect(result.totals.internalPayments).toBe(1);
   });
 });
 
