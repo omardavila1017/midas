@@ -22,11 +22,15 @@ import { fetchNomina, JdeApiError } from '../../../services/jde';
 import {
   computeKpis,
   filterRecords,
+  lastNMonths,
   mergeNominaBatch,
   nominaCacheKey,
   summarizeByConcept,
   summarizePeriods,
 } from '../services/payrollModuleService';
+
+/** Mes actual + N-1 anteriores. Refresh jala este histórico para proyectar. */
+const HISTORY_WINDOW_MONTHS = 4;
 
 interface Props {
   companyCode: string;
@@ -34,11 +38,15 @@ interface Props {
   nominaRecords: PayrollCostRecord[];
   /** Llaves de cache ya cargadas (`${id}:${tipo}:${año}:${mes}` → ISO). */
   nominaLoadedKeys: Record<string, string>;
-  /** Callback al merge exitoso — el App.tsx persiste en MidasStore. */
+  /**
+   * Callback al merge exitoso — App.tsx persiste en MidasStore.
+   * `cacheKeys` puede contener varias entradas cuando el refresh jala un
+   * histórico (mes actual + meses anteriores), una por cada (anio, mes)
+   * fetched OK.
+   */
   onNominaFetched: (
     merged: PayrollCostRecord[],
-    cacheKey: string,
-    fetchedAt: string,
+    cacheKeys: Record<string, string>,
   ) => void;
 }
 
@@ -93,7 +101,9 @@ export default function PayrollDashboard({
   // Vista filtrada por (selectedCia/idEmpresa, año, mes, tipoNomina).
   // `companyCode` es la cia activa global del app; si el usuario filtra por
   // una cia específica en el módulo, se respeta esa.
-  const ciaFilter = idEmpresa === 99 ? companyCode || undefined : normalizeCia(idEmpresa);
+  const ciaFilter = idEmpresa === 99
+    ? (companyCode && companyCode !== 'all' ? companyCode : undefined)
+    : normalizeCia(idEmpresa);
   const tipoFilter = tipoNomina === 99 ? undefined : (tipoNomina === 1 ? 'Semanal' : 'Quincenal');
 
   const filtered = useMemo(
@@ -111,13 +121,48 @@ export default function PayrollDashboard({
   const conceptBreakdown = useMemo(() => summarizeByConcept(filtered), [filtered]);
   const topConcepts = conceptBreakdown.slice(0, 12);
 
+  /**
+   * Refresh = mes seleccionado + (HISTORY_WINDOW_MONTHS-1) anteriores.
+   * Fetch en paralelo para que la latencia total ≈ max(fetch) y no Σ.
+   * Si alguna falla, persistimos las que sí pasaron y reportamos el resto.
+   */
   const refresh = useCallback(async () => {
     setLoading(true);
     setErrMsg(null);
     try {
-      const fresh = await fetchNomina({ idEmpresa, tipoNomina, anio, mes });
-      const merged = mergeNominaBatch(nominaRecords, fresh);
-      onNominaFetched(merged, cacheKey, new Date().toISOString());
+      const window = lastNMonths(anio, mes, HISTORY_WINDOW_MONTHS);
+      const results = await Promise.allSettled(
+        window.map(p => fetchNomina({ idEmpresa, tipoNomina, anio: p.anio, mes: p.mes })),
+      );
+
+      const fetchedAt = new Date().toISOString();
+      let merged = nominaRecords;
+      const freshKeys: Record<string, string> = {};
+      const failures: string[] = [];
+
+      results.forEach((res, i) => {
+        const p = window[i];
+        const key = nominaCacheKey({ idEmpresa, tipoNomina, anio: p.anio, mes: p.mes });
+        if (res.status === 'fulfilled') {
+          merged = mergeNominaBatch(merged, res.value);
+          freshKeys[key] = fetchedAt;
+        } else {
+          const reason = res.reason;
+          const msg = reason instanceof JdeApiError
+            ? `${reason.message} (status ${reason.status})`
+            : reason instanceof Error
+              ? reason.message
+              : 'Error desconocido';
+          failures.push(`${p.anio}-${String(p.mes).padStart(2, '0')}: ${msg}`);
+        }
+      });
+
+      if (Object.keys(freshKeys).length > 0) {
+        onNominaFetched(merged, freshKeys);
+      }
+      if (failures.length > 0) {
+        setErrMsg(`Fallaron ${failures.length}/${window.length} meses → ${failures.join(' · ')}`);
+      }
     } catch (e) {
       const msg = e instanceof JdeApiError
         ? `${e.message} (status ${e.status})`
@@ -128,7 +173,7 @@ export default function PayrollDashboard({
     } finally {
       setLoading(false);
     }
-  }, [idEmpresa, tipoNomina, anio, mes, nominaRecords, onNominaFetched, cacheKey]);
+  }, [idEmpresa, tipoNomina, anio, mes, nominaRecords, onNominaFetched]);
 
   const hasData = filtered.length > 0;
   const yearOptions = useMemo(() => {
@@ -140,7 +185,7 @@ export default function PayrollDashboard({
     <div className="space-y-6">
       <PageHeader
         title="Nómina"
-        subtitle="Costos de nómina por compañía, periodo y concepto — fuente TRESS"
+        subtitle={`Costos de nómina por compañía, periodo y concepto — fuente TRESS. Cada refresh jala el mes seleccionado y los ${HISTORY_WINDOW_MONTHS - 1} anteriores para proyectar.`}
         meta={
           lastLoadedAt
             ? `Último refresh ${fmtDate(new Date(lastLoadedAt))}`
@@ -155,7 +200,7 @@ export default function PayrollDashboard({
             style={{ borderColor: 'var(--gray-300)', background: 'var(--surface)' }}
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-            <span>{loading ? 'Cargando…' : 'Refrescar TRESS'}</span>
+            <span>{loading ? 'Cargando…' : `Refrescar TRESS (${HISTORY_WINDOW_MONTHS} meses)`}</span>
           </button>
         }
       />

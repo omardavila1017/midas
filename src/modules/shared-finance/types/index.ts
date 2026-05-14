@@ -71,6 +71,8 @@ export interface FinancialMovement {
   updatedAt: string;
 }
 
+export type PurchaseConfidence = 'CONFIRMED' | 'PROJECTED';
+
 export interface PurchaseReceiptRecord {
   cia: string;
   noProveedor: string;
@@ -79,6 +81,11 @@ export interface PurchaseReceiptRecord {
   purchaseOrderNo: string;
   receiptNo: string;
   orderDate: string;
+  /**
+   * Fecha de recepción real. Vacía si la OC aún no se recibió (en ese caso
+   * `confidence === 'PROJECTED'` y `estimatedDueDate` se derivó de
+   * `orderDate + leadTime + creditDays`).
+   */
   receiptDate: string;
   creditDays: number;
   estimatedDueDate: string;
@@ -105,6 +112,18 @@ export interface PurchaseReceiptRecord {
   familyName?: string;
   subfamilyCode?: string;
   subfamilyName?: string;
+  /**
+   * CONFIRMED = OC ya recibida, `receiptDate` real, fecha de pago cierta.
+   * PROJECTED = OC pedida sin recepción, `estimatedDueDate` derivado de
+   * lead time histórico. Menor confianza, alimenta forecast a largo plazo.
+   */
+  confidence?: PurchaseConfidence;
+  /** Lead time en días usado cuando confidence = PROJECTED. */
+  projectedLeadTimeDays?: number;
+  /** Fuente del lead time (cia-familia, familia, global, default, etc.). */
+  projectedLeadTimeSource?: string;
+  /** Estado workflow JDE (Edo_Sig). Para diagnóstico/filtros downstream. */
+  workflowState?: string;
 }
 
 export type PayrollCashTreatment =

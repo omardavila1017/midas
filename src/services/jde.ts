@@ -15,7 +15,12 @@
  */
 
 import { jdeClient, JdeClientConfig } from './jdeClient';
-import { fetchRangeWithDailyCache, getDailyCached, setDailyCached } from './dailyApiCache';
+import {
+  fetchRangeWithDailyCache,
+  getDailyCached,
+  setDailyCached,
+  primeDailyCache,
+} from './dailyApiCache';
 import { apiConfig } from '../config/api.config';
 import {
   AgedBalanceRecord,
@@ -33,6 +38,8 @@ import {
   ComprasRequest,
   Company,
   NominaRequest,
+  PagoProveedorRecord,
+  PagoProveedorRequest,
 } from './jdeTypes';
 import type {
   PayrollCashTreatment,
@@ -419,7 +426,13 @@ function groupByAccount(
     acc: BankAccountStatement;
     saldoInicial: number;
     saldoFinal: number;
-    saldoSeen: boolean;
+    // Flags separados: una línea que trae Saldo_Inicial pero no Saldo_Final
+    // antes guardaba `saldoFinal = 0` (default) y el UI `saldoFinal ?? saldoInicial`
+    // resolvía a 0 — borrando el saldo real. Cuentas afectadas: BANBAJIO
+    // (centinela colapsado) y cualquier Santander/Banamex con Saldo_Final null
+    // en el último día consultado.
+    saldoInicialSeen: boolean;
+    saldoFinalSeen: boolean;
     /**
      * Sub-cuentas únicas dentro del grupo. Para la mayoría de bancos esto
      * tiene 1 elemento (cada cuenta real = un Cuenta_Bancos estable). Para
@@ -454,7 +467,8 @@ function groupByAccount(
         },
         saldoInicial: 0,
         saldoFinal: 0,
-        saldoSeen: false,
+        saldoInicialSeen: false,
+        saldoFinalSeen: false,
         sources: new Map(),
       };
       map.set(key, entry);
@@ -473,14 +487,14 @@ function groupByAccount(
       const siNum = si !== undefined && si !== null ? toNum(si) : undefined;
       const sfNum = sf !== undefined && sf !== null ? toNum(sf) : undefined;
       entry.sources.set(sourceKey, { saldoInicial: siNum, saldoFinal: sfNum });
-      if (siNum !== undefined) { entry.saldoInicial += siNum; entry.saldoSeen = true; }
-      if (sfNum !== undefined) { entry.saldoFinal += sfNum; entry.saldoSeen = true; }
+      if (siNum !== undefined) { entry.saldoInicial += siNum; entry.saldoInicialSeen = true; }
+      if (sfNum !== undefined) { entry.saldoFinal += sfNum; entry.saldoFinalSeen = true; }
     }
   }
 
-  for (const { acc, saldoInicial, saldoFinal, saldoSeen } of map.values()) {
-    acc.saldoInicial = saldoSeen ? saldoInicial : undefined;
-    acc.saldoFinal = saldoSeen ? saldoFinal : undefined;
+  for (const { acc, saldoInicial, saldoFinal, saldoInicialSeen, saldoFinalSeen } of map.values()) {
+    acc.saldoInicial = saldoInicialSeen ? saldoInicial : undefined;
+    acc.saldoFinal = saldoFinalSeen ? saldoFinal : undefined;
     acc.movimientos.sort((a, b) => a.fechaOperacion.localeCompare(b.fechaOperacion));
   }
 
@@ -560,12 +574,13 @@ export async function fetchBankStatementsRange(
   }
 
   // Parallel fetch with a simple worker pool, gated por cache por día.
-  // El cache (`midas.daily.banks.{formato}.{day}`) sirve días pasados sin
-  // tocar la red. "Hoy" siempre se re-fetch. Días que no estaban en cache
-  // se guardan al regresar.
+  // El cache (en IDB, ver dailyApiCache.ts) sirve días pasados sin tocar la
+  // red. "Hoy" siempre se re-fetch. Días que no estaban en cache se guardan
+  // al regresar.
   // Cada día puede fallar por timeout transitorio del proxy serverless o
   // por contención del API JDE (devuelve 500 cuando se le encima la cola).
   // Reintentamos hasta 2 veces con backoff antes de aceptar 0 movimientos.
+  await primeDailyCache();
   const cacheApiKey = `banks.${formato}`;
   const today = new Date().toISOString().slice(0, 10);
   const results: BankAccountStatement[][] = new Array(dates.length);
@@ -897,9 +912,8 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
  *     compañías llamar en serie y mergear.
  *   • `fechaInicial: null` trae todo el histórico hasta `fechaFinal`.
- *   • El token productivo lo inyecta server-side la Vercel Function
- *     (api/jde/[...path].ts) leyendo `JDE_TOKEN`. En dev local, usa
- *     `VITE_JDE_TOKEN`.
+ *   • Token leído de `VITE_JDE_TOKEN` (queda embebido en el bundle al
+ *     correr en localhost).
  */
 export async function fetchCobranza(
   req: CobranzaRequest,
@@ -1191,14 +1205,16 @@ export async function fetchComprasRange(
 }
 
 /**
- * Fetch cobranza (CXC) para una cía en rango de fechas con cache por día.
+ * Fetch cobranza (CXC) para una cía en rango de fechas — snapshot único.
  *
- * El endpoint /cobranza toma (cia, fechaInicial, fechaFinal). Aquí lo
- * chunkeamos por día para alimentar el cache `midas.daily.cobranza.{cia}.{day}`.
- * Días pasados se sirven del cache; "hoy" siempre se re-fetch.
+ * El endpoint /cobranza con `fechaInicial=null, fechaFinal=today` devuelve TODAS
+ * las facturas abiertas/históricas para la cía. Por eso una sola llamada por cía
+ * basta y NO conviene chunkear por día (sería 365 requests por cía).
  *
- * Semánticamente: cada día devuelve invoices con fechaFactura en ese día. La
- * unión de los días cubre el mismo conjunto que el viejo fetch de rango.
+ * El cache vive en `MidasStore.cobranzaRecords` (localStorage) + TTL por cia en
+ * `cobranzaLoadedCias`. Adicionalmente persistimos un snapshot en IDB para que
+ * el siguiente boot tenga los datos sin esperar a la red mientras el TTL fresh
+ * sea válido.
  */
 export async function fetchCobranzaRange(
   cia: string,
@@ -1211,25 +1227,21 @@ export async function fetchCobranzaRange(
   } = {},
 ): Promise<CobranzaRecord[]> {
   const config = options.config ?? {};
-  const fetchDay = async (day: string): Promise<CobranzaRecord[]> => {
-    return await fetchCobranza({ cia, fechaInicial: day, fechaFinal: day }, config);
-  };
-
-  return await fetchRangeWithDailyCache<CobranzaRecord>('cobranza', {
-    from,
-    to,
-    cia,
-    fetchDay,
-    onProgress: options.onProgress,
-    concurrency: options.concurrency ?? 3,
-  });
+  options.onProgress?.(0, 1);
+  // Una sola llamada por cía con el rango completo. El upstream regresa TODAS
+  // las facturas abiertas/históricas — chunkear por día explotaría a 365 calls
+  // por cía sin ganancia de cache (los registros del mismo día rara vez se
+  // repiten en queries posteriores).
+  const records = await fetchCobranza({ cia, fechaInicial: from, fechaFinal: to }, config);
+  options.onProgress?.(1, 1);
+  return records;
 }
 
 /**
- * Fetch indicadores de cobranza (recibos/pagos) para una cía con cache por día.
+ * Fetch indicadores de cobranza (recibos/pagos) para una cía — snapshot único.
  *
- * Mismo patrón que fetchCobranzaRange. El endpoint toma rango de fechas y lo
- * partimos por día para cachear bajo `midas.daily.indicadores.{cia}.{day}`.
+ * Mismo razonamiento que fetchCobranzaRange: una llamada por cía cubre todo.
+ * El cache vive en MidasStore.cobranzaPayments + cobranzaPaymentsLoadedCias.
  */
 export async function fetchIndicadoresCobranzaRange(
   cia: string,
@@ -1242,18 +1254,10 @@ export async function fetchIndicadoresCobranzaRange(
   } = {},
 ): Promise<CobranzaPayment[]> {
   const config = options.config ?? {};
-  const fetchDay = async (day: string): Promise<CobranzaPayment[]> => {
-    return await fetchIndicadoresCobranza({ cia, fechaInicial: day, fechaFinal: day }, config);
-  };
-
-  return await fetchRangeWithDailyCache<CobranzaPayment>('indicadores', {
-    from,
-    to,
-    cia,
-    fetchDay,
-    onProgress: options.onProgress,
-    concurrency: options.concurrency ?? 3,
-  });
+  options.onProgress?.(0, 1);
+  const records = await fetchIndicadoresCobranza({ cia, fechaInicial: from, fechaFinal: to }, config);
+  options.onProgress?.(1, 1);
+  return records;
 }
 
 // Flag para que el log de shape solo aparezca una vez por sesión.
@@ -1381,6 +1385,121 @@ export const __internal = {
   inferCashTreatment,
 };
 
+// ───────────────────────────────────────────────────────────────
+// 8. PagoProveedor (pagos ejecutados — espejo egreso de cobranza)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Normaliza fecha JDE en formato "DD-MM-YYYY" a "YYYY-MM-DD".
+ *
+ * Solo este endpoint usa día-primero; los demás devuelven ISO con timestamp.
+ * Si no matchea el formato esperado, intenta `trimIsoDate` como fallback
+ * (cubre el caso raro de que JDE cambie a ISO en una versión futura).
+ */
+function trimDmyDate(v: unknown): string {
+  const s = toStr(v);
+  if (!s) return '';
+  const m = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return trimIsoDate(v);
+}
+
+function mapPagoProveedor(raw: RawRecord): PagoProveedorRecord {
+  return {
+    tipoPago:                          toStr(pick(raw, ['tipo_pago', 'tipoPago', 'TipoPago'])),
+    noPago:                            toStr(pick(raw, ['no_pago', 'noPago', 'NoPago'])),
+    cia:                               normalizeCia(pick(raw, ['No_Cia', 'no_cia', 'noCia', 'cia', 'compania'])),
+    nombreCia:                         toStr(pick(raw, ['Nombre_Cia', 'nombre_cia', 'nombreCia'])),
+    cuentaBancaria:                    toStr(pick(raw, ['Cuenta_Bancaria', 'cuenta_bancaria', 'cuentaBancaria'])),
+    cuentaBanco:                       toStr(pick(raw, ['Cuenta_Banco', 'cuenta_banco', 'cuentaBanco'])),
+    fechaPago:                         trimDmyDate(pick(raw, ['Fecha_Pago', 'fecha_pago', 'fechaPago'])),
+    importePesos:                      toNum(pick(raw, ['Importe_Pago_Pesos', 'importe_pago_pesos', 'importePesos'])),
+    importeDolares:                    toNum(pick(raw, ['Importe_Pago_Dolares', 'importe_pago_dolares', 'importeDolares'])),
+    moneda:                            toStr(pick(raw, ['Moneda', 'moneda', 'currency'])) || 'MXP',
+    batchPago:                         toStr(pick(raw, ['Batch_pago', 'batch_pago', 'batchPago'])),
+    claveProveedor:                    toStr(pick(raw, ['Clave_Proveedor', 'clave_proveedor', 'claveProveedor'])),
+    rfcProveedor:                      toStr(pick(raw, ['RFC_Proveedor', 'rfc_proveedor', 'rfcProveedor'])),
+    nombreProveedor:                   toStr(pick(raw, ['Nombre_Proveedor', 'nombre_proveedor', 'nombreProveedor'])),
+    tipoBusqueda:                      toStr(pick(raw, ['Tipo_busqueda', 'tipo_busqueda', 'tipoBusqueda'])),
+    clasificacionProveedor:            toStr(pick(raw, ['Clasificacion_proveedor', 'clasificacion_proveedor', 'clasificacionProveedor'])),
+    clasificacionProveedorFinanciera:  toStr(pick(raw, ['clasificacion_Proveedor_Financiera', 'Clasificacion_Proveedor_Financiera', 'clasificacionProveedorFinanciera'])),
+    comentarioPago:                    toStr(pick(raw, ['Comentario_Pago', 'comentario_pago', 'comentarioPago'])),
+  };
+}
+
+/**
+ * POST /v1/erp/tesoreria/pagoproveedor
+ *
+ * Devuelve los pagos ejecutados a proveedores en el rango. Es el espejo
+ * egreso de /cobranza (cobros ejecutados). Sin chunking forzado upstream
+ * pero para rangos amplios usar `fetchPagoProveedorRange` con cache diario.
+ */
+export async function fetchPagoProveedor(
+  req: PagoProveedorRequest,
+  config: JdeClientConfig = {},
+): Promise<PagoProveedorRecord[]> {
+  const raw = await jdeClient.post<unknown>('/pagoproveedor', req, config);
+  return unwrapList(raw).map(mapPagoProveedor);
+}
+
+/**
+ * Fetch pagos a proveedor en bloques de 1 día con cache por día.
+ *
+ * Mismo patrón que /cobranza y /compras: cada día se cachea bajo
+ * `midas.daily.pagoproveedor.__all__.{YYYY-MM-DD}`. Días pasados se sirven
+ * del cache; "hoy" siempre se re-fetch (los datos del día cambian intradía).
+ *
+ * Deduplica por `(cia, noPago)` para tolerar registros repetidos.
+ *
+ * @param from   YYYY-MM-DD inclusive.
+ * @param to     YYYY-MM-DD inclusive.
+ */
+export async function fetchPagoProveedorRange(
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<PagoProveedorRecord[]> {
+  const config = options.config ?? {};
+
+  const MAX_ATTEMPTS = 3;
+  const fetchDayWithRetry = async (day: string): Promise<PagoProveedorRecord[]> => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await fetchPagoProveedor({ fechaInicial: day, fechaFinal: day }, config);
+      } catch (err) {
+        lastErr = err;
+        if (attempt === MAX_ATTEMPTS) break;
+        const delayMs = 500 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    throw lastErr;
+  };
+
+  const all = await fetchRangeWithDailyCache<PagoProveedorRecord>('pagoproveedor', {
+    from,
+    to,
+    fetchDay: fetchDayWithRetry,
+    onProgress: options.onProgress,
+    concurrency: options.concurrency ?? 3,
+  });
+
+  const seen = new Set<string>();
+  const merged: PagoProveedorRecord[] = [];
+  for (const rec of all) {
+    const key = `${rec.cia}::${rec.noPago}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+  }
+  return merged;
+}
+
 // Re-exports convenientes
 export type {
   AgedBalanceRecord,
@@ -1400,5 +1519,7 @@ export type {
   Company,
   NominaRequest,
   NominaRawRecord,
+  PagoProveedorRecord,
+  PagoProveedorRequest,
 } from './jdeTypes';
 export { JdeApiError } from './jdeTypes';

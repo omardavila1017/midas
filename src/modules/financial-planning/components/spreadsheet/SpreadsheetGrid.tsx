@@ -43,7 +43,8 @@ interface CellCoord {
 type DisplayRow =
   | { kind: 'data'; row: PlanningRow }
   | { kind: 'ap-group'; id: string; label: string; rows: PlanningRow[] }
-  | { kind: 'ap-subgroup'; id: string; parentId: string; label: string; rows: PlanningRow[] };
+  | { kind: 'ap-subgroup'; id: string; parentId: string; label: string; rows: PlanningRow[] }
+  | { kind: 'transfer-group'; id: string; label: string; rows: PlanningRow[] };
 
 export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const {
@@ -69,6 +70,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const [collapsed, setCollapsed] = useState<Record<FinancialMovementType, boolean>>({ INFLOW: false, OUTFLOW: false });
   const [expandedApGroups, setExpandedApGroups] = useState<Record<string, boolean>>({});
   const [expandedApSubgroups, setExpandedApSubgroups] = useState<Record<string, boolean>>({});
+  const [expandedTransferGroup, setExpandedTransferGroup] = useState(false);
   const toggleSection = (type: FinancialMovementType) => {
     setCollapsed((current) => ({ ...current, [type]: !current[type] }));
   };
@@ -78,6 +80,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const toggleApSubgroup = (id: string) => {
     setExpandedApSubgroups((current) => ({ ...current, [id]: !(current[id] ?? true) }));
   };
+  const toggleTransferGroup = () => setExpandedTransferGroup((v) => !v);
 
   const visibleInflowRows = collapsed.INFLOW ? [] : inflowRows;
   const visibleOutflowRows = collapsed.OUTFLOW ? [] : outflowRows;
@@ -88,12 +91,15 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const visibleOutflowDisplayRows = useMemo<DisplayRow[]>(() => {
     const byProviderType = new Map<string, PlanningRow[]>();
     const plainRows: DisplayRow[] = [];
+    const transferRows: PlanningRow[] = [];
     for (const row of visibleOutflowRows) {
       if (row.category === 'AP_PAYMENT') {
         const label = row.subgroupLabel ?? 'Sin clasificar';
         const bucket = byProviderType.get(label);
         if (bucket) bucket.push(row);
         else byProviderType.set(label, [row]);
+      } else if (row.category === 'TRANSFER') {
+        transferRows.push(row);
       } else {
         plainRows.push({ kind: 'data', row });
       }
@@ -125,8 +131,22 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           });
         return [{ kind: 'ap-group', id, label, rows: sortedRows }, ...childRows];
       });
-    return [...grouped, ...plainRows];
-  }, [expandedApGroups, expandedApSubgroups, visibleOutflowRows]);
+    const transferDisplay: DisplayRow[] = transferRows.length > 0
+      ? (() => {
+        const sortedTransfer = [...transferRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
+        const header: DisplayRow = {
+          kind: 'transfer-group',
+          id: 'transfer:otros',
+          label: 'Otros Egresos',
+          rows: sortedTransfer,
+        };
+        return expandedTransferGroup
+          ? [header, ...sortedTransfer.map((row) => ({ kind: 'data' as const, row }))]
+          : [header];
+      })()
+      : [];
+    return [...grouped, ...plainRows, ...transferDisplay];
+  }, [expandedApGroups, expandedApSubgroups, expandedTransferGroup, visibleOutflowRows]);
   const displayRows = useMemo(
     () => [...visibleInflowDisplayRows, ...visibleOutflowDisplayRows],
     [visibleInflowDisplayRows, visibleOutflowDisplayRows],
@@ -507,6 +527,65 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     );
   };
 
+  const renderTransferGroupRow = (group: Extract<DisplayRow, { kind: 'transfer-group' }>, rowIndex: number) => {
+    const expanded = expandedTransferGroup;
+    return (
+      <div
+        key={group.id}
+        role="row"
+        className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/70 hover:bg-[var(--gray-100)]/70"
+        style={{ height: ROW_HEIGHT }}
+      >
+        <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-500)]" left={0}>
+          <span className="truncate">Egresos · Otros</span>
+        </StickyLeftCell>
+        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow className="bg-[var(--gray-50)]/70">
+          <button
+            type="button"
+            onClick={toggleTransferGroup}
+            aria-expanded={expanded}
+            className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-bold text-[var(--gray-950)] hover:text-[var(--primary)]"
+          >
+            {expanded
+              ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
+              : <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />}
+            <span className="truncate">{group.label}</span>
+            <span className="ml-auto rounded bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--gray-500)]">
+              {group.rows.length}
+            </span>
+          </button>
+        </StickyLeftCell>
+        {columns.map((column, colIndex) => {
+          const value = group.rows.reduce((sum, child) => {
+            const override = overrideFor(child.conceptKey, column.key);
+            return sum + (override ? override.value : baseValueFor(child.conceptKey, column.key));
+          }, 0);
+          const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;
+          return (
+            <div
+              key={column.key}
+              role="gridcell"
+              aria-selected={isSelected}
+              onClick={() => {
+                setSelection({ rowIndex, colIndex });
+                setIsEditing(false);
+                toggleTransferGroup();
+              }}
+              className={`flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)] cursor-pointer select-none ${
+                column.isPast ? 'bg-[var(--gray-100)] text-[var(--gray-500)]' : 'text-[var(--gray-950)]'
+              } ${isSelected ? 'ring-2 ring-inset ring-[var(--primary)] z-10 bg-white' : ''}`}
+              style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
+            >
+              <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
+                {value === 0 ? '—' : fmtCompact(value)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderAddRow = (type: FinancialMovementType) => {
     if (isReadOnly) return null;
     return (
@@ -613,7 +692,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             ? renderDataRow(displayRow.row, index)
             : displayRow.kind === 'ap-group'
               ? renderApGroupRow(displayRow, index)
-              : renderApSubgroupRow(displayRow, index),
+              : displayRow.kind === 'ap-subgroup'
+                ? renderApSubgroupRow(displayRow, index)
+                : renderTransferGroupRow(displayRow, index),
         )
       ))}
       {!collapsed.INFLOW && renderAddRow('INFLOW')}
@@ -634,7 +715,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             ? renderDataRow(displayRow.row, rowIndex)
             : displayRow.kind === 'ap-group'
               ? renderApGroupRow(displayRow, rowIndex)
-              : renderApSubgroupRow(displayRow, rowIndex);
+              : displayRow.kind === 'ap-subgroup'
+                ? renderApSubgroupRow(displayRow, rowIndex)
+                : renderTransferGroupRow(displayRow, rowIndex);
         })
       ))}
       {!collapsed.OUTFLOW && renderAddRow('OUTFLOW')}

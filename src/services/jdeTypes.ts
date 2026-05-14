@@ -450,6 +450,90 @@ export interface NominaRawRecord {
 }
 
 // ───────────────────────────────────────────────────────────────
+// 8. PagoProveedor (Pagos ejecutados — espejo egreso de Cobranza)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Request body para POST /v1/erp/tesoreria/pagoproveedor.
+ *
+ * Endpoint productivo publicado por el equipo JDE: devuelve los pagos
+ * EFECTIVAMENTE ejecutados a proveedores en el rango indicado. Es el
+ * espejo egreso de /cobranza (que trae los cobros ejecutados).
+ *
+ * A diferencia de /compras (límite 30 días) el endpoint acepta rangos
+ * amplios sin chunking forzado. Para volúmenes grandes usar el helper
+ * `fetchPagoProveedorRange` que cachea por día.
+ */
+export interface PagoProveedorRequest {
+  /** Fecha inicial inclusive (YYYY-MM-DD). */
+  fechaInicial: string;
+  /** Fecha final inclusive (YYYY-MM-DD). */
+  fechaFinal: string;
+}
+
+/**
+ * Registro normalizado de un pago a proveedor.
+ *
+ * Notas de formato JDE crudo:
+ *   - `Fecha_Pago` viene como "DD-MM-YYYY" (Mexicano), NO ISO. El mapper
+ *     normaliza a "YYYY-MM-DD".
+ *   - `Cuenta_Bancaria` es texto descriptivo (p.ej. "38.1020.0010405 -
+ *     BANAMEX - 7013 8708851"). El número crudo para cruce con el módulo
+ *     Bancos viene en `Cuenta_Banco` (p.ej. "70138708851").
+ *   - `Comentario_Pago` suele referenciar el folio CXP (p.ej.
+ *     "FL CXP-VALE21829") — utilizable para matching factura por texto.
+ *   - `Clasificacion_Proveedor_Financiera` viene como "220 - Por
+ *     Clasificar" — preservamos la cadena cruda para semaforización.
+ *   - `Tipo_busqueda` distingue proveedores normales de empleados
+ *     ("Employees" para reembolsos/nómina/vales). Útil para excluir o
+ *     resaltar pagos no-comerciales.
+ *
+ * Conexiones downstream:
+ *   - CXP: match por `claveProveedor` + texto `comentarioPago` (folio).
+ *   - Compras (OC): vía CXP (el comentario referencia CXP, no OC).
+ *   - Bancos: match por `cuentaBanco` + `fechaPago` + `importePesos`
+ *     contra `BankStatementLine.tipoMovimiento='CARGO'`.
+ */
+export interface PagoProveedorRecord {
+  /** Tipo de pago (PT/PE/etc.). */
+  tipoPago: string;
+  /** ID único del pago (no_pago). */
+  noPago: string;
+  /** Compañía normalizada a 5 dígitos. */
+  cia: string;
+  /** Nombre de la compañía (trim). */
+  nombreCia: string;
+  /** Texto descriptivo de cuenta bancaria. */
+  cuentaBancaria: string;
+  /** Número de cuenta crudo (para cruce con módulo Bancos). */
+  cuentaBanco: string;
+  /** Fecha del pago en formato YYYY-MM-DD (normalizado desde DD-MM-YYYY). */
+  fechaPago: string;
+  /** Importe pagado en pesos. */
+  importePesos: number;
+  /** Importe pagado en dólares (si aplica). */
+  importeDolares: number;
+  /** Moneda (MXP/USD). */
+  moneda: string;
+  /** ID de batch JDE que agrupó este pago. */
+  batchPago: string;
+  /** Código numérico de proveedor (Clave_Proveedor). */
+  claveProveedor: string;
+  /** RFC del proveedor (trim). */
+  rfcProveedor: string;
+  /** Nombre del proveedor (trim). */
+  nombreProveedor: string;
+  /** Tipo de búsqueda JDE — "Employees" para reembolsos/nómina. */
+  tipoBusqueda: string;
+  /** Clasificación textual (Nóminas / Reembolsos / etc.). */
+  clasificacionProveedor: string;
+  /** Clasificación financiera con código (p.ej. "220 - Por Clasificar"). */
+  clasificacionProveedorFinanciera: string;
+  /** Comentario libre — usualmente referencia folio CXP. */
+  comentarioPago: string;
+}
+
+// ───────────────────────────────────────────────────────────────
 // Errores
 // ───────────────────────────────────────────────────────────────
 

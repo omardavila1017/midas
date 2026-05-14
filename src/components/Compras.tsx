@@ -1,10 +1,7 @@
-import { useMemo, useState, useCallback, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
   Package,
-  Loader2,
-  RefreshCw,
   Search,
-  AlertTriangle,
   Calendar,
   CheckCircle2,
   Clock,
@@ -12,16 +9,18 @@ import {
   Filter,
   X,
 } from 'lucide-react';
-import { fetchComprasRange, type ComprasRecord } from '../services/jde';
+import { type ComprasRecord } from '../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate } from '../formatters';
 import PageHeader from './ui/PageHeader';
+import ProviderBadge from './ProviderBadge';
+import { buildProviderIndex } from '../domain/providerIdentity';
+import type { Provider } from '../domain/types';
 
 interface ComprasProps {
   comprasRecords: ComprasRecord[];
   comprasLoadedCias: Record<string, string>;
   selectedCia: string;
-  onComprasChange: (records: ComprasRecord[]) => void;
-  onLoadedCiasChange: (loaded: Record<string, string>) => void;
+  providers: Provider[];
 }
 
 type FacturaFilter = 'all' | 'sinFacturar' | 'facturadas';
@@ -60,16 +59,13 @@ export default function Compras({
   comprasRecords,
   comprasLoadedCias,
   selectedCia,
-  onComprasChange,
-  onLoadedCiasChange,
+  providers,
 }: ComprasProps) {
   const [search, setSearch] = useState('');
   const [facturaFilter, setFacturaFilter] = useState<FacturaFilter>('all');
   const [receiptFilter, setReceiptFilter] = useState<ReceiptFilter>('all');
-  const [lookbackDays, setLookbackDays] = useState<number>(60);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
 
   const lastLoadedAt = comprasLoadedCias[COMPRAS_CACHE_KEY];
   const filtersActive = search.trim() !== '' || facturaFilter !== 'all' || receiptFilter !== 'all';
@@ -125,30 +121,6 @@ export default function Compras({
     return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [filteredRecords]);
 
-  const handleRefresh = useCallback(async () => {
-    setRefreshing(true);
-    setRefreshError(null);
-    setProgress(null);
-    try {
-      const today = new Date();
-      const fechaFinal = today.toISOString().slice(0, 10);
-      const lookback = new Date(today);
-      lookback.setUTCDate(lookback.getUTCDate() - lookbackDays);
-      const fechaInicial = lookback.toISOString().slice(0, 10);
-      const records = await fetchComprasRange(fechaInicial, fechaFinal, {
-        concurrency: 2,
-        onProgress: (done, total) => setProgress({ done, total }),
-      });
-      onComprasChange(records);
-      onLoadedCiasChange({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
-    } catch (err) {
-      setRefreshError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRefreshing(false);
-      setProgress(null);
-    }
-  }, [lookbackDays, onComprasChange, onLoadedCiasChange]);
-
   const clearFilters = () => {
     setSearch('');
     setFacturaFilter('all');
@@ -157,43 +129,11 @@ export default function Compras({
 
   return (
     <div className="space-y-5">
-      <PageHeader
-        title="Órdenes de Compras"
-        actions={
-          <>
-            <select
-              className="h-9 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 disabled:opacity-40 cursor-pointer"
-              value={lookbackDays}
-              onChange={(e) => setLookbackDays(Number(e.target.value))}
-              disabled={refreshing}
-              title="Rango de búsqueda en JDE"
-            >
-              <option value={30}>30 días</option>
-              <option value={60}>60 días</option>
-              <option value={90}>90 días</option>
-              <option value={180}>180 días</option>
-            </select>
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              title="Actualizar desde JDE"
-              aria-label="Actualizar desde JDE"
-              className="flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] text-[var(--gray-400)] hover:text-[var(--primary)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
-            >
-              {refreshing ? (
-                <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.5} />
-              ) : (
-                <RefreshCw className="w-4 h-4" strokeWidth={1.5} />
-              )}
-            </button>
-          </>
-        }
-      />
+      <PageHeader title="Órdenes de Compras" />
 
       {/* ─── Trust signal: last sync ───────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--gray-500)]">
-        {lastLoadedAt && !refreshing && (
+      {lastLoadedAt && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--gray-500)]">
           <div className="inline-flex items-center gap-2 bg-white border border-[var(--gray-200)] rounded-full px-3 py-1 shadow-sm">
             <Database className="w-3 h-3 text-[var(--gray-400)]" />
             <span>
@@ -204,30 +144,6 @@ export default function Compras({
             <span className="tabular-nums">
               {comprasRecords.length.toLocaleString()} OCs
             </span>
-          </div>
-        )}
-        {progress && (
-          <div className="inline-flex items-center gap-2 bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-full px-3 py-1 text-[var(--primary)] font-medium">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            Chunk {progress.done} / {progress.total}
-          </div>
-        )}
-      </div>
-
-      {refreshError && (
-        <div
-          className="flex items-start gap-2 rounded-[var(--radius-md)] px-3 py-2.5 text-[13px]"
-          style={{
-            background: 'var(--danger-muted)',
-            border: '1px solid oklch(88% 0.08 25)',
-            color: 'var(--danger)',
-          }}
-          role="alert"
-        >
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <div>
-            <p className="font-medium">Error al cargar Compras desde JDE</p>
-            <p className="text-[12px] mt-0.5 opacity-90">{refreshError}</p>
           </div>
         </div>
       )}
@@ -361,13 +277,6 @@ export default function Compras({
                           <>
                             <Package className="w-5 h-5 text-[var(--gray-300)]" />
                             <div className="text-[13px]">Sin OCs cargadas.</div>
-                            <button
-                              onClick={handleRefresh}
-                              disabled={refreshing}
-                              className="text-[12px] text-[var(--primary)] hover:underline disabled:opacity-40"
-                            >
-                              Cargar desde JDE
-                            </button>
                           </>
                         ) : (
                           <>
@@ -404,11 +313,18 @@ export default function Compras({
                         >
                           {r.nombreProveedor}
                         </div>
-                        {r.noFactura && (
-                          <div className="text-[10px] text-[var(--gray-400)] font-mono mt-0.5">
-                            Fac. {r.noFactura}
-                          </div>
-                        )}
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <ProviderBadge
+                            index={providerIndex}
+                            jdeCode={r.noProveedor}
+                            name={r.nombreProveedor}
+                          />
+                          {r.noFactura && (
+                            <span className="text-[10px] text-[var(--gray-400)] font-mono">
+                              Fac. {r.noFactura}
+                            </span>
+                          )}
+                        </div>
                       </Td>
                       <Td>
                         <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noOrden}</span>

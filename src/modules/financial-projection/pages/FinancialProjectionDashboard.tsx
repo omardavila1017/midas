@@ -104,6 +104,11 @@ import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
 import { ProbabilisticRiskStrip } from '../components/ProbabilisticRiskStrip';
 import { useProbabilisticForecast } from '../services/probabilisticForecastService';
+import {
+  FORECAST_MODELS,
+  type ForecastModelId,
+  type ForecastOutput,
+} from '../../../domain/comprasForecastModels';
 
 interface Props {
   companyCode: string;
@@ -114,12 +119,22 @@ interface Props {
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
   cobranzaReconciliation?: RealReconciliationResult;
+  /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
+  paidCxpKeys?: Set<string>;
+  /** CARGO bancarios matcheados a PagoProveedor — reclasifican como AP_PAYMENT. */
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
   onNavigateToTax?: () => void;
+  /** Modelo seleccionado para forecast de futuras OCs. */
+  forecastModelId?: ForecastModelId;
+  /** Cambia el modelo y persiste. */
+  onForecastModelChange?: (id: ForecastModelId) => void;
+  /** Salida del modelo seleccionado: receipts + estadísticas por proveedor. */
+  forecastSummary?: ForecastOutput;
 }
 
 const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> = [
@@ -161,6 +176,8 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.cobranzaRecords,
       props.cobranzaPayments,
       props.cobranzaReconciliation,
+      props.paidCxpKeys,
+      props.cargoEnrichments,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
@@ -770,6 +787,11 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         title="Proyección Financiera"
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <ForecastModelSelector
+              value={props.forecastModelId}
+              onChange={props.onForecastModelChange}
+              summary={props.forecastSummary}
+            />
             <SegmentedControl
               value={granularity}
               options={GRANULARITY_OPTIONS}
@@ -1043,6 +1065,41 @@ function addUtcDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
+}
+
+function ForecastModelSelector({
+  value,
+  onChange,
+  summary,
+}: {
+  value?: ForecastModelId;
+  onChange?: (id: ForecastModelId) => void;
+  summary?: ForecastOutput;
+}) {
+  if (!value || !onChange) return null;
+  const totalForecasted = summary?.receipts.reduce((s, r) => s + r.amountMxn, 0) ?? 0;
+  const providersCount = summary?.perProvider.length ?? 0;
+  return (
+    <div className="inline-flex h-10 items-stretch overflow-hidden rounded-xl border border-[var(--gray-200)] bg-white">
+      <label
+        className="flex items-center px-3 text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]"
+        htmlFor="forecast-model-selector"
+      >
+        Modelo OC
+      </label>
+      <select
+        id="forecast-model-selector"
+        value={value}
+        onChange={(e) => onChange(e.target.value as ForecastModelId)}
+        className="border-l border-[var(--gray-200)] bg-transparent px-3 text-[12px] font-medium text-[var(--gray-700)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
+        title={`${providersCount} proveedores · forecast total ${fmtCompact(totalForecasted)} (12m)`}
+      >
+        {FORECAST_MODELS.map((m) => (
+          <option key={m.id} value={m.id} title={m.description}>{m.label}</option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function EmptyDataState() {

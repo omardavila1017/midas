@@ -40,6 +40,7 @@ import {
 } from '../domain/realReconciliationEngine';
 import {
   attachImportedStatementsToKnownCompanies,
+  bankStatementBalance,
   currentBankStatements,
   latestStatementDate,
   mergeBankStatements,
@@ -70,6 +71,13 @@ interface BancosProps {
    * pestaña sigue funcionando como antes.
    */
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
+  /**
+   * Mapa de bankMovementKey(mov) → CargoPaymentEnrichment, memoizado desde
+   * App.tsx tras correr el motor de PagoProveedor. Espejo egreso de
+   * `abonoEnrichmentIndex`: revela qué pagos a proveedor generaron cada
+   * CARGO y resalta CARGOs huérfanos (sin pago asociado).
+   */
+  cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }
 
 type BancosView = 'form' | 'dashboard';
@@ -311,6 +319,7 @@ const BancosDashboard = ({
   refreshError,
   companies = [],
   abonoEnrichmentIndex,
+  cargoEnrichmentIndex,
 }: {
   statements: BankAccountStatement[];
   query: BankQueryState;
@@ -324,6 +333,7 @@ const BancosDashboard = ({
   refreshError: string | null;
   companies?: { cia: string; nombre: string }[];
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
+  cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }) => {
   const santanderInputRef = useRef<HTMLInputElement | null>(null);
   const refreshBlockedReason = 'Este dataset viene solo de archivo Santander. Para actualizarlo desde JDE, primero corre una consulta.';
@@ -709,7 +719,7 @@ const BancosDashboard = ({
               const totalsByMoneda = (() => {
                 const m = new Map<string, number>();
                 for (const a of accs) {
-                  m.set(a.moneda, (m.get(a.moneda) ?? 0) + (a.saldoFinal ?? a.saldoInicial ?? 0));
+                  m.set(a.moneda, (m.get(a.moneda) ?? 0) + bankStatementBalance(a));
                 }
                 return Array.from(m.entries()).sort((x, y) => x[0].localeCompare(y[0]));
               })();
@@ -755,7 +765,11 @@ const BancosDashboard = ({
                       {accs.map(acc => {
                         const key = `${acc.cia}::${acc.cuenta}::${acc.moneda}`;
                         const isExpanded = expanded === key;
-                        const saldo = acc.saldoFinal ?? acc.saldoInicial ?? 0;
+                        const saldo = bankStatementBalance(acc);
+                        const saldoIsDerived =
+                          (acc.saldoFinal === undefined || acc.saldoFinal === 0)
+                          && acc.saldoInicial !== undefined
+                          && acc.movimientos.length > 0;
                         return (
                           <div key={key}>
                             <button
@@ -786,8 +800,17 @@ const BancosDashboard = ({
 
                               <div className="text-right w-36">
                                 <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
-                                <p className="text-[10px] text-[var(--gray-400)]">
-                                  {acc.saldoFinal !== undefined ? 'Saldo final' : acc.saldoInicial !== undefined ? 'Saldo inicial' : 'Sin saldo'}
+                                <p
+                                  className="text-[10px] text-[var(--gray-400)]"
+                                  title={saldoIsDerived ? 'Saldo final reportado fue 0/nulo; estimado desde saldoInicial + movimientos del periodo.' : undefined}
+                                >
+                                  {saldoIsDerived
+                                    ? 'Estimado'
+                                    : acc.saldoFinal !== undefined
+                                      ? 'Saldo final'
+                                      : acc.saldoInicial !== undefined
+                                        ? 'Saldo inicial'
+                                        : 'Sin saldo'}
                                 </p>
                               </div>
                             </button>
@@ -797,6 +820,7 @@ const BancosDashboard = ({
                                 acc={acc}
                                 internalReasonOf={internalReasonOf}
                                 abonoEnrichmentIndex={abonoEnrichmentIndex}
+                                cargoEnrichmentIndex={cargoEnrichmentIndex}
                               />
                             )}
                           </div>
@@ -822,10 +846,12 @@ const BancosMovimientos = ({
   acc,
   internalReasonOf,
   abonoEnrichmentIndex,
+  cargoEnrichmentIndex,
 }: {
   acc: BankAccountStatement & { movimientos: BankStatementLine[] };
   internalReasonOf: (cia: string, cuenta: string, mov: BankStatementLine) => InternalReason | null;
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
+  cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }) => {
   if (acc.movimientos.length === 0) {
     return (
@@ -881,11 +907,15 @@ const BancosMovimientos = ({
                 ? 'text-[var(--gray-400)] line-through'
                 : isCargo ? 'text-[var(--danger)]' : 'text-[var(--success)]';
 
-              // ── Cobranza enrichment ──
-              // Solo aplica a ABONOs que NO sean traspaso interno; los CARGOs
-              // siguen rumbos de pago de proveedor que no se cruzan acá.
+              // ── Cobranza enrichment (ABONOs) ──
+              // Solo aplica a ABONOs que NO sean traspaso interno.
               const enrichment = !isInternal && m.tipoMovimiento === 'ABONO' && abonoEnrichmentIndex
                 ? abonoEnrichmentIndex.get(bankMovementKey(m))
+                : undefined;
+              // ── PagoProveedor enrichment (CARGOs) ──
+              // Espejo egreso: revela qué pago a proveedor originó este CARGO.
+              const cargoEnrichment = !isInternal && m.tipoMovimiento === 'CARGO' && cargoEnrichmentIndex
+                ? cargoEnrichmentIndex.get(bankMovementKey(m))
                 : undefined;
               return (
                 <tr key={i} className={`border-b border-[var(--gray-50)] ${rowMuted}`} title={isInternal ? tooltip : undefined}>
@@ -924,6 +954,24 @@ const BancosMovimientos = ({
                         Sin factura
                       </span>
                     )}
+                    {cargoEnrichment?.status === 'MATCHED' && cargoEnrichment.payments && cargoEnrichment.payments.length > 0 && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--info-muted)] text-[var(--info)] font-bold align-middle"
+                        title={cargoEnrichment.payments
+                          .map(p => `${p.noPago} · ${p.nombreProveedor} · ${p.tier}`)
+                          .join('\n')}
+                      >
+                        ✓ Pago{cargoEnrichment.payments.length > 1 ? `s ×${cargoEnrichment.payments.length}` : ` ${cargoEnrichment.payments[0].nombreProveedor.split(' ').slice(0, 2).join(' ')}`}
+                      </span>
+                    )}
+                    {cargoEnrichment?.status === 'ORPHAN' && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] font-bold align-middle"
+                        title="CARGO sin pago a proveedor asociado — probable comisión, traspaso o pago fuera del rango cargado."
+                      >
+                        Sin pago
+                      </span>
+                    )}
                   </td>
                   <td className="py-1.5 text-center">
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${tipoColor}`}>
@@ -960,7 +1008,7 @@ const BancosMovimientos = ({
                 )}
               </td>
               <td className="py-2 text-right font-mono text-[var(--gray-950)]">
-                {acc.saldoFinal !== undefined ? fmtCurrency(acc.saldoFinal, acc.moneda) : '—'}
+                {fmtCurrency(bankStatementBalance(acc), acc.moneda)}
               </td>
             </tr>
           </tbody>

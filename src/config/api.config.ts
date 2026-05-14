@@ -1,23 +1,12 @@
 /**
  * Configuración de APIs para el frontend.
  *
- * AVISO DE SEGURIDAD:
- *   Todas las variables `VITE_*` quedan EMBEBIDAS en el bundle del cliente.
- *   No coloques credenciales reales aquí en producción — usa el proxy
- *   serverless (`api/jde/[...path].ts`) que lee `JDE_TOKEN` server-side.
- *   `VITE_JDE_TOKEN` y `VITE_COGNOS_TOKEN` solo deben tener valor en
- *   `.env.local` para desarrollo. En Vercel deja esas variables vacías.
+ * AVISO: Todas las variables `VITE_*` quedan embebidas en el bundle del
+ * cliente. Hoy la app corre solo en localhost; cuando se migre a un servidor
+ * con proxy real, los Bearer tokens deben moverse a un namespace server-side.
  *
- * Default `baseUrl = /api/jde`:
- *   En producción la Vercel Function `api/jde/[...path].ts` resuelve la
- *   llamada e inyecta `JDE_TOKEN` server-side. En desarrollo el proxy de
- *   Vite (vite.config.ts) reescribe `/api/jde/*` hacia el upstream JDE.
- *   Por eso el default cubre ambos entornos sin pedir `VITE_JDE_BASE_URL`.
- *   Antes se usaba `?? ''` y, como `??` no atrapa string vacío, el fallback
- *   posterior `?? '/api/jde'` en `jdeClient.resolveBaseUrl` no llegaba a
- *   ejecutarse: las llamadas terminaban en el origen ('/empresas', '/bancos')
- *   y el rewrite SPA devolvía `index.html`, así que todo el cliente JDE se
- *   quedaba "cargando" sin datos en producción.
+ * Default `baseUrl = /api/jde`: el proxy de Vite (vite.config.ts) reescribe
+ * `/api/jde/*` hacia el upstream JDE para evitar CORS en dev.
  */
 const DEFAULT_JDE_BASE_URL = '/api/jde';
 const DEFAULT_TRESS_BASE_URL = '/api/tress';
@@ -60,16 +49,13 @@ if (
   // eslint-disable-next-line no-console
   console.warn(
     '[security] VITE_JDE_TOKEN/VITE_COGNOS_TOKEN definidos en build de ' +
-      'producción → la credencial es visible en el bundle público. Migra al ' +
-      'proxy serverless (api/jde/[...path].ts) y vacía la VITE_ en Vercel.',
+      'producción → la credencial es visible en el bundle público. Migrar a ' +
+      'un proxy server-side antes de exponer públicamente.',
   );
 }
 
 export function validateApiConfig(): string[] {
   const missing: string[] = [];
-  // JDE: en producción el token vive server-side (`JDE_TOKEN`) y lo inyecta
-  // la Vercel Function. Solo flagueamos `VITE_JDE_TOKEN` faltante en dev,
-  // donde el proxy de Vite no inyecta credencial.
   if (!apiConfig.jde.baseUrl) missing.push('VITE_JDE_BASE_URL');
   if (!apiConfig.tress.baseUrl) missing.push('VITE_TRESS_BASE_URL');
   if (import.meta.env.DEV && !apiConfig.jde.authValue) {

@@ -16,9 +16,23 @@ export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   DEBT: 'Deuda',
   CAPEX: 'CAPEX',
   OPEX: 'OPEX',
-  TRANSFER: 'Transferencias',
+  TRANSFER: 'Otros Egresos',
   MANUAL: 'Manual',
 };
+
+// Buckets de negocio para INFLOW solicitados por el user: clientes con
+// `commercialGroupId === 'group-viajes-especiales'` van a "Viajes Especiales";
+// ABONOs Santander sin match de factura van a "Federal"; el resto cae en
+// "Otros ingresos". El motor canónico ya escribe estas tres etiquetas en
+// `movement.subcategory` para INFLOW — aquí solo las leemos.
+const INCOME_BUCKETS = new Set(['Viajes Especiales', 'Federal', 'Otros ingresos']);
+
+function inflowBucketFor(movement: FinancialMovement): string {
+  if (movement.type !== 'INFLOW') return '';
+  const sub = movement.subcategory;
+  if (sub && INCOME_BUCKETS.has(sub)) return sub;
+  return 'Otros ingresos';
+}
 
 export function conceptKeyForMovement(movement: FinancialMovement): string {
   const tail = rowLabelForMovement(movement);
@@ -38,10 +52,13 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
     const key = conceptKeyForMovement(movement);
     if (map.has(key)) continue;
     const tail = rowLabelForMovement(movement);
+    const group = movement.type === 'INFLOW'
+      ? `Ingresos · ${inflowBucketFor(movement)}`
+      : rowGroup(movement.type, movement.category);
     map.set(key, {
       conceptKey: key,
       label: tail,
-      group: rowGroup(movement.type, movement.category),
+      group,
       type: movement.type,
       category: movement.category,
       subgroupLabel: movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT'
@@ -103,7 +120,14 @@ function cleanConceptLabel(concept: string | undefined): string | null {
 
 export function rowGroup(type: FinancialMovementType, category: FinancialMovementCategory): string {
   const sectionLabel = type === 'INFLOW' ? 'Ingresos' : 'Egresos';
-  return `${sectionLabel} · ${CATEGORY_LABELS[category]}`;
+  // TRANSFER cae tanto en ingreso (ABONOs sin cobranza match) como en
+  // egreso (CARGOs sin pago match). El label `'Otros Egresos'` sólo
+  // tiene sentido para egresos; en ingresos lo etiquetamos como
+  // `'Otros Ingresos'`.
+  const tail = category === 'TRANSFER'
+    ? (type === 'INFLOW' ? 'Otros Ingresos' : 'Otros Egresos')
+    : CATEGORY_LABELS[category];
+  return `${sectionLabel} · ${tail}`;
 }
 
 export function aggregateRowValueForBucket(args: {

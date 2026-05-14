@@ -577,7 +577,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       )}
 
       {/* Cash chart */}
-      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
+      <div className="rounded-[var(--radius-lg)] border p-5" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
         <h2 className="text-[15px] font-bold tracking-tight mb-1" style={{ color: 'var(--gray-950)' }}>
           Flujo mensual
         </h2>
@@ -592,7 +592,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               margin={{ top: 10, right: 20, left: 10, bottom: 10 }}
               onClick={handleBarClick}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <CartesianGrid strokeDasharray="3 3" className="recharts-cartesian-grid" />
               <XAxis
                 dataKey="yearMonth"
                 tick={{ fontSize: 11 }}
@@ -822,7 +822,7 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
     phase === 'current' ? 'En curso (real + proy.)' :
     phase === 'future' ? 'Proyectado' : '';
   return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white shadow-sm px-3 py-2 text-[12px]">
+    <div className="rounded-[var(--radius-md)] border shadow-sm px-3 py-2 text-[12px]" style={{ background: 'var(--popover)', borderColor: 'var(--border)', color: 'var(--popover-foreground)' }}>
       <p className="font-bold mb-0.5" style={{ color: 'var(--gray-950)' }}>{fmtYearMonthLong(ym)}</p>
       {phaseText && <p className="text-[11px] mb-1.5" style={{ color: 'var(--gray-400)' }}>{phaseText}</p>}
       <ul className="space-y-0.5">
@@ -877,7 +877,8 @@ const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipPayloadItem[];
 
 const StartingBalanceDisplay: React.FC<{ value: number }> = ({ value }) => (
   <div
-    className="flex items-center gap-2 h-10 px-3 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white"
+    className="flex items-center gap-2 h-10 px-3 rounded-[var(--radius)] border"
+    style={{ background: 'var(--card)', borderColor: 'var(--border)' }}
     title="Caja inicial fija por decisión de negocio."
   >
     <span className="text-[11px]" style={{ color: 'var(--gray-400)' }}>Caja inicial</span>

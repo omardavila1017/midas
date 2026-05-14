@@ -116,6 +116,13 @@ interface Props {
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
   cobranzaReconciliation?: RealReconciliationResult;
+  /**
+   * CXPs ya pagadas según PagoProveedor. Se excluyen del egreso
+   * proyectado para no doblar (el cargo bancario real ya las descontó).
+   */
+  paidCxpKeys?: Set<string>;
+  /** CARGO bancarios matcheados a PagoProveedor — reclasifican como AP_PAYMENT. */
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
@@ -155,6 +162,8 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.cxpRecords,
       props.cobranzaRecords,
       props.cobranzaReconciliation,
+      props.paidCxpKeys,
+      props.cargoEnrichments,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
@@ -222,7 +231,12 @@ function PlanningWarmupShell() {
 function PlanningDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
   const goTo = useNavigateToTab();
-  const yearStart = today;
+  // Extender la grilla 90 días hacia atrás para mostrar histórico
+  // (meses/semanas/días previos al actual) además del horizonte futuro.
+  // El usuario necesita ver la tendencia real reciente al lado de la
+  // proyección — sin esto la pantalla arrancaba en "hoy" y los buckets
+  // del trimestre pasado quedaban invisibles.
+  const yearStart = useMemo(() => addUtcDays(today, -90), [today]);
   const yearEnd = useMemo(() => addUtcDays(today, 364), [today]);
 
   const sourceBaseScenario = useMemo(
@@ -411,7 +425,12 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       const movementsBeforeAdjust = isBase
         ? source.movements
         : [...source.movements, ...manualMovements];
-      const preTaxMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
+      // applyAdjustmentsToMovements es determinístico sobre input idéntico —
+      // calculamos una sola vez y lo reusamos como seed fiscal y como base
+      // del schedule. La versión anterior corría el motor dos veces (preTax +
+      // adjustedMovements) sobre exactamente los mismos inputs, duplicando CPU
+      // en cada eval de escenario.
+      const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
       const taxSeedView = isBase ? null : buildTaxDashboardView({
         clients: props.clients,
         providers: props.providers,
@@ -423,7 +442,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         companyCode: props.companyCode,
         startDate: yearStart,
         endDate: yearEnd,
-        movements: preTaxMovements,
+        movements: adjustedMovements,
         store: taxStore,
         today,
       });
@@ -445,7 +464,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           }),
         ]
         : [];
-      const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
       const movementsWithTax = [...adjustedMovements, ...taxMovements];
       const supplierSchedule = scheduleSupplierPaymentsByScore({
         movements: movementsWithTax,

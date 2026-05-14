@@ -30,6 +30,28 @@ export function nominaCacheKey(k: NominaCacheKey): string {
 }
 
 /**
+ * Devuelve `{anio, mes}` para el periodo dado y los `n-1` anteriores, en orden
+ * cronológico ascendente (el más viejo primero, el actual al final).
+ *
+ * Ejemplo: `lastNMonths(2026, 5, 4)` → [
+ *   {anio:2026,mes:2}, {anio:2026,mes:3}, {anio:2026,mes:4}, {anio:2026,mes:5}
+ * ].
+ *
+ * Usado por el dashboard de nómina para jalar el histórico necesario para
+ * proyectar (mes actual + 3 anteriores por default).
+ */
+export function lastNMonths(anio: number, mes: number, n: number): Array<{ anio: number; mes: number }> {
+  const out: Array<{ anio: number; mes: number }> = [];
+  for (let i = n - 1; i >= 0; i--) {
+    let m = mes - i;
+    let y = anio;
+    while (m <= 0) { m += 12; y -= 1; }
+    out.push({ anio: y, mes: m });
+  }
+  return out;
+}
+
+/**
  * Refina el `cashTreatment` heurístico que asigna el mapper basándose solo
  * en el `TipoConcepto`. Aquí inspeccionamos el nombre/ID del concepto para
  * separar:

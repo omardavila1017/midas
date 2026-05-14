@@ -295,7 +295,8 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-[399] bg-black/50 animate-fadeIn"
+        className="fixed inset-0 z-[399] animate-fadeIn"
+        style={{ background: 'var(--modal-overlay)' }}
         onClick={onClose}
         aria-hidden="true"
       />
@@ -304,11 +305,14 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       <div className="fixed inset-0 z-[400] flex items-start justify-center pointer-events-none pt-20 px-4">
         <div className="pointer-events-auto w-full max-w-2xl animate-scale-in">
           {/* Command Palette Container */}
-          <div className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-lg)] overflow-hidden">
+          <div
+            className="rounded-[var(--radius-lg)] shadow-[var(--shadow-lg)] overflow-hidden border"
+            style={{ background: 'var(--card)', borderColor: 'var(--border)' }}
+          >
             {/* Search Input */}
-            <div className="relative border-b border-gray-200 px-4 py-3">
+            <div className="relative px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-center gap-3">
-                <Search size={20} className="text-gray-400" />
+                <Search size={20} style={{ color: 'var(--gray-400)' }} />
                 <input
                   ref={inputRef}
                   type="text"
@@ -319,10 +323,18 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                     setSelectedIndex(0);
                   }}
                   onKeyDown={handleKeyDown}
-                  className="flex-1 bg-transparent outline-none text-gray-900 placeholder-gray-400 text-base"
+                  className="flex-1 bg-transparent outline-none text-base"
+                  style={{ color: 'var(--card-foreground)' }}
                   aria-label="Buscar comandos"
                 />
-                <kbd className="hidden sm:inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-gray-400 bg-gray-100 rounded border border-gray-200">
+                <kbd
+                  className="hidden sm:inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium rounded border"
+                  style={{
+                    background: 'var(--gray-100)',
+                    color: 'var(--gray-500)',
+                    borderColor: 'var(--border)',
+                  }}
+                >
                   <span>⌘</span>
                   <span>K</span>
                 </kbd>
@@ -330,39 +342,30 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
             </div>
 
             {/* Results */}
-            <div
-              ref={resultsRef}
-              className="max-h-96 overflow-y-auto divide-y divide-gray-100"
-            >
+            <div ref={resultsRef} className="max-h-96 overflow-y-auto">
               {flatResults.length === 0 ? (
-                <div className="px-4 py-8 text-center text-gray-500">
+                <div className="px-4 py-8 text-center" style={{ color: 'var(--muted-foreground)' }}>
                   <p>Sin resultados para '{query}'</p>
                 </div>
               ) : (
                 groupedResults.map((group) => (
-                  <div key={group.category}>
-                    {/* Category Header */}
+                  <div key={group.category} className="border-t" style={{ borderColor: 'var(--border)' }}>
                     <div className="px-4 pt-3 pb-2">
-                      <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+                      <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: 'var(--muted-foreground)' }}>
                         {group.category}
                       </h3>
                     </div>
 
-                    {/* Items in category */}
                     {group.items.map((item) => {
-                      const globalIndex = flatResults.findIndex(
-                        (r) => r.id === item.id
-                      );
+                      const globalIndex = flatResults.findIndex((r) => r.id === item.id);
                       const isSelected = selectedIndex === globalIndex;
-
                       return (
                         <button
                           key={item.id}
                           data-index={globalIndex}
                           onClick={() => {
-                            if (item.run) {
-                              item.run();
-                            } else if (item.tabId) {
+                            if (item.run) item.run();
+                            else if (item.tabId) {
                               onNavigate(item.tabId);
                               if (item.scenarioId) {
                                 window.dispatchEvent(new CustomEvent('midas:planning:setActiveScenario', { detail: { scenarioId: item.scenarioId } }));
@@ -371,25 +374,22 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                             onClose();
                           }}
                           onMouseEnter={() => setSelectedIndex(globalIndex)}
-                          className={`w-full px-4 py-2.5 flex items-center gap-3 transition-colors text-left ${
-                            isSelected
-                              ? 'bg-[color:var(--primary)]/10'
-                              : 'hover:bg-gray-50'
-                          }`}
+                          className="w-full px-4 py-2.5 flex items-center gap-3 transition-colors text-left"
+                          style={{
+                            background: isSelected ? 'color-mix(in oklch, var(--accent-blue) 14%, transparent)' : 'transparent',
+                          }}
                           aria-selected={isSelected}
                         >
-                          <div className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-gray-600">
+                          <div className="flex-shrink-0 w-5 h-5 flex items-center justify-center" style={{ color: 'var(--muted-foreground)' }}>
                             {item.icon}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-900 truncate">
+                            <p className="text-sm font-medium truncate" style={{ color: 'var(--card-foreground)' }}>
                               {item.label}
                             </p>
                           </div>
                           {isSelected && (
-                            <div className="flex-shrink-0 text-xs font-medium text-gray-400">
-                              ↵
-                            </div>
+                            <div className="flex-shrink-0 text-xs font-medium" style={{ color: 'var(--muted-foreground)' }}>↵</div>
                           )}
                         </button>
                       );
@@ -399,13 +399,17 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
               )}
             </div>
 
-            {/* Footer */}
             {flatResults.length > 0 && (
-              <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500 bg-gray-50">
+              <div
+                className="border-t px-4 py-2 text-xs"
+                style={{
+                  borderColor: 'var(--border)',
+                  background: 'var(--muted)',
+                  color: 'var(--muted-foreground)',
+                }}
+              >
                 <div className="flex items-center justify-between">
-                  <span>
-                    Resultado {selectedIndex + 1} de {flatResults.length}
-                  </span>
+                  <span>Resultado {selectedIndex + 1} de {flatResults.length}</span>
                   <span>Esc para cerrar</span>
                 </div>
               </div>

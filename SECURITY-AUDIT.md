@@ -5,6 +5,13 @@ Branch: `claude/security-audit-api-keys-Joifs`
 Alcance: exposición de credenciales, pen-test del frontend, configuración de
 APIs (JDE / Cognos), persistencia local y dependencias.
 
+> **Nota 2026-05-13** — Vercel fue removido del stack. Las mitigaciones F3,
+> F4 y F6 que dependían de Vercel Serverless Functions y `vercel.json` ya no
+> aplican: hoy la app corre solo en localhost y `VITE_JDE_TOKEN` viaja
+> embebido en el bundle de dev. Cuando se migre a un servidor real, reaplicar
+> el patrón de proxy server-side (sin Vercel) y reintroducir los headers de
+> seguridad a nivel del nuevo host.
+
 ---
 
 ## 1. Resumen ejecutivo

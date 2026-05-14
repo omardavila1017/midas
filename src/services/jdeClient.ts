@@ -3,19 +3,12 @@
  *
  * Configuración:
  *   VITE_JDE_BASE_URL   — base URL (default: "/api/jde" via apiConfig)
- *   VITE_JDE_TOKEN      — Bearer credential (SOLO desarrollo local).
- *                         En producción el token vive en `JDE_TOKEN`
- *                         (server-side, sin prefijo VITE_) y lo inyecta la
- *                         Vercel Function `api/jde/[...path].ts`. Si la var
- *                         de entorno está vacía, este cliente delega la
- *                         autorización al proxy y NO manda Authorization
- *                         desde el navegador — así evitamos exponer la
- *                         credencial en el bundle público.
+ *   VITE_JDE_TOKEN      — Bearer credential. En localhost queda embebido
+ *                         en el bundle; al migrar a servidor con proxy real
+ *                         el token debe regresar a un namespace server-side.
  *
- * En desarrollo el `base` default ("/api/jde") es reescrito por el proxy
- * configurado en vite.config.ts hacia https://api.gruposenda.com/v1/erp/tesoreria.
- * En producción, una serverless function (api/jde/[...path].ts) resuelve la
- * llamada inyectando el Bearer desde el secret server-side.
+ * El `base` default ("/api/jde") es reescrito por el proxy configurado en
+ * vite.config.ts hacia https://api.gruposenda.com/v1/erp/tesoreria.
  */
 
 import { JdeApiError } from './jdeTypes';
@@ -28,19 +21,37 @@ export interface JdeClientConfig {
   authValue?: string;
   /** Timeout por request en ms. Default: 30_000. */
   timeoutMs?: number;
+  /**
+   * Intentos extra si el server responde 502/503/504/408 o hay timeout/red.
+   * Default: 2 (3 intentos totales). Backoff exponencial con jitter.
+   * Solo aplica a errores transitorios — 4xx no se reintenta.
+   */
+  retries?: number;
 }
 
-// Cada request a JDE tarda ~60s en producción. 90s estaba al filo y a veces
-// reventaba con AbortError antes de que respondiera. 180s da margen real
-// sin dejar requests colgados eternamente si algo se cuelga del lado server.
-const DEFAULT_TIMEOUT_MS = 180_000;
+// JDE tarda ~60s típico. 120s da margen sin secuestrar el slot 3min+.
+// Retries con backoff 0..4s. Si 3 intentos fallan, mejor degradar UI que
+// quemar 8min en un sólo endpoint colgado.
+const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_RETRIES = 2;
+const RETRY_STATUSES = new Set([408, 502, 503, 504]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function backoffDelay(attempt: number): number {
+  const base = 1000;
+  const cap = 4000;
+  const exp = Math.min(cap, base * 2 ** attempt);
+  return Math.floor(Math.random() * exp);
+}
 
 function resolveBaseUrl(override?: string): string {
   // Usamos `||` en vez de `??` porque `apiConfig.jde.baseUrl` puede llegar
-  // como string vacío si la env var existe pero está sin valor en Vercel.
-  // Con `??` ese empty string ganaría y el cliente terminaría llamando a
-  // rutas absolutas tipo `/empresas` que en producción cae en el rewrite
-  // SPA y devuelve `index.html` (la app se quedaba cargando para siempre).
+  // como string vacío si la env var existe pero sin valor; en ese caso
+  // queremos caer al default "/api/jde" y no a rutas absolutas tipo
+  // `/empresas` que no resuelven.
   const raw = override || apiConfig.jde.baseUrl || '/api/jde';
   return raw.replace(/\/+$/, '');
 }
@@ -59,68 +70,85 @@ async function request<T>(
   const authValue = resolveAuthValue(config.authValue);
   const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 
-  // Cuando `baseUrl` apunta al proxy interno (`/api/jde` o similar relativo),
-  // la credencial puede inyectarla la Vercel Function server-side. En ese caso
-  // omitir el header Authorization es deliberado: evita filtrar el token al
-  // navegador. Solo exigimos credencial si llamamos a un host externo directo.
+  // Si `baseUrl` apunta al proxy interno (`/api/jde` o relativo), el header
+  // Authorization viaja igual desde el cliente (Vite no inyecta nada). Solo
+  // saltamos el guard cuando no hay credencial Y no hay host externo, para
+  // dejar pasar el caso de proxy interno con auth inyectada a futuro.
   const isInternalProxy = /^\/(?!\/)/.test(baseUrl) || baseUrl === '';
   if (!authValue && !isInternalProxy) {
     throw new JdeApiError(
-      'Falta credencial JDE — configura JDE_TOKEN (server-side) o VITE_JDE_TOKEN (solo dev)',
+      'Falta credencial JDE — configura VITE_JDE_TOKEN',
       401,
       path,
     );
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const maxRetries = config.retries ?? DEFAULT_RETRIES;
+  let lastErr: unknown;
 
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: {
-        ...(authValue ? { Authorization: `Bearer ${authValue}` } : {}),
-        Accept: 'application/json',
-        ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
-      },
-      body: method === 'POST' && body !== undefined ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
-  } catch (e) {
-    clearTimeout(timeout);
-    if (e instanceof DOMException && e.name === 'AbortError') {
-      throw new JdeApiError(`Timeout llamando ${path}`, 408, path);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          ...(authValue ? { Authorization: `Bearer ${authValue}` } : {}),
+          Accept: 'application/json',
+          ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: method === 'POST' && body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      clearTimeout(timeout);
+      const isAbort = e instanceof DOMException && e.name === 'AbortError';
+      lastErr = isAbort
+        ? new JdeApiError(`Timeout llamando ${path}`, 408, path)
+        : new JdeApiError(
+            `Error de red llamando ${path}: ${e instanceof Error ? e.message : String(e)}`,
+            0,
+            path,
+          );
+      if (attempt < maxRetries) {
+        await sleep(backoffDelay(attempt));
+        continue;
+      }
+      throw lastErr;
     }
-    throw new JdeApiError(
-      `Error de red llamando ${path}: ${e instanceof Error ? e.message : String(e)}`,
-      0,
-      path,
-    );
-  } finally {
     clearTimeout(timeout);
+
+    if (!res.ok) {
+      let errBody: unknown;
+      try { errBody = await res.json(); } catch { errBody = await res.text().catch(() => undefined); }
+      const err = new JdeApiError(
+        `JDE ${path} respondió ${res.status} ${res.statusText}`,
+        res.status,
+        path,
+        errBody,
+      );
+      if (RETRY_STATUSES.has(res.status) && attempt < maxRetries) {
+        lastErr = err;
+        await sleep(backoffDelay(attempt));
+        continue;
+      }
+      throw err;
+    }
+
+    try {
+      return (await res.json()) as T;
+    } catch (e) {
+      throw new JdeApiError(
+        `Respuesta no es JSON válido (${path}): ${e instanceof Error ? e.message : String(e)}`,
+        res.status,
+        path,
+      );
+    }
   }
 
-  if (!res.ok) {
-    let errBody: unknown;
-    try { errBody = await res.json(); } catch { errBody = await res.text().catch(() => undefined); }
-    throw new JdeApiError(
-      `JDE ${path} respondió ${res.status} ${res.statusText}`,
-      res.status,
-      path,
-      errBody,
-    );
-  }
-
-  try {
-    return (await res.json()) as T;
-  } catch (e) {
-    throw new JdeApiError(
-      `Respuesta no es JSON válido (${path}): ${e instanceof Error ? e.message : String(e)}`,
-      res.status,
-      path,
-    );
-  }
+  throw lastErr ?? new JdeApiError(`JDE ${path} falló sin error`, 0, path);
 }
 
 export const jdeClient = {

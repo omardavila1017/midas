@@ -81,7 +81,7 @@ desk) demands light mode, and the brand manual mandates it.
 
 **Anti-references** (the interface must NOT look like any of these):
 
-- Vercel / Next.js landing pages (purple gradients, glassmorphism, neon).
+- Next.js / SaaS landing pages (purple gradients, glassmorphism, neon).
 - Stripe marketing pages (gradient mesh, hero animations).
 - Linear marketing pages (dark mode glow, animated hero).
 - Any "AI product" launch page (Syne font, gradient text, auto-type writer).

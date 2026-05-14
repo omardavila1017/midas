@@ -17,6 +17,7 @@ import {
 import PageHeader from './ui/PageHeader';
 import ProviderDetailModal from './ProviderDetailModal';
 import type { CXPRecord } from '../domain/persistence';
+import { lookupRecentSpend, type ProviderSpendIndex } from '../domain/providerRecentSpend';
 
 /**
  * Catálogo de Proveedores — pestaña Catálogos → Proveedores.
@@ -69,6 +70,8 @@ const FREQ_ORDER = ['Diario', 'Semanal', 'Quincenal', 'Mensual', 'Bimestral/Trim
 interface Props {
   providers: Provider[];
   cxpRecords?: CXPRecord[];
+  /** Índice de gasto reciente (últimos N meses calendario desde PagoProveedor real). */
+  spendIndex?: ProviderSpendIndex;
   onReplace: (providers: Provider[]) => void;
   onAdd: (p: Provider) => void;
   onUpdate: (p: Provider) => void;
@@ -86,7 +89,7 @@ const fmtCurrency = (n: number | null | undefined): string => {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n);
 };
 
-export default function Providers({ providers, cxpRecords, onReplace, onAdd, onUpdate: _onUpdate, onDelete: _onDelete }: Props) {
+export default function Providers({ providers, cxpRecords, spendIndex, onReplace, onAdd, onUpdate: _onUpdate, onDelete: _onDelete }: Props) {
   void _onUpdate; void _onDelete;
   const [query, setQuery] = useState('');
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
@@ -308,6 +311,11 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                   const bucketStyle = SCORE_STYLES[bucket];
                   const isCritico = bucket === 'CRITICO';
                   const showPausarBadge = p.clasificacionAlberto === 'PAUSAR';
+                  const recentStats = spendIndex ? lookupRecentSpend(spendIndex, p) : null;
+                  const monthlyAvg = recentStats?.monthlyAverage ?? p.gastoMinimoMensual ?? null;
+                  const avgPerPayment = recentStats && recentStats.paymentCount > 0
+                    ? recentStats.totalSpend / recentStats.paymentCount
+                    : (p.montoPromedioPago ?? null);
                   return (
                     <tr
                       key={p.id}
@@ -362,7 +370,7 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                       </Td>
                       <Td align="right">
                         <span className="tabular-nums text-[var(--gray-700)]">
-                          {fmtCurrency(p.montoPromedioPago)}
+                          {fmtCurrency(avgPerPayment)}
                         </span>
                       </Td>
                       <Td align="right">
@@ -376,17 +384,33 @@ export default function Providers({ providers, cxpRecords, onReplace, onAdd, onU
                         </span>
                       </Td>
                       <Td align="right">
-                        {p.gastoMinimoMensual && isCritico ? (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-md bg-yellow-100 px-2 py-1 text-[12px] font-bold tabular-nums text-yellow-900 ring-1 ring-yellow-300"
-                            title="Gasto mínimo de operación — se suma al piso amarillo en la proyección"
-                          >
-                            {fmtCurrency(p.gastoMinimoMensual)}
-                          </span>
-                        ) : p.gastoMinimoMensual ? (
-                          <span className="tabular-nums text-[var(--gray-500)]">
-                            {fmtCurrency(p.gastoMinimoMensual)}
-                          </span>
+                        {monthlyAvg && isCritico ? (
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span
+                              className="inline-flex items-center gap-1 rounded-md bg-yellow-100 px-2 py-1 text-[12px] font-bold tabular-nums text-yellow-900 ring-1 ring-yellow-300"
+                              title={recentStats
+                                ? `Promedio últimos ${recentStats.monthsInWindow} meses (${recentStats.paymentCount} pagos). Se suma al piso amarillo.`
+                                : 'Gasto mínimo del catálogo — se suma al piso amarillo en la proyección.'}
+                            >
+                              {fmtCurrency(monthlyAvg)}
+                            </span>
+                            {recentStats && (
+                              <span className="text-[9px] text-[var(--gray-400)]">
+                                prom. {recentStats.monthsInWindow} m.
+                              </span>
+                            )}
+                          </div>
+                        ) : monthlyAvg ? (
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className="tabular-nums text-[var(--gray-500)]">
+                              {fmtCurrency(monthlyAvg)}
+                            </span>
+                            {recentStats && (
+                              <span className="text-[9px] text-[var(--gray-400)]">
+                                prom. {recentStats.monthsInWindow} m.
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-[var(--gray-300)]">—</span>
                         )}

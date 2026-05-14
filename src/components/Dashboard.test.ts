@@ -79,10 +79,10 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
       bankStatements: statements,
       budget: mkBudget(),
     });
-    // 4 meses históricos (ene–abr) + 11 meses proyectados (may–mar) = 15
-    expect(base).toHaveLength(15);
+    // 4 meses históricos (ene–abr) + 23 meses proyectados (may 2026 – mar 2028) = 27
+    expect(base).toHaveLength(27);
     expect(base[0].yearMonth).toBe('2026-01');
-    expect(base[base.length - 1].yearMonth).toBe('2027-03');
+    expect(base[base.length - 1].yearMonth).toBe('2028-03');
   });
 
   it('usa el presupuesto como piso de egreso cuando supera al gasto operativo futuro', () => {
@@ -104,24 +104,33 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
     expect(may?.isHistorical).toBe(false);
   });
 
-  it('sin datos operativos futuros, los meses futuros quedan en cero (no hay fallback de regresión)', () => {
+  it('sin datos operativos futuros, el motor predictivo extrapola desde la historia bancaria', () => {
+    // Con el motor predictivo (Holt-Winters tiered) habilitado por default,
+    // los meses futuros se llenan con extrapolación cuando hay >=1 mes de
+    // historia banca, aunque no haya catálogo per-cliente / per-proveedor.
+    // El user pidió: "extrapola toda la info de ingreso y egreso y calcula
+    // a futuro y plasmalo a 12 meses".
     const statements = [
       mkStmt('2026-01', 500, 0),
       mkStmt('2026-02', 500, 0),
       mkStmt('2026-03', 500, 0),
       mkStmt('2026-04', 500, 0),
     ];
-    const { base } = computeBaseCashFlow({
+    const { base, predictive } = computeBaseCashFlow({
       ...BASE_INPUTS,
       bankStatements: statements,
       budget: null,
     });
-    // Sigue cubriendo el horizonte rodante pero con income/expense en cero.
-    expect(base).toHaveLength(15);
+    // Horizonte rodante intacto (4 históricos + 23 futuros = 27).
+    expect(base).toHaveLength(27);
     const future = base.filter((m) => !m.isHistorical);
     expect(future.length).toBeGreaterThan(0);
+    // El predictor entrenó con 4 meses de historia → modelo naive-mean.
+    expect(predictive).toBeTruthy();
+    expect(predictive?.metadata.income.model).toBe('naive-mean');
+    // Cada mes futuro recibe el predicho desde naive-mean (~500/mes).
     for (const m of future) {
-      expect(m.income).toBe(0);
+      expect(m.income).toBeGreaterThan(0);
       expect(m.expense).toBe(0);
     }
   });

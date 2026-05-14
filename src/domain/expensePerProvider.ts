@@ -107,6 +107,14 @@ export interface ProviderBankPattern {
   activeMonths: number;
   monthsInWindow: number;
   monthlyAvg: number;
+  /**
+   * Promedio por mes calendario (índice 0=enero, 11=diciembre) calculado
+   * sobre TODA la historia bancaria. Permite estacionalidad: meses con
+   * más historia de pago al proveedor proyectan más. Si un slot es 0,
+   * significa que NO hay historial para ese mes calendario y se debe
+   * usar `monthlyAvg` como fallback.
+   */
+  monthlyAvgByCalendarMonth: number[];
   lastPaid: string | null; // yearMonth del último pago
   typicalPayDay: number;   // 1..31 (mediana)
   isRecurring: boolean;
@@ -189,11 +197,32 @@ export function buildProviderBankPatterns(
     const typicalPayDay = allDays.length > 0 ? allDays[Math.floor(allDays.length / 2)] : 15;
     const lastPaid = Array.from(monthly.keys()).sort().slice(-1)[0] ?? null;
     const isRecurring = monthsInWindow > 0 && activeMonths / monthsInWindow >= 0.5;
+
+    // Estacionalidad por mes calendario: usa TODA la historia disponible,
+    // no sólo la ventana de recurrencia. Acumula pagos por mes calendario
+    // y promedia por número de años observados en ese mes. Sin esto, la
+    // proyección de egreso era plana mes-a-mes (mismo monthlyAvg cada mes
+    // futuro), perdiendo aguinaldo / refrendos / pagos anuales.
+    const monthlyAvgByCalendarMonth: number[] = new Array(12).fill(0);
+    const yearsByCalendarMonth: Array<Set<string>> = Array.from({ length: 12 }, () => new Set());
+    for (const [ym, bucket] of monthly) {
+      const yearStr = ym.slice(0, 4);
+      const monthIdx = Number(ym.slice(5, 7)) - 1;
+      if (monthIdx < 0 || monthIdx > 11) continue;
+      monthlyAvgByCalendarMonth[monthIdx] += bucket.amount;
+      yearsByCalendarMonth[monthIdx].add(yearStr);
+    }
+    for (let i = 0; i < 12; i++) {
+      const yearCount = yearsByCalendarMonth[i].size;
+      if (yearCount > 0) monthlyAvgByCalendarMonth[i] /= yearCount;
+    }
+
     patterns.set(provId, {
       provider,
       activeMonths,
       monthsInWindow,
       monthlyAvg,
+      monthlyAvgByCalendarMonth,
       lastPaid,
       typicalPayDay,
       isRecurring,
@@ -278,6 +307,14 @@ export function projectExpenseByProvider(params: {
   const out: PerProviderMonth[] = [];
   let cursor = fromYm;
   while (compareYearMonth(cursor, toYm) <= 0) {
+    const monthIdx = Number(cursor.slice(5, 7)) - 1;
+    // Blend 50/50 entre promedio plano y el mes calendario observado:
+    // si el slot calendario es 0 (sin historia), regresa al promedio plano.
+    const seasonalAmountFor = (pat: ProviderBankPattern): number => {
+      const seasonal = pat.monthlyAvgByCalendarMonth[monthIdx] || 0;
+      if (seasonal <= 0) return pat.monthlyAvg;
+      return 0.5 * pat.monthlyAvg + 0.5 * seasonal;
+    };
     const lines: ProviderMonthLine[] = [];
     const agedForMonth = agedBuckets.get(cursor) ?? new Map();
     const coveredProviderIds = new Set<string>();
@@ -299,16 +336,19 @@ export function projectExpenseByProvider(params: {
         source: 'scheduled',
         parts: { scheduled: bucket.amount, recurring: 0 },
       };
-      // Si además es recurrente y el promedio mensual es mayor, subimos al avg
-      // (puede haber facturas por llegar que aún no entraron a CXP).
+      // Si además es recurrente y el promedio mensual (estacional) es mayor,
+      // subimos al avg (puede haber facturas por llegar que aún no entraron a CXP).
       const pat = patterns.get(key);
-      if (pat && pat.isRecurring && pat.monthlyAvg > bucket.amount) {
-        line.amount = pat.monthlyAvg;
-        line.source = 'mixed';
-        line.parts.recurring = pat.monthlyAvg - bucket.amount;
-        line.typicalPayDay = pat.typicalPayDay;
-        line.score = pat.provider.score;
-        line.ivaRate = pat.provider.ivaRate;
+      if (pat && pat.isRecurring) {
+        const seasonalAvg = seasonalAmountFor(pat);
+        if (seasonalAvg > bucket.amount) {
+          line.amount = seasonalAvg;
+          line.source = 'mixed';
+          line.parts.recurring = seasonalAvg - bucket.amount;
+          line.typicalPayDay = pat.typicalPayDay;
+          line.score = pat.provider.score;
+          line.ivaRate = pat.provider.ivaRate;
+        }
       }
       if (minMonthly > line.amount) {
         line.source = 'mixed';
@@ -324,7 +364,7 @@ export function projectExpenseByProvider(params: {
       if (!pat.isRecurring) continue;
       if (coveredProviderIds.has(provId)) continue;
       const minMonthly = operationalMonthlyFloor(pat.provider);
-      const amount = Math.max(pat.monthlyAvg, minMonthly);
+      const amount = Math.max(seasonalAmountFor(pat), minMonthly);
       lines.push({
         providerId: provId,
         providerName: pat.provider.name,

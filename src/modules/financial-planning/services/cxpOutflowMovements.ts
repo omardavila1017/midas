@@ -14,6 +14,13 @@ export interface BuildCxpOutflowsInput {
   companyCode: string;
   asOfDate: string;
   endDate: string;
+  /**
+   * Set de cxpKeys (`${cia}::${noFactura}::${noProveedor}`) marcadas como
+   * PAID por PagoProveedor. Estas CXPs NO entran al egreso proyectado —
+   * el pago real ya salió y se reflejará en bancos. Si una CXP está
+   * PARTIAL no se excluye (queda residual por proyectar).
+   */
+  paidCxpKeys?: Set<string>;
 }
 
 function normalize(value: string | undefined | null): string {
@@ -48,7 +55,7 @@ function effectiveCxpDate(record: CXPRecord, asOfDate: string): { date: string; 
 const VISIBLE_CLASIF: ClasificacionAlberto[] = ['CRITICO', 'FLEX_ALTO', 'FLEX_MEDIO', 'FLEX_BAJO'];
 
 export function buildCxpOutflowMovements(input: BuildCxpOutflowsInput): FinancialMovement[] {
-  const { cxpRecords, providers, companyCode, asOfDate, endDate } = input;
+  const { cxpRecords, providers, companyCode, asOfDate, endDate, paidCxpKeys } = input;
 
   const providerByJde = new Map<string, Provider>();
   const providerByName = new Map<string, Provider>();
@@ -68,6 +75,9 @@ export function buildCxpOutflowMovements(input: BuildCxpOutflowsInput): Financia
   filtered.forEach((record, index) => {
     const amount = Number(record.importePendientePesos) || 0;
     if (amount <= 0) return;
+    // PagoProveedor: si la CXP ya está pagada (PAID), excluirla del egreso
+    // proyectado — el cargo bancario real ya refleja la salida.
+    if (paidCxpKeys?.has(`${record.cia}::${record.noFactura}::${record.noProveedor}`)) return;
     const provider = (record.noProveedor ? providerByJde.get(normalizeJde(record.noProveedor)) : undefined)
       ?? providerByName.get(normalize(record.nombre));
     const clasif: ClasificacionAlberto = provider?.clasificacionAlberto

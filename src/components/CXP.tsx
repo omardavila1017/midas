@@ -39,6 +39,7 @@ import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, Provid
 import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
 import { projectYear } from '../domain/collectionEngine';
 import type { Budget } from '../domain/budget';
+import type { CxpPaymentCoverage } from '../domain/paymentReconciliationEngine';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -130,6 +131,7 @@ interface AgingBucket {
 
 interface SupplierSummary {
   nombre: string;
+  noProveedor: string;
   total: number;
   count: number;
   maxDias: number;
@@ -575,6 +577,7 @@ const CXPDashboard = ({
   clients,
   assumptions,
   bankStatements,
+  paymentCoverage,
 }: {
   records: CXPRecord[];
   onReset: () => void;
@@ -583,6 +586,7 @@ const CXPDashboard = ({
   clients: Client[];
   assumptions: CashFlowAssumptions;
   bankStatements: BankAccountStatement[];
+  paymentCoverage?: Map<string, CxpPaymentCoverage>;
 }) => {
   /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
   const ciaName = useCallback((code: string): string => {
@@ -805,6 +809,7 @@ const CXPDashboard = ({
       if (!map.has(k)) {
         map.set(k, {
           nombre: k,
+          noProveedor: r.noProveedor || '',
           total: 0,
           count: 0,
           maxDias: 0,
@@ -1294,6 +1299,11 @@ const CXPDashboard = ({
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">{s.nombre}</p>
                       <div className="flex items-center gap-2 mt-0.5">
+                        {s.noProveedor && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--gray-100)] text-[var(--gray-500)]" title="Número de proveedor JDE">
+                            JDE {s.noProveedor}
+                          </span>
+                        )}
                         <span className="text-[11px] text-[var(--gray-400)]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-100)] text-[var(--gray-500)]">{s.providerType}</span>
                         <span
@@ -1373,7 +1383,21 @@ const CXPDashboard = ({
                                 onClick={() => setSelectedRecord(r)}
                                 className="cursor-pointer border-b border-[var(--gray-50)] hover:bg-white"
                               >
-                                <td className="py-1.5 font-mono text-[var(--gray-950)]">{r.noFactura}</td>
+                                <td className="py-1.5 font-mono text-[var(--gray-950)]">
+                                  <div className="flex items-center gap-1.5">
+                                    <span>{r.noFactura}</span>
+                                    {paymentCoverage?.get(`${r.cia}::${r.noFactura}::${r.noProveedor}`)?.status === 'PAID' && (
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--success-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--success)] uppercase tracking-wide" title="Pagada según PagoProveedor JDE">
+                                        Pagada
+                                      </span>
+                                    )}
+                                    {paymentCoverage?.get(`${r.cia}::${r.noFactura}::${r.noProveedor}`)?.status === 'PARTIAL' && (
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--warning-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--warning)] uppercase tracking-wide" title="Pago parcial registrado">
+                                        Parcial
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaFactura}</td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaVence}</td>
                                 <td className="py-1.5 text-right font-mono">
@@ -1663,7 +1687,12 @@ function TriageDetailTable({
                 className="cursor-pointer border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]"
               >
                 <td className="px-4 py-2 font-mono text-[var(--gray-950)]">{record.noFactura || '-'}</td>
-                <td className="px-4 py-2 text-[var(--gray-950)]">{record.nombre || '-'}</td>
+                <td className="px-4 py-2 text-[var(--gray-950)]">
+                  <div>{record.nombre || '-'}</div>
+                  {record.noProveedor && (
+                    <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">JDE {record.noProveedor}</div>
+                  )}
+                </td>
                 <td className="px-4 py-2">
                   <div className="flex max-w-[420px] flex-wrap gap-1">
                     {record.alerts.slice(0, 3).map(alert => (
@@ -1993,6 +2022,13 @@ interface CXPProps {
   clients: Client[];
   assumptions: CashFlowAssumptions;
   bankStatements: BankAccountStatement[];
+  /**
+   * Map de `${cia}::${noFactura}::${noProveedor}` → coverage de pagos
+   * ya ejecutados (PagoProveedor). Si una CXP aparece como PAID, se
+   * muestra chip "Pagada" para que el controller financiero no la
+   * vuelva a proyectar/programar.
+   */
+  paymentCoverage?: Map<string, CxpPaymentCoverage>;
   budget: Budget | null;
   onMergeCia: (cia: string, records: CXPRecord[]) => void;
   onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
@@ -2008,6 +2044,7 @@ const CXP = ({
   clients,
   assumptions,
   bankStatements,
+  paymentCoverage,
   onMergeCia,
   onReplaceAll,
   onReset,
@@ -2318,6 +2355,7 @@ const CXP = ({
         clients={clients}
         assumptions={assumptions}
         bankStatements={bankStatements}
+        paymentCoverage={paymentCoverage}
       />
     </div>
   );

@@ -60,6 +60,19 @@ export interface FinancialProjectionSourceInput {
    * un nuevo cruce, la proyección se recalcula automáticamente.
    */
   cobranzaReconciliation?: RealReconciliationResult;
+  /**
+   * Set de cxpKeys (`${cia}::${noFactura}::${noProveedor}`) marcadas PAID
+   * por PagoProveedor. Espejo egreso de cobranzaReconciliation. Cuando se
+   * pasa, las CXPs pagadas se excluyen del egreso proyectado (el cargo
+   * bancario real ya descontó el dinero).
+   */
+  paidCxpKeys?: Set<string>;
+  /**
+   * Mapa `bankMovementKey` → enriquecimiento PagoProveedor. Cuando un CARGO
+   * histórico empata con un pago a proveedor, la proyección lo emite como
+   * AP_PAYMENT (con nombre de proveedor) en vez de TRANSFER/Otros Egresos.
+   */
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -117,6 +130,8 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.purchaseReceipts),
     refId(input.payrollCosts),
     refId(input.cobranzaReconciliation),
+    refId(input.paidCxpKeys),
+    refId(input.cargoEnrichments),
     refId(input.assumptions),
     refId(input.budget),
   ];
@@ -163,6 +178,8 @@ export function buildFinancialProjectionSourceData(
     purchaseReceipts: input.purchaseReceipts ?? [],
     payrollCosts: input.payrollCosts ?? [],
     cobranzaReconciliation: input.cobranzaReconciliation,
+    paidCxpKeys: input.paidCxpKeys,
+    cargoEnrichments: input.cargoEnrichments,
     assumptions: input.assumptions,
     budget: input.budget,
     startingBalance: input.startingBalance,

@@ -66,6 +66,8 @@ interface Props {
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
   cobranzaReconciliation?: RealReconciliationResult;
+  /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
+  paidCxpKeys?: Set<string>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
@@ -118,6 +120,7 @@ export default function TaxDashboard(props: Props) {
       props.cxpRecords,
       props.cobranzaRecords,
       props.cobranzaReconciliation,
+      props.paidCxpKeys,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
@@ -1573,7 +1576,7 @@ function TaxTrajectoryChart({ view }: { view: TaxDashboardView }) {
       <div className="h-[180px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+            <CartesianGrid strokeDasharray="3 3" vertical={false} className="recharts-cartesian-grid" />
             <XAxis dataKey="name" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
             <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
             <Tooltip

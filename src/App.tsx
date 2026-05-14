@@ -4,6 +4,12 @@ import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domai
 import { MidasStore, loadStore, saveStore, CXPRecord } from './domain/persistence';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
+import { buildProviderSpendIndex, enrichProvidersWithRecentSpend } from './domain/providerRecentSpend';
+import {
+  forecastFutureCompras,
+  DEFAULT_FORECAST_MODEL,
+  type ForecastModelId,
+} from './domain/comprasForecastModels';
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import {
@@ -14,6 +20,7 @@ import {
   fetchCobranzaRange,
   fetchIndicadoresCobranzaRange,
   fetchComprasRange,
+  fetchPagoProveedorRange,
   fetchNomina,
   type Company,
   type BankAccountStatement,
@@ -21,6 +28,7 @@ import {
   type CobranzaPayment,
   type CobranzaRecord,
   type ComprasRecord,
+  type PagoProveedorRecord,
 } from './services/jde';
 
 const FIXED_STARTING_BALANCE = 76_300_000;
@@ -34,6 +42,7 @@ const Dashboard = lazy(() => import('./components/Dashboard'));
 const CashFlowDetail = lazy(() => import('./components/CashFlowDetail'));
 const CXP = lazy(() => import('./components/CXP'));
 const Compras = lazy(() => import('./components/Compras'));
+const Pagos = lazy(() => import('./components/Pagos'));
 const Bancos = lazy(() => import('./components/Bancos'));
 const CollectionProjection = lazy(() => import('./components/CollectionProjection'));
 const FideicomisoDashboard = lazy(() => import('./components/FideicomisoDashboard'));
@@ -60,7 +69,7 @@ import {
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
   HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
-  LogOut, ClipboardList, BarChart3, ShieldCheck,
+  LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard,
   type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
@@ -76,6 +85,7 @@ import {
   type RealReconciliationMatch,
   type RealReconciliationResult,
 } from './domain/realReconciliationEngine';
+import { reconcilePayments } from './domain/paymentReconciliationEngine';
 import {
   applyManualConfirmations,
   useConfirmedReviewKeys,
@@ -202,7 +212,13 @@ const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
-const COMPRAS_LOOKBACK_DAYS = 60;
+// Boot auto-fetch lookback. Con chunks de 1 día (requisito del usuario para
+// alimentar el cache diario), N días = N calls a /compras + N a /pagoproveedor.
+// 730 días (2 años) son ~1460 calls a JDE — mucho pero necesario para
+// alimentar el motor predictivo Holt-Winters que requiere ≥24 meses para
+// detectar estacionalidad. El cache IDB persistente sirve días pasados sin
+// tocar JDE en boot subsecuentes — solo el primer arranque pega duro.
+const COMPRAS_LOOKBACK_DAYS = 730;
 const COMPRAS_CACHE_KEY = '__all__';
 // Tabs que dependen del cruce JDE↔banco para mostrar números correctos.
 // Proyección / Planeación / Impuestos consumen `cobranzaReconciliation`
@@ -251,6 +267,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
     { id: 'compras',     label: 'Órdenes de Compras', icon: FolderOpen },
+    { id: 'pagos',       label: 'Pagos',       icon: CreditCard },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
     { id: 'fideicomiso', label: 'Fideicomiso', icon: ShieldCheck },
   ],
@@ -264,7 +281,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
   netflow: 'operacion',
-  cxp: 'operacion', compras: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
+  cxp: 'operacion', compras: 'operacion', pagos: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
   payroll: 'proyeccion',
@@ -508,9 +525,15 @@ export default function App() {
   // no se han facturado.
   const [comprasRecords, setComprasRecords] = useState<ComprasRecord[]>([]);
   const [comprasLoadedCias, setComprasLoadedCias] = useState<Record<string, string>>({});
-  // Nómina TRESS — cache aditivo on-demand. Se hidrata por interacción del
-  // usuario en el módulo de Nómina; no hay auto-fetch al boot porque el
-  // endpoint puede tomar varios segundos por (cia, tipoNomina, año, mes).
+  // PagoProveedor — endpoint /v1/erp/tesoreria/pagoproveedor, liberado a
+  // producción 2026-05-13. Pagos ya ejecutados (espejo egreso de cobranza).
+  // Cierra el loop CXP↔OC↔banco mostrando qué facturas/OCs ya se pagaron y
+  // contra qué cuenta bancaria. Mismo patrón de auto-fetch 60d que compras.
+  const [pagoProveedorRecords, setPagoProveedorRecords] = useState<PagoProveedorRecord[]>([]);
+  const [pagoProveedorLoadedCias, setPagoProveedorLoadedCias] = useState<Record<string, string>>({});
+  // Nómina TRESS — cache aditivo. Auto-fetch al boot del mes en curso con
+  // idEmpresa=99, tipoNomina=99 (1 request cubre todas las cías y tipos);
+  // refreshes posteriores los dispara el módulo de Nómina.
   const [nominaRecords, setNominaRecords] = useState<PayrollCostRecord[]>([]);
   const [nominaLoadedKeys, setNominaLoadedKeys] = useState<Record<string, string>>({});
   // Status del auto/manual fetch de cobranza — se muestra en la pestaña
@@ -624,6 +647,28 @@ export default function App() {
     () => excludeBajio(bankStatements),
     [bankStatements],
   );
+  // ── Cruce pagos ↔ CXP ↔ banco (motor de PagoProveedor) ────────────────
+  // Sincrónico: el matching es O(pagos × cxps_por_proveedor + pagos × cargos_por_cuenta)
+  // — varios órdenes de magnitud menor que la conciliación de cobranza. Si en
+  // el futuro escala a millones de movs, mover a idle como cobranza.
+  const paymentReconciliation = useMemo(
+    () => reconcilePayments({
+      payments: pagoProveedorRecords,
+      cxpRecords,
+      bankStatements: accountableBankStatements,
+    }),
+    [pagoProveedorRecords, cxpRecords, accountableBankStatements],
+  );
+  // Set de CXPs pagadas — feed para excluirlas del egreso proyectado en
+  // canonicalProjection. Solo `PAID` (cobertura completa); `PARTIAL` deja
+  // que el residuo siga proyectándose.
+  const paidCxpKeys = useMemo(() => {
+    const out = new Set<string>();
+    for (const [key, cov] of paymentReconciliation.cxpCoverage) {
+      if (cov.status === 'PAID') out.add(key);
+    }
+    return out;
+  }, [paymentReconciliation]);
   // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
   // Es un motor pesado (texto + subset-sum), así que no corre durante render.
   // Lo diferimos a idle y sólo cuando una pestaña lo necesita; así cargar JDE
@@ -737,47 +782,114 @@ export default function App() {
   const effectiveStartingBalance = FIXED_STARTING_BALANCE;
 
   // OCs (Compras) traducidas a PurchaseReceiptRecord para alimentar el motor
-  // canónico de proyección. El adapter filtra cancelados, sin recepción, y
-  // fechas pasadas. El motor canónico hace dedup vs CXP (no doble-conteo) y
-  // matchea por proveedor para que el monto suba la fila del proveedor en el
-  // mapa de Planeación Financiera. Memoizado por (comprasRecords, hoy) para
-  // estabilidad referencial de la prop downstream.
+  // canónico de proyección. Emite DOS tipos:
+  //   - CONFIRMED: OC ya recibida, fecha de pago = recepción + díasCrédito.
+  //   - PROJECTED: OC pedida sin recepción, fecha de pago estimada con lead
+  //     time histórico por familia (alimenta forecast largo plazo).
+  // Filtros: cancelados, workflow JDE cerrado (Edo_Sig), importes ≤ 0, fechas
+  // pasadas. El motor canónico hace dedup vs CXP (no doble-conteo). Memoizado
+  // por comprasRecords.
   const purchaseReceiptsFromCompras = useMemo(
-    () => comprasToPurchaseReceipts(comprasRecords),
+    () => comprasToPurchaseReceipts(comprasRecords, { includeProjected: true }),
     [comprasRecords],
   );
 
-  // Nómina real del último mes cargado en TRESS para el tile de comparación
-  // en el Dashboard. Filtra por la cia activa (si la hay) y suma solo los
-  // conceptos que efectivamente salen como cash en FechaPago (Σ Percepciones
-  // − Σ Deducciones que reducen el neto). NO reemplaza el `payrollMonthly`
-  // del presupuesto: es solo referencia.
+  // Promedio de gasto por proveedor en los últimos 3 meses calendario,
+  // derivado de PagoProveedor real. Sobrescribe `montoPromedioPago` y
+  // `gastoMinimoMensual` del catálogo para que el piso operativo refleje
+  // el ritmo de pago vigente, no el promedio anual 2025.
+  const providerSpendIndex = useMemo(
+    () => buildProviderSpendIndex(pagoProveedorRecords, { months: 3 }),
+    [pagoProveedorRecords],
+  );
+  // Sólo enriquecer cuando hay pagos reales para extraer historia. Si pagos
+  // está vacío (splash en curso, sin data) devolvemos la referencia original
+  // de providers — así la proyección no invalida su cache canónico en cada
+  // render, lo que disparaba un recompute pesado y colgaba el navegador.
+  const providersEnriched = useMemo(
+    () => {
+      if (pagoProveedorRecords.length === 0) return providers;
+      return enrichProvidersWithRecentSpend(providers, providerSpendIndex);
+    },
+    [providers, providerSpendIndex, pagoProveedorRecords.length],
+  );
+
+  // Modelo de pronóstico para FUTURAS OCs (no ya emitidas). El usuario lo
+  // elige en la barra de Proyección Financiera; lo persistimos en
+  // localStorage para que sobreviva refresh.
+  const [forecastModelId, setForecastModelIdState] = useState<ForecastModelId>(() => {
+    try {
+      const stored = localStorage.getItem('midas.projection.forecastModel.v1');
+      if (stored === 'moving-avg' || stored === 'linear-trend' || stored === 'historical-cadence') {
+        return stored as ForecastModelId;
+      }
+    } catch { /* ignore */ }
+    return DEFAULT_FORECAST_MODEL;
+  });
+  const setForecastModelId = useCallback((id: ForecastModelId) => {
+    setForecastModelIdState(id);
+    try { localStorage.setItem('midas.projection.forecastModel.v1', id); } catch { /* ignore */ }
+  }, []);
+
+  // OCs futuras pronosticadas según el modelo seleccionado. Se concatenan
+  // a las CONFIRMED + lead-time-projected para que la curva de egresos
+  // proyectada cubra el horizonte completo y no solo lo que ya se pidió.
+  const forecastedReceipts = useMemo(
+    () => forecastFutureCompras(
+      { comprasRecords, providers: providersEnriched, horizonMonths: 6, topProvidersByVolume: 80 },
+      forecastModelId,
+    ),
+    [comprasRecords, providersEnriched, forecastModelId],
+  );
+  // NOTE: forecastedReceipts.receipts NO se concatena a `purchaseReceipts`
+  // pasado a Proyección por ahora — feed pesado disparaba recompute del
+  // canónico en cada render. El selector + KPI siguen funcionando
+  // como vista previa hasta que se mueva el merge a un worker / cache stable.
+
+  // Piso operativo de nómina = promedio mensual real, suavizado sobre 12 meses
+  // cerrados. Por qué 12 y no 3:
+  //   TRESS agrupa los registros por FechaPago, no por periodo. En la práctica
+  //   los meses caen bimodalmente: meses "grandes" con 17M+ (varias quincenas
+  //   + operadores) y meses "chicos" con ~1M (solo ejecutivos off-cycle). Un
+  //   avg 3m agarra 1 grande + 2 chicos según el calendario actual y termina
+  //   en ~5M — muy por debajo del piso real (~9M). Sumar 12 meses cerrados y
+  //   dividir entre 12 cancela la asimetría y devuelve el verdadero costo
+  //   mensual operativo proyectable a futuro.
+  // Fórmula: (Σ_12m CASH_OUT − Σ_12m (DEDUCTION + WITHHOLDING_PAYABLE)) / 12.
+  // Excluye el mes en curso (datos parciales). Filtra por cia si está activa.
   const payrollMonthlyActualJDE = useMemo(() => {
     if (nominaRecords.length === 0) return undefined;
-    const ciaFilter = selectedCia ? selectedCia.replace(/\D/g, '').padStart(5, '0') : '';
-    // Identifica el (year, month) más reciente cargado.
-    let latestYear = 0;
-    let latestMonth = 0;
+    const ciaFilter = selectedCia && selectedCia !== 'all'
+      ? selectedCia.replace(/\D/g, '').padStart(5, '0')
+      : '';
+    const grossByMonth = new Map<string, number>();
+    const reducByMonth = new Map<string, number>();
     for (const r of nominaRecords) {
       if (ciaFilter && r.cia !== ciaFilter) continue;
-      if (r.year > latestYear || (r.year === latestYear && r.month > latestMonth)) {
-        latestYear = r.year;
-        latestMonth = r.month;
+      const key = `${r.year}-${String(r.month).padStart(2, '0')}`;
+      if (r.cashTreatment === 'CASH_OUT') {
+        grossByMonth.set(key, (grossByMonth.get(key) ?? 0) + r.amount);
+      } else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
+        reducByMonth.set(key, (reducByMonth.get(key) ?? 0) + r.amount);
       }
     }
-    if (!latestYear) return undefined;
-    let gross = 0;
-    let netReducing = 0;
-    for (const r of nominaRecords) {
-      if (ciaFilter && r.cia !== ciaFilter) continue;
-      if (r.year !== latestYear || r.month !== latestMonth) continue;
-      if (r.cashTreatment === 'CASH_OUT') gross += r.amount;
-      else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
-        netReducing += r.amount;
-      }
+    const now = new Date();
+    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const closedMonths = Array.from(grossByMonth.keys())
+      .filter((k) => grossByMonth.get(k)! > 0 && k !== currentKey)
+      .sort()
+      .reverse();
+    if (closedMonths.length === 0) return undefined;
+    const windowSize = Math.min(12, closedMonths.length);
+    const window12 = closedMonths.slice(0, windowSize);
+    let sumGross = 0;
+    let sumReduc = 0;
+    for (const k of window12) {
+      sumGross += grossByMonth.get(k) ?? 0;
+      sumReduc += reducByMonth.get(k) ?? 0;
     }
-    const net = gross - netReducing;
-    return net > 0 ? net : undefined;
+    const avg = Math.max(0, sumGross - sumReduc) / windowSize;
+    return avg > 0 ? avg : undefined;
   }, [nominaRecords, selectedCia]);
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
@@ -851,6 +963,8 @@ export default function App() {
       if (stored.cobranzaPaymentsLoadedCias) setCobranzaPaymentsLoadedCias(stored.cobranzaPaymentsLoadedCias);
       if (stored.comprasRecords?.length) setComprasRecords(stored.comprasRecords);
       if (stored.comprasLoadedCias) setComprasLoadedCias(stored.comprasLoadedCias);
+      if (stored.pagoProveedorRecords?.length) setPagoProveedorRecords(stored.pagoProveedorRecords);
+      if (stored.pagoProveedorLoadedCias) setPagoProveedorLoadedCias(stored.pagoProveedorLoadedCias);
       if (stored.nominaRecords?.length) setNominaRecords(stored.nominaRecords);
       if (stored.nominaLoadedKeys) setNominaLoadedKeys(stored.nominaLoadedKeys);
       if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
@@ -1199,6 +1313,7 @@ export default function App() {
       cobranzaRecords, cobranzaLoadedCias,
       cobranzaPayments, cobranzaPaymentsLoadedCias,
       comprasRecords, comprasLoadedCias,
+      pagoProveedorRecords, pagoProveedorLoadedCias,
       companies, companiesLoadedAt,
       nominaRecords, nominaLoadedKeys,
       cashFlowOverrides,
@@ -1219,6 +1334,7 @@ export default function App() {
     cobranzaRecords, cobranzaLoadedCias,
     cobranzaPayments, cobranzaPaymentsLoadedCias,
     comprasRecords, comprasLoadedCias,
+    pagoProveedorRecords, pagoProveedorLoadedCias,
     companies, companiesLoadedAt,
     nominaRecords, nominaLoadedKeys,
     cashFlowOverrides,
@@ -1345,6 +1461,8 @@ export default function App() {
             cxpRecords,
             cobranzaRecords,
             cobranzaReconciliation,
+            paidCxpKeys,
+            cargoEnrichments: paymentReconciliation.cargoEnrichments,
             assumptions,
             budget: null,
             startingBalance: effectiveStartingBalance,
@@ -1386,6 +1504,8 @@ export default function App() {
     cxpRecords,
     cobranzaRecords,
     cobranzaReconciliation,
+    paidCxpKeys,
+    paymentReconciliation,
     assumptions,
     effectiveStartingBalance,
   ]);
@@ -1489,6 +1609,39 @@ export default function App() {
     })();
   }, [companies, comprasLoadedCias]);
 
+  // ── Auto-load PagoProveedor durante el boot ──
+  // Endpoint global (no filtra por cia, igual que /compras). Cargamos los
+  // últimos 60 días — mismo lookback que compras, para que la ventana de
+  // conciliación pagos↔CXP↔banco sea coherente. Reusa COMPRAS_* constants:
+  // el endpoint tiene la misma forma de cache + TTL.
+  const pagoProveedorAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (pagoProveedorAutoFetchDone.current) return;
+    if (companies.length === 0) return;
+    if (isFreshTimestamp(pagoProveedorLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
+      pagoProveedorAutoFetchDone.current = true;
+      return;
+    }
+    pagoProveedorAutoFetchDone.current = true;
+    const today = new Date();
+    const fechaFinal = today.toISOString().slice(0, 10);
+    const lookback = new Date(today);
+    lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
+    const fechaInicial = lookback.toISOString().slice(0, 10);
+    (async () => {
+      try {
+        const records = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 2 });
+        if (records.length > 0) {
+          setPagoProveedorRecords(records);
+        }
+        setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+      } catch (err) {
+        pagoProveedorAutoFetchDone.current = false;
+        console.error('[pagoproveedor] auto-fetch falló', err);
+      }
+    })();
+  }, [companies, pagoProveedorLoadedCias]);
+
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /v1/erp/tesoreria/cobranza (productivo desde 2026-05-01).
   //
@@ -1524,9 +1677,11 @@ export default function App() {
 
       const today = new Date();
       const fechaFinal = today.toISOString().slice(0, 10);
-      const yearAgo = new Date(today);
-      yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
-      const fechaInicial = yearAgo.toISOString().slice(0, 10);
+      // 2 años de historia para alimentar modelos predictivos estacionales
+      // (Holt-Winters requiere ≥24 meses para detectar pauta anual).
+      const twoYearsAgo = new Date(today);
+      twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
+      const fechaInicial = twoYearsAgo.toISOString().slice(0, 10);
 
       const errors: string[] = [];
       let totalRecords = 0;
@@ -1660,30 +1815,67 @@ export default function App() {
   // no bloquea el boot — el módulo de Nómina permite refrescar manualmente.
   useEffect(() => {
     if (companies.length === 0) return;
+    // Fetch últimos 24 meses de nómina TRESS para alimentar predictor
+    // estacional Y el piso operativo (avg 3m de meses cerrados). Iteramos
+    // (año, mes) hacia atrás; cada mes ya cargado se skippea sin red.
+    // SIN early-return — antes el guard sobre el mes actual saltaba el
+    // batch entero aunque los meses previos no estuvieran cargados,
+    // forzando al usuario a "Refrescar TRESS" manualmente.
     const today = new Date();
-    const anio = today.getFullYear();
-    const mes = today.getMonth() + 1;
-    const cacheKey = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio, mes });
-    if (nominaLoadedKeys[cacheKey]) {
-      // Cache hit — ya hay datos del mes; el módulo decidirá si refresca.
-      setBootSlot('nomina', 'done');
-      return;
-    }
     setBootSlot('nomina', 'loading');
     (async () => {
       try {
-        const fresh = await fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio, mes });
-        setNominaRecords(prev => mergeNominaBatch(prev, fresh));
-        setNominaLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
+        const monthsToFetch: Array<{ anio: number; mes: number; cacheKey: string }> = [];
+        for (let i = 0; i < 24; i++) {
+          const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+          const anio = d.getFullYear();
+          const mes = d.getMonth() + 1;
+          const cacheKey = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio, mes });
+          if (nominaLoadedKeys[cacheKey]) continue;
+          monthsToFetch.push({ anio, mes, cacheKey });
+        }
+        if (monthsToFetch.length === 0) {
+          setBootSlot('nomina', 'done');
+          return;
+        }
+        // Chunks paralelos (no sequential await). Antes: 24 awaits en serie
+        // tardaban minutos; el usuario abría Nómina antes de que terminara y
+        // veía datos parciales → avg 3m mal calculado. Bajamos a 2 porque 4
+        // saturaba el upstream y provocaba 504s en cadena (cobranza/nomina/
+        // antiguedades compiten por el mismo gateway). Con retry+backoff en
+        // jdeClient esto es suficiente.
+        const CONCURRENCY = 2;
+        const newKeys: Record<string, string> = {};
+        for (let i = 0; i < monthsToFetch.length; i += CONCURRENCY) {
+          const chunk = monthsToFetch.slice(i, i + CONCURRENCY);
+          const results = await Promise.allSettled(
+            chunk.map(({ anio, mes }) =>
+              fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio, mes }),
+            ),
+          );
+          const ts = new Date().toISOString();
+          let chunkMerged: PayrollCostRecord[] = [];
+          results.forEach((res, idx) => {
+            const { cacheKey, anio, mes } = chunk[idx];
+            if (res.status === 'fulfilled') {
+              chunkMerged = mergeNominaBatch(chunkMerged, res.value);
+              newKeys[cacheKey] = ts;
+            } else {
+              console.error(`[nomina] auto-fetch ${anio}-${String(mes).padStart(2, '0')} falló`, res.reason);
+            }
+          });
+          if (chunkMerged.length > 0) {
+            setNominaRecords(prev => mergeNominaBatch(prev, chunkMerged));
+          }
+        }
+        if (Object.keys(newKeys).length > 0) {
+          setNominaLoadedKeys(prev => ({ ...prev, ...newKeys }));
+        }
         setBootSlot('nomina', 'done');
       } catch {
-        // Marcamos error pero seguimos: el dashboard sigue siendo usable sin
-        // nómina cargada; el usuario puede reintentar desde el módulo.
         setBootSlot('nomina', 'error');
       }
     })();
-    // Disparamos una sola vez al obtener compañías; los refreshes posteriores
-    // los maneja el módulo de Nómina (botón "Refrescar TRESS").
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companies.length]);
 
@@ -1755,7 +1947,11 @@ export default function App() {
     includeRange: boolean = false,
   ) => {
     const today = new Date().toISOString().slice(0, 10);
-    const yearStart = `${new Date().getUTCFullYear()}-01-01`;
+    // 2 años hacia atrás para alimentar Holt-Winters seasonal (≥24m).
+    // Antes era year-start (≤365d) → predictor caía a naive-mean (flat).
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
+    const yearStart = twoYearsAgo.toISOString().slice(0, 10);
     const defaultFormat: BankStatementFormat = 'SWIFT';
 
     // Cache hit: skip unless forced.
@@ -2145,12 +2341,17 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  paidCxpKeys={paidCxpKeys}
+                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
                   purchaseReceipts={purchaseReceiptsFromCompras}
                   payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
                   startingBalance={effectiveStartingBalance}
                   onNavigateToTax={() => setActiveTab('taxes')}
+                  forecastModelId={forecastModelId}
+                  onForecastModelChange={setForecastModelId}
+                  forecastSummary={forecastedReceipts}
                 />
               </Suspense>
             )}
@@ -2164,6 +2365,8 @@ export default function App() {
                   cxpRecords={cxpRecords}
                   cobranzaRecords={cobranzaRecords}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  paidCxpKeys={paidCxpKeys}
+                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
                   purchaseReceipts={purchaseReceiptsFromCompras}
                   payrollCosts={nominaRecords}
                   assumptions={assumptions}
@@ -2183,6 +2386,7 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
+                  paidCxpKeys={paidCxpKeys}
                   payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
@@ -2196,9 +2400,9 @@ export default function App() {
                   companyCode={selectedCia}
                   nominaRecords={nominaRecords}
                   nominaLoadedKeys={nominaLoadedKeys}
-                  onNominaFetched={(merged, cacheKey, fetchedAt) => {
+                  onNominaFetched={(merged, freshKeys) => {
                     setNominaRecords(merged);
-                    setNominaLoadedKeys(prev => ({ ...prev, [cacheKey]: fetchedAt }));
+                    setNominaLoadedKeys(prev => ({ ...prev, ...freshKeys }));
                   }}
                 />
               </Suspense>
@@ -2311,6 +2515,7 @@ export default function App() {
               <Suspense fallback={<LazyTabFallback label="Proveedores" />}>
                 <Providers
                   providers={providers}
+                  spendIndex={providerSpendIndex}
                   cxpRecords={cxpRecords}
                   onReplace={setProviders}
                   onAdd={addProvider}
@@ -2330,6 +2535,7 @@ export default function App() {
                   clients={clients}
                   assumptions={assumptions}
                   bankStatements={accountableBankStatements}
+                  paymentCoverage={paymentReconciliation.cxpCoverage}
                   budget={null}
                   onMergeCia={mergeCxpForCia}
                   onReplaceAll={replaceAllCxp}
@@ -2343,8 +2549,17 @@ export default function App() {
                   comprasRecords={comprasRecords}
                   comprasLoadedCias={comprasLoadedCias}
                   selectedCia={selectedCia}
-                  onComprasChange={setComprasRecords}
-                  onLoadedCiasChange={setComprasLoadedCias}
+                  providers={providers}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'pagos' && (
+              <Suspense fallback={<LazyTabFallback label="Pagos a Proveedores" />}>
+                <Pagos
+                  pagoProveedorRecords={pagoProveedorRecords}
+                  pagoProveedorLoadedCias={pagoProveedorLoadedCias}
+                  selectedCia={selectedCia}
+                  providers={providers}
                 />
               </Suspense>
             )}
@@ -2360,6 +2575,7 @@ export default function App() {
                   onLastQueryChange={setBankLastQuery}
                   companies={companies}
                   abonoEnrichmentIndex={cobranzaAbonoIndex}
+                  cargoEnrichmentIndex={paymentReconciliation.cargoEnrichments}
                 />
               </Suspense>
             )}

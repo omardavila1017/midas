@@ -4,6 +4,7 @@ import {
   computeKpis,
   filterRecords,
   isCacheFresh,
+  lastNMonths,
   mergeNominaBatch,
   nominaCacheKey,
   refineBatch,
@@ -36,6 +37,30 @@ describe('nominaCacheKey', () => {
   it('genera la llave compuesta canónica', () => {
     expect(nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio: 2026, mes: 5 }))
       .toBe('99:99:2026:5');
+  });
+});
+
+describe('lastNMonths', () => {
+  it('devuelve mes actual + n-1 anteriores en orden ascendente', () => {
+    expect(lastNMonths(2026, 5, 4)).toEqual([
+      { anio: 2026, mes: 2 },
+      { anio: 2026, mes: 3 },
+      { anio: 2026, mes: 4 },
+      { anio: 2026, mes: 5 },
+    ]);
+  });
+
+  it('cruza el límite de año hacia atrás', () => {
+    expect(lastNMonths(2026, 2, 4)).toEqual([
+      { anio: 2025, mes: 11 },
+      { anio: 2025, mes: 12 },
+      { anio: 2026, mes: 1 },
+      { anio: 2026, mes: 2 },
+    ]);
+  });
+
+  it('soporta n=1 (solo mes actual)', () => {
+    expect(lastNMonths(2026, 7, 1)).toEqual([{ anio: 2026, mes: 7 }]);
   });
 });
 

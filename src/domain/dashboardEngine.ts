@@ -10,13 +10,19 @@ import {
 import {
   buildMonthlyProjection,
   type ProjectionOverrides,
-  type MonthlyProjection,
+  type ProjectionResult,
 } from './projectionEngine';
+import {
+  buildPredictiveForecast,
+  type BuildPredictiveResult,
+} from './predictive';
 import type { CashFlowMonth } from '../types';
 import type {
   BankAccountStatement,
   AgedBalanceRecord,
 } from '../services/jde';
+import type { CobranzaRecord } from '../services/jdeTypes';
+import type { PurchaseReceiptRecord } from '../modules/shared-finance/types';
 
 // Pure cash-flow engine extracted from Dashboard.tsx so that callers in the
 // projection / planning pipeline can import it without pulling Recharts,
@@ -35,12 +41,34 @@ export interface ComputeInputs {
   overrides: ProjectionOverrides;
   budget: Budget | null;
   startingBalance?: number;
+  /**
+   * Inputs opcionales del motor predictivo. Si se proveen, los totales
+   * mensuales futuros vienen del modelo Holt-Winters en lugar del MA6.
+   * Si no, mantenemos la lógica vieja para no romper callers existentes.
+   */
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  /** Horizonte de predicción en meses (default 12). */
+  predictiveHorizonMonths?: number;
+  /** Si es false, no se ejecuta el predictor (para tests / callers viejos). */
+  enablePredictive?: boolean;
 }
 
 export interface ComputeOutput {
   base: CashFlowMonth[];
   baseline: { avgIncome: number; avgExpense: number };
-  projection: MonthlyProjection;
+  /**
+   * Resultado de `buildMonthlyProjection`: lleva `months[]` con el desglose
+   * per-cliente/per-proveedor. Se llamaba `MonthlyProjection` por error
+   * (apuntaba a un mes individual, no al resultado completo).
+   */
+  projection: ProjectionResult;
+  /**
+   * Resultado del motor predictivo con bandas. Null si no se habilitó o
+   * si no hay datos suficientes. Planeación Financiera, Proyección y
+   * Dashboard consumen las bandas desde aquí.
+   */
+  predictive: BuildPredictiveResult | null;
 }
 
 export function computeBankStartingBalance(statements: BankAccountStatement[]): number {
@@ -78,11 +106,12 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
 
   const todayYm = toYearMonth(today);
 
-  // Horizonte operativo: 12 meses rodantes incluyendo el mes actual.
-  // La UI de Proyección/Planeación ya trabaja así; si aquí cortamos en
-  // diciembre, los meses del siguiente año quedan con buckets vacíos y la
-  // caja se aplana artificialmente justo donde más importa sostener egresos.
-  const rollingEndYm = addMonths(todayYm, 11);
+  // Horizonte operativo: 24 meses rodantes incluyendo el mes actual.
+  // Antes era 11 meses (12 rodantes), pero la curva de caja se aplanaba
+  // a los 12 meses justo donde más importa visualizar tendencia y runway.
+  // 24 meses permite ver 2 años de proyección y un horizonte de runway
+  // suficiente para decisiones de mediano plazo.
+  const rollingEndYm = addMonths(todayYm, 23);
   const lastHistoricalYm = historical.length > 0
     ? historical[historical.length - 1].yearMonth
     : todayYm;
@@ -96,6 +125,21 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     ? rollingEndYm
     : null;
 
+  // Baseline desde history bancaria — promedio de los 6 meses cerrados más
+  // recientes (excluye mes en curso, suele estar incompleto). Sirve como
+  // piso para que la proyección no caiga por debajo del realmente observado
+  // cuando el catálogo de clientes/proveedores subestima. Sin esto, el
+  // chart proyectaba "pura pérdida" porque el catálogo de clientes pesaba
+  // mucho menos que la cobranza real.
+  const closedHistorical = historical.filter((m) => m.yearMonth !== todayYm);
+  const baselineWindow = closedHistorical.slice(-6);
+  const baselineIncome = baselineWindow.length > 0
+    ? baselineWindow.reduce((s, m) => s + m.income, 0) / baselineWindow.length
+    : 0;
+  const baselineExpense = baselineWindow.length > 0
+    ? baselineWindow.reduce((s, m) => s + m.expense, 0) / baselineWindow.length
+    : 0;
+
   // Proyección operativa per-cliente / per-proveedor. Esta es la fuente para
   // los meses futuros; las plantillas externas quedan fuera del runtime normal.
   const projection = buildMonthlyProjection({
@@ -105,8 +149,8 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     providers,
     aged: combinedAged,
     bankStatements: filtered,
-    baselineIncome: 0,
-    baselineExpense: 0,
+    baselineIncome,
+    baselineExpense,
     assumptions,
     today,
     budget,
@@ -132,6 +176,40 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     historicalChained.push({ ...m, closingCash: runningHist });
   }
 
+  // ── Motor predictivo (Holt-Winters tiered) ───────────────────────────
+  // Si está habilitado y hay histórico suficiente, los totales mensuales
+  // futuros pueden venir del modelo. Precedencia para cada mes futuro:
+  //   1. override manual del usuario (siempre gana)
+  //   2. MAX(predicción Holt-Winters, proyección operativa/budget)
+  // El MAX preserva el budget-as-floor cuando supera la realidad histórica
+  // y deja al modelo predictivo sobreescribir cuando la historia banca
+  // dice más que el catálogo de proveedores/clientes alcanzó a cubrir.
+  const predictiveEnabled = inputs.enablePredictive !== false;
+  const predictive: BuildPredictiveResult | null = predictiveEnabled && filtered.length > 0
+    ? buildPredictiveForecast({
+        bankStatements: filtered,
+        companyCode: companyCode || 'all',
+        asOfDate: today,
+        horizonMonths: inputs.predictiveHorizonMonths ?? 24,
+        purchaseReceipts: inputs.purchaseReceipts,
+        cobranzaRecords: inputs.cobranzaRecords,
+      })
+    : null;
+  const predIncomeByYm = new Map<string, number>();
+  const predExpenseByYm = new Map<string, number>();
+  if (predictive) {
+    // El loop de meses futuros (abajo) parte de firstFutureYm, que ya es
+    // posterior al último histórico cerrado. Los buckets parciales del mes
+    // en curso quedan en `historicalChained`, así que aquí sólo poblamos
+    // los meses estrictamente futuros con la predicción.
+    for (const p of predictive.income.monthly) {
+      if (!p.isHistorical) predIncomeByYm.set(p.date.slice(0, 7), p.expected);
+    }
+    for (const p of predictive.expense.monthly) {
+      if (!p.isHistorical) predExpenseByYm.set(p.date.slice(0, 7), p.expected);
+    }
+  }
+
   const months: CashFlowMonth[] = [...historicalChained];
   let running = historicalChained.length > 0
     ? historicalChained[historicalChained.length - 1].closingCash
@@ -141,8 +219,12 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     while (compareYearMonth(cursor, lastFutureYm) <= 0) {
       const ov = overrides[cursor];
       const projected = projectionByYm.get(cursor);
-      const income = ov?.income ?? projected?.income.total ?? 0;
-      const expense = ov?.expense ?? projected?.expense.total ?? 0;
+      const projectedIncome = projected?.income.total ?? 0;
+      const projectedExpense = projected?.expense.total ?? 0;
+      const predIncome = predIncomeByYm.get(cursor) ?? 0;
+      const predExpense = predExpenseByYm.get(cursor) ?? 0;
+      const income = ov?.income ?? Math.max(projectedIncome, predIncome);
+      const expense = ov?.expense ?? Math.max(projectedExpense, predExpense);
       running = running + income - expense;
       months.push({
         yearMonth: cursor,
@@ -154,5 +236,5 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
       cursor = addMonths(cursor, 1);
     }
   }
-  return { base: months, baseline, projection };
+  return { base: months, baseline, projection, predictive };
 }

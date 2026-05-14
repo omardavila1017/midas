@@ -21,6 +21,7 @@ export type TabId =
   | 'clients'
   | 'cxp'
   | 'compras'
+  | 'pagos'
   | 'bancos'
   | 'netflow';
 

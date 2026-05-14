@@ -176,7 +176,7 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
                 <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.expensePattern} strokeWidth="2.5" />
               </pattern>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+            <CartesianGrid strokeDasharray="3 3" className="recharts-cartesian-grid" />
             <XAxis
               dataKey="yearMonth"
               tick={{ fontSize: 11 }}

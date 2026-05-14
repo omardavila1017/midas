@@ -102,13 +102,12 @@ La coma trailing en `cia` NO es typo. El cliente la pide así. `fechaInicial: nu
 
 `.env.local` ya tiene el token productivo (no commitear):
 ```
-JDE_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-VITE_JDE_TOKEN=<mismo token>
-JDE_UPSTREAM=https://api.gruposenda.com/v1/erp/tesoreria
+VITE_JDE_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+VITE_JDE_UPSTREAM=https://api.gruposenda.com/v1/erp/tesoreria
 VITE_JDE_ENVIRONMENT=PD920
 ```
 
-En **Vercel** debe estar `JDE_TOKEN` (server-side) en Production y Preview. La Vercel Function `api/jde/[...path].ts` lo inyecta sin que el bundle del cliente lo vea.
+Hoy la app corre solo en localhost; el token va embebido en el bundle de Vite. Cuando se migre a un servidor con proxy real, mover el Bearer a un namespace server-side.
 
 ---
 

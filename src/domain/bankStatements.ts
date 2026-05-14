@@ -54,11 +54,43 @@ export function currentBankStatements<T extends Pick<BankAccountStatement, 'fech
   return statements.filter(statement => statement.fechaEstadoCuenta === asOfDate);
 }
 
-export function bankStatementBalance(statement: Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial'>): number {
+/**
+ * Balance "más confiable" para una cuenta:
+ *
+ *   1. `saldoFinal` cuando viene definido y NO es 0. Es el valor autoritativo
+ *      de JDE/Santander para el cierre del último día del rango.
+ *   2. Si `saldoFinal` falta o es 0 (sentinela frecuente cuando el API responde
+ *      Saldo_Final null o el centinela Bajío suma sub-cuentas que se cancelan),
+ *      derivamos: `saldoInicial + Σ(abonos) - Σ(cargos)` sobre el rango cargado.
+ *      Esto es matemáticamente equivalente a saldoFinal cuando ambos vienen
+ *      bien — y recupera el valor cuando saldoFinal está bugged.
+ *   3. Fallback final: `saldoInicial` o 0.
+ *
+ * Cuentas afectadas observadas en producción: BANBAJIO (centinela) y SANTANDER
+ * (Saldo_Final null) mostraban $0.00 en la pestaña Bancos pese a tener
+ * saldoInicial real y movimientos del periodo.
+ */
+export function bankStatementBalance(
+  statement: Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial' | 'movimientos'>,
+): number {
+  if (statement.saldoFinal !== undefined && statement.saldoFinal !== 0) {
+    return statement.saldoFinal;
+  }
+  const movs = statement.movimientos ?? [];
+  if (statement.saldoInicial !== undefined && movs.length > 0) {
+    let net = 0;
+    for (const m of movs) {
+      if (m.tipoMovimiento === 'ABONO') net += m.importe;
+      else if (m.tipoMovimiento === 'CARGO') net -= m.importe;
+    }
+    return statement.saldoInicial + net;
+  }
   return statement.saldoFinal ?? statement.saldoInicial ?? 0;
 }
 
-export function sumBankStatementBalances(statements: readonly Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial'>[]): number {
+export function sumBankStatementBalances(
+  statements: readonly Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial' | 'movimientos'>[],
+): number {
   return statements.reduce((sum, statement) => sum + bankStatementBalance(statement), 0);
 }
 

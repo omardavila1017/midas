@@ -63,7 +63,7 @@ function buildCategoryBreakdown(movements: FinancialMovement[]): CategoryBreakdo
     DEBT: 'Deuda',
     CAPEX: 'CAPEX',
     OPEX: 'OPEX',
-    TRANSFER: 'Transferencias',
+    TRANSFER: 'Otros Egresos',
     MANUAL: 'Manual',
   };
   return Array.from(map.entries())
@@ -243,7 +243,7 @@ function CashFlowChartImpl({
             instead of a 1.5s cascade where each series re-tweens. */}
         <ResponsiveContainer width="100%" height="100%" debounce={120}>
           <ComposedChart data={data} margin={{ top: 12, right: 18, bottom: 0, left: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <CartesianGrid strokeDasharray="3 3" className="recharts-cartesian-grid" vertical={false} />
             <XAxis
               dataKey="date"
               tick={{ fontSize: 11, fill: 'var(--gray-400)' }}

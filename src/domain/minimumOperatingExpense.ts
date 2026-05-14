@@ -126,6 +126,7 @@ export function floorForMonth(
 export function computeMinimumOperatingExpense(
   providers: Provider[],
   budget?: Budget | null,
+  payrollMonthlyOverride?: number,
 ): MinimumExpenseSummary {
   const criticals = providers.filter((p) => p.clasificacionAutomatica === 'CRITICO');
   const withData: Provider[] = [];
@@ -151,7 +152,11 @@ export function computeMinimumOperatingExpense(
     .sort((a, b) => b.gastoMinimoMensual - a.gastoMinimoMensual);
 
   const providersMonthly = byProvider.reduce((acc, p) => acc + p.gastoMinimoMensual, 0);
-  const payrollMonthly = computePayrollMonthlyFromBudget(budget);
+  // Prioridad: TRESS (cash neto real) > presupuesto CSV. TRESS refleja el
+  // pago que efectivamente sale del banco; el budget es solo plantilla.
+  const payrollMonthly = typeof payrollMonthlyOverride === 'number' && payrollMonthlyOverride > 0
+    ? payrollMonthlyOverride
+    : computePayrollMonthlyFromBudget(budget);
   const totalMonthly = providersMonthly + payrollMonthly;
 
   const categoryMap = new Map<string, { total: number; count: number }>();

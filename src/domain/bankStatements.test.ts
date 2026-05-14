@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   attachImportedStatementsToKnownCompanies,
+  bankStatementBalance,
   currentBankStatements,
   latestStatementDate,
   mergeBankStatements,
@@ -144,5 +145,71 @@ describe('current bank balance helpers', () => {
     expect(latest).toBe('2026-05-06');
     expect(current.map(statement => statement.cuenta).sort()).toEqual(['A', 'B']);
     expect(sumBankStatementBalances(current)).toBe(70_000_000);
+  });
+});
+
+describe('bankStatementBalance', () => {
+  it('uses saldoFinal when defined and non-zero', () => {
+    const stmt = makeStatement({
+      cia: '00011', banco: 'BANAMEX', cuenta: 'A', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-05-12',
+      saldoInicial: 100, saldoFinal: 150,
+      movimientos: [],
+    });
+    expect(bankStatementBalance(stmt)).toBe(150);
+  });
+
+  it('derives balance from saldoInicial + Σ movimientos when saldoFinal === 0 but movimientos exist', () => {
+    // Repro real: SANTANDER cuenta con Saldo_Final null en JDE → almacenado
+    // como 0. saldoInicial + abonos - cargos da el balance verdadero.
+    const stmt = makeStatement({
+      cia: '00011', banco: 'SANTANDER', cuenta: 'X', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-04-22',
+      saldoInicial: 4_028_462.95,
+      saldoFinal: 0,
+      movimientos: [
+        { cia: '00011', banco: 'SANTANDER', cuenta: 'X', moneda: 'MXN',
+          fechaOperacion: '2026-04-10', referencia: 'A', concepto: 'in',
+          tipoMovimiento: 'ABONO', importe: 1_000_000 },
+        { cia: '00011', banco: 'SANTANDER', cuenta: 'X', moneda: 'MXN',
+          fechaOperacion: '2026-04-15', referencia: 'B', concepto: 'out',
+          tipoMovimiento: 'CARGO', importe: 500_000 },
+      ],
+    });
+    expect(bankStatementBalance(stmt)).toBeCloseTo(4_528_462.95, 2);
+  });
+
+  it('derives balance when saldoFinal undefined but saldoInicial + movimientos defined', () => {
+    const stmt = makeStatement({
+      cia: '00011', banco: 'BANAMEX', cuenta: 'B', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-05-12',
+      saldoInicial: 100,
+      saldoFinal: undefined,
+      movimientos: [
+        { cia: '00011', banco: 'BANAMEX', cuenta: 'B', moneda: 'MXN',
+          fechaOperacion: '2026-05-12', referencia: 'A', concepto: 'in',
+          tipoMovimiento: 'ABONO', importe: 50 },
+      ],
+    });
+    expect(bankStatementBalance(stmt)).toBe(150);
+  });
+
+  it('returns 0 for empty account with no saldo info', () => {
+    const stmt = makeStatement({
+      cia: '00011', banco: 'BANAMEX', cuenta: 'C', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-05-12',
+      movimientos: [],
+    });
+    expect(bankStatementBalance(stmt)).toBe(0);
+  });
+
+  it('keeps saldoFinal === 0 when account is truly empty (no movimientos)', () => {
+    const stmt = makeStatement({
+      cia: '00011', banco: 'BANAMEX', cuenta: 'D', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-05-12',
+      saldoInicial: 0, saldoFinal: 0,
+      movimientos: [],
+    });
+    expect(bankStatementBalance(stmt)).toBe(0);
   });
 });

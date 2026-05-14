@@ -33,6 +33,7 @@
 
 import { computeBaseCashFlow } from '../../../domain/dashboardEngine';
 import type { ComputeInputs } from '../../../domain/dashboardEngine';
+import type { BuildPredictiveResult } from '../../../domain/predictive';
 import { compareYearMonth, toYearMonth } from '../../../domain/cashFlowEngine';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 import { isNonOperatingDay } from '../../../domain/bankHolidays';
@@ -55,7 +56,11 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { Client, Provider, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
-import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import {
+  bankMovementKey,
+  type AbonoEnrichment,
+  type RealReconciliationResult,
+} from '../../../domain/realReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
@@ -88,6 +93,21 @@ export interface CanonicalProjectionInputs {
    * históricos. Sin esto la suma anual queda doblada.
    */
   cobranzaReconciliation?: RealReconciliationResult;
+  /**
+   * Set de `${cia}::${noFactura}::${noProveedor}` de CXPs marcadas PAID por
+   * PagoProveedor. Espejo egreso de cobranzaReconciliation: estas facturas
+   * NO se proyectan como egreso futuro — el cargo bancario real ya
+   * descontó el dinero. Si está PARTIAL, se proyecta el residuo.
+   */
+  paidCxpKeys?: Set<string>;
+  /**
+   * Mapa `bankMovementKey(line)` → enriquecimiento PagoProveedor. Cuando un
+   * CARGO histórico empata con un pago a proveedor, se reclasifica como
+   * AP_PAYMENT con el nombre del proveedor — en vez de caer al cubo
+   * genérico "Otros Egresos". Mismo patrón que `abonoEnrichments` para
+   * cobranza (ingresos).
+   */
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -108,6 +128,18 @@ export interface CanonicalProjectionResult {
   initialCash: number;
   fromYearMonth: string;
   toYearMonth: string;
+  /**
+   * Resultado del motor predictivo (Holt-Winters tiered) con bandas de
+   * confianza a 4 granularidades (daily/weekly/monthly/annual) más
+   * overlays informativos de OCs y CXC. Null si no se entrenó (ej. sin
+   * datos suficientes).
+   *
+   * Esto es lo que Planeación Financiera (Base + Approved), Proyección
+   * Financiera y Dashboard deben leer para mostrar bandas y horizonte.
+   * Los `monthly[]` siguen siendo la trayectoria puntual byte-a-byte
+   * con el Dashboard; `predictive` es la capa de incertidumbre encima.
+   */
+  predictive: BuildPredictiveResult | null;
 }
 
 export function buildCanonicalProjection(
@@ -125,8 +157,11 @@ export function buildCanonicalProjection(
     overrides: loadCanonicalOverrides(),
     budget: inputs.budget,
     startingBalance: inputs.startingBalance,
+    purchaseReceipts: inputs.purchaseReceipts,
+    cobranzaRecords: inputs.cobranzaRecords,
+    enablePredictive: true,
   };
-  const { base, projection } = computeBaseCashFlow(computeInputs);
+  const { base, projection, predictive } = computeBaseCashFlow(computeInputs);
   const projectionByYm = new Map(projection.months.map((month) => [month.yearMonth, month]));
 
   const monthly: CanonicalMonthlyPoint[] = base.map((m) => ({
@@ -149,6 +184,7 @@ export function buildCanonicalProjection(
     initialCash,
     fromYearMonth: monthly[0]?.yearMonth ?? toYearMonth(inputs.asOfDate),
     toYearMonth: monthly[monthly.length - 1]?.yearMonth ?? toYearMonth(inputs.asOfDate),
+    predictive,
   };
 }
 
@@ -169,11 +205,39 @@ interface BuildArgs {
   projectionByYm: Map<string, ReturnType<typeof computeBaseCashFlow>['projection']['months'][number]>;
 }
 
+// Grupos de filas para INFLOW en la tabla de Planeación. El usuario pidió
+// 3 cubos: clientes etiquetados Viajes Especiales en el catálogo, el bucket
+// "Federal" (lo que cae en cuentas Santander sin match a factura), y el resto.
+const INCOME_SUBCAT_VIAJES = 'Viajes Especiales';
+const INCOME_SUBCAT_FEDERAL = 'Federal';
+const INCOME_SUBCAT_OTROS = 'Otros ingresos';
+const CLIENT_VIAJES_ESPECIALES_GROUP_ID = 'group-viajes-especiales';
+
+function resolveInflowSubcategory(args: {
+  counterpartyId?: string;
+  clientById: Map<string, Client>;
+  bankFallbackLabel?: string;
+}): string {
+  if (args.counterpartyId) {
+    const client = args.clientById.get(args.counterpartyId);
+    if (client?.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID) {
+      return INCOME_SUBCAT_VIAJES;
+    }
+  }
+  // Sin client match — usar bank label si es Santander como "Federal",
+  // resto cae en "Otros ingresos".
+  if (args.bankFallbackLabel && args.bankFallbackLabel.toUpperCase().includes('FEDERAL')) {
+    return INCOME_SUBCAT_FEDERAL;
+  }
+  return INCOME_SUBCAT_OTROS;
+}
+
 function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): FinancialMovement[] {
   const out: FinancialMovement[] = [];
   const todayYm = toYearMonth(inputs.asOfDate);
   const monthlyByYm = new Map(monthly.map((m) => [m.yearMonth, m]));
   const inflowContext = buildInflowContext(inputs);
+  const clientById = new Map(inputs.clients.map((c) => [c.id, c]));
 
   // Mismo contexto de clasificación que `buildHistoricalMonths` del
   // Dashboard. Sin esto los traspasos internos (TRASPASO REF, RFCs del
@@ -184,6 +248,17 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     buildOwnAccountsIndex(inputs.bankStatements),
   );
   const pairedKeys = buildPairMatchedKeys(inputs.bankStatements);
+
+  // Mapa movementKey → AbonoEnrichment. Permite reclasificar un ABONO
+  // histórico como cobranza por cliente cuando el cruce contra cobranza JDE
+  // detectó qué factura(s) cubrió. Sin esto los ingresos pasados quedaban
+  // todos bajo "Transferencias" en Planeación, ocultando el ingreso por
+  // cliente en meses pasados.
+  const abonoEnrichmentByKey = new Map<string, AbonoEnrichment>();
+  for (const enrichment of inputs.cobranzaReconciliation?.abonoEnrichments ?? []) {
+    abonoEnrichmentByKey.set(enrichment.movementKey, enrichment);
+  }
+  const cargoEnrichmentByKey = inputs.cargoEnrichments ?? new Map();
 
   // 1) Histórico bancario — los mismos números que sumó el Dashboard.
   for (const statement of inputs.bankStatements) {
@@ -207,15 +282,65 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
           statement.cuenta,
         ).kind === 'internal'
       ) continue;
+      const isInflow = line.tipoMovimiento === 'ABONO';
+      const movementKey = bankMovementKey(line);
+      const enrichment = isInflow ? abonoEnrichmentByKey.get(movementKey) : undefined;
+      const isCobranzaInflow = enrichment?.status === 'factura-cobrada'
+        && (enrichment.facturas?.length ?? 0) > 0;
+      const firstFactura = isCobranzaInflow ? enrichment!.facturas![0] : undefined;
+      // CARGO enrichment: si PagoProveedor empata este CARGO con un pago a
+      // proveedor, lo reclasificamos como AP_PAYMENT con el nombre del
+      // proveedor. Sin match cae al cubo "Otros Egresos" (TRANSFER) con
+      // drill-down por banco/concepto.
+      const cargoEnrich = !isInflow ? cargoEnrichmentByKey.get(movementKey) : undefined;
+      const matchedPayment = cargoEnrich?.status === 'MATCHED'
+        ? cargoEnrich.payments?.[0]
+        : undefined;
+      const isMatchedAp = !!matchedPayment;
+      // ABONOs sin match a factura → agrupar por banco origen para que la
+      // tabla de Planeación no muestre cientos de filas únicas por concepto
+      // bancario. Santander recibe etiqueta "Federal — Santander" según
+      // convención de negocio del user (todo lo que cae en Santander es
+      // ingreso federal). Otros bancos llevan su nombre legible.
+      const bankLabel = (statement.banco || statement.nombreBanco || 'Banco').toUpperCase();
+      const bankFallbackName = bankLabel === 'SANTANDER'
+        ? 'Federal — Santander'
+        : (statement.nombreBanco || statement.banco || 'Banco');
+      const counterpartyName = isCobranzaInflow
+        ? (enrichment!.catalogClientName ?? firstFactura?.nombreCliente ?? undefined)
+        : isMatchedAp
+          ? matchedPayment!.nombreProveedor || undefined
+          : (isInflow ? bankFallbackName : undefined);
+      const counterpartyId = isCobranzaInflow
+        ? (enrichment!.catalogClientId ?? firstFactura?.noCliente ?? undefined)
+        : undefined;
+      const inflowSubcategory = isInflow
+        ? resolveInflowSubcategory({
+            counterpartyId,
+            clientById,
+            bankFallbackLabel: !isCobranzaInflow ? bankFallbackName : undefined,
+          })
+        : undefined;
       out.push({
         id: `bank:${statement.cia}:${statement.cuenta}:${line.referencia ?? ''}:${line.fechaOperacion}:${out.length}`,
         sourceSystem: 'BANK',
         sourceObjectId: line.referencia,
-        type: line.tipoMovimiento === 'ABONO' ? 'INFLOW' : 'OUTFLOW',
-        category: 'TRANSFER',
+        type: isInflow ? 'INFLOW' : 'OUTFLOW',
+        category: isCobranzaInflow
+          ? 'AR_COLLECTION'
+          : isMatchedAp
+            ? 'AP_PAYMENT'
+            : 'TRANSFER',
+        subcategory: inflowSubcategory,
         companyId: statement.cia,
         bankAccountId: statement.cuenta,
-        counterpartyType: 'BANK',
+        counterpartyId,
+        counterpartyName,
+        counterpartyType: isCobranzaInflow
+          ? 'CUSTOMER'
+          : isMatchedAp
+            ? 'SUPPLIER'
+            : 'BANK',
         concept: line.concepto || 'Movimiento bancario',
         currency: line.moneda || statement.moneda || 'MXN',
         originalAmount: Math.abs(line.importe),
@@ -236,11 +361,82 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     }
   }
 
+  // 1b) Histórico desde cobranza JDE. Cuando el banco no cubre meses
+  //     pasados (estados de cuenta no cargados, periodo fuera de
+  //     ventana), las facturas con `fechaCobro` real igual seguían sin
+  //     aparecer por cliente en Planeación. Aquí emitimos un
+  //     AR_COLLECTION sintético por factura cobrada cuya fecha cae en
+  //     un mes histórico y NO fue ya cruzada con un ABONO bancario en
+  //     el paso 1 (evita doble conteo).
+  const cobradaBancoKeysHistoric = buildCobradaBancoKeySet(inputs.cobranzaReconciliation);
+  const companyCobranza = filterCobranzaByCompany(
+    inputs.cobranzaRecords ?? [],
+    inputs.companyCode,
+  );
+  const clientLookupHistoric = buildClientLookup(inputs.clients);
+  for (const record of companyCobranza) {
+    const cobroDate = cleanDate(record.fechaCobro);
+    if (!cobroDate) continue;
+    if (cobroDate >= inputs.asOfDate) continue;
+    const ym = cobroDate.slice(0, 7);
+    const monthInfo = monthlyByYm.get(ym);
+    if (!monthInfo || !monthInfo.isHistorical) continue;
+    const facturaKey = cxcFacturaKey(record);
+    if (cobradaBancoKeysHistoric.has(facturaKey)) continue;
+    const amount = Math.abs(record.importeBrutoPesos);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const clientMatch = findClientForCobranza(record, clientLookupHistoric);
+    const counterpartyId = clientMatch?.client.id ?? record.noCliente;
+    const counterpartyName = clientMatch?.client.name || record.nombreCliente || 'Cliente sin nombre';
+    out.push({
+      id: `cobranza-historic:${record.cia}:${record.noCliente}:${record.noFactura}:${cobroDate}`,
+      sourceSystem: 'JDE',
+      sourceObjectId: record.noFactura,
+      type: 'INFLOW',
+      category: 'AR_COLLECTION',
+      subcategory: resolveInflowSubcategory({ counterpartyId, clientById }),
+      companyId: record.cia,
+      counterpartyId,
+      counterpartyName,
+      counterpartyType: 'CUSTOMER',
+      concept: `Cobro factura ${record.noFactura || 'sin folio'} · ${counterpartyName}`,
+      currency: record.moneda || 'MXN',
+      originalAmount: amount,
+      baseAmount: amount,
+      projectedAmount: amount,
+      issueDate: cleanDate(record.fechaFactura),
+      dueDate: cleanDate(record.fechaVence),
+      actualDate: cobroDate,
+      projectedDate: cobroDate,
+      confidenceScore: 100,
+      confidenceBand: calculateConfidenceBand(100),
+      forecastMethod: 'RULE',
+      ruleApplied: 'Cobranza JDE (fechaCobro real)',
+      status: 'REAL',
+      lockState: 'LOCKED',
+      comments: ['Cobro real reportado por JDE. No editable desde Planeación.'],
+      createdAt: `${cobroDate}T00:00:00.000Z`,
+      updatedAt: `${cobroDate}T00:00:00.000Z`,
+    });
+  }
+
   // 2) Para cada mes futuro: distribuimos los totales canónicos sobre
   //    catálogos reales (`projectClientMonth` para inflows, CXP/JDE,
   //    compras, nómina y proveedores recurrentes para outflows). El escalamiento garantiza que la
   //    suma de `projectedAmount` empate con el total canónico.
   const futureMonths = monthly.filter((m) => !m.isHistorical);
+  const horizonYm = monthly[monthly.length - 1]?.yearMonth;
+  // Hoist purchase-receipt build OUT of the per-month loop. It does
+  // O(receipts × cxp) dedup work and is identical for every month. Running
+  // it 12+ times per render was the main thread hog that hung the
+  // Planeación / Proyección tabs once PROJECTED OCs multiplied the
+  // receipt count (~5000+).
+  const purchaseMovementsByYm = groupMovementsByYearMonth(buildPurchaseReceiptMovements({
+    purchaseReceipts: inputs.purchaseReceipts ?? [],
+    cxpRecords: inputs.cxpRecords,
+    companyCode: inputs.companyCode,
+    asOfDate: inputs.asOfDate,
+  }));
   for (const month of futureMonths) {
     const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
     const hasCxcFromJde = inflowLines.some((line) => line.id.startsWith('cxc:'));
@@ -256,7 +452,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
         fallbackRule: 'Total proyectado mensual (Dashboard)',
       })));
 
-    const outflowLines = collectOutflowLines(month, inputs, todayYm, projectionByYm.get(month.yearMonth)?.expense);
+    const outflowLines = collectOutflowLines(month, inputs, todayYm, projectionByYm.get(month.yearMonth)?.expense, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? []);
     out.push(...balanceOutflowMonth({
       lines: outflowLines,
       target: month.expense,
@@ -293,7 +489,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
       out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
     }
 
-    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, projectionByYm.get(currentYm)?.expense)
+    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, projectionByYm.get(currentYm)?.expense, horizonYm, purchaseMovementsByYm.get(currentYm) ?? [])
       .filter((line) => line.date >= inputs.asOfDate);
     if (remainingExpense > 0) {
       out.push(...balanceMonth({
@@ -311,6 +507,17 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     }
   }
 
+  return out;
+}
+
+function groupMovementsByYearMonth(movements: FinancialMovement[]): Map<string, FinancialMovement[]> {
+  const out = new Map<string, FinancialMovement[]>();
+  for (const m of movements) {
+    const ym = m.projectedDate.slice(0, 7);
+    const arr = out.get(ym);
+    if (arr) arr.push(m);
+    else out.set(ym, [m]);
+  }
   return out;
 }
 
@@ -462,6 +669,9 @@ function collectInflowLines(
         ...inputs.assumptions,
         year: scan.year,
       });
+      const clientInflowSubcat = client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID
+        ? INCOME_SUBCAT_VIAJES
+        : INCOME_SUBCAT_OTROS;
       for (const event of events) {
         const ym = event.realDate.slice(0, 7);
         if (ym !== month.yearMonth) continue;
@@ -475,6 +685,7 @@ function collectInflowLines(
           date: event.realDate,
           concept: `Cobranza ${client.name}`,
           category: 'AR_COLLECTION',
+          subcategory: clientInflowSubcat,
           counterpartyId: client.id,
           counterpartyName: client.name,
           counterpartyType: 'CUSTOMER',
@@ -540,12 +751,16 @@ function collectCxcInflowLines(
         ? 'Sin regla confiable; se usa vencimiento JDE.'
         : 'Sin regla confiable; se usa fecha de factura JDE.';
 
+    const cxcSubcat = clientMatch?.client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID
+      ? INCOME_SUBCAT_VIAJES
+      : INCOME_SUBCAT_OTROS;
     lines.push({
       id: `cxc:${record.cia}:${record.noCliente}:${record.noFactura}`,
       amount: record.importePendientePesos,
       date: dateInfo.date,
       concept: `Factura CXC ${record.noFactura || 'sin folio'} · ${record.nombreCliente || 'Cliente sin nombre'}`,
       category: 'AR_COLLECTION',
+      subcategory: cxcSubcat,
       companyId: record.cia,
       counterpartyId: clientMatch?.client.id ?? record.noCliente,
       counterpartyName: record.nombreCliente || clientMatch?.client.name,
@@ -584,6 +799,13 @@ function collectOutflowLines(
   inputs: CanonicalProjectionInputs,
   todayYm: string,
   expenseProjection?: ExpenseProjectionBreakdown,
+  projectThroughYearMonth?: string,
+  /**
+   * Movimientos de compras (PurchaseReceipt) ya filtrados para `month.yearMonth`.
+   * Se inyectan desde `buildMovements` para evitar recomputar el dedup CXP
+   * por cada mes (era O(receipts × cxp × meses) → ahora una sola vez).
+   */
+  purchaseMovementsForMonth: FinancialMovement[] = [],
 ): RawLine[] {
   const lines: RawLine[] = [];
   const providerByName = new Map(inputs.providers.map((p) => [supplierLookupKey(p.name), p]));
@@ -600,6 +822,10 @@ function collectOutflowLines(
   // para que el scheduler decida si se paga hoy, se recorre o queda pendiente.
   filteredCxp.forEach((record, index) => {
     if (record.importePendientePesos <= 0) return;
+    // PagoProveedor: si la CXP ya fue pagada (match en PagoProveedor),
+    // omítela del egreso proyectado. El cargo bancario real ya cubrió el
+    // movimiento. Si está parcial NO se omite — se proyecta el residuo.
+    if (inputs.paidCxpKeys?.has(`${record.cia}::${record.noFactura}::${record.noProveedor}`)) return;
     const scheduledDate = cleanDate(record.fechaProgramacionPago)
       ?? cleanDate(record.fechaVence)
       ?? cleanDate(record.fechaFactura)
@@ -660,12 +886,9 @@ function collectOutflowLines(
 
   // 2) Compras activas sin CXP matcheada. Son compromisos tempranos:
   // se emiten como locked para no perderlos al balancear el mes.
-  for (const movement of buildPurchaseReceiptMovements({
-    purchaseReceipts: inputs.purchaseReceipts ?? [],
-    cxpRecords: inputs.cxpRecords,
-    companyCode: inputs.companyCode,
-    asOfDate: inputs.asOfDate,
-  })) {
+  // `purchaseMovementsForMonth` ya fue precomputado en buildMovements,
+  // así que el dedup contra CXP corre una sola vez (no por mes).
+  for (const movement of purchaseMovementsForMonth) {
     if (movement.projectedDate.slice(0, 7) !== month.yearMonth) continue;
     lines.push({
       id: movement.id,
@@ -697,10 +920,15 @@ function collectOutflowLines(
   }
 
   // 3) Nómina TRESS. No genera IVA; sí alimenta ISN/IMSS en el módulo fiscal.
+  // Si TRESS solo tiene el mes en curso, replicamos la pauta hacia adelante
+  // hasta el horizonte de proyección para que Dashboard / Planeación / Proyección
+  // vean nómina proyectada y no caja "inflada" por ausencia del egreso.
   for (const movement of buildPayrollCostMovements({
     payrollCosts: inputs.payrollCosts ?? [],
     companyCode: inputs.companyCode,
     asOfDate: inputs.asOfDate,
+    projectThroughYearMonth,
+    targetYearMonth: month.yearMonth,
   })) {
     if (movement.projectedDate.slice(0, 7) !== month.yearMonth) continue;
     lines.push({
