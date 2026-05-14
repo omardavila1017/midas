@@ -4,6 +4,9 @@ import TaxDashboard from './TaxDashboard';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
+import type { BankStatementLine } from '../../../services/jdeTypes';
+import type { CargoPaymentEnrichment } from '../../../domain/paymentReconciliationEngine';
+import type { PurchaseReceiptRecord } from '../../shared-finance/types';
 
 const TODAY = '2026-05-01';
 
@@ -23,7 +26,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 describe('<TaxDashboard />', () => {
@@ -221,6 +223,77 @@ describe('<TaxDashboard />', () => {
       rate: 8,
     });
   });
+
+  it('uses purchase receipts passed from App as creditable IVA in taxes', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[]}
+        providers={[]}
+        cxpRecords={[]}
+        purchaseReceipts={[purchaseReceipt({ invoiceNo: 'OC-IVA-16' })]}
+        assumptions={assumptions}
+        budget={null}
+        startingBalance={20_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('2026-05'));
+    fireEvent.click(screen.getByRole('button', { name: /IVA/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Acreditable/i }));
+
+    expect(screen.getByText(/OC-IVA-16/i)).toBeTruthy();
+    expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
+  });
+
+  it('uses PagoProveedor cargo enrichments from App to classify bank cargos as AP IVA creditable', () => {
+    const movement = bankMovement({
+      fechaOperacion: '2026-05-08',
+      referencia: 'PP-1',
+      concepto: 'Pago proveedor',
+      tipoMovimiento: 'CARGO',
+      importe: 1160,
+    });
+    const key = [
+      movement.cia,
+      movement.cuenta,
+      movement.fechaOperacion,
+      movement.referencia,
+      movement.tipoMovimiento,
+      movement.importe,
+      movement.concepto,
+    ].join('|');
+    const cargoEnrichments = new Map<string, CargoPaymentEnrichment>([[
+      key,
+      {
+        movementKey: key,
+        status: 'MATCHED',
+        payments: [{ noPago: 'P-1', nombreProveedor: 'Proveedor IVA', importe: 1160, tier: 'exact' }],
+      },
+    ]]);
+
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank([movement])]}
+        clients={[]}
+        providers={[]}
+        cxpRecords={[]}
+        cargoEnrichments={cargoEnrichments}
+        assumptions={assumptions}
+        budget={null}
+        startingBalance={20_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('2026-05'));
+    fireEvent.click(screen.getByRole('button', { name: /IVA/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Acreditable/i }));
+
+    expect(screen.getByText(/Pago proveedor/i)).toBeTruthy();
+    expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
+  });
 });
 
 const assumptions: CashFlowAssumptions = {
@@ -266,7 +339,7 @@ function budget(input: { dieselFeb?: number } = {}): Budget {
   };
 }
 
-function bank(): BankAccountStatement {
+function bank(movimientos: BankStatementLine[] = []): BankAccountStatement {
   return {
     cia: '00001',
     banco: 'BANCO',
@@ -275,6 +348,46 @@ function bank(): BankAccountStatement {
     fechaEstadoCuenta: TODAY,
     saldoInicial: 20_000,
     saldoFinal: 20_000,
-    movimientos: [],
+    movimientos,
+  };
+}
+
+function bankMovement(patch: Partial<BankStatementLine>): BankStatementLine {
+  return {
+    cia: patch.cia ?? '00001',
+    banco: patch.banco ?? 'BANCO',
+    cuenta: patch.cuenta ?? '123',
+    moneda: patch.moneda ?? 'MXN',
+    fechaOperacion: patch.fechaOperacion ?? TODAY,
+    referencia: patch.referencia ?? 'REF-1',
+    concepto: patch.concepto ?? 'Movimiento banco',
+    tipoMovimiento: patch.tipoMovimiento ?? 'CARGO',
+    importe: patch.importe ?? 0,
+  };
+}
+
+function purchaseReceipt(patch: Partial<PurchaseReceiptRecord> = {}): PurchaseReceiptRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    noProveedor: patch.noProveedor ?? 'P-1',
+    supplierName: patch.supplierName ?? 'Proveedor IVA',
+    invoiceNo: patch.invoiceNo ?? 'OC-IVA',
+    purchaseOrderNo: patch.purchaseOrderNo ?? 'PO-1',
+    receiptNo: patch.receiptNo ?? 'REC-1',
+    orderDate: patch.orderDate ?? '2026-05-01',
+    receiptDate: patch.receiptDate ?? '2026-05-01',
+    creditDays: patch.creditDays ?? 0,
+    estimatedDueDate: patch.estimatedDueDate ?? '2026-05-15',
+    currency: patch.currency ?? 'MXN',
+    exchangeRate: patch.exchangeRate ?? 1,
+    totalAmount: patch.totalAmount ?? 1160,
+    amountMxn: patch.amountMxn ?? patch.totalAmount ?? 1160,
+    taxRateCode: patch.taxRateCode ?? 'IVA16',
+    taxRate: patch.taxRate ?? 16,
+    taxTreatment: patch.taxTreatment ?? 'IVA_CREDITABLE',
+    taxBaseAmount: patch.taxBaseAmount ?? 1000,
+    taxAmount: patch.taxAmount ?? 160,
+    isCancelled: patch.isCancelled ?? false,
+    status: patch.status ?? 'PROJECTED_BASE',
   };
 }

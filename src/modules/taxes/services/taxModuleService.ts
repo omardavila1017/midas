@@ -1,4 +1,5 @@
 import type { CXPRecord } from '../../../domain/persistence';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -315,6 +316,7 @@ export function buildTaxDashboardView(params: {
   providers?: Provider[];
   assumptions?: CashFlowAssumptions;
   cxpRecords?: CXPRecord[];
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   cobranzaPayments?: CobranzaPayment[];
@@ -354,6 +356,7 @@ export function buildTaxDashboardView(params: {
 
   const handledCxpKeys = accumulateCxpIva({
     cxpRecords: params.cxpRecords ?? [],
+    cxpPaymentCoverage: params.cxpPaymentCoverage,
     purchaseReceipts: params.purchaseReceipts ?? [],
     companyCode: params.companyCode,
     startDate,
@@ -724,6 +727,7 @@ function accumulateProjectedClientIva({
 
 function accumulateCxpIva({
   cxpRecords,
+  cxpPaymentCoverage,
   purchaseReceipts,
   companyCode,
   startDate,
@@ -732,6 +736,7 @@ function accumulateCxpIva({
   ensure,
 }: {
   cxpRecords: CXPRecord[];
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
   purchaseReceipts: PurchaseReceiptRecord[];
   companyCode?: string;
   startDate: string;
@@ -745,12 +750,71 @@ function accumulateCxpIva({
     const date = cleanIsoDate(record.fechaProgramacionPago)
       ?? cleanIsoDate(record.fechaVence)
       ?? cleanIsoDate(record.fechaFactura);
-    if (!date || date < startDate || date > endDate) return;
+    if (!date) return;
 
     const target = providerRateTargetFromCxp(record);
     const providerRate = providerCatalogRate(rateContext, record);
     const overrideRate = overrideRateFor(rateContext, target);
     const matchedPurchase = purchaseReceipts.find((receipt) => purchaseMatchesCxp(receipt, record));
+    const coverage = cxpPaymentCoverage?.get(cxpCoverageKey(record));
+
+    if (coverage && coverage.payments.length > 0) {
+      const grossAmount = positiveNumber(record.importeBrutoPesos)
+        || positiveNumber(record.importePendientePesos)
+        || positiveNumber(coverage.totalPaidPesos);
+      let allocatedPaid = 0;
+      let emitted = false;
+
+      for (const [paymentIndex, payment] of coverage.payments.entries()) {
+        const remainingCapacity = Math.max(0, grossAmount - allocatedPaid);
+        const paymentAmount = positiveNumber(payment.importe);
+        const paidAmount = grossAmount > 0
+          ? Math.min(paymentAmount, remainingCapacity)
+          : paymentAmount;
+        if (paidAmount <= 0) continue;
+        allocatedPaid += paidAmount;
+        const paymentDate = cleanIsoDate(payment.fechaPago) ?? date;
+        emitted = addCxpIvaLine({
+          record,
+          index,
+          date: paymentDate,
+          amount: paidAmount,
+          conceptPrefix: `Pago ${payment.noPago || paymentIndex + 1}`,
+          target,
+          overrideRate: overrideRate ?? undefined,
+          providerRate,
+          matchedPurchase,
+          startDate,
+          endDate,
+          ensure,
+        }) || emitted;
+      }
+
+      const remaining = Math.max(0, grossAmount - allocatedPaid);
+      if (coverage.status === 'PARTIAL' && remaining > 0) {
+        emitted = addCxpIvaLine({
+          record,
+          index,
+          date,
+          amount: remaining,
+          conceptPrefix: 'Remanente proyectado',
+          target,
+          overrideRate: overrideRate ?? undefined,
+          providerRate,
+          matchedPurchase,
+          startDate,
+          endDate,
+          ensure,
+        }) || emitted;
+      }
+
+      if (emitted || coverage.status === 'PAID' || coverage.status === 'PARTIAL') {
+        markCxpHandled(handledKeys, record, index);
+      }
+      return;
+    }
+
+    if (date < startDate || date > endDate) return;
     const breakdown = cxpTaxBreakdown(record, overrideRate ?? undefined, providerRate, matchedPurchase);
     if (breakdown.amount <= 0) return;
     markCxpHandled(handledKeys, record, index);
@@ -777,6 +841,60 @@ function accumulateCxpIva({
     }
   });
   return handledKeys;
+}
+
+function addCxpIvaLine({
+  record,
+  index,
+  date,
+  amount,
+  conceptPrefix,
+  target,
+  overrideRate,
+  providerRate,
+  matchedPurchase,
+  startDate,
+  endDate,
+  ensure,
+}: {
+  record: CXPRecord;
+  index: number;
+  date: string;
+  amount: number;
+  conceptPrefix: string;
+  target: TaxRateTarget;
+  overrideRate?: 8 | 16;
+  providerRate?: 8 | 16;
+  matchedPurchase?: PurchaseReceiptRecord;
+  startDate: string;
+  endDate: string;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): boolean {
+  const breakdown = cxpTaxBreakdown(record, overrideRate, providerRate, matchedPurchase, amount);
+  if (breakdown.amount <= 0) return false;
+  if (date < startDate || date > endDate) return true;
+
+  const line: TaxSourceLine = {
+    movementId: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}:${conceptPrefix}`,
+    date,
+    concept: `${conceptPrefix} · Factura ${record.noFactura || 'sin folio'} · ${record.nombre}`,
+    counterpartyName: record.nombre,
+    amount: breakdown.amount,
+    taxBase: breakdown.taxBase,
+    taxRate: breakdown.taxRate,
+    taxAmount: breakdown.taxAmount,
+    sourceSystem: 'JDE',
+    rateTarget: target,
+    rateSource: overrideRate ? 'OVERRIDE' : breakdown.rateSource,
+    estimated: breakdown.estimated,
+  };
+  const row = ensure(date.slice(0, 7));
+  if (breakdown.taxRate === 16 || breakdown.taxRate === 8) addIvaCreditable(row, line, breakdown.taxRate);
+  else {
+    row.unclassifiedExpense += breakdown.amount;
+    row.unclassifiedLines.push(line);
+  }
+  return true;
 }
 
 function accumulatePurchaseReceiptIva({
@@ -1209,7 +1327,13 @@ function normalizeTargetKey(target: TaxRateTarget): string {
     : normalizeText(target.targetKey);
 }
 
-function cxpTaxBreakdown(record: CXPRecord, overrideRate?: 8 | 16, providerRate?: 8 | 16, matchedPurchase?: PurchaseReceiptRecord): {
+function cxpTaxBreakdown(
+  record: CXPRecord,
+  overrideRate?: 8 | 16,
+  providerRate?: 8 | 16,
+  matchedPurchase?: PurchaseReceiptRecord,
+  amountOverride?: number,
+): {
   amount: number;
   taxBase: number;
   taxAmount: number;
@@ -1218,7 +1342,7 @@ function cxpTaxBreakdown(record: CXPRecord, overrideRate?: 8 | 16, providerRate?
   estimated?: boolean;
 } {
   const gross = positiveNumber(record.importeBrutoPesos);
-  const pending = positiveNumber(record.importePendientePesos);
+  const pending = positiveNumber(amountOverride ?? record.importePendientePesos);
   const subtotal = positiveNumber(record.importeSubtotalPesos);
   const tax = positiveNumber(record.importeImpuestosPesos);
   if (pending <= 0) return { amount: 0, taxBase: 0, taxAmount: 0 };
@@ -1405,6 +1529,10 @@ function markCxpHandled(keys: Set<string>, record: CXPRecord, index: number): vo
   keys.add(`id:cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`);
   if (record.noFactura) keys.add(`invoice:${normalizeText(record.cia)}:${normalizeText(record.noFactura)}`);
   if (record.noFactura) keys.add(`invoice:any:${normalizeText(record.noFactura)}`);
+}
+
+function cxpCoverageKey(record: CXPRecord): string {
+  return `${record.cia}::${record.noFactura}::${record.noProveedor}`;
 }
 
 function isHandledCxpMovement(movement: FinancialMovement, keys: Set<string>): boolean {

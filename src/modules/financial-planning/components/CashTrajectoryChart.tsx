@@ -98,7 +98,7 @@ function todayYm(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjection, probabilisticProjection }) => {
+export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjection }) => {
   const months = useMemo(
     () => aggregateProjectionToMonths(projection, baseProjection),
     [projection, baseProjection],
@@ -106,15 +106,6 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
 
   const hasBaseline = Boolean(baseProjection) && projection.scenarioId !== baseProjection?.scenarioId;
   const currentYm = todayYm();
-
-  const probabilisticByMonth = useMemo(() => {
-    const grouped = new Map<string, ProbabilisticForecastRun['buckets'][number]>();
-    for (const bucket of probabilisticProjection?.buckets ?? []) {
-      const ym = bucket.date.slice(0, 7);
-      grouped.set(ym, bucket);
-    }
-    return grouped;
-  }, [probabilisticProjection?.buckets]);
 
   const chartData = useMemo(() => months.map((m) => {
     const isPast = m.yearMonth < currentYm;

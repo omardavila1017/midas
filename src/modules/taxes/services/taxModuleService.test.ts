@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
@@ -87,6 +88,66 @@ describe('taxModuleService', () => {
     expect(may.iva.ivaCreditable).toBeCloseTo(80 + (500 - 500 / 1.16));
     expect(may.iva.unclassifiedExpense).toBe(0);
     expect(may.iva.expenseLines.some((line) => line.concept.includes('F-NOTAX'))).toBe(true);
+  });
+
+  it('dates creditable CXP IVA on the real PagoProveedor date when coverage is paid', () => {
+    const cxp = cxpRecord({
+      noFactura: 'F-PAID',
+      fechaProgramacionPago: '2026-05-17',
+      importeSubtotalPesos: 1000,
+      importeImpuestosPesos: 160,
+      importeBrutoPesos: 1160,
+      importePendientePesos: 1160,
+    });
+    const view = buildTaxDashboardView({
+      cxpRecords: [cxp],
+      cxpPaymentCoverage: new Map([[coverageKey(cxp), coverage(cxp, {
+        status: 'PAID',
+        totalPaidPesos: 1160,
+        payments: [{ noPago: 'P-1', fechaPago: '2026-04-20', importe: 1160, tier: 'invoice-amount' }],
+      })]]),
+      companyCode: 'all',
+      startDate: '2026-04-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const apr = view.periods.find((period) => period.period === '2026-04')!;
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(apr.iva.ivaCreditable).toBeCloseTo(160);
+    expect(apr.iva.expenseLines[0].concept).toContain('Pago P-1');
+    expect(may?.iva.ivaCreditable ?? 0).toBe(0);
+  });
+
+  it('splits partial PagoProveedor coverage between paid date and projected remainder', () => {
+    const cxp = cxpRecord({
+      noFactura: 'F-PARTIAL-COVERAGE',
+      fechaProgramacionPago: '2026-06-10',
+      importeSubtotalPesos: 1000,
+      importeImpuestosPesos: 160,
+      importeBrutoPesos: 1160,
+      importePendientePesos: 1160,
+    });
+    const view = buildTaxDashboardView({
+      cxpRecords: [cxp],
+      cxpPaymentCoverage: new Map([[coverageKey(cxp), coverage(cxp, {
+        status: 'PARTIAL',
+        totalPaidPesos: 580,
+        payments: [{ noPago: 'P-2', fechaPago: '2026-05-12', importe: 580, tier: 'invoice-amount' }],
+      })]]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-06-30',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    const jun = view.periods.find((period) => period.period === '2026-06')!;
+    expect(may.iva.ivaCreditable).toBeCloseTo(80);
+    expect(jun.iva.ivaCreditable).toBeCloseTo(80);
+    expect(jun.iva.expenseLines[0].concept).toContain('Remanente proyectado');
   });
 
   it('uses matched purchase receipt tax rate when CXP has no tax fields', () => {
@@ -613,6 +674,17 @@ function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
     v121_150: patch.v121_150 ?? 0,
     v151_180: patch.v151_180 ?? 0,
     mas180: patch.mas180 ?? 0,
+  };
+}
+
+function coverageKey(record: CXPRecord): string {
+  return `${record.cia}::${record.noFactura}::${record.noProveedor}`;
+}
+
+function coverage(record: CXPRecord, patch: Omit<CxpPaymentCoverage, 'cxpKey'>): CxpPaymentCoverage {
+  return {
+    cxpKey: coverageKey(record),
+    ...patch,
   };
 }
 

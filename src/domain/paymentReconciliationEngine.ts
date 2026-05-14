@@ -37,6 +37,12 @@
 import type { PagoProveedorRecord, BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 import type { CXPRecord } from './persistence';
 import { bankMovementKey } from './realReconciliationEngine';
+import {
+  buildOwnAccountDetector,
+  buildOwnAccountsIndex,
+  buildPairMatchedKeys,
+  classifyMovement,
+} from './netCashFlowEngine';
 
 // ── Configuración ─────────────────────────────────────────────────────────
 
@@ -128,13 +134,21 @@ export interface PaymentReconciliationResult {
   paymentMatches: PaymentMatch[];
   cxpCoverage: Map<string, CxpPaymentCoverage>;
   cargoEnrichments: Map<string, CargoPaymentEnrichment>;
+  /**
+   * Pagos de PagoProveedor que empatan con un CARGO bancario clasificado
+   * como interno. Se conservan para auditoria, pero no deben alimentar UI,
+   * KPIs, CXP coverage ni proyecciones de proveedores.
+   */
+  internalPaymentKeys: Set<string>;
   totals: {
     payments: number;
+    internalPayments: number;
     matchedCxp: number;
     matchedCargo: number;
     matchedFull: number;
     unmatched: number;
     totalPaidPesos: number;
+    totalInternalPesos: number;
     totalUnmatchedPesos: number;
   };
 }
@@ -150,23 +164,32 @@ export function reconcilePayments(input: {
 
   // Indexes ───────────────────────────────────────────────────────────────
   const cxpByProvider = indexCxpByProvider(cxpRecords);
-  const cargoMovements = collectCargoMovements(bankStatements);
+  const { real: cargoMovements, internal: internalCargoMovements } = collectCargoMovements(bankStatements);
   const cargoByAccount = indexCargosByAccount(cargoMovements);
+  const internalCargoByAccount = indexCargosByAccount(internalCargoMovements);
 
   // Tracking ─────────────────────────────────────────────────────────────
   const claimedCxp = new Set<string>();         // CXPs ya asignadas a un pago
   const claimedCargo = new Set<string>();       // movimientos CARGO ya asignados
+  const claimedInternalCargo = new Set<string>();
   const cxpCoverage = new Map<string, CxpPaymentCoverage>();
   const cargoEnrichments = new Map<string, CargoPaymentEnrichment>();
+  const internalPaymentKeys = new Set<string>();
 
   const paymentMatches: PaymentMatch[] = [];
 
   for (const payment of payments) {
     const isEmployee = payment.tipoBusqueda.trim().toLowerCase().startsWith('employee');
+    const internalCargoMatch = findCargoMatch(payment, internalCargoByAccount, claimedInternalCargo);
+    const isInternalPayment = !!internalCargoMatch;
+    if (internalCargoMatch) {
+      internalPaymentKeys.add(paymentKey(payment));
+      claimedInternalCargo.add(internalCargoMatch.key);
+    }
 
     // ── Match CXP ──
     const cxpHits: PaymentMatch['cxpMatches'] = [];
-    if (!isEmployee) {
+    if (!isEmployee && !isInternalPayment) {
       const proveedorCxps = cxpByProvider.get(normalizeJde(payment.claveProveedor)) ?? [];
       const eligibleCxps = proveedorCxps.filter((cxp) =>
         !claimedCxp.has(cxpKey(cxp)) &&
@@ -207,20 +230,18 @@ export function reconcilePayments(input: {
 
     // ── Match CARGO ──
     let cargoMatch: PaymentMatch['cargoMatch'] | undefined;
-    const accountCargos = cargoByAccount.get(normalizeAccountKey(payment.cuentaBanco)) ?? [];
-    for (const cargo of accountCargos) {
-      if (claimedCargo.has(cargo.key)) continue;
-      const tier = cargoMatchTier(payment, cargo.movement, cargo.fechaOperacion);
-      if (tier === 'unmatched') continue;
-      cargoMatch = {
-        movement: cargo.movement,
-        cia: cargo.cia,
-        cuenta: cargo.cuenta,
-        tier,
-        confidence: tier === 'exact' ? 0.95 : 0.75,
-      };
-      claimedCargo.add(cargo.key);
-      break;
+    if (!isInternalPayment) {
+      const cargo = findCargoMatch(payment, cargoByAccount, claimedCargo);
+      if (cargo) {
+        cargoMatch = {
+          movement: cargo.movement,
+          cia: cargo.cia,
+          cuenta: cargo.cuenta,
+          tier: cargo.tier,
+          confidence: cargo.tier === 'exact' ? 0.95 : 0.75,
+        };
+        claimedCargo.add(cargo.key);
+      }
     }
 
     // ── Status agregado ──
@@ -234,7 +255,9 @@ export function reconcilePayments(input: {
           ? 'MATCHED_BANK_ONLY'
           : 'UNMATCHED';
 
-    const reason = buildReason(status, cxpHits, cargoMatch, isEmployee);
+    const reason = isInternalPayment
+      ? 'Pago interno detectado por CARGO bancario interno; se excluye de conciliacion CXP y egreso proveedor.'
+      : buildReason(status, cxpHits, cargoMatch, isEmployee);
     paymentMatches.push({ payment, status, cxpMatches: cxpHits, cargoMatch, reason });
 
     // ── Acumular coverage CXP ──
@@ -289,22 +312,30 @@ export function reconcilePayments(input: {
   }
 
   // ── Totals ──
+  const nonInternalMatches = paymentMatches.filter((m) => !internalPaymentKeys.has(paymentKey(m.payment)));
+  const internalMatches = paymentMatches.filter((m) => internalPaymentKeys.has(paymentKey(m.payment)));
   const totals = {
     payments: paymentMatches.length,
-    matchedCxp: paymentMatches.filter((m) => m.cxpMatches.length > 0).length,
-    matchedCargo: paymentMatches.filter((m) => m.cargoMatch).length,
-    matchedFull: paymentMatches.filter((m) => m.status === 'MATCHED_FULL').length,
-    unmatched: paymentMatches.filter((m) => m.status === 'UNMATCHED').length,
-    totalPaidPesos: paymentMatches.reduce((acc, m) => acc + m.payment.importePesos, 0),
-    totalUnmatchedPesos: paymentMatches
+    internalPayments: internalMatches.length,
+    matchedCxp: nonInternalMatches.filter((m) => m.cxpMatches.length > 0).length,
+    matchedCargo: nonInternalMatches.filter((m) => m.cargoMatch).length,
+    matchedFull: nonInternalMatches.filter((m) => m.status === 'MATCHED_FULL').length,
+    unmatched: nonInternalMatches.filter((m) => m.status === 'UNMATCHED').length,
+    totalPaidPesos: nonInternalMatches.reduce((acc, m) => acc + m.payment.importePesos, 0),
+    totalInternalPesos: internalMatches.reduce((acc, m) => acc + m.payment.importePesos, 0),
+    totalUnmatchedPesos: nonInternalMatches
       .filter((m) => m.status === 'UNMATCHED')
       .reduce((acc, m) => acc + m.payment.importePesos, 0),
   };
 
-  return { paymentMatches, cxpCoverage, cargoEnrichments, totals };
+  return { paymentMatches, cxpCoverage, cargoEnrichments, internalPaymentKeys, totals };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
+
+function paymentKey(payment: PagoProveedorRecord): string {
+  return `${payment.cia}::${payment.noPago}`;
+}
 
 function cxpKey(cxp: CXPRecord): string {
   return `${cxp.cia}::${cxp.noFactura}::${cxp.noProveedor}`;
@@ -330,21 +361,37 @@ interface IndexedCargo {
   key: string;
 }
 
-function collectCargoMovements(statements: BankAccountStatement[]): IndexedCargo[] {
-  const out: IndexedCargo[] = [];
+function collectCargoMovements(statements: BankAccountStatement[]): { real: IndexedCargo[]; internal: IndexedCargo[] } {
+  const real: IndexedCargo[] = [];
+  const internal: IndexedCargo[] = [];
+  const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(statements));
+  const pairedKeys = buildPairMatchedKeys(statements);
+  const classificationContext = { ownAccountDetector, pairedKeys };
+
   for (const stmt of statements) {
     for (const m of stmt.movimientos ?? []) {
       if (m.tipoMovimiento !== 'CARGO') continue;
-      out.push({
-        movement: m,
+      const line: BankStatementLine = {
+        ...m,
+        cia: m.cia || stmt.cia,
+        banco: m.banco || stmt.banco,
+        nombreBanco: m.nombreBanco || stmt.nombreBanco,
+        cuenta: m.cuenta || stmt.cuenta,
+        moneda: m.moneda || stmt.moneda,
+      };
+      const entry: IndexedCargo = {
+        movement: line,
         cia: stmt.cia,
         cuenta: stmt.cuenta,
-        fechaOperacion: cleanIsoDate(m.fechaOperacion) ?? '',
-        key: bankMovementKey(m),
-      });
+        fechaOperacion: cleanIsoDate(line.fechaOperacion) ?? '',
+        key: bankMovementKey(line),
+      };
+      const classification = classifyMovement(line, classificationContext, stmt.cia, stmt.cuenta);
+      if (classification.kind === 'internal') internal.push(entry);
+      else real.push(entry);
     }
   }
-  return out;
+  return { real, internal };
 }
 
 function indexCargosByAccount(cargos: IndexedCargo[]): Map<string, IndexedCargo[]> {
@@ -356,6 +403,21 @@ function indexCargosByAccount(cargos: IndexedCargo[]): Map<string, IndexedCargo[
     else map.set(key, [c]);
   }
   return map;
+}
+
+function findCargoMatch(
+  payment: PagoProveedorRecord,
+  cargosByAccount: Map<string, IndexedCargo[]>,
+  claimedCargo: Set<string>,
+): (IndexedCargo & { tier: Exclude<CargoMatchTier, 'unmatched'> }) | undefined {
+  const accountCargos = cargosByAccount.get(normalizeAccountKey(payment.cuentaBanco)) ?? [];
+  for (const cargo of accountCargos) {
+    if (claimedCargo.has(cargo.key)) continue;
+    const tier = cargoMatchTier(payment, cargo.movement, cargo.fechaOperacion);
+    if (tier === 'unmatched') continue;
+    return { ...cargo, tier };
+  }
+  return undefined;
 }
 
 function findFolioMatch(cxps: CXPRecord[], comentario: string): CXPRecord | undefined {

@@ -32,7 +32,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 describe('<FinancialPlanningDashboard />', () => {
@@ -106,7 +105,26 @@ describe('<FinancialPlanningDashboard />', () => {
     expect(surviving.length).toBe(0);
   });
 
-  it('creates expected commitments from the Planning commitments view', async () => {
+  it('preserves approved manual planning entries without the legacy commitments button', async () => {
+    localStorage.setItem(
+      'midas.financialPlanning.manualEntries.v1',
+      JSON.stringify([{
+        id: 'manual-entry-test',
+        name: 'Nómina semanal',
+        type: 'OUTFLOW',
+        category: 'PAYROLL',
+        amount: 150000,
+        startDate: '2026-05-22',
+        recurrence: 'WEEKLY',
+        companyId: '00001',
+        scenarioIds: ['approved'],
+        status: 'APPROVED',
+        createdBy: 'test',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:00:00.000Z',
+      }]),
+    );
+
     render(
       <FinancialPlanningDashboard
         companyCode="00001"
@@ -121,12 +139,7 @@ describe('<FinancialPlanningDashboard />', () => {
     );
 
     await flushPlanningWarmup();
-    fireEvent.click(screen.getByRole('button', { name: /Compromisos/i }));
-    fireEvent.change(screen.getByLabelText('Concepto'), { target: { value: 'Nómina semanal' } });
-    fireEvent.change(screen.getByLabelText('Monto'), { target: { value: '150000' } });
-    fireEvent.change(screen.getByLabelText('Fecha'), { target: { value: '2026-05-22' } });
-    fireEvent.change(screen.getByLabelText('Recurrencia'), { target: { value: 'WEEKLY' } });
-    fireEvent.click(screen.getByRole('button', { name: /Agregar compromiso/i }));
+    expect(screen.queryByRole('button', { name: /Compromisos/i })).toBeNull();
 
     await waitFor(() => {
       const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.manualEntries.v1') ?? '[]');

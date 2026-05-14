@@ -724,6 +724,11 @@ export default function App() {
     }
     return out;
   }, [paymentReconciliation]);
+  const nonInternalPagoProveedorRecords = useMemo(() => {
+    const internalKeys = paymentReconciliation.internalPaymentKeys;
+    if (internalKeys.size === 0) return pagoProveedorRecords;
+    return pagoProveedorRecords.filter((record) => !internalKeys.has(`${record.cia}::${record.noPago}`));
+  }, [pagoProveedorRecords, paymentReconciliation.internalPaymentKeys]);
   // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
   // Es un motor pesado (texto + subset-sum), así que no corre durante render.
   // Lo diferimos a idle y sólo cuando una pestaña lo necesita; así cargar JDE
@@ -851,9 +856,9 @@ export default function App() {
       excludePastUnexecuted: true,
       futureOrderLookaheadMonths: COMPRAS_FUTURE_LOOKAHEAD_MONTHS,
       cxpRecords,
-      pagoProveedorRecords,
+      pagoProveedorRecords: nonInternalPagoProveedorRecords,
     }),
-    [comprasRecords, cxpRecords, pagoProveedorRecords],
+    [comprasRecords, cxpRecords, nonInternalPagoProveedorRecords],
   );
 
   // Promedio de gasto por proveedor en los últimos 3 meses calendario,
@@ -861,8 +866,8 @@ export default function App() {
   // `gastoMinimoMensual` del catálogo para que el piso operativo refleje
   // el ritmo de pago vigente, no el promedio anual 2025.
   const providerSpendIndex = useMemo(
-    () => buildProviderSpendIndex(pagoProveedorRecords, { months: 3 }),
-    [pagoProveedorRecords],
+    () => buildProviderSpendIndex(nonInternalPagoProveedorRecords, { months: 3 }),
+    [nonInternalPagoProveedorRecords],
   );
   // Sólo enriquecer cuando hay pagos reales para extraer historia. Si pagos
   // está vacío (splash en curso, sin data) devolvemos la referencia original
@@ -870,10 +875,10 @@ export default function App() {
   // render, lo que disparaba un recompute pesado y colgaba el navegador.
   const providersEnriched = useMemo(
     () => {
-      if (pagoProveedorRecords.length === 0) return providers;
+      if (nonInternalPagoProveedorRecords.length === 0) return providers;
       return enrichProvidersWithRecentSpend(providers, providerSpendIndex);
     },
-    [providers, providerSpendIndex, pagoProveedorRecords.length],
+    [providers, providerSpendIndex, nonInternalPagoProveedorRecords.length],
   );
 
   // Modelo de pronóstico para FUTURAS OCs (no ya emitidas). El usuario lo
@@ -2652,6 +2657,9 @@ export default function App() {
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
                   paidCxpKeys={paidCxpKeys}
+                  cxpPaymentCoverage={paymentReconciliation.cxpCoverage}
+                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
+                  purchaseReceipts={purchaseReceiptsFromCompras}
                   payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
@@ -2825,6 +2833,7 @@ export default function App() {
                   pagoProveedorLoadedCias={pagoProveedorLoadedCias}
                   selectedCia={selectedCia}
                   providers={providers}
+                  internalPaymentKeys={paymentReconciliation.internalPaymentKeys}
                 />
               </Suspense>
             )}
