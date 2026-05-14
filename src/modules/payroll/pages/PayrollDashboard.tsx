@@ -5,10 +5,9 @@
  * disparar un refresh por (cia, tipoNomina, año, mes) y renderiza KPIs +
  * tablas. La fórmula del cash neto al empleado vive en `payrollModuleService`.
  *
- * El módulo NO emite eventos al cash flow todavía — eso llega en PR3
- * (integración a `extractPaymentEvents`). Aquí mostramos los datos crudos y
- * agregados para que treasury los pueda revisar y, eventualmente, conciliar
- * con bancos (PR4).
+ * App.tsx entrega estos registros al motor canónico para Planeación,
+ * Proyección e Impuestos. Aquí se mantienen visibles los datos crudos y
+ * agregados para revisión operativa.
  */
 
 import { useCallback, useMemo, useState } from 'react';

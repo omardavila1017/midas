@@ -16,6 +16,7 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import type { CargoPaymentEnrichment, CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
@@ -68,6 +69,10 @@ interface Props {
   cobranzaReconciliation?: RealReconciliationResult;
   /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
   paidCxpKeys?: Set<string>;
+  /** Cobertura PagoProveedor → CXP para fechar IVA acreditable con pagos reales. */
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
+  /** Enriquecimiento PagoProveedor → CARGO bancario para reclasificar egresos reales. */
+  cargoEnrichments?: Map<string, CargoPaymentEnrichment>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
@@ -121,6 +126,7 @@ export default function TaxDashboard(props: Props) {
       props.cobranzaRecords,
       props.cobranzaReconciliation,
       props.paidCxpKeys,
+      props.cargoEnrichments,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
@@ -136,6 +142,7 @@ export default function TaxDashboard(props: Props) {
       providers: props.providers,
       assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
+      cxpPaymentCoverage: props.cxpPaymentCoverage,
       purchaseReceipts: props.purchaseReceipts,
       payrollCosts: props.payrollCosts,
       cobranzaPayments: props.cobranzaPayments,
@@ -147,7 +154,7 @@ export default function TaxDashboard(props: Props) {
       store: taxStore,
       today,
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source.movements, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source.movements, taxStore, today],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 

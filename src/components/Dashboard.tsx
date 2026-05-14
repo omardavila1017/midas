@@ -33,7 +33,6 @@ import {
   computeBaseCashFlow,
   computeBankStartingBalance,
 } from '../domain/dashboardEngine';
-import type { CashFlowMonth } from '../types';
 import {
   fetchAgedBalances,
   type BankAccountStatement,

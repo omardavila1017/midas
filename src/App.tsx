@@ -2422,6 +2422,9 @@ export default function App() {
                   cobranzaPayments={cobranzaPayments}
                   cobranzaReconciliation={cobranzaReconciliation}
                   paidCxpKeys={paidCxpKeys}
+                  cxpPaymentCoverage={paymentReconciliation.cxpCoverage}
+                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
+                  purchaseReceipts={purchaseReceiptsFromCompras}
                   payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}

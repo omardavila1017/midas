@@ -3,28 +3,16 @@ import { CashFlowAssumptions } from '../domain/types';
 import {
   aggregateWeekly,
   aggregateMonthly,
-  classifyMovement,
-  buildOwnAccountsIndex,
-  buildOwnAccountDetector,
-  buildPairMatchedKeys,
   computeBankOnlyCashFlow,
   EnrichedBankMovement,
   INTERNAL_REASON_LABELS,
 } from '../domain/netCashFlowEngine';
 import type { BankAccountStatement } from '../services/jde';
 import {
-  currentBankStatements,
-  latestStatementDate,
-  sumBankStatementBalances,
-} from '../domain/bankStatements';
-import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
-  TrendingUp,
-  TrendingDown,
-  Wallet,
   Calendar as CalendarIcon,
   Landmark,
   RefreshCw,
@@ -71,15 +59,6 @@ interface Props {
   confirmedPayments?: unknown;
 }
 
-/** Flatten bank statements into daily inflow/outflow totals + saldo snapshot */
-interface BankDaySummary {
-  date: string;
-  abonos: number;      // total inflows from bank
-  cargos: number;      // total outflows from bank
-  saldoFinal: number;  // last known saldo final across accounts
-  cuentas: number;     // how many accounts had movements
-}
-
 type Granularity = 'daily' | 'weekly' | 'monthly';
 
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -111,70 +90,7 @@ export default function CashFlowDetail({
   const [monthFilter, setMonthFilter] = useState<number | 'all'>('all');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
-  // Build company name lookup
-  const ciaNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const c of companies) map.set(c.cia, c.nombre);
-    return map;
-  }, [companies]);
-
-  // ── Flatten bank statements into day summaries ──
-  // Mismo principio que `computeBankOnlyCashFlow`: los traspasos internos
-  // (leyenda / RFC propio / beneficiario propio / cuenta propia / par
-  // simétrico) NO entran en `abonos`/`cargos` para que los totales reflejen
-  // sólo flujo real. La sección colapsable del drilldown sí los muestra.
-  const bankByDate = useMemo(() => {
-    const map = new Map<string, BankDaySummary>();
-    const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
-    const pairedKeys = buildPairMatchedKeys(bankStatements);
-    const ctx = { ownAccountDetector, pairedKeys };
-    for (const acc of bankStatements) {
-      for (const mov of acc.movimientos) {
-        const date = mov.fechaOperacion;
-        if (!date) continue;
-        if (classifyMovement(mov, ctx, acc.cia, acc.cuenta).kind === 'internal') continue;
-        let entry = map.get(date);
-        if (!entry) {
-          entry = { date, abonos: 0, cargos: 0, saldoFinal: 0, cuentas: 0 };
-          map.set(date, entry);
-        }
-        if (mov.tipoMovimiento === 'ABONO') entry.abonos += mov.importe;
-        else entry.cargos += mov.importe;
-      }
-      if (acc.saldoFinal !== undefined) {
-        const date = acc.fechaEstadoCuenta;
-        let entry = map.get(date);
-        if (!entry) {
-          entry = { date, abonos: 0, cargos: 0, saldoFinal: 0, cuentas: 0 };
-          map.set(date, entry);
-        }
-        entry.saldoFinal += acc.saldoFinal;
-        entry.cuentas += 1;
-      }
-    }
-    return map;
-  }, [bankStatements]);
-
-  // Totales de bancos
-  const currentBalanceDate = useMemo(() => latestStatementDate(bankStatements), [bankStatements]);
-  const balanceStatements = useMemo(
-    () => currentBankStatements(bankStatements, currentBalanceDate),
-    [bankStatements, currentBalanceDate],
-  );
-  const totalBankSaldo = useMemo(
-    () => sumBankStatementBalances(balanceStatements),
-    [balanceStatements],
-  );
-  const totalBankAbonos = useMemo(() => {
-    let total = 0;
-    for (const entry of bankByDate.values()) total += entry.abonos;
-    return total;
-  }, [bankByDate]);
-  const totalBankCargos = useMemo(() => {
-    let total = 0;
-    for (const entry of bankByDate.values()) total += entry.cargos;
-    return total;
-  }, [bankByDate]);
+  void companies;
 
   // ──────────────────────────────────────────────────────────────
   // Fuente única de verdad: estados de cuenta del API de JDE.
@@ -217,13 +133,6 @@ export default function CashFlowDetail({
     );
   }, [monthly, sortOrder]);
 
-  // KPIs
-  const totalInflows = daily.reduce((s, d) => s + d.inflows, 0);
-  const totalOutflows = daily.reduce((s, d) => s + d.outflows, 0);
-  const netFlow = totalInflows - totalOutflows;
-  const calculatedFinalBalance = daily.length > 0 ? daily[daily.length - 1].cumulative : startingBalance;
-  const bankBalanceAvailable = balanceStatements.length > 0;
-  const finalBalance = bankBalanceAvailable ? totalBankSaldo : calculatedFinalBalance;
   const minBalance = daily.reduce((m, d) => Math.min(m, d.cumulative), startingBalance);
   const minBalanceDate = daily.find(d => d.cumulative === minBalance)?.date;
 
@@ -374,7 +283,7 @@ function EmptyDataCard({ onRefreshBanks }: { onRefreshBanks?: () => void }) {
   );
 }
 
-function KpiCard({
+export function KpiCard({
   label, value, icon: Icon, tone,
 }: {
   label: string;
@@ -404,7 +313,7 @@ function KpiCard({
   );
 }
 
-function BankSummaryCard({
+export function BankSummaryCard({
   bankStatements, balanceStatements, balanceDate, totalBankSaldo, totalBankAbonos, totalBankCargos,
   activeDays,
   ciaNameMap, bankFetchStatus, bankFetchProgress, onRefreshBanks,
