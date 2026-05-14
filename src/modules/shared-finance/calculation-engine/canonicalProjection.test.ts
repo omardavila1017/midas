@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
-import type { BankAccountStatement, BankStatementLine, CobranzaRecord } from '../../../services/jdeTypes';
+import { comprasToPurchaseReceipts } from '../../../domain/comprasToPurchaseReceipts';
+import type { BankAccountStatement, BankStatementLine, CobranzaRecord, ComprasRecord } from '../../../services/jdeTypes';
 import { buildHistoricalMonths } from '../../../domain/cashFlowEngine';
 import type {
   RealReconciliationMatch,
@@ -532,6 +533,111 @@ describe('canonicalProjection IVA metadata', () => {
     expect(canonical.movements.some((item) => item.id.startsWith('cxp:') && item.sourceObjectId === 'MATCHED')).toBe(true);
   });
 
+  it('does not project past OCs filtered out by the compras adapter', () => {
+    const purchaseReceipts = comprasToPurchaseReceipts([
+      compraRecord({
+        noOrden: 'OLD-OC',
+        fechaPedido: '2024-11-25',
+        fechaRecepcion: '2024-12-23',
+        fechaPagoProyectada: '2025-01-22',
+      }),
+    ], {
+      asOfDate: '2026-05-13',
+      excludePastUnexecuted: true,
+      futureOrderLookaheadMonths: 3,
+    });
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      purchaseReceipts,
+      assumptions,
+      budget: budget({ expenseMay: 0, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-05-13',
+    });
+
+    expect(purchaseReceipts).toHaveLength(0);
+    expect(canonical.movements.some((item) => item.sourceObjectId === 'OLD-OC')).toBe(false);
+  });
+
+  it('keeps OCs whose projected payment date is past but still inside the 1-month grace window', () => {
+    const purchaseReceipts = comprasToPurchaseReceipts([
+      compraRecord({
+        noOrden: 'RECENT-PAST-OC',
+        fechaPedido: '2026-03-15',
+        fechaRecepcion: '2026-03-20',
+        fechaPagoProyectada: '2026-04-20',
+      }),
+    ], {
+      asOfDate: '2026-05-13',
+      excludePastUnexecuted: true,
+      futureOrderLookaheadMonths: 3,
+    });
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          cuenta: 'CTA-1',
+          movimientos: [
+            bankMovement({ cia: '00001', cuenta: 'CTA-1', tipoMovimiento: 'ABONO', importe: 1, fechaOperacion: '2026-05-01' }),
+          ],
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      purchaseReceipts,
+      assumptions,
+      budget: budget({ expenseMay: 0, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-05-13',
+    });
+
+    const movement = canonical.movements.find((item) => item.sourceObjectId === 'RECENT-PAST-OC');
+    expect(movement).toBeTruthy();
+    expect(movement?.projectedDate).toBe('2026-05-13');
+  });
+
+  it('projects future OCs from compras inside the 3-month window', () => {
+    const purchaseReceipts = comprasToPurchaseReceipts([
+      compraRecord({
+        noOrden: 'FUTURE-OC',
+        fechaPedido: '2026-06-01',
+        fechaRecepcion: '',
+        fechaPagoProyectada: '',
+        diasCredito: 0,
+      }),
+    ], {
+      asOfDate: '2026-05-13',
+      excludePastUnexecuted: true,
+      futureOrderLookaheadMonths: 3,
+    });
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      purchaseReceipts,
+      assumptions,
+      budget: budget({ expenseMay: 0, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-05-13',
+    });
+
+    const movement = canonical.movements.find((item) => item.sourceObjectId === 'FUTURE-OC');
+    expect(movement).toBeTruthy();
+    expect(movement?.category).toBe('AP_PAYMENT');
+    expect(movement?.projectedDate).toBe('2026-06-22');
+  });
+
   it('adds TRESS payroll costs but skips deduction-only concepts', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
@@ -647,6 +753,42 @@ function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
     v121_150: patch.v121_150 ?? 0,
     v151_180: patch.v151_180 ?? 0,
     mas180: patch.mas180 ?? 0,
+  };
+}
+
+function compraRecord(patch: Partial<ComprasRecord> = {}): ComprasRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    noProveedor: patch.noProveedor ?? '59570032',
+    nombreProveedor: patch.nombreProveedor ?? 'NEW WORLD FUEL SA DE CV',
+    noOrden: patch.noOrden ?? 'OC-1',
+    tipoOrden: patch.tipoOrden ?? 'OS',
+    descTipoOrden: patch.descTipoOrden ?? 'Catalogadas almacén',
+    lineaOrden: patch.lineaOrden ?? 1,
+    noProducto: patch.noProducto ?? 'DIESEL',
+    descProducto: patch.descProducto ?? 'DIESEL AUTOCONSUMO',
+    concepto: patch.concepto ?? 'Compra test',
+    cantidad: patch.cantidad ?? 1,
+    precioUnitario: patch.precioUnitario ?? 1160,
+    importeTotal: patch.importeTotal ?? 1160,
+    moneda: patch.moneda ?? 'MXP',
+    tipoCambio: patch.tipoCambio ?? 1,
+    fechaPedido: patch.fechaPedido ?? '2026-06-01',
+    fechaRecepcion: patch.fechaRecepcion ?? '',
+    diasCredito: patch.diasCredito ?? 0,
+    fechaPagoProyectada: patch.fechaPagoProyectada ?? '',
+    noFactura: patch.noFactura ?? '',
+    centroCostos: patch.centroCostos ?? '101',
+    categoria: patch.categoria ?? 'IND',
+    descCategoria: patch.descCategoria ?? 'Indirectos',
+    familia: patch.familia ?? 'DIE',
+    descFamilia: patch.descFamilia ?? 'DIESEL AUTOCONSUMO',
+    subFamilia: patch.subFamilia ?? 'DIE',
+    descSubFamilia: patch.descSubFamilia ?? 'DIESEL',
+    estadoSiguiente: patch.estadoSiguiente ?? '',
+    tasaFiscal: patch.tasaFiscal ?? 'IVA16',
+    cancelada: patch.cancelada ?? false,
+    facturada: patch.facturada ?? false,
   };
 }
 

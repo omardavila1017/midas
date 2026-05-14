@@ -44,9 +44,17 @@ interface PagosProps {
 
 type TipoBusquedaFilter = 'all' | 'employees' | 'suppliers';
 type BancoFilter = string;
+type PagoSortKey = 'fechaPago' | 'importePesos' | 'nombreProveedor' | 'banco' | 'noPago';
+type SortDirection = 'asc' | 'desc';
+
+interface PagoSort {
+  key: PagoSortKey;
+  direction: SortDirection;
+}
 
 const PAGOS_CACHE_KEY = '__all__';
 const ROW_CAP = 500;
+const DEFAULT_SORT: PagoSort = { key: 'fechaPago', direction: 'desc' };
 
 interface ChipStyle {
   bg: string;
@@ -86,11 +94,29 @@ export default function Pagos({
   const [search, setSearch] = useState('');
   const [tipoFilter, setTipoFilter] = useState<TipoBusquedaFilter>('all');
   const [bancoFilter, setBancoFilter] = useState<BancoFilter>('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [monedaFilter, setMonedaFilter] = useState('all');
+  const [clasificacionFilter, setClasificacionFilter] = useState('all');
+  const [sort, setSort] = useState<PagoSort>(DEFAULT_SORT);
 
   const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
 
   const lastLoadedAt = pagoProveedorLoadedCias[PAGOS_CACHE_KEY];
-  const filtersActive = search.trim() !== '' || tipoFilter !== 'all' || bancoFilter !== 'all';
+  const filtersActive =
+    search.trim() !== ''
+    || tipoFilter !== 'all'
+    || bancoFilter !== 'all'
+    || dateFrom !== ''
+    || dateTo !== ''
+    || amountMin !== ''
+    || amountMax !== ''
+    || monedaFilter !== 'all'
+    || clasificacionFilter !== 'all'
+    || sort.key !== DEFAULT_SORT.key
+    || sort.direction !== DEFAULT_SORT.direction;
 
   // Lista única de bancos para el filtro (extraída de los datos visibles).
   const bancosDisponibles = useMemo(() => {
@@ -102,16 +128,45 @@ export default function Pagos({
     return Array.from(set).sort();
   }, [pagoProveedorRecords]);
 
+  const monedasDisponibles = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of pagoProveedorRecords) {
+      if (r.moneda) set.add(r.moneda);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [pagoProveedorRecords]);
+
+  const clasificacionesDisponibles = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of pagoProveedorRecords) {
+      const classification = r.clasificacionProveedorFinanciera || r.clasificacionProveedor;
+      if (classification) set.add(classification);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [pagoProveedorRecords]);
+
   const filteredRecords = useMemo(() => {
     const q = search.trim().toUpperCase();
+    const min = parseAmountInput(amountMin);
+    const max = parseAmountInput(amountMax);
     return pagoProveedorRecords.filter((r) => {
       if (selectedCia !== 'all' && r.cia !== selectedCia) return false;
       if (tipoFilter === 'employees' && !isEmployeePayment(r)) return false;
       if (tipoFilter === 'suppliers' && isEmployeePayment(r)) return false;
       if (bancoFilter !== 'all' && bancoLabel(r.cuentaBancaria) !== bancoFilter) return false;
+      if (monedaFilter !== 'all' && r.moneda !== monedaFilter) return false;
+      if (clasificacionFilter !== 'all') {
+        const classification = r.clasificacionProveedorFinanciera || r.clasificacionProveedor;
+        if (classification !== clasificacionFilter) return false;
+      }
+      if (dateFrom && (!r.fechaPago || r.fechaPago < dateFrom)) return false;
+      if (dateTo && (!r.fechaPago || r.fechaPago > dateTo)) return false;
+      if (min !== undefined && r.importePesos < min) return false;
+      if (max !== undefined && r.importePesos > max) return false;
       if (q) {
         const hay =
           r.nombreProveedor.toUpperCase().includes(q) ||
+          r.claveProveedor.toUpperCase().includes(q) ||
           r.rfcProveedor.toUpperCase().includes(q) ||
           r.noPago.toUpperCase().includes(q) ||
           r.batchPago.toUpperCase().includes(q) ||
@@ -120,8 +175,21 @@ export default function Pagos({
         if (!hay) return false;
       }
       return true;
-    });
-  }, [pagoProveedorRecords, search, tipoFilter, bancoFilter, selectedCia]);
+    }).sort((a, b) => comparePagoRecords(a, b, sort));
+  }, [
+    pagoProveedorRecords,
+    search,
+    tipoFilter,
+    bancoFilter,
+    dateFrom,
+    dateTo,
+    amountMin,
+    amountMax,
+    monedaFilter,
+    clasificacionFilter,
+    selectedCia,
+    sort,
+  ]);
 
   const kpis = useMemo(() => {
     let totalAmount = 0;
@@ -157,6 +225,13 @@ export default function Pagos({
     setSearch('');
     setTipoFilter('all');
     setBancoFilter('all');
+    setDateFrom('');
+    setDateTo('');
+    setAmountMin('');
+    setAmountMax('');
+    setMonedaFilter('all');
+    setClasificacionFilter('all');
+    setSort(DEFAULT_SORT);
   };
 
   return (
@@ -248,7 +323,7 @@ export default function Pagos({
             />
           </div>
           <select
-            className="input max-w-[170px]"
+            className="input max-w-[155px]"
             value={tipoFilter}
             onChange={(e) => setTipoFilter(e.target.value as TipoBusquedaFilter)}
             title="Filtrar por tipo de beneficiario"
@@ -258,7 +333,7 @@ export default function Pagos({
             <option value="employees">Empleados</option>
           </select>
           <select
-            className="input max-w-[180px]"
+            className="input max-w-[170px]"
             value={bancoFilter}
             onChange={(e) => setBancoFilter(e.target.value)}
             title="Filtrar por banco emisor"
@@ -267,6 +342,80 @@ export default function Pagos({
             {bancosDisponibles.map((b) => (
               <option key={b} value={b}>{b}</option>
             ))}
+          </select>
+          <select
+            className="input max-w-[135px]"
+            value={monedaFilter}
+            onChange={(e) => setMonedaFilter(e.target.value)}
+            title="Filtrar por moneda"
+          >
+            <option value="all">Todas monedas</option>
+            {monedasDisponibles.map((moneda) => (
+              <option key={moneda} value={moneda}>{moneda}</option>
+            ))}
+          </select>
+          <select
+            className="input max-w-[190px]"
+            value={clasificacionFilter}
+            onChange={(e) => setClasificacionFilter(e.target.value)}
+            title="Filtrar por clasificación financiera"
+          >
+            <option value="all">Todas clasificaciones</option>
+            {clasificacionesDisponibles.map((classification) => (
+              <option key={classification} value={classification}>{classification}</option>
+            ))}
+          </select>
+          <input
+            type="date"
+            className="input max-w-[145px]"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            title="Fecha pago desde"
+          />
+          <input
+            type="date"
+            className="input max-w-[145px]"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            title="Fecha pago hasta"
+          />
+          <input
+            type="number"
+            className="input max-w-[120px]"
+            placeholder="Importe mín."
+            value={amountMin}
+            onChange={(e) => setAmountMin(e.target.value)}
+            min="0"
+            title="Importe mínimo"
+          />
+          <input
+            type="number"
+            className="input max-w-[120px]"
+            placeholder="Importe máx."
+            value={amountMax}
+            onChange={(e) => setAmountMax(e.target.value)}
+            min="0"
+            title="Importe máximo"
+          />
+          <select
+            className="input max-w-[185px]"
+            value={`${sort.key}:${sort.direction}`}
+            onChange={(e) => {
+              const [key, direction] = e.target.value.split(':') as [PagoSortKey, SortDirection];
+              setSort({ key, direction });
+            }}
+            title="Ordenar registros"
+          >
+            <option value="fechaPago:desc">Fecha reciente primero</option>
+            <option value="fechaPago:asc">Fecha antigua primero</option>
+            <option value="importePesos:desc">Importe mayor primero</option>
+            <option value="importePesos:asc">Importe menor primero</option>
+            <option value="nombreProveedor:asc">Proveedor A-Z</option>
+            <option value="nombreProveedor:desc">Proveedor Z-A</option>
+            <option value="banco:asc">Banco A-Z</option>
+            <option value="banco:desc">Banco Z-A</option>
+            <option value="noPago:desc">No. pago mayor primero</option>
+            <option value="noPago:asc">No. pago menor primero</option>
           </select>
           {filtersActive && (
             <button
@@ -498,6 +647,29 @@ function Td({
       {children}
     </td>
   );
+}
+
+function parseAmountInput(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function comparePagoRecords(a: PagoProveedorRecord, b: PagoProveedorRecord, sort: PagoSort): number {
+  const direction = sort.direction === 'asc' ? 1 : -1;
+  if (sort.key === 'importePesos') return (a.importePesos - b.importePesos) * direction;
+  const av = pagoSortValue(a, sort.key);
+  const bv = pagoSortValue(b, sort.key);
+  if (!av && !bv) return 0;
+  if (!av) return 1;
+  if (!bv) return -1;
+  return av.localeCompare(bv, 'es-MX', { numeric: true }) * direction;
+}
+
+function pagoSortValue(record: PagoProveedorRecord, key: PagoSortKey): string {
+  if (key === 'banco') return bancoLabel(record.cuentaBancaria);
+  if (key === 'importePesos') return String(record.importePesos);
+  return record[key] ?? '';
 }
 
 function Chip({
