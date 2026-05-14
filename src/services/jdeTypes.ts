@@ -1,7 +1,7 @@
 /**
  * Tipos de datos para los APIs de JD Edwards.
  *
- * Endpoints consumidos (api.gruposenda.com/v1/erp/tesoreria):
+ * Endpoints consumidos (api.gruposenda.com/JDEdwards):
  *   1. POST /antiguedadsaldos  → CXP / aging buckets
  *   2. POST /bancos            → Estados de cuenta bancarios
  *   3. GET  /empresas          → Catálogo de compañías
@@ -303,7 +303,7 @@ export interface CobranzaPayment {
 // ───────────────────────────────────────────────────────────────
 
 /**
- * Request body para POST /v1/erp/tesoreria/compras.
+ * Request body para POST /JDEdwards/compras.
  *
  * Endpoint liberado a producción el 2026-05-08 por el equipo JDE.
  *
@@ -454,7 +454,7 @@ export interface NominaRawRecord {
 // ───────────────────────────────────────────────────────────────
 
 /**
- * Request body para POST /v1/erp/tesoreria/pagoproveedor.
+ * Request body para POST /JDEdwards/pagoproveedor.
  *
  * Endpoint productivo publicado por el equipo JDE: devuelve los pagos
  * EFECTIVAMENTE ejecutados a proveedores en el rango indicado. Es el

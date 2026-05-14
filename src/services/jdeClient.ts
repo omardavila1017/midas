@@ -8,7 +8,7 @@
  *                         el token debe regresar a un namespace server-side.
  *
  * El `base` default ("/api/jde") es reescrito por el proxy configurado en
- * vite.config.ts hacia https://api.gruposenda.com/v1/erp/tesoreria.
+ * vite.config.ts hacia https://api.gruposenda.com/JDEdwards.
  */
 
 import { JdeApiError } from './jdeTypes';

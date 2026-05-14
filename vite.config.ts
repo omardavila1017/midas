@@ -41,7 +41,7 @@ export default defineConfig(({ mode }) => {
     })
   }
 
-  const jdeUp = parseUpstream(env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tesoreria')
+  const jdeUp = parseUpstream(env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/JDEdwards')
   const tressUp = parseUpstream(env.VITE_TRESS_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tress')
 
   // Bundle analyzer only when ANALYZE=1. Writes dist/stats.html with a
@@ -74,7 +74,7 @@ export default defineConfig(({ mode }) => {
         '/api/jde': {
           target: jdeUp.origin,
           changeOrigin: true,
-          secure: true,
+          secure: false,
           rewrite: (p) => p.replace(/^\/api\/jde/, jdeUp.path),
           configure: configureProxy,
         },

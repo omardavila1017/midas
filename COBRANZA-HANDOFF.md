@@ -1,6 +1,6 @@
 # Cobranza JDE + Cruce con Bancos — Handoff
 
-**Para el próximo Claude que tome este branch.** Este archivo resume todo el trabajo hecho en una sesión continua de Cowork (3 may 2026) integrando el endpoint `/v1/erp/tesoreria/cobranza` (CXC) y cruzándolo contra los movimientos bancarios. Hay bugs abiertos que el usuario sigue viendo en su navegador y que debes resolver.
+**Para el próximo Claude que tome este branch.** Este archivo resume todo el trabajo hecho en una sesión continua de Cowork (3 may 2026) integrando el endpoint `/JDEdwards/cobranza` (CXC) y cruzándolo contra los movimientos bancarios. Hay bugs abiertos que el usuario sigue viendo en su navegador y que debes resolver.
 
 > Lee también `CLAUDE.md` para el contexto general del repo. Esto es solo el subconjunto cobranza/cruce.
 
@@ -48,7 +48,7 @@
 
 ## Shape REAL del API productivo (validado 2026-05-03)
 
-POST `https://api.gruposenda.com/v1/erp/tesoreria/cobranza`
+POST `https://api.gruposenda.com/JDEdwards/cobranza`
 
 **Body:**
 ```json
@@ -103,7 +103,7 @@ La coma trailing en `cia` NO es typo. El cliente la pide así. `fechaInicial: nu
 `.env.local` ya tiene el token productivo (no commitear):
 ```
 VITE_JDE_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-VITE_JDE_UPSTREAM=https://api.gruposenda.com/v1/erp/tesoreria
+VITE_JDE_UPSTREAM=https://api.gruposenda.com/JDEdwards
 VITE_JDE_ENVIRONMENT=PD920
 ```
 

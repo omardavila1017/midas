@@ -52,7 +52,7 @@ interface Props {
   bankStatements?: BankAccountStatement[];
   companies?: { cia: string; nombre: string }[];
   /**
-   * CXC real proveniente de POST /v1/erp/tesoreria/cobranza. Cada registro es
+   * CXC real proveniente de POST /JDEdwards/cobranza. Cada registro es
    * una factura abierta o reciente (últimos 12 meses). Cuando llega vacío,
    * la pestaña sigue funcionando en modo Proyectada y la sección "Real (JDE)"
    * muestra empty state.

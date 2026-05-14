@@ -510,7 +510,7 @@ export default function App() {
 
   const [cxpRecords, setCxpRecords] = useState<CXPRecord[]>([]);
   const [cxpLoadedCias, setCxpLoadedCias] = useState<Record<string, string>>({});
-  // Cobranza (CXC) — endpoint /v1/erp/tesoreria/cobranza, liberado a
+  // Cobranza (CXC) — endpoint /JDEdwards/cobranza, liberado a
   // producción 2026-05-01. Mismo patrón que cxpRecords: cache en localStorage
   // a través de MidasStore (v8), refresh secuencial por cia, último año
   // (fechaInicial = hoy - 365d).
@@ -518,14 +518,14 @@ export default function App() {
   const [cobranzaLoadedCias, setCobranzaLoadedCias] = useState<Record<string, string>>({});
   const [cobranzaPayments, setCobranzaPayments] = useState<CobranzaPayment[]>([]);
   const [cobranzaPaymentsLoadedCias, setCobranzaPaymentsLoadedCias] = useState<Record<string, string>>({});
-  // Compras (Órdenes de Compra) — endpoint /v1/erp/tesoreria/compras,
+  // Compras (Órdenes de Compra) — endpoint /JDEdwards/compras,
   // liberado a producción 2026-05-08. Restricción del API: 30 días por
   // request → fetchComprasRange parte el rango en chunks. Cargamos los
   // últimos 60 días por default para cubrir OCs con D_Credito alto que aún
   // no se han facturado.
   const [comprasRecords, setComprasRecords] = useState<ComprasRecord[]>([]);
   const [comprasLoadedCias, setComprasLoadedCias] = useState<Record<string, string>>({});
-  // PagoProveedor — endpoint /v1/erp/tesoreria/pagoproveedor, liberado a
+  // PagoProveedor — endpoint /JDEdwards/pagoproveedor, liberado a
   // producción 2026-05-13. Pagos ya ejecutados (espejo egreso de cobranza).
   // Cierra el loop CXP↔OC↔banco mostrando qué facturas/OCs ya se pagaron y
   // contra qué cuenta bancaria. Mismo patrón de auto-fetch 60d que compras.
@@ -1643,7 +1643,7 @@ export default function App() {
   }, [companies, pagoProveedorLoadedCias]);
 
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
-  // Endpoint: POST /v1/erp/tesoreria/cobranza (productivo desde 2026-05-01).
+  // Endpoint: POST /JDEdwards/cobranza (productivo desde 2026-05-01).
   //
   // Concurrencia: 3 cías en paralelo, y dentro de cada cía /cobranza y
   // /cobranzaindicadores corren en paralelo. Mandar todas las cías juntas

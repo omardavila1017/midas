@@ -185,7 +185,7 @@ JDE typical response: ~60s. If you see persistent timeouts, check upstream — d
 Treasury / cash-flow logic lives in `src/domain/`. Two reconciliation engines exist by design:
 
 - `reconciliationEngine.ts` — matches projected collection events against bank ABONOs (heuristic, ±5% tolerance).
-- `realReconciliationEngine.ts` — matches real cobranza invoices (JDE `/v1/erp/tesoreria/cobranza`) against actual bank movements. 4-layer matching: exact → tolerance → subset-sum → unmatched.
+- `realReconciliationEngine.ts` — matches real cobranza invoices (JDE `/JDEdwards/cobranza`) against actual bank movements. 4-layer matching: exact → tolerance → subset-sum → unmatched.
 
 These are not duplicates — they answer different questions (forecast vs. realized).
 

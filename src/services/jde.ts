@@ -188,7 +188,7 @@ function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
 }
 
 /**
- * POST /v1/erp/tesoreria/antiguedadsaldos
+ * POST /JDEdwards/antiguedadsaldos
  * Retorna todos los saldos abiertos por proveedor para la compañía indicada.
  */
 export async function fetchAgedBalances(
@@ -502,7 +502,7 @@ function groupByAccount(
 }
 
 /**
- * POST /v1/erp/tesoreria/bancos
+ * POST /JDEdwards/bancos
  * Retorna el estado de cuenta agrupado por cuenta bancaria.
  */
 export async function fetchBankStatements(
@@ -731,7 +731,7 @@ function mapCompany(raw: RawRecord): Company {
 }
 
 /**
- * GET /v1/erp/tesoreria/empresas
+ * GET /JDEdwards/empresas
  * Retorna el catálogo de compañías disponible para el usuario autenticado.
  */
 export async function fetchCompanies(config: JdeClientConfig = {}): Promise<Company[]> {
@@ -894,7 +894,7 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
 }
 
 /**
- * POST /v1/erp/tesoreria/cobranza
+ * POST /JDEdwards/cobranza
  *
  * Retorna las facturas de cobranza (CXC) abiertas/históricas para la
  * compañía indicada en el rango de fechas dado.
@@ -1041,7 +1041,7 @@ export function normalizeCobranzaPayments(rows: Record<string, unknown>[], ciaFa
  * POST /cobranzaindicadores vía el proxy JDE estándar.
  *
  * Reporte de pagos/recibos y aplicaciones de cobranza. Liberado en producción
- * el 2026-05-07 en `api.gruposenda.com/v1/erp/tesoreria/cobranzaindicadores`,
+ * el 2026-05-07 en `api.gruposenda.com/JDEdwards/cobranzaindicadores`,
  * por lo que ya usa el mismo cliente, token y proxy que el resto de las APIs
  * JDE — sin upstream separado ni headers de auth custom. La respuesta plana
  * se normaliza a un pago por `Id Pago`, con sus facturas aplicadas anidadas.
@@ -1124,7 +1124,7 @@ function mapCompras(raw: RawRecord): ComprasRecord {
 }
 
 /**
- * POST /v1/erp/tesoreria/compras
+ * POST /JDEdwards/compras
  *
  * Devuelve las órdenes de compra del rango indicado. JDE solo procesa hasta
  * 30 días por request — para rangos mayores usar `fetchComprasRange`.
@@ -1428,7 +1428,7 @@ function mapPagoProveedor(raw: RawRecord): PagoProveedorRecord {
 }
 
 /**
- * POST /v1/erp/tesoreria/pagoproveedor
+ * POST /JDEdwards/pagoproveedor
  *
  * Devuelve los pagos ejecutados a proveedores en el rango. Es el espejo
  * egreso de /cobranza (cobros ejecutados). Sin chunking forzado upstream
