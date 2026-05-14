@@ -12,6 +12,7 @@ import {
 } from './domain/comprasForecastModels';
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
+import { primeDailyCache, getMaxCachedDay, nextIsoDay } from './services/dailyApiCache';
 import {
   fetchCompanies,
   fetchBankStatements,
@@ -1596,12 +1597,45 @@ export default function App() {
     const fechaFinal = today.toISOString().slice(0, 10);
     const lookback = new Date(today);
     lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
-    const fechaInicial = lookback.toISOString().slice(0, 10);
+    const lookbackStart = lookback.toISOString().slice(0, 10);
     (async () => {
       try {
-        const records = await fetchComprasRange(fechaInicial, fechaFinal, { concurrency: 2 });
-        if (records.length > 0) {
-          setComprasRecords(records);
+        // Delta sync: primero revisamos qué tenemos en IDB. Si el último día
+        // cacheado es reciente y el store ya hidrató registros, sólo pedimos
+        // a JDE desde (maxCached+1) hasta hoy. Sin cache o store vacío → full
+        // backfill (lookback completo). El cache diario por día sirve días
+        // pasados sin tocar la red en cualquier caso, pero el delta también
+        // evita iterar 730 días para confirmar cache hits.
+        await primeDailyCache();
+        const maxCached = getMaxCachedDay('compras');
+        const hasHydratedRecords = comprasRecords.length > 0;
+        const candidateFrom = maxCached ? nextIsoDay(maxCached) : lookbackStart;
+        const fechaInicial = (hasHydratedRecords && maxCached && candidateFrom >= lookbackStart)
+          ? candidateFrom
+          : lookbackStart;
+
+        if (fechaInicial > fechaFinal) {
+          // Nada que sincronizar: el cache ya cubre hasta hoy.
+          setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+          return;
+        }
+
+        const fetched = await fetchComprasRange(fechaInicial, fechaFinal, { concurrency: 2 });
+        if (fetched.length > 0) {
+          if (fechaInicial === lookbackStart) {
+            // Full backfill: reemplaza state (limpia datos viejos fuera del
+            // lookback).
+            setComprasRecords(fetched);
+          } else {
+            // Delta: merge con prev por `cia::noOrden::lineaOrden` para
+            // preservar la historia hidratada desde el store.
+            setComprasRecords(prev => {
+              const map = new Map<string, ComprasRecord>();
+              for (const r of prev) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
+              for (const r of fetched) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
+              return Array.from(map.values());
+            });
+          }
         }
         setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
       } catch (err) {
@@ -1612,7 +1646,7 @@ export default function App() {
         console.error('[compras] auto-fetch falló', err);
       }
     })();
-  }, [companies, comprasLoadedCias]);
+  }, [companies, comprasLoadedCias, comprasRecords.length]);
 
   // ── Auto-load PagoProveedor durante el boot ──
   // Endpoint global (no filtra por cia, igual que /compras). Cargamos los
@@ -1632,12 +1666,35 @@ export default function App() {
     const fechaFinal = today.toISOString().slice(0, 10);
     const lookback = new Date(today);
     lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
-    const fechaInicial = lookback.toISOString().slice(0, 10);
+    const lookbackStart = lookback.toISOString().slice(0, 10);
     (async () => {
       try {
-        const records = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 2 });
-        if (records.length > 0) {
-          setPagoProveedorRecords(records);
+        // Delta sync — mismo patrón que Compras. Ver comentario allá.
+        await primeDailyCache();
+        const maxCached = getMaxCachedDay('pagoproveedor');
+        const hasHydratedRecords = pagoProveedorRecords.length > 0;
+        const candidateFrom = maxCached ? nextIsoDay(maxCached) : lookbackStart;
+        const fechaInicial = (hasHydratedRecords && maxCached && candidateFrom >= lookbackStart)
+          ? candidateFrom
+          : lookbackStart;
+
+        if (fechaInicial > fechaFinal) {
+          setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+          return;
+        }
+
+        const fetched = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 2 });
+        if (fetched.length > 0) {
+          if (fechaInicial === lookbackStart) {
+            setPagoProveedorRecords(fetched);
+          } else {
+            setPagoProveedorRecords(prev => {
+              const map = new Map<string, PagoProveedorRecord>();
+              for (const r of prev) map.set(`${r.cia}::${r.noPago}`, r);
+              for (const r of fetched) map.set(`${r.cia}::${r.noPago}`, r);
+              return Array.from(map.values());
+            });
+          }
         }
         setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
       } catch (err) {
@@ -1645,7 +1702,7 @@ export default function App() {
         console.error('[pagoproveedor] auto-fetch falló', err);
       }
     })();
-  }, [companies, pagoProveedorLoadedCias]);
+  }, [companies, pagoProveedorLoadedCias, pagoProveedorRecords.length]);
 
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /JDEdwards/cobranza (productivo desde 2026-05-01).
@@ -2034,37 +2091,65 @@ export default function App() {
       return { primed, ranged: false };
     }
 
-    // ── Step 2: Backfill año-a-la-fecha ──
+    // ── Step 2: Backfill año-a-la-fecha (delta-aware) ──
+    // Si el cache diario en IDB ya cubre hasta ayer y tenemos statements
+    // hidratados desde localStorage, sólo pedimos JDE desde (maxCached+1)
+    // hasta hoy. Si no hay cache o el max está fuera del lookback, full
+    // backfill. force=true salta el delta para forzar refresh manual completo.
     setBankFetchStatus('ranging');
     setBankFetchProgress({ done: 0, total: 0 });
     let ranged = false;
     let lastTotal = 0;
     let lastProgressPaint = 0;
     try {
-      const full = await fetchBankStatementsRange(
-        yearStart,
-        today,
-        defaultFormat,
-        {
-          concurrency: 6,
-          onProgress: (done, total) => {
-            lastTotal = total;
-            const now = performance.now();
-            if (done === total || now - lastProgressPaint > 250) {
-              lastProgressPaint = now;
-              setBankFetchProgress({ done, total });
-            }
-          },
-        },
-      );
-      if (full.length > 0) {
-        setBankJdeStatements(full);
+      await primeDailyCache();
+      const maxCachedBanks = getMaxCachedDay(`banks.${defaultFormat}`);
+      const candidateFrom = maxCachedBanks ? nextIsoDay(maxCachedBanks) : yearStart;
+      const hasHydratedStatements = bankJdeStatements.length > 0;
+      const backfillFrom = (!force && hasHydratedStatements && maxCachedBanks && candidateFrom >= yearStart)
+        ? candidateFrom
+        : yearStart;
+
+      if (backfillFrom > today) {
+        // Cache cubre hasta hoy — nada que pedir.
         setBankLastQuery({
           fechaEstadoCuenta: today,
           formatoElectronico: defaultFormat,
           hasUploadedSantander: bankSupplementalStatements.length > 0,
         });
         ranged = true;
+      } else {
+        const full = await fetchBankStatementsRange(
+          backfillFrom,
+          today,
+          defaultFormat,
+          {
+            concurrency: 6,
+            onProgress: (done, total) => {
+              lastTotal = total;
+              const now = performance.now();
+              if (done === total || now - lastProgressPaint > 250) {
+                lastProgressPaint = now;
+                setBankFetchProgress({ done, total });
+              }
+            },
+          },
+        );
+        if (full.length > 0) {
+          if (backfillFrom === yearStart) {
+            // Full backfill: reemplaza para limpiar statements fuera del lookback.
+            setBankJdeStatements(full);
+          } else {
+            // Delta: merge para preservar historia hidratada.
+            setBankJdeStatements(prev => mergeBankStatements(prev, full));
+          }
+          setBankLastQuery({
+            fechaEstadoCuenta: today,
+            formatoElectronico: defaultFormat,
+            hasUploadedSantander: bankSupplementalStatements.length > 0,
+          });
+          ranged = true;
+        }
       }
     } catch {
       // Keep the last known state visible when the range refresh fails.
@@ -2112,15 +2197,13 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      // Backfill anual al boot — el botón "Actualizar" en la vista Bancos
-      // hace exactamente esto. Lo metemos al boot para que el usuario no
-      // tenga que hacer click después (antes sólo cargaba el prime de 1
-      // día y la vista quedaba con "1 día con actividad"). force=true
-      // bypassa cache; includeRange=true dispara el rango año-a-la-fecha
-      // con concurrencia 6 (mismo path que el botón manual).
+      // Backfill anual al boot. force=false para que la lógica delta-aware
+      // dentro de refreshBankStatementsRange decida qué pedir: si tenemos
+      // cache hasta ayer, sólo pega JDE para hoy en vez de los 730 días.
+      // includeRange=true dispara el rango año-a-la-fecha con concurrencia 6.
       setBootSlot('banks', 'loading');
       try {
-        await refreshBankStatementsRange(true, true);
+        await refreshBankStatementsRange(false, true);
         setBootSlot('banks', 'done');
       } catch {
         setBootSlot('banks', 'error');

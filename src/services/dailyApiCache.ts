@@ -382,6 +382,42 @@ export function dailyCacheStats(api: string, cia?: string): { count: number; day
   return { count: days.length, days };
 }
 
+/**
+ * Último YYYY-MM-DD con entry persistida para `api` (opcionalmente filtrado por
+ * `cia`). Útil para boot: si tenemos cache hasta ayer, sólo pedir desde hoy.
+ *
+ * SYNC — requiere que `primeDailyCache()` ya haya completado. Si memoryIndex
+ * no está listo, devuelve null (caller debe asumir cache miss y hacer full
+ * backfill).
+ *
+ * Si se pasa `cia`, busca el prefijo `${api}.${cia}.`. Si no se pasa, busca
+ * cualquier cía (incluyendo el bucket por defecto `__all__` para endpoints
+ * globales como `/compras` y `/pagoproveedor`).
+ */
+export function getMaxCachedDay(api: string, cia?: string): string | null {
+  if (!memoryIndex) return null;
+  const prefix = cia ? `${api}.${cia}.` : `${api}.`;
+  let max: string | null = null;
+  for (const key of memoryIndex.keys()) {
+    if (!key.startsWith(prefix)) continue;
+    const day = dayFromKey(key);
+    if (!day) continue;
+    if (max === null || day > max) max = day;
+  }
+  return max;
+}
+
+/**
+ * Devuelve el día siguiente a `day` en formato YYYY-MM-DD.
+ * Útil para construir el `from` de un fetch incremental tras un cache hit.
+ */
+export function nextIsoDay(day: string): string {
+  const d = new Date(day + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime())) return day;
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 export async function clearAllDailyCache(): Promise<number> {
   await ensureMemoryReady();
   const count = memoryIndex ? memoryIndex.size : 0;
