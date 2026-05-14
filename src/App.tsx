@@ -61,7 +61,7 @@ import { buildFinancialProjectionSourceData } from './modules/financial-projecti
 import { NavigationProvider, type AppTabId, type NavTarget } from './modules/shared-finance/components/NavigationContext';
 import DashboardLoadingShell from './modules/shared-finance/components/DashboardLoadingShell';
 import type { PayrollCostRecord } from './modules/shared-finance/types';
-import { mergeNominaBatch, nominaCacheKey } from './modules/payroll/services/payrollModuleService';
+import { isCacheFresh, mergeNominaBatch, nominaCacheKey } from './modules/payroll/services/payrollModuleService';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
   LayoutDashboard,
@@ -948,10 +948,14 @@ export default function App() {
     },
   });
 
-  // Load from persistence on mount
+  // Load from persistence on mount. Async desde v12: heavies
+  // (cobranza/cxp/compras/pagoproveedor/nómina/payments) viven en IDB porque
+  // localStorage tenía cuota ~5MB que se rompía y dejaba el store sin
+  // persistir, causando refetch JDE en cada boot. Ver persistence.ts:saveStore.
   useEffect(() => {
-    const stored = loadStore();
-    if (stored) {
+    let cancelled = false;
+    void loadStore().then((stored) => {
+      if (cancelled || !stored) return;
       if (stored.providers.length) setProviders(stored.providers);
       if (stored.clients.length) setClients(stored.clients);
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
@@ -981,7 +985,8 @@ export default function App() {
         setCompaniesLoadedAt(stored.companiesLoadedAt);
         setBootSlot('companies', 'done');
       }
-    }
+    });
+    return () => { cancelled = true; };
   }, []);
 
   // ── Auto-resolución total matcher cliente↔cobranza ──────────────────────
@@ -1831,7 +1836,23 @@ export default function App() {
           const anio = d.getFullYear();
           const mes = d.getMonth() + 1;
           const cacheKey = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio, mes });
-          if (nominaLoadedKeys[cacheKey]) continue;
+          const loadedAt = nominaLoadedKeys[cacheKey];
+          // Mes en curso (i=0): siempre refetch. El mes vivo cambia
+          // intra-día; cache de ayer reflejaba un mes parcial y dejaba
+          // al usuario con datos incompletos hasta que pulsara "Refrescar
+          // TRESS" manualmente.
+          // Mes anterior (i=1): refetch si cache > 6h. Late entries
+          // siguen cayendo durante la primera semana de cierre.
+          // Meses cerrados (i ≥ 2): el cache es definitivo, skip.
+          if (i === 0) {
+            monthsToFetch.push({ anio, mes, cacheKey });
+            continue;
+          }
+          if (i === 1 && !isCacheFresh(loadedAt, 6 * 60 * 60 * 1000)) {
+            monthsToFetch.push({ anio, mes, cacheKey });
+            continue;
+          }
+          if (loadedAt) continue;
           monthsToFetch.push({ anio, mes, cacheKey });
         }
         if (monthsToFetch.length === 0) {
