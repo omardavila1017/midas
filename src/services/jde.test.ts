@@ -276,7 +276,7 @@ describe('Nómina (TRESS) — mapNominaRow', () => {
 
     expect(result).toEqual([]);
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/api/tress/nomina'),
+      expect.stringContaining('/api/tress/Nomina'),
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ idEmpresa: 99, tipoNomina: 99, anio: 2026, mes: 5 }),
