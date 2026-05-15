@@ -566,25 +566,26 @@ export interface PagoProveedorRecord {
 // ───────────────────────────────────────────────────────────────
 
 /**
- * Request body para POST http://srv-desarrollo:92/CITI/RolDiario.
+ * Request body para POST /citi/roldiario.
  *
- * Endpoint productivo Senda Citi, liberado 2026-05-14 con campos nuevos
- * `B_Despachado`, `B_Efectuado`, `Factura`, `UUID_Fiscal`. Sirve para
- * proyectar ingresos a corto plazo: viaje ejecutado + Dias_Credito del cliente
- * + día pago preferido = fecha esperada de cash-in. Cuando la cobranza emite
- * la factura matching (por `Factura` o `UUID_Fiscal`) el ROL transiciona de
- * "predicho" a "facturado".
+ * Endpoint productivo Senda Citi (campos `B_Despachado`, `B_Efectuado`,
+ * `Factura`, `UUID_Fiscal`). Sirve para proyectar ingresos a corto plazo:
+ * viaje ejecutado + Dias_Credito del cliente + día pago preferido = fecha
+ * esperada de cash-in. Cuando la cobranza emite la factura matching (por
+ * `Factura` o `UUID_Fiscal`) el ROL transiciona de "predicho" a "facturado".
  *
- * Body asumido (mirroring patrón cobranza/compras — confirmar con equipo CITI
- * si se rechaza): rango de fechas + compañía opcional.
+ * Contrato confirmado por el equipo CITI (2026-05-15): el endpoint espera
+ * `f_Inicio`, `f_Final` y `k_Servidor`. Mandar otros nombres de campo hace
+ * que el endpoint pase una fecha vacía a SQL y truene con "SqlDateTime
+ * overflow" — por eso los nombres importan.
  */
 export interface RolRequest {
   /** Fecha inicial inclusive (YYYY-MM-DD). */
-  fechaInicial: string;
+  f_Inicio: string;
   /** Fecha final inclusive (YYYY-MM-DD). */
-  fechaFinal: string;
-  /** Compañía (opcional — vacío trae todas las cías Senda Citi). */
-  cia?: string;
+  f_Final: string;
+  /** Servidor CITI; -1 = todos los servidores. */
+  k_Servidor?: number;
 }
 
 /**
