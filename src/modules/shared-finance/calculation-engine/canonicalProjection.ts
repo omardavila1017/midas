@@ -129,6 +129,8 @@ export interface CanonicalMonthlyPoint {
   income: number;
   expense: number;
   closingCash: number;
+  actualIncome?: number;
+  actualExpense?: number;
 }
 
 export interface CanonicalProjectionResult {
@@ -179,6 +181,8 @@ export function buildCanonicalProjection(
     income: m.income,
     expense: m.expense,
     closingCash: m.closingCash,
+    actualIncome: m.actualIncome,
+    actualExpense: m.actualExpense,
   }));
 
   const movements = buildMovements({ monthly, inputs, projectionByYm });
@@ -533,8 +537,8 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
   const currentYm = todayYm;
   const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
   if (currentHistorical) {
-    const remainingIncome = 0;
-    const remainingExpense = 0;
+    const remainingIncome = Math.max(0, currentHistorical.income - (currentHistorical.actualIncome ?? currentHistorical.income));
+    const remainingExpense = Math.max(0, currentHistorical.expense - (currentHistorical.actualExpense ?? currentHistorical.expense));
 
     const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
       .filter((line) => line.date >= inputs.asOfDate);

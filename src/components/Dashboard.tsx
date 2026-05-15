@@ -21,7 +21,11 @@ import {
   computeBankStartingBalance,
 } from '../domain/dashboardEngine';
 import {
-  fetchAgedBalances,
+  cashFlowSummaryScopeKey,
+  loadCashFlowSummary,
+  saveCashFlowSummary,
+} from '../domain/cashFlowSummaryCache';
+import {
   type BankAccountStatement,
   type AgedBalanceRecord,
 } from '../services/jde';
@@ -113,21 +117,14 @@ const Dashboard: React.FC<DashboardProps> = ({
   }, [overrides]);
 
   useEffect(() => {
-    let cancelled = false;
-    if (!companyCode || companyCode === 'all') {
-      setAged([]);
-      return;
-    }
-    setLoading(true);
+    setAged([]);
+    setLoading(false);
     setError(null);
-    fetchAgedBalances({ cia: companyCode })
-      .then((d) => { if (!cancelled) setAged(d); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
   }, [companyCode]);
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const summaryScopeKey = useMemo(() => cashFlowSummaryScopeKey(companyCode), [companyCode]);
+  const cachedSummary = useMemo(() => loadCashFlowSummary(summaryScopeKey), [summaryScopeKey]);
 
   // Gasto mínimo operativo: proveedores de Operación + nómina TRESS (prom 3m).
   // El override de nómina entra como totalMonthly al KPI y al piso del chart.
@@ -144,6 +141,24 @@ const Dashboard: React.FC<DashboardProps> = ({
     }),
     [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, budget, startingBalance],
   );
+  const effectiveBase = base.length > 0 ? base : cachedSummary?.months ?? [];
+
+  useEffect(() => {
+    if (base.length === 0) return;
+    saveCashFlowSummary(summaryScopeKey, {
+      months: base,
+      counts: {
+        bankStatements: bankStatements.length,
+        bankMovements: bankStatements.reduce((sum, statement) => sum + statement.movimientos.length, 0),
+        cxpRecords: cxpRecords.length,
+        cobranzaRecords: cobranzaReconciliation?.summary.totalFacturas ?? 0,
+        comprasRecords: 0,
+        pagoProveedorRecords: 0,
+        nominaRecords: 0,
+        rolRecords: 0,
+      },
+    });
+  }, [base, summaryScopeKey, bankStatements, cxpRecords.length, cobranzaReconciliation]);
 
   // Antes el Dashboard pasaba por `evaluateCashFlow` (motor de Simulación) con
   // un array vacío de propuestas. Tras eliminar el módulo de Simulación basta
@@ -152,11 +167,13 @@ const Dashboard: React.FC<DashboardProps> = ({
   // mensual cubra Ene–Dic incluso cuando no hay datos bancarios para algunos
   // meses (típico cuando el primer estado de cuenta arranca en abril).
   const evaluated = useMemo(() => {
-    const mapped = base.map((m) => ({
+    const mapped = effectiveBase.map((m) => ({
       yearMonth: m.yearMonth,
       isHistorical: m.isHistorical,
       baseIncome: m.income,
       baseExpense: m.expense,
+      actualIncome: m.actualIncome ?? m.income,
+      actualExpense: m.actualExpense ?? m.expense,
       baseClosingCash: m.closingCash,
     }));
     if (mapped.length === 0) return { months: mapped };
@@ -179,21 +196,23 @@ const Dashboard: React.FC<DashboardProps> = ({
             isHistorical: false,
             baseIncome: 0,
             baseExpense: 0,
+            actualIncome: 0,
+            actualExpense: 0,
             baseClosingCash: lastClosing,
           });
         }
       }
     }
     return { months: filled };
-  }, [base]);
+  }, [effectiveBase]);
 
   const currentYear = new Date().getFullYear();
   const currentYm = toYearMonth(today);
   const monthsThisYear = evaluated.months.filter((m) => m.yearMonth.startsWith(String(currentYear)));
 
   const histThisYear = monthsThisYear.filter((m) => m.isHistorical);
-  const ingresosYtd = histThisYear.reduce((s, m) => s + m.baseIncome, 0);
-  const egresosYtd = histThisYear.reduce((s, m) => s + m.baseExpense, 0);
+  const ingresosYtd = histThisYear.reduce((s, m) => s + m.actualIncome, 0);
+  const egresosYtd = histThisYear.reduce((s, m) => s + m.actualExpense, 0);
   const monthsElapsed = histThisYear.length;
   const ingresosAvgMonth = monthsElapsed > 0 ? ingresosYtd / monthsElapsed : 0;
   const egresosAvgMonth = monthsElapsed > 0 ? egresosYtd / monthsElapsed : 0;
@@ -272,8 +291,8 @@ const Dashboard: React.FC<DashboardProps> = ({
     const projectedExpense = operationalMonthValue(ym, 'expense');
 
     if (cmp < 0) {
-      const projectedIncomeTotal = override?.income ?? projectedIncome ?? 0;
-      const projectedExpenseTotal = override?.expense ?? projectedExpense ?? 0;
+      const projectedIncomeTotal = override?.income ?? projectedIncome ?? m.baseIncome;
+      const projectedExpenseTotal = override?.expense ?? projectedExpense ?? m.baseExpense;
       const projIncGap = projectedIncomeTotal > 0
         ? Math.max(0, projectedIncomeTotal - m.baseIncome)
         : 0;
@@ -329,10 +348,14 @@ const Dashboard: React.FC<DashboardProps> = ({
         phase: 'future' as const,
       };
     }
-    const projectedIncomeTotal = override?.income ?? projectedIncome ?? 0;
-    const projectedExpenseTotal = override?.expense ?? projectedExpense ?? 0;
-    const projIncGap = Math.max(0, projectedIncomeTotal - m.baseIncome);
-    const projExpGap = Math.max(0, projectedExpenseTotal - m.baseExpense);
+    const projectedIncomeTotal = override?.income ?? projectedIncome ?? m.baseIncome;
+    const projectedExpenseTotal = override?.expense ?? projectedExpense ?? m.baseExpense;
+    const realIncome = m.actualIncome;
+    const realExpense = m.actualExpense;
+    const totalIncome = Math.max(m.baseIncome, projectedIncomeTotal);
+    const totalExpense = Math.max(m.baseExpense, projectedExpenseTotal);
+    const projIncGap = Math.max(0, totalIncome - realIncome);
+    const projExpGap = Math.max(0, totalExpense - realExpense);
     // Mes en curso: NO carvear piso adentro del stack. Real lleva mucho menos
     // del mes (mid-month) y el carve lo escondería dentro del piso amarillo.
     // Render: real sólido + proyectado rayado, con el piso como marcador
@@ -340,17 +363,17 @@ const Dashboard: React.FC<DashboardProps> = ({
     const floor = minimumExpense.totalMonthly;
     return {
       yearMonth: ym,
-      realIncome: m.baseIncome,
+      realIncome,
       projIncomeGap: projIncGap,
-      projIncomeTotal: projectedIncomeTotal,
-      realExpense: m.baseExpense,
+      projIncomeTotal: totalIncome,
+      realExpense,
       projExpenseGap: projExpGap,
-      projExpenseTotal: projectedExpenseTotal,
+      projExpenseTotal: totalExpense,
       gastoMinFloor: 0,
-      realExpenseAboveFloor: m.baseExpense,
+      realExpenseAboveFloor: realExpense,
       projExpenseGapAboveFloor: projExpGap,
       monthlyFloor: floor,
-      floorReference: m.baseExpense + projExpGap > 0 ? floor : null,
+      floorReference: realExpense + projExpGap > 0 ? floor : null,
       projIncomeOverrun: null,
       projExpenseOverrun: null,
       cashBase: m.baseClosingCash,
@@ -400,16 +423,14 @@ const Dashboard: React.FC<DashboardProps> = ({
           override,
         };
       }
-      // Mes en curso: sólo proyección operativa u override manual.
-      const projIncTotal = override?.income ?? projectedIncome ?? 0;
-      const projExpTotal = override?.expense ?? projectedExpense ?? 0;
+      // Mes en curso: real acumulado + proyección restante.
       return {
         yearMonth: ym,
         phase,
-        realIncome: m.baseIncome,
-        realExpense: m.baseExpense,
-        projectedIncome: Math.max(0, projIncTotal - m.baseIncome),
-        projectedExpense: Math.max(0, projExpTotal - m.baseExpense),
+        realIncome: m.actualIncome,
+        realExpense: m.actualExpense,
+        projectedIncome: Math.max(0, m.baseIncome - m.actualIncome),
+        projectedExpense: Math.max(0, m.baseExpense - m.actualExpense),
         closingCash: m.baseClosingCash,
         projectionDetail: projDetail,
         override,

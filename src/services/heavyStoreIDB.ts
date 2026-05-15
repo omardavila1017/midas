@@ -170,6 +170,34 @@ export async function loadHeavyStore(): Promise<HeavyStore> {
   return out;
 }
 
+export async function loadHeavyRecords<K extends HeavyKey>(key: K): Promise<HeavyStore[K]> {
+  const db = await openDb();
+  if (!db) {
+    // eslint-disable-next-line no-console
+    console.warn(`[heavyStoreIDB] loadHeavyRecords(${key}): DB no disponible`);
+    return emptyHeavyStore()[key];
+  }
+  const records = await new Promise<unknown[]>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(key);
+      req.onsuccess = () => {
+        const value = req.result as IdbEntry | undefined;
+        resolve(value && Array.isArray(value.records) ? value.records : []);
+      };
+      req.onerror = () => resolve([]);
+      tx.onerror = () => resolve([]);
+      tx.onabort = () => resolve([]);
+    } catch {
+      resolve([]);
+    }
+  });
+  // eslint-disable-next-line no-console
+  console.info(`[heavyStoreIDB] loadHeavyRecords(${key}) · ${records.length}`);
+  return records as HeavyStore[K];
+}
+
 export async function saveHeavyRecords(key: HeavyKey, records: unknown[]): Promise<void> {
   const db = await openDb();
   if (!db) return;

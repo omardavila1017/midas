@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { MidasStore, loadStore, saveStore, saveLightStore, CXPRecord } from './domain/persistence';
-import { saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
+import { MidasStore, loadLightStore, saveStore, saveLightStore, CXPRecord } from './domain/persistence';
+import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
 import { buildProviderSpendIndex, enrichProvidersWithRecentSpend } from './domain/providerRecentSpend';
@@ -252,6 +252,27 @@ const RECONCILIATION_TABS = new Set<TabId>([
   'financialPlanning',
   'taxes',
 ]);
+
+type DatasetKey = 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'banks';
+type DatasetStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'error';
+
+const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
+  dashboard: [],
+  netflow: ['banks'],
+  bancos: ['banks'],
+  cxp: ['cxp', 'pagos'],
+  concursoMercantil: ['cxp'],
+  collections: ['cobranza', 'banks'],
+  fideicomiso: ['cobranza', 'banks'],
+  compras: ['compras'],
+  pagos: ['pagos'],
+  payroll: ['nomina'],
+  financialProjection: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol'],
+  financialPlanning: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol'],
+  taxes: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina'],
+  providers: [],
+  clients: [],
+};
 
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
@@ -620,9 +641,9 @@ export default function App() {
     nomina: 'pending',
     rol: 'pending',
   });
-  const [cxpBootProgress, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
-  const [cobranzaBootProgress, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
-  const [rolBootProgress, setRolBootProgress] = useState<{ done: number; total: number } | null>(null);
+  const [, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
+  const [, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
+  const [, setRolBootProgress] = useState<{ done: number; total: number } | null>(null);
   const setBootSlot = useCallback(
     (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'nomina' | 'rol', status: BootTaskStatus) => {
       setBootStatus(prev => (prev[slot] === status ? prev : { ...prev, [slot]: status }));
@@ -631,6 +652,33 @@ export default function App() {
   );
   const [isBooted, setIsBooted] = useState(false);
   const [splashMounted, setSplashMounted] = useState(true);
+  const [requestedDatasets, setRequestedDatasets] = useState<Set<DatasetKey>>(() => new Set(['banks']));
+  const [datasetStatus, setDatasetStatus] = useState<Record<DatasetKey, DatasetStatus>>({
+    cxp: 'idle',
+    cobranza: 'idle',
+    compras: 'idle',
+    pagos: 'idle',
+    nomina: 'idle',
+    rol: 'idle',
+    banks: 'loading',
+  });
+  const requestDatasets = useCallback((keys: DatasetKey[]) => {
+    if (keys.length === 0) return;
+    setRequestedDatasets(prev => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const key of keys) {
+        if (!next.has(key)) {
+          next.add(key);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+  const setDatasetSlot = useCallback((key: DatasetKey, status: DatasetStatus) => {
+    setDatasetStatus(prev => (prev[key] === status ? prev : { ...prev, [key]: status }));
+  }, []);
 
   // ── JDE integration state ──
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -1149,31 +1197,24 @@ export default function App() {
         console.warn(`[loadStore] setter ${name} threw:`, err);
       }
     };
-    void loadStore()
+    void loadLightStore()
       .then((stored) => {
         if (cancelled) return;
         if (stored) {
           if (stored.providers.length) safeSet(setProviders, stored.providers, 'providers');
           if (stored.clients.length) safeSet(setClients, stored.clients, 'clients');
           if (stored.confirmedPayments.length) safeSet(setConfirmedPayments, stored.confirmedPayments, 'confirmedPayments');
-          if (stored.cxpRecords.length) safeSet(setCxpRecords, stored.cxpRecords, 'cxpRecords');
           if (stored.cxpLoadedCias) safeSet(setCxpLoadedCias, stored.cxpLoadedCias, 'cxpLoadedCias');
-          if (stored.cobranzaRecords?.length) safeSet(setCobranzaRecords, stored.cobranzaRecords, 'cobranzaRecords');
           if (stored.cobranzaLoadedCias) safeSet(setCobranzaLoadedCias, stored.cobranzaLoadedCias, 'cobranzaLoadedCias');
-          if (stored.cobranzaPayments?.length) safeSet(setCobranzaPayments, stored.cobranzaPayments, 'cobranzaPayments');
           if (stored.cobranzaPaymentsLoadedCias) safeSet(setCobranzaPaymentsLoadedCias, stored.cobranzaPaymentsLoadedCias, 'cobranzaPaymentsLoadedCias');
-          if (stored.comprasRecords?.length) safeSet(setComprasRecords, stored.comprasRecords, 'comprasRecords');
           if (stored.comprasLoadedCias) safeSet(setComprasLoadedCias, stored.comprasLoadedCias, 'comprasLoadedCias');
-          if (stored.pagoProveedorRecords?.length) safeSet(setPagoProveedorRecords, stored.pagoProveedorRecords, 'pagoProveedorRecords');
           if (stored.pagoProveedorLoadedCias) safeSet(setPagoProveedorLoadedCias, stored.pagoProveedorLoadedCias, 'pagoProveedorLoadedCias');
-          if (stored.nominaRecords?.length) safeSet(setNominaRecords, stored.nominaRecords, 'nominaRecords');
           if (stored.nominaLoadedKeys) safeSet(setNominaLoadedKeys, stored.nominaLoadedKeys, 'nominaLoadedKeys');
-          if (stored.rolRecords?.length) safeSet(setRolRecords, stored.rolRecords, 'rolRecords');
           if (stored.rolLoadedKeys) safeSet(setRolLoadedKeys, stored.rolLoadedKeys, 'rolLoadedKeys');
           if (stored.cashFlowOverrides) safeSet(setCashFlowOverrides, stored.cashFlowOverrides, 'cashFlowOverrides');
           safeSet(setAssumptions, stored.assumptions, 'assumptions');
           // eslint-disable-next-line no-console
-          console.info(`[loadStore] hidratado · cobranza=${stored.cobranzaRecords?.length ?? 0} · cxp=${stored.cxpRecords?.length ?? 0} · compras=${stored.comprasRecords?.length ?? 0} · pagoProv=${stored.pagoProveedorRecords?.length ?? 0} · nomina=${stored.nominaRecords?.length ?? 0} · companies=${stored.companies?.length ?? 0}`);
+          console.info(`[loadStore] light hidratado · companies=${stored.companies?.length ?? 0} · heavy=on-demand`);
           // Hidratar companies desde cache antes de que JDE responda. Esto
           // desbloquea el splash inmediatamente (boot slot 'companies' = done)
           // y permite que CXP/Cobranza auto-fetch arranquen contra el catálogo
@@ -1204,6 +1245,67 @@ export default function App() {
       window.clearTimeout(fallbackTimer);
     };
   }, []);
+
+  useEffect(() => {
+    requestDatasets(TAB_DATASETS[activeTab] ?? []);
+  }, [activeTab, requestDatasets]);
+
+  useEffect(() => {
+    if (bankCacheLoaded) setDatasetSlot('banks', 'ready');
+  }, [bankCacheLoaded, setDatasetSlot]);
+
+  const hydratedDatasetsRef = useRef<Set<DatasetKey>>(new Set());
+  const hydrationPromisesRef = useRef<Partial<Record<DatasetKey, Promise<void>>>>({});
+  const hydrateDataset = useCallback((dataset: DatasetKey): Promise<void> => {
+    if (dataset === 'banks') return Promise.resolve();
+    if (hydratedDatasetsRef.current.has(dataset)) return Promise.resolve();
+    const existing = hydrationPromisesRef.current[dataset];
+    if (existing) return existing;
+
+    setDatasetSlot(dataset, 'loading');
+    const promise = (async () => {
+      try {
+        if (dataset === 'cxp') {
+          const records = await loadHeavyRecords('cxpRecords');
+          if (records.length > 0) setCxpRecords(records);
+        } else if (dataset === 'cobranza') {
+          const [records, payments] = await Promise.all([
+            loadHeavyRecords('cobranzaRecords'),
+            loadHeavyRecords('cobranzaPayments'),
+          ]);
+          if (records.length > 0) setCobranzaRecords(records);
+          if (payments.length > 0) setCobranzaPayments(payments);
+        } else if (dataset === 'compras') {
+          const records = await loadHeavyRecords('comprasRecords');
+          if (records.length > 0) setComprasRecords(records);
+        } else if (dataset === 'pagos') {
+          const records = await loadHeavyRecords('pagoProveedorRecords');
+          if (records.length > 0) setPagoProveedorRecords(records);
+        } else if (dataset === 'nomina') {
+          const records = await loadHeavyRecords('nominaRecords');
+          if (records.length > 0) setNominaRecords(records);
+        } else if (dataset === 'rol') {
+          const records = await loadHeavyRecords('rolRecords');
+          if (records.length > 0) setRolRecords(records);
+        }
+        hydratedDatasetsRef.current.add(dataset);
+        setDatasetSlot(dataset, 'ready');
+      } catch (err) {
+        console.warn(`[dataset:${dataset}] hydrate failed`, err);
+        setDatasetSlot(dataset, 'error');
+      } finally {
+        delete hydrationPromisesRef.current[dataset];
+      }
+    })();
+    hydrationPromisesRef.current[dataset] = promise;
+    return promise;
+  }, [setDatasetSlot]);
+
+  useEffect(() => {
+    for (const dataset of requestedDatasets) {
+      void hydrateDataset(dataset);
+    }
+  }, [requestedDatasets, hydrateDataset]);
 
   // ── Auto-resolución total matcher cliente↔cobranza ──────────────────────
   // Regla de negocio (Santiago, 2026-05-12):
@@ -1693,12 +1795,8 @@ export default function App() {
       { id: 'catalog', label: 'Catálogos · clientes y proveedores', status: bootStatus.catalog },
       { id: 'companies', label: 'JDE · empresas', status: bootStatus.companies },
       { id: 'banks', label: 'Bancos · estado reciente', status: bootStatus.banks, progress: bankFetchProgress },
-      { id: 'cxp', label: 'CXP · antigüedad de saldos', status: bootStatus.cxp, progress: cxpBootProgress },
-      { id: 'cobranza', label: 'Cobranza · cartera y pagos', status: bootStatus.cobranza, progress: cobranzaBootProgress },
-      { id: 'nomina', label: 'Nómina · TRESS mes en curso', status: bootStatus.nomina },
-      { id: 'rol', label: 'ROL CITI · viajes ejecutados', status: bootStatus.rol, progress: rolBootProgress },
     ],
-    [bootStatus, bankFetchProgress, cxpBootProgress, cobranzaBootProgress, rolBootProgress],
+    [bootStatus.catalog, bootStatus.companies, bootStatus.banks, bankFetchProgress],
   );
   useEffect(() => {
     if (isBooted) return;
@@ -1740,24 +1838,31 @@ export default function App() {
   const cxpAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cxpAutoFetchDone.current) return;
+    if (!requestedDatasets.has('cxp')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
     const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
     if (activeCias.length === 0) {
       cxpAutoFetchDone.current = true;
       setBootSlot('cxp', 'done');
+      setDatasetSlot('cxp', 'ready');
       return;
     }
-    const ciasToFetch = activeCias.filter(cia => !isFreshTimestamp(cxpLoadedCias[cia], CXP_AUTO_REFRESH_TTL_MS));
+    const ciasWithRecords = new Set(cxpRecords.map((record) => record.cia));
+    const ciasToFetch = activeCias.filter(cia =>
+      !ciasWithRecords.has(cia) || !isFreshTimestamp(cxpLoadedCias[cia], CXP_AUTO_REFRESH_TTL_MS)
+    );
     // eslint-disable-next-line no-console
     console.info(`[cxp] boot sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (TTL ${Math.round(CXP_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cxpRecords.length}`);
     if (ciasToFetch.length === 0) {
       cxpAutoFetchDone.current = true;
       setBootSlot('cxp', 'done');
+      setDatasetSlot('cxp', 'ready');
       return;
     }
     cxpAutoFetchDone.current = true;
     setBootSlot('cxp', 'loading');
+    setDatasetSlot('cxp', 'loading');
     setCxpBootProgress({ done: 0, total: ciasToFetch.length });
     // Sin `cancelled` mid-flight: en StrictMode el cleanup dispara antes de
     // que JDE responda y matar los workers ahí deja CXP atorado en 0/N para
@@ -1795,9 +1900,11 @@ export default function App() {
         setCxpRecords(prev => [...prev.filter(r => !fetchedSet.has(r.cia)), ...fetchedRecords]);
         setCxpLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
       }
-      setBootSlot('cxp', errors === ciasToFetch.length ? 'error' : 'done');
+      const status = errors === ciasToFetch.length ? 'error' : 'done';
+      setBootSlot('cxp', status);
+      setDatasetSlot('cxp', status === 'error' ? 'error' : 'ready');
     })();
-  }, [storeHydrated, companies, cxpLoadedCias, setBootSlot]);
+  }, [requestedDatasets, storeHydrated, companies, cxpRecords, cxpLoadedCias, setBootSlot, setDatasetSlot]);
 
   // ── Auto-load Compras (Órdenes de Compra) durante el boot ──
   // Endpoint global (no por cia, no listado en /empresas). Cargamos los últimos
@@ -1807,13 +1914,16 @@ export default function App() {
   const comprasAutoFetchDone = useRef(false);
   useEffect(() => {
     if (comprasAutoFetchDone.current) return;
+    if (!requestedDatasets.has('compras')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
-    if (isFreshTimestamp(comprasLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
+    if (comprasRecords.length > 0 && isFreshTimestamp(comprasLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
       comprasAutoFetchDone.current = true;
+      setDatasetSlot('compras', 'ready');
       return;
     }
     comprasAutoFetchDone.current = true;
+    setDatasetSlot('compras', 'loading');
     const today = new Date();
     const fechaFinal = addMonthsIso(today, COMPRAS_FUTURE_LOOKAHEAD_MONTHS);
     const lookback = new Date(today);
@@ -1842,6 +1952,7 @@ export default function App() {
           // eslint-disable-next-line no-console
           console.info('[compras] boot sync · nada nuevo, cache cubre hasta hoy');
           setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+          setDatasetSlot('compras', 'ready');
           return;
         }
 
@@ -1859,15 +1970,17 @@ export default function App() {
           });
         }
         setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+        setDatasetSlot('compras', 'ready');
       } catch (err) {
         // Reset the guard so el usuario puede reintentar manualmente desde la
         // pestaña Compras sin reload. Loggeamos para que la falla no quede
         // muda — el silencio anterior dejaba "no muestra nada" sin pista.
         comprasAutoFetchDone.current = false;
+        setDatasetSlot('compras', 'error');
         console.error('[compras] auto-fetch falló', err);
       }
     })();
-  }, [storeHydrated, companies, comprasLoadedCias, comprasRecords.length]);
+  }, [requestedDatasets, storeHydrated, companies, comprasLoadedCias, comprasRecords.length, setDatasetSlot]);
 
   // ── Auto-load PagoProveedor durante el boot ──
   // Endpoint global (no filtra por cia, igual que /compras). Cargamos los
@@ -1877,13 +1990,16 @@ export default function App() {
   const pagoProveedorAutoFetchDone = useRef(false);
   useEffect(() => {
     if (pagoProveedorAutoFetchDone.current) return;
+    if (!requestedDatasets.has('pagos')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
-    if (isFreshTimestamp(pagoProveedorLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
+    if (pagoProveedorRecords.length > 0 && isFreshTimestamp(pagoProveedorLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
       pagoProveedorAutoFetchDone.current = true;
+      setDatasetSlot('pagos', 'ready');
       return;
     }
     pagoProveedorAutoFetchDone.current = true;
+    setDatasetSlot('pagos', 'loading');
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
     const lookback = new Date(today);
@@ -1906,6 +2022,7 @@ export default function App() {
           // eslint-disable-next-line no-console
           console.info('[pagoproveedor] boot sync · nada nuevo, cache cubre hasta hoy');
           setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+          setDatasetSlot('pagos', 'ready');
           return;
         }
 
@@ -1920,12 +2037,14 @@ export default function App() {
           });
         }
         setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+        setDatasetSlot('pagos', 'ready');
       } catch (err) {
         pagoProveedorAutoFetchDone.current = false;
+        setDatasetSlot('pagos', 'error');
         console.error('[pagoproveedor] auto-fetch falló', err);
       }
     })();
-  }, [storeHydrated, companies, pagoProveedorLoadedCias, pagoProveedorRecords.length]);
+  }, [requestedDatasets, storeHydrated, companies, pagoProveedorLoadedCias, pagoProveedorRecords.length, setDatasetSlot]);
 
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /JDEdwards/cobranza (productivo desde 2026-05-01).
@@ -1946,10 +2065,14 @@ export default function App() {
         setCobranzaError('No hay compañías activas en el catálogo.');
         return;
       }
+      const cobranzaRecordCias = new Set(cobranzaRecords.map(record => record.cia));
+      const cobranzaPaymentCias = new Set(cobranzaPayments.map(payment => payment.cia));
       const ciasToFetch = force
         ? activeCias
         : activeCias.filter(cia =>
-          !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
+          !cobranzaRecordCias.has(cia)
+          || !cobranzaPaymentCias.has(cia)
+          || !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
           || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
         );
       // eslint-disable-next-line no-console
@@ -2054,7 +2177,7 @@ export default function App() {
         setCobranzaRefreshing(false);
       }
     },
-    [companies, cobranzaLoadedCias, cobranzaPaymentsLoadedCias],
+    [companies, cobranzaRecords, cobranzaPayments, cobranzaLoadedCias, cobranzaPaymentsLoadedCias],
   );
 
   // Cobranza ya forma parte de la ruta crítica del boot — no esperamos a que
@@ -2062,36 +2185,42 @@ export default function App() {
   const cobranzaAutoFetchDone = useRef(false);
   useEffect(() => {
     if (cobranzaAutoFetchDone.current) return;
+    if (!requestedDatasets.has('cobranza')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
     const activeCias = companies.filter(c => c.activa !== false);
     if (activeCias.length === 0) {
       cobranzaAutoFetchDone.current = true;
       setBootSlot('cobranza', 'done');
+      setDatasetSlot('cobranza', 'ready');
       return;
     }
     cobranzaAutoFetchDone.current = true;
     setBootSlot('cobranza', 'loading');
+    setDatasetSlot('cobranza', 'loading');
     (async () => {
       try {
         const summary = await refreshCobranza(false, 'cobranza');
         if (!summary) {
           setBootSlot('cobranza', 'done');
+          setDatasetSlot('cobranza', 'ready');
           return;
         }
         const allFailed = summary.failedCias >= summary.totalCias * 2;
         setBootSlot('cobranza', allFailed ? 'error' : 'done');
+        setDatasetSlot('cobranza', allFailed ? 'error' : 'ready');
       } catch {
         setBootSlot('cobranza', 'error');
+        setDatasetSlot('cobranza', 'error');
       }
     })();
-  }, [storeHydrated, companies, refreshCobranza, setBootSlot]);
+  }, [requestedDatasets, storeHydrated, companies, refreshCobranza, setBootSlot, setDatasetSlot]);
 
   // ── ROL CITI: viajes ejecutados ─────────────────────────────────────────
-  // Fetcheamos desde el 1° de enero del año en curso hasta hoy. Un solo
-  // request por año (el endpoint acepta rangos amplios). El resultado se
-  // persiste en IDB heavy-store y queda disponible para cruzar contra
-  // cobranza por `factura`/`uuidFiscal` en flujos futuros.
+  // Fetcheamos desde el 1° de enero del año en curso hasta hoy. El service
+  // trocea el rango en ventanas diarias para que el API CITI no se vaya por
+  // timeout. El resultado se persiste en IDB heavy-store y queda disponible
+  // para cruzar contra cobranza por `factura`/`uuidFiscal` en flujos futuros.
   const refreshRol = useCallback(
     async (force = true, progressSlot?: 'rol') => {
       const today = new Date();
@@ -2101,19 +2230,22 @@ export default function App() {
       const cacheKey = `${year}:full`;
       // Refresh si force=true, si no hay cache aún, o si el timestamp es viejo.
       const lastFetch = rolLoadedKeys[cacheKey];
-      if (!force && lastFetch && isFreshTimestamp(lastFetch, COBRANZA_AUTO_REFRESH_TTL_MS)) {
+      if (!force && rolRecords.length > 0 && lastFetch && isFreshTimestamp(lastFetch, COBRANZA_AUTO_REFRESH_TTL_MS)) {
         return { totalRecords: rolRecords.length, totalCias: 1, failedCias: 0 };
       }
 
       if (progressSlot === 'rol') setRolBootProgress({ done: 0, total: 1 });
 
       try {
-        const records = await fetchRolRange(fechaInicial, fechaFinal);
+        const records = await fetchRolRange(fechaInicial, fechaFinal, {
+          onProgress: progressSlot === 'rol'
+            ? (done, total) => setRolBootProgress({ done, total })
+            : undefined,
+        });
         setRolRecords(records);
         setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
         // eslint-disable-next-line no-console
         console.info(`[rol] sync · ${records.length} viajes ${fechaInicial}..${fechaFinal}`);
-        if (progressSlot === 'rol') setRolBootProgress({ done: 1, total: 1 });
         return { totalRecords: records.length, totalCias: 1, failedCias: 0 };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2132,18 +2264,23 @@ export default function App() {
   const rolAutoFetchDone = useRef(false);
   useEffect(() => {
     if (rolAutoFetchDone.current) return;
+    if (!requestedDatasets.has('rol')) return;
     if (!storeHydrated) return;
     rolAutoFetchDone.current = true;
     setBootSlot('rol', 'loading');
+    setDatasetSlot('rol', 'loading');
     (async () => {
       try {
         const summary = await refreshRol(false, 'rol');
-        setBootSlot('rol', summary && summary.failedCias > 0 ? 'error' : 'done');
+        const status = summary && summary.failedCias > 0 ? 'error' : 'done';
+        setBootSlot('rol', status);
+        setDatasetSlot('rol', status === 'error' ? 'error' : 'ready');
       } catch {
         setBootSlot('rol', 'error');
+        setDatasetSlot('rol', 'error');
       }
     })();
-  }, [storeHydrated, refreshRol, setBootSlot]);
+  }, [requestedDatasets, storeHydrated, refreshRol, setBootSlot, setDatasetSlot]);
 
   // Si JDE no devuelve compañías (companies en error), CXP y cobranza nunca
   // se dispararon — marcamos los slots como error para destrabar el boot.
@@ -2169,6 +2306,7 @@ export default function App() {
   const nominaBootDone = useRef(false);
   useEffect(() => {
     if (nominaBootDone.current) return;
+    if (!requestedDatasets.has('nomina')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
     nominaBootDone.current = true;
@@ -2180,6 +2318,7 @@ export default function App() {
     // forzando al usuario a "Refrescar TRESS" manualmente.
     const today = new Date();
     setBootSlot('nomina', 'loading');
+    setDatasetSlot('nomina', 'loading');
     (async () => {
       try {
         // Re-refine pass sobre records persistidos. La tabla de clasificación
@@ -2258,6 +2397,7 @@ export default function App() {
           setNominaLoadedKeys(prev => ({ ...prev, ...recentKeys }));
         }
         setBootSlot('nomina', 'done');
+        setDatasetSlot('nomina', 'ready');
 
         // BACKGROUND: meses 5..23 atrás para alimentar el predictor estacional
         // y avg 3m de meses cerrados. Solo los que no estén cacheados ni
@@ -2278,10 +2418,11 @@ export default function App() {
         }
       } catch {
         setBootSlot('nomina', 'error');
+        setDatasetSlot('nomina', 'error');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeHydrated, companies.length]);
+  }, [requestedDatasets, storeHydrated, companies.length, setDatasetSlot]);
 
   // Persist selected cia (clear to 'all' if it disappears from the catalog)
   useEffect(() => {
@@ -2567,6 +2708,20 @@ export default function App() {
 
   const activeSection = SECTION_FOR_TAB[activeTab] ?? 'operacion';
   const subTabs = SUB_TABS[activeSection];
+  const activeTabDatasets = TAB_DATASETS[activeTab] ?? [];
+  const datasetHasRecords: Record<DatasetKey, boolean> = {
+    banks: bankStatements.length > 0,
+    cxp: cxpRecords.length > 0,
+    cobranza: cobranzaRecords.length > 0 || cobranzaPayments.length > 0,
+    compras: comprasRecords.length > 0,
+    pagos: pagoProveedorRecords.length > 0,
+    nomina: nominaRecords.length > 0,
+    rol: rolRecords.length > 0,
+  };
+  const tabDataPending = activeTabDatasets.some((dataset) => {
+    const status = datasetStatus[dataset];
+    return status !== 'ready' && status !== 'error' && !datasetHasRecords[dataset];
+  });
 
   const switchSection = (s: SectionId) => {
     if (s === activeSection) return;
@@ -2737,6 +2892,16 @@ export default function App() {
         <NavigationProvider goTo={goTo}>
           <div key={pageKey} className="animate-page-in">
           <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
+            {tabDataPending ? (
+              <DashboardLoadingShell
+                label={`Cargando ${subTabs.find(t => t.id === activeTab)?.label ?? activeTab}`}
+                kpis={4}
+                showFilterBar={false}
+                showChart={activeSection === 'proyeccion'}
+                tableRows={activeSection === 'operacion' ? 5 : 0}
+              />
+            ) : (
+              <>
             {activeTab === 'dashboard' && (
               <Suspense fallback={<LazyTabFallback label="Dashboard" />}>
                 <Dashboard
@@ -3033,6 +3198,8 @@ export default function App() {
               </Suspense>
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}
+              </>
+            )}
           </ErrorBoundary>
           </div>
         </NavigationProvider>

@@ -79,6 +79,7 @@ import {
 export type { HeavyKey, HeavyStore } from '../services/heavyStoreIDB';
 export {
   loadHeavyStore,
+  loadHeavyRecords,
   saveHeavyStore,
   saveHeavyRecords,
   clearHeavyStore,
@@ -651,6 +652,31 @@ export async function loadStore(): Promise<MidasStore | null> {
   return null;
 }
 
+/**
+ * Carga solo el store ligero. No toca IndexedDB heavy; sirve para que el shell
+ * inicial pinte con catálogos/timestamps y difiera las colecciones grandes
+ * hasta que una pestaña las pida.
+ */
+export async function loadLightStore(): Promise<MidasStore | null> {
+  purgeOrphanKeys();
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const payload = JSON.parse(raw) as { version?: number; data?: unknown };
+      if (payload && typeof payload === 'object' && payload.data !== undefined) {
+        return normalizeStore(payload.data);
+      }
+    }
+  } catch {
+    // fall through to migration/full loader
+  }
+
+  // Legacy stores may still carry heavies inline and need the existing
+  // migration path. This only happens once per browser profile.
+  return loadStore();
+}
+
 export function clearStore(): void {
   try {
     localStorage.removeItem(STORAGE_KEY);
@@ -676,4 +702,3 @@ export function importStore(json: string): MidasStore {
   }
   return normalizeStore(parsed.data);
 }
-

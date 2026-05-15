@@ -55,6 +55,17 @@ import type {
 
 type RawRecord = Record<string, unknown>;
 
+const LONG_RUNNING_TIMEOUT_MS = 240_000;
+const LONG_RUNNING_RETRIES = 1;
+
+function withLongRunningDefaults(config: JdeClientConfig = {}): JdeClientConfig {
+  return {
+    ...config,
+    timeoutMs: config.timeoutMs ?? LONG_RUNNING_TIMEOUT_MS,
+    retries: config.retries ?? LONG_RUNNING_RETRIES,
+  };
+}
+
 /** Busca una clave por varios alias (case-insensitive, snake/camel). */
 function pick(obj: RawRecord, aliases: string[]): unknown {
   const keys = Object.keys(obj);
@@ -151,6 +162,27 @@ function unwrapList(raw: unknown): RawRecord[] {
     }
   }
   return [];
+}
+
+function splitIntoFixedDayWindows(from: string, to: string, windowDays: number): Array<{ from: string; to: string }> {
+  const windows: Array<{ from: string; to: string }> = [];
+  const start = new Date(from + 'T00:00:00Z');
+  const end = new Date(to + 'T00:00:00Z');
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end || windowDays < 1) return windows;
+
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  while (cursor <= end) {
+    const winEnd = new Date(cursor);
+    winEnd.setUTCDate(winEnd.getUTCDate() + windowDays - 1);
+    const boundedEnd = winEnd <= end ? winEnd : end;
+    windows.push({
+      from: cursor.toISOString().slice(0, 10),
+      to: boundedEnd.toISOString().slice(0, 10),
+    });
+    cursor = new Date(boundedEnd);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return windows;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -1087,7 +1119,7 @@ export async function fetchIndicadoresCobranza(
   req: CobranzaPaymentRequest,
   config: JdeClientConfig = {},
 ): Promise<CobranzaPayment[]> {
-  const raw = await jdeClient.post<unknown>('/cobranzaindicadores', req, config);
+  const raw = await jdeClient.post<unknown>('/cobranzaindicadores', req, withLongRunningDefaults(config));
   return normalizeCobranzaPayments(unwrapList(raw), req.cia);
 }
 
@@ -1291,10 +1323,65 @@ export async function fetchIndicadoresCobranzaRange(
   } = {},
 ): Promise<CobranzaPayment[]> {
   const config = options.config ?? {};
-  options.onProgress?.(0, 1);
-  const records = await fetchIndicadoresCobranza({ cia, fechaInicial: from, fechaFinal: to }, config);
-  options.onProgress?.(1, 1);
-  return records;
+  const windows = splitIntoMonthlyWindows(from, to);
+  if (windows.length === 0) return [];
+
+  options.onProgress?.(0, windows.length);
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  const results: CobranzaPayment[][] = new Array(windows.length);
+  const failedWindows: string[] = [];
+  let cursor = 0;
+  let completed = 0;
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const slot = cursor++;
+      if (slot >= windows.length) return;
+      const w = windows[slot];
+      try {
+        results[slot] = await fetchIndicadoresCobranza(
+          { cia, fechaInicial: w.from, fechaFinal: w.to },
+          config,
+        );
+      } catch (err) {
+        failedWindows.push(`${w.from}..${w.to}`);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[cobranzaindicadores] ${cia} ventana ${w.from}..${w.to} falló: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        results[slot] = [];
+      } finally {
+        completed += 1;
+        options.onProgress?.(completed, windows.length);
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, windows.length) }, worker),
+  );
+
+  if (failedWindows.length === windows.length) {
+    throw new JdeApiError(
+      `JDE /cobranzaindicadores no respondió para ${cia} en ninguna ventana mensual`,
+      504,
+      '/cobranzaindicadores',
+      { cia, from, to, failedWindows },
+    );
+  }
+
+  if (failedWindows.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[cobranzaindicadores] ${cia} completó parcial: ${windows.length - failedWindows.length}/${windows.length} ventanas`,
+    );
+  }
+
+  const byId = new Map<string, CobranzaPayment>();
+  for (const payment of results.flat()) {
+    byId.set(payment.idPago, payment);
+  }
+  return Array.from(byId.values()).sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro) || a.idPago.localeCompare(b.idPago));
 }
 
 // Flag para que el log de shape solo aparezca una vez por sesión.
@@ -1660,11 +1747,11 @@ export async function fetchRol(
   req: RolRequest,
   config: JdeClientConfig = {},
 ): Promise<RolRecord[]> {
-  const merged: JdeClientConfig = {
+  const merged = withLongRunningDefaults({
     baseUrl: apiConfig.citi.baseUrl,
     authValue: apiConfig.citi.authValue || undefined,
     ...config,
-  };
+  });
   let raw: unknown;
   try {
     raw = await jdeClient.post<unknown>('/roldiario', req, merged);
@@ -1721,25 +1808,32 @@ function splitIntoMonthlyWindows(from: string, to: string): Array<{ from: string
  * Wrapper para histórico del ROL diario. Dedup por
  * (cia, kCliente, anio, semana, ruta, tipoViaje) para tolerar duplicados.
  *
- * El endpoint /citi/roldiario es lento (~20s+ por mes); un solo request del
- * año entero rebasa el timeout de 120s del jdeClient (y al colgarse retiene
- * un slot del semáforo global, ahogando cobranza/compras). Por eso troceamos
- * por mes calendario y los corremos con concurrencia baja. Un mes que falla
- * se trata como 0 viajes — no aborta el rango completo.
+ * El endpoint /citi/roldiario es lento; un solo request del año entero rebasa
+ * el timeout del cliente/proxy y al colgarse retiene un slot del semáforo
+ * global. Por eso troceamos por día y corremos con concurrencia baja.
+ * Una ventana que falla se trata como 0 viajes — no aborta el rango completo.
  */
 export async function fetchRolRange(
   fechaInicial: string,
   fechaFinal: string,
-  options: { kServidor?: number; concurrency?: number; config?: JdeClientConfig } = {},
+  options: {
+    kServidor?: number;
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
 ): Promise<RolRecord[]> {
   const kServidor = options.kServidor ?? -1;
   const config = options.config ?? {};
-  const windows = splitIntoMonthlyWindows(fechaInicial, fechaFinal);
+  const windows = splitIntoFixedDayWindows(fechaInicial, fechaFinal, 1);
   if (windows.length === 0) return [];
 
+  options.onProgress?.(0, windows.length);
   const concurrency = Math.max(1, options.concurrency ?? 2);
   const results: RolRecord[][] = new Array(windows.length);
+  const failedWindows: string[] = [];
   let cursor = 0;
+  let completed = 0;
   const worker = async (): Promise<void> => {
     while (true) {
       const slot = cursor++;
@@ -1751,15 +1845,33 @@ export async function fetchRolRange(
           config,
         );
       } catch (err) {
+        failedWindows.push(`${w.from}..${w.to}`);
         // eslint-disable-next-line no-console
         console.warn(`[rol] ventana ${w.from}..${w.to} falló: ${err instanceof Error ? err.message : String(err)}`);
         results[slot] = [];
+      } finally {
+        completed += 1;
+        options.onProgress?.(completed, windows.length);
       }
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(concurrency, windows.length) }, worker),
   );
+
+  if (failedWindows.length === windows.length) {
+    throw new JdeApiError(
+      `CITI /roldiario no respondió en ninguna ventana diaria`,
+      504,
+      '/roldiario',
+      { fechaInicial, fechaFinal, failedWindows },
+    );
+  }
+
+  if (failedWindows.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`[rol] completó parcial: ${windows.length - failedWindows.length}/${windows.length} ventanas`);
+  }
 
   const seen = new Set<string>();
   const merged: RolRecord[] = [];

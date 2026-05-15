@@ -157,25 +157,6 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   });
   const projectionByYm = new Map(projection.months.map((m) => [m.yearMonth, m]));
 
-  // Baseline queda expuesto como 0 — ya no se calcula linear regression.
-  const baseline = { avgIncome: 0, avgExpense: 0 };
-
-  // ── Encadenado de caja con fórmula simple y predecible ──────────────
-  // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
-  //
-  // Los meses históricos SIEMPRE usan sus ingresos/egresos REALES (del banco).
-  // Para la caja inicial, si el usuario no dio override manual, usamos la suma
-  // de saldoInicial de las cuentas.
-  const baseStart = typeof startingBalance === 'number'
-    ? startingBalance
-    : computeBankStartingBalance(filtered);
-  const historicalChained: CashFlowMonth[] = [];
-  let runningHist = baseStart;
-  for (const m of historical) {
-    runningHist = runningHist + m.income - m.expense;
-    historicalChained.push({ ...m, closingCash: runningHist });
-  }
-
   // ── Motor predictivo (Holt-Winters tiered) ───────────────────────────
   // Si está habilitado y hay histórico suficiente, los totales mensuales
   // futuros pueden venir del modelo. Precedencia para cada mes futuro:
@@ -208,6 +189,50 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     for (const p of predictive.expense.monthly) {
       if (!p.isHistorical) predExpenseByYm.set(p.date.slice(0, 7), p.expected);
     }
+  }
+
+  // Baseline queda expuesto como 0 — ya no se calcula linear regression.
+  const baseline = { avgIncome: 0, avgExpense: 0 };
+
+  // ── Encadenado de caja con fórmula simple y predecible ──────────────
+  // caja_final[m] = caja_final[m-1] + ingresos[m] - egresos[m]
+  //
+  // Meses cerrados: ingresos/egresos reales del banco.
+  // Mes actual: real acumulado + proyección restante, modelado como el máximo
+  // entre el acumulado real, la proyección operativa y el override manual.
+  const baseStart = typeof startingBalance === 'number'
+    ? startingBalance
+    : computeBankStartingBalance(filtered);
+  const historicalChained: CashFlowMonth[] = [];
+  let runningHist = baseStart;
+  for (const m of historical) {
+    const actualIncome = m.income;
+    const actualExpense = m.expense;
+    let income = actualIncome;
+    let expense = actualExpense;
+    if (m.yearMonth === todayYm) {
+      const ov = overrides[todayYm];
+      const projected = projectionByYm.get(todayYm);
+      income = ov?.income ?? Math.max(
+        actualIncome,
+        projected?.income.total ?? 0,
+        predIncomeByYm.get(todayYm) ?? 0,
+      );
+      expense = ov?.expense ?? Math.max(
+        actualExpense,
+        projected?.expense.total ?? 0,
+        predExpenseByYm.get(todayYm) ?? 0,
+      );
+    }
+    runningHist = runningHist + income - expense;
+    historicalChained.push({
+      ...m,
+      income,
+      expense,
+      actualIncome,
+      actualExpense,
+      closingCash: runningHist,
+    });
   }
 
   const months: CashFlowMonth[] = [...historicalChained];

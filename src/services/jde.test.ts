@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __internal, fetchBankStatements, fetchIndicadoresCobranza, fetchNomina, normalizeCobranzaPayments, normalizeInvoiceRef } from './jde';
+import {
+  __internal,
+  fetchBankStatements,
+  fetchIndicadoresCobranza,
+  fetchIndicadoresCobranzaRange,
+  fetchNomina,
+  normalizeCobranzaPayments,
+  normalizeInvoiceRef,
+} from './jde';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -169,6 +177,52 @@ describe('normalizeCobranzaPayments', () => {
     }));
     expect(payments).toHaveLength(1);
     expect(payments[0].idPago).toBe('PAY-1');
+  });
+
+  it('parte cobranzaindicadores por mes para evitar timeouts de rangos largos', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { fechaInicial: string; fechaFinal: string };
+      return new Response(JSON.stringify([
+        {
+          'Id Pago': `PAY-${body.fechaInicial}`,
+          CIA: '00011',
+          'Fecha Cobro': body.fechaInicial,
+          'cta bancaria': '11.1020.0011302',
+          'No Recibo': 'RI-1',
+          'Importe Recibo': '1000',
+          'No Factura': 'F-1',
+          'Importe Cobrado': '1000',
+        },
+      ]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const payments = await fetchIndicadoresCobranzaRange(
+      '00011',
+      '2026-04-15',
+      '2026-05-10',
+      { concurrency: 1 },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/jde/cobranzaindicadores', expect.objectContaining({
+      body: JSON.stringify({
+        cia: '00011',
+        fechaInicial: '2026-04-15',
+        fechaFinal: '2026-04-30',
+      }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/jde/cobranzaindicadores', expect.objectContaining({
+      body: JSON.stringify({
+        cia: '00011',
+        fechaInicial: '2026-05-01',
+        fechaFinal: '2026-05-10',
+      }),
+    }));
+    expect(payments).toHaveLength(2);
   });
 });
 

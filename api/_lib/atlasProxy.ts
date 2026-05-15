@@ -1,4 +1,4 @@
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 
 export interface AtlasProxyRequest {
   method?: string;
@@ -30,6 +30,14 @@ function pathFromQuery(query: AtlasProxyRequest['query']): string {
   const rawPath = query?.path;
   const segments = Array.isArray(rawPath) ? rawPath : rawPath ? [rawPath] : [];
   return segments.map(encodeURIComponent).join('/');
+}
+
+function resolveTimeoutMs(label: string): number {
+  const scoped = process.env[`${label.toUpperCase()}_PROXY_TIMEOUT_MS`];
+  const shared = process.env.ATLAS_PROXY_TIMEOUT_MS;
+  const raw = scoped ?? shared;
+  const parsed = raw ? Number.parseInt(raw, 10) : DEFAULT_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
 }
 
 export function createAtlasProxy(options: AtlasProxyOptions) {
@@ -65,8 +73,9 @@ export function createAtlasProxy(options: AtlasProxyOptions) {
       if (value) outgoingHeaders[key] = value;
     }
 
+    const timeoutMs = resolveTimeoutMs(options.label);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const upstreamRes = await fetch(targetUrl, {
@@ -90,7 +99,7 @@ export function createAtlasProxy(options: AtlasProxyOptions) {
       clearTimeout(timer);
       const timeout = error instanceof Error && error.name === 'AbortError';
       res.status(timeout ? 504 : 502).json({
-        error: timeout ? `${options.label} upstream timeout` : `${options.label} upstream unreachable`,
+        error: timeout ? `${options.label} upstream timeout after ${timeoutMs}ms` : `${options.label} upstream unreachable`,
       });
     }
   };
