@@ -9,7 +9,6 @@ import type {
 } from '../../../shared-finance/types';
 import {
   BucketColumn,
-  GROUP_COL_WIDTH,
   HEADER_HEIGHT,
   LABEL_COL_WIDTH,
   parseNumericInput,
@@ -41,10 +40,12 @@ interface CellCoord {
 }
 
 type DisplayRow =
-  | { kind: 'data'; row: PlanningRow }
-  | { kind: 'ap-group'; id: string; label: string; rows: PlanningRow[] }
-  | { kind: 'ap-subgroup'; id: string; parentId: string; label: string; rows: PlanningRow[] }
-  | { kind: 'transfer-group'; id: string; label: string; rows: PlanningRow[] };
+  | { kind: 'data'; row: PlanningRow; depth: number }
+  | { kind: 'bucket'; id: string; label: string; rows: PlanningRow[]; type: FinancialMovementType };
+
+function bucketId(type: FinancialMovementType, label: string): string {
+  return `${type}:${label}`;
+}
 
 export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const {
@@ -68,85 +69,46 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const outflowRows = useMemo(() => rows.filter((row) => row.type === 'OUTFLOW'), [rows]);
 
   const [collapsed, setCollapsed] = useState<Record<FinancialMovementType, boolean>>({ INFLOW: false, OUTFLOW: false });
-  const [expandedApGroups, setExpandedApGroups] = useState<Record<string, boolean>>({});
-  const [expandedApSubgroups, setExpandedApSubgroups] = useState<Record<string, boolean>>({});
-  const [expandedTransferGroup, setExpandedTransferGroup] = useState(false);
+  const [expandedBuckets, setExpandedBuckets] = useState<Record<string, boolean>>({});
   const toggleSection = (type: FinancialMovementType) => {
     setCollapsed((current) => ({ ...current, [type]: !current[type] }));
   };
-  const toggleApGroup = (id: string) => {
-    setExpandedApGroups((current) => ({ ...current, [id]: !current[id] }));
+  const toggleBucket = (id: string) => {
+    setExpandedBuckets((current) => ({ ...current, [id]: !current[id] }));
   };
-  const toggleApSubgroup = (id: string) => {
-    setExpandedApSubgroups((current) => ({ ...current, [id]: !(current[id] ?? true) }));
-  };
-  const toggleTransferGroup = () => setExpandedTransferGroup((v) => !v);
+
+  const groupByBucket = useCallback(
+    (inputRows: PlanningRow[], type: FinancialMovementType): DisplayRow[] => {
+      const byBucket = new Map<string, PlanningRow[]>();
+      for (const row of inputRows) {
+        const label = row.bucketLabel || (type === 'INFLOW' ? 'Otros ingresos' : 'Otros egresos');
+        const bucket = byBucket.get(label);
+        if (bucket) bucket.push(row);
+        else byBucket.set(label, [row]);
+      }
+      return Array.from(byBucket.entries())
+        .sort(([a], [b]) => a.localeCompare(b, 'es-MX'))
+        .flatMap<DisplayRow>(([label, groupRows]) => {
+          const id = bucketId(type, label);
+          const sortedRows = [...groupRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
+          const header: DisplayRow = { kind: 'bucket', id, label, rows: sortedRows, type };
+          if (!expandedBuckets[id]) return [header];
+          return [header, ...sortedRows.map((row) => ({ kind: 'data' as const, row, depth: 1 }))];
+        });
+    },
+    [expandedBuckets],
+  );
 
   const visibleInflowRows = collapsed.INFLOW ? [] : inflowRows;
   const visibleOutflowRows = collapsed.OUTFLOW ? [] : outflowRows;
   const visibleInflowDisplayRows = useMemo<DisplayRow[]>(
-    () => visibleInflowRows.map((row) => ({ kind: 'data', row })),
-    [visibleInflowRows],
+    () => groupByBucket(visibleInflowRows, 'INFLOW'),
+    [groupByBucket, visibleInflowRows],
   );
-  const visibleOutflowDisplayRows = useMemo<DisplayRow[]>(() => {
-    const byProviderType = new Map<string, PlanningRow[]>();
-    const plainRows: DisplayRow[] = [];
-    const transferRows: PlanningRow[] = [];
-    for (const row of visibleOutflowRows) {
-      if (row.category === 'AP_PAYMENT') {
-        const label = row.subgroupLabel ?? 'Sin clasificar';
-        const bucket = byProviderType.get(label);
-        if (bucket) bucket.push(row);
-        else byProviderType.set(label, [row]);
-      } else if (row.category === 'TRANSFER') {
-        transferRows.push(row);
-      } else {
-        plainRows.push({ kind: 'data', row });
-      }
-    }
-    const grouped = Array.from(byProviderType.entries())
-      .sort(([a], [b]) => a.localeCompare(b, 'es-MX'))
-      .flatMap<DisplayRow>(([label, groupRows]) => {
-        const id = `ap:${label}`;
-        const sortedRows = [...groupRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
-        if (!expandedApGroups[id]) return [{ kind: 'ap-group', id, label, rows: sortedRows }];
-        const byProviderCategory = new Map<string, PlanningRow[]>();
-        for (const row of sortedRows) {
-          const childLabel = row.providerCategoryLabel ?? 'Sin categoría';
-          const bucket = byProviderCategory.get(childLabel);
-          if (bucket) bucket.push(row);
-          else byProviderCategory.set(childLabel, [row]);
-        }
-        const childRows = Array.from(byProviderCategory.entries())
-          .sort(([a], [b]) => a.localeCompare(b, 'es-MX'))
-          .flatMap<DisplayRow>(([childLabel, categoryRows]) => {
-            const childId = `${id}:${childLabel}`;
-            const categorySortedRows = [...categoryRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
-            return (expandedApSubgroups[childId] ?? true)
-              ? [
-                { kind: 'ap-subgroup', id: childId, parentId: id, label: childLabel, rows: categorySortedRows },
-                ...categorySortedRows.map((row) => ({ kind: 'data' as const, row })),
-              ]
-              : [{ kind: 'ap-subgroup', id: childId, parentId: id, label: childLabel, rows: categorySortedRows }];
-          });
-        return [{ kind: 'ap-group', id, label, rows: sortedRows }, ...childRows];
-      });
-    const transferDisplay: DisplayRow[] = transferRows.length > 0
-      ? (() => {
-        const sortedTransfer = [...transferRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
-        const header: DisplayRow = {
-          kind: 'transfer-group',
-          id: 'transfer:otros',
-          label: 'Otros Egresos',
-          rows: sortedTransfer,
-        };
-        return expandedTransferGroup
-          ? [header, ...sortedTransfer.map((row) => ({ kind: 'data' as const, row }))]
-          : [header];
-      })()
-      : [];
-    return [...grouped, ...plainRows, ...transferDisplay];
-  }, [expandedApGroups, expandedApSubgroups, expandedTransferGroup, visibleOutflowRows]);
+  const visibleOutflowDisplayRows = useMemo<DisplayRow[]>(
+    () => groupByBucket(visibleOutflowRows, 'OUTFLOW'),
+    [groupByBucket, visibleOutflowRows],
+  );
   const displayRows = useMemo(
     () => [...visibleInflowDisplayRows, ...visibleOutflowDisplayRows],
     [visibleInflowDisplayRows, visibleOutflowDisplayRows],
@@ -321,21 +283,19 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     }
   }, [clearSelectedCell, columns, commitEdit, displayRows, isEditing, moveSelection, onInspectCell, selection, startEdit]);
 
-  const renderDataRow = (row: PlanningRow, rowIndex: number) => (
+  const renderDataRow = (row: PlanningRow, rowIndex: number, depth: number) => (
     <div
       key={row.conceptKey}
       role="row"
       className="flex border-b border-[var(--gray-100)] hover:bg-[var(--gray-50)]/40"
       style={{ height: ROW_HEIGHT }}
     >
-      <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" left={0}>
-        <span className="truncate">{row.group}</span>
-      </StickyLeftCell>
-      <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow>
+      <StickyLeftCell width={LABEL_COL_WIDTH} left={0} shadow>
         <button
           type="button"
           onClick={() => onClickRow?.(row.conceptKey)}
           className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-medium text-[var(--gray-950)] hover:text-[var(--primary)]"
+          style={{ paddingLeft: depth * 18 }}
         >
           {row.isCustom && <Sparkles className="h-3 w-3 text-[var(--primary)]" strokeWidth={1.5} />}
           <span className="truncate">{row.label}</span>
@@ -409,8 +369,8 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     </div>
   );
 
-  const renderApGroupRow = (group: Extract<DisplayRow, { kind: 'ap-group' }>, rowIndex: number) => {
-    const expanded = !!expandedApGroups[group.id];
+  const renderBucketRow = (group: Extract<DisplayRow, { kind: 'bucket' }>, rowIndex: number) => {
+    const expanded = !!expandedBuckets[group.id];
     return (
       <div
         key={group.id}
@@ -418,13 +378,10 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/70 hover:bg-[var(--gray-100)]/70"
         style={{ height: ROW_HEIGHT }}
       >
-        <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-500)]" left={0}>
-          <span className="truncate">Egresos · Proveedores</span>
-        </StickyLeftCell>
-        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow className="bg-[var(--gray-50)]/70">
+        <StickyLeftCell width={LABEL_COL_WIDTH} left={0} shadow className="bg-[var(--gray-50)]/70">
           <button
             type="button"
-            onClick={() => toggleApGroup(group.id)}
+            onClick={() => toggleBucket(group.id)}
             aria-expanded={expanded}
             className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-bold text-[var(--gray-950)] hover:text-[var(--primary)]"
           >
@@ -451,125 +408,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
               onClick={() => {
                 setSelection({ rowIndex, colIndex });
                 setIsEditing(false);
-                toggleApGroup(group.id);
-              }}
-              className={`flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)] cursor-pointer select-none ${
-                column.isPast ? 'bg-[var(--gray-100)] text-[var(--gray-500)]' : 'text-[var(--gray-950)]'
-              } ${isSelected ? 'ring-2 ring-inset ring-[var(--primary)] z-10 bg-white' : ''}`}
-              style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
-            >
-              <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
-                {value === 0 ? '—' : fmtCompact(value)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const renderApSubgroupRow = (group: Extract<DisplayRow, { kind: 'ap-subgroup' }>, rowIndex: number) => {
-    const expanded = expandedApSubgroups[group.id] ?? true;
-    return (
-      <div
-        key={group.id}
-        role="row"
-        className="flex border-b border-[var(--gray-100)] bg-white hover:bg-[var(--gray-50)]"
-        style={{ height: ROW_HEIGHT }}
-      >
-        <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" left={0}>
-          <span className="truncate">Egresos · Proveedores</span>
-        </StickyLeftCell>
-        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow>
-          <button
-            type="button"
-            onClick={() => toggleApSubgroup(group.id)}
-            aria-expanded={expanded}
-            className="flex w-full items-center gap-1.5 truncate pl-5 text-left text-[12px] font-semibold text-[var(--gray-800)] hover:text-[var(--primary)]"
-          >
-            {expanded
-              ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
-              : <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />}
-            <span className="truncate">{group.label}</span>
-            <span className="ml-auto rounded bg-[var(--gray-100)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--gray-500)]">
-              {group.rows.length}
-            </span>
-          </button>
-        </StickyLeftCell>
-        {columns.map((column, colIndex) => {
-          const value = group.rows.reduce((sum, child) => {
-            const override = overrideFor(child.conceptKey, column.key);
-            return sum + (override ? override.value : baseValueFor(child.conceptKey, column.key));
-          }, 0);
-          const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;
-          return (
-            <div
-              key={column.key}
-              role="gridcell"
-              aria-selected={isSelected}
-              onClick={() => {
-                setSelection({ rowIndex, colIndex });
-                setIsEditing(false);
-                toggleApSubgroup(group.id);
-              }}
-              className={`flex h-full items-center justify-end px-2 text-[12px] font-semibold tabular-nums border-l border-[var(--gray-100)] cursor-pointer select-none ${
-                column.isPast ? 'bg-[var(--gray-50)] text-[var(--gray-500)]' : 'text-[var(--gray-800)]'
-              } ${isSelected ? 'ring-2 ring-inset ring-[var(--primary)] z-10 bg-white' : ''}`}
-              style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
-            >
-              <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
-                {value === 0 ? '—' : fmtCompact(value)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const renderTransferGroupRow = (group: Extract<DisplayRow, { kind: 'transfer-group' }>, rowIndex: number) => {
-    const expanded = expandedTransferGroup;
-    return (
-      <div
-        key={group.id}
-        role="row"
-        className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/70 hover:bg-[var(--gray-100)]/70"
-        style={{ height: ROW_HEIGHT }}
-      >
-        <StickyLeftCell width={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-500)]" left={0}>
-          <span className="truncate">Egresos · Otros</span>
-        </StickyLeftCell>
-        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} shadow className="bg-[var(--gray-50)]/70">
-          <button
-            type="button"
-            onClick={toggleTransferGroup}
-            aria-expanded={expanded}
-            className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-bold text-[var(--gray-950)] hover:text-[var(--primary)]"
-          >
-            {expanded
-              ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
-              : <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />}
-            <span className="truncate">{group.label}</span>
-            <span className="ml-auto rounded bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--gray-500)]">
-              {group.rows.length}
-            </span>
-          </button>
-        </StickyLeftCell>
-        {columns.map((column, colIndex) => {
-          const value = group.rows.reduce((sum, child) => {
-            const override = overrideFor(child.conceptKey, column.key);
-            return sum + (override ? override.value : baseValueFor(child.conceptKey, column.key));
-          }, 0);
-          const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;
-          return (
-            <div
-              key={column.key}
-              role="gridcell"
-              aria-selected={isSelected}
-              onClick={() => {
-                setSelection({ rowIndex, colIndex });
-                setIsEditing(false);
-                toggleTransferGroup();
+                toggleBucket(group.id);
               }}
               className={`flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)] cursor-pointer select-none ${
                 column.isPast ? 'bg-[var(--gray-100)] text-[var(--gray-500)]' : 'text-[var(--gray-950)]'
@@ -592,7 +431,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       <div className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/40">
         <div
           className="sticky left-0 z-20 flex items-center bg-[var(--gray-50)]/40"
-          style={{ width: GROUP_COL_WIDTH + LABEL_COL_WIDTH, paddingLeft: 8 }}
+          style={{ width: LABEL_COL_WIDTH, paddingLeft: 8 }}
         >
           <button
             type="button"
@@ -615,7 +454,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       role="row"
     >
       <StickyLeftCell
-        width={GROUP_COL_WIDTH + LABEL_COL_WIDTH}
+        width={LABEL_COL_WIDTH}
         left={0}
         className="text-[12px] font-bold text-[var(--gray-950)]"
         shadow
@@ -644,6 +483,16 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     </div>
   );
 
+  const renderGroupedRows = (
+    list: DisplayRow[],
+    rowIndexOffset: number,
+  ) => list.map((displayRow, index) => {
+    const rowIndex = rowIndexOffset + index;
+    return displayRow.kind === 'data'
+      ? renderDataRow(displayRow.row, rowIndex, displayRow.depth)
+      : renderBucketRow(displayRow, rowIndex);
+  });
+
   return (
     <div
       ref={containerRef}
@@ -657,10 +506,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     >
       {/* Header row */}
       <div className="sticky top-0 z-30 flex border-b border-[var(--gray-200)] bg-[var(--gray-50)]" style={{ height: HEADER_HEIGHT }}>
-        <StickyLeftCell width={GROUP_COL_WIDTH} left={0} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header>
-          Sección
-        </StickyLeftCell>
-        <StickyLeftCell width={LABEL_COL_WIDTH} left={GROUP_COL_WIDTH} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header shadow>
+        <StickyLeftCell width={LABEL_COL_WIDTH} left={0} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header shadow>
           Concepto
         </StickyLeftCell>
         {columns.map((column) => (
@@ -683,19 +529,12 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         count={inflowRows.length}
         collapsed={collapsed.INFLOW}
         onToggle={() => toggleSection('INFLOW')}
+        width={LABEL_COL_WIDTH}
       />
       {!collapsed.INFLOW && (inflowRows.length === 0 ? (
         <EmptyRow message="Sin ingresos en este escenario." />
       ) : (
-        visibleInflowDisplayRows.map((displayRow, index) =>
-          displayRow.kind === 'data'
-            ? renderDataRow(displayRow.row, index)
-            : displayRow.kind === 'ap-group'
-              ? renderApGroupRow(displayRow, index)
-              : displayRow.kind === 'ap-subgroup'
-                ? renderApSubgroupRow(displayRow, index)
-                : renderTransferGroupRow(displayRow, index),
-        )
+        renderGroupedRows(visibleInflowDisplayRows, 0)
       ))}
       {!collapsed.INFLOW && renderAddRow('INFLOW')}
 
@@ -705,20 +544,12 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         count={outflowRows.length}
         collapsed={collapsed.OUTFLOW}
         onToggle={() => toggleSection('OUTFLOW')}
+        width={LABEL_COL_WIDTH}
       />
       {!collapsed.OUTFLOW && (outflowRows.length === 0 ? (
         <EmptyRow message="Sin egresos en este escenario." />
       ) : (
-        visibleOutflowDisplayRows.map((displayRow, index) => {
-          const rowIndex = visibleInflowDisplayRows.length + index;
-          return displayRow.kind === 'data'
-            ? renderDataRow(displayRow.row, rowIndex)
-            : displayRow.kind === 'ap-group'
-              ? renderApGroupRow(displayRow, rowIndex)
-              : displayRow.kind === 'ap-subgroup'
-                ? renderApSubgroupRow(displayRow, rowIndex)
-                : renderTransferGroupRow(displayRow, rowIndex);
-        })
+        renderGroupedRows(visibleOutflowDisplayRows, visibleInflowDisplayRows.length)
       ))}
       {!collapsed.OUTFLOW && renderAddRow('OUTFLOW')}
 
@@ -774,11 +605,13 @@ function SectionHeader({
   count,
   collapsed,
   onToggle,
+  width,
 }: {
   label: string;
   count: number;
   collapsed: boolean;
   onToggle: () => void;
+  width: number;
 }) {
   return (
     <div
@@ -791,7 +624,7 @@ function SectionHeader({
         onClick={onToggle}
         aria-expanded={!collapsed}
         className="sticky left-0 flex h-full items-center gap-1.5 px-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--gray-700)] bg-[var(--gray-50)] hover:bg-[var(--gray-100)] transition-colors"
-        style={{ width: GROUP_COL_WIDTH + LABEL_COL_WIDTH, zIndex: 18, boxShadow: '4px 0 6px -4px rgba(15,23,42,0.18)' }}
+        style={{ width, zIndex: 18, boxShadow: '4px 0 6px -4px rgba(15,23,42,0.18)' }}
       >
         {collapsed
           ? <ChevronRight className="h-3 w-3" strokeWidth={1.5} />

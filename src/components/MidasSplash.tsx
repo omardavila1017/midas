@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 export type BootTaskStatus = 'pending' | 'loading' | 'done' | 'error';
 
@@ -15,12 +15,71 @@ interface MidasSplashProps {
   startedAt: number;
 }
 
-export default function MidasSplash({ visible }: MidasSplashProps) {
+// Rotación de mensajes "vivos" mientras esperamos que un slot termine. Dan
+// señal de que el thread no está pegado aunque el slot tarde.
+const HEARTBEAT_PHRASES: Record<string, string[]> = {
+  catalog: ['Cargando catálogos…', 'Leyendo IndexedDB…', 'Preparando clientes y proveedores…'],
+  companies: ['Conectando con JDE…', 'Leyendo /empresas…', 'Hidratando catálogo de cías…'],
+  banks: ['Pidiendo estados de cuenta…', 'Reconstruyendo movimientos…', 'Reconciliando bancos…'],
+  cxp: ['Pidiendo CXP a JDE (29 cías)…', 'Acumulando antigüedad de saldos…', 'Procesando facturas pendientes…'],
+  cobranza: ['Pidiendo cobranza a JDE (29 cías)…', 'Cruzando facturas vs pagos…', 'Reconciliando cartera…'],
+  nomina: ['Conectando con TRESS…', 'Cargando nómina del mes…', 'Calculando bimodal de pagos…'],
+  rol: ['Conectando con CITI…', 'Pidiendo ROL Diario desde enero…', 'Cruzando viajes con cobranza…'],
+};
+
+function heartbeatFor(taskId: string, tick: number): string {
+  const list = HEARTBEAT_PHRASES[taskId];
+  if (!list || list.length === 0) return 'Trabajando…';
+  return list[tick % list.length];
+}
+
+export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashProps) {
   const [leaving, setLeaving] = useState(false);
+  const [heartbeatTick, setHeartbeatTick] = useState(0);
+  const [elapsedSec, setElapsedSec] = useState(() => Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+  const startedAtRef = useRef(startedAt);
 
   useEffect(() => {
     if (!visible) setLeaving(true);
   }, [visible]);
+
+  // Heartbeat: cambia el sub-texto cada 2.5s para que el usuario vea que la
+  // app sigue viva aunque un fetch tarde 60s. requestAnimationFrame en lugar
+  // de setInterval para que se autopause si el thread se traba (mejor señal).
+  useEffect(() => {
+    if (!visible) return;
+    let raf = 0;
+    let lastTick = performance.now();
+    const loop = (now: number) => {
+      if (now - lastTick > 2500) {
+        lastTick = now;
+        setHeartbeatTick(t => t + 1);
+      }
+      const elapsed = Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000));
+      setElapsedSec(prev => (prev === elapsed ? prev : elapsed));
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [visible]);
+
+  // Slot activo: el primero que esté `loading`, sino el primero `pending`.
+  const activeTask = useMemo(() => {
+    return tasks.find(t => t.status === 'loading') ?? tasks.find(t => t.status === 'pending') ?? null;
+  }, [tasks]);
+
+  const doneCount = useMemo(() => tasks.filter(t => t.status === 'done' || t.status === 'error').length, [tasks]);
+  const totalCount = tasks.length;
+
+  const subtext = activeTask
+    ? activeTask.progress && activeTask.progress.total > 0
+      ? `${activeTask.label} · ${activeTask.progress.done}/${activeTask.progress.total}`
+      : `${activeTask.label} — ${heartbeatFor(activeTask.id, heartbeatTick)}`
+    : 'Casi listo…';
+
+  const elapsedLabel = elapsedSec >= 60
+    ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`
+    : `${elapsedSec}s`;
 
   return (
     <div
@@ -70,6 +129,35 @@ export default function MidasSplash({ visible }: MidasSplashProps) {
           <div className="typing-shadow" />
           <div className="typing-shadow" />
           <div className="typing-shadow" />
+        </div>
+
+        <div
+          className="flex flex-col items-center gap-1"
+          style={{ minHeight: 42, maxWidth: 360, textAlign: 'center' }}
+        >
+          <p
+            style={{
+              fontSize: 13,
+              fontWeight: 500,
+              color: 'var(--skeuo-brass-deep)',
+              opacity: 0.92,
+              margin: 0,
+              lineHeight: 1.35,
+            }}
+          >
+            {subtext}
+          </p>
+          <p
+            style={{
+              fontSize: 11,
+              color: 'var(--skeuo-brass-deep)',
+              opacity: 0.55,
+              margin: 0,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {doneCount}/{totalCount} listos · {elapsedLabel}
+          </p>
         </div>
       </div>
     </div>

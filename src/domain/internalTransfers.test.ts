@@ -51,6 +51,49 @@ describe('classifyMovement — backwards compatible with isInternalTransfer', ()
     expect(c.reason).toBe('legend');
   });
 
+  it('detects "TRASLADO" legend without REF (extended)', () => {
+    const m = mov({ concepto: 'TRASLADO ENTRE CUENTAS', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('legend-extended');
+  });
+
+  it('detects "INTERCIAS" abbreviation', () => {
+    const m = mov({ concepto: 'PAGO INTERCIAS NOVIEMBRE', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('legend-extended');
+  });
+
+  it('detects "INTERCIA" singular', () => {
+    const m = mov({ concepto: 'MOVIMIENTO INTERCIA', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('legend-extended');
+  });
+
+  it('detects "ENTRE CIAS" multi-word', () => {
+    const m = mov({ concepto: 'MOV ENTRE CIAS DEL GRUPO', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('legend-extended');
+  });
+
+  it('detects "ENTRE EMPRESAS" multi-word', () => {
+    const m = mov({ concepto: 'TRANSFERENCIA ENTRE EMPRESAS', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('legend-extended');
+  });
+
+  it('extended pattern does NOT match unrelated tokens (TRANSPORTAR, SERVIVA, INTERCAMBIO)', () => {
+    // "TRANSPORTAR" includes "TRA" but not the regex literal patterns.
+    expect(classifyMovement(mov({ concepto: 'TRANSPORTAR MERCANCIA', referencia: '' })).kind).toBe('real');
+    expect(classifyMovement(mov({ concepto: 'PAGO SERVIVA SUPERMERCADO', referencia: '' })).kind).toBe('real');
+    // "INTERCAMBIO" contains "INTERCA" prefix but NOT word "INTERCIA"/"INTERCIAS".
+    expect(classifyMovement(mov({ concepto: 'INTERCAMBIO COMERCIAL', referencia: '' })).kind).toBe('real');
+  });
+
   it('detects own-RFC inside concepto', () => {
     const m = mov({ concepto: 'TRCC AL R.F.C. TTA4906038F4', referencia: '' });
     const c = classifyMovement(m);

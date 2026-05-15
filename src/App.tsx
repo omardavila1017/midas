@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadStore, saveStore, saveLightStore, CXPRecord } from './domain/persistence';
@@ -29,6 +29,7 @@ import {
   fetchComprasRange,
   fetchPagoProveedorRange,
   fetchNomina,
+  fetchRolRange,
   type Company,
   type BankAccountStatement,
   type BankStatementFormat,
@@ -36,6 +37,7 @@ import {
   type CobranzaRecord,
   type ComprasRecord,
   type PagoProveedorRecord,
+  type RolRecord,
 } from './services/jde';
 
 const FIXED_STARTING_BALANCE = 76_300_000;
@@ -57,6 +59,7 @@ const FinancialProjectionDashboard = lazy(() => import('./modules/financial-proj
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
+const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus } from './components/MidasSplash';
 import DarkModeToggle from './components/ui/DarkModeToggle';
@@ -64,11 +67,10 @@ import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette, { type CommandPaletteAction } from './components/CommandPalette';
 import { loadPlanningScenarios, loadPlanningAdjustments } from './modules/financial-planning/services/financialPlanningStorage';
-import { buildFinancialProjectionSourceData } from './modules/financial-projection/services/financialProjectionService';
 import { NavigationProvider, type AppTabId, type NavTarget } from './modules/shared-finance/components/NavigationContext';
 import DashboardLoadingShell from './modules/shared-finance/components/DashboardLoadingShell';
 import type { PayrollCostRecord } from './modules/shared-finance/types';
-import { isCacheFresh, mergeNominaBatch, nominaCacheKey } from './modules/payroll/services/payrollModuleService';
+import { findSuspectMonths, mergeNominaBatch, nominaCacheKey, refineBatch } from './modules/payroll/services/payrollModuleService';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
   LayoutDashboard,
@@ -76,7 +78,7 @@ import {
   Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
   HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
   Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
-  LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard,
+  LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
   type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
@@ -92,7 +94,8 @@ import {
   type RealReconciliationMatch,
   type RealReconciliationResult,
 } from './domain/realReconciliationEngine';
-import { reconcilePayments } from './domain/paymentReconciliationEngine';
+import { reconcilePayments, emptyPaymentReconciliationResult, type PaymentReconciliationResult } from './domain/paymentReconciliationEngine';
+import type { PaymentReconciliationWorkerResponse } from './workers/paymentReconciliationWorkerTypes';
 import {
   applyManualConfirmations,
   useConfirmedReviewKeys,
@@ -280,6 +283,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
     { id: 'cxp',         label: 'CXP',         icon: Receipt },
+    { id: 'concursoMercantil', label: 'Concurso Mercantil', icon: Scale },
     { id: 'compras',     label: 'Órdenes de Compras', icon: FolderOpen },
     { id: 'pagos',       label: 'Pagos',       icon: CreditCard },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
@@ -295,7 +299,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
   netflow: 'operacion',
-  cxp: 'operacion', compras: 'operacion', pagos: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
+  cxp: 'operacion', concursoMercantil: 'operacion', compras: 'operacion', pagos: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
   payroll: 'proyeccion',
@@ -580,6 +584,13 @@ export default function App() {
   // refreshes posteriores los dispara el módulo de Nómina.
   const [nominaRecords, setNominaRecords] = useState<PayrollCostRecord[]>([]);
   const [nominaLoadedKeys, setNominaLoadedKeys] = useState<Record<string, string>>({});
+  // ROL CITI — viajes ejecutados (Senda Citi). Endpoint
+  // http://srv-desarrollo:92/CITI/RolDiario liberado 2026-05-14. Auto-fetch
+  // al boot desde 1° de enero del año en curso hasta hoy; alimenta
+  // proyección de ingresos a corto plazo y cross-ref con cobranza por
+  // `Factura`/`UUID_Fiscal` cuando el viaje ya se facturó.
+  const [rolRecords, setRolRecords] = useState<RolRecord[]>([]);
+  const [rolLoadedKeys, setRolLoadedKeys] = useState<Record<string, string>>({});
   // Status del auto/manual fetch de cobranza — se muestra en la pestaña
   // Cobranza para que el usuario sepa qué pasó si la lista llega vacía.
   // Antes los errores eran silenciados y resultaba imposible diagnosticar
@@ -634,6 +645,7 @@ export default function App() {
     cxp: BootTaskStatus;
     cobranza: BootTaskStatus;
     nomina: BootTaskStatus;
+    rol: BootTaskStatus;
   }>({
     catalog: 'loading',
     companies: 'loading',
@@ -641,11 +653,13 @@ export default function App() {
     cxp: 'pending',
     cobranza: 'pending',
     nomina: 'pending',
+    rol: 'pending',
   });
   const [cxpBootProgress, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [cobranzaBootProgress, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
+  const [rolBootProgress, setRolBootProgress] = useState<{ done: number; total: number } | null>(null);
   const setBootSlot = useCallback(
-    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'nomina', status: BootTaskStatus) => {
+    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'nomina' | 'rol', status: BootTaskStatus) => {
       setBootStatus(prev => (prev[slot] === status ? prev : { ...prev, [slot]: status }));
     },
     [],
@@ -702,33 +716,140 @@ export default function App() {
     () => excludeBajio(bankStatements),
     [bankStatements],
   );
+  // PERF (2026-05-14): los heavy memos (paymentReconciliation, providersEnriched,
+  // forecastedReceipts, payrollMonthlyActualJDE, etc.) iteran cientos de miles
+  // de records por commit de boot. Sin deferred React procesa el memo dentro
+  // del mismo paint que el setState, pinea el thread 200-500ms+ y bloquea
+  // clicks/scroll. Con `useDeferredValue` el memo se reagenda como work de
+  // baja prioridad — clicks y scroll responden mientras el cómputo avanza
+  // detrás. El valor diferido converge al actual cuando el thread está libre.
+  const cxpRecordsDeferred = useDeferredValue(cxpRecords);
+  const pagoProveedorRecordsDeferred = useDeferredValue(pagoProveedorRecords);
+  const accountableBankStatementsDeferred = useDeferredValue(accountableBankStatements);
+  const nominaRecordsDeferred = useDeferredValue(nominaRecords);
+  const comprasRecordsDeferred = useDeferredValue(comprasRecords);
   // ── Cruce pagos ↔ CXP ↔ banco (motor de PagoProveedor) ────────────────
-  // Sincrónico: el matching es O(pagos × cxps_por_proveedor + pagos × cargos_por_cuenta)
-  // — varios órdenes de magnitud menor que la conciliación de cobranza. Si en
-  // el futuro escala a millones de movs, mover a idle como cobranza.
-  const paymentReconciliation = useMemo(
-    () => reconcilePayments({
-      payments: pagoProveedorRecords,
-      cxpRecords,
-      bankStatements: accountableBankStatements,
-    }),
-    [pagoProveedorRecords, cxpRecords, accountableBankStatements],
+  // PERF (2026-05-14): antes corría sync en useMemo sobre 39k pagos × 9.5k
+  // CXP × bankStmts → 2-10s de main thread pinned por cada commit de boot.
+  // Ahora vive en Web Worker; el render no espera. Mientras se calcula,
+  // downstream usa `emptyPaymentReconciliationResult()` (no rompe nada — el
+  // canonical filtra paidCxpKeys vacío, mostrando todas las CXP como
+  // pendientes, lo que es OK durante boot ya que planning espera a isBooted).
+  const [paymentReconciliation, setPaymentReconciliation] = useState<PaymentReconciliationResult>(
+    () => emptyPaymentReconciliationResult(),
   );
+  const paymentReconWorkerRef = useRef<Worker | null>(null);
+  const paymentReconJobRef = useRef(0);
+  useEffect(() => {
+    // No correr durante boot — los datos llegan en stream y dispararíamos
+    // el worker N veces con datos parciales, pinando el cascade downstream.
+    // Sólo después de que el splash dismiss disparamos UNA corrida con todo
+    // el dataset en su sitio.
+    if (!isBooted) return;
+    if (
+      pagoProveedorRecordsDeferred.length === 0 ||
+      cxpRecordsDeferred.length === 0 ||
+      accountableBankStatementsDeferred.length === 0
+    ) {
+      setPaymentReconciliation(emptyPaymentReconciliationResult());
+      return;
+    }
+
+    let cancelled = false;
+    const jobId = ++paymentReconJobRef.current;
+
+    const runFallback = () => {
+      const t0 = performance.now();
+      try {
+        const result = reconcilePayments({
+          payments: pagoProveedorRecordsDeferred,
+          cxpRecords: cxpRecordsDeferred,
+          bankStatements: accountableBankStatementsDeferred,
+        });
+        if (!cancelled && paymentReconJobRef.current === jobId) {
+          setPaymentReconciliation(result);
+        }
+      } catch (err) {
+        console.warn('[paymentRecon] fallback failed', err);
+      }
+      // eslint-disable-next-line no-console
+      console.info(`[paymentRecon] fallback sync ${(performance.now() - t0).toFixed(0)}ms`);
+    };
+
+    // Debounce 600ms para colapsar bursts de boot (cxp commit + pagoProveedor
+    // commit + banks commit caen casi juntos → 1 sola corrida del worker).
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      if (typeof Worker === 'undefined') {
+        runFallback();
+        return;
+      }
+      try {
+        if (!paymentReconWorkerRef.current) {
+          paymentReconWorkerRef.current = new Worker(
+            new URL('./workers/paymentReconciliation.worker.ts', import.meta.url),
+            { type: 'module' },
+          );
+        }
+        const worker = paymentReconWorkerRef.current;
+        worker.onmessage = (event: MessageEvent<PaymentReconciliationWorkerResponse>) => {
+          if (cancelled || event.data.jobId !== paymentReconJobRef.current) return;
+          if (event.data.result) {
+            setPaymentReconciliation(event.data.result);
+          } else if (event.data.error) {
+            console.warn('[paymentRecon] worker error, fallback', event.data.error);
+            runFallback();
+          }
+        };
+        worker.onerror = (event) => {
+          if (cancelled) return;
+          console.warn('[paymentRecon] worker exception, fallback', event.message);
+          runFallback();
+        };
+        worker.postMessage({
+          jobId,
+          payments: pagoProveedorRecordsDeferred,
+          cxpRecords: cxpRecordsDeferred,
+          bankStatements: accountableBankStatementsDeferred,
+        });
+      } catch (err) {
+        console.warn('[paymentRecon] worker spawn failed, fallback', err);
+        runFallback();
+      }
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [isBooted, pagoProveedorRecordsDeferred, cxpRecordsDeferred, accountableBankStatementsDeferred]);
+
+  useEffect(() => {
+    return () => {
+      paymentReconWorkerRef.current?.terminate();
+      paymentReconWorkerRef.current = null;
+    };
+  }, []);
+  // PERF (2026-05-14): defiero también el resultado del worker para que el
+  // cascade downstream (paidCxpKeys → nonInternalPagoProveedor → providers
+  // enriched → purchaseReceiptsFromCompras → forecastedReceipts) no se
+  // dispare sync dentro del mismo paint que setPaymentReconciliation.
+  const paymentReconciliationDeferred = useDeferredValue(paymentReconciliation);
   // Set de CXPs pagadas — feed para excluirlas del egreso proyectado en
   // canonicalProjection. Solo `PAID` (cobertura completa); `PARTIAL` deja
   // que el residuo siga proyectándose.
   const paidCxpKeys = useMemo(() => {
     const out = new Set<string>();
-    for (const [key, cov] of paymentReconciliation.cxpCoverage) {
+    for (const [key, cov] of paymentReconciliationDeferred.cxpCoverage) {
       if (cov.status === 'PAID') out.add(key);
     }
     return out;
-  }, [paymentReconciliation]);
+  }, [paymentReconciliationDeferred]);
   const nonInternalPagoProveedorRecords = useMemo(() => {
-    const internalKeys = paymentReconciliation.internalPaymentKeys;
-    if (internalKeys.size === 0) return pagoProveedorRecords;
-    return pagoProveedorRecords.filter((record) => !internalKeys.has(`${record.cia}::${record.noPago}`));
-  }, [pagoProveedorRecords, paymentReconciliation.internalPaymentKeys]);
+    const internalKeys = paymentReconciliationDeferred.internalPaymentKeys;
+    if (internalKeys.size === 0) return pagoProveedorRecordsDeferred;
+    return pagoProveedorRecordsDeferred.filter((record) => !internalKeys.has(`${record.cia}::${record.noPago}`));
+  }, [pagoProveedorRecordsDeferred, paymentReconciliationDeferred]);
   // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
   // Es un motor pesado (texto + subset-sum), así que no corre durante render.
   // Lo diferimos a idle y sólo cuando una pestaña lo necesita; así cargar JDE
@@ -849,16 +970,24 @@ export default function App() {
   // Filtros: cancelados, workflow JDE cerrado (Edo_Sig), importes ≤ 0, fechas
   // pasadas. El motor canónico hace dedup vs CXP (no doble-conteo). Memoizado
   // por comprasRecords.
+  // PERF (2026-05-14): comprasToPurchaseReceipts itera comprasRecords ×
+  // (cxpRecords + pagoProveedorRecords) sync — varios cientos de ms con data
+  // real. Antes de isBooted devolvemos [] vacío para que el splash no se pegue
+  // con esta cascada; planning espera a isBooted para montarse, así que el
+  // gate no afecta UX. Después de boot, corre con deferred values (low prio).
   const purchaseReceiptsFromCompras = useMemo(
-    () => comprasToPurchaseReceipts(comprasRecords, {
-      asOfDate: new Date().toISOString().slice(0, 10),
-      includeProjected: true,
-      excludePastUnexecuted: true,
-      futureOrderLookaheadMonths: COMPRAS_FUTURE_LOOKAHEAD_MONTHS,
-      cxpRecords,
-      pagoProveedorRecords: nonInternalPagoProveedorRecords,
-    }),
-    [comprasRecords, cxpRecords, nonInternalPagoProveedorRecords],
+    () => {
+      if (!isBooted) return [];
+      return comprasToPurchaseReceipts(comprasRecordsDeferred, {
+        asOfDate: new Date().toISOString().slice(0, 10),
+        includeProjected: true,
+        excludePastUnexecuted: true,
+        futureOrderLookaheadMonths: COMPRAS_FUTURE_LOOKAHEAD_MONTHS,
+        cxpRecords: cxpRecordsDeferred,
+        pagoProveedorRecords: nonInternalPagoProveedorRecords,
+      });
+    },
+    [isBooted, comprasRecordsDeferred, cxpRecordsDeferred, nonInternalPagoProveedorRecords],
   );
 
   // Promedio de gasto por proveedor en los últimos 3 meses calendario,
@@ -866,8 +995,8 @@ export default function App() {
   // `gastoMinimoMensual` del catálogo para que el piso operativo refleje
   // el ritmo de pago vigente, no el promedio anual 2025.
   const providerSpendIndex = useMemo(
-    () => buildProviderSpendIndex(nonInternalPagoProveedorRecords, { months: 3 }),
-    [nonInternalPagoProveedorRecords],
+    () => buildProviderSpendIndex(isBooted ? nonInternalPagoProveedorRecords : [], { months: 3 }),
+    [isBooted, nonInternalPagoProveedorRecords],
   );
   // Sólo enriquecer cuando hay pagos reales para extraer historia. Si pagos
   // está vacío (splash en curso, sin data) devolvemos la referencia original
@@ -875,10 +1004,11 @@ export default function App() {
   // render, lo que disparaba un recompute pesado y colgaba el navegador.
   const providersEnriched = useMemo(
     () => {
+      if (!isBooted) return providers;
       if (nonInternalPagoProveedorRecords.length === 0) return providers;
       return enrichProvidersWithRecentSpend(providers, providerSpendIndex);
     },
-    [providers, providerSpendIndex, nonInternalPagoProveedorRecords.length],
+    [isBooted, providers, providerSpendIndex, nonInternalPagoProveedorRecords.length],
   );
 
   // Modelo de pronóstico para FUTURAS OCs (no ya emitidas). El usuario lo
@@ -902,62 +1032,76 @@ export default function App() {
   // a las CONFIRMED + lead-time-projected para que la curva de egresos
   // proyectada cubra el horizonte completo y no solo lo que ya se pidió.
   const forecastedReceipts = useMemo(
-    () => forecastFutureCompras(
-      { comprasRecords, providers: providersEnriched, horizonMonths: 6, topProvidersByVolume: 80 },
-      forecastModelId,
-    ),
-    [comprasRecords, providersEnriched, forecastModelId],
+    () => {
+      if (!isBooted) return { modelId: forecastModelId, receipts: [], perProvider: [] };
+      return forecastFutureCompras(
+        { comprasRecords: comprasRecordsDeferred, providers: providersEnriched, horizonMonths: 6, topProvidersByVolume: 80 },
+        forecastModelId,
+      );
+    },
+    [isBooted, comprasRecordsDeferred, providersEnriched, forecastModelId],
   );
   // NOTE: forecastedReceipts.receipts NO se concatena a `purchaseReceipts`
   // pasado a Proyección por ahora — feed pesado disparaba recompute del
   // canónico en cada render. El selector + KPI siguen funcionando
   // como vista previa hasta que se mueva el merge a un worker / cache stable.
 
-  // Piso operativo de nómina = promedio mensual real, suavizado sobre 12 meses
-  // cerrados. Por qué 12 y no 3:
-  //   TRESS agrupa los registros por FechaPago, no por periodo. En la práctica
-  //   los meses caen bimodalmente: meses "grandes" con 17M+ (varias quincenas
-  //   + operadores) y meses "chicos" con ~1M (solo ejecutivos off-cycle). Un
-  //   avg 3m agarra 1 grande + 2 chicos según el calendario actual y termina
-  //   en ~5M — muy por debajo del piso real (~9M). Sumar 12 meses cerrados y
-  //   dividir entre 12 cancela la asimetría y devuelve el verdadero costo
-  //   mensual operativo proyectable a futuro.
-  // Fórmula: (Σ_12m CASH_OUT − Σ_12m (DEDUCTION + WITHHOLDING_PAYABLE)) / 12.
-  // Excluye el mes en curso (datos parciales). Filtra por cia si está activa.
+  // Piso operativo de nómina = promedio mensual real sobre los últimos 3 meses
+  // cerrados. Excluye el mes en curso (datos parciales). Filtra por cia si está
+  // activa.
+  // Fórmula: Σ_3m CASH_OUT / 3 (= Σ Percepciones, "Nómina Bruta" del KPI).
+  //
+  // Usamos gross y no neto porque éste es el "piso operativo" en términos de
+  // costo de nómina contratado; coincide con el KPI "Nómina Bruta" que el
+  // usuario lee en el módulo de Nómina mes a mes.
+  //
+  // Filtra meses con carga parcial usando `reducCount / cashCount`. Una
+  // nómina real tiene ~1 deducción por cada percepción (ISR + IMSS empleado
+  // + préstamos); ratio < 0.3 indica que el response solo trajo una quincena
+  // o llegó truncado. Sin este filtro los parciales tiraban el promedio.
   const payrollMonthlyActualJDE = useMemo(() => {
-    if (nominaRecords.length === 0) return undefined;
+    if (!isBooted) return undefined;
+    if (nominaRecordsDeferred.length === 0) return undefined;
     const ciaFilter = selectedCia && selectedCia !== 'all'
       ? selectedCia.replace(/\D/g, '').padStart(5, '0')
       : '';
     const grossByMonth = new Map<string, number>();
-    const reducByMonth = new Map<string, number>();
-    for (const r of nominaRecords) {
+    const cashCountByMonth = new Map<string, number>();
+    const reducCountByMonth = new Map<string, number>();
+    for (const r of nominaRecordsDeferred) {
       if (ciaFilter && r.cia !== ciaFilter) continue;
       const key = `${r.year}-${String(r.month).padStart(2, '0')}`;
       if (r.cashTreatment === 'CASH_OUT') {
         grossByMonth.set(key, (grossByMonth.get(key) ?? 0) + r.amount);
+        cashCountByMonth.set(key, (cashCountByMonth.get(key) ?? 0) + 1);
       } else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
-        reducByMonth.set(key, (reducByMonth.get(key) ?? 0) + r.amount);
+        reducCountByMonth.set(key, (reducCountByMonth.get(key) ?? 0) + 1);
       }
     }
     const now = new Date();
     const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const PARTIAL_RATIO_THRESHOLD = 0.3;
     const closedMonths = Array.from(grossByMonth.keys())
-      .filter((k) => grossByMonth.get(k)! > 0 && k !== currentKey)
+      .filter((k) => {
+        if (k === currentKey) return false;
+        if ((grossByMonth.get(k) ?? 0) <= 0) return false;
+        const cashCnt = cashCountByMonth.get(k) ?? 0;
+        if (cashCnt === 0) return false;
+        const reducCnt = reducCountByMonth.get(k) ?? 0;
+        return reducCnt / cashCnt >= PARTIAL_RATIO_THRESHOLD;
+      })
       .sort()
       .reverse();
     if (closedMonths.length === 0) return undefined;
-    const windowSize = Math.min(12, closedMonths.length);
-    const window12 = closedMonths.slice(0, windowSize);
+    const windowSize = Math.min(3, closedMonths.length);
+    const windowKeys = closedMonths.slice(0, windowSize);
     let sumGross = 0;
-    let sumReduc = 0;
-    for (const k of window12) {
+    for (const k of windowKeys) {
       sumGross += grossByMonth.get(k) ?? 0;
-      sumReduc += reducByMonth.get(k) ?? 0;
     }
-    const avg = Math.max(0, sumGross - sumReduc) / windowSize;
+    const avg = sumGross / windowSize;
     return avg > 0 ? avg : undefined;
-  }, [nominaRecords, selectedCia]);
+  }, [isBooted, nominaRecordsDeferred, selectedCia]);
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
@@ -1059,6 +1203,8 @@ export default function App() {
           if (stored.pagoProveedorLoadedCias) safeSet(setPagoProveedorLoadedCias, stored.pagoProveedorLoadedCias, 'pagoProveedorLoadedCias');
           if (stored.nominaRecords?.length) safeSet(setNominaRecords, stored.nominaRecords, 'nominaRecords');
           if (stored.nominaLoadedKeys) safeSet(setNominaLoadedKeys, stored.nominaLoadedKeys, 'nominaLoadedKeys');
+          if (stored.rolRecords?.length) safeSet(setRolRecords, stored.rolRecords, 'rolRecords');
+          if (stored.rolLoadedKeys) safeSet(setRolLoadedKeys, stored.rolLoadedKeys, 'rolLoadedKeys');
           if (stored.cashFlowOverrides) safeSet(setCashFlowOverrides, stored.cashFlowOverrides, 'cashFlowOverrides');
           safeSet(setAssumptions, stored.assumptions, 'assumptions');
           // eslint-disable-next-line no-console
@@ -1102,14 +1248,31 @@ export default function App() {
   //   • Cliente del cubo Viajes Especiales que brinca el umbral se promueve
   //     (sale del grupo) en la pasada siguiente.
   // No deja nada para revisar manual — el wizard queda como override.
+  //
+  // PERF (2026-05-14): este useEffect itera `cobranzaRecords` (decenas de
+  // miles) en main thread y crea `Set<accountKeys>`. Durante boot, cobranza
+  // se hidrata en stream (29 cías una a una) → ref nuevo cada cía → matcher
+  // re-corre 29× y satura el event loop, impidiendo que el splash hard
+  // timeout (240s) dispare. Gateamos a que `cobranza` y `cxp` boot slots
+  // estén `done`/`error` y debounceamos 800ms para colapsar bursts.
   const matcherLastSig = useRef<string>('');
   useEffect(() => {
     if (clients.length === 0 || cobranzaRecords.length === 0) return;
+    const cobranzaSettled = bootStatus.cobranza === 'done' || bootStatus.cobranza === 'error';
+    const cxpSettled = bootStatus.cxp === 'done' || bootStatus.cxp === 'error';
+    if (!cobranzaSettled || !cxpSettled) return;
     const accountKeys = new Set<string>();
     for (const r of cobranzaRecords) accountKeys.add(`${r.cia}::${r.noCliente}`);
     const sig = `${clients.length}|${accountKeys.size}|${cobranzaRecords.length}|${companies.length}`;
     if (sig === matcherLastSig.current) return;
-    matcherLastSig.current = sig;
+
+    const handle = window.setTimeout(() => {
+      matcherLastSig.current = sig;
+      runMatcher();
+    }, 800);
+    return () => window.clearTimeout(handle);
+
+    function runMatcher() {
 
     // Blocklist intercompañía: nombres/RFCs de empresas nuestras (catálogo JDE
     // /empresas). Sirve para no contaminar el catálogo de clientes con cuentas
@@ -1290,21 +1453,32 @@ export default function App() {
     if (totalChanged) {
       setClients(created.length > 0 ? [...reconciledWithExtras, ...created] : reconciledWithExtras);
     }
-    // Todo resuelto → wizard queda vacío (sirve solo como override manual).
-    setMatcherReview({ autoAccepted: [], needsReview: [], orphanNoClientes: [] });
+    // Wizard queda vacío sólo si quedaba algo viejo. Evita re-render innecesario.
+    setMatcherReview(prev =>
+      prev.autoAccepted.length === 0 && prev.needsReview.length === 0 && prev.orphanNoClientes.length === 0
+        ? prev
+        : { autoAccepted: [], needsReview: [], orphanNoClientes: [] }
+    );
     // eslint-disable-next-line no-console
     console.info(
       `[matcher] auto-resolve: ${toAttach.length} adjuntos · ${attachedByFallback} fallback adj · ${createdRecurrentes} cli. nuevos · ${createdViajes} viajes · ${reclassifiedIntoViajes} →viajes · ${reclassifiedOutOfViajes} ←viajes · ${intercoRemoved} interco quitados`,
     );
-  }, [clients, cobranzaRecords, companies]);
+    } // end runMatcher
+  }, [clients, cobranzaRecords, companies, bootStatus.cobranza, bootStatus.cxp]);
 
   // Auto-actualiza `creditDays` por cliente con el lag observado de pagos
   // reales (fechaCobro - fechaFactura). El cliente queda igual cuando no hay
   // facturas pagadas o el promedio coincide con el valor previo.
+  // Gateado igual que el matcher: durante el stream de 29 cías de cobranza,
+  // recomputar 46k records por cía pinea el main thread.
   useEffect(() => {
     if (cobranzaRecords.length === 0) return;
-    setClients(prev => recomputeClientCreditDaysFromCobranza(prev, cobranzaRecords));
-  }, [cobranzaRecords]);
+    if (bootStatus.cobranza !== 'done' && bootStatus.cobranza !== 'error') return;
+    const handle = window.setTimeout(() => {
+      setClients(prev => recomputeClientCreditDaysFromCobranza(prev, cobranzaRecords));
+    }, 800);
+    return () => window.clearTimeout(handle);
+  }, [cobranzaRecords, bootStatus.cobranza]);
 
   // Catalog bootstrap tracking — splash waits for both bundled CSVs to settle.
   const [clientsCatalogDone, setClientsCatalogDone] = useState(false);
@@ -1439,6 +1613,7 @@ export default function App() {
       pagoProveedorRecords, pagoProveedorLoadedCias,
       companies, companiesLoadedAt,
       nominaRecords, nominaLoadedKeys,
+      rolRecords, rolLoadedKeys,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
@@ -1461,7 +1636,7 @@ export default function App() {
     providers, clients, assumptions, confirmedPayments,
     cxpLoadedCias, cobranzaLoadedCias, cobranzaPaymentsLoadedCias,
     comprasLoadedCias, pagoProveedorLoadedCias,
-    companies, companiesLoadedAt, nominaLoadedKeys, cashFlowOverrides,
+    companies, companiesLoadedAt, nominaLoadedKeys, rolLoadedKeys, cashFlowOverrides,
   ]);
 
   // Per-heavy saves: cada uno solo dispara cuando su key cambia. saveHeavyRecords
@@ -1490,6 +1665,7 @@ export default function App() {
   useHeavySaver('comprasRecords', comprasRecords);
   useHeavySaver('pagoProveedorRecords', pagoProveedorRecords);
   useHeavySaver('nominaRecords', nominaRecords);
+  useHeavySaver('rolRecords', rolRecords);
 
   useEffect(() => {
     const flush = () => {
@@ -1555,8 +1731,9 @@ export default function App() {
       { id: 'cxp', label: 'CXP · antigüedad de saldos', status: bootStatus.cxp, progress: cxpBootProgress },
       { id: 'cobranza', label: 'Cobranza · cartera y pagos', status: bootStatus.cobranza, progress: cobranzaBootProgress },
       { id: 'nomina', label: 'Nómina · TRESS mes en curso', status: bootStatus.nomina },
+      { id: 'rol', label: 'ROL CITI · viajes ejecutados', status: bootStatus.rol, progress: rolBootProgress },
     ],
-    [bootStatus, bankFetchProgress, cxpBootProgress, cobranzaBootProgress],
+    [bootStatus, bankFetchProgress, cxpBootProgress, cobranzaBootProgress, rolBootProgress],
   );
   useEffect(() => {
     if (isBooted) return;
@@ -1582,92 +1759,14 @@ export default function App() {
     return () => clearTimeout(t);
   }, [isBooted]);
 
-  // Pre-warm the projection / planning source cache once boot data is in.
-  // The canonical projection (clients × months × CXP) is the single most
-  // expensive thing those dashboards do. Building it during idle time after
-  // boot means the first navigation into Proyección or Planeación gets a
-  // cache hit for the source layer — saves ~250ms of main-thread work and
-  // (more importantly) means the warmup shell doesn't need to wait for the
-  // canonical pass to finish before mounting the inner dashboard.
-  //
-  // Wait longer (3 s) and yield before compute so the warmup is genuinely
-  // backgrounded — earlier versions fired ~1.5 s after boot and could
-  // collide with the user's first dashboard interaction, locking the main
-  // thread mid-click.
-  useEffect(() => {
-    if (!isBooted) return;
-    const idleWindow = window as IdleWindow;
-    let cancelled = false;
-    const run = () => {
-      if (cancelled) return;
-      const channel = typeof MessageChannel !== 'undefined' ? new MessageChannel() : null;
-      const fire = () => {
-        if (cancelled) return;
-        try {
-          buildFinancialProjectionSourceData({
-            companyCode: selectedCia,
-            bankStatements: accountableBankStatements,
-            clients,
-            providers,
-            cxpRecords,
-            cobranzaRecords,
-            cobranzaReconciliation,
-            paidCxpKeys,
-            cargoEnrichments: paymentReconciliation.cargoEnrichments,
-            // Planning pasa purchaseReceipts + payrollCosts; el prewarm DEBE
-            // incluirlos para que el cache key empate (refId() los suma). Sin
-            // esto, planning entra en cache miss, rebuildea canonical sync en
-            // idle y congela el primer frame del módulo.
-            purchaseReceipts: purchaseReceiptsFromCompras,
-            payrollCosts: nominaRecords,
-            assumptions,
-            budget: null,
-            startingBalance: effectiveStartingBalance,
-          });
-        } catch {
-          /* pre-warm is best-effort — never block the user on a cache miss */
-        }
-      };
-      if (channel) {
-        channel.port1.onmessage = () => { channel.port1.close(); fire(); };
-        channel.port2.postMessage(null);
-      } else {
-        window.setTimeout(fire, 0);
-      }
-    };
-    let idleHandle: number | null = null;
-    const debounceId = window.setTimeout(() => {
-      if (cancelled) return;
-      if (idleWindow.requestIdleCallback) {
-        idleHandle = idleWindow.requestIdleCallback(run, { timeout: 3000 });
-      } else {
-        idleHandle = window.setTimeout(run, 0);
-      }
-    }, 3000);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(debounceId);
-      if (idleHandle !== null) {
-        if (idleWindow.cancelIdleCallback) idleWindow.cancelIdleCallback(idleHandle);
-        else window.clearTimeout(idleHandle);
-      }
-    };
-  }, [
-    isBooted,
-    selectedCia,
-    accountableBankStatements,
-    clients,
-    providers,
-    cxpRecords,
-    cobranzaRecords,
-    cobranzaReconciliation,
-    paidCxpKeys,
-    paymentReconciliation,
-    purchaseReceiptsFromCompras,
-    nominaRecords,
-    assumptions,
-    effectiveStartingBalance,
-  ]);
+  // PERF (2026-05-14): el prewarm proactivo de buildFinancialProjectionSourceData
+  // se eliminó. Antes corría sync sobre 142k records ~5s después de isBooted,
+  // pinando el thread justo cuando el usuario ya veía el dashboard ("despliega
+  // la información en el dashboard pero después todo el app se congela").
+  // Planning module ya tiene su propio cache + PlanningWarmupShell que computa
+  // on-demand cuando el usuario navega a Planeación. Trade-off aceptado: la
+  // primera nav a Planning paga ~1-3s de cómputo VISIBLE (con shell), en vez
+  // de pinear el thread invisible 5s post-boot.
 
   // ── Auto-load CXP (antigüedad de saldos) durante el boot ──
   // Concurrencia limitada a 3 — JDE revienta con paralelismo total contra
@@ -2023,8 +2122,67 @@ export default function App() {
     })();
   }, [storeHydrated, companies, refreshCobranza, setBootSlot]);
 
+  // ── ROL CITI: viajes ejecutados ─────────────────────────────────────────
+  // Fetcheamos desde el 1° de enero del año en curso hasta hoy. Un solo
+  // request por año (el endpoint acepta rangos amplios). El resultado se
+  // persiste en IDB heavy-store y queda disponible para cruzar contra
+  // cobranza por `factura`/`uuidFiscal` en flujos futuros.
+  const refreshRol = useCallback(
+    async (force = true, progressSlot?: 'rol') => {
+      const today = new Date();
+      const year = today.getUTCFullYear();
+      const fechaInicial = `${year}-01-01`;
+      const fechaFinal = today.toISOString().slice(0, 10);
+      const cacheKey = `${year}:full`;
+      // Refresh si force=true, si no hay cache aún, o si el timestamp es viejo.
+      const lastFetch = rolLoadedKeys[cacheKey];
+      if (!force && lastFetch && isFreshTimestamp(lastFetch, COBRANZA_AUTO_REFRESH_TTL_MS)) {
+        return { totalRecords: rolRecords.length, totalCias: 1, failedCias: 0 };
+      }
+
+      if (progressSlot === 'rol') setRolBootProgress({ done: 0, total: 1 });
+
+      try {
+        const records = await fetchRolRange(fechaInicial, fechaFinal);
+        setRolRecords(records);
+        setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
+        // eslint-disable-next-line no-console
+        console.info(`[rol] sync · ${records.length} viajes ${fechaInicial}..${fechaFinal}`);
+        if (progressSlot === 'rol') setRolBootProgress({ done: 1, total: 1 });
+        return { totalRecords: records.length, totalCias: 1, failedCias: 0 };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.warn('[rol] fetch falló:', msg);
+        if (progressSlot === 'rol') setRolBootProgress({ done: 1, total: 1 });
+        return { totalRecords: 0, totalCias: 1, failedCias: 1 };
+      }
+    },
+    [rolLoadedKeys, rolRecords.length],
+  );
+
+  // Auto-fetch ROL al boot. No gatea en `companies` porque ROL no es por-cia
+  // (mismo upstream para todas las cías Senda Citi); solo espera a que el
+  // store hidrate.
+  const rolAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (rolAutoFetchDone.current) return;
+    if (!storeHydrated) return;
+    rolAutoFetchDone.current = true;
+    setBootSlot('rol', 'loading');
+    (async () => {
+      try {
+        const summary = await refreshRol(false, 'rol');
+        setBootSlot('rol', summary && summary.failedCias > 0 ? 'error' : 'done');
+      } catch {
+        setBootSlot('rol', 'error');
+      }
+    })();
+  }, [storeHydrated, refreshRol, setBootSlot]);
+
   // Si JDE no devuelve compañías (companies en error), CXP y cobranza nunca
   // se dispararon — marcamos los slots como error para destrabar el boot.
+  // ROL no depende de companies (es global CITI) → no se marca aquí.
   useEffect(() => {
     if (bootStatus.companies !== 'error') return;
     if (bootStatus.cxp === 'pending') setBootSlot('cxp', 'error');
@@ -2059,69 +2217,100 @@ export default function App() {
     setBootSlot('nomina', 'loading');
     (async () => {
       try {
-        const monthsToFetch: Array<{ anio: number; mes: number; cacheKey: string }> = [];
-        for (let i = 0; i < 24; i++) {
-          const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-          const anio = d.getFullYear();
-          const mes = d.getMonth() + 1;
-          const cacheKey = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio, mes });
-          const loadedAt = nominaLoadedKeys[cacheKey];
-          // Mes en curso (i=0): siempre refetch. El mes vivo cambia
-          // intra-día; cache de ayer reflejaba un mes parcial y dejaba
-          // al usuario con datos incompletos hasta que pulsara "Refrescar
-          // TRESS" manualmente.
-          // Mes anterior (i=1): refetch si cache > 6h. Late entries
-          // siguen cayendo durante la primera semana de cierre.
-          // Meses cerrados (i ≥ 2): el cache es definitivo, skip.
-          if (i === 0) {
-            monthsToFetch.push({ anio, mes, cacheKey });
-            continue;
-          }
-          if (i === 1 && !isCacheFresh(loadedAt, 6 * 60 * 60 * 1000)) {
-            monthsToFetch.push({ anio, mes, cacheKey });
-            continue;
-          }
-          if (loadedAt) continue;
-          monthsToFetch.push({ anio, mes, cacheKey });
+        // Re-refine pass sobre records persistidos. La tabla de clasificación
+        // de `cashTreatment` evolucionó; refinar ahora actualiza sin refetch.
+        if (nominaRecords.length > 0) {
+          setNominaRecords(prev => refineBatch(prev));
         }
-        if (monthsToFetch.length === 0) {
-          setBootSlot('nomina', 'done');
-          return;
+        // Purga registros parciales persistidos (firma: records>0 sin
+        // Deducciones ni Aportaciones — truncamiento upstream AWS API Gateway).
+        const refinedSnapshot = refineBatch(nominaRecords);
+        const suspectMonths = findSuspectMonths(refinedSnapshot);
+        if (suspectMonths.length > 0) {
+          console.warn(
+            `[nomina] purgando ${suspectMonths.length} mes(es) con firma parcial:`,
+            suspectMonths.map(m => `${m.year}-${String(m.month).padStart(2, '0')}`).join(', '),
+          );
+          const suspectFps = new Set(suspectMonths.map(m => `${m.year}|${m.month}`));
+          setNominaRecords(prev =>
+            prev.filter(r => !suspectFps.has(`${r.year}|${r.month}`)),
+          );
+          setNominaLoadedKeys(prev => {
+            const next = { ...prev };
+            for (const { year, month } of suspectMonths) {
+              const key = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio: year, mes: month });
+              delete next[key];
+            }
+            return next;
+          });
         }
-        // Chunks paralelos (no sequential await). Antes: 24 awaits en serie
-        // tardaban minutos; el usuario abría Nómina antes de que terminara y
-        // veía datos parciales → avg 3m mal calculado. Bajamos a 2 porque 4
-        // saturaba el upstream y provocaba 504s en cadena (cobranza/nomina/
-        // antiguedades compiten por el mismo gateway). Con retry+backoff en
-        // jdeClient esto es suficiente.
-        const CONCURRENCY = 2;
-        const newKeys: Record<string, string> = {};
-        for (let i = 0; i < monthsToFetch.length; i += CONCURRENCY) {
-          const chunk = monthsToFetch.slice(i, i + CONCURRENCY);
+
+        // Construye plan: últimos 4 meses (fast path, igual que el botón
+        // manual) + meses históricos hasta 24 atrás (background).
+        const plan = (count: number): Array<{ anio: number; mes: number; cacheKey: string }> => {
+          const out: Array<{ anio: number; mes: number; cacheKey: string }> = [];
+          for (let i = 0; i < count; i++) {
+            const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+            const anio = d.getFullYear();
+            const mes = d.getMonth() + 1;
+            out.push({ anio, mes, cacheKey: nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio, mes }) });
+          }
+          return out;
+        };
+
+        const fetchAndMerge = async (
+          targets: Array<{ anio: number; mes: number; cacheKey: string }>,
+        ): Promise<Record<string, string>> => {
           const results = await Promise.allSettled(
-            chunk.map(({ anio, mes }) =>
+            targets.map(({ anio, mes }) =>
               fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio, mes }),
             ),
           );
           const ts = new Date().toISOString();
-          let chunkMerged: PayrollCostRecord[] = [];
+          let merged: PayrollCostRecord[] = [];
+          const keys: Record<string, string> = {};
           results.forEach((res, idx) => {
-            const { cacheKey, anio, mes } = chunk[idx];
+            const { cacheKey, anio, mes } = targets[idx];
             if (res.status === 'fulfilled') {
-              chunkMerged = mergeNominaBatch(chunkMerged, res.value);
-              newKeys[cacheKey] = ts;
+              merged = mergeNominaBatch(merged, res.value);
+              keys[cacheKey] = ts;
             } else {
               console.error(`[nomina] auto-fetch ${anio}-${String(mes).padStart(2, '0')} falló`, res.reason);
             }
           });
-          if (chunkMerged.length > 0) {
-            setNominaRecords(prev => mergeNominaBatch(prev, chunkMerged));
+          if (merged.length > 0) {
+            setNominaRecords(prev => mergeNominaBatch(prev, merged));
           }
-        }
-        if (Object.keys(newKeys).length > 0) {
-          setNominaLoadedKeys(prev => ({ ...prev, ...newKeys }));
+          return keys;
+        };
+
+        // FAST PATH: últimos 4 meses en paralelo. Mismo patrón que el botón
+        // "Refrescar TRESS (4 meses)" del módulo de Nómina — un único batch
+        // paralelo, no chunked. Se carga en ~1s contra TRESS sano.
+        const recent = plan(4);
+        const recentKeys = await fetchAndMerge(recent);
+        if (Object.keys(recentKeys).length > 0) {
+          setNominaLoadedKeys(prev => ({ ...prev, ...recentKeys }));
         }
         setBootSlot('nomina', 'done');
+
+        // BACKGROUND: meses 5..23 atrás para alimentar el predictor estacional
+        // y avg 3m de meses cerrados. Solo los que no estén cacheados ni
+        // fueron parte del fast path. Chunks pequeños para no saturar JDE.
+        const recentKeysSet = new Set(recent.map(r => r.cacheKey));
+        const historical = plan(24).filter(p => {
+          if (recentKeysSet.has(p.cacheKey)) return false;
+          return !nominaLoadedKeys[p.cacheKey];
+        });
+        if (historical.length === 0) return;
+        const CONCURRENCY = 2;
+        for (let i = 0; i < historical.length; i += CONCURRENCY) {
+          const chunk = historical.slice(i, i + CONCURRENCY);
+          const keys = await fetchAndMerge(chunk);
+          if (Object.keys(keys).length > 0) {
+            setNominaLoadedKeys(prev => ({ ...prev, ...keys }));
+          }
+        }
       } catch {
         setBootSlot('nomina', 'error');
       }
@@ -2813,6 +3002,15 @@ export default function App() {
                   onMergeCia={mergeCxpForCia}
                   onReplaceAll={replaceAllCxp}
                   onReset={resetCxp}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'concursoMercantil' && (
+              <Suspense fallback={<LazyTabFallback label="Concurso Mercantil" />}>
+                <ConcursoMercantilDashboard
+                  cxpRecords={cxpRecords}
+                  companies={companies}
+                  selectedCia={selectedCia}
                 />
               </Suspense>
             )}

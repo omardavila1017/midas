@@ -20,6 +20,7 @@ export interface AtlasProxyOptions {
   upstreamEnvVar: string;
   defaultUpstream: string;
   tokenEnvVar: string;
+  fallbackTokenEnvVar?: string;
   extraHeaders?: Record<string, string | undefined>;
 }
 
@@ -39,7 +40,9 @@ export function createAtlasProxy(options: AtlasProxyOptions) {
       return;
     }
 
-    const token = process.env[options.tokenEnvVar];
+    const token = process.env[options.tokenEnvVar] || (
+      options.fallbackTokenEnvVar ? process.env[options.fallbackTokenEnvVar] : undefined
+    );
     const upstreamBase = (process.env[options.upstreamEnvVar] ?? options.defaultUpstream).replace(/\/+$/, '');
     if (!token || !upstreamBase) {
       res.status(500).json({ error: `${options.label} proxy not configured` });

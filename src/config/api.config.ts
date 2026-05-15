@@ -13,6 +13,7 @@ const DEFAULT_JDE_BASE_URL = '/api/jde';
 const DEFAULT_TRESS_BASE_URL = '/api/tress';
 const DEFAULT_COGNOS_BASE_URL = '/api/cognos';
 const DEFAULT_OPENAI_BASE_URL = '/api/openai';
+const DEFAULT_CITI_BASE_URL = '/api/citi';
 
 export const apiConfig = {
   jde: {
@@ -25,6 +26,14 @@ export const apiConfig = {
   // `baseUrl: apiConfig.tress.baseUrl` — no hay clase aparte.
   tress: {
     baseUrl: import.meta.env.VITE_TRESS_BASE_URL || DEFAULT_TRESS_BASE_URL,
+    authValue: '',
+  },
+  // CITI / Senda Citi — namespace para el ROL diario (viajes ejecutados).
+  // Endpoint productivo: http://srv-desarrollo:92/CITI/RolDiario. En dev el
+  // proxy de Vite (vite.config.ts) reescribe `/api/citi/*` hacia upstream
+  // para evitar CORS. Comparte el token JDE — son el mismo backend Senda.
+  citi: {
+    baseUrl: import.meta.env.VITE_CITI_BASE_URL || DEFAULT_CITI_BASE_URL,
     authValue: '',
   },
   cognos: {
@@ -45,6 +54,7 @@ export function validateApiConfig(): string[] {
   const missing: string[] = [];
   if (!apiConfig.jde.baseUrl) missing.push('VITE_JDE_BASE_URL');
   if (!apiConfig.tress.baseUrl) missing.push('VITE_TRESS_BASE_URL');
+  if (!apiConfig.citi.baseUrl) missing.push('VITE_CITI_BASE_URL');
   if (!apiConfig.cognos.baseUrl) missing.push('VITE_COGNOS_BASE_URL');
   return missing;
 }

@@ -91,11 +91,20 @@ export function buildPurchaseReceiptMovements(input: {
   companyCode: string;
   asOfDate: string;
   endDate?: string;
+  /**
+   * Set de `noProveedor` (trim + upper) a omitir — usado para excluir
+   * proveedores en Concurso Mercantil del modelo predictivo. Una compra cuyo
+   * proveedor está en concurso no genera egreso proyectado: el pago de su
+   * deuda se maneja en el módulo Concurso.
+   */
+  excludeProviderIds?: Set<string>;
 }): FinancialMovement[] {
   const scopedCxp = filterCxpByCompany(input.cxpRecords, input.companyCode);
+  const excludeSet = input.excludeProviderIds;
   return input.purchaseReceipts
     .filter((record) => input.companyCode === 'all' || !input.companyCode || normalizeCia(record.cia) === normalizeCia(input.companyCode))
     .filter((record) => !record.isCancelled && record.amountMxn > 0)
+    .filter((record) => !excludeSet || !excludeSet.has((record.noProveedor || '').trim().toUpperCase()))
     .filter((record) => !isPurchaseMatchedToCxp(record, scopedCxp))
     .map((record, index) => purchaseReceiptToMovement(record, input.asOfDate, index))
     .filter((movement) => !input.endDate || movement.projectedDate <= input.endDate);

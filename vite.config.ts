@@ -53,6 +53,10 @@ export default defineConfig(({ mode }) => {
   const openaiUp = parseUpstream(env.OPENAI_UPSTREAM || 'https://api.openai.com/v1')
   const jdeToken = env.JDE_TOKEN || env.VITE_JDE_TOKEN
   const cognosToken = env.COGNOS_TOKEN || env.VITE_COGNOS_TOKEN
+  // CITI: red interna srv-desarrollo:92/CITI. En prod requiere proxy server-side
+  // (nginx/cloudflare) que reescriba /api/citi → http://srv-desarrollo:92/CITI.
+  const citiUp = parseUpstream(env.VITE_CITI_UPSTREAM || env.CITI_UPSTREAM || 'http://srv-desarrollo:92/CITI')
+  const citiToken = env.CITI_TOKEN || jdeToken || env.VITE_CITI_TOKEN
 
   // Bundle analyzer only when ANALYZE=1. Writes dist/stats.html with a
   // treemap of chunk content + duplicate-module detection.
@@ -115,6 +119,13 @@ export default defineConfig(({ mode }) => {
           secure: true,
           rewrite: (p) => p.replace(/^\/api\/openai/, openaiUp.path),
           configure: (proxy) => configureProxy(proxy, { token: env.OPENAI_API_KEY }),
+        },
+        '/api/citi': {
+          target: citiUp.origin,
+          changeOrigin: true,
+          secure: false,
+          rewrite: (p) => p.replace(/^\/api\/citi/, citiUp.path),
+          configure: (proxy) => configureProxy(proxy, { token: citiToken }),
         },
       },
     },

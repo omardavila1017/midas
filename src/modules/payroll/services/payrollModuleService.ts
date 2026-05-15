@@ -79,6 +79,34 @@ const NON_CASH_PATTERNS = [
   /informativ/i,
 ];
 
+/**
+ * Conceptos bajo TipoConcepto="Obligación Empresa" que NO son cash real:
+ *  - EXENTO/EXCENTO: porción exenta de un concepto (informativo para base
+ *    fiscal — el cash real ya salió como Percepción).
+ *  - GRAVADO/GRAVADA: porción gravada (mismo caso, informativo).
+ *  - PROVISION/PROVISIÓN: provisión contable (ej. ISN), no es el pago real
+ *    al fisco. El pago real se proyecta vía taxModule.
+ *  - DESPENSA GRAVADA: la porción gravada de los vales, informativo.
+ */
+const EMPLOYER_INFORMATIVO_PATTERNS = [
+  /\bexento\b/i,
+  /\bexcento\b/i,
+  /\bgravad[oa]\b/i,
+  /provisi(ó|o)n/i,
+  /hrs?\s+extras?\s+gravad/i,
+];
+
+/**
+ * Conceptos bajo TipoConcepto="Prestación" que SÍ son cash real al empleado
+ * (no vales). Indemnización, gratificación por separación y prima de
+ * antigüedad se pagan al banco en FechaPago.
+ */
+const PRESTACION_CASH_PATTERNS = [
+  /indemnizaci(ó|o)n/i,
+  /gratificaci(ó|o)n\s+por\s+separaci(ó|o)n/i,
+  /prima\s+de\s+antig(ü|u)edad/i,
+];
+
 export function refineCashTreatment(record: PayrollCostRecord): PayrollCashTreatment {
   const concept = `${record.conceptName} ${record.conceptType}`;
 
@@ -89,6 +117,22 @@ export function refineCashTreatment(record: PayrollCostRecord): PayrollCashTreat
   if (record.cashTreatment === 'CASH_OUT') {
     if (NON_CASH_PATTERNS.some(p => p.test(concept))) return 'NON_CASH';
     return 'CASH_OUT';
+  }
+  if (record.cashTreatment === 'EMPLOYER_TAX') {
+    // ISR (EMPRESA) es ISR retenido al empleado pero registrado bajo
+    // Obligación Empresa. Reclasificamos a WITHHOLDING_PAYABLE para que viva
+    // junto con las demás retenciones que la empresa entera al SAT.
+    if (WITHHOLDING_PATTERNS.some(p => p.test(concept))) return 'WITHHOLDING_PAYABLE';
+    if (EMPLOYER_INFORMATIVO_PATTERNS.some(p => p.test(concept))) return 'NON_CASH';
+    return 'EMPLOYER_TAX';
+  }
+  if (record.cashTreatment === 'NON_CASH') {
+    // Promoción NON_CASH → CASH_OUT para pagos reales bajo "Prestación".
+    // Se queda NON_CASH para todo lo demás (vales, despensa, retroactivos).
+    if (record.conceptType === 'Prestación' || record.conceptType === 'Prestacion') {
+      if (PRESTACION_CASH_PATTERNS.some(p => p.test(record.conceptName))) return 'CASH_OUT';
+    }
+    return 'NON_CASH';
   }
   return record.cashTreatment;
 }
@@ -133,6 +177,83 @@ export function mergeNominaBatch(
   });
 
   return [...filtered, ...refineBatch(incoming)];
+}
+
+/**
+ * Detecta meses con firma de carga parcial. Dos firmas:
+ *
+ *  1) Truncamiento total (AWS API Gateway >1MB): records>0 pero ningún
+ *     `DEDUCTION` ni `EMPLOYER_TAX`. La response solo trajo Percepciones.
+ *  2) Quincena suelta: records>0 con muy pocas deducciones — el response
+ *     solo trajo una o dos quincenas del mes (típicamente cuando TRESS
+ *     responde parcial por un periodo en tránsito). Detectado por
+ *     `dedCount / cashCount < 0.3` Y monto total bajo (`gross < 25%` del
+ *     mes vecino más alto). Una nómina completa siempre tiene un DEDUCTION
+ *     por cada CASH_OUT (mínimo IMSS empleado + ISR), así que ratio < 0.3
+ *     casi nunca es legítimo. Antes del fix, estos meses se promediaban
+ *     con los meses completos y tiraban el TRESS prom 3m varios M.
+ *
+ * Devuelve la lista de `{year, month}` afectados para que el boot pueda
+ * purgar esos records (y su cacheKey) antes de refetch.
+ */
+export function findSuspectMonths(
+  records: PayrollCostRecord[],
+): Array<{ year: number; month: number }> {
+  type Entry = {
+    year: number;
+    month: number;
+    hasDed: boolean;
+    hasTax: boolean;
+    cashCount: number;
+    dedCount: number;
+    gross: number;
+  };
+  const byMonth = new Map<string, Entry>();
+  for (const r of records) {
+    if (!r.year || !r.month) continue;
+    const key = `${r.year}|${r.month}`;
+    const entry = byMonth.get(key) ?? {
+      year: r.year,
+      month: r.month,
+      hasDed: false,
+      hasTax: false,
+      cashCount: 0,
+      dedCount: 0,
+      gross: 0,
+    };
+    if (r.cashTreatment === 'DEDUCTION') { entry.hasDed = true; entry.dedCount += 1; }
+    if (r.cashTreatment === 'WITHHOLDING_PAYABLE') entry.dedCount += 1;
+    if (r.cashTreatment === 'EMPLOYER_TAX') entry.hasTax = true;
+    if (r.cashTreatment === 'CASH_OUT') { entry.cashCount += 1; entry.gross += r.amount; }
+    byMonth.set(key, entry);
+  }
+  // Baseline para detectar "quincena suelta": gross máximo entre meses que
+  // tienen ratio dedCount/cashCount sano (>=0.3). Eso da el techo razonable
+  // del gross mensual; cualquier mes con gross < 25% de ese techo y ratio
+  // bajo es parcial.
+  let baselineGross = 0;
+  for (const e of byMonth.values()) {
+    const ratio = e.cashCount > 0 ? e.dedCount / e.cashCount : 0;
+    if (ratio >= 0.3 && e.gross > baselineGross) baselineGross = e.gross;
+  }
+  const PARTIAL_RATIO = 0.3;
+  const PARTIAL_GROSS_RATIO = 0.25;
+  const suspect: Array<{ year: number; month: number }> = [];
+  for (const e of byMonth.values()) {
+    // Firma 1: truncamiento total — sin deducciones ni aportaciones.
+    if (e.cashCount > 0 && !e.hasDed && !e.hasTax) {
+      suspect.push({ year: e.year, month: e.month });
+      continue;
+    }
+    // Firma 2: quincena suelta — ratio bajo Y gross bajo vs el techo.
+    if (e.cashCount > 0 && baselineGross > 0) {
+      const ratio = e.dedCount / e.cashCount;
+      if (ratio < PARTIAL_RATIO && e.gross < baselineGross * PARTIAL_GROSS_RATIO) {
+        suspect.push({ year: e.year, month: e.month });
+      }
+    }
+  }
+  return suspect;
 }
 
 /**

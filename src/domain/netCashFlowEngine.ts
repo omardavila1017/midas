@@ -62,6 +62,23 @@ import type { BankAccountStatement, BankStatementLine } from '../services/jdeTyp
 const INTERNAL_TRANSFER_PATTERN = /\bTRA(?:N?S(?:P(?:ASO)?|F(?:ER(?:ENCIA)?)?)?)?[\s._/\-]*REF/i;
 
 /**
+ * Patrones complementarios sin "REF" sufijo, agregados después de detectar
+ * que algunos traspasos entre empresas llegan a "Otros Egresos" en
+ * Planeación cuando la leyenda omite la palabra REF (caso: el detector
+ * principal exige REF). Capturan inter-compañía explícitamente:
+ *
+ *   - `TRASLADO` solo o seguido por contexto bancario.
+ *   - `INTERCIA` / `INTERCIAS` (abreviaturas comunes en chequeras corporativas).
+ *   - `ENTRE CIAS`, `ENTRE EMPRESAS`, `ENTRE COMPAÑIAS` (con tilde o sin).
+ *
+ * Riesgo controlado: TRASLADO en contexto bancario MX siempre denota traspaso
+ * entre cuentas; INTERCIA(S) y ENTRE CIAS son específicos del grupo. Si alguna
+ * vez aparecen como descripción legítima de un pago a tercero, agregar
+ * negative-lookahead aquí.
+ */
+const INTERNAL_INTERCOMPANY_PATTERN = /\b(?:TRASLADO|INTERCIAS?|ENTRE\s+(?:CIAS|EMPRESAS|COMPA(?:N|Ñ)IAS))\b/i;
+
+/**
  * RFCs de empresas propias del grupo. Cuando aparece uno de estos en el
  * concepto o referencia de un movimiento, se trata como transferencia
  * interna aunque la leyenda de tipo de operación no lo diga.
@@ -264,6 +281,10 @@ export function isInternalTransfer(
   if (concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) return true;
   if (referencia && INTERNAL_TRANSFER_PATTERN.test(referencia)) return true;
 
+  // 1b. Leyendas inter-compañía sin REF (TRASLADO, INTERCIAS, ENTRE CIAS).
+  if (concepto && INTERNAL_INTERCOMPANY_PATTERN.test(concepto)) return true;
+  if (referencia && INTERNAL_INTERCOMPANY_PATTERN.test(referencia)) return true;
+
   // 2. RFC de empresa propia en cualquier parte del texto.
   if (INTERNAL_RFC_PATTERN) {
     if (concepto && INTERNAL_RFC_PATTERN.test(concepto)) return true;
@@ -415,12 +436,13 @@ export function buildPairMatchedKeys(
 // ─────────────────────────────────────────────────────────────────────────
 
 export type InternalReason =
-  | 'legend'         // "TRASPASO REF", "TRANSFERENCIA REF", etc.
-  | 'rfc'            // RFC de empresa del grupo embebido en concepto/referencia
-  | 'beneficiary'    // nombre de empresa del grupo como beneficiario
-  | 'own-account'    // cuenta destino es otra cuenta del grupo
-  | 'pair-matched'   // CARGO-ABONO simétrico el mismo día en cuentas distintas
-  | 'opaque-income'; // ABONO con concepto opaco (folios, ABONO PTE, BCO BENEFIC)
+  | 'legend'           // "TRASPASO REF", "TRANSFERENCIA REF", etc.
+  | 'legend-extended'  // TRASLADO, INTERCIAS, ENTRE CIAS (leyendas sin REF)
+  | 'rfc'              // RFC de empresa del grupo embebido en concepto/referencia
+  | 'beneficiary'      // nombre de empresa del grupo como beneficiario
+  | 'own-account'      // cuenta destino es otra cuenta del grupo
+  | 'pair-matched'     // CARGO-ABONO simétrico el mismo día en cuentas distintas
+  | 'opaque-income';   // ABONO con concepto opaco (folios, ABONO PTE, BCO BENEFIC)
 
 export interface MovementClassification {
   kind: 'real' | 'internal';
@@ -429,6 +451,7 @@ export interface MovementClassification {
 
 export const INTERNAL_REASON_LABELS: Record<InternalReason, string> = {
   legend: 'Marcado como traspaso interno por leyenda',
+  'legend-extended': 'Marcado como traspaso entre empresas (TRASLADO / INTERCIAS / ENTRE CIAS)',
   rfc: 'RFC de empresa del grupo en el concepto/referencia',
   beneficiary: 'Beneficiario es una empresa del grupo',
   'own-account': 'Cuenta destino pertenece al grupo',
@@ -461,6 +484,9 @@ export function classifyMovement(
 
   if ((concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) || (referencia && INTERNAL_TRANSFER_PATTERN.test(referencia))) {
     return { kind: 'internal', reason: 'legend' };
+  }
+  if ((concepto && INTERNAL_INTERCOMPANY_PATTERN.test(concepto)) || (referencia && INTERNAL_INTERCOMPANY_PATTERN.test(referencia))) {
+    return { kind: 'internal', reason: 'legend-extended' };
   }
   if (INTERNAL_RFC_PATTERN && ((concepto && INTERNAL_RFC_PATTERN.test(concepto)) || (referencia && INTERNAL_RFC_PATTERN.test(referencia)))) {
     return { kind: 'internal', reason: 'rfc' };

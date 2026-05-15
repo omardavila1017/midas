@@ -237,6 +237,14 @@ describe('Nómina (TRESS) — mapNominaRow', () => {
     it('Informativo → NON_CASH', () => {
       expect(inferCashTreatment('Informativo')).toBe('NON_CASH');
     });
+    it('Obligación Empresa → EMPLOYER_TAX (TRESS prod, refinado a NON_CASH/WITHHOLDING_PAYABLE para exentos/ISR)', () => {
+      expect(inferCashTreatment('Obligación Empresa')).toBe('EMPLOYER_TAX');
+      expect(inferCashTreatment('Obligacion Empresa')).toBe('EMPLOYER_TAX');
+    });
+    it('Prestación → NON_CASH (mayoría son vales; CASH_OUT real lo promueve refineCashTreatment)', () => {
+      expect(inferCashTreatment('Prestación')).toBe('NON_CASH');
+      expect(inferCashTreatment('Prestacion')).toBe('NON_CASH');
+    });
     it('TipoConcepto vacío o desconocido → NON_CASH (conservador)', () => {
       expect(inferCashTreatment('')).toBe('NON_CASH');
       expect(inferCashTreatment('Algo Raro Que No Existe')).toBe('NON_CASH');

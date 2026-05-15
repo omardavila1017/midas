@@ -22,7 +22,8 @@ import {
   primeDailyCache,
 } from './dailyApiCache';
 import { apiConfig } from '../config/api.config';
-import {
+import { JdeApiError } from './jdeTypes';
+import type {
   AgedBalanceRecord,
   AgedBalanceRequest,
   BankAccountStatement,
@@ -40,6 +41,8 @@ import {
   NominaRequest,
   PagoProveedorRecord,
   PagoProveedorRequest,
+  RolRecord,
+  RolRequest,
 } from './jdeTypes';
 import type {
   PayrollCashTreatment,
@@ -860,6 +863,27 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
   // toStr ya hace trim. Si no viene, dejamos vacío.
   const condPago = toStr(pick(raw, ['condPago', 'cond_pago', 'condicionPago', 'dias_credito', 'Dias_Credito']));
 
+  // ── Días de crédito numéricos ── (campo nuevo 2026-05-14)
+  // El API trae "Dias_Credito" como string padded ("30 ", "1  "); convertimos
+  // a number. Si no parsea, undefined (cae a fallback de client.creditDays
+  // catálogo). Mantener condPago para compatibilidad histórica.
+  const diasCreditoRaw = pick(raw, ['diasCredito', 'dias_credito', 'Dias_Credito']);
+  const diasCreditoNum = diasCreditoRaw == null ? undefined : toNum(diasCreditoRaw);
+  const diasCredito = diasCreditoNum && Number.isFinite(diasCreditoNum) && diasCreditoNum > 0
+    ? Math.round(diasCreditoNum)
+    : undefined;
+
+  // ── Cliente padre (grupo comercial JDE) ── (campo nuevo 2026-05-14)
+  // Autoridad sobre commercialGroupName del catálogo cuando viene poblado.
+  const noClientePadreRaw = toStr(pick(raw, ['noClientePadre', 'no_cliente_padre', 'No_Cliente_Padre']));
+  const noClientePadre = noClientePadreRaw && noClientePadreRaw !== '0' ? noClientePadreRaw : undefined;
+  const nombreClientePadre = toStr(pick(raw, ['nombreClientePadre', 'nombre_cliente_padre', 'Nombre_Cliente_Padre'])) || undefined;
+
+  // ── Día de pago preferido (CC13) ── (campo nuevo 2026-05-14)
+  // Regla del cliente: "paga los viernes". Útil para snap-to-day en proyección.
+  const diaPagoClave = toStr(pick(raw, ['diaPagoClave', 'claveDiaPagoCc13', 'clave_dia_pago_cc13', 'Clave_Dia_Pago_CC13'])) || undefined;
+  const diaPagoNombre = toStr(pick(raw, ['diaPagoNombre', 'nombreDiaPagoCc13', 'nombre_dia_pago_cc13', 'Nombre_Dia_Pago_CC13'])) || undefined;
+
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),
     noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'No_Cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
@@ -884,14 +908,19 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     importeIVA:              toNum(pick(raw, ['importeIVA', 'Importe_IVA', 'importe_iva'])),
     importeRetencion:        toNum(pick(raw, ['importeRetencion', 'Importe_RETENCION', 'importe_retencion'])),
     uuidFiscal:              toStr(pick(raw, ['uuidFiscal', 'UUID_Fiscal', 'uuid_fiscal'])),
-    claveDiaPagoCc13:        toStr(pick(raw, ['claveDiaPagoCc13', 'Clave_Dia_Pago_CC13', 'clave_dia_pago_cc13'])),
-    nombreDiaPagoCc13:       toStr(pick(raw, ['nombreDiaPagoCc13', 'Nombre_Dia_Pago_CC13', 'nombre_dia_pago_cc13'])),
+    claveDiaPagoCc13:        diaPagoClave ?? '',
+    nombreDiaPagoCc13:       diaPagoNombre ?? '',
     noReciboSePagoFactura:   toStr(pick(raw, [
       'noReciboSePagoFactura',
       'No_recibo_Se_Pago_Factura',
       'No_Recibo_Se_Pago_Factura',
       'no_recibo_se_pago_factura',
     ])),
+    noClientePadre,
+    nombreClientePadre,
+    diasCredito,
+    diaPagoClave,
+    diaPagoNombre,
     // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
     // campos cada una, el JSON.stringify del store excedía el quota de
     // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se
@@ -1299,6 +1328,19 @@ const TIPO_CONCEPTO_TO_CASH_TREATMENT: Record<string, PayrollCashTreatment> = {
   'aportacion': 'EMPLOYER_TAX',
   'aportación': 'EMPLOYER_TAX',
   'patronal': 'EMPLOYER_TAX',
+  // TRESS prod usa "Obligación Empresa" para todo lo que el empleador entera
+  // al SAT/IMSS/INFONAVIT — IMSS patronal, RCV, INFONAVIT, ISR retenido,
+  // provisión ISN, etc. + algunos informativos exentos. El default es
+  // EMPLOYER_TAX; `refineCashTreatment` separa los informativos (EXENTO,
+  // GRAVADO, PROVISION) y el ISR retenido (WITHHOLDING_PAYABLE).
+  'obligacion empresa': 'EMPLOYER_TAX',
+  'obligación empresa': 'EMPLOYER_TAX',
+  // "Prestación" en TRESS son mayoritariamente vales de despensa (no cash al
+  // empleado en FechaPago, salen por monedero electrónico). Default NON_CASH
+  // y `refineCashTreatment` promueve a CASH_OUT los pagos reales: indemnización,
+  // gratificación por separación, prima de antigüedad.
+  'prestacion': 'NON_CASH',
+  'prestación': 'NON_CASH',
   'informativo': 'NON_CASH',
 };
 
@@ -1370,10 +1412,25 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
  *
  * Nota sobre `idEmpresa=99` y `tipoNomina=99`: ambos valores funcionan como
  * comodín ("Todas") según el contrato del API. Para backfill anual basta con
- * 12 requests, una por mes. Cada request puede tardar parecido a los
- * endpoints de tesorería (varios segundos a >1min) — el cliente comparte el
- * timeout de 180s configurado en `jdeClient.ts`.
+ * 12 requests, una por mes.
+ *
+ * Sanity-check retry: AWS API Gateway puede truncar responses >1MB (ver
+ * vite.config.ts:26), produciendo payloads que solo traen Percepciones (sin
+ * Deducciones ni Aportaciones). Detectamos esa firma y reintentamos hasta
+ * MAX_NOMINA_PARTIAL_RETRIES veces. Si tras los retries el response sigue
+ * sospechoso, devolvemos lo que llegó (best-effort) — el caller decide si
+ * mergea o no. Lanzar aquí dejaba al usuario con "Sin datos" hasta que
+ * pulsara refresh manual.
  */
+const MAX_NOMINA_PARTIAL_RETRIES = 2;
+
+function isNominaResponseSuspect(records: PayrollCostRecord[]): boolean {
+  if (records.length === 0) return false; // empty es legítimo
+  return !records.some(
+    r => r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'EMPLOYER_TAX',
+  );
+}
+
 export async function fetchNomina(
   req: NominaRequest,
   config: JdeClientConfig = {},
@@ -1382,8 +1439,22 @@ export async function fetchNomina(
     baseUrl: apiConfig.tress.baseUrl,
     ...config,
   };
-  const raw = await jdeClient.post<unknown>('/Nomina', req, merged);
-  return unwrapList(raw).map(mapNominaRow);
+  let records: PayrollCostRecord[] = [];
+  for (let attempt = 0; attempt <= MAX_NOMINA_PARTIAL_RETRIES; attempt++) {
+    const raw = await jdeClient.post<unknown>('/Nomina', req, merged);
+    records = unwrapList(raw).map(mapNominaRow);
+    if (!isNominaResponseSuspect(records)) return records;
+    if (attempt < MAX_NOMINA_PARTIAL_RETRIES) {
+      console.warn(
+        `[fetchNomina] response sospechoso (${records.length} records, solo Percepciones — sin Deducciones ni Aportaciones) para ${JSON.stringify(req)} — retry ${attempt + 1}/${MAX_NOMINA_PARTIAL_RETRIES}`,
+      );
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+  console.error(
+    `[fetchNomina] response sigue sospechoso tras ${MAX_NOMINA_PARTIAL_RETRIES} retries para ${JSON.stringify(req)} (${records.length} records sin Deducciones/Aportaciones). Devolviendo best-effort.`,
+  );
+  return records;
 }
 
 // Exporta helpers internos para que los unit tests puedan ejercitarlos sin
@@ -1509,6 +1580,154 @@ export async function fetchPagoProveedorRange(
   return merged;
 }
 
+// ───────────────────────────────────────────────────────────────
+// 9. ROL Diario (CITI — viajes ejecutados)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Calcula la fecha del lunes ISO de la semana indicada. Se usa para inferir
+ * la fecha de despacho del viaje hasta que el API CITI exponga un campo de
+ * fecha exacta.
+ *
+ * ISO 8601: la semana 1 contiene el primer jueves del año (equivalente: la
+ * semana que contiene el 4 de enero).
+ */
+function isoWeekMonday(year: number, week: number): string {
+  if (!Number.isFinite(year) || !Number.isFinite(week) || week < 1 || week > 53) return '';
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  // En JS: domingo=0; ISO: domingo=7.
+  const jan4Dow = jan4.getUTCDay() || 7;
+  // Lunes de la semana 1: 4-enero menos (jan4Dow - 1) días.
+  const week1Monday = new Date(jan4);
+  week1Monday.setUTCDate(jan4.getUTCDate() - (jan4Dow - 1));
+  const target = new Date(week1Monday);
+  target.setUTCDate(week1Monday.getUTCDate() + (week - 1) * 7);
+  return target.toISOString().slice(0, 10);
+}
+
+function toBool(v: unknown): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const t = v.trim().toLowerCase();
+    return t === 'true' || t === '1' || t === 'si' || t === 'sí';
+  }
+  return false;
+}
+
+function mapRol(raw: RawRecord): RolRecord {
+  const anio = toNum(pick(raw, ['anio', 'Anio', 'año', 'Ano', 'year']));
+  const semana = toNum(pick(raw, ['semana', 'Semana', 'week']));
+  const fechaViaje = isoWeekMonday(anio, semana);
+
+  return {
+    cia:             normalizeCia(pick(raw, ['cia', 'Cia', 'compania', 'company'])),
+    empresa:         toStr(pick(raw, ['empresa', 'D_Empresa', 'd_empresa'])),
+    kCliente:        toNum(pick(raw, ['kCliente', 'K_Cliente', 'k_cliente'])),
+    cCliente:        toStr(pick(raw, ['cCliente', 'C_Cliente', 'c_cliente'])),
+    dCliente:        toStr(pick(raw, ['dCliente', 'D_Cliente', 'd_cliente'])),
+    rfc:             toStr(pick(raw, ['rfc', 'RFC'])),
+    claveJDE:        toStr(pick(raw, ['claveJDE', 'Clave_JDE', 'clave_jde'])),
+    facturacionTipo: toStr(pick(raw, ['facturacionTipo', 'D_Facturacion_Tipo', 'd_facturacion_tipo'])),
+    iva:             toNum(pick(raw, ['iva', 'IVA'])),
+    tipoViaje:       toStr(pick(raw, ['tipoViaje', 'D_Tipo_Viaje', 'd_tipo_viaje'])),
+    ruta:            toStr(pick(raw, ['ruta', 'D_Ruta', 'd_ruta'])),
+    costoRuta:       toNum(pick(raw, ['costoRuta', 'Costo_Ruta', 'costo_ruta'])),
+    viajes:          toNum(pick(raw, ['viajes', 'Viajes'])),
+    subTotal:        toNum(pick(raw, ['subTotal', 'SubTotal', 'sub_total'])),
+    despachado:      toBool(pick(raw, ['despachado', 'B_Despachado', 'b_despachado'])),
+    efectuado:       toBool(pick(raw, ['efectuado', 'B_Efectuado', 'b_efectuado'])),
+    anio,
+    semana,
+    fechaViaje,
+    factura:         toStr(pick(raw, ['factura', 'Factura'])) || undefined,
+    uuidFiscal:      toStr(pick(raw, ['uuidFiscal', 'UUID_Fiscal', 'uuid_fiscal'])) || undefined,
+    plazaCiti:       toStr(pick(raw, ['plazaCiti', 'Plaza_CITI', 'plaza_citi'])) || undefined,
+  };
+}
+
+let rolShapeLogged = false;
+
+/**
+ * POST http://srv-desarrollo:92/CITI/RolDiario
+ *
+ * Retorna viajes ejecutados del rango indicado. Endpoint productivo Senda
+ * Citi liberado 2026-05-14 (campos nuevos B_Despachado/B_Efectuado/Factura/
+ * UUID_Fiscal). El body asumido sigue el patrón cobranza/compras; si el API
+ * rechaza, ajustar shape aquí.
+ */
+export async function fetchRol(
+  req: RolRequest,
+  config: JdeClientConfig = {},
+): Promise<RolRecord[]> {
+  const merged: JdeClientConfig = {
+    baseUrl: apiConfig.citi.baseUrl,
+    authValue: apiConfig.citi.authValue || undefined,
+    // Sin retries mientras el endpoint upstream tiene el bug de SqlDateTime
+    // overflow (reportado 2026-05-14): el error no es transitorio, retries solo
+    // gastan ancho de banda. Volver al default cuando CITI confirme fix.
+    retries: 0,
+    ...config,
+  };
+  let raw: unknown;
+  try {
+    raw = await jdeClient.post<unknown>('/RolDiario', req, merged);
+  } catch (err) {
+    // El endpoint CITI es nuevo (2026-05-14); si el body que mandamos no
+    // empata con lo que espera, log el detalle del error para diagnosticar
+    // sin tener que rebootar la app.
+    // eslint-disable-next-line no-console
+    console.warn(`[rol] fetch error: ${err instanceof Error ? err.message : String(err)} · body sent: ${JSON.stringify(req)}`);
+    if (err instanceof JdeApiError) {
+      // eslint-disable-next-line no-console
+      console.warn(`[rol] server response body: ${typeof err.body === 'string' ? err.body : JSON.stringify(err.body)}`);
+    }
+    throw err;
+  }
+  const list = unwrapList(raw);
+
+  if (typeof window !== 'undefined' && !rolShapeLogged) {
+    rolShapeLogged = true;
+    // eslint-disable-next-line no-console
+    console.info(`[rol] ${list.length} registros entre ${req.fechaInicial} y ${req.fechaFinal}${req.cia ? ` cia=${req.cia}` : ''}`);
+    if (list.length > 0) {
+      // eslint-disable-next-line no-console
+      console.info('[rol] sample raw record:', list[0]);
+      // eslint-disable-next-line no-console
+      console.info('[rol] sample mapped record:', mapRol(list[0]));
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[rol] respuesta VACÍA. Posibles causas: (1) endpoint sin permisos, (2) rango sin viajes, (3) body rechazado.');
+    }
+  }
+
+  return list.map(mapRol);
+}
+
+/**
+ * Wrapper para histórico: un solo request al rango completo. Dedup por
+ * (cia, kCliente, anio, semana, ruta, tipoViaje) para tolerar duplicados.
+ */
+export async function fetchRolRange(
+  fechaInicial: string,
+  fechaFinal: string,
+  options: { cia?: string; config?: JdeClientConfig } = {},
+): Promise<RolRecord[]> {
+  const records = await fetchRol(
+    { fechaInicial, fechaFinal, ...(options.cia ? { cia: options.cia } : {}) },
+    options.config ?? {},
+  );
+  const seen = new Set<string>();
+  const merged: RolRecord[] = [];
+  for (const rec of records) {
+    const key = `${rec.cia}::${rec.kCliente}::${rec.anio}::${rec.semana}::${rec.ruta}::${rec.tipoViaje}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+  }
+  return merged;
+}
+
 // Re-exports convenientes
 export type {
   AgedBalanceRecord,
@@ -1530,5 +1749,7 @@ export type {
   NominaRawRecord,
   PagoProveedorRecord,
   PagoProveedorRequest,
+  RolRecord,
+  RolRequest,
 } from './jdeTypes';
 export { JdeApiError } from './jdeTypes';

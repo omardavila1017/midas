@@ -6,8 +6,8 @@ export const GROUP_HEADER_HEIGHT = 28;
 export const ADD_ROW_HEIGHT = 32;
 export const FOOTER_ROW_HEIGHT = 36;
 
-export const GROUP_COL_WIDTH = 130;
-export const LABEL_COL_WIDTH = 200;
+export const GROUP_COL_WIDTH = 0;
+export const LABEL_COL_WIDTH = 340;
 
 export function colWidthForGranularity(granularity: ProjectionGranularity): number {
   if (granularity === 'daily') return 64;

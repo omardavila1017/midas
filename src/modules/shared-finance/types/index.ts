@@ -417,6 +417,7 @@ export interface PlanningRow {
   conceptKey: string;
   label: string;
   group: string;
+  bucketLabel: string;
   type: FinancialMovementType;
   category: FinancialMovementCategory;
   subgroupLabel?: string;

@@ -254,6 +254,28 @@ export interface CobranzaRecord {
   nombreDiaPagoCc13?: string;
   /** Recibo JDE que pagó la factura; llave fuerte para cruce con /bancos No_Recibo. */
   noReciboSePagoFactura?: string;
+  /**
+   * Grupo comercial autoridad JDE. Cuando varias razones sociales pertenecen
+   * al mismo conglomerado JDE las consolida bajo un mismo No_Cliente_Padre.
+   * Campo agregado al endpoint de cobranza el 2026-05-14.
+   *
+   * Edge case: `49080179` "Resto Clientes" es un bucket genérico JDE que NO
+   * representa un grupo real — son clientes huérfanos sin padre asignado.
+   * El grouping engine debe tratarlo como "individual" no como grupo.
+   */
+  noClientePadre?: string;
+  /** Razón social comercial del padre (autoridad de UI). Trim aplicado. */
+  nombreClientePadre?: string;
+  /**
+   * Días de crédito contractuales según JDE (numérico). Campo agregado al
+   * endpoint el 2026-05-14. Reemplaza el string `condPago` para reglas de
+   * pago — `condPago` sigue presente para compatibilidad.
+   */
+  diasCredito?: number;
+  /** Clave del día de pago preferido (CC13 catálogo JDE), p.ej. "027". */
+  diaPagoClave?: string;
+  /** Nombre del día de pago preferido, p.ej. "Viernes". Trim aplicado. */
+  diaPagoNombre?: string;
   /** Registro original devuelto por el API, útil para depurar campos nuevos. */
   raw?: Record<string, unknown>;
 }
@@ -537,6 +559,119 @@ export interface PagoProveedorRecord {
   clasificacionProveedorFinanciera: string;
   /** Comentario libre — usualmente referencia folio CXP. */
   comentarioPago: string;
+}
+
+// ───────────────────────────────────────────────────────────────
+// 9. ROL Diario (CITI — viajes ejecutados)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Request body para POST http://srv-desarrollo:92/CITI/RolDiario.
+ *
+ * Endpoint productivo Senda Citi, liberado 2026-05-14 con campos nuevos
+ * `B_Despachado`, `B_Efectuado`, `Factura`, `UUID_Fiscal`. Sirve para
+ * proyectar ingresos a corto plazo: viaje ejecutado + Dias_Credito del cliente
+ * + día pago preferido = fecha esperada de cash-in. Cuando la cobranza emite
+ * la factura matching (por `Factura` o `UUID_Fiscal`) el ROL transiciona de
+ * "predicho" a "facturado".
+ *
+ * Body asumido (mirroring patrón cobranza/compras — confirmar con equipo CITI
+ * si se rechaza): rango de fechas + compañía opcional.
+ */
+export interface RolRequest {
+  /** Fecha inicial inclusive (YYYY-MM-DD). */
+  fechaInicial: string;
+  /** Fecha final inclusive (YYYY-MM-DD). */
+  fechaFinal: string;
+  /** Compañía (opcional — vacío trae todas las cías Senda Citi). */
+  cia?: string;
+}
+
+/**
+ * Registro normalizado de un viaje ejecutado del ROL diario CITI.
+ *
+ * Shape crudo del API (campos relevantes 2026-05-14):
+ *   {
+ *     "K_Cliente": 125,
+ *     "C_Cliente": "ABB MEXICO",
+ *     "D_Cliente": "ABB MEXICO S.A. DE C.V.",
+ *     "RFC": "AME920102SS4",
+ *     "Clave_JDE": "40317168",                    // = noCliente en cobranza
+ *     "D_Facturacion_Tipo": "MENSUAL",            // ciclo facturación
+ *     "D_Empresa": "SERVICIO INDUSTRIAL ...",     // razón social Senda
+ *     "IVA": 16.0,
+ *     "D_Tipo_Viaje": "SENCILL",
+ *     "D_Ruta": "BECARIOS A-CARR. 57",
+ *     "Costo_Ruta": 997,
+ *     "Viajes": 4,
+ *     "SubTotal": 3988,
+ *     "B_Despachado": true,                       // viaje despachado
+ *     "B_Efectuado": true,                        // viaje efectuado
+ *     "Anio": 2026,
+ *     "Semana": 12,                               // ISO week
+ *     "Factura": "RI-305405",                     // populated when invoiced
+ *     "UUID_Fiscal": "6D19051B-D7E0-...",
+ *     "Plaza_CITI": "SIP"
+ *   }
+ *
+ * Notas operativas:
+ *   - El API NO trae fecha exacta del viaje (solo Anio + Semana). Para
+ *     proyección asumimos lunes ISO de esa semana como fecha despacho. Cuando
+ *     el equipo CITI publique el campo fecha exacta agregar `fechaViaje`
+ *     mapeando ese campo en lugar de derivarlo localmente.
+ *   - `factura` vacío → viaje aún no facturado (predicho).
+ *   - `factura` poblado → buscar en cobranza por `noFactura` o `uuidFiscal`
+ *     para encontrar la factura emitida correspondiente.
+ */
+export interface RolRecord {
+  /** Compañía Senda Citi normalizada a 5 dígitos. */
+  cia: string;
+  /** Razón social Senda (D_Empresa). */
+  empresa: string;
+  /** Clave numérica del cliente CITI (K_Cliente). */
+  kCliente: number;
+  /** Código corto del cliente (C_Cliente, p.ej. "ABB MEXICO"). */
+  cCliente: string;
+  /** Razón social del cliente (D_Cliente). */
+  dCliente: string;
+  /** RFC del cliente, trim. */
+  rfc: string;
+  /** Clave JDE del cliente = noCliente en cobranza. Llave de cruce. */
+  claveJDE: string;
+  /** Tipo de facturación del cliente (MENSUAL / SEMANAL / QUINCENAL). */
+  facturacionTipo: string;
+  /** Tasa IVA aplicada al viaje. */
+  iva: number;
+  /** Tipo de viaje (SENCILL, REDONDO, etc.). */
+  tipoViaje: string;
+  /** Descripción de la ruta. */
+  ruta: string;
+  /** Costo unitario por viaje. */
+  costoRuta: number;
+  /** Cantidad de viajes ejecutados. */
+  viajes: number;
+  /** Subtotal sin IVA = costoRuta × viajes. */
+  subTotal: number;
+  /** Flag: viaje despachado. */
+  despachado: boolean;
+  /** Flag: viaje efectuado (clave para predicción ingreso). */
+  efectuado: boolean;
+  /** Año ISO del viaje. */
+  anio: number;
+  /** Semana ISO del viaje (1-53). */
+  semana: number;
+  /**
+   * Fecha asumida del viaje = lunes ISO de (anio, semana). Computada local
+   * porque el API aún no trae fecha exacta. TODO: cuando el equipo CITI
+   * publique el campo de fecha exacta, mapear desde ahí en lugar de derivar.
+   */
+  fechaViaje: string;
+  /** Número de factura emitida (vacío hasta que cobranza factura el viaje). */
+  factura?: string;
+  /** UUID fiscal de la factura, trim. */
+  uuidFiscal?: string;
+  /** Plaza CITI (p.ej. "SIP" para Servicio Industrial Potosino). */
+  plazaCiti?: string;
 }
 
 // ───────────────────────────────────────────────────────────────

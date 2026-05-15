@@ -95,8 +95,8 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const hierarchy = useMemo(
-    () => buildClientHierarchy(clients, { assumptions, confirmedPayments, today }),
-    [clients, assumptions, confirmedPayments, today],
+    () => buildClientHierarchy(clients, { assumptions, confirmedPayments, today, cobranzaRecords }),
+    [clients, assumptions, confirmedPayments, today, cobranzaRecords],
   );
 
   const cobranzaByAccount = useMemo<CobranzaByAccount>(
@@ -152,10 +152,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
     return map;
   }, [clients, assumptions, today]);
 
-  const groupNominalCredit = (g: ClientGroupNode): number => {
-    if (g.accounts.length === 0) return 0;
-    return Math.round(g.accounts.reduce((s, a) => s + a.client.creditDays, 0) / g.accounts.length);
-  };
+  const groupNominalCredit = (g: ClientGroupNode): number => g.creditDaysApi;
 
   const filteredGroups = useMemo(() => {
     const q = query.toLowerCase();
@@ -408,13 +405,14 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
               <Th className="text-right">Ventas</Th>
               <Th className="text-right">Por cobrar</Th>
               <Th className="text-right">Facturas</Th>
-              <Th className="text-right">Crédito real</Th>
+              <Th className="text-right" title="Días de crédito según JDE (Dias_Credito)">Días crédito</Th>
+              <Th className="text-right" title="Días reales hasta cobro = crédito API + lag observado">Crédito real</Th>
               <Th className="w-64">Acciones</Th>
             </tr>
           </thead>
           <tbody>
             {filteredGroups.length === 0 && (
-              <tr><td colSpan={8} className="text-center text-[var(--gray-400)] py-10">
+              <tr><td colSpan={9} className="text-center text-[var(--gray-400)] py-10">
                 {clients.length === 0
                   ? 'Sin clientes. Sincroniza el catálogo o agrega uno manual.'
                   : 'Sin coincidencias.'}
@@ -446,6 +444,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-[var(--gray-950)]">{group.name}</span>
+                            {group.source === 'jde-padre' && <span className="rounded bg-[var(--gray-950)] px-1.5 py-0.5 text-[10px] font-medium text-white" title="Grupo derivado de Nombre_Cliente_Padre JDE">JDE</span>}
                             {group.source === 'manual' && <span className="rounded bg-[var(--primary-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--primary)]">Manual</span>}
                           </div>
                           <p className="text-[11px] text-[var(--gray-400)] truncate">{group.accounts.length} cuenta{group.accounts.length !== 1 ? 's' : ''}</p>
@@ -456,7 +455,17 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
                     <Td className="text-right tabular-nums font-medium">{fmt(group.annualSales)}</Td>
                     <Td className="text-right tabular-nums">{fmt(group.projectedReceivable)}</Td>
                     <Td className="text-right tabular-nums">{group.pendingInvoices}</Td>
-                    <Td className="text-right tabular-nums">{group.realCreditDays}d</Td>
+                    <Td className="text-right tabular-nums" title={group.source === 'jde-padre' ? 'Días de crédito según JDE' : 'Días de crédito catálogo manual'}>
+                      {group.creditDaysApi}d
+                    </Td>
+                    <Td className="text-right tabular-nums" title={`Crédito API ${group.creditDaysApi}d + lag observado ${group.lagDaysExtra}d`}>
+                      <span className={group.lagDaysExtra > 0 ? 'font-bold text-[var(--danger)]' : 'text-[var(--success)]'}>
+                        {group.realCreditDays}d
+                      </span>
+                      {group.lagDaysExtra > 0 && (
+                        <span className="ml-1 text-[10px] text-[var(--gray-400)]">(+{group.lagDaysExtra})</span>
+                      )}
+                    </Td>
                     <Td>
                       <button
                         onClick={(e) => {
@@ -472,22 +481,36 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
                   {isOpen && (
                     <>
                       <tr className="bg-[var(--surface-alt)] border-t border-[var(--gray-200)]/40">
-                        <td colSpan={8} className="px-4 py-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Pencil className="h-3.5 w-3.5 text-[var(--gray-400)]" />
-                            <span className="text-[12px] text-[var(--gray-400)]">Nombre del grupo</span>
-                            <input
-                              value={renameValue}
-                              onChange={e => setRenameDrafts(prev => ({ ...prev, [group.id]: e.target.value }))}
-                              className="input h-8 w-72"
-                            />
-                            <button
-                              onClick={() => renameGroup(group)}
-                              className="h-8 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
-                            >
-                              Renombrar
-                            </button>
-                          </div>
+                        <td colSpan={9} className="px-4 py-3">
+                          {group.source === 'jde-padre' ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Lock className="h-3.5 w-3.5 text-[var(--gray-400)]" />
+                              <span className="text-[12px] text-[var(--gray-400)]">Nombre del grupo</span>
+                              <span className="rounded bg-white border border-[var(--gray-200)] px-2 py-1 text-[12px] font-medium text-[var(--gray-950)]">
+                                {group.name}
+                              </span>
+                              <span className="rounded bg-[var(--gray-950)] px-1.5 py-0.5 text-[10px] font-medium text-white" title={group.signal}>
+                                JDE
+                              </span>
+                              <span className="text-[11px] text-[var(--gray-400)]">No editable — autoridad JDE (Nombre_Cliente_Padre)</span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Pencil className="h-3.5 w-3.5 text-[var(--gray-400)]" />
+                              <span className="text-[12px] text-[var(--gray-400)]">Nombre del grupo</span>
+                              <input
+                                value={renameValue}
+                                onChange={e => setRenameDrafts(prev => ({ ...prev, [group.id]: e.target.value }))}
+                                className="input h-8 w-72"
+                              />
+                              <button
+                                onClick={() => renameGroup(group)}
+                                className="h-8 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
+                              >
+                                Renombrar
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                       <GroupBillingRow
@@ -597,10 +620,17 @@ function AccountRows({
         <Td className="text-right tabular-nums font-medium">{fmt(annual)}</Td>
         <Td className="text-right tabular-nums">{fmt(account.projectedReceivable)}</Td>
         <Td className="text-right tabular-nums">{account.pendingInvoices}</Td>
-        <Td className="text-right tabular-nums">
-          {account.realCreditDays > c.creditDays
+        <Td className="text-right tabular-nums" title={c.creditDaysFromApi ? 'Días de crédito según JDE (Dias_Credito)' : 'Días de crédito catálogo manual'}>
+          {account.creditDaysApi}d
+          {c.creditDaysFromApi && <Lock className="ml-1 inline h-2.5 w-2.5 text-[var(--gray-400)]" />}
+        </Td>
+        <Td className="text-right tabular-nums" title={`Crédito API ${account.creditDaysApi}d + lag ${account.lagDaysExtra}d${account.paymentDayName ? ` · día pago ${account.paymentDayName}` : ''}`}>
+          {account.lagDaysExtra > 0
             ? <span className="font-bold text-[var(--danger)]">{account.realCreditDays}d</span>
             : <span className="text-[var(--success)]">{account.realCreditDays}d</span>}
+          {account.lagDaysExtra > 0 && (
+            <span className="ml-1 text-[10px] text-[var(--gray-400)]">(+{account.lagDaysExtra})</span>
+          )}
         </Td>
         <Td>
           <div className="flex items-center justify-end gap-1.5">
@@ -633,7 +663,7 @@ function AccountRows({
       </tr>
       {isOpen && (
         <tr className="border-t border-[var(--gray-200)]/30 bg-[var(--surface-alt)]">
-          <td colSpan={8} className="px-4 py-4">
+          <td colSpan={9} className="px-4 py-4">
             <div className="mb-3 grid grid-cols-2 gap-3 rounded-[var(--radius-md)] bg-white px-3 py-2 text-[12px] lg:grid-cols-4">
               <div>
                 <div className="text-[var(--gray-400)]">Lag estimado</div>
@@ -690,7 +720,7 @@ function GroupBillingRow({
   const maxVal = Math.max(1, ...sum);
   return (
     <tr className="bg-[var(--surface-alt)] border-t border-[var(--gray-200)]/20">
-      <td colSpan={8} className="px-4 py-2">
+      <td colSpan={9} className="px-4 py-2">
         <div className="flex items-center gap-3">
           <span className="text-[11px] uppercase tracking-wide text-[var(--gray-400)] whitespace-nowrap">
             Facturación grupo (sin IVA)
@@ -794,11 +824,13 @@ function ClientEditor({
                   className="input w-full"
                 />
               </Field>
-              <Field label="Grupo comercial fijo">
+              <Field label={client.jdeAccounts && client.jdeAccounts.length > 0 ? 'Grupo JDE (no editable)' : 'Grupo comercial fijo'}>
                 <input
                   value={client.commercialGroupName ?? ''}
                   onChange={e => updateManualGroup(e.target.value)}
-                  className="input w-full"
+                  className="input w-full disabled:cursor-not-allowed disabled:bg-[var(--gray-50)]"
+                  disabled={(client.jdeAccounts?.length ?? 0) > 0}
+                  title={(client.jdeAccounts?.length ?? 0) > 0 ? 'El grupo viene de Nombre_Cliente_Padre JDE' : ''}
                 />
               </Field>
             </div>
@@ -875,12 +907,14 @@ function ClientEditor({
                   {FREQUENCIES.map(f => <option key={f} value={f}>{f}</option>)}
                 </select>
               </Field>
-              <Field label="Días crédito">
+              <Field label={client.creditDaysFromApi ? 'Días crédito (JDE)' : 'Días crédito'}>
                 <input
                   type="number"
                   value={client.creditDays}
                   onChange={e => update({ creditDays: Number(e.target.value) })}
-                  className="input w-full"
+                  className="input w-full disabled:cursor-not-allowed disabled:bg-[var(--gray-50)]"
+                  disabled={client.creditDaysFromApi === true}
+                  title={client.creditDaysFromApi ? 'Días de crédito viene de JDE (Dias_Credito)' : ''}
                 />
               </Field>
               <Field label="Tasa IVA">
@@ -1270,11 +1304,11 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     </label>
   );
 }
-function Th({ children, className = '' }: { children?: ReactNode; className?: string }) {
-  return <th className={`px-4 py-2.5 font-medium ${className}`}>{children}</th>;
+function Th({ children, className = '', title }: { children?: ReactNode; className?: string; title?: string }) {
+  return <th className={`px-4 py-2.5 font-medium ${className}`} title={title}>{children}</th>;
 }
-function Td({ children, className = '' }: { children?: ReactNode; className?: string }) {
-  return <td className={`px-4 py-2.5 text-[var(--gray-950)] ${className}`}>{children}</td>;
+function Td({ children, className = '', title }: { children?: ReactNode; className?: string; title?: string }) {
+  return <td className={`px-4 py-2.5 text-[var(--gray-950)] ${className}`} title={title}>{children}</td>;
 }
 function fmt(n: number): string {
   return fmtSmart(n);

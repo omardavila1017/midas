@@ -153,6 +153,26 @@ export interface PaymentReconciliationResult {
   };
 }
 
+export function emptyPaymentReconciliationResult(): PaymentReconciliationResult {
+  return {
+    paymentMatches: [],
+    cxpCoverage: new Map(),
+    cargoEnrichments: new Map(),
+    internalPaymentKeys: new Set(),
+    totals: {
+      payments: 0,
+      internalPayments: 0,
+      matchedCxp: 0,
+      matchedCargo: 0,
+      matchedFull: 0,
+      unmatched: 0,
+      totalPaidPesos: 0,
+      totalInternalPesos: 0,
+      totalUnmatchedPesos: 0,
+    },
+  };
+}
+
 // ── API pública ───────────────────────────────────────────────────────────
 
 export function reconcilePayments(input: {
