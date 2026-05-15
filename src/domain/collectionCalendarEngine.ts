@@ -582,40 +582,128 @@ function isoDaysBetween(fromIso: string, toIso: string): number {
 }
 
 /**
- * Recalcula `creditDays` por cliente a partir de pagos reales (`fechaCobro`).
- * Promedia el lag observado (fecha real - fecha factura) sobre todas las
- * facturas pagadas del cliente, redondea y aplica un piso de 1 día. Devuelve
- * los clientes mutados (referencia nueva) y los conserva igual cuando no hay
- * datos de pago suficientes.
+ * Sincroniza Client desde cobranza. Para cada cliente del catálogo:
+ *
+ *   1. `creditDays` ← `Dias_Credito` del API si viene poblado (autoridad JDE),
+ *      en cuyo caso `creditDaysFromApi=true`. Fallback: promedio de lag real
+ *      observado (`Fecha_Cobro - Fecha_Factura`) con piso 1 día.
+ *   2. `commercialGroupName/Id` ← `Nombre_Cliente_Padre`/`No_Cliente_Padre` del
+ *      API (autoridad JDE; lock UI). Excepto cuando el padre es el bucket
+ *      genérico "Resto Clientes" (49080179) — ese se ignora.
+ *   3. `paymentDayName` ← `Nombre_Dia_Pago_CC13` del API ("Viernes", etc.).
+ *
+ * Match cliente↔cobranza pasa por `findClientForCobranza` (dig + tokens) que
+ * funciona aunque el cliente no tenga jdeAccounts explícitos. Devuelve la
+ * misma referencia cuando no hay cambios.
+ *
+ * `49080179` "Resto Clientes" — bucket JDE para huérfanos sin padre real
+ * asignado. NO debe colapsar todos esos clientes en un grupo único.
  */
+const RESTO_CLIENTES_PADRE_ID = '49080179';
+
 export function recomputeClientCreditDaysFromCobranza(
   clients: Client[],
   cobranzaRecords: CobranzaRecord[],
 ): Client[] {
   if (cobranzaRecords.length === 0 || clients.length === 0) return clients;
   const lookup = buildClientLookup(clients);
-  const lagsByClient = new Map<string, { sum: number; count: number }>();
+
+  interface PerClientApiInfo {
+    diasCreditoApi?: number;
+    noClientePadre?: string;
+    nombreClientePadre?: string;
+    diaPagoNombre?: string;
+    lagSum: number;
+    lagCount: number;
+  }
+  const apiByClient = new Map<string, PerClientApiInfo>();
+
   for (const record of cobranzaRecords) {
-    if (!record.fechaCobro || !record.fechaFactura) continue;
-    if (record.importePendientePesos > 0) continue;
     const match = findClientForCobranza(record, lookup);
     if (!match) continue;
-    const lag = isoDaysBetween(record.fechaFactura, record.fechaCobro);
-    if (!Number.isFinite(lag)) continue;
-    const slot = lagsByClient.get(match.client.id) ?? { sum: 0, count: 0 };
-    slot.sum += lag;
-    slot.count += 1;
-    lagsByClient.set(match.client.id, slot);
+    let info = apiByClient.get(match.client.id);
+    if (!info) {
+      info = { lagSum: 0, lagCount: 0 };
+      apiByClient.set(match.client.id, info);
+    }
+    // Capturar campos del API (primer registro poblado gana).
+    if (record.diasCredito && !info.diasCreditoApi) info.diasCreditoApi = record.diasCredito;
+    if (record.noClientePadre && !info.noClientePadre && record.noClientePadre !== RESTO_CLIENTES_PADRE_ID) {
+      info.noClientePadre = record.noClientePadre;
+    }
+    if (record.nombreClientePadre && !info.nombreClientePadre && record.noClientePadre !== RESTO_CLIENTES_PADRE_ID) {
+      info.nombreClientePadre = record.nombreClientePadre;
+    }
+    if (record.diaPagoNombre && !info.diaPagoNombre) info.diaPagoNombre = record.diaPagoNombre;
+    // Sample de lag real (fallback cuando no hay diasCredito API).
+    if (record.fechaCobro && record.fechaFactura && record.importePendientePesos === 0) {
+      const lag = isoDaysBetween(record.fechaFactura, record.fechaCobro);
+      if (Number.isFinite(lag) && lag >= 0 && lag <= 365) {
+        info.lagSum += lag;
+        info.lagCount += 1;
+      }
+    }
   }
-  if (lagsByClient.size === 0) return clients;
+
+  if (apiByClient.size === 0) return clients;
   let mutated = false;
   const next = clients.map(client => {
-    const slot = lagsByClient.get(client.id);
-    if (!slot || slot.count === 0) return client;
-    const observed = Math.max(1, Math.round(slot.sum / slot.count));
-    if (observed === client.creditDays) return client;
+    const info = apiByClient.get(client.id);
+    if (!info) return client;
+
+    const patch: Partial<Client> = {};
+    let dirty = false;
+
+    // 1. Días de crédito — API gana sobre cálculo de lag.
+    if (info.diasCreditoApi != null) {
+      if (client.creditDays !== info.diasCreditoApi) {
+        patch.creditDays = info.diasCreditoApi;
+        dirty = true;
+      }
+      if (client.creditDaysFromApi !== true) {
+        patch.creditDaysFromApi = true;
+        dirty = true;
+      }
+    } else if (info.lagCount > 0) {
+      const observed = Math.max(1, Math.round(info.lagSum / info.lagCount));
+      if (observed !== client.creditDays) {
+        patch.creditDays = observed;
+        dirty = true;
+      }
+      // No API: limpia flag si estaba activo.
+      if (client.creditDaysFromApi === true) {
+        patch.creditDaysFromApi = false;
+        dirty = true;
+      }
+    }
+
+    // 2. Grupo padre — autoridad JDE.
+    if (info.noClientePadre && info.nombreClientePadre) {
+      const padreId = `client-padre-${info.noClientePadre}`;
+      const padreName = info.nombreClientePadre.trim();
+      if (client.commercialGroupId !== padreId) {
+        patch.commercialGroupId = padreId;
+        dirty = true;
+      }
+      if (client.commercialGroupName !== padreName) {
+        patch.commercialGroupName = padreName;
+        dirty = true;
+      }
+      if (client.manualGroupOverride === true) {
+        patch.manualGroupOverride = false;
+        dirty = true;
+      }
+    }
+
+    // 3. Día de pago preferido.
+    if (info.diaPagoNombre && client.paymentDayName !== info.diaPagoNombre) {
+      patch.paymentDayName = info.diaPagoNombre;
+      dirty = true;
+    }
+
+    if (!dirty) return client;
     mutated = true;
-    return { ...client, creditDays: observed };
+    return { ...client, ...patch };
   });
   return mutated ? next : clients;
 }

@@ -107,14 +107,13 @@ export function lookupProvider(
  */
 export function provierClassificationLabel(provider: Provider | null | undefined): string | null {
   if (!provider) return null;
-  if (provider.clasificacionAlberto) {
+  if (provider.clasificacionAlberto && provider.clasificacionAlberto !== 'SIN_CLASIFICAR') {
     switch (provider.clasificacionAlberto) {
       case 'CRITICO': return 'Crítico';
       case 'FLEX_ALTO': return 'Flex. alto';
       case 'FLEX_MEDIO': return 'Flex. medio';
       case 'FLEX_BAJO': return 'Flex. bajo';
       case 'PAUSAR': return 'Pausar';
-      case 'SIN_CLASIFICAR': return null;
     }
   }
   if (provider.clasificacionAutomatica) {
@@ -130,7 +129,10 @@ export function providerClassificationTone(provider: Provider | null | undefined
   border: string;
 } | null {
   if (!provider) return null;
-  const cls = provider.clasificacionAlberto || provider.clasificacionAutomatica;
+  const alberto = provider.clasificacionAlberto && provider.clasificacionAlberto !== 'SIN_CLASIFICAR'
+    ? provider.clasificacionAlberto
+    : undefined;
+  const cls = alberto || provider.clasificacionAutomatica;
   switch (cls) {
     case 'CRITICO':
       return { bg: 'var(--danger-muted)', text: 'var(--danger)', border: 'oklch(88% 0.08 25)' };

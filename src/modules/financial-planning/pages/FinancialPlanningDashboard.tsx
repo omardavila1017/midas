@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
 import { AlertTriangle, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
@@ -152,7 +153,11 @@ export default function FinancialPlanningDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const cacheProbeInput = useMemo(
-    () => ({ ...props, asOfDate: today }),
+    // PERF (2026-05-14): Planning NO usa `predictive` (Holt-Winters tiered).
+    // Pasamos enablePredictive=false para que canonical no entrene el modelo
+    // — ahorra varios cientos de ms en cold mounts y elimina extractHistorical
+    // Series sobre 100k+ movimientos bancarios.
+    () => ({ ...props, asOfDate: today, enablePredictive: false }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -180,34 +185,81 @@ export default function FinancialPlanningDashboard(props: Props) {
 
   const [source, setSource] = useState<FinancialProjectionSourceData | null>(cachedSource);
 
+  // PERF (2026-05-14): el build de source corría sync en idle callback
+  // pinaba el thread varios segundos con data real (142k records) → "page
+  // unresponsive" y crash del renderer. Ahora vive en Web Worker; UI muestra
+  // PlanningWarmupShell mientras el worker computa. Fallback sync si Worker
+  // no está disponible o falla.
+  const sourceWorkerRef = useRef<Worker | null>(null);
+  const sourceJobRef = useRef(0);
   useEffect(() => {
     if (cachedSource) {
       setSource(cachedSource);
       return;
     }
     let cancelled = false;
-    const ric = (window as unknown as {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    });
-    const run = () => {
-      if (cancelled) return;
-      const built = buildFinancialProjectionSourceData(cacheProbeInput);
-      if (!cancelled) setSource(built);
+    const jobId = ++sourceJobRef.current;
+    const tStart = performance.now();
+    // eslint-disable-next-line no-console
+    console.info(`[planning.source] requesting jobId=${jobId} cxp=${cacheProbeInput.cxpRecords.length} cobranza=${cacheProbeInput.cobranzaRecords?.length ?? 0} payroll=${cacheProbeInput.payrollCosts?.length ?? 0}`);
+
+    const runSyncFallback = () => {
+      const t0 = performance.now();
+      try {
+        const built = buildFinancialProjectionSourceData(cacheProbeInput);
+        if (!cancelled && sourceJobRef.current === jobId) setSource(built);
+      } catch (err) {
+        console.warn('[planning.source] sync fallback failed', err);
+      }
+      // eslint-disable-next-line no-console
+      console.info(`[planning.source] sync fallback ${(performance.now() - t0).toFixed(0)}ms`);
     };
-    if (typeof ric.requestIdleCallback === 'function') {
-      const id = ric.requestIdleCallback(run, { timeout: 200 });
-      return () => {
-        cancelled = true;
-        if (typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(id);
-      };
+
+    if (typeof Worker === 'undefined') {
+      runSyncFallback();
+      return () => { cancelled = true; };
     }
-    const id = window.setTimeout(run, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(id);
-    };
+
+    try {
+      if (!sourceWorkerRef.current) {
+        sourceWorkerRef.current = new Worker(
+          new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
+          { type: 'module' },
+        );
+      }
+      const worker = sourceWorkerRef.current;
+      worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
+        if (cancelled || event.data.jobId !== sourceJobRef.current) return;
+        const totalElapsed = performance.now() - tStart;
+        if (event.data.result) {
+          // eslint-disable-next-line no-console
+          console.info(`[planning.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms (incluye spawn + cómputo + transferencia)`);
+          setSource(event.data.result);
+        } else if (event.data.error) {
+          console.warn(`[planning.source] worker error jobId=${jobId} total=${totalElapsed.toFixed(0)}ms, fallback`, event.data.error);
+          runSyncFallback();
+        }
+      };
+      worker.onerror = (event) => {
+        if (cancelled) return;
+        console.warn('[planning.source] worker exception, fallback', event.message);
+        runSyncFallback();
+      };
+      worker.postMessage({ jobId, input: cacheProbeInput });
+    } catch (err) {
+      console.warn('[planning.source] worker spawn failed, fallback', err);
+      runSyncFallback();
+    }
+
+    return () => { cancelled = true; };
   }, [cachedSource, cacheProbeInput]);
+
+  useEffect(() => {
+    return () => {
+      sourceWorkerRef.current?.terminate();
+      sourceWorkerRef.current = null;
+    };
+  }, []);
 
   // Segundo paint gate: una vez `source` está listo, esperamos un frame
   // adicional antes de montar el inner. El inner corre 2-3 buildScenarioRun
@@ -263,13 +315,14 @@ function PlanningWarmupShell() {
 function PlanningDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
   const goTo = useNavigateToTab();
-  // Extender la grilla 90 días hacia atrás para mostrar histórico
-  // (meses/semanas/días previos al actual) además del horizonte futuro.
-  // El usuario necesita ver la tendencia real reciente al lado de la
-  // proyección — sin esto la pantalla arrancaba en "hoy" y los buckets
-  // del trimestre pasado quedaban invisibles.
-  const yearStart = useMemo(() => addUtcDays(today, -90), [today]);
-  const yearEnd = useMemo(() => addUtcDays(today, 364), [today]);
+  // PERF (2026-05-14): window = año en curso (Ene 1 → Dic 31). Antes era
+  // -90 días → +364 días = 15 meses arrastrando movements de fin de año
+  // anterior. Reducir a año calendario baja N proporcionalmente y elimina
+  // el cálculo de buckets para meses irrelevantes. Si el usuario necesita
+  // 3 meses adicionales hacia atrás, agregar UI de "expandir histórico"
+  // (TODO: estado `extendBackMonths` controlado por botón en toolbar).
+  const yearStart = useMemo(() => `${today.slice(0, 4)}-01-01`, [today]);
+  const yearEnd = useMemo(() => `${today.slice(0, 4)}-12-31`, [today]);
 
   const sourceBaseScenario = useMemo(
     () => source.scenarios.find((s) => s.kind === 'BASE') ?? source.scenarios[0],
@@ -445,6 +498,8 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
     const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}`;
     return cachedRun<PlanningScenarioRun>(cacheKey, () => {
+      const t0 = performance.now();
+      const result = (() => {
       const isBase = scenarioId === BASE_SCENARIO_ID;
       const manualMovements = !isBase && includeManualEntries
         ? expandManualPlanningEntriesToMovements(manualEntries, {
@@ -516,6 +571,10 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         name: scenarios.find((s) => s.id === scenarioId)?.name ?? scenarioId,
       });
       return { ...projection, supplierPlan: supplierSchedule.plan };
+      })();
+      // eslint-disable-next-line no-console
+      console.info(`[planning.scenarioRun] scenarioId=${scenarioId} ${(performance.now() - t0).toFixed(0)}ms · movements=${result.movements.length}`);
+      return result;
     });
   };
 
@@ -1361,11 +1420,6 @@ function minimumCashFor(): number {
   return fallback;
 }
 
-function addUtcDays(date: string, days: number): string {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + days);
-  return value.toISOString().slice(0, 10);
-}
 
 function EmptyDataState() {
   return (

@@ -20,6 +20,7 @@ export type TabId =
   | 'fideicomiso'
   | 'clients'
   | 'cxp'
+  | 'concursoMercantil'
   | 'compras'
   | 'pagos'
   | 'bancos'

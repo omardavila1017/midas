@@ -60,6 +60,7 @@ import {
   type FinancialProjectionSourceData,
 } from '../services/financialProjectionService';
 import { yieldToMain } from '../services/yieldToMain';
+import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
 import {
   loadManualPlanningEntries,
   saveManualPlanningEntries,
@@ -203,43 +204,81 @@ export default function FinancialProjectionDashboard(props: Props) {
   // main thread twice (rAF then MessageChannel macrotask) so any queued
   // tab-switch click is processed first. If the user navigates away during
   // that window, `cancelled` flips and we never enter the heavy block.
+  // PERF (2026-05-14): mismo patrón que Planning — el build ahora vive en
+  // Web Worker para no pinear el thread varios segundos. Fallback sync si
+  // Worker falla. Logs en `[projection.source]` para diagnóstico.
+  const sourceWorkerRef = useRef<Worker | null>(null);
+  const sourceJobRef = useRef(0);
   useEffect(() => {
     if (cachedSource) {
       setSource(cachedSource);
       return;
     }
     let cancelled = false;
-    let rafId: number | null = null;
-    let timeoutId: number | null = null;
+    const jobId = ++sourceJobRef.current;
+    const tStart = performance.now();
+    // eslint-disable-next-line no-console
+    console.info(`[projection.source] requesting jobId=${jobId} cxp=${cacheProbeInput.cxpRecords.length} cobranza=${cacheProbeInput.cobranzaRecords?.length ?? 0}`);
 
-    const run = async () => {
-      // Yield once more so the warm-up shell has actually painted and any
-      // queued input gets processed before we lock the main thread.
+    const runSyncFallback = async () => {
       await yieldToMain();
       if (cancelled) return;
+      const t0 = performance.now();
       try {
         const built = buildFinancialProjectionSourceData(cacheProbeInput);
-        if (!cancelled) setSource(built);
+        if (!cancelled && sourceJobRef.current === jobId) setSource(built);
       } catch {
-        // Compute failures must not crash the dashboard — caller surfaces
-        // the empty state via `source.hasData`.
+        /* swallow — empty-state shows */
       }
+      // eslint-disable-next-line no-console
+      console.info(`[projection.source] sync fallback ${(performance.now() - t0).toFixed(0)}ms`);
     };
 
-    // Double rAF guarantees one paint of the warm-up shell first.
-    rafId = window.requestAnimationFrame(() => {
-      rafId = window.requestAnimationFrame(() => {
+    if (typeof Worker === 'undefined') {
+      void runSyncFallback();
+      return () => { cancelled = true; };
+    }
+
+    try {
+      if (!sourceWorkerRef.current) {
+        sourceWorkerRef.current = new Worker(
+          new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
+          { type: 'module' },
+        );
+      }
+      const worker = sourceWorkerRef.current;
+      worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
+        if (cancelled || event.data.jobId !== sourceJobRef.current) return;
+        const totalElapsed = performance.now() - tStart;
+        if (event.data.result) {
+          // eslint-disable-next-line no-console
+          console.info(`[projection.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms`);
+          setSource(event.data.result);
+        } else if (event.data.error) {
+          console.warn(`[projection.source] worker error, fallback`, event.data.error);
+          void runSyncFallback();
+        }
+      };
+      worker.onerror = (event) => {
         if (cancelled) return;
-        timeoutId = window.setTimeout(run, 0);
-      });
-    });
+        console.warn('[projection.source] worker exception, fallback', event.message);
+        void runSyncFallback();
+      };
+      worker.postMessage({ jobId, input: cacheProbeInput });
+    } catch (err) {
+      console.warn('[projection.source] worker spawn failed, fallback', err);
+      void runSyncFallback();
+    }
 
-    return () => {
-      cancelled = true;
-      if (rafId !== null) window.cancelAnimationFrame(rafId);
-      if (timeoutId !== null) window.clearTimeout(timeoutId);
-    };
+    return () => { cancelled = true; };
   }, [cachedSource, cacheProbeInput]);
+
+  useEffect(() => {
+    return () => {
+      sourceWorkerRef.current?.terminate();
+      sourceWorkerRef.current = null;
+    };
+  }, []);
 
   if (!source) {
     return <ProjectionWarmupShell />;

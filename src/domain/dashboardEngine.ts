@@ -190,7 +190,7 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
         bankStatements: filtered,
         companyCode: companyCode || 'all',
         asOfDate: today,
-        horizonMonths: inputs.predictiveHorizonMonths ?? 24,
+        horizonMonths: inputs.predictiveHorizonMonths ?? 12,
         purchaseReceipts: inputs.purchaseReceipts,
         cobranzaRecords: inputs.cobranzaRecords,
       })

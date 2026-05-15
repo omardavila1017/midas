@@ -53,6 +53,7 @@ import {
 } from '../../../domain/netCashFlowEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
+import { getConcursoProviderIds, isConcursoMercantil, normalizeProviderId } from '../../../domain/concursoMercantil';
 import type { Client, Provider, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
@@ -62,6 +63,8 @@ import {
   type RealReconciliationResult,
 } from '../../../domain/realReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
+import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
+import { enrichMovementWithCatalog } from '../../../domain/bankAccountsCatalog';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
   FinancialMovement,
@@ -112,6 +115,13 @@ export interface CanonicalProjectionInputs {
   budget: Budget | null;
   startingBalance: number;
   asOfDate: string;
+  /**
+   * Si false, salta el motor predictivo (Holt-Winters tiered + extracción de
+   * series). Default true para no romper Dashboard/Proyección. Planning lo
+   * pasa false porque sólo consume `monthly`/`movements`, no `predictive`.
+   * Saltarlo recorta varios cientos de ms en mounts cold de Planning.
+   */
+  enablePredictive?: boolean;
 }
 
 export interface CanonicalMonthlyPoint {
@@ -159,7 +169,7 @@ export function buildCanonicalProjection(
     startingBalance: inputs.startingBalance,
     purchaseReceipts: inputs.purchaseReceipts,
     cobranzaRecords: inputs.cobranzaRecords,
-    enablePredictive: true,
+    enablePredictive: inputs.enablePredictive !== false,
   };
   const { base, projection, predictive } = computeBaseCashFlow(computeInputs);
   const projectionByYm = new Map(projection.months.map((month) => [month.yearMonth, month]));
@@ -249,6 +259,13 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
   );
   const pairedKeys = buildPairMatchedKeys(inputs.bankStatements);
 
+  // Proveedores en Concurso Mercantil: cualquier proveedor con AL MENOS una
+  // factura ≤ CONCURSO_MERCANTIL_CUTOFF (deuda congelada). Sus pagos viven
+  // en el módulo Concurso; aquí se excluyen del modelo predictivo para que
+  // su deuda fresca no entre dos veces al flujo. Set indexado por noProveedor
+  // (trim + upper) — la misma normalización que usa `normalizeProviderId`.
+  const concursoProviderIds = getConcursoProviderIds(inputs.cxpRecords);
+
   // Mapa movementKey → AbonoEnrichment. Permite reclasificar un ABONO
   // histórico como cobranza por cliente cuando el cruce contra cobranza JDE
   // detectó qué factura(s) cubrió. Sin esto los ingresos pasados quedaban
@@ -282,6 +299,19 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
           statement.cuenta,
         ).kind === 'internal'
       ) continue;
+      // Catálogo de cuentas: cuentas con role neutro (reserva, ahorro,
+      // crédito, garantía, por_cancelar, saldo_retenido) son traspasos
+      // internos por definición — se excluyen del modelo de planeación
+      // igual que los movimientos internos detectados por heurística.
+      // Para cuentas operativas el catálogo aporta `unidadNegocio` y
+      // `subRole`, que se usan más abajo para etiquetar el movimiento.
+      const catalogEnrich = enrichMovementWithCatalog({
+        cuenta: statement.cuenta,
+        cuentaBancos: line.cuentaBancos ?? line.cuenta,
+        tipoMovimiento: line.tipoMovimiento,
+        importe: line.importe,
+      });
+      if (catalogEnrich && catalogEnrich.entry.flow === 'neutro') continue;
       const isInflow = line.tipoMovimiento === 'ABONO';
       const movementKey = bankMovementKey(line);
       const enrichment = isInflow ? abonoEnrichmentByKey.get(movementKey) : undefined;
@@ -306,11 +336,25 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
       const bankFallbackName = bankLabel === 'SANTANDER'
         ? 'Federal — Santander'
         : (statement.nombreBanco || statement.banco || 'Banco');
+      // CARGOs sin match a PagoProveedor: clasificar por concepto crudo
+      // (`IVA`, `ISR`, `IMSS`, `COMISION`, etc.) para que miles de folios
+      // únicos colapsen en pocas filas legibles. Detalle crudo permanece en
+      // `concept` para drill-down al click.
+      const unmatchedCargoClassification = !isInflow && !isMatchedAp
+        ? classifyBankConcept({
+            concepto: line.concepto,
+            infAdi1: line.infAdi1,
+            infAdi2: line.infAdi2,
+            infAdi3: line.infAdi3,
+          })
+        : undefined;
       const counterpartyName = isCobranzaInflow
         ? (enrichment!.catalogClientName ?? firstFactura?.nombreCliente ?? undefined)
         : isMatchedAp
           ? matchedPayment!.nombreProveedor || undefined
-          : (isInflow ? bankFallbackName : undefined);
+          : isInflow
+            ? bankFallbackName
+            : unmatchedCargoClassification!.counterpartyName;
       const counterpartyId = isCobranzaInflow
         ? (enrichment!.catalogClientId ?? firstFactura?.noCliente ?? undefined)
         : undefined;
@@ -321,6 +365,17 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
             bankFallbackLabel: !isCobranzaInflow ? bankFallbackName : undefined,
           })
         : undefined;
+      const cargoCategory = unmatchedCargoClassification?.category ?? 'TRANSFER';
+      // Si el clasificador de concepto bancario no produce subcategoría,
+      // pero la cuenta vive en el catálogo, usamos el subRole/role del
+      // catálogo (`nomina_operadores`, `dotacion_efectivo`, `dolares`,
+      // `proveedores_nomina`, …). Esto evita cientos de CARGOs etiquetados
+      // como genérico "Otros Egresos" cuando el banco solo manda folios
+      // numéricos pero el destino de la cuenta es claro.
+      const cargoSubcategory = unmatchedCargoClassification?.subcategory
+        ?? (catalogEnrich && !isInflow
+          ? catalogEnrich.entry.subRole ?? catalogEnrich.entry.role
+          : undefined);
       out.push({
         id: `bank:${statement.cia}:${statement.cuenta}:${line.referencia ?? ''}:${line.fechaOperacion}:${out.length}`,
         sourceSystem: 'BANK',
@@ -330,9 +385,12 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
           ? 'AR_COLLECTION'
           : isMatchedAp
             ? 'AP_PAYMENT'
-            : 'TRANSFER',
-        subcategory: inflowSubcategory,
+            : isInflow
+              ? 'TRANSFER'
+              : cargoCategory,
+        subcategory: isInflow ? inflowSubcategory : cargoSubcategory,
         companyId: statement.cia,
+        businessUnitId: catalogEnrich?.entry.unidadNegocio,
         bankAccountId: statement.cuenta,
         counterpartyId,
         counterpartyName,
@@ -436,6 +494,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     cxpRecords: inputs.cxpRecords,
     companyCode: inputs.companyCode,
     asOfDate: inputs.asOfDate,
+    excludeProviderIds: concursoProviderIds,
   }));
   for (const month of futureMonths) {
     const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
@@ -452,7 +511,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
         fallbackRule: 'Total proyectado mensual (Dashboard)',
       })));
 
-    const outflowLines = collectOutflowLines(month, inputs, todayYm, projectionByYm.get(month.yearMonth)?.expense, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? []);
+    const outflowLines = collectOutflowLines(month, inputs, todayYm, projectionByYm.get(month.yearMonth)?.expense, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? [], concursoProviderIds);
     out.push(...balanceOutflowMonth({
       lines: outflowLines,
       target: month.expense,
@@ -806,13 +865,25 @@ function collectOutflowLines(
    * por cada mes (era O(receipts × cxp × meses) → ahora una sola vez).
    */
   purchaseMovementsForMonth: FinancialMovement[] = [],
+  /**
+   * Set de `noProveedor` (trim + upper) de proveedores en Concurso Mercantil.
+   * Esos proveedores tienen al menos una factura ≤ CONCURSO_MERCANTIL_CUTOFF
+   * y se excluyen de TODAS las proyecciones futuras (CXP nueva, recurrentes,
+   * compras). Sus pagos pertenecen al módulo Concurso.
+   */
+  concursoProviderIds: Set<string> = new Set(),
 ): RawLine[] {
   const lines: RawLine[] = [];
   const providerByName = new Map(inputs.providers.map((p) => [supplierLookupKey(p.name), p]));
   const providerByJde = new Map<string, Provider>();
+  // Lookup catalog provider id → noProveedor (trim + upper) para validar
+  // recurring providers contra el set de concurso, que indexa por noProveedor.
+  const providerJdeByCatalogId = new Map<string, string>();
   for (const provider of inputs.providers) {
     const jdeKey = providerJdeKey(provider.numProveedorJDE);
     if (jdeKey) providerByJde.set(jdeKey, provider);
+    const noProv = normalizeProviderId(provider.numProveedorJDE);
+    if (noProv) providerJdeByCatalogId.set(provider.id, noProv);
   }
   const filteredCxp = inputs.companyCode === 'all' || !inputs.companyCode
     ? inputs.cxpRecords
@@ -822,6 +893,14 @@ function collectOutflowLines(
   // para que el scheduler decida si se paga hoy, se recorre o queda pendiente.
   filteredCxp.forEach((record, index) => {
     if (record.importePendientePesos <= 0) return;
+    // Concurso Mercantil: facturas con `fechaFactura` ≤ 2022-12-31 son deuda
+    // congelada que vive en su propio módulo. No se proyecta como egreso —
+    // el flujo no se ve afectado por estos saldos.
+    if (isConcursoMercantil(record)) return;
+    // Y además: cualquier factura nueva de un proveedor que ya tenga deuda en
+    // Concurso también se excluye. Sus pagos están bloqueados a nivel legal
+    // y se manejan dentro del módulo Concurso, no en el modelo predictivo.
+    if (concursoProviderIds.has(normalizeProviderId(record.noProveedor))) return;
     // PagoProveedor: si la CXP ya fue pagada (match en PagoProveedor),
     // omítela del egreso proyectado. El cargo bancario real ya cubrió el
     // movimiento. Si está parcial NO se omite — se proyecta el residuo.
@@ -962,6 +1041,10 @@ function collectOutflowLines(
     for (const providerLine of expenseProjection.providerLines) {
       const recurringAmount = positiveNumber(providerLine.parts.recurring);
       if (recurringAmount <= 0) continue;
+      // Concurso Mercantil: omitir recurrentes de proveedores con deuda
+      // congelada. Sus pagos viven en el módulo Concurso.
+      const noProvRecurring = providerJdeByCatalogId.get(providerLine.providerId);
+      if (noProvRecurring && concursoProviderIds.has(noProvRecurring)) continue;
       const taxMeta = providerLine.ivaRate ? grossToIvaTaxMeta(recurringAmount, providerLine.ivaRate) : undefined;
       lines.push({
         id: `recurring-provider:${month.yearMonth}:${providerLine.providerId}`,

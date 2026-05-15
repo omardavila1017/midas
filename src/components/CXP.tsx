@@ -40,6 +40,8 @@ import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
 import { projectYear } from '../domain/collectionEngine';
 import type { Budget } from '../domain/budget';
 import type { CxpPaymentCoverage } from '../domain/paymentReconciliationEngine';
+import { excludeConcursoMercantil } from '../domain/concursoMercantil';
+import { buildProviderIndex, findProviderByRef, type ProviderIndex } from '../domain/providerIdentity';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -344,14 +346,12 @@ function paymentPriority(record: EnrichedCXPRecord): PaymentPriority {
 
 function enrichCxpRecord(
   record: CXPRecord,
-  providersByName: Map<string, Provider>,
-  providersByJde?: Map<string, Provider>,
+  providerIndex: ProviderIndex,
 ): EnrichedCXPRecord {
-  // Primero matcheamos por número JDE (más confiable); fallback a nombre normalizado.
-  const noProveedorTrim = record.noProveedor ? String(record.noProveedor).trim() : '';
-  const provider: Provider | undefined =
-    (noProveedorTrim ? providersByJde?.get(noProveedorTrim) : undefined)
-    ?? providersByName.get(normName(record.nombre));
+  const provider: Provider | undefined = findProviderByRef(providerIndex, {
+    jdeCode: record.noProveedor,
+    name: record.nombre,
+  }).provider ?? undefined;
   const catalog = enrichFromCatalog({
     supplier: record.nombre,
     classification: record.clasificacionProveedor,
@@ -649,20 +649,10 @@ const CXPDashboard = ({
     }
   }, [records, selectedCia]);
 
-  const providersByName = useMemo(
-    () => new Map(providers.map((provider) => [normName(provider.name), provider])),
-    [providers],
-  );
-  const providersByJde = useMemo(() => {
-    const map = new Map<string, Provider>();
-    providers.forEach((p) => {
-      if (p.numProveedorJDE) map.set(String(p.numProveedorJDE).trim(), p);
-    });
-    return map;
-  }, [providers]);
+  const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
 
   const enrichedRecords = useMemo(() => {
-    const base = records.map((record) => enrichCxpRecord(record, providersByName, providersByJde));
+    const base = records.map((record) => enrichCxpRecord(record, providerIndex));
     const duplicateCounts = new Map<string, number>();
     const exposureBySupplier = new Map<string, number>();
     base.forEach((record) => {
@@ -678,7 +668,7 @@ const CXPDashboard = ({
         alerts: buildCxpAlerts(record, duplicateCounts.get(invoiceKey(record)) ?? 0, supplierExposure),
       };
     });
-  }, [providersByName, providersByJde, records]);
+  }, [providerIndex, records]);
 
   // ── Filtered Records ──
   const filtered = useMemo(() => {
@@ -2060,10 +2050,12 @@ const CXP = ({
   );
   const loadedCiaList = useMemo(() => Object.keys(loadedCias), [loadedCias]);
 
-  // Visible records = filtered by header's selectedCia
+  // Visible records = filtered by header's selectedCia, excluding Concurso
+  // Mercantil (fechaFactura ≤ 2022-12-31). Esos saldos viven en su propio
+  // módulo (Operación → Concurso Mercantil) y no se reflejan acá.
   const visibleRecords = useMemo(() => {
-    if (selectedCia === 'all') return records;
-    return records.filter(r => r.cia === selectedCia);
+    const scoped = selectedCia === 'all' ? records : records.filter(r => r.cia === selectedCia);
+    return excludeConcursoMercantil(scoped);
   }, [records, selectedCia]);
 
   const hasData = visibleRecords.length > 0;

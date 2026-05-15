@@ -184,7 +184,6 @@ export default function PayrollDashboard({
     <div className="space-y-6">
       <PageHeader
         title="Nómina"
-        subtitle={`Costos de nómina por compañía, periodo y concepto — fuente TRESS. Cada refresh jala el mes seleccionado y los ${HISTORY_WINDOW_MONTHS - 1} anteriores para proyectar.`}
         meta={
           lastLoadedAt
             ? `Último refresh ${fmtDate(new Date(lastLoadedAt))}`

@@ -43,6 +43,9 @@ export default defineConfig(({ mode }) => {
 
   const jdeUp = parseUpstream(env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/JDEdwards')
   const tressUp = parseUpstream(env.VITE_TRESS_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tress')
+  // CITI: red interna srv-desarrollo:92/CITI. En prod requiere proxy server-side
+  // (nginx/cloudflare) que reescriba /api/citi → http://srv-desarrollo:92/CITI.
+  const citiUp = parseUpstream(env.VITE_CITI_UPSTREAM || 'http://srv-desarrollo:92/CITI')
 
   // Bundle analyzer only when ANALYZE=1. Writes dist/stats.html with a
   // treemap of chunk content + duplicate-module detection.
@@ -83,6 +86,13 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: true,
           rewrite: (p) => p.replace(/^\/api\/tress/, tressUp.path),
+          configure: configureProxy,
+        },
+        '/api/citi': {
+          target: citiUp.origin,
+          changeOrigin: true,
+          secure: false,
+          rewrite: (p) => p.replace(/^\/api\/citi/, citiUp.path),
           configure: configureProxy,
         },
       },

@@ -66,6 +66,7 @@ import type {
   ComprasRecord,
   Company,
   PagoProveedorRecord,
+  RolRecord,
 } from '../services/jdeTypes';
 import type { PayrollCostRecord } from '../modules/shared-finance/types';
 import {
@@ -183,6 +184,18 @@ export interface MidasStore {
    * decidir si refresca o sirve cache.
    */
   nominaLoadedKeys: Record<string, string>;
+  /**
+   * ROL diario CITI: viajes ejecutados. Cache aditivo desde enero del año en
+   * curso hasta hoy (ver `refreshRol` en App.tsx). Una row por
+   * (cia, kCliente, anio, semana, ruta, tipoViaje). Heavy → vive en IDB.
+   */
+  rolRecords: RolRecord[];
+  /**
+   * ISO timestamp del último fetch ROL exitoso, indexado por
+   * `${anio}:${semana}` (o `${anio}:full` cuando se fetcheó el año completo).
+   * El boot decide si refrescar comparando contra la semana actual.
+   */
+  rolLoadedKeys: Record<string, string>;
   cashFlowOverrides: CashFlowOverrides;
   lastSaved: string;
 }
@@ -250,6 +263,8 @@ export function getDefaultStore(): MidasStore {
     companiesLoadedAt: undefined,
     nominaRecords: [],
     nominaLoadedKeys: {},
+    rolRecords: [],
+    rolLoadedKeys: {},
     cashFlowOverrides: {},
     lastSaved: isoNow(),
   };
@@ -336,11 +351,19 @@ function normalizeStore(raw: unknown): MidasStore {
           return r as CobranzaRecord;
         }) as CobranzaRecord[])
     : [];
+  // Si la cache existente NO trae el nuevo campo `noClientePadre` (API
+  // actualizado 2026-05-14 agregó padre + diasCredito + diaPago), invalidamos
+  // timestamps para forzar refetch en el próximo boot. Una vez fresca, los
+  // registros nuevos tendrán los campos y el grouping pasa a 'jde-padre'.
+  const hasPadreField = cobranzaRecords.some((r) => 'noClientePadre' in r);
   const cobranzaLoadedCias: Record<string, string> = {};
-  if (o.cobranzaLoadedCias && typeof o.cobranzaLoadedCias === 'object') {
+  if (hasPadreField && o.cobranzaLoadedCias && typeof o.cobranzaLoadedCias === 'object') {
     for (const [k, val] of Object.entries(o.cobranzaLoadedCias as Record<string, unknown>)) {
       if (typeof val === 'string') cobranzaLoadedCias[k] = val;
     }
+  } else if (!hasPadreField && cobranzaRecords.length > 0) {
+    // eslint-disable-next-line no-console
+    console.info('[persistence] cobranza cache pre-2026-05-14 detectada; invalidando timestamps para forzar refetch con campos nuevos (padre/diasCredito/diaPago).');
   }
   const cobranzaPayments = Array.isArray(o.cobranzaPayments)
     ? (o.cobranzaPayments.filter((r) => !!r && typeof r === 'object') as CobranzaPayment[])
@@ -402,6 +425,16 @@ function normalizeStore(raw: unknown): MidasStore {
     }
   }
 
+  // ROL CITI — viajes ejecutados. Aditivo desde el primer boot post-PR.
+  const rolRecords = Array.isArray(o.rolRecords)
+    ? (o.rolRecords.filter((r) => !!r && typeof r === 'object') as RolRecord[])
+    : [];
+  const rolLoadedKeys: Record<string, string> = {};
+  if (o.rolLoadedKeys && typeof o.rolLoadedKeys === 'object') {
+    for (const [k, val] of Object.entries(o.rolLoadedKeys as Record<string, unknown>)) {
+      if (typeof val === 'string') rolLoadedKeys[k] = val;
+    }
+  }
 
   return {
     providers,
@@ -421,6 +454,8 @@ function normalizeStore(raw: unknown): MidasStore {
     companiesLoadedAt,
     nominaRecords,
     nominaLoadedKeys,
+    rolRecords,
+    rolLoadedKeys,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
     assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
     lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,
@@ -456,6 +491,7 @@ function pickHeavy(store: MidasStore): HeavyStore {
     comprasRecords: store.comprasRecords,
     pagoProveedorRecords: store.pagoProveedorRecords,
     nominaRecords: store.nominaRecords,
+    rolRecords: store.rolRecords,
   };
 }
 

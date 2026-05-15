@@ -77,6 +77,11 @@ export interface FinancialProjectionSourceInput {
   budget: Budget | null;
   startingBalance: number;
   asOfDate?: string;
+  /**
+   * Si false, el canonical no entrena el motor predictivo. Planning no usa
+   * `predictive`, así que pasar false ahorra varios cientos de ms.
+   */
+  enablePredictive?: boolean;
 }
 
 export interface FinancialProjectionSourceData {
@@ -183,6 +188,7 @@ export function buildFinancialProjectionSourceData(
     assumptions: input.assumptions,
     budget: input.budget,
     startingBalance: input.startingBalance,
+    enablePredictive: input.enablePredictive,
     asOfDate,
   };
   const hasData = hasSufficientCanonicalData(canonicalInputs);

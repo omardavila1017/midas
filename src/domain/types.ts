@@ -98,9 +98,21 @@ export interface Client {
   paymentDayRaw?: string;
   /** Structured, computable version of paymentDayRaw. */
   paymentDay: PaymentDayPattern;
+  /**
+   * Día de pago preferido del cliente según JDE (Nombre_Dia_Pago_CC13), p.ej.
+   * "Viernes". Cuando viene del API toma precedencia sobre `paymentDay` para
+   * snap-to-day en proyección de ingresos. Vacío = cae a `paymentDay`.
+   */
+  paymentDayName?: string;
   frequency: Frequency;
   /** Days of credit granted from invoice date. */
   creditDays: number;
+  /**
+   * `true` cuando `creditDays` viene del API cobranza (Dias_Credito) y NO debe
+   * editarse manualmente. La UI muestra el input deshabilitado. Por default
+   * `false` (catálogo manual histórico).
+   */
+  creditDaysFromApi?: boolean;
   /** Monthly billing — one value per calendar month (Jan..Dec).
    *  Captures seasonality from historical data. Engine divides each month's
    *  value by `eventsPerMonth(frequency)` to get the per-event amount. */

@@ -10,6 +10,7 @@
  */
 const DEFAULT_JDE_BASE_URL = '/api/jde';
 const DEFAULT_TRESS_BASE_URL = '/api/tress';
+const DEFAULT_CITI_BASE_URL = '/api/citi';
 
 export const apiConfig = {
   jde: {
@@ -23,6 +24,14 @@ export const apiConfig = {
   tress: {
     baseUrl: import.meta.env.VITE_TRESS_BASE_URL || DEFAULT_TRESS_BASE_URL,
     authValue: import.meta.env.VITE_JDE_TOKEN ?? '',
+  },
+  // CITI / Senda Citi — namespace para el ROL diario (viajes ejecutados).
+  // Endpoint productivo: http://srv-desarrollo:92/CITI/RolDiario. En dev el
+  // proxy de Vite (vite.config.ts) reescribe `/api/citi/*` hacia upstream
+  // para evitar CORS. Comparte el token JDE — son el mismo backend Senda.
+  citi: {
+    baseUrl: import.meta.env.VITE_CITI_BASE_URL || DEFAULT_CITI_BASE_URL,
+    authValue: import.meta.env.VITE_CITI_TOKEN ?? import.meta.env.VITE_JDE_TOKEN ?? '',
   },
   cognos: {
     baseUrl: import.meta.env.VITE_COGNOS_BASE_URL ?? '',

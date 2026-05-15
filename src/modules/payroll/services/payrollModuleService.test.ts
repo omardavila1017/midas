@@ -84,9 +84,66 @@ describe('refineCashTreatment', () => {
   it('Sueldo ordinario como Percepción → CASH_OUT', () => {
     expect(refineCashTreatment(rec({}))).toBe('CASH_OUT');
   });
-  it('EMPLOYER_TAX no se toca (lo dueña Taxes module)', () => {
-    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'IMSS PATRONAL' });
+  it('EMPLOYER_TAX para IMSS PATRONAL → EMPLOYER_TAX (lo dueña Taxes module)', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'IMSS PATRONAL', conceptType: 'Obligación Empresa' });
     expect(refineCashTreatment(r)).toBe('EMPLOYER_TAX');
+  });
+  it('EMPLOYER_TAX para INFONAVIT 5% → EMPLOYER_TAX', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'INFONAVIT 5%', conceptType: 'Obligación Empresa' });
+    expect(refineCashTreatment(r)).toBe('EMPLOYER_TAX');
+  });
+  it('EMPLOYER_TAX para ISR (EMPRESA) → WITHHOLDING_PAYABLE (es ISR retenido al empleado)', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'ISR (EMPRESA)', conceptType: 'Obligación Empresa' });
+    expect(refineCashTreatment(r)).toBe('WITHHOLDING_PAYABLE');
+  });
+  it('EMPLOYER_TAX para EXCENTO VALES DEPENSA → NON_CASH (informativo)', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'EXCENTO VALES DEPENSA', conceptType: 'Obligación Empresa' });
+    expect(refineCashTreatment(r)).toBe('NON_CASH');
+  });
+  it('EMPLOYER_TAX para EXENTO PRIMA VACACIONAL → NON_CASH (informativo)', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'EXENTO DE PRIMA VACACIONAL', conceptType: 'Obligación Empresa' });
+    expect(refineCashTreatment(r)).toBe('NON_CASH');
+  });
+  it('EMPLOYER_TAX para PROVISION IMPTO SOBRE NOMINA → NON_CASH (provisión contable)', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'PROVISION IMPTO SOBRE NOMINA', conceptType: 'Obligación Empresa' });
+    expect(refineCashTreatment(r)).toBe('NON_CASH');
+  });
+  it('EMPLOYER_TAX para HRS EXTRAS GRAVADAS PARA IMSS → NON_CASH (informativo base IMSS)', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'HRS EXTRAS GRAVADAS PARA IMSS', conceptType: 'Obligación Empresa' });
+    expect(refineCashTreatment(r)).toBe('NON_CASH');
+  });
+  it('EMPLOYER_TAX para DESPENSA GRAVADA → NON_CASH (informativo)', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'DESPENSA GRAVADA', conceptType: 'Obligación Empresa' });
+    expect(refineCashTreatment(r)).toBe('NON_CASH');
+  });
+  it('NON_CASH para INDEMNIZACION bajo Prestación → CASH_OUT (pago real al empleado)', () => {
+    const r = rec({ cashTreatment: 'NON_CASH', conceptName: 'INDEMNIZACION', conceptType: 'Prestación' });
+    expect(refineCashTreatment(r)).toBe('CASH_OUT');
+  });
+  it('NON_CASH para GRATIFICACION POR SEPARACION bajo Prestación → CASH_OUT', () => {
+    const r = rec({ cashTreatment: 'NON_CASH', conceptName: 'GRATIFICACION POR SEPARACION', conceptType: 'Prestación' });
+    expect(refineCashTreatment(r)).toBe('CASH_OUT');
+  });
+  it('NON_CASH para PRIMA DE ANTIGUEDAD bajo Prestación → CASH_OUT', () => {
+    const r = rec({ cashTreatment: 'NON_CASH', conceptName: 'PRIMA DE ANTIGUEDAD', conceptType: 'Prestación' });
+    expect(refineCashTreatment(r)).toBe('CASH_OUT');
+  });
+  it('NON_CASH para VALE DE DESPENSA bajo Prestación → NON_CASH (sigue siendo vale)', () => {
+    const r = rec({ cashTreatment: 'NON_CASH', conceptName: 'VALE DE DESPENSA', conceptType: 'Prestación' });
+    expect(refineCashTreatment(r)).toBe('NON_CASH');
+  });
+});
+
+describe('inferCashTreatment desde mapper (a través de mergeNominaBatch + refineBatch)', () => {
+  it('Obligación Empresa default → EMPLOYER_TAX', () => {
+    const r = rec({ cashTreatment: 'EMPLOYER_TAX', conceptName: 'IMSS PATRONAL', conceptType: 'Obligación Empresa' });
+    const refined = refineBatch([r]);
+    expect(refined[0].cashTreatment).toBe('EMPLOYER_TAX');
+  });
+  it('Prestación default → NON_CASH', () => {
+    const r = rec({ cashTreatment: 'NON_CASH', conceptName: 'VALE DE DESPENSA', conceptType: 'Prestación' });
+    const refined = refineBatch([r]);
+    expect(refined[0].cashTreatment).toBe('NON_CASH');
   });
 });
 

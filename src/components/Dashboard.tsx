@@ -17,7 +17,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import type { Client, Provider, CashFlowAssumptions } from '../domain/types';
-import { computeMinimumOperatingExpense, floorForMonth } from '../domain/minimumOperatingExpense';
+import { computeMinimumOperatingExpense } from '../domain/minimumOperatingExpense';
 import type { CXPRecord } from '../domain/persistence';
 import type { Budget } from '../domain/budget';
 import { fmtCompact, fmtCurrency, fmtYearMonthShort, fmtYearMonthLong } from '../formatters';
@@ -157,12 +157,11 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
-  // Gasto mínimo operativo: proveedores de Operación calculados desde catálogo.
-  // La nómina real se modela en la proyección operativa cuando existe fuente
-  // TRESS/JDE; el Dashboard no toma nómina desde una plantilla.
+  // Gasto mínimo operativo: proveedores de Operación + nómina TRESS (prom 3m).
+  // El override de nómina entra como totalMonthly al KPI y al piso del chart.
   const minimumExpense = useMemo(
-    () => computeMinimumOperatingExpense(providers, null),
-    [providers],
+    () => computeMinimumOperatingExpense(providers, null, payrollMonthlyActualJDE),
+    [providers, payrollMonthlyActualJDE],
   );
 
   const { base, baseline, projection } = useMemo(
@@ -270,8 +269,8 @@ const Dashboard: React.FC<DashboardProps> = ({
    *   3. projGapAboveFloor (red striped) — proyectado arriba del piso
    * La suma de los 3 = realExpense + projExpenseGap (sin cambios en altura total).
    */
-  const partitionExpense = (realExpense: number, projGap: number, ym: string) => {
-    const floor = floorForMonth(ym, minimumExpense.providersMonthly, null);
+  const partitionExpense = (realExpense: number, projGap: number, _ym: string) => {
+    const floor = minimumExpense.totalMonthly;
     const total = realExpense + projGap;
     const floorPortion = Math.max(0, Math.min(floor, total));
     const carvedFromReal = Math.min(realExpense, floorPortion);
@@ -284,7 +283,16 @@ const Dashboard: React.FC<DashboardProps> = ({
     };
   };
 
-  const chartData = useMemo(() => evaluated.months.map((m) => {
+  // Chart limitado a Ene–Dic del año en curso. La historia completa sigue
+  // viviendo en `evaluated.months` (la usa el modelo predictivo / drilldown);
+  // aquí sólo recortamos lo que se RENDERIZA.
+  const chartMonths = useMemo(
+    () => evaluated.months.filter((m) => m.yearMonth.startsWith(String(currentYear))),
+    [evaluated.months, currentYear],
+  );
+
+  const chartData = useMemo(() => {
+    const mapped = chartMonths.map((m) => {
     const ym = m.yearMonth;
     const cmp = compareYearMonth(ym, currentYm);
     const override = overrides[ym];
@@ -329,7 +337,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       // (proy.)" (roja rayada). El piso operativo NO se apila — ya está
       // implícito en la proyección. Se rinde aparte como marker horizontal
       // de referencia en `OverrunMarkers` cuando `floorReference` > 0.
-      const floor = floorForMonth(ym, minimumExpense.providersMonthly, null);
+      const floor = minimumExpense.totalMonthly;
       return {
         yearMonth: ym,
         realIncome: 0,
@@ -353,7 +361,11 @@ const Dashboard: React.FC<DashboardProps> = ({
     const projectedExpenseTotal = override?.expense ?? projectedExpense ?? 0;
     const projIncGap = Math.max(0, projectedIncomeTotal - m.baseIncome);
     const projExpGap = Math.max(0, projectedExpenseTotal - m.baseExpense);
-    const parts = partitionExpense(m.baseExpense, projExpGap, ym);
+    // Mes en curso: NO carvear piso adentro del stack. Real lleva mucho menos
+    // del mes (mid-month) y el carve lo escondería dentro del piso amarillo.
+    // Render: real sólido + proyectado rayado, con el piso como marcador
+    // horizontal (floorReference) — mismo lenguaje visual que meses futuros.
+    const floor = minimumExpense.totalMonthly;
     return {
       yearMonth: ym,
       realIncome: m.baseIncome,
@@ -362,13 +374,19 @@ const Dashboard: React.FC<DashboardProps> = ({
       realExpense: m.baseExpense,
       projExpenseGap: projExpGap,
       projExpenseTotal: projectedExpenseTotal,
-      ...parts,
+      gastoMinFloor: 0,
+      realExpenseAboveFloor: m.baseExpense,
+      projExpenseGapAboveFloor: projExpGap,
+      monthlyFloor: floor,
+      floorReference: m.baseExpense + projExpGap > 0 ? floor : null,
       projIncomeOverrun: null,
       projExpenseOverrun: null,
       cashBase: m.baseClosingCash,
       phase: 'current' as const,
     };
-  }), [evaluated.months, currentYm, overrides, projectionByMonth, minimumExpense.providersMonthly]);
+    });
+    return mapped;
+  }, [chartMonths, currentYm, overrides, projectionByMonth, minimumExpense.totalMonthly]);
 
   const tableRows: CashFlowTableRow[] = useMemo(
     () => evaluated.months.map((m) => {
@@ -451,8 +469,8 @@ const Dashboard: React.FC<DashboardProps> = ({
             <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.expensePattern} strokeWidth="2.5" />
           </pattern>
           <pattern id="hatchMinimum" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
-            <rect width="8" height="8" fill="#D1FAE5" />
-            <line x1="0" y1="0" x2="0" y2="8" stroke="#059669" strokeWidth="3" opacity="0.95" />
+            <rect width="8" height="8" fill="#fef3c7" />
+            <line x1="0" y1="0" x2="0" y2="8" stroke="#d97706" strokeWidth="3" opacity="0.95" />
           </pattern>
         </defs>
       </svg>
@@ -561,7 +579,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           annual={minimumExpense.totalAnnual}
           providersMonthly={minimumExpense.providersMonthly}
           payrollMonthly={minimumExpense.payrollMonthly}
-          payrollActualJDE={payrollMonthlyActualJDE}
           criticalCount={minimumExpense.criticalCount}
         />
       </div>
@@ -580,10 +597,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         <h2 className="text-[15px] font-bold tracking-tight mb-1" style={{ color: 'var(--gray-950)' }}>
           Flujo mensual
         </h2>
-        <p className="text-[11px] mb-4" style={{ color: 'var(--gray-400)' }}>
-          Barra sólida = real · Barra de líneas = proyectado · Línea punteada = nivel proyectado cuando el real lo excedió. Haz clic en un mes para ver el detalle.
-          {clients.length > 0 && ' Ingreso proyectado desde catálogo de clientes; egreso desde /AntiguedadSaldos + CARGOs recurrentes.'}
-        </p>
         <div style={{ height: 340 }}>
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart
@@ -628,8 +641,8 @@ const Dashboard: React.FC<DashboardProps> = ({
               <Bar
                 dataKey="gastoMinFloor"
                 stackId="expense"
-                fill="#34D399"
-                stroke="#059669"
+                fill="#f59e0b"
+                stroke="#d97706"
                 strokeWidth={1.5}
                 name="Piso operativo"
                 radius={[0, 0, 0, 0]}
@@ -639,7 +652,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 {chartData.map((row) => (
                   <Cell
                     key={`floor-${row.yearMonth}`}
-                    fill={row.phase === 'past' ? '#34D399' : 'url(#hatchMinimum)'}
+                    fill={row.phase === 'past' ? '#f59e0b' : 'url(#hatchMinimum)'}
                   />
                 ))}
               </Bar>
@@ -800,7 +813,7 @@ const OverrunMarkers: React.FC<any> = (props) => {
         x2={bar.x + bar.width}
         y1={y}
         y2={y}
-        stroke="#059669"
+        stroke="#d97706"
         strokeWidth={2}
         strokeDasharray="4 2"
       />,
@@ -900,10 +913,8 @@ const MinimumExpenseKpi: React.FC<{
   annual: number;
   providersMonthly: number;
   payrollMonthly: number;
-  /** Nómina real del último periodo cargado en TRESS — referencia, no piso. */
-  payrollActualJDE?: number;
   criticalCount: number;
-}> = ({ monthly, annual, providersMonthly, payrollMonthly, payrollActualJDE, criticalCount }) => (
+}> = ({ monthly, annual, providersMonthly, payrollMonthly, criticalCount }) => (
   <div
     className="relative overflow-hidden rounded-[var(--radius)] p-4 floor-kpi"
     title="Piso operativo: proveedores de Operación + nómina/finiquitos. Es el monto que necesitas cubrir cada mes para no afectar operación."
@@ -969,22 +980,13 @@ const MinimumExpenseKpi: React.FC<{
         <div className="flex items-center justify-between text-[11px]">
           <span style={{ color: 'var(--gray-700)' }}>
             Nómina + finiquitos
+            <span className="ml-1" style={{ color: 'var(--gray-500)' }}>· TRESS prom 3m</span>
           </span>
           <span
             className="font-medium tabular-nums"
             style={{ color: 'var(--gray-950)' }}
           >
             {fmtCompact(payrollMonthly)}
-          </span>
-        </div>
-      )}
-      {payrollActualJDE !== undefined && payrollActualJDE > 0 && (
-        <div className="flex items-center justify-between text-[10px] pl-3">
-          <span className="text-yellow-800/60">
-            · Real TRESS últ. mes
-          </span>
-          <span className="font-medium tabular-nums text-yellow-800/80">
-            {fmtCompact(payrollActualJDE)}
           </span>
         </div>
       )}
