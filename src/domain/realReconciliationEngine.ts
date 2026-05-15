@@ -40,6 +40,7 @@
  */
 
 import type { BankAccountStatement, BankStatementLine, CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
+import { bankMovementKey } from './bankMovementKey';
 import {
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
@@ -323,21 +324,6 @@ export interface RealReconciliationResult {
 }
 
 // ── Helpers internos ───────────────────────────────────────────────────────
-
-/** Genera una clave estable para un movimiento bancario. Mismo formato que
- *  reconciliationEngine.ts para que ambos motores puedan compartir índices
- *  si en el futuro se quieren cruzar resultados. */
-export function bankMovementKey(mov: BankStatementLine): string {
-  return [
-    mov.cia,
-    mov.cuenta,
-    mov.fechaOperacion,
-    mov.referencia,
-    mov.tipoMovimiento,
-    mov.importe,
-    mov.concepto,
-  ].join('|');
-}
 
 /**
  * Días entre dos fechas (b − a). Robusto contra cadenas con time component:

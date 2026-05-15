@@ -58,11 +58,8 @@ import { getConcursoProviderIds, isConcursoMercantil, normalizeProviderId } from
 import type { Client, Provider, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
-import {
-  bankMovementKey,
-  type AbonoEnrichment,
-  type RealReconciliationResult,
-} from '../../../domain/realReconciliationEngine';
+import { bankMovementKey } from '../../../domain/bankMovementKey';
+import type { AbonoEnrichment, RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
 import { bankAccountBusinessUnitLabel, enrichMovementWithCatalog } from '../../../domain/bankAccountsCatalog';

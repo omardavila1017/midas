@@ -6,6 +6,7 @@ import React, {
   useRef,
   useCallback,
   useMemo,
+  useDeferredValue,
 } from 'react';
 import {
   LayoutDashboard,
@@ -93,12 +94,6 @@ const NAVIGATION_ITEMS: NavigationItem[] = [
   { tabId: 'netflow', label: 'Flujo Neto', icon: <Wallet size={18} /> },
 ];
 
-const fuzzyMatch = (query: string, text: string): boolean => {
-  const lowerQuery = query.toLowerCase();
-  const lowerText = text.toLowerCase();
-  return lowerText.includes(lowerQuery);
-};
-
 const CommandPalette: React.FC<CommandPaletteProps> = ({
   open,
   onClose,
@@ -113,22 +108,45 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const deferredQuery = useDeferredValue(query);
+  const normalizedQuery = useMemo(() => deferredQuery.trim().toLowerCase(), [deferredQuery]);
+
+  const searchableActions = useMemo(
+    () => actions.map((item) => ({ item, search: item.label.toLowerCase() })),
+    [actions],
+  );
+  const searchableScenarios = useMemo(
+    () => scenarios.map((item) => ({ item, search: item.name.toLowerCase() })),
+    [scenarios],
+  );
+  const searchableClients = useMemo(
+    () => clients.map((item) => ({ item, search: item.name.toLowerCase() })),
+    [clients],
+  );
+  const searchableProviders = useMemo(
+    () => providers.map((item) => ({ item, search: item.name.toLowerCase() })),
+    [providers],
+  );
+  const searchableSimulations = useMemo(
+    () => simulations.map((item) => ({ item, search: item.name.toLowerCase() })),
+    [simulations],
+  );
 
   // Build results grouped by category
   const results = useMemo<ResultItem[]>(() => {
-    const actionResults: ResultItem[] = actions
-      .filter((a) => fuzzyMatch(query, a.label))
+    const actionResults: ResultItem[] = searchableActions
+      .filter(({ search }) => search.includes(normalizedQuery))
       .slice(0, 6)
-      .map((a) => ({
-        id: a.id,
-        label: a.label,
+      .map(({ item }) => ({
+        id: item.id,
+        label: item.label,
         category: 'Acciones',
-        icon: a.icon ?? <Zap size={18} />,
-        run: a.run,
+        icon: item.icon ?? <Zap size={18} />,
+        run: item.run,
       }));
 
     const navResults: ResultItem[] = NAVIGATION_ITEMS.filter((item) =>
-      fuzzyMatch(query, item.label)
+      item.label.toLowerCase().includes(normalizedQuery)
     ).map((item) => ({
       id: item.tabId,
       label: item.label,
@@ -137,46 +155,46 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       tabId: item.tabId,
     }));
 
-    const scenarioResults: ResultItem[] = scenarios
-      .filter((s) => fuzzyMatch(query, s.name))
+    const scenarioResults: ResultItem[] = searchableScenarios
+      .filter(({ search }) => search.includes(normalizedQuery))
       .slice(0, 8)
-      .map((s) => ({
-        id: s.id,
-        label: s.name,
+      .map(({ item }) => ({
+        id: item.id,
+        label: item.name,
         category: 'Escenarios',
         icon: <GitBranch size={18} />,
         tabId: 'financialPlanning',
-        scenarioId: s.id,
+        scenarioId: item.id,
       }));
 
-    const clientResults: ResultItem[] = clients
-      .filter((c) => fuzzyMatch(query, c.name))
+    const clientResults: ResultItem[] = searchableClients
+      .filter(({ search }) => search.includes(normalizedQuery))
       .slice(0, 8)
-      .map((c) => ({
-        id: c.id,
-        label: c.name,
+      .map(({ item }) => ({
+        id: item.id,
+        label: item.name,
         category: 'Clientes',
         icon: <UserSquare size={18} />,
         tabId: 'clients',
       }));
 
-    const providerResults: ResultItem[] = providers
-      .filter((p) => fuzzyMatch(query, p.name))
+    const providerResults: ResultItem[] = searchableProviders
+      .filter(({ search }) => search.includes(normalizedQuery))
       .slice(0, 8)
-      .map((p) => ({
-        id: p.id,
-        label: p.name,
+      .map(({ item }) => ({
+        id: item.id,
+        label: item.name,
         category: 'Proveedores',
         icon: <Users size={18} />,
         tabId: 'providers',
       }));
 
-    const simulationResults: ResultItem[] = simulations
-      .filter((pr) => fuzzyMatch(query, pr.name))
+    const simulationResults: ResultItem[] = searchableSimulations
+      .filter(({ search }) => search.includes(normalizedQuery))
       .slice(0, 8)
-      .map((pr) => ({
-        id: pr.id,
-        label: pr.name,
+      .map(({ item }) => ({
+        id: item.id,
+        label: item.name,
         category: 'Propuestas',
         icon: <Receipt size={18} />,
         tabId: 'financialPlanning',
@@ -190,7 +208,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       ...providerResults,
       ...simulationResults,
     ];
-  }, [query, actions, scenarios, clients, providers, simulations]);
+  }, [normalizedQuery, searchableActions, searchableScenarios, searchableClients, searchableProviders, searchableSimulations]);
 
   // Group results by category
   const groupedResults = useMemo(() => {

@@ -9,7 +9,7 @@ import type {
   RealReconciliationMatch,
   RealReconciliationResult,
 } from '../../../domain/realReconciliationEngine';
-import { bankMovementKey } from '../../../domain/realReconciliationEngine';
+import { bankMovementKey } from '../../../domain/bankMovementKey';
 import type { PayrollCostRecord, PurchaseReceiptRecord } from '../types';
 import { buildCanonicalProjection } from './canonicalProjection';
 

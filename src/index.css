@@ -663,6 +663,11 @@ html.dark .skeleton {
   background-color: var(--primary-subtle);
 }
 
+.cv-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 44px;
+}
+
 /* Minimum touch target (WCAG 2.5.8) */
 .touch-target-44 {
   min-height: 44px;

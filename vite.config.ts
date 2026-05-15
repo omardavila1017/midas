@@ -3,6 +3,56 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import { visualizer } from 'rollup-plugin-visualizer'
 
+function lucideIconPath(iconName: string): string {
+  const fileName = iconName
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/([A-Za-z])([0-9])/g, '$1-$2')
+    .replace(/([0-9])([A-Za-z])/g, '$1-$2')
+    .toLowerCase()
+  return `lucide-react/dist/esm/icons/${fileName}`
+}
+
+function lucideDeepImportPlugin({ types: t }: { types: any }) {
+  return {
+    name: 'lucide-react-deep-imports',
+    visitor: {
+      ImportDeclaration(path: any) {
+        if (path.node.source.value !== 'lucide-react') return
+        if (path.node.importKind === 'type') return
+
+        const valueSpecifiers = path.node.specifiers.filter(
+          (specifier: any) => t.isImportSpecifier(specifier) && specifier.importKind !== 'type',
+        )
+        if (valueSpecifiers.length === 0) return
+
+        const passthroughSpecifiers = path.node.specifiers.filter(
+          (specifier: any) => !valueSpecifiers.includes(specifier),
+        )
+        const replacement = valueSpecifiers.map((specifier: any) => {
+          const imported = t.isIdentifier(specifier.imported)
+            ? specifier.imported.name
+            : specifier.imported.value
+          return t.importDeclaration(
+            [t.importDefaultSpecifier(t.identifier(specifier.local.name))],
+            t.stringLiteral(lucideIconPath(imported)),
+          )
+        })
+
+        if (passthroughSpecifiers.length > 0) {
+          replacement.unshift(
+            t.importDeclaration(
+              passthroughSpecifiers.map((specifier: any) => t.cloneNode(specifier)),
+              t.stringLiteral('lucide-react'),
+            ),
+          )
+        }
+
+        path.replaceWithMultiple(replacement)
+      },
+    },
+  }
+}
+
 // Proxies de desarrollo para APIs externas. El browser llama a /api/* y Vite
 // reescribe hacia el upstream, inyectando credenciales desde env local para
 // que el cliente no mande Bearer headers.
@@ -64,7 +114,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [
-      react(),
+      react({
+        babel: {
+          plugins: [lucideDeepImportPlugin],
+        },
+      }),
       ...(analyze
         ? [
             visualizer({

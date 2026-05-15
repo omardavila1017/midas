@@ -142,6 +142,9 @@ interface SupplierSummary {
   providerFlexibility: ProviderFlexibility;
   creditLimit?: number;
   records: EnrichedCXPRecord[];
+  bucketTotals: number[];
+  vencido: number;
+  sortedRecords: EnrichedCXPRecord[];
 }
 
 type DashboardTab = 'resumen' | 'triage' | 'proveedores';
@@ -808,15 +811,26 @@ const CXPDashboard = ({
           providerFlexibility: r.providerFlexibility,
           creditLimit: r.providerCreditLimit,
           records: [],
+          bucketTotals: new Array(BUCKET_KEYS.length).fill(0),
+          vencido: 0,
+          sortedRecords: [],
         });
       }
       const e = map.get(k)!;
       e.total += r.importePendientePesos;
       e.count++;
       e.maxDias = Math.max(e.maxDias, r.diasVencida);
+      BUCKET_KEYS.forEach((key, index) => {
+        const value = r[key] as number;
+        e.bucketTotals[index] += value;
+        if (index > 0) e.vencido += value;
+      });
       e.records.push(r);
     });
-    const arr = Array.from(map.values());
+    const arr = Array.from(map.values()).map((supplier) => ({
+      ...supplier,
+      sortedRecords: [...supplier.records].sort((a, b) => b.diasVencida - a.diasVencida),
+    }));
     arr.sort((a, b) => {
       const mul = sortDir === 'desc' ? -1 : 1;
       if (sortKey === 'nombre') return mul * a.nombre.localeCompare(b.nombre);
@@ -1277,7 +1291,6 @@ const CXPDashboard = ({
           <div className="divide-y divide-[var(--gray-50)]">
             {pagedSuppliers.map(s => {
               const isExpanded = expandedSupplier === s.nombre;
-              const vencido = s.records.reduce((sum, r) => sum + r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180, 0);
               const severity = s.maxDias > 120 ? hex.danger : s.maxDias > 60 ? hex.warning : s.maxDias > 0 ? hex.primary : hex.success;
 
               return (
@@ -1314,7 +1327,7 @@ const CXPDashboard = ({
                     {/* Mini aging bar */}
                     <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[var(--gray-100)]" title={agingTooltip(s.maxDias)}>
                       {BUCKET_KEYS.map((key, bi) => {
-                        const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
+                        const bval = s.bucketTotals[bi] ?? 0;
                         const bpct = s.total > 0 ? (bval / s.total) * 100 : 0;
                         return bpct > 0 ? <div key={bi} style={{ width: `${bpct}%`, backgroundColor: AGING_COLORS[bi] }} /> : null;
                       })}
@@ -1322,7 +1335,7 @@ const CXPDashboard = ({
 
                     <div className="text-right w-28">
                       <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</p>
-                      {vencido > 0 && <p className="text-[10px] font-mono text-[var(--danger)]">{fmt(vencido)} vencido</p>}
+                      {s.vencido > 0 && <p className="text-[10px] font-mono text-[var(--danger)]">{fmt(s.vencido)} vencido</p>}
                       {s.creditLimit !== undefined && s.creditLimit > 0 && (
                         <p className={`text-[10px] font-mono ${s.total > s.creditLimit ? 'text-[var(--warning)]' : 'text-[var(--gray-400)]'}`}>
                           lim {fmt(s.creditLimit)}
@@ -1337,7 +1350,7 @@ const CXPDashboard = ({
                       {/* Aging summary for this supplier */}
                       <div className="flex gap-1.5 mb-3 flex-wrap">
                         {BUCKET_KEYS.map((key, bi) => {
-                          const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
+                          const bval = s.bucketTotals[bi] ?? 0;
                           if (bval === 0) return null;
                           return (
                             <div key={bi} className="flex items-center gap-1 bg-white rounded-full px-2 py-0.5 text-[10px] border border-[var(--gray-100)]">
@@ -1367,7 +1380,7 @@ const CXPDashboard = ({
                             </tr>
                           </thead>
                           <tbody>
-                            {s.records.sort((a, b) => b.diasVencida - a.diasVencida).map((r, ri) => (
+                            {s.sortedRecords.map((r, ri) => (
                               <tr
                                 key={ri}
                                 onClick={() => setSelectedRecord(r)}
@@ -1545,7 +1558,7 @@ function AgingMatrix({
           </thead>
           <tbody>
             {supplierData.slice(0, 100).map((s, si) => {
-              const bucketVals = BUCKET_KEYS.map(key => s.records.reduce((sum, r) => sum + (r[key] as number), 0));
+              const bucketVals = s.bucketTotals;
               const maxBucket = Math.max(...bucketVals);
               return (
                 <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">

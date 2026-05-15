@@ -35,10 +35,8 @@ import {
   type ClassificationContext,
   type InternalReason,
 } from '../domain/netCashFlowEngine';
-import {
-  bankMovementKey,
-  type AbonoEnrichment,
-} from '../domain/realReconciliationEngine';
+import { bankMovementKey } from '../domain/bankMovementKey';
+import type { AbonoEnrichment } from '../domain/realReconciliationEngine';
 import {
   attachImportedStatementsToKnownCompanies,
   bankStatementBalance,
