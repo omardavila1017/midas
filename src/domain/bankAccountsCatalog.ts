@@ -120,7 +120,7 @@ export function bankAccountBusinessUnitLabel(un: string | null | undefined): str
   if (upper === 'MULTICARGA') return 'Multicarga';
   if (upper === 'TURIMEX LLC') return 'Turimex LLC';
   if (upper === 'RESERVA') return 'Reserva';
-  if (upper === 'CITI') return 'CITI';
+  if (upper === 'CITI') return 'Clientes Citi';
   if (upper === 'AC') return 'AC';
   return value;
 }

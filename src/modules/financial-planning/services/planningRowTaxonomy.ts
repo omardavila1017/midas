@@ -8,6 +8,7 @@ import type {
 } from '../../shared-finance/types';
 import { bankAccountBusinessUnitLabel } from '../../../domain/bankAccountsCatalog';
 import { slug } from './customRowsStorage';
+import { macroBucketForSupplier } from './providerCategoryGeneralization';
 
 export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   AR_COLLECTION: 'Cobranza',
@@ -23,7 +24,7 @@ export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
 
 const INCOME_BUCKETS = new Set([
   'AC',
-  'CITI',
+  'Clientes Citi',
   'Federal',
   'Multicarga',
   'Reserva',
@@ -131,46 +132,6 @@ function cleanConceptLabel(concept: string | undefined): string | null {
   return trimmed.replace(/\s+/g, ' ');
 }
 
-// Mapeo de etiqueta cruda de proveedor (REFACCIONARIO, HONORARIOS LEGAL,
-// TECNOLOGIA Y SOPORTE, …) a bucket limpio para agrupación visual en la
-// planeación. El orden importa: primero patrones más específicos.
-const EXPENSE_BUCKET_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /refac/i, label: 'Refacciones' },
-  { pattern: /llanta|neumat/i, label: 'Llantas' },
-  { pattern: /combust|diesel|gasolin|lubric/i, label: 'Combustibles y lubricantes' },
-  { pattern: /legal|jur[íi]dic|abogad|notari/i, label: 'Legal' },
-  { pattern: /tecnolog|sistem|soporte|inform[áa]tic|software|hardware|\bti\b|dti|telecom/i, label: 'Tecnología (TI)' },
-  { pattern: /mantenim/i, label: 'Mantenimiento' },
-  { pattern: /\brh\b|recursos\s*humanos|personal|capacitaci|reclut/i, label: 'Recursos Humanos' },
-  { pattern: /renta|arrend/i, label: 'Rentas' },
-  { pattern: /seguro\b|p[óo]liza/i, label: 'Seguros' },
-  { pattern: /seguridad|vigilanc|guard/i, label: 'Seguridad y vigilancia' },
-  { pattern: /honorar/i, label: 'Honorarios' },
-  { pattern: /transp|flete|log[íi]stic|paqueter/i, label: 'Transporte y logística' },
-  { pattern: /papel|oficin|consumibl/i, label: 'Papelería y oficina' },
-  { pattern: /publi|marketing|mercad|imprent|imprenta/i, label: 'Publicidad y marketing' },
-  { pattern: /viaje|hospedaje|hotel|vi[áa]tic/i, label: 'Viáticos y viajes' },
-  { pattern: /financ|banc|comisi/i, label: 'Servicios financieros' },
-  { pattern: /tesorer/i, label: 'Tesorería' },
-  { pattern: /administr/i, label: 'Administración' },
-  { pattern: /limpie|aseo|sanit/i, label: 'Limpieza' },
-  { pattern: /energ|electric|cfe|agua|gas\b/i, label: 'Servicios (luz, agua, gas)' },
-  { pattern: /alimento|comed|restaur/i, label: 'Alimentos' },
-];
-
-function toTitleCase(value: string): string {
-  return value.toLowerCase().replace(/(^|\s|·|-|\/)\p{L}/gu, (c) => c.toUpperCase());
-}
-
-function normalizeExpenseBucket(raw: string | undefined | null): string {
-  const trimmed = raw?.trim();
-  if (!trimmed) return 'Otros proveedores';
-  for (const { pattern, label } of EXPENSE_BUCKET_PATTERNS) {
-    if (pattern.test(trimmed)) return label;
-  }
-  return toTitleCase(trimmed);
-}
-
 const CATEGORY_BUCKET_LABEL: Record<FinancialMovementCategory, string> = {
   AR_COLLECTION: 'Cobranza',
   AP_PAYMENT: 'Otros proveedores',
@@ -186,7 +147,10 @@ const CATEGORY_BUCKET_LABEL: Record<FinancialMovementCategory, string> = {
 export function bucketForMovement(movement: FinancialMovement): string {
   if (movement.type === 'INFLOW') return inflowBucketFor(movement);
   if (movement.category === 'AP_PAYMENT') {
-    return normalizeExpenseBucket(movement.providerCategory ?? movement.subcategory);
+    return macroBucketForSupplier({
+      counterpartyId: movement.counterpartyId,
+      counterpartyName: movement.counterpartyName,
+    });
   }
   if (movement.category === 'TRANSFER') return 'Otros egresos';
   return CATEGORY_BUCKET_LABEL[movement.category];

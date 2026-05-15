@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { comprasToPurchaseReceipts } from './comprasToPurchaseReceipts';
+import {
+  comprasToPurchaseReceipts,
+  buildComprasCreditOverlay,
+} from './comprasToPurchaseReceipts';
 import type { ComprasRecord } from '../services/jdeTypes';
 
 function record(overrides: Partial<ComprasRecord>): ComprasRecord {
@@ -212,6 +215,76 @@ describe('comprasToPurchaseReceipts — PROJECTED path', () => {
     });
     expect(out).toHaveLength(1);
     expect(out[0].purchaseOrderNo).toBe('OLD-OPEN');
+  });
+});
+
+describe('buildComprasCreditOverlay — API actualiza el catálogo', () => {
+  it('picks the modal credit term per provider', () => {
+    const overlay = buildComprasCreditOverlay([
+      record({ noProveedor: '100', noOrden: 'A', diasCredito: 30 }),
+      record({ noProveedor: '100', noOrden: 'B', diasCredito: 30 }),
+      record({ noProveedor: '100', noOrden: 'C', diasCredito: 60 }),
+      record({ noProveedor: '200', noOrden: 'D', diasCredito: 45 }),
+    ]);
+    expect(overlay.get('100')).toBe(30);
+    expect(overlay.get('200')).toBe(45);
+  });
+
+  it('breaks ties on frequency by the most recent pedido', () => {
+    const overlay = buildComprasCreditOverlay([
+      record({ noProveedor: '300', noOrden: 'A', diasCredito: 30, fechaPedido: '2026-01-01' }),
+      record({ noProveedor: '300', noOrden: 'B', diasCredito: 60, fechaPedido: '2026-03-01' }),
+    ]);
+    expect(overlay.get('300')).toBe(60);
+  });
+
+  it('ignores cancelled OCs and non-positive credit days', () => {
+    const overlay = buildComprasCreditOverlay([
+      record({ noProveedor: '400', noOrden: 'A', diasCredito: 90, cancelada: true }),
+      record({ noProveedor: '400', noOrden: 'B', diasCredito: 0 }),
+    ]);
+    expect(overlay.has('400')).toBe(false);
+  });
+});
+
+describe('comprasToPurchaseReceipts — credit overlay dating', () => {
+  it('CONFIRMED with D_Credito=0 re-dates payment to recepción + provider term', () => {
+    const sibling = record({
+      noProveedor: '777',
+      noOrden: 'SIB',
+      diasCredito: 30,
+      fechaRecepcion: '2026-04-10',
+      fechaPagoProyectada: '2026-05-10',
+    });
+    const target = record({
+      noProveedor: '777',
+      noOrden: 'TGT',
+      diasCredito: 0,
+      fechaRecepcion: '2026-04-20',
+      fechaPagoProyectada: '2026-04-20',
+    });
+    const out = comprasToPurchaseReceipts([sibling, target], { asOfDate: '2026-04-15' });
+    const tgt = out.find((r) => r.purchaseOrderNo === 'TGT');
+    expect(tgt?.confidence).toBe('CONFIRMED');
+    // 2026-04-20 + 30d (overlay del proveedor 777) = 2026-05-20
+    expect(tgt?.estimatedDueDate).toBe('2026-05-20');
+  });
+
+  it('CONFIRMED with D_Credito=0 and no provider history keeps receipt-day payment', () => {
+    const target = record({
+      noProveedor: '888',
+      noOrden: 'TGT',
+      diasCredito: 0,
+      fechaRecepcion: '2026-04-20',
+      fechaPagoProyectada: '2026-04-20',
+    });
+    const out = comprasToPurchaseReceipts([target], { asOfDate: '2026-04-15' });
+    expect(out[0]?.estimatedDueDate).toBe('2026-04-20');
+  });
+
+  it('does not alter dating when the OC carries its own D_Credito', () => {
+    const out = comprasToPurchaseReceipts([record({})], { asOfDate: '2026-05-13' });
+    expect(out[0].estimatedDueDate).toBe('2026-05-13');
   });
 });
 

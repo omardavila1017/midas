@@ -17,7 +17,9 @@ import type {
   TaxType,
 } from '../../shared-finance/types';
 import {
+  buildJdeSupplierIndex,
   buildPurchaseReceiptMovements,
+  normalizeJde,
   purchaseMatchesCxp,
   purchaseReceiptToMovement,
 } from '../../shared-finance/sourceRecords';
@@ -745,6 +747,7 @@ function accumulateCxpIva({
   ensure: (period: string) => TaxPeriodAccumulator;
 }): Set<string> {
   const handledKeys = new Set<string>();
+  const purchaseBySupplier = buildJdeSupplierIndex(purchaseReceipts);
   cxpRecords.forEach((record, index) => {
     if (companyCode && companyCode !== 'all' && record.cia !== companyCode) return;
     const date = cleanIsoDate(record.fechaProgramacionPago)
@@ -755,7 +758,9 @@ function accumulateCxpIva({
     const target = providerRateTargetFromCxp(record);
     const providerRate = providerCatalogRate(rateContext, record);
     const overrideRate = overrideRateFor(rateContext, target);
-    const matchedPurchase = purchaseReceipts.find((receipt) => purchaseMatchesCxp(receipt, record));
+    const matchedPurchase = purchaseBySupplier
+      .get(normalizeJde(record.noProveedor))
+      ?.find((receipt) => purchaseMatchesCxp(receipt, record));
     const coverage = cxpPaymentCoverage?.get(cxpCoverageKey(record));
 
     if (coverage && coverage.payments.length > 0) {

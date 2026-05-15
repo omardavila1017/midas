@@ -559,7 +559,16 @@ export async function fetchBankStatementsRange(
   } = {},
 ): Promise<BankAccountStatement[]> {
   const concurrency = Math.max(1, options.concurrency ?? 6);
-  const config = options.config ?? {};
+  // Per-day /bancos es una foto chica — debe responder en segundos. Forzamos
+  // timeout 30s + 0 retries internos del jdeClient: este worker ya reintenta
+  // vía MAX_ATTEMPTS con su propio backoff. Sin esto el retry queda anidado
+  // (3 worker × 3 jdeClient × 120s ≈ 18min por UN día colgado → barra atorada
+  // en "730/731"). El caller puede override vía options.config.
+  const config: JdeClientConfig = {
+    timeoutMs: 30_000,
+    retries: 0,
+    ...(options.config ?? {}),
+  };
 
   // Build the list of dates [from..to] inclusive.
   const dates: string[] = [];

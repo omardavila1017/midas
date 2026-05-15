@@ -38,6 +38,22 @@ let dbPromise: Promise<IDBDatabase | null> | null = null;
 let memoryIndex: Map<string, unknown[]> | null = null;
 let memoryReady: Promise<void> | null = null;
 let idbWarned = false;
+// null = aún sin resolver openDb. true = IDB persiste. false = memory-only
+// (lock de otra pestaña, IDB no disponible, o timeout de apertura). El boot
+// usa esto para NO machacar JDE con 731 días cuando el cache no persiste.
+let idbAvailable: boolean | null = null;
+
+/**
+ * ¿El cache diario persiste en IDB? false = memory-only (otra pestaña tiene
+ * la DB lockeada, IDB deshabilitado, o `open` venció su timeout). En ese
+ * estado el cache NO sobrevive recargas, así que el caller debe recortar
+ * rangos largos en vez de re-fetchearlos en cada boot.
+ *
+ * Requiere que `primeDailyCache()` haya resuelto; antes devuelve false.
+ */
+export function isDailyCachePersistent(): boolean {
+  return idbAvailable === true;
+}
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -70,6 +86,7 @@ function openDb(): Promise<IDBDatabase | null> {
     const finish = (db: IDBDatabase | null) => {
       if (!resolved) {
         resolved = true;
+        if (idbAvailable === null) idbAvailable = db !== null;
         resolve(db);
       }
     };
@@ -96,7 +113,14 @@ function openDb(): Promise<IDBDatabase | null> {
           db.createObjectStore(STORE_NAME, { keyPath: 'key' });
         }
       };
-      req.onsuccess = () => stamp(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // Si otra pestaña abre una versión nueva, cerramos para no provocar
+        // `onblocked` allá (que la degradaría a memory-only → refetch de 731
+        // días). El refresh natural de esa pestaña reabrirá la DB.
+        db.onversionchange = () => db.close();
+        stamp(db);
+      };
       req.onerror = () => {
         if (!idbWarned) {
           idbWarned = true;

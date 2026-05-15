@@ -28,7 +28,8 @@ import {
   TONE_SUCCESS,
   TONE_NEUTRAL,
 } from '../../shared-finance/components/tone';
-import { buildFinancialProjectionSourceData } from '../../financial-projection/services/financialProjectionService';
+import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
+import { useFinancialProjectionSource } from '../../shared-finance/hooks/useFinancialProjectionSource';
 import type {
   PayrollCostRecord,
   TaxManualAdjustment,
@@ -114,8 +115,8 @@ export default function TaxDashboard(props: Props) {
     saveTaxStore(taxStore);
   }, [taxStore]);
 
-  const source = useMemo(
-    () => buildFinancialProjectionSourceData({ ...props, asOfDate: today }),
+  const cacheProbeInput = useMemo(
+    () => ({ ...props, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -136,6 +137,11 @@ export default function TaxDashboard(props: Props) {
     ],
   );
 
+  // Heavy canonical build runs in a Web Worker — see hook docstring. `source`
+  // is null until it resolves; we render DashboardLoadingShell meanwhile so
+  // the tab stays responsive instead of freezing the whole renderer.
+  const source = useFinancialProjectionSource(cacheProbeInput);
+
   const view = useMemo(
     () => buildTaxDashboardView({
       clients: props.clients,
@@ -150,11 +156,11 @@ export default function TaxDashboard(props: Props) {
       companyCode: props.companyCode,
       startDate: fiscalYearStart,
       endDate,
-      movements: source.movements,
+      movements: source?.movements ?? [],
       store: taxStore,
       today,
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source.movements, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 
@@ -169,7 +175,7 @@ export default function TaxDashboard(props: Props) {
   const hasFiscalData = props.clients.length > 0
     || props.cxpRecords.length > 0
     || props.budget != null
-    || source.movements.length > 0
+    || (source?.movements.length ?? 0) > 0
     || taxStore.adjustments.length > 0
     || taxStore.obligations.length > 0
     || taxStore.overdueBalance > 0;
@@ -239,6 +245,10 @@ export default function TaxDashboard(props: Props) {
     setDetailTab('summary');
     setShowAddForm(false);
   };
+
+  if (!source) {
+    return <DashboardLoadingShell label="Cargando Impuestos" tableRows={6} />;
+  }
 
   if (!hasFiscalData) {
     return (

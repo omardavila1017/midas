@@ -24,7 +24,7 @@ npm run typecheck  # tsc --noEmit
 npm run build      # tsc && vite build
 ```
 
-Always run `npm test` and `npm run build` before declaring a change done. Note: as of 2026-05-14 main has ~12 pre-existing `TS6133` (unused locals) errors in `src/components/CashFlowDetail.tsx` and `src/modules/financial-planning/components/CashTrajectoryChart.tsx` that block `npm run build`. Do not introduce new ones; cleanup of the dead refactor leftovers is tracked separately.
+Always run `npm test` and `npm run build` before declaring a change done. As of 2026-05-15 `npm run typecheck` and `npm run build` are clean (the prior ~12 `TS6133` leftovers in `CashFlowDetail.tsx` / `CashTrajectoryChart.tsx` are gone). Keep them clean — do not introduce new unused-locals errors.
 
 ## Where things live now
 
@@ -71,6 +71,8 @@ src/
 │   │   ├── components/, permissions/, types/
 │   ├── taxes/                   # Tax dashboard + service (tax movements wired into planning since 2026-05)
 │   │   ├── pages/, services/
+│   ├── concurso-mercantil/      # Convenio concursal: data/ (Excel→code, 29 trimestres + 80 acreedores, en miles) + pages/ (dashboard: calendario + cruce banco + futuro) + services/ (convenioMovements → DEBT egresos a Aprobado)
+│   │   ├── data/, pages/, services/
 │   ├── payroll/                 # TRESS nómina loader; expansion to movements happens INSIDE canonicalProjection
 │   └── midas-ai/                # MidasBubble proposal suggestion bot
 ├── components/                  # Treasury UI: Dashboard, CXP, Bancos, Clients, Providers, etc.
@@ -99,7 +101,15 @@ buildFinancialProjectionSourceData()  ← src/modules/financial-projection/servi
   │   • CXC (cobranza + projections)
   │   • CXP (CXPRecord + recurring providers)
   │   • Payroll (TRESS, projected forward)
-  │   • Purchase receipts (compras)
+  │   • Purchase receipts (compras) — OC egreso fechado en pago proyectado
+  │     (recepción/pedido + crédito). `comprasToPurchaseReceipts` deriva un
+  │     overlay de días-crédito por proveedor desde las propias OCs
+  │     (`buildComprasCreditOverlay`, "el API actualiza el catálogo") para
+  │     rellenar D_Credito=0. `buildPurchaseReceiptMovements` recibe
+  │     `providers?` y enriquece cada egreso con reglas del catálogo igual que
+  │     CXP (flexibilidad → `inamovible` LOCKED, criticidad, providerType).
+  │     Pasar `providers` aquí afecta Planeación/Proyección/Dashboard/Base;
+  │     el acumulador de IVA (taxes) lo omite a propósito (lockState irrelevante).
   │ Returns { movements, scenarios (Base+Approved shells), customers, suppliers, canonical }
   │ LRU-cached by content fingerprint.
   ▼
@@ -194,9 +204,10 @@ The forecast / scenario evaluation pipeline lives across `src/modules/financial-
 1. Base movements from `source.movements` (real CXP + cobranza + payroll + compras + recurring providers + manual entries)
 2. Active propuestas (`FinancialAdjustments`) applied via `applyAdjustmentsToMovements()` — **single call per run**; the previous double-call was deleted 2026-05-14
 3. Tax movements seeded from the post-adjustment view (`buildTaxDashboardView` → `buildApprovedTaxPaymentMovements` + `buildAutomaticTaxReserveMovements`)
-4. Supplier payment schedule (`scheduleSupplierPaymentsByScore`) rewires CXP timing under the cash floor
-5. Manual cell overrides (`applyCellOverridesToBuckets`) at render
-6. Recompute KPIs and projections via `calculateBaseProjection`
+4. Convenio concursal: future quarterly payments injected as locked `DEBT` egresos (`buildConvenioPaymentMovements`, mirrors the tax pattern) — non-base only, clipped to the projection window. Calendar/data: `src/domain/convenioConcursal.ts` + `src/modules/concurso-mercantil/data/convenioSchedule.ts` (Excel baked to code, values in miles ×1000)
+5. Supplier payment schedule (`scheduleSupplierPaymentsByScore`) rewires CXP timing under the cash floor
+6. Manual cell overrides (`applyCellOverridesToBuckets`) at render
+7. Recompute KPIs and projections via `calculateBaseProjection`
 
 ## Base scenario invariant
 
@@ -255,9 +266,9 @@ Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you eve
 
 ## Before you ship
 
-- `npm test` (15 pre-existing failures on main as of 2026-05-14 — verify count didn't grow)
-- `npm run typecheck` (12 pre-existing `TS6133` failures — verify count didn't grow)
-- `npm run build`
+- `npm test` (13 pre-existing failures on main as of 2026-05-15, all in `CollectionProjection.test.tsx` + `MidasSplash.test.tsx` — verify count didn't grow)
+- `npm run typecheck` (clean as of 2026-05-15 — any error is yours)
+- `npm run build` (clean as of 2026-05-15)
 - Smoke `npm run dev` against real JDE data (or empty store) for the path you touched.
 - For visual changes, toggle dark mode (add `dark` class to `<html>` via DevTools) and verify your component reads correctly. The splash, dashboard, planning grid, charts, CommandPalette (⌘K), modals, and form inputs should all be coherent.
 - Update this file if you changed the architecture.

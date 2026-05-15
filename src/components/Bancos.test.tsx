@@ -27,12 +27,12 @@ describe('<Bancos /> bank catalog enrichment', () => {
     );
 
     expect(container.querySelector('button[title="Filtrar por Multicarga"]')).toBeTruthy();
-    expect(container.querySelector('button[title="Filtrar por CITI"]')).toBeTruthy();
+    expect(container.querySelector('button[title="Filtrar por Clientes Citi"]')).toBeTruthy();
 
     fireEvent.change(screen.getByTitle('Unidad de negocio'), { target: { value: 'MULTICARGA' } });
 
     expect(container.querySelector('button[title="Filtrar por Multicarga"]')).toBeTruthy();
-    expect(container.querySelector('button[title="Filtrar por CITI"]')).toBeFalsy();
+    expect(container.querySelector('button[title="Filtrar por Clientes Citi"]')).toBeFalsy();
     expect(screen.getByText(/Cuentas/)).toBeTruthy();
   });
 });

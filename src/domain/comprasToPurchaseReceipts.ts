@@ -35,6 +35,7 @@ import {
   leadTimeFor,
   type LeadTimeStats,
 } from './comprasLeadTime';
+import { normalizeJdeKey, normalizeProviderName } from './providerIdentity';
 
 /**
  * Estados workflow JDE (Edo_Sig) que indican OC cerrada o sin acción de pago
@@ -158,6 +159,78 @@ function buildRecord(
   };
 }
 
+/**
+ * Días de crédito por proveedor derivados de la propia API de Órdenes de
+ * Compra. Es "el catálogo actualizado por el API": cada OC trae su `D_Credito`
+ * real; el término representativo de un proveedor es la **moda** de esos
+ * valores (el plazo contractual que se repite), con desempate por la OC más
+ * reciente. Sirve para fechar el egreso de una OC cuyo `D_Credito` viene en 0
+ * y para que otros módulos (CXP / recurrentes sin plazo explícito) lean el
+ * mismo dato vivo en vez del JSON estático.
+ *
+ * Clave = número JDE de proveedor normalizado; fallback = nombre normalizado.
+ */
+export type ComprasCreditOverlay = Map<string, number>;
+
+function providerKey(noProveedor: string, nombreProveedor: string): string {
+  return normalizeJdeKey(noProveedor) || normalizeProviderName(nombreProveedor);
+}
+
+export function buildComprasCreditOverlay(records: ComprasRecord[]): ComprasCreditOverlay {
+  // key -> (diasCredito -> { count, latestPedido })
+  const samples = new Map<string, Map<number, { count: number; latest: string }>>();
+  for (const r of records) {
+    if (r.cancelada) continue;
+    const dias = Math.floor(Number(r.diasCredito) || 0);
+    if (dias <= 0) continue;
+    const key = providerKey(r.noProveedor, r.nombreProveedor);
+    if (!key) continue;
+    let byDias = samples.get(key);
+    if (!byDias) {
+      byDias = new Map();
+      samples.set(key, byDias);
+    }
+    const prev = byDias.get(dias);
+    const pedido = cleanIsoDate(r.fechaPedido) ?? '';
+    if (prev) {
+      prev.count += 1;
+      if (pedido > prev.latest) prev.latest = pedido;
+    } else {
+      byDias.set(dias, { count: 1, latest: pedido });
+    }
+  }
+  const overlay: ComprasCreditOverlay = new Map();
+  for (const [key, byDias] of samples) {
+    let bestDias = 0;
+    let bestCount = -1;
+    let bestLatest = '';
+    for (const [dias, meta] of byDias) {
+      if (
+        meta.count > bestCount ||
+        (meta.count === bestCount && meta.latest > bestLatest)
+      ) {
+        bestDias = dias;
+        bestCount = meta.count;
+        bestLatest = meta.latest;
+      }
+    }
+    if (bestDias > 0) overlay.set(key, bestDias);
+  }
+  return overlay;
+}
+
+/**
+ * Plazo de crédito efectivo para una OC: su propio `D_Credito` si viene > 0
+ * (verdad contractual de ESE pedido); si viene 0/ausente, el término
+ * representativo del proveedor según el API (overlay); si no hay overlay, 0.
+ */
+function effectiveCreditDays(r: ComprasRecord, overlay: ComprasCreditOverlay | undefined): number {
+  const own = Math.floor(Number(r.diasCredito) || 0);
+  if (own > 0) return own;
+  if (!overlay) return 0;
+  return overlay.get(providerKey(r.noProveedor, r.nombreProveedor)) ?? 0;
+}
+
 export interface ComprasToPurchaseReceiptsOptions {
   /** Fecha de hoy para filtrar pagos pasados. Default: today UTC. */
   asOfDate?: string;
@@ -206,6 +279,10 @@ export function comprasToPurchaseReceipts(
   const futureOrderCutoff = typeof options.futureOrderLookaheadMonths === 'number'
     ? addMonths(asOfDate, Math.max(0, options.futureOrderLookaheadMonths))
     : undefined;
+  // El API actualiza el catálogo: plazo de crédito representativo por
+  // proveedor derivado de las propias OCs. Rellena el plazo cuando una OC
+  // trae D_Credito en 0 para que el egreso no caiga el día de recepción.
+  const creditOverlay = buildComprasCreditOverlay(comprasRecords);
 
   const out: PurchaseReceiptRecord[] = [];
 
@@ -220,9 +297,20 @@ export function comprasToPurchaseReceipts(
 
     if (r.fechaRecepcion && r.fechaPagoProyectada) {
       // CONFIRMED: ya recibida, fecha de pago cierta.
-      if (options.excludePastUnexecuted && isPastPaymentGrace(r.fechaPagoProyectada, asOfDate)) continue;
-      if (!options.excludePastUnexecuted && r.fechaPagoProyectada < asOfDate) continue;
-      const record = buildRecord(r, r.fechaPagoProyectada, 'CONFIRMED');
+      //
+      // Cuando D_Credito > 0, `fechaPagoProyectada` ya = recepción + crédito
+      // (la calculó el mapper JDE) — la respetamos tal cual. Cuando D_Credito
+      // viene en 0, JDE dejó `fechaPagoProyectada = fechaRecepcion`, lo que
+      // adelanta el egreso al día de recepción. Si el catálogo (vía API)
+      // conoce el plazo del proveedor, re-fechamos a recepción + ese plazo.
+      let dueDate = r.fechaPagoProyectada;
+      if (Math.floor(Number(r.diasCredito) || 0) <= 0) {
+        const eff = effectiveCreditDays(r, creditOverlay);
+        if (eff > 0) dueDate = addDays(r.fechaRecepcion, eff);
+      }
+      if (options.excludePastUnexecuted && isPastPaymentGrace(dueDate, asOfDate)) continue;
+      if (!options.excludePastUnexecuted && dueDate < asOfDate) continue;
+      const record = buildRecord(r, dueDate, 'CONFIRMED');
       if (record) out.push(record);
     } else if (includeProjected && stats && r.fechaPedido) {
       // PROJECTED: OC pedida pero sin recepción. Estimamos recepción y pago.
@@ -233,7 +321,7 @@ export function comprasToPurchaseReceipts(
         categoria: r.categoria,
       });
       const projectedReceipt = addDays(r.fechaPedido, lt.days);
-      const projectedDue = addDays(projectedReceipt, Math.max(0, r.diasCredito || 0));
+      const projectedDue = addDays(projectedReceipt, Math.max(0, effectiveCreditDays(r, creditOverlay)));
       if (options.excludePastUnexecuted && isPastPaymentGrace(projectedDue, asOfDate)) continue;
       if (!options.excludePastUnexecuted && projectedDue < asOfDate) continue;
       const record = buildRecord(r, projectedDue, 'PROJECTED', lt);

@@ -13,7 +13,7 @@ describe('bankAccountsCatalog', () => {
 
     const citi = findBankAccountByClabe('002580701388051721');
     expect(citi?.unidadNegocio).toBe('CITI');
-    expect(bankAccountBusinessUnitLabel(citi?.unidadNegocio)).toBe('CITI');
+    expect(bankAccountBusinessUnitLabel(citi?.unidadNegocio)).toBe('Clientes Citi');
 
     const federal = findBankAccount('7013 8237069');
     expect(federal?.unidadNegocio).toBe('FEDERAL');

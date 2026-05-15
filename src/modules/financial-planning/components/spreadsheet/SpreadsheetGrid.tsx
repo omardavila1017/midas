@@ -483,6 +483,37 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     </div>
   );
 
+  const renderSubtotalRow = (label: string, kind: 'inflows' | 'outflows') => (
+    <div
+      className="flex border-b-2 border-[var(--gray-300)] bg-[var(--primary)]/5"
+      style={{ height: ROW_HEIGHT }}
+      role="row"
+    >
+      <StickyLeftCell
+        width={LABEL_COL_WIDTH}
+        left={0}
+        className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--gray-950)] bg-[var(--primary)]/5"
+        shadow
+      >
+        {label}
+      </StickyLeftCell>
+      {columns.map((column) => {
+        const value = totalsFor(kind, column.key);
+        return (
+          <div
+            key={column.key}
+            className="flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)] text-[var(--gray-950)]"
+            style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
+          >
+            <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
+              {value === 0 ? '—' : fmtCompact(value)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+
   const renderGroupedRows = (
     list: DisplayRow[],
     rowIndexOffset: number,
@@ -538,6 +569,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       ))}
       {!collapsed.INFLOW && renderAddRow('INFLOW')}
 
+      {/* Subtotal: total de ingresos antes de egresos */}
+      {inflowRows.length > 0 && renderSubtotalRow('Total Ingresos', 'inflows')}
+
       {/* Section: Egresos */}
       <SectionHeader
         label="Egresos"
@@ -552,6 +586,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         renderGroupedRows(visibleOutflowDisplayRows, visibleInflowDisplayRows.length)
       ))}
       {!collapsed.OUTFLOW && renderAddRow('OUTFLOW')}
+
+      {/* Subtotal: total de egresos antes del neto */}
+      {outflowRows.length > 0 && renderSubtotalRow('Total Egresos', 'outflows')}
 
       {/* Footer */}
       {renderFooterRow('Neto', 'net', 'neutral')}

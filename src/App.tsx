@@ -13,7 +13,7 @@ import {
 } from './domain/comprasForecastModels';
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
-import { primeDailyCache, getMaxCachedDay, nextIsoDay } from './services/dailyApiCache';
+import { primeDailyCache, getMaxCachedDay, nextIsoDay, isDailyCachePersistent } from './services/dailyApiCache';
 import {
   loadBankStatementsFromIDB,
   saveBankJdeStatementsToIDB,
@@ -2425,10 +2425,15 @@ export default function App() {
     if (!primed) {
       const settled = await Promise.allSettled(
         tryDates.map(fecha =>
-          fetchBankStatements({
-            fechaEstadoCuenta: fecha,
-            formatoElectronico: defaultFormat,
-          }).then(res => ({ fecha, res })),
+          // Prime gatea el splash → fast-fail. 30s timeout + 1 retry en vez
+          // del default 120s × 3: 6 fechas colgadas no deben costar minutos.
+          fetchBankStatements(
+            {
+              fechaEstadoCuenta: fecha,
+              formatoElectronico: defaultFormat,
+            },
+            { timeoutMs: 30_000, retries: 1 },
+          ).then(res => ({ fecha, res })),
         ),
       );
       for (let i = 0; i < settled.length; i++) {
@@ -2467,12 +2472,23 @@ export default function App() {
     let lastProgressPaint = 0;
     try {
       await primeDailyCache();
+      // Si el cache IDB NO persiste (lock de otra pestaña / IDB no disponible)
+      // cada día pasado sería un miss → 731 llamadas vivas a JDE por boot,
+      // serializadas en el semáforo global de 3. Recortamos a 120 días: útil
+      // para la vista reciente; el predictor seasonal degrada a naive-mean
+      // hasta que el cache vuelva a persistir — aceptable vs storm de >18min.
+      let rangeStart = yearStart;
+      if (!isDailyCachePersistent()) {
+        const clamp = new Date();
+        clamp.setUTCDate(clamp.getUTCDate() - 120);
+        rangeStart = clamp.toISOString().slice(0, 10);
+      }
       const maxCachedBanks = getMaxCachedDay(`banks.${defaultFormat}`);
       // eslint-disable-next-line no-console
-      console.info(`[banks] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} · hydratedState=${bankJdeStatements.length} · force=${force} · range ${yearStart}→${today} (FULL via daily cache)`);
+      console.info(`[banks] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} · hydratedState=${bankJdeStatements.length} · force=${force} · idbPersist=${isDailyCachePersistent()} · range ${rangeStart}→${today} (FULL via daily cache)`);
 
       const full = await fetchBankStatementsRange(
-        yearStart,
+        rangeStart,
         today,
         defaultFormat,
         {
@@ -2550,15 +2566,15 @@ export default function App() {
     if (!bankCacheLoaded) return;
     banksBootDone.current = true;
     (async () => {
-      // Backfill anual al boot. force=false para que la lógica delta-aware
-      // dentro de refreshBankStatementsRange decida qué pedir: si tenemos
-      // cache hasta ayer, sólo pega JDE para hoy en vez de los 730 días.
-      // includeRange=true dispara el rango año-a-la-fecha con concurrencia 6.
+      // SOLO prime (días recientes). includeRange=false → NO esperamos el
+      // backfill de 2 años aquí: el splash no debe quedar atrás de 730 días.
+      // Apenas hay foto reciente marcamos 'done' y la app abre. El backfill
+      // seasonal corre después, en background (efecto de abajo).
       // Gateado en storeHydrated + bankCacheLoaded para que bankJdeStatements
       // ya esté hidratado desde localStorage antes de evaluar la rama delta.
       setBootSlot('banks', 'loading');
       try {
-        await refreshBankStatementsRange(false, true);
+        await refreshBankStatementsRange(false, false);
         setBootSlot('banks', 'done');
       } catch {
         setBootSlot('banks', 'error');
@@ -2566,6 +2582,19 @@ export default function App() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeHydrated, bankCacheLoaded]);
+
+  // Backfill seasonal (2 años) en BACKGROUND — corre tras el prime, NO gatea
+  // el splash. Para Holt-Winters (≥24m). Si el cache IDB persiste es barato
+  // (días pasados salen de IDB); si no, refreshBankStatementsRange recorta a
+  // 120d para no machacar JDE. Dispara al volverse 'done' el slot banks, con
+  // el callback fresco → Step 1 ve bankJdeStatements ya primed y se lo salta.
+  const bankRangeBackfillDone = useRef(false);
+  useEffect(() => {
+    if (bankRangeBackfillDone.current) return;
+    if (bootStatus.banks !== 'done') return;
+    bankRangeBackfillDone.current = true;
+    void refreshBankStatementsRange(false, true);
+  }, [bootStatus.banks, refreshBankStatementsRange]);
 
   /* ── Animated page key for re-mount on tab change ── */
   const [pageKey, setPageKey] = useState(0);
@@ -3011,6 +3040,7 @@ export default function App() {
                   cxpRecords={cxpRecords}
                   companies={companies}
                   selectedCia={selectedCia}
+                  bankStatements={accountableBankStatements}
                 />
               </Suspense>
             )}

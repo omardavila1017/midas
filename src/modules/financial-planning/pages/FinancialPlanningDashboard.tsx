@@ -34,7 +34,6 @@ import type {
   PurchaseReceiptRecord,
   ScenarioChangeLogEntry,
 } from '../../shared-finance/types';
-import { CashTrajectoryChart } from '../components/CashTrajectoryChart';
 import { ScenarioTabs } from '../components/ScenarioTabs';
 import { AddRowPopover } from '../components/AddRowPopover';
 import { ChangeLogDrawer } from '../components/ChangeLogDrawer';
@@ -64,6 +63,7 @@ import {
   TAX_STORE_CHANGED_EVENT,
   TAX_STORE_KEY,
 } from '../../taxes/services/taxModuleService';
+import { buildConvenioPaymentMovements } from '../../concurso-mercantil/services/convenioMovements';
 import {
   expandManualPlanningEntriesToMovements,
   loadManualPlanningEntries,
@@ -568,7 +568,18 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           }),
         ]
         : [];
-      const movementsWithTax = [...adjustedMovements, ...taxMovements];
+      // Convenio concursal: pagos futuros del convenio inyectados como
+      // egresos DEBT bloqueados (mismo patrón e invariante que impuestos:
+      // solo escenarios no-base, recortado a la ventana de proyección).
+      const convenioMovements = isBase
+        ? []
+        : buildConvenioPaymentMovements({
+          scenarioId,
+          startDate: yearStart,
+          endDate: yearEnd,
+          asOfDate: today,
+        });
+      const movementsWithTax = [...adjustedMovements, ...taxMovements, ...convenioMovements];
       const supplierSchedule = scheduleSupplierPaymentsByScore({
         movements: movementsWithTax,
         providers: props.providers,
@@ -1201,12 +1212,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           onClose={() => setDrawerOpen(false)}
         />
       )}
-
-      <CashTrajectoryChart
-        projection={activeRun}
-        baseProjection={activeScenario.kind === 'BASE' ? undefined : approvedRunWithOverrides}
-        probabilisticProjection={probabilistic.run}
-      />
 
       {addRowFor && (
         <AddRowPopover

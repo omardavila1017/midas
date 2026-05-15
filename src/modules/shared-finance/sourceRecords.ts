@@ -1,11 +1,15 @@
 import type { CXPRecord } from '../../domain/persistence';
+import type { Provider } from '../../domain/types';
 import type {
   FinancialMovement,
+  LockState,
   FinancialTaxRate,
   PayrollCostRecord,
   PurchaseReceiptRecord,
 } from './types';
 import { calculateConfidenceBand } from './calculation-engine/financialProjectionEngine';
+import { buildProviderIndex, lookupProvider, type ProviderIndex } from '../../domain/providerIdentity';
+import { enrichFromCatalog, type Flexibility } from '../../domain/providerCatalog';
 
 const DAY_MS = 86_400_000;
 
@@ -43,10 +47,6 @@ export function estimatedPurchaseDueDate(record: Pick<PurchaseReceiptRecord, 're
   const base = cleanIsoDate(record.receiptDate) ?? cleanIsoDate(record.orderDate);
   if (!base) return '';
   return addDays(base, Math.max(0, Number(record.creditDays) || 0));
-}
-
-export function isPurchaseMatchedToCxp(record: PurchaseReceiptRecord, cxpRecords: CXPRecord[]): boolean {
-  return cxpRecords.some((cxp) => purchaseMatchesCxp(record, cxp));
 }
 
 export function purchaseMatchesCxp(record: PurchaseReceiptRecord, cxp: CXPRecord): boolean {
@@ -98,22 +98,71 @@ export function buildPurchaseReceiptMovements(input: {
    * deuda se maneja en el módulo Concurso.
    */
   excludeProviderIds?: Set<string>;
+  /**
+   * Catálogo de proveedores. Si se pasa, cada egreso de OC se enriquece con
+   * las reglas del proveedor (flexibilidad, criticidad, tipo) igual que CXP:
+   * un proveedor `inamovible` bloquea el egreso para que el scheduler no lo
+   * recorra. Si se omite (p.ej. acumulador de IVA en módulo fiscal), el
+   * movimiento conserva el lockState basado sólo en confianza.
+   */
+  providers?: Provider[];
 }): FinancialMovement[] {
   const scopedCxp = filterCxpByCompany(input.cxpRecords, input.companyCode);
+  const cxpBySupplier = buildJdeSupplierIndex(scopedCxp);
   const excludeSet = input.excludeProviderIds;
+  const providerIndex = input.providers && input.providers.length > 0
+    ? buildProviderIndex(input.providers)
+    : undefined;
   return input.purchaseReceipts
     .filter((record) => input.companyCode === 'all' || !input.companyCode || normalizeCia(record.cia) === normalizeCia(input.companyCode))
     .filter((record) => !record.isCancelled && record.amountMxn > 0)
     .filter((record) => !excludeSet || !excludeSet.has((record.noProveedor || '').trim().toUpperCase()))
-    .filter((record) => !isPurchaseMatchedToCxp(record, scopedCxp))
-    .map((record, index) => purchaseReceiptToMovement(record, input.asOfDate, index))
+    .filter((record) => {
+      const candidates = cxpBySupplier.get(normalizeJde(record.noProveedor));
+      return !candidates || !candidates.some((cxp) => purchaseMatchesCxp(record, cxp));
+    })
+    .map((record, index) => purchaseReceiptToMovement(record, input.asOfDate, index, providerIndex))
     .filter((movement) => !input.endDate || movement.projectedDate <= input.endDate);
+}
+
+export interface PurchaseProviderRules {
+  flexibility: Flexibility;
+  providerType?: string;
+  criticidad: string | null;
+}
+
+/**
+ * Resuelve las reglas del proveedor de una OC contra el catálogo, con la misma
+ * prioridad que el bloque CXP de `canonicalProjection`: primero el Provider del
+ * catálogo (por código JDE, luego nombre), después el catálogo estático
+ * (`enrichFromCatalog`).
+ */
+export function resolvePurchaseProviderRules(
+  record: PurchaseReceiptRecord,
+  providerIndex: ProviderIndex,
+): PurchaseProviderRules {
+  const provider = lookupProvider(providerIndex, {
+    jdeCode: record.noProveedor,
+    name: record.supplierName,
+  });
+  const catalog = enrichFromCatalog({
+    supplier: record.supplierName,
+    classification: provider?.type ?? '',
+  });
+  const flexibility: Flexibility =
+    (provider?.flexibility as Flexibility | undefined) ?? catalog.flexibility ?? 'unknown';
+  return {
+    flexibility,
+    providerType: provider?.type || catalog.providerType || undefined,
+    criticidad: catalog.criticidad,
+  };
 }
 
 export function purchaseReceiptToMovement(
   record: PurchaseReceiptRecord,
   asOfDate: string,
   index = 0,
+  providerIndex?: ProviderIndex,
 ): FinancialMovement {
   const originalDate = cleanIsoDate(record.estimatedDueDate)
     ?? cleanIsoDate(record.receiptDate)
@@ -133,10 +182,23 @@ export function purchaseReceiptToMovement(
   // Default 76 cuando el campo no está poblado (records pre-migración).
   const isProjected = record.confidence === 'PROJECTED';
   const confidenceScore = isProjected ? 48 : 76;
-  const ruleApplied = isProjected
+  const baseRule = isProjected
     ? `OC pendiente de recepción · lead time estimado ${record.projectedLeadTimeDays ?? '?'}d (${record.projectedLeadTimeSource ?? 'default'})`
     : 'Recibo de compras activo sin CXP matcheada';
   const idTag = isProjected ? 'po' : 'purchase';
+
+  // Reglas del proveedor desde el catálogo — misma semántica que el bloque
+  // CXP de canonicalProjection: un proveedor `inamovible` bloquea el egreso
+  // para que el scheduler de pagos no recorra su fecha.
+  const rules = providerIndex ? resolvePurchaseProviderRules(record, providerIndex) : undefined;
+  const knownFlex = rules && rules.flexibility !== 'unknown' ? rules.flexibility : undefined;
+  const lockState: LockState =
+    rules?.flexibility === 'inamovible'
+      ? 'LOCKED'
+      : isProjected
+        ? 'UNLOCKED'
+        : 'RESTRICTED';
+  const ruleApplied = knownFlex ? `${baseRule} · Proveedor ${knownFlex}` : baseRule;
 
   const comments: string[] = isProjected
     ? [
@@ -149,6 +211,8 @@ export function purchaseReceiptToMovement(
   } else {
     comments.push('Sin tasa fiscal clasificada.');
   }
+  if (knownFlex) comments.push(`Proveedor ${knownFlex} (catálogo).`);
+  if (rules?.criticidad) comments.push(`Criticidad ${rules.criticidad}.`);
 
   return {
     id: `${idTag}:${record.cia}:${record.noProveedor || 'sin-proveedor'}:${record.invoiceNo || record.purchaseOrderNo || record.receiptNo || index}`,
@@ -162,7 +226,7 @@ export function purchaseReceiptToMovement(
     counterpartyId: record.noProveedor,
     counterpartyName: record.supplierName || 'Proveedor sin nombre',
     counterpartyType: 'SUPPLIER',
-    providerCategory: record.categoryName || record.familyName || record.subfamilyName,
+    providerCategory: rules?.providerType || record.categoryName || record.familyName || record.subfamilyName,
     concept: `${isProjected ? 'OC' : 'Compra'} ${record.invoiceNo || record.purchaseOrderNo || 'sin folio'} · ${record.supplierName || 'Proveedor sin nombre'}`,
     currency: 'MXN',
     originalAmount: record.amountMxn,
@@ -180,7 +244,7 @@ export function purchaseReceiptToMovement(
     taxBaseAmount: meta.taxBaseAmount,
     taxAmount: meta.taxAmount,
     status: record.status === 'CANCELLED' || record.isCancelled ? 'CANCELLED' : 'PROJECTED_BASE',
-    lockState: isProjected ? 'UNLOCKED' : 'RESTRICTED',
+    lockState,
     comments,
     createdAt: now,
     updatedAt: now,
@@ -401,11 +465,29 @@ function normalizeCia(value: string | undefined | null): string {
   return digits ? digits.padStart(5, '0') : (value ?? '').trim();
 }
 
-function normalizeJde(value: string | undefined | null): string {
+export function normalizeJde(value: string | undefined | null): string {
   const digits = (value ?? '').replace(/\D+/g, '');
   return digits ? String(Number(digits)) : '';
 }
 
 function normalizeInvoice(value: string | undefined | null): string {
   return normalize(value).replace(/\s*-\s*/g, '-').replace(/\s+/g, '');
+}
+
+// Every tier of purchaseMatchesCxp requires sameSupplier (equal normalizeJde
+// supplier on both sides), so a match is impossible across different suppliers.
+// Bucketing by supplier key turns the O(purchases × cxp) scan into a
+// per-supplier lookup without changing which pairs match.
+export function buildJdeSupplierIndex<T extends { noProveedor?: string | null }>(
+  records: T[],
+): Map<string, T[]> {
+  const index = new Map<string, T[]>();
+  for (const record of records) {
+    const key = normalizeJde(record.noProveedor);
+    if (!key) continue;
+    const bucket = index.get(key);
+    if (bucket) bucket.push(record);
+    else index.set(key, [record]);
+  }
+  return index;
 }

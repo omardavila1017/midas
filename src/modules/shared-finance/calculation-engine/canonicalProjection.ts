@@ -217,11 +217,17 @@ interface BuildArgs {
   projectionByYm: Map<string, ReturnType<typeof computeBaseCashFlow>['projection']['months'][number]>;
 }
 
-// Grupos de filas para INFLOW en la tabla de Planeación. El usuario pidió
-// 3 cubos: clientes etiquetados Viajes Especiales en el catálogo, el bucket
-// "Federal" (lo que cae en cuentas Santander sin match a factura), y el resto.
+// Cubos de ingreso en la tabla de Planeación. Reglas de negocio (confirmadas
+// con el usuario 2026-05-15):
+//   • ROL = viajes ejecutados (cobranza/CXC JDE, real o proyectado). TODO el
+//     ROL es Senda Citi → bucket "Clientes Citi".
+//   • Federal = lo que el catálogo de bancos etiqueta unidadNegocio=FEDERAL
+//     (ingreso real) + el modelo predictivo histórico para meses futuros.
+//   • Viajes Especiales = clientes en el grupo comercial Viajes Especiales.
+//   • Otros ingresos = SOLO lo no reconocido.
 const INCOME_SUBCAT_VIAJES = 'Viajes Especiales';
 const INCOME_SUBCAT_FEDERAL = 'Federal';
+const INCOME_SUBCAT_CITI = 'Clientes Citi';
 const INCOME_SUBCAT_OTROS = 'Otros ingresos';
 const CLIENT_VIAJES_ESPECIALES_GROUP_ID = 'group-viajes-especiales';
 
@@ -230,21 +236,32 @@ function resolveInflowSubcategory(args: {
   clientById: Map<string, Client>;
   bankFallbackLabel?: string;
   businessUnitId?: string;
+  /** El ingreso proviene de un viaje ejecutado (cobranza/CXC JDE). Todo el
+   *  ROL es Senda Citi salvo que el cliente sea Viajes Especiales o el
+   *  catálogo de bancos diga otra cosa. */
+  isRolCollection?: boolean;
 }): string {
+  // 1) Catálogo de bancos manda (ingreso real con cuenta conocida):
+  //    FEDERAL → "Federal", CITI → "Clientes Citi", AC, Multicarga, etc.
   if (args.businessUnitId) {
     return bankAccountBusinessUnitLabel(args.businessUnitId);
   }
+  // 2) Cliente del grupo comercial Viajes Especiales.
   if (args.counterpartyId) {
     const client = args.clientById.get(args.counterpartyId);
     if (client?.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID) {
       return INCOME_SUBCAT_VIAJES;
     }
   }
-  // Sin client match — usar bank label si es Santander como "Federal",
-  // resto cae en "Otros ingresos".
+  // 3) ABONO real sin match a factura que cayó en Santander = Federal.
   if (args.bankFallbackLabel && args.bankFallbackLabel.toUpperCase().includes('FEDERAL')) {
     return INCOME_SUBCAT_FEDERAL;
   }
+  // 4) Cobranza/CXC (viaje ejecutado) sin otra señal = Clientes Citi.
+  if (args.isRolCollection) {
+    return INCOME_SUBCAT_CITI;
+  }
+  // 5) No reconocido.
   return INCOME_SUBCAT_OTROS;
 }
 
@@ -370,6 +387,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
             clientById,
             businessUnitId: catalogEnrich?.entry.unidadNegocio,
             bankFallbackLabel: !isCobranzaInflow ? bankFallbackName : undefined,
+            isRolCollection: isCobranzaInflow,
           })
         : undefined;
       const cargoCategory = unmatchedCargoClassification?.category ?? 'TRANSFER';
@@ -459,7 +477,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
       sourceObjectId: record.noFactura,
       type: 'INFLOW',
       category: 'AR_COLLECTION',
-      subcategory: resolveInflowSubcategory({ counterpartyId, clientById }),
+      subcategory: resolveInflowSubcategory({ counterpartyId, clientById, isRolCollection: true }),
       companyId: record.cia,
       counterpartyId,
       counterpartyName,
@@ -502,6 +520,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     companyCode: inputs.companyCode,
     asOfDate: inputs.asOfDate,
     excludeProviderIds: concursoProviderIds,
+    providers: inputs.providers,
   }));
   for (const month of futureMonths) {
     const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
@@ -573,6 +592,96 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     }
   }
 
+  // 4) Modelo predictivo de ingreso Federal. ROL/CXC sólo proyecta Citi
+  //    (viajes ejecutados); Federal es un flujo aparte que el catálogo de
+  //    bancos etiqueta unidadNegocio=FEDERAL en los ABONOs reales. Sin esto
+  //    el ingreso Federal desaparece de los meses futuros. Se proyecta con
+  //    el histórico real ya emitido (paso 1) usando promedio estacional por
+  //    mes calendario, con respaldo a media móvil. Id `federal-forecast:` →
+  //    excluido de Base (no es dato real de API de corto plazo).
+  out.push(...buildFederalForecastMovements({ monthly, existing: out, asOfDate: inputs.asOfDate, todayYm }));
+
+  return out;
+}
+
+/**
+ * Proyecta ingreso Federal a futuro a partir del Federal real histórico
+ * (ABONOs en cuentas catalogadas unidadNegocio=FEDERAL, ya emitidos en el
+ * paso 1). Algoritmo: promedio del mismo mes calendario en años previos
+ * cuando hay ≥12 meses de historia (captura estacionalidad escolar);
+ * si no, media de los últimos 6 meses históricos completos. Sólo meses
+ * históricos COMPLETOS (estrictamente antes del mes en curso) entran al
+ * cálculo para no sesgar con un mes parcial.
+ */
+function buildFederalForecastMovements(args: {
+  monthly: CanonicalMonthlyPoint[];
+  existing: FinancialMovement[];
+  asOfDate: string;
+  todayYm: string;
+}): FinancialMovement[] {
+  const { monthly, existing, asOfDate, todayYm } = args;
+
+  const historicalByYm = new Map<string, number>();
+  for (const m of existing) {
+    if (m.type !== 'INFLOW') continue;
+    if (m.subcategory !== INCOME_SUBCAT_FEDERAL) continue;
+    const ym = m.projectedDate.slice(0, 7);
+    if (ym >= todayYm) continue; // sólo meses completos cerrados
+    historicalByYm.set(ym, (historicalByYm.get(ym) ?? 0) + (m.projectedAmount ?? 0));
+  }
+  if (historicalByYm.size === 0) return [];
+
+  const sortedYms = Array.from(historicalByYm.keys()).sort();
+  const trailing = sortedYms.slice(-6).map((ym) => historicalByYm.get(ym)!);
+  const trailingMean = trailing.reduce((s, v) => s + v, 0) / trailing.length;
+
+  const byCalendarMonth = new Map<string, number[]>();
+  for (const ym of sortedYms) {
+    const mm = ym.slice(5, 7);
+    const arr = byCalendarMonth.get(mm) ?? [];
+    arr.push(historicalByYm.get(ym)!);
+    byCalendarMonth.set(mm, arr);
+  }
+  const hasSeasonalHistory = historicalByYm.size >= 12;
+
+  const out: FinancialMovement[] = [];
+  for (const month of monthly) {
+    if (month.isHistorical) continue;
+    const mm = month.yearMonth.slice(5, 7);
+    const seasonal = byCalendarMonth.get(mm);
+    const amount = hasSeasonalHistory && seasonal && seasonal.length > 0
+      ? seasonal.reduce((s, v) => s + v, 0) / seasonal.length
+      : trailingMean;
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    out.push({
+      id: `federal-forecast:${month.yearMonth}`,
+      sourceSystem: 'FORECAST',
+      type: 'INFLOW',
+      category: 'AR_COLLECTION',
+      subcategory: INCOME_SUBCAT_FEDERAL,
+      concept: `Ingreso Federal proyectado ${month.yearMonth}`,
+      currency: 'MXN',
+      originalAmount: Math.round(amount),
+      baseAmount: Math.round(amount),
+      projectedAmount: Math.round(amount),
+      projectedDate: midMonthDate(month.yearMonth),
+      confidenceScore: 60,
+      confidenceBand: calculateConfidenceBand(60),
+      forecastMethod: 'DRIVER',
+      ruleApplied: hasSeasonalHistory
+        ? 'Promedio estacional Federal (mismo mes, años previos)'
+        : 'Media móvil Federal (últimos 6 meses)',
+      taxTreatment: 'IVA_CAUSED',
+      taxRate: 16,
+      taxBaseAmount: Math.round(amount),
+      taxAmount: Math.round(amount * 0.16),
+      status: 'PROJECTED_BASE',
+      lockState: 'RESTRICTED',
+      comments: ['Modelo predictivo de ingreso Federal basado en histórico real del catálogo de bancos. No editable desde Planeación.'],
+      createdAt: `${asOfDate}T00:00:00.000Z`,
+      updatedAt: `${asOfDate}T00:00:00.000Z`,
+    });
+  }
   return out;
 }
 
@@ -738,7 +847,7 @@ function collectInflowLines(
       });
       const clientInflowSubcat = client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID
         ? INCOME_SUBCAT_VIAJES
-        : INCOME_SUBCAT_OTROS;
+        : INCOME_SUBCAT_CITI;
       for (const event of events) {
         const ym = event.realDate.slice(0, 7);
         if (ym !== month.yearMonth) continue;
@@ -823,7 +932,7 @@ function collectCxcInflowLines(
 
     const cxcSubcat = clientMatch?.client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID
       ? INCOME_SUBCAT_VIAJES
-      : INCOME_SUBCAT_OTROS;
+      : INCOME_SUBCAT_CITI;
     lines.push({
       id: `cxc:${record.cia}:${record.noCliente}:${record.noFactura}`,
       amount: record.importePendientePesos,
