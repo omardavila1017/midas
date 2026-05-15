@@ -1649,12 +1649,12 @@ function mapRol(raw: RawRecord): RolRecord {
 let rolShapeLogged = false;
 
 /**
- * POST http://srv-desarrollo:92/CITI/RolDiario
+ * POST /citi/roldiario
  *
  * Retorna viajes ejecutados del rango indicado. Endpoint productivo Senda
- * Citi liberado 2026-05-14 (campos nuevos B_Despachado/B_Efectuado/Factura/
- * UUID_Fiscal). El body asumido sigue el patrón cobranza/compras; si el API
- * rechaza, ajustar shape aquí.
+ * Citi (campos B_Despachado/B_Efectuado/Factura/UUID_Fiscal). El body usa
+ * los nombres de campo confirmados por CITI (`f_Inicio`, `f_Final`,
+ * `k_Servidor`) — ver `RolRequest`. La consulta es lenta (~20s+).
  */
 export async function fetchRol(
   req: RolRequest,
@@ -1663,15 +1663,11 @@ export async function fetchRol(
   const merged: JdeClientConfig = {
     baseUrl: apiConfig.citi.baseUrl,
     authValue: apiConfig.citi.authValue || undefined,
-    // Sin retries mientras el endpoint upstream tiene el bug de SqlDateTime
-    // overflow (reportado 2026-05-14): el error no es transitorio, retries solo
-    // gastan ancho de banda. Volver al default cuando CITI confirme fix.
-    retries: 0,
     ...config,
   };
   let raw: unknown;
   try {
-    raw = await jdeClient.post<unknown>('/RolDiario', req, merged);
+    raw = await jdeClient.post<unknown>('/roldiario', req, merged);
   } catch (err) {
     // El endpoint CITI es nuevo (2026-05-14); si el body que mandamos no
     // empata con lo que espera, log el detalle del error para diagnosticar
@@ -1689,7 +1685,7 @@ export async function fetchRol(
   if (typeof window !== 'undefined' && !rolShapeLogged) {
     rolShapeLogged = true;
     // eslint-disable-next-line no-console
-    console.info(`[rol] ${list.length} registros entre ${req.fechaInicial} y ${req.fechaFinal}${req.cia ? ` cia=${req.cia}` : ''}`);
+    console.info(`[rol] ${list.length} registros entre ${req.f_Inicio} y ${req.f_Final} (k_Servidor=${req.k_Servidor ?? -1})`);
     if (list.length > 0) {
       // eslint-disable-next-line no-console
       console.info('[rol] sample raw record:', list[0]);
@@ -1711,10 +1707,10 @@ export async function fetchRol(
 export async function fetchRolRange(
   fechaInicial: string,
   fechaFinal: string,
-  options: { cia?: string; config?: JdeClientConfig } = {},
+  options: { kServidor?: number; config?: JdeClientConfig } = {},
 ): Promise<RolRecord[]> {
   const records = await fetchRol(
-    { fechaInicial, fechaFinal, ...(options.cia ? { cia: options.cia } : {}) },
+    { f_Inicio: fechaInicial, f_Final: fechaFinal, k_Servidor: options.kServidor ?? -1 },
     options.config ?? {},
   );
   const seen = new Set<string>();
