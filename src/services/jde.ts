@@ -1700,22 +1700,70 @@ export async function fetchRol(
   return list.map(mapRol);
 }
 
+/** Parte [from..to] (YYYY-MM-DD, inclusive) en ventanas por mes calendario. */
+function splitIntoMonthlyWindows(from: string, to: string): Array<{ from: string; to: string }> {
+  const windows: Array<{ from: string; to: string }> = [];
+  const start = new Date(from + 'T00:00:00Z');
+  const end = new Date(to + 'T00:00:00Z');
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return windows;
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  while (cursor <= end) {
+    // Último día del mes de `cursor` (día 0 del mes siguiente).
+    const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
+    const winEnd = monthEnd <= end ? monthEnd : end;
+    windows.push({ from: cursor.toISOString().slice(0, 10), to: winEnd.toISOString().slice(0, 10) });
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+  }
+  return windows;
+}
+
 /**
- * Wrapper para histórico: un solo request al rango completo. Dedup por
+ * Wrapper para histórico del ROL diario. Dedup por
  * (cia, kCliente, anio, semana, ruta, tipoViaje) para tolerar duplicados.
+ *
+ * El endpoint /citi/roldiario es lento (~20s+ por mes); un solo request del
+ * año entero rebasa el timeout de 120s del jdeClient (y al colgarse retiene
+ * un slot del semáforo global, ahogando cobranza/compras). Por eso troceamos
+ * por mes calendario y los corremos con concurrencia baja. Un mes que falla
+ * se trata como 0 viajes — no aborta el rango completo.
  */
 export async function fetchRolRange(
   fechaInicial: string,
   fechaFinal: string,
-  options: { kServidor?: number; config?: JdeClientConfig } = {},
+  options: { kServidor?: number; concurrency?: number; config?: JdeClientConfig } = {},
 ): Promise<RolRecord[]> {
-  const records = await fetchRol(
-    { f_Inicio: fechaInicial, f_Final: fechaFinal, k_Servidor: options.kServidor ?? -1 },
-    options.config ?? {},
+  const kServidor = options.kServidor ?? -1;
+  const config = options.config ?? {};
+  const windows = splitIntoMonthlyWindows(fechaInicial, fechaFinal);
+  if (windows.length === 0) return [];
+
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  const results: RolRecord[][] = new Array(windows.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const slot = cursor++;
+      if (slot >= windows.length) return;
+      const w = windows[slot];
+      try {
+        results[slot] = await fetchRol(
+          { f_Inicio: w.from, f_Final: w.to, k_Servidor: kServidor },
+          config,
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[rol] ventana ${w.from}..${w.to} falló: ${err instanceof Error ? err.message : String(err)}`);
+        results[slot] = [];
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, windows.length) }, worker),
   );
+
   const seen = new Set<string>();
   const merged: RolRecord[] = [];
-  for (const rec of records) {
+  for (const rec of results.flat()) {
     const key = `${rec.cia}::${rec.kCliente}::${rec.anio}::${rec.semana}::${rec.ruta}::${rec.tipoViaje}`;
     if (seen.has(key)) continue;
     seen.add(key);
