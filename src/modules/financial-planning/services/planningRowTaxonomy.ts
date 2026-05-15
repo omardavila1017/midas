@@ -6,6 +6,7 @@ import type {
   PlanningCustomRow,
   PlanningRow,
 } from '../../shared-finance/types';
+import { bankAccountBusinessUnitLabel } from '../../../domain/bankAccountsCatalog';
 import { slug } from './customRowsStorage';
 
 export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
@@ -20,15 +21,22 @@ export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   MANUAL: 'Manual',
 };
 
-// Buckets de negocio para INFLOW solicitados por el user: clientes con
-// `commercialGroupId === 'group-viajes-especiales'` van a "Viajes Especiales";
-// ABONOs Santander sin match de factura van a "Federal"; el resto cae en
-// "Otros ingresos". El motor canónico ya escribe estas tres etiquetas en
-// `movement.subcategory` para INFLOW — aquí solo las leemos.
-const INCOME_BUCKETS = new Set(['Viajes Especiales', 'Federal', 'Otros ingresos']);
+const INCOME_BUCKETS = new Set([
+  'AC',
+  'CITI',
+  'Federal',
+  'Multicarga',
+  'Reserva',
+  'Turimex LLC',
+  'Viajes Especiales',
+  'Otros ingresos',
+]);
 
 function inflowBucketFor(movement: FinancialMovement): string {
   if (movement.type !== 'INFLOW') return '';
+  if (movement.businessUnitId) {
+    return bankAccountBusinessUnitLabel(movement.businessUnitId);
+  }
   const sub = movement.subcategory;
   if (sub && INCOME_BUCKETS.has(sub)) return sub;
   return 'Otros ingresos';

@@ -112,6 +112,63 @@ export function listBankAccountsByBanco(banco: string): BankAccountCatalogEntry[
   return catalog.accounts.filter(a => a.banco.toUpperCase() === target);
 }
 
+export function bankAccountBusinessUnitLabel(un: string | null | undefined): string {
+  const value = un?.trim();
+  if (!value) return 'Otros ingresos';
+  const upper = value.toUpperCase();
+  if (upper === 'FEDERAL') return 'Federal';
+  if (upper === 'MULTICARGA') return 'Multicarga';
+  if (upper === 'TURIMEX LLC') return 'Turimex LLC';
+  if (upper === 'RESERVA') return 'Reserva';
+  if (upper === 'CITI') return 'CITI';
+  if (upper === 'AC') return 'AC';
+  return value;
+}
+
+export function bankAccountRoleLabel(role: BankAccountRole | string | null | undefined): string {
+  switch (role) {
+    case 'concentradora': return 'Concentradora';
+    case 'pagadora': return 'Pagadora';
+    case 'reserva': return 'Reserva';
+    case 'credito': return 'Crédito';
+    case 'ahorro': return 'Ahorro';
+    case 'por_cancelar': return 'Por cancelar';
+    case 'garantia': return 'Garantía';
+    case 'saldo_retenido': return 'Saldo retenido';
+    default: return role ? String(role) : 'Sin rol';
+  }
+}
+
+export function bankAccountFlowLabel(flow: BankAccountFlow | string | null | undefined): string {
+  switch (flow) {
+    case 'ingreso': return 'Ingreso';
+    case 'egreso': return 'Egreso';
+    case 'neutro': return 'Neutro';
+    default: return flow ? String(flow) : 'Sin flujo';
+  }
+}
+
+export function bankAccountSearchText(entry: BankAccountCatalogEntry | null | undefined): string {
+  if (!entry) return '';
+  return [
+    entry.banco,
+    entry.numeroCliente,
+    entry.razonSocial,
+    entry.cuenta,
+    entry.cuentaDigits,
+    entry.clabe,
+    entry.moneda,
+    entry.unidadNegocio,
+    bankAccountBusinessUnitLabel(entry.unidadNegocio),
+    entry.concepto,
+    entry.role,
+    bankAccountRoleLabel(entry.role),
+    entry.subRole,
+    entry.flow,
+    bankAccountFlowLabel(entry.flow),
+  ].filter(Boolean).join(' ');
+}
+
 /* ─── Movement enrichment ─────────────────────────────────────────────── */
 
 /** Minimal shape needed to enrich a bank movement. Compatible with BankStatementLine. */

@@ -9,6 +9,7 @@ import type {
   RealReconciliationMatch,
   RealReconciliationResult,
 } from '../../../domain/realReconciliationEngine';
+import { bankMovementKey } from '../../../domain/realReconciliationEngine';
 import type { PayrollCostRecord, PurchaseReceiptRecord } from '../types';
 import { buildCanonicalProjection } from './canonicalProjection';
 
@@ -378,6 +379,100 @@ describe('canonicalProjection IVA metadata', () => {
       .reduce((s, m) => s + m.projectedAmount, 0);
     expect(sumInflows).toBe(aprilDashboard?.income ?? 0);
     expect(sumOutflows).toBe(aprilDashboard?.expense ?? 0);
+  });
+
+  it('classifies bank inflows by catalog business unit while preserving crossed client detail', () => {
+    const abono = bankMovement({
+      cia: '00001',
+      banco: 'BANAMEX',
+      cuenta: '678 7361240',
+      tipoMovimiento: 'ABONO',
+      importe: 25_000,
+      fechaOperacion: '2026-04-16',
+      concepto: 'Cobro cliente Sendex',
+      referencia: 'REF-MULTI',
+    });
+    const reconciliation = reconciliationResult([]);
+    reconciliation.abonoEnrichments = [{
+      movementKey: bankMovementKey(abono),
+      status: 'factura-cobrada',
+      facturas: [{
+        cia: '00001',
+        noFactura: 'F-100',
+        noCliente: 'C-100',
+        nombreCliente: 'Cliente Multicarga',
+        importeBruto: 25_000,
+      }],
+      cia: '00001',
+      cuenta: '678 7361240',
+      fechaOperacion: '2026-04-16',
+      importe: 25_000,
+      concepto: 'Cobro cliente Sendex',
+      referencia: 'REF-MULTI',
+      catalogClientId: 'C-100',
+      catalogClientName: 'Cliente Multicarga',
+    }];
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          banco: 'BANAMEX',
+          cuenta: '678 7361240',
+          movimientos: [abono],
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaReconciliation: reconciliation,
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-04-22',
+    });
+
+    const movement = canonical.movements.find((m) => m.sourceObjectId === 'REF-MULTI');
+    expect(movement?.businessUnitId).toBe('MULTICARGA');
+    expect(movement?.subcategory).toBe('Multicarga');
+    expect(movement?.category).toBe('AR_COLLECTION');
+    expect(movement?.counterpartyName).toBe('Cliente Multicarga');
+    expect(movement?.bankAccountId).toBe('678 7361240');
+  });
+
+  it('excludes catalog-neutral bank accounts from real inflows and outflows', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          banco: 'BANAMEX',
+          cuenta: '7014 1877834',
+          movimientos: [
+            bankMovement({
+              cia: '00001',
+              banco: 'BANAMEX',
+              cuenta: '7014 1877834',
+              tipoMovimiento: 'ABONO',
+              importe: 5_000,
+              fechaOperacion: '2026-04-16',
+              concepto: 'Fondo ahorro',
+              referencia: 'NEUTRO',
+            }),
+          ],
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-04-22',
+    });
+
+    expect(canonical.movements.some((m) => m.sourceObjectId === 'NEUTRO')).toBe(false);
   });
 
   it('suppresses CXC facturas already cross-matched to a bank ABONO (cobrada-banco)', () => {

@@ -18,6 +18,12 @@ import type {
 } from '../../../domain/types';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
 import { projectClientMonth } from '../../../domain/collectionEngine';
+import {
+  bankAccountBusinessUnitLabel,
+  bankAccountFlowLabel,
+  bankAccountRoleLabel,
+  findBankAccount,
+} from '../../../domain/bankAccountsCatalog';
 
 const POPOVER_WIDTH = 480;
 const POPOVER_MARGIN = 8;
@@ -98,6 +104,7 @@ export function MovementDrillDownDrawer({
   }, [anchor]);
 
   if (!movement || !anchor || !pos) return null;
+  const bankAccount = movement.bankAccountId ? findBankAccount(movement.bankAccountId) : null;
 
   const rows: [string, string][] = [
     ['Fuente', `${movement.sourceSystem}${movement.sourceObjectId ? ` · ${movement.sourceObjectId}` : ''}`],
@@ -167,6 +174,22 @@ export function MovementDrillDownDrawer({
             caller pasa el contexto operativo. */}
         {invoiceContext && (
           <InvoiceDetailSection movement={movement} context={invoiceContext} />
+        )}
+
+        {(movement.sourceSystem === 'BANK' || bankAccount) && (
+          <DetailBlock
+            title="Clasificación bancaria"
+            items={[
+              ['Unidad', bankAccount ? bankAccountBusinessUnitLabel(bankAccount.unidadNegocio) : movement.businessUnitId ?? '—'],
+              ['Banco', bankAccount?.banco ?? '—'],
+              ['Cuenta', bankAccount?.cuenta ?? movement.bankAccountId ?? '—'],
+              ['Razón social', bankAccount?.razonSocial ?? '—'],
+              ['Concepto cuenta', bankAccount?.concepto ?? movement.subcategory ?? '—'],
+              ['Rol', bankAccount ? bankAccountRoleLabel(bankAccount.role) : '—'],
+              ['Flujo', bankAccount ? bankAccountFlowLabel(bankAccount.flow) : '—'],
+              ['Contraparte', movement.counterpartyName ?? '—'],
+            ]}
+          />
         )}
 
         {quickActions && (

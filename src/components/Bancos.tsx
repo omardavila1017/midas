@@ -17,6 +17,7 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   Upload,
+  Building2,
 } from 'lucide-react';
 import {
   fetchBankStatements,
@@ -50,6 +51,14 @@ import {
 import { parseSantanderFile, SANTANDER_FILE_FORMAT } from '../domain/santanderCsv';
 import { hex } from '../theme';
 import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
+import {
+  bankAccountBusinessUnitLabel,
+  bankAccountFlowLabel,
+  bankAccountRoleLabel,
+  bankAccountSearchText,
+  findBankAccount,
+  type BankAccountCatalogEntry,
+} from '../domain/bankAccountsCatalog';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Props
@@ -120,6 +129,43 @@ const csvEscape = (v: string | number | undefined): string => {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
+
+function accountCatalogEntry(acc: Pick<BankAccountStatement, 'cuenta' | 'cuentaBancos'>): BankAccountCatalogEntry | null {
+  return findBankAccount(acc.cuentaBancos ?? acc.cuenta);
+}
+
+function catalogFlowClass(flow: string | undefined): string {
+  if (flow === 'ingreso') return 'bg-[var(--success-muted)] text-[var(--success)]';
+  if (flow === 'egreso') return 'bg-[var(--danger-muted)] text-[var(--danger)]';
+  return 'bg-[var(--gray-100)] text-[var(--gray-500)]';
+}
+
+function BankAccountBadges({ entry }: { entry: BankAccountCatalogEntry | null }) {
+  if (!entry) {
+    return (
+      <span className="inline-flex h-5 items-center rounded-full bg-[var(--warning-muted)] px-2 text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--warning)]">
+        Sin catálogo
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="inline-flex h-5 items-center rounded-full bg-[var(--primary-muted)] px-2 text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--primary)]">
+        {bankAccountBusinessUnitLabel(entry.unidadNegocio)}
+      </span>
+      <span className="inline-flex h-5 items-center rounded-full bg-[var(--gray-100)] px-2 text-[10px] font-medium text-[var(--gray-600)]">
+        {bankAccountRoleLabel(entry.role)}
+      </span>
+      <span className={`inline-flex h-5 items-center rounded-full px-2 text-[10px] font-medium ${catalogFlowClass(entry.flow)}`}>
+        {bankAccountFlowLabel(entry.flow)}
+      </span>
+      <span className="min-w-0 max-w-[360px] truncate text-[11px] text-[var(--gray-400)]" title={`${entry.razonSocial} · ${entry.concepto}`}>
+        {entry.concepto}
+      </span>
+    </div>
+  );
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    Form view — inicial / nueva consulta
@@ -350,6 +396,8 @@ const BancosDashboard = ({
   const [bancoFilter, setBancoFilter] = useState<string>('all');
   const [monedaFilter, setMonedaFilter] = useState<string>('all');
   const [tipoFilter, setTipoFilter] = useState<TipoFilter>('all');
+  const [unidadFilter, setUnidadFilter] = useState<string>('all');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
 
   // Construir el contexto de clasificación una sola vez sobre el universo
   // completo (no sobre el subset filtrado) para que la detección de cuenta
@@ -372,12 +420,15 @@ const BancosDashboard = ({
   // those accounts show regardless of company filter.
   const accountsFiltered = useMemo(() => {
     return statements.filter(s => {
+      const catalogEntry = accountCatalogEntry(s);
       if (selectedCia !== 'all' && s.cia && s.cia !== selectedCia) return false;
       if (bancoFilter !== 'all' && (s.nombreBanco ?? s.banco) !== bancoFilter) return false;
       if (monedaFilter !== 'all' && s.moneda !== monedaFilter) return false;
+      if (unidadFilter !== 'all' && (catalogEntry?.unidadNegocio ?? '__uncatalogued__') !== unidadFilter) return false;
+      if (roleFilter !== 'all' && (catalogEntry?.role ?? '__uncatalogued__') !== roleFilter) return false;
       return true;
     });
-  }, [statements, selectedCia, bancoFilter, monedaFilter]);
+  }, [statements, selectedCia, bancoFilter, monedaFilter, unidadFilter, roleFilter]);
 
   // Movement-level filter (search + tipo). Los traspasos internos NUNCA se
   // filtran fuera por sí mismos: aparecen siempre, en gris, restando de los
@@ -386,16 +437,31 @@ const BancosDashboard = ({
   const accountsView = useMemo(() => {
     const needle = searchTerm.trim().toLowerCase();
     return accountsFiltered.map(acc => {
+      const catalogEntry = accountCatalogEntry(acc);
+      const accountHay = [
+        acc.banco,
+        acc.nombreBanco,
+        acc.cia,
+        acc.cuenta,
+        acc.cuentaBancos,
+        acc.cuentaContable,
+        acc.nombreCuentaContable,
+        acc.desc039,
+        acc.desc036,
+        bankAccountSearchText(catalogEntry),
+      ].filter(Boolean).join(' ').toLowerCase();
+      const accountMatches = needle !== '' && accountHay.includes(needle);
       const movimientos = acc.movimientos.filter(m => {
         if (tipoFilter !== 'all' && m.tipoMovimiento !== tipoFilter) return false;
+        if (accountMatches) return true;
         if (needle) {
-          const hay = `${m.referencia} ${m.concepto}`.toLowerCase();
+          const hay = `${m.referencia} ${m.concepto} ${m.noRecibo ?? ''} ${m.cuentaBancos ?? ''} ${m.cuenta ?? ''}`.toLowerCase();
           if (!hay.includes(needle)) return false;
         }
         return true;
       });
       return { ...acc, movimientos };
-    });
+    }).filter(acc => !needle || acc.movimientos.length > 0 || bankAccountSearchText(accountCatalogEntry(acc)).toLowerCase().includes(needle));
   }, [accountsFiltered, searchTerm, tipoFilter]);
 
   const balanceDate = useMemo(() => latestStatementDate(accountsView), [accountsView]);
@@ -440,6 +506,18 @@ const BancosDashboard = ({
     () => Array.from(new Set(statements.map(s => s.moneda))).sort(),
     [statements],
   );
+  const unidadOptions = useMemo(
+    () => Array.from(new Set(
+      statements.map(s => accountCatalogEntry(s)?.unidadNegocio ?? '__uncatalogued__'),
+    )).sort((a, b) => bankAccountBusinessUnitLabel(a).localeCompare(bankAccountBusinessUnitLabel(b), 'es-MX')),
+    [statements],
+  );
+  const roleOptions = useMemo(
+    () => Array.from(new Set(
+      statements.map(s => accountCatalogEntry(s)?.role ?? '__uncatalogued__'),
+    )).sort((a, b) => bankAccountRoleLabel(a).localeCompare(bankAccountRoleLabel(b), 'es-MX')),
+    [statements],
+  );
 
   // ── KPIs ──
   // Calcula 4 totales: bruto (incluye internos) y real (sin internos).
@@ -476,17 +554,58 @@ const BancosDashboard = ({
   const balanceCuentas = balanceAccountsView.length;
   const staleCuentas = Math.max(0, totalCuentas - balanceCuentas);
 
-  const hasFilters = bancoFilter !== 'all' || monedaFilter !== 'all' || tipoFilter !== 'all' || searchTerm !== '';
-  const clearFilters = () => { setBancoFilter('all'); setMonedaFilter('all'); setTipoFilter('all'); setSearchTerm(''); };
+  const unitSummaries = useMemo(() => {
+    const summaries = new Map<string, { label: string; accounts: number; movimientos: number; saldo: number; abonos: number; cargos: number }>();
+    for (const acc of accountsView) {
+      const entry = accountCatalogEntry(acc);
+      const key = entry?.unidadNegocio ?? '__uncatalogued__';
+      const current = summaries.get(key) ?? {
+        label: entry ? bankAccountBusinessUnitLabel(entry.unidadNegocio) : 'Sin catálogo',
+        accounts: 0,
+        movimientos: 0,
+        saldo: 0,
+        abonos: 0,
+        cargos: 0,
+      };
+      current.accounts += 1;
+      current.movimientos += acc.movimientos.length;
+      current.saldo += bankStatementBalance(acc);
+      for (const m of acc.movimientos) {
+        if (internalReasonOf(acc.cia, acc.cuenta, m) !== null) continue;
+        if (m.tipoMovimiento === 'ABONO') current.abonos += m.importe;
+        if (m.tipoMovimiento === 'CARGO') current.cargos += m.importe;
+      }
+      summaries.set(key, current);
+    }
+    return Array.from(summaries.entries())
+      .map(([key, value]) => ({ key, ...value }))
+      .sort((a, b) => b.saldo - a.saldo || a.label.localeCompare(b.label, 'es-MX'));
+  }, [accountsView, internalReasonOf]);
+
+  const hasFilters = bancoFilter !== 'all' || monedaFilter !== 'all' || tipoFilter !== 'all' || unidadFilter !== 'all' || roleFilter !== 'all' || searchTerm !== '';
+  const clearFilters = () => {
+    setBancoFilter('all');
+    setMonedaFilter('all');
+    setTipoFilter('all');
+    setUnidadFilter('all');
+    setRoleFilter('all');
+    setSearchTerm('');
+  };
 
   const exportCsv = () => {
-    const header = ['cia','empresa','banco','cuenta','moneda','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo'];
+    const header = ['cia','empresa','banco','cuenta','moneda','unidadNegocio','rolCuenta','flujoCuenta','razonSocialCuenta','conceptoCuenta','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo'];
     const rows: string[] = [header.join(',')];
     accountsView.forEach(acc => {
       const empresaNombre = ciaNameMap.get(acc.cia) ?? '';
+      const catalogEntry = accountCatalogEntry(acc);
       acc.movimientos.forEach(m => {
         rows.push([
           acc.cia, empresaNombre, acc.banco, acc.cuenta, acc.moneda,
+          catalogEntry ? bankAccountBusinessUnitLabel(catalogEntry.unidadNegocio) : '',
+          catalogEntry ? bankAccountRoleLabel(catalogEntry.role) : '',
+          catalogEntry ? bankAccountFlowLabel(catalogEntry.flow) : '',
+          catalogEntry?.razonSocial ?? '',
+          catalogEntry?.concepto ?? '',
           m.fechaOperacion, m.fechaValor ?? '',
           m.referencia, m.concepto, m.tipoMovimiento,
           m.importe, m.saldo ?? '',
@@ -504,42 +623,59 @@ const BancosDashboard = ({
 
   return (
     <div className="space-y-4">
-      {/* ── Top bar (hidden) ── */}
-      {false && (
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 gap-2 shadow-sm">
+      {/* ── Toolbar ── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex h-9 min-w-[280px] flex-1 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 shadow-sm">
           <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
           <input
             type="text"
-            placeholder="Buscar referencia o concepto..."
+            placeholder="Buscar cuenta, CLABE, razón social, unidad, referencia..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
-            className="text-[13px] bg-transparent border-none outline-none w-64 placeholder:text-[var(--gray-300)]"
+            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--gray-300)]"
           />
           {searchTerm && <button onClick={() => setSearchTerm('')}><X className="w-3.5 h-3.5 text-[var(--gray-400)]" /></button>}
         </div>
 
         <select value={bancoFilter} onChange={e => setBancoFilter(e.target.value)}
-          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer">
           <option value="all">Todos los bancos</option>
           {bancoOptions.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
 
+        <select value={unidadFilter} onChange={e => setUnidadFilter(e.target.value)}
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer"
+          title="Unidad de negocio">
+          <option value="all">Todas las unidades</option>
+          {unidadOptions.map(u => (
+            <option key={u} value={u}>{u === '__uncatalogued__' ? 'Sin catálogo' : bankAccountBusinessUnitLabel(u)}</option>
+          ))}
+        </select>
+
+        <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer"
+          title="Rol de cuenta">
+          <option value="all">Todos los roles</option>
+          {roleOptions.map(r => (
+            <option key={r} value={r}>{r === '__uncatalogued__' ? 'Sin catálogo' : bankAccountRoleLabel(r)}</option>
+          ))}
+        </select>
+
         <select value={monedaFilter} onChange={e => setMonedaFilter(e.target.value)}
-          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer">
           <option value="all">Todas las monedas</option>
           {monedaOptions.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
 
         <select value={tipoFilter} onChange={e => setTipoFilter(e.target.value as TipoFilter)}
-          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer">
           <option value="all">Cargos y abonos</option>
           <option value="ABONO">Solo abonos</option>
           <option value="CARGO">Solo cargos</option>
         </select>
 
         {hasFilters && (
-          <button onClick={clearFilters} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition">
+          <button onClick={clearFilters} className="h-9 rounded-[var(--radius)] px-2 text-[12px] text-[var(--gray-500)] hover:bg-[var(--gray-100)] hover:text-[var(--primary)] flex items-center gap-1 transition">
             <Filter className="w-3 h-3" /> Limpiar filtros
           </button>
         )}
@@ -587,7 +723,6 @@ const BancosDashboard = ({
           </button>
         </div>
       </div>
-      )}
 
       {/* ── cia filter banner ── */}
       {selectedCia !== 'all' && (
@@ -614,6 +749,44 @@ const BancosDashboard = ({
           {canRefresh
             ? 'Archivo Santander agregado al dataset actual.'
             : 'Archivo Santander cargado. Para actualizar los movimientos, sube un archivo nuevo o corre una consulta JDE.'}
+        </div>
+      )}
+
+      {unitSummaries.length > 0 && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {unitSummaries.map(unit => (
+            <button
+              key={unit.key}
+              type="button"
+              onClick={() => setUnidadFilter(unit.key)}
+              className={`rounded-[var(--radius-lg)] border p-3 text-left transition ${
+                unidadFilter === unit.key
+                  ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
+                  : 'border-[var(--gray-200)] bg-white hover:border-[var(--gray-300)] hover:bg-[var(--gray-50)]'
+              }`}
+              title={`Filtrar por ${unit.label}`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Building2 className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
+                  <p className="truncate text-[12px] font-bold text-[var(--gray-950)]">{unit.label}</p>
+                </div>
+                <span className="shrink-0 text-[10px] font-medium text-[var(--gray-400)]">
+                  {unit.accounts} cuenta{unit.accounts === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[14px] font-bold text-[var(--gray-950)]">{fmtCurrency(unit.saldo)}</p>
+                  <p className="text-[10px] text-[var(--gray-400)]">{unit.movimientos.toLocaleString()} mov.</p>
+                </div>
+                <div className="text-right text-[10px] tabular-nums">
+                  <p className="text-[var(--success)]">+{fmtCurrency(unit.abonos)}</p>
+                  <p className="text-[var(--danger)]">-{fmtCurrency(unit.cargos)}</p>
+                </div>
+              </div>
+            </button>
+          ))}
         </div>
       )}
 
@@ -765,6 +938,7 @@ const BancosDashboard = ({
                       {accs.map(acc => {
                         const key = `${acc.cia}::${acc.cuenta}::${acc.moneda}`;
                         const isExpanded = expanded === key;
+                        const catalogEntry = accountCatalogEntry(acc);
                         const saldo = bankStatementBalance(acc);
                         const saldoIsDerived =
                           (acc.saldoFinal === undefined || acc.saldoFinal === 0)
@@ -795,6 +969,9 @@ const BancosDashboard = ({
                                     </span>
                                   )}
                                   <span className="text-[11px] text-[var(--gray-400)]">{acc.cia ? '· ' : ''}{acc.movimientos.length} mov.</span>
+                                </div>
+                                <div className="mt-1.5">
+                                  <BankAccountBadges entry={catalogEntry} />
                                 </div>
                               </div>
 
@@ -1032,6 +1209,7 @@ const Bancos = ({
   onLastQueryChange,
   companies = [],
   abonoEnrichmentIndex,
+  cargoEnrichmentIndex,
 }: BancosProps) => {
   const [view, setView] = useState<BancosView>(
     statements.length > 0 && lastQuery ? 'dashboard' : 'form'
@@ -1149,6 +1327,7 @@ const Bancos = ({
       refreshError={refreshError}
       companies={companies}
       abonoEnrichmentIndex={abonoEnrichmentIndex}
+      cargoEnrichmentIndex={cargoEnrichmentIndex}
     />
   );
 };

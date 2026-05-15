@@ -65,7 +65,7 @@ import {
 } from '../../../domain/realReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
-import { enrichMovementWithCatalog } from '../../../domain/bankAccountsCatalog';
+import { bankAccountBusinessUnitLabel, enrichMovementWithCatalog } from '../../../domain/bankAccountsCatalog';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
   FinancialMovement,
@@ -228,7 +228,11 @@ function resolveInflowSubcategory(args: {
   counterpartyId?: string;
   clientById: Map<string, Client>;
   bankFallbackLabel?: string;
+  businessUnitId?: string;
 }): string {
+  if (args.businessUnitId) {
+    return bankAccountBusinessUnitLabel(args.businessUnitId);
+  }
   if (args.counterpartyId) {
     const client = args.clientById.get(args.counterpartyId);
     if (client?.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID) {
@@ -363,6 +367,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
         ? resolveInflowSubcategory({
             counterpartyId,
             clientById,
+            businessUnitId: catalogEnrich?.entry.unidadNegocio,
             bankFallbackLabel: !isCobranzaInflow ? bankFallbackName : undefined,
           })
         : undefined;

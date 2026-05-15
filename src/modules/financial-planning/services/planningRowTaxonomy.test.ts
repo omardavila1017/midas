@@ -83,6 +83,28 @@ describe('planning row taxonomy', () => {
       movementsInBucket: [recurring],
     })).toBe(50_000);
   });
+
+  it('groups bank inflows by business unit and keeps crossed client as row detail', () => {
+    const inflow = movement({
+      id: 'bank:multicarga',
+      sourceSystem: 'BANK',
+      type: 'INFLOW',
+      category: 'AR_COLLECTION',
+      businessUnitId: 'MULTICARGA',
+      subcategory: 'Multicarga',
+      counterpartyName: 'Cliente Multicarga',
+      counterpartyType: 'CUSTOMER',
+      concept: 'Cobro factura F-100',
+      projectedAmount: 25_000,
+    });
+
+    const rows = buildPlanningRows({ movements: [inflow], customRows: [], overrides: [] });
+
+    expect(rows[0]?.group).toBe('Ingresos · Multicarga');
+    expect(rows[0]?.bucketLabel).toBe('Multicarga');
+    expect(rows[0]?.label).toBe('Cliente Multicarga');
+    expect(conceptKeyForMovement(inflow)).toBe('INFLOW:AR_COLLECTION:cliente-multicarga');
+  });
 });
 
 function movement(patch: Partial<FinancialMovement>): FinancialMovement {
@@ -90,12 +112,13 @@ function movement(patch: Partial<FinancialMovement>): FinancialMovement {
   return {
     id: patch.id ?? 'm',
     sourceSystem: patch.sourceSystem ?? 'JDE',
-    type: 'OUTFLOW',
+    type: patch.type ?? 'OUTFLOW',
     category: patch.category ?? 'AP_PAYMENT',
     subcategory: patch.subcategory,
+    businessUnitId: patch.businessUnitId,
     providerCategory: patch.providerCategory,
     counterpartyName: patch.counterpartyName,
-    counterpartyType: 'SUPPLIER',
+    counterpartyType: patch.counterpartyType ?? 'SUPPLIER',
     concept: patch.concept ?? 'Factura',
     currency: 'MXN',
     originalAmount: patch.projectedAmount ?? 0,
