@@ -104,6 +104,29 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
     expect(may?.isHistorical).toBe(false);
   });
 
+  it('trata el mes actual como real acumulado más proyección restante', () => {
+    const statements = [
+      mkStmt('2026-03', 1000, 400),
+      mkStmt('2026-04', 100, 40),
+    ];
+    const budget = mkBudget({
+      incomeTotal: [0, 0, 0, 900, 0, 0, 0, 0, 0, 0, 0, 0],
+      expenseTotal: [0, 0, 0, 300, 0, 0, 0, 0, 0, 0, 0, 0],
+    });
+    const { base } = computeBaseCashFlow({
+      ...BASE_INPUTS,
+      bankStatements: statements,
+      budget,
+    });
+
+    const april = base.find((m) => m.yearMonth === '2026-04');
+    expect(april?.isHistorical).toBe(true);
+    expect(april?.actualIncome).toBe(100);
+    expect(april?.actualExpense).toBe(40);
+    expect(april?.income).toBe(1000);
+    expect(april?.expense).toBe(400);
+  });
+
   it('sin datos operativos futuros, el motor predictivo extrapola desde la historia bancaria', () => {
     // Con el motor predictivo (Holt-Winters tiered) habilitado por default,
     // los meses futuros se llenan con extrapolación cuando hay >=1 mes de

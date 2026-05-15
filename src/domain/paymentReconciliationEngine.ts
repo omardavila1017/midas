@@ -36,7 +36,7 @@
 
 import type { PagoProveedorRecord, BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 import type { CXPRecord } from './persistence';
-import { bankMovementKey } from './realReconciliationEngine';
+import { bankMovementKey } from './bankMovementKey';
 import {
   buildOwnAccountDetector,
   buildOwnAccountsIndex,

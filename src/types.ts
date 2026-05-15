@@ -36,6 +36,8 @@ export interface CashFlowMonth {
   income: number;          // pesos
   expense: number;         // pesos, positivo (entrada)
   closingCash: number;     // caja final base — sin propuestas
+  actualIncome?: number;   // pesos reales acumulados cuando el mes es mixto
+  actualExpense?: number;  // pesos reales acumulados cuando el mes es mixto
 }
 
 // ── Overrides editables de flujo (tabla ↔ chart) ─────────────────────────

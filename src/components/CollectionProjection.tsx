@@ -5,11 +5,11 @@ import { isBankHoliday } from '../domain/bankHolidays';
 import { isInternalTransfer, buildOwnAccountsIndex, buildOwnAccountDetector } from '../domain/netCashFlowEngine';
 import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
 import {
-  reconcileRealCollections,
   type RealReconciliationMatch,
   type RealReconciliationResult,
   type RealReconciliationBankCoverage,
 } from '../domain/realReconciliationEngine';
+import { emptyRealReconciliationResult } from '../domain/emptyRealReconciliationResult';
 import {
   applyManualConfirmations,
   useConfirmedReviewKeys,
@@ -1142,7 +1142,7 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
             const share = total ? (rowTotal / total) * 100 : 0;
             const delay = `${Math.min(i, 20) * 25}ms`;
             return (
-              <tr key={c.id} className="border-t border-[var(--gray-200)]/40 hover-row animate-slide-up" style={{ animationDelay: delay }}>
+              <tr key={c.id} className="cv-row border-t border-[var(--gray-200)]/40 hover-row animate-slide-up" style={{ animationDelay: delay }}>
                 <td className="px-5 py-2.5">
                   <div className="flex items-center gap-2">
                     {c.factoraje && (
@@ -1223,7 +1223,7 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
             {sorted.slice(0, 1000).map((e, i) => {
               const c = byId.get(e.clientId);
               return (
-                <tr key={i} className="border-t border-[var(--gray-200)]/40 hover-row">
+                <tr key={i} className="cv-row border-t border-[var(--gray-200)]/40 hover-row">
                   <td className="px-4 py-2">{c?.name ?? e.clientId}</td>
                   <td className="px-4 py-2 text-[var(--gray-400)]">{e.invoiceDate}</td>
                   <td className="px-4 py-2 text-[var(--gray-400)]">{e.theoreticalDate}</td>
@@ -1639,7 +1639,7 @@ function CobranzaRealCalendar({
                 </thead>
                 <tbody>
                   {selectedEvents.map(event => (
-                    <tr key={event.id} className="border-t border-[var(--gray-100)]">
+                    <tr key={event.id} className="cv-row border-t border-[var(--gray-100)]">
                       <td className="px-3 py-2">
                         <CollectionSourceBadge source={event.source} />
                         <div className="text-[10px] text-[var(--gray-400)] mt-1">{event.statusLabel}</div>
@@ -1841,14 +1841,29 @@ function CobranzaRealView({
   // local — la pestaña debe seguir funcionando aunque el padre no haya
   // cableado la prop.
   const confirmedReviewKeys = useConfirmedReviewKeys();
-  const localReconciliation = useMemo(() => {
-    // `externalReconciliation` ya viene con confirmaciones aplicadas desde
-    // App.tsx; el fallback local debe aplicarlas también para no divergir.
-    if (externalReconciliation) return externalReconciliation;
-    const raw = reconcileRealCollections(records, bankStatements, { cobranzaPayments: payments });
-    return applyManualConfirmations(raw, confirmedReviewKeys);
+  const [fallbackReconciliation, setFallbackReconciliation] = useState<RealReconciliationResult>(() =>
+    emptyRealReconciliationResult(),
+  );
+  useEffect(() => {
+    if (externalReconciliation) return;
+    if (records.length === 0 && payments.length === 0) {
+      setFallbackReconciliation(emptyRealReconciliationResult());
+      return;
+    }
+
+    let cancelled = false;
+    void import('../domain/realReconciliationEngine')
+      .then(({ reconcileRealCollections }) => {
+        if (cancelled) return;
+        const raw = reconcileRealCollections(records, bankStatements, { cobranzaPayments: payments });
+        if (!cancelled) setFallbackReconciliation(applyManualConfirmations(raw, confirmedReviewKeys));
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [externalReconciliation, records, bankStatements, payments, confirmedReviewKeys]);
-  const reconciliation = localReconciliation;
+  const reconciliation = externalReconciliation ?? fallbackReconciliation;
   const matchByFactura = useMemo(() => {
     if (externalFacturaIndex) return externalFacturaIndex;
     const m = new Map<string, RealReconciliationMatch>();
