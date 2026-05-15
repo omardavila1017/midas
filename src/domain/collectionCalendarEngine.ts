@@ -2,6 +2,7 @@ import type { CashFlowAssumptions, Client, CollectionEvent } from './types';
 import { eventKey } from './types';
 import { projectYear } from './collectionEngine';
 import { resolveRealPaymentDate, toISODate } from './calendar';
+import { parsePaymentDay } from './parsePaymentDay';
 import { isNonOperatingDay } from './bankHolidays';
 import { normalizeClientText } from './clientGrouping';
 import type { CobranzaRecord } from '../services/jdeTypes';
@@ -329,7 +330,7 @@ function eventFromJdeOpenProjected(
 ): CollectionCalendarEvent {
   const resolved = clientMatch
     ? resolveCobranzaRuleDate(record, clientMatch.client, assumptions)
-    : null;
+    : resolveCobranzaApiPaymentDate(record);
   const fallbackDate = record.fechaVence || record.fechaFactura || new Date().toISOString().slice(0, 10);
   return {
     id: `jde-open:${record.cia}:${record.noFactura}`,
@@ -555,6 +556,43 @@ export function resolveCobranzaRuleDate(
     theoreticalDate: toISODate(theoretical),
     reason,
   };
+}
+
+export function resolveCobranzaApiPaymentDate(
+  record: CobranzaRecord,
+): { calendarDate: string; invoiceDate: string; theoreticalDate: string; reason: string } | null {
+  const rawPaymentDay = record.nombreDiaPagoCc13 || record.claveDiaPagoCc13 || '';
+  const paymentDay = parsePaymentDay(expandCc13PaymentDay(rawPaymentDay));
+  if (!paymentDay) return null;
+
+  const invoiceDate = record.fechaFactura || record.fechaVence || new Date().toISOString().slice(0, 10);
+  const invoice = parseIsoDate(invoiceDate);
+  const theoretical = record.fechaVence
+    ? parseIsoDate(record.fechaVence)
+    : addDays(invoice, Number.parseInt(record.condPago, 10) || 0);
+  const real = resolveRealPaymentDate(theoretical, paymentDay, 'Semanal');
+  return {
+    calendarDate: toISODate(real),
+    invoiceDate: toISODate(invoice),
+    theoreticalDate: toISODate(theoretical),
+    reason: `Regla CC13 /cobranza: ${rawPaymentDay.trim() || 'dia de pago'}.`,
+  };
+}
+
+function expandCc13PaymentDay(raw: string): string {
+  const value = raw.trim().toUpperCase();
+  const map: Record<string, string> = {
+    DOM: 'domingo',
+    LUN: 'lunes',
+    MAR: 'martes',
+    MIE: 'miercoles',
+    MIÉ: 'miercoles',
+    JUE: 'jueves',
+    VIE: 'viernes',
+    SAB: 'sabado',
+    SÁB: 'sabado',
+  };
+  return map[value] ?? raw;
 }
 
 export function clientRuleLabel(client: Client): string {

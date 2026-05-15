@@ -1,71 +1,38 @@
-import { useState, useEffect, useRef, FormEvent, ReactNode } from 'react';
-import { Lock, User, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { useEffect, useRef, FormEvent, ReactNode, useState } from 'react';
+import { AlertCircle, Lock } from 'lucide-react';
 
-const AUTH_STORAGE_KEY = 'midas-auth-v1';
-
-// Registro de usuarios habilitados. Comparación directa contra el password
-// en texto plano configurado en la env var correspondiente
-// (VITE_<USER>_PASSWORD). Este gate vive en cliente y solo disuade lecturas
-// casuales — la auth real debe delegarse a Atlas SSO (ver AUTH.md).
-const USERS: Record<string, string> = {
-  admin: import.meta.env.VITE_ADMIN_PASSWORD ?? 'admin',
-  paolo: import.meta.env.VITE_PAOLO_PASSWORD ?? 'paolo',
-};
-
-function isAuthenticated(): boolean {
-  try {
-    return sessionStorage.getItem(AUTH_STORAGE_KEY) === 'ok';
-  } catch {
-    return false;
-  }
-}
-
-function persistAuth() {
-  try {
-    sessionStorage.setItem(AUTH_STORAGE_KEY, 'ok');
-  } catch {
-    /* no-op */
-  }
-}
+const LOCAL_AUTH_ENABLED = import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_AUTH_GATE === 'true';
+const LOCAL_CONFIRMATION = 'local';
 
 export function clearAuth() {
-  try {
-    sessionStorage.removeItem(AUTH_STORAGE_KEY);
-  } catch {
-    /* no-op */
-  }
+  // Auth is enforced by Atlas/backend in shared deployments. The optional
+  // local gate keeps state only in memory, so there is no browser token to clear.
 }
 
-interface LoginScreenProps {
-  onSuccess: () => void;
+interface LocalGateProps {
+  onContinue: () => void;
 }
 
-function LoginScreen({ onSuccess }: LoginScreenProps) {
-  const [user, setUser] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+function LocalGate({ onContinue }: LocalGateProps) {
+  const [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const userInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    userInputRef.current?.focus();
+    inputRef.current?.focus();
   }, []);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const expected = USERS[user.trim().toLowerCase()];
-    if (expected && password === expected) {
-      persistAuth();
-      onSuccess();
+    if (confirmation.trim().toLowerCase() === LOCAL_CONFIRMATION) {
+      onContinue();
       return;
     }
-    setError('Usuario o contraseña incorrectos.');
+    setError('Escribe "local" para abrir esta sesión de desarrollo.');
   };
 
   return (
-    <div
-      className="min-h-screen flex items-center justify-center px-4 skeuo-paper"
-    >
+    <div className="min-h-screen flex items-center justify-center px-4 skeuo-paper">
       <div
         className="w-full max-w-sm rounded-[var(--radius-lg)] p-8 skeuo-emboss-bordered"
         style={{ background: 'var(--skeuo-paper)' }}
@@ -81,62 +48,30 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
           >
             <Lock className="w-5 h-5" />
           </div>
-          <h1
-            className="text-[18px] font-bold text-[var(--gray-950)] skeuo-letterpress"
-          >
+          <h1 className="text-[18px] font-bold text-[var(--gray-950)] skeuo-letterpress">
             Midas
           </h1>
           <p className="text-[13px] text-[var(--gray-400)] mt-1">
-            Ingresa tus credenciales para continuar
+            Gate local de desarrollo. La autenticacion real vive en Atlas/backend.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <label className="block">
-            <span className="text-[12px] font-medium text-[var(--gray-700)]">Usuario</span>
-            <div className="mt-1 relative">
-              <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--gray-400)]" />
-              <input
-                ref={userInputRef}
-                type="text"
-                autoComplete="username"
-                value={user}
-                onChange={(event) => {
-                  setUser(event.target.value);
-                  if (error) setError(null);
-                }}
-                className="w-full h-10 pl-9 pr-3 rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] text-[14px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
-                style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
-                placeholder="admin"
-              />
-            </div>
-          </label>
-
-          <label className="block">
-            <span className="text-[12px] font-medium text-[var(--gray-700)]">Contraseña</span>
-            <div className="mt-1 relative">
-              <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--gray-400)]" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
-                value={password}
-                onChange={(event) => {
-                  setPassword(event.target.value);
-                  if (error) setError(null);
-                }}
-                className="w-full h-10 pl-9 pr-9 rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] text-[14px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
-                style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
-                placeholder="••••••••"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((current) => !current)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-[var(--gray-400)] hover:text-[var(--gray-700)] hover:bg-[var(--gray-100)]"
-                aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
+            <span className="text-[12px] font-medium text-[var(--gray-700)]">Confirmacion</span>
+            <input
+              ref={inputRef}
+              type="text"
+              autoComplete="off"
+              value={confirmation}
+              onChange={(event) => {
+                setConfirmation(event.target.value);
+                if (error) setError(null);
+              }}
+              className="mt-1 w-full h-10 rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] px-3 text-[14px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]"
+              style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
+              placeholder="local"
+            />
           </label>
 
           {error && (
@@ -161,7 +96,7 @@ function LoginScreen({ onSuccess }: LoginScreenProps) {
               border: '1px solid var(--skeuo-brass-deep)',
             }}
           >
-            Entrar
+            Continuar
           </button>
         </form>
       </div>
@@ -174,10 +109,10 @@ interface AuthGateProps {
 }
 
 export default function AuthGate({ children }: AuthGateProps) {
-  const [authed, setAuthed] = useState<boolean>(() => isAuthenticated());
+  const [localGatePassed, setLocalGatePassed] = useState(false);
 
-  if (!authed) {
-    return <LoginScreen onSuccess={() => setAuthed(true)} />;
+  if (LOCAL_AUTH_ENABLED && !localGatePassed) {
+    return <LocalGate onContinue={() => setLocalGatePassed(true)} />;
   }
 
   return <>{children}</>;

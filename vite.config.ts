@@ -3,10 +3,9 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import { visualizer } from 'rollup-plugin-visualizer'
 
-// Proxies de desarrollo para los APIs de JDE / TRESS.
-// El browser llama a /api/jde/... y /api/tress/... y Vite reescribe hacia el
-// host productivo (evita CORS en dev). Configurable vía VITE_JDE_UPSTREAM y
-// VITE_TRESS_UPSTREAM.
+// Proxies de desarrollo para APIs externas. El browser llama a /api/* y Vite
+// reescribe hacia el upstream, inyectando credenciales desde env local para
+// que el cliente no mande Bearer headers.
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
@@ -26,7 +25,10 @@ export default defineConfig(({ mode }) => {
   // namespaces: AWS API Gateway responde 500 con compresión >1MB y los
   // headers que el browser auto-agrega pueden tirar reglas de WAF. Replicamos
   // el comportamiento de curl en ambos proxies.
-  function configureProxy(proxy: { on(event: string, cb: (req: any) => void): void }) {
+  function configureProxy(
+    proxy: { on(event: string, cb: (req: any) => void): void },
+    options: { token?: string; extraHeaders?: Record<string, string> } = {},
+  ) {
     proxy.on('proxyReq', (proxyReq: any) => {
       proxyReq.removeHeader('origin')
       proxyReq.removeHeader('referer')
@@ -38,11 +40,19 @@ export default defineConfig(({ mode }) => {
       proxyReq.removeHeader('sec-ch-ua-platform')
       proxyReq.removeHeader('cookie')
       proxyReq.setHeader('accept-encoding', 'identity')
+      if (options.token) proxyReq.setHeader('authorization', `Bearer ${options.token}`)
+      for (const [key, value] of Object.entries(options.extraHeaders ?? {})) {
+        proxyReq.setHeader(key, value)
+      }
     })
   }
 
   const jdeUp = parseUpstream(env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/JDEdwards')
   const tressUp = parseUpstream(env.VITE_TRESS_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tress')
+  const cognosUp = parseUpstream(env.VITE_COGNOS_UPSTREAM || env.COGNOS_UPSTREAM || '')
+  const openaiUp = parseUpstream(env.OPENAI_UPSTREAM || 'https://api.openai.com/v1')
+  const jdeToken = env.JDE_TOKEN || env.VITE_JDE_TOKEN
+  const cognosToken = env.COGNOS_TOKEN || env.VITE_COGNOS_TOKEN
 
   // Bundle analyzer only when ANALYZE=1. Writes dist/stats.html with a
   // treemap of chunk content + duplicate-module detection.
@@ -76,14 +86,35 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
           rewrite: (p) => p.replace(/^\/api\/jde/, jdeUp.path),
-          configure: configureProxy,
+          configure: (proxy) => configureProxy(proxy, { token: jdeToken }),
         },
         '/api/tress': {
           target: tressUp.origin,
           changeOrigin: true,
           secure: true,
           rewrite: (p) => p.replace(/^\/api\/tress/, tressUp.path),
-          configure: configureProxy,
+          configure: (proxy) => configureProxy(proxy, { token: jdeToken }),
+        },
+        ...(cognosUp.origin
+          ? {
+              '/api/cognos': {
+                target: cognosUp.origin,
+                changeOrigin: true,
+                secure: true,
+                rewrite: (p: string) => p.replace(/^\/api\/cognos/, cognosUp.path),
+                configure: (proxy: { on(event: string, cb: (req: any) => void): void }) => configureProxy(proxy, {
+                  token: cognosToken,
+                  extraHeaders: { 'x-cognos-namespace': env.VITE_COGNOS_NAMESPACE || 'CognosEx' },
+                }),
+              },
+            }
+          : {}),
+        '/api/openai': {
+          target: openaiUp.origin,
+          changeOrigin: true,
+          secure: true,
+          rewrite: (p) => p.replace(/^\/api\/openai/, openaiUp.path),
+          configure: (proxy) => configureProxy(proxy, { token: env.OPENAI_API_KEY }),
         },
       },
     },

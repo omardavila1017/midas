@@ -884,6 +884,14 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     importeIVA:              toNum(pick(raw, ['importeIVA', 'Importe_IVA', 'importe_iva'])),
     importeRetencion:        toNum(pick(raw, ['importeRetencion', 'Importe_RETENCION', 'importe_retencion'])),
     uuidFiscal:              toStr(pick(raw, ['uuidFiscal', 'UUID_Fiscal', 'uuid_fiscal'])),
+    claveDiaPagoCc13:        toStr(pick(raw, ['claveDiaPagoCc13', 'Clave_Dia_Pago_CC13', 'clave_dia_pago_cc13'])),
+    nombreDiaPagoCc13:       toStr(pick(raw, ['nombreDiaPagoCc13', 'Nombre_Dia_Pago_CC13', 'nombre_dia_pago_cc13'])),
+    noReciboSePagoFactura:   toStr(pick(raw, [
+      'noReciboSePagoFactura',
+      'No_recibo_Se_Pago_Factura',
+      'No_Recibo_Se_Pago_Factura',
+      'no_recibo_se_pago_factura',
+    ])),
     // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
     // campos cada una, el JSON.stringify del store excedía el quota de
     // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se
@@ -912,8 +920,8 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
  *     compañías llamar en serie y mergear.
  *   • `fechaInicial: null` trae todo el histórico hasta `fechaFinal`.
- *   • Token leído de `VITE_JDE_TOKEN` (queda embebido en el bundle al
- *     correr en localhost).
+ *   • El browser llama a `/api/jde`; Atlas/backend o el proxy de Vite local
+ *     inyectan el token server-side.
  */
 export async function fetchCobranza(
   req: CobranzaRequest,
@@ -1381,6 +1389,7 @@ export async function fetchNomina(
 // Exporta helpers internos para que los unit tests puedan ejercitarlos sin
 // montar un mock del cliente HTTP.
 export const __internal = {
+  mapCobranza,
   mapNominaRow,
   inferCashTreatment,
 };

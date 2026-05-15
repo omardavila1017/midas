@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "security:secrets": "node scripts/secret-scan.mjs",
+    "security:gitleaks": "gitleaks detect --no-git --redact --source ."
   },
   "dependencies": {
     "@rollup/rollup-linux-x64-gnu": "^4.60.3",

@@ -3,9 +3,9 @@
  *
  * Configuración:
  *   VITE_JDE_BASE_URL   — base URL (default: "/api/jde" via apiConfig)
- *   VITE_JDE_TOKEN      — Bearer credential. En localhost queda embebido
- *                         en el bundle; al migrar a servidor con proxy real
- *                         el token debe regresar a un namespace server-side.
+ *   VITE_JDE_TOKEN      — local-dev fallback only. For `/api/jde` and
+ *                         `/api/tress`, the browser delegates auth to the
+ *                         Atlas/backend proxy.
  *
  * El `base` default ("/api/jde") es reescrito por el proxy configurado en
  * vite.config.ts hacia https://api.gruposenda.com/JDEdwards.
@@ -17,7 +17,7 @@ import { apiConfig } from '../config/api.config';
 export interface JdeClientConfig {
   /** Base URL sin trailing slash. Default: import.meta.env.VITE_JDE_BASE_URL || "/api/jde". */
   baseUrl?: string;
-  /** Bearer credential override. Default: import.meta.env.VITE_JDE_TOKEN. */
+  /** Bearer credential override for explicit external base URLs only. */
   authValue?: string;
   /** Timeout por request en ms. Default: 30_000. */
   timeoutMs?: number;
@@ -103,6 +103,10 @@ function resolveAuthValue(override?: string): string | undefined {
   return override ?? apiConfig.jde.authValue;
 }
 
+function isInternalProxy(baseUrl: string): boolean {
+  return /^\/(?!\/)/.test(baseUrl) || baseUrl === '';
+}
+
 async function request<T>(
   method: 'GET' | 'POST',
   path: string,
@@ -110,17 +114,13 @@ async function request<T>(
   config: JdeClientConfig,
 ): Promise<T> {
   const baseUrl = resolveBaseUrl(config.baseUrl);
-  const authValue = resolveAuthValue(config.authValue);
   const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 
-  // Si `baseUrl` apunta al proxy interno (`/api/jde` o relativo), el header
-  // Authorization viaja igual desde el cliente (Vite no inyecta nada). Solo
-  // saltamos el guard cuando no hay credencial Y no hay host externo, para
-  // dejar pasar el caso de proxy interno con auth inyectada a futuro.
-  const isInternalProxy = /^\/(?!\/)/.test(baseUrl) || baseUrl === '';
-  if (!authValue && !isInternalProxy) {
+  const delegateAuthToProxy = isInternalProxy(baseUrl);
+  const authValue = delegateAuthToProxy ? undefined : resolveAuthValue(config.authValue);
+  if (!authValue && !delegateAuthToProxy) {
     throw new JdeApiError(
-      'Falta credencial JDE — configura VITE_JDE_TOKEN',
+      'Falta credencial JDE para endpoint externo',
       401,
       path,
     );
@@ -141,7 +141,7 @@ async function request<T>(
       res = await fetch(url, {
         method,
         headers: {
-          ...(authValue ? { Authorization: `Bearer ${authValue}` } : {}),
+          ...(authValue ? { Authorization: ['Bearer', authValue].join(' ') } : {}),
           Accept: 'application/json',
           ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
         },

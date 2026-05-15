@@ -17,7 +17,7 @@ export interface OpenAIResponse {
 }
 
 export function isOpenAIConfigured(): boolean {
-  return Boolean(apiConfig.openai.apiKey);
+  return Boolean(apiConfig.openai.baseUrl);
 }
 
 interface OpenAIToolCall {
@@ -41,10 +41,7 @@ interface OpenAIError {
 }
 
 export async function callOpenAI(req: OpenAIChatRequest): Promise<OpenAIResponse> {
-  const { apiKey, model, baseUrl } = apiConfig.openai;
-  if (!apiKey) {
-    throw new Error('VITE_OPENAI_API_KEY no configurada.');
-  }
+  const { model, baseUrl } = apiConfig.openai;
 
   const messages = [
     { role: 'system' as const, content: req.systemPrompt },
@@ -73,7 +70,6 @@ export async function callOpenAI(req: OpenAIChatRequest): Promise<OpenAIResponse
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
   });

@@ -64,24 +64,26 @@ src/
 
 ## Environment Variables
 
-All sensitive configuration is injected via environment variables. See `.env.example` for the complete list.
+All sensitive configuration is injected server-side by Atlas/backend. See `.env.example` for placeholders only; never commit real tokens or passwords.
 
 | VARIABLE | REQUIRED | DESCRIPTION | WHERE TO GET |
 |----------|----------|-------------|--------------|
 | `VITE_ATLAS_ARTIFACT_ID` | Yes | Atlas artifact identifier | Atlas admin |
-| `VITE_JDE_BASE_URL` | Yes | JDE Orchestrator server URL or Atlas proxy path | JDE / Atlas admin |
-| `VITE_JDE_TOKEN` | Yes | JDE bearer credential | JDE admin |
+| `VITE_JDE_BASE_URL` | Yes | Browser path, default `/api/jde` | Atlas admin |
+| `VITE_TRESS_BASE_URL` | Yes | Browser path, default `/api/tress` | Atlas admin |
+| `VITE_COGNOS_BASE_URL` | Yes for live data | Browser path, default `/api/cognos` | Atlas admin |
+| `VITE_OPENAI_BASE_URL` | Yes for MIDAS AI | Browser path, default `/api/openai` | Atlas admin |
 | `VITE_JDE_ENVIRONMENT` | Yes | JDE environment code, for example `PD920` | JDE admin |
-| `VITE_COGNOS_BASE_URL` | Yes for live data | Cognos Analytics REST base URL | Cognos admin |
-| `VITE_COGNOS_TOKEN` | Yes for live data | Cognos REST credential | Cognos admin |
-| `VITE_COGNOS_NAMESPACE` | Yes for live data | Cognos auth namespace | Cognos admin |
-| `VITE_JDE_UPSTREAM` | Local dev only | Vite proxy upstream host | SWAT engineer |
+| `JDE_TOKEN` | Server-side only | JDE/TRESS bearer credential injected by backend | JDE admin |
+| `COGNOS_TOKEN` | Server-side only | Cognos bearer credential injected by backend | Cognos admin |
+| `OPENAI_API_KEY` | Server-side only | OpenAI key injected by backend | OpenAI admin |
+| `JDE_UPSTREAM` / `TRESS_UPSTREAM` / `COGNOS_UPSTREAM` | Server-side only | Upstream API base URLs | SWAT engineer |
 
 ## Local Development Setup
 
 1. Clone the repository.
 2. Copy environment file: `cp .env.example .env.local`.
-3. Fill in `.env.local` with development JDE and Cognos credentials.
+3. Fill in `.env.local` with local-only development credentials. Prefer non-`VITE_` token names so the Vite proxy injects headers instead of the browser.
 4. Install dependencies: `npm install`.
 5. Start the dev server: `npm run dev`.
 
@@ -97,15 +99,19 @@ To activate live data connections in Atlas:
 | VARIABLE | VALUE | WHERE TO GET IT |
 |----------|-------|-----------------|
 | `VITE_ATLAS_ARTIFACT_ID` | `midas` | Atlas admin |
-| `VITE_JDE_BASE_URL` | Production JDE Orchestrator URL or Atlas proxy path | JDE / Atlas admin |
-| `VITE_JDE_TOKEN` | Bearer credential | JDE admin |
+| `VITE_JDE_BASE_URL` | `/api/jde` | Atlas admin |
+| `VITE_TRESS_BASE_URL` | `/api/tress` | Atlas admin |
+| `VITE_COGNOS_BASE_URL` | `/api/cognos` | Atlas admin |
+| `VITE_OPENAI_BASE_URL` | `/api/openai` | Atlas admin |
 | `VITE_JDE_ENVIRONMENT` | `PD920` for production | JDE admin |
-| `VITE_COGNOS_BASE_URL` | Cognos Analytics REST base URL | Cognos admin |
-| `VITE_COGNOS_TOKEN` | Cognos REST credential | Cognos admin |
-| `VITE_COGNOS_NAMESPACE` | Cognos namespace, default `CognosEx` | Cognos admin |
-| `VITE_JDE_UPSTREAM` | Dev proxy upstream only | SWAT engineer |
+| `JDE_TOKEN` | Server-side JDE bearer credential | JDE admin |
+| `COGNOS_TOKEN` | Server-side Cognos bearer credential | Cognos admin |
+| `OPENAI_API_KEY` | Server-side OpenAI credential | OpenAI admin |
+| `JDE_UPSTREAM` / `TRESS_UPSTREAM` / `COGNOS_UPSTREAM` | Upstream API base URLs | SWAT engineer |
 
 3. Redeploy the artifact after setting variables.
+
+Production builds must not set token/password/API-key values with `VITE_` prefixes. Run `npm run security:secrets` before pushing; teams with `gitleaks` installed can also run `npm run security:gitleaks` or wire that command into a local pre-commit hook.
 
 ## Business Rules
 

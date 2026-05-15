@@ -10,10 +10,12 @@ interface ImportMetaEnv {
   readonly VITE_JDE_TOKEN?: string;
   readonly VITE_JDE_ENVIRONMENT?: string;
   readonly VITE_COGNOS_BASE_URL?: string;
+  readonly VITE_COGNOS_UPSTREAM?: string;
   readonly VITE_COGNOS_TOKEN?: string;
   readonly VITE_COGNOS_NAMESPACE?: string;
-  readonly VITE_ADMIN_PASSWORD?: string;
-  readonly VITE_PAOLO_PASSWORD?: string;
+  readonly VITE_OPENAI_BASE_URL?: string;
+  readonly VITE_OPENAI_MODEL?: string;
+  readonly VITE_ENABLE_LOCAL_AUTH_GATE?: string;
 }
 
 interface ImportMeta {

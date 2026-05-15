@@ -100,14 +100,14 @@ La coma trailing en `cia` NO es typo. El cliente la pide así. `fechaInicial: nu
 
 ## Configuración de entorno
 
-`.env.local` ya tiene el token productivo (no commitear):
+`.env.local` debe usar placeholders o credenciales locales rotadas (no commitear):
 ```
-VITE_JDE_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+JDE_TOKEN=<server-side-jde-token>
 VITE_JDE_UPSTREAM=https://api.gruposenda.com/JDEdwards
 VITE_JDE_ENVIRONMENT=PD920
 ```
 
-Hoy la app corre solo en localhost; el token va embebido en el bundle de Vite. Cuando se migre a un servidor con proxy real, mover el Bearer a un namespace server-side.
+El browser debe llamar a `/api/jde`; Vite local o Atlas/backend inyectan el Bearer fuera del bundle.
 
 ---
 

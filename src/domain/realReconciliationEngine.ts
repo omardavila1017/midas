@@ -68,6 +68,7 @@ export type MatchTier =
   | 'payment-confirmed-ref'
   | 'payment-auto-unique'
   | 'payment-ambiguous'
+  | 'invoice-receipt-ref'
   | 'invoice-reference'
   | 'customer-reference'
   | 'exact'
@@ -390,6 +391,7 @@ function computeConfidence(
     tier === 'payment-confirmed-ref' ? 0.99 :
     tier === 'payment-auto-unique' ? 0.94 :
     tier === 'payment-ambiguous' ? 0.55 :
+    tier === 'invoice-receipt-ref' ? 0.97 :
     tier === 'invoice-reference' ? 0.99 :
     tier === 'customer-reference' ? 0.93 :
     tier === 'exact' ? 0.92 :
@@ -667,6 +669,26 @@ function reciboMatchKeys(cia: string, noRecibo: string): string[] {
 function bankContainsNoRecibo(line: BankStatementLine, noRecibo: string): boolean {
   const text = bankReferenceText(line);
   return reciboTokens(noRecibo).some(token => text.includes(token));
+}
+
+function cobranzaReceiptMatchKeys(record: CobranzaRecord): string[] {
+  if (!record.noReciboSePagoFactura) return [];
+  return reciboMatchKeys(record.cia, record.noReciboSePagoFactura);
+}
+
+function uniqueFacturas(records: CobranzaRecord[]): CobranzaRecord[] {
+  return Array.from(new Map(records.map(record => [`${record.cia}::${record.noFactura}`, record])).values());
+}
+
+function groupByCobranzaReceipt(records: CobranzaRecord[]): CobranzaRecord[][] {
+  const groups = new Map<string, CobranzaRecord[]>();
+  for (const record of records) {
+    const key = `${record.cia}::${normalizeCode(record.noReciboSePagoFactura ?? '')}`;
+    const list = groups.get(key) ?? [];
+    list.push(record);
+    groups.set(key, list);
+  }
+  return Array.from(groups.values());
 }
 
 function significantNameTokens(value: string): string[] {
@@ -1160,6 +1182,12 @@ export function reconcileRealCollections(
       );
     }
   }
+  const facturasByNoRecibo = new Map<string, CobranzaRecord[]>();
+  for (const factura of facturas) {
+    for (const key of cobranzaReceiptMatchKeys(factura)) {
+      addToListMap(facturasByNoRecibo, key, factura);
+    }
+  }
   const indexes = buildFacturaIndexes(facturas);
   const indexMs = nowMs() - indexStartedAt;
 
@@ -1260,6 +1288,51 @@ export function reconcileRealCollections(
     enrichment.paymentMatchStatus = matchStatus;
   };
 
+  const applyCobranzaReceiptMatch = (
+    enrichment: AbonoEnrichment,
+    abono: BankStatementLine,
+    selectedFacturas: CobranzaRecord[],
+    confidence: number,
+    reason: string,
+  ) => {
+    consumedAbono.add(enrichment.movementKey);
+    const paidFacturas: AbonoEnrichment['facturas'] = [];
+    const receipt = selectedFacturas.find(f => f.noReciboSePagoFactura)?.noReciboSePagoFactura;
+    for (const record of selectedFacturas) {
+      const facturaKey = `${record.cia}::${record.noFactura}`;
+      consumedFactura.add(facturaKey);
+      const state = facturaState.get(facturaKey);
+      if (!state) continue;
+      state.status = 'cobrada-banco';
+      state.matchTier = 'invoice-receipt-ref';
+      state.confidence = confidence;
+      state.reviewStatus = 'auto';
+      state.matchReason = reason;
+      state.bankRef = abono.referencia;
+      state.bankAmount = abono.importe;
+      state.bankDate = abono.fechaOperacion;
+      state.bankConcept = abono.concepto;
+      state.bankAccount = abono.cuenta;
+      state.bankCia = abono.cia;
+      state.bankMovements = [movementSnapshot(abono)];
+      state.noRecibo = receipt;
+      paidFacturas.push({
+        cia: state.cia,
+        noFactura: state.noFactura,
+        noCliente: state.noCliente,
+        nombreCliente: state.nombreCliente,
+        importeBruto: state.importeBruto,
+      });
+    }
+
+    enrichment.status = 'factura-cobrada';
+    enrichment.matchTier = 'invoice-receipt-ref';
+    enrichment.confidence = confidence;
+    enrichment.matchReason = reason;
+    enrichment.facturas = paidFacturas;
+    enrichment.noRecibo = receipt;
+  };
+
   for (const abono of abonos) {
     const moneda = (abono.moneda || 'MXN').toUpperCase();
     const useUSD = enableUSD && moneda === 'USD';
@@ -1343,6 +1416,31 @@ export function reconcileRealCollections(
       );
       enrichments.push(enrichment);
       continue;
+    }
+
+    const receiptFacturas = uniqueFacturas(
+      abono.noRecibo
+        ? reciboMatchKeys(abono.cia, abono.noRecibo).flatMap(key => facturasByNoRecibo.get(key) ?? [])
+        : [],
+    ).filter(record => !consumedFactura.has(`${record.cia}::${record.noFactura}`));
+    if (receiptFacturas.length > 0) {
+      const matchingGroups = groupByCobranzaReceipt(receiptFacturas).filter(group => {
+        const total = group.reduce((sum, record) => sum + Math.max(0, record.importeBrutoPesos), 0);
+        return importesCoinciden(total, abono.importe, false);
+      });
+      if (matchingGroups.length === 1) {
+        const selectedFacturas = matchingGroups[0];
+        const receipt = selectedFacturas.find(f => f.noReciboSePagoFactura)?.noReciboSePagoFactura ?? abono.noRecibo;
+        applyCobranzaReceiptMatch(
+          enrichment,
+          abono,
+          selectedFacturas,
+          0.97,
+          `Banco cruza por No_recibo_Se_Pago_Factura ${receipt} informado en /cobranza.`,
+        );
+        enrichments.push(enrichment);
+        continue;
+      }
     }
 
     const invoiceFacturaKeys = candidateFacturaKeysFromText(indexes, abono);

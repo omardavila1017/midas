@@ -105,8 +105,8 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
           <div className="rounded-[var(--radius)] border border-[#C7D2FE] bg-[#EEF2FF] p-3 text-[12px] text-[var(--gray-800)]">
             <div className="font-bold text-[#4338CA]">MIDAS no configurado</div>
             <p className="mt-1">
-              Falta <code className="rounded bg-white px-1">VITE_OPENAI_API_KEY</code> en el archivo{' '}
-              <code className="rounded bg-white px-1">.env</code>. Reinicia el servidor después de configurarla.
+              Falta configurar el proxy <code className="rounded bg-white px-1">/api/openai</code>. La llave debe
+              vivir server-side en Atlas/backend.
             </p>
           </div>
         )}
@@ -169,7 +169,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
                 handleSubmit(e);
               }
             }}
-            placeholder={configured ? 'Pregunta a MIDAS...' : 'Configura VITE_OPENAI_API_KEY'}
+            placeholder={configured ? 'Pregunta a MIDAS...' : 'Configura /api/openai'}
             disabled={!configured || pending}
             rows={1}
             className="min-h-[36px] max-h-[120px] flex-1 resize-none rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 py-2 text-[13px] outline-none focus:border-[#7C3AED] focus:ring-2 focus:ring-[#7C3AED]/20 disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"

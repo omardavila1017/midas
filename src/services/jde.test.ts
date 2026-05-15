@@ -99,6 +99,8 @@ describe('normalizeCobranzaPayments', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/jde/bancos', expect.objectContaining({
       method: 'POST',
     }));
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init?.headers as Record<string, string>).Authorization).toBeUndefined();
     expect(statements[0].cia).toBe('00011');
     expect(statements[0].movimientos[0].cia).toBe('00011');
     // El banco devuelve "RI-100" → normalizado a solo dígitos: "100".

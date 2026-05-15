@@ -42,6 +42,7 @@ import {
   buildClientLookup,
   clientRuleLabel,
   findClientForCobranza,
+  resolveCobranzaApiPaymentDate,
   resolveCobranzaRuleDate,
   type CollectionCalendarClientMatch,
 } from '../../../domain/collectionCalendarEngine';
@@ -733,7 +734,7 @@ function collectCxcInflowLines(
     const clientMatch = context.clientMatchByFactura.get(key) ?? null;
     const resolved = clientMatch
       ? resolveCobranzaRuleDate(record, clientMatch.client, inputs.assumptions)
-      : null;
+      : resolveCobranzaApiPaymentDate(record);
     const rawDate = resolved?.calendarDate
       ?? cleanDate(record.fechaVence)
       ?? cleanDate(record.fechaFactura)
@@ -765,7 +766,11 @@ function collectCxcInflowLines(
       counterpartyId: clientMatch?.client.id ?? record.noCliente,
       counterpartyName: record.nombreCliente || clientMatch?.client.name,
       counterpartyType: 'CUSTOMER',
-      ruleApplied: clientMatch ? clientRuleLabel(clientMatch.client) : 'Fecha vencimiento JDE',
+      ruleApplied: clientMatch
+        ? clientRuleLabel(clientMatch.client)
+        : record.nombreDiaPagoCc13 || record.claveDiaPagoCc13
+          ? 'Día de pago CC13 /cobranza'
+          : 'Fecha vencimiento JDE',
       sourceSystem: 'JDE',
       sourceObjectId: record.noFactura,
       issueDate: cleanDate(record.fechaFactura),

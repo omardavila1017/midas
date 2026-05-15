@@ -248,6 +248,12 @@ export interface CobranzaRecord {
   importeIVA?: number;
   importeRetencion?: number;
   uuidFiscal?: string;
+  /** Día de pago CC13 expuesto por /cobranza, p.ej. "LUN". */
+  claveDiaPagoCc13?: string;
+  /** Nombre del día de pago CC13, p.ej. "LUNES". */
+  nombreDiaPagoCc13?: string;
+  /** Recibo JDE que pagó la factura; llave fuerte para cruce con /bancos No_Recibo. */
+  noReciboSePagoFactura?: string;
   /** Registro original devuelto por el API, útil para depurar campos nuevos. */
   raw?: Record<string, unknown>;
 }
