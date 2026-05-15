@@ -2,8 +2,9 @@ import type { CashFlowAssumptions, Client, CollectionEvent } from './types';
 import { eventKey } from './types';
 import { projectYear } from './collectionEngine';
 import { resolveRealPaymentDate, toISODate } from './calendar';
-import { parsePaymentDay } from './parsePaymentDay';
+import { parseCc13PaymentDay } from './parsePaymentDay';
 import { isNonOperatingDay } from './bankHolidays';
+import { isInternalCounterparty } from './netCashFlowEngine';
 import { normalizeClientText } from './clientGrouping';
 import type { CobranzaRecord } from '../services/jdeTypes';
 import type {
@@ -179,6 +180,10 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
   const cxcCoverageByClientMonth = new Map<string, Set<string>>();
 
   for (const record of cobranzaRecords) {
+    // Movimientos internos (factura de una empresa propia del grupo a otra)
+    // NO son cobranza real: no se proyectan ni bloquean el ciclo del cliente.
+    if (isInternalCounterparty(record.rfc, record.nombreCliente)) continue;
+
     const key = facturaKey(record.cia, record.noFactura);
     const clientMatch = clientMatchByFactura.get(key) ?? null;
     if (clientMatch && record.fechaFactura) {
@@ -209,6 +214,7 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     const coveredMonths = cxcCoverageByClientMonth.get(projected.clientId);
     if (coveredMonths?.has(projected.invoiceDate.slice(0, 7))) continue;
     const client = clientLookup.byId.get(projected.clientId);
+    if (client && isInternalCounterparty(client.rfc, client.name)) continue;
     events.push(eventFromProjection(projected, client));
   }
 
@@ -530,6 +536,16 @@ function addCoveredMonth(map: Map<string, Set<string>>, clientId: string, yearMo
   map.set(clientId, set);
 }
 
+/**
+ * Nombre del día de pago tal como lo expone el API de cobranza/ROL para
+ * ESTA factura (`Nombre_Dia_Pago_CC13`). Es la autoridad por-factura — gana
+ * sobre cualquier regla del catálogo. Solo el nombre; la clave numérica
+ * (`Clave_Dia_Pago_CC13` p.ej. "027") no es un día parseable.
+ */
+function apiPaymentDayName(record: CobranzaRecord): string {
+  return (record.diaPagoNombre || record.nombreDiaPagoCc13 || '').trim();
+}
+
 export function resolveCobranzaRuleDate(
   record: CobranzaRecord,
   client: Client,
@@ -537,9 +553,17 @@ export function resolveCobranzaRuleDate(
 ): { calendarDate: string; invoiceDate: string; theoreticalDate: string; reason: string } {
   const invoiceDate = record.fechaFactura || record.fechaVence || new Date().toISOString().slice(0, 10);
   const invoice = parseIsoDate(invoiceDate);
+
+  // Días de crédito: `Dias_Credito` del API (por factura) es autoridad sobre
+  // el catálogo. Solo si el API no lo trae caemos al catálogo del cliente.
+  const creditDays = record.diasCredito && record.diasCredito > 0
+    ? record.diasCredito
+    : client.creditDays;
+
   const theoretical = record.fechaFactura
-    ? addDays(invoice, client.creditDays)
+    ? addDays(invoice, creditDays)
     : parseIsoDate(record.fechaVence || invoiceDate);
+
   let real: Date;
   let reason: string;
   if (client.factoraje) {
@@ -547,8 +571,21 @@ export function resolveCobranzaRuleDate(
     while (isNonOperatingDay(real)) real = addDays(real, 1);
     reason = `Factoraje: factura + ${assumptions.factorajeDays} dias.`;
   } else {
-    real = resolveRealPaymentDate(theoretical, client.paymentDay, client.frequency);
-    reason = `Regla cliente: ${client.creditDays} dias credito + ${client.paymentDayRaw || client.paymentDay.kind}.`;
+    // Regla de día de pago en orden de autoridad:
+    //   1. `Nombre_Dia_Pago_CC13` de ESTA factura (API/ROL).
+    //   2. `paymentDayName` del catálogo (sincronizado del API).
+    //   3. `paymentDay` estructurado histórico del catálogo.
+    const apiName = apiPaymentDayName(record);
+    const apiPattern = parseCc13PaymentDay(apiName);
+    const catalogPattern = parseCc13PaymentDay(client.paymentDayName);
+    const pattern = apiPattern ?? catalogPattern ?? client.paymentDay;
+    real = resolveRealPaymentDate(theoretical, pattern, client.frequency);
+    const ruleSrc = apiPattern
+      ? `dia pago API ${apiName}`
+      : catalogPattern
+        ? `dia pago API ${client.paymentDayName}`
+        : (client.paymentDayRaw || client.paymentDay.kind);
+    reason = `Regla cliente: ${creditDays} dias credito + ${ruleSrc}.`;
   }
   return {
     calendarDate: toISODate(real),
@@ -561,38 +598,25 @@ export function resolveCobranzaRuleDate(
 export function resolveCobranzaApiPaymentDate(
   record: CobranzaRecord,
 ): { calendarDate: string; invoiceDate: string; theoreticalDate: string; reason: string } | null {
-  const rawPaymentDay = record.nombreDiaPagoCc13 || record.claveDiaPagoCc13 || '';
-  const paymentDay = parsePaymentDay(expandCc13PaymentDay(rawPaymentDay));
+  const apiName = apiPaymentDayName(record);
+  const paymentDay = parseCc13PaymentDay(apiName);
   if (!paymentDay) return null;
 
   const invoiceDate = record.fechaFactura || record.fechaVence || new Date().toISOString().slice(0, 10);
   const invoice = parseIsoDate(invoiceDate);
+  const creditDays = record.diasCredito && record.diasCredito > 0
+    ? record.diasCredito
+    : Number.parseInt(record.condPago, 10) || 0;
   const theoretical = record.fechaVence
     ? parseIsoDate(record.fechaVence)
-    : addDays(invoice, Number.parseInt(record.condPago, 10) || 0);
+    : addDays(invoice, creditDays);
   const real = resolveRealPaymentDate(theoretical, paymentDay, 'Semanal');
   return {
     calendarDate: toISODate(real),
     invoiceDate: toISODate(invoice),
     theoreticalDate: toISODate(theoretical),
-    reason: `Regla CC13 /cobranza: ${rawPaymentDay.trim() || 'dia de pago'}.`,
+    reason: `Regla CC13 /cobranza: ${apiName || 'dia de pago'}.`,
   };
-}
-
-function expandCc13PaymentDay(raw: string): string {
-  const value = raw.trim().toUpperCase();
-  const map: Record<string, string> = {
-    DOM: 'domingo',
-    LUN: 'lunes',
-    MAR: 'martes',
-    MIE: 'miercoles',
-    MIÉ: 'miercoles',
-    JUE: 'jueves',
-    VIE: 'viernes',
-    SAB: 'sabado',
-    SÁB: 'sabado',
-  };
-  return map[value] ?? raw;
 }
 
 export function clientRuleLabel(client: Client): string {

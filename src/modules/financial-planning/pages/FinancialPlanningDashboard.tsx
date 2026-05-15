@@ -136,6 +136,23 @@ type PlanningScenarioRun = ForecastRun & { supplierPlan: SupplierPaymentPlan };
 type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
 
 /**
+ * Base scenario invariant: Base proyecta SÓLO datos reales de las APIs de
+ * corto plazo. En el dominio Senda eso es cobranza real de JDE (facturas CXC
+ * de viajes ya ejecutados — lo que el negocio llama "rol"), órdenes de compra
+ * de JDE (`compras`) y nómina real de TRESS. NO debe incluir forecast por
+ * regla (`client:` projectClientMonth), CXP, proveedores recurrentes, relleno
+ * presupuestal ni el sintético de balanceo canónico. Filtramos por prefijo de
+ * `id` porque el motor canónico es compartido (Dashboard/Proyección lo usan
+ * completo) y no debe alterarse — el recorte vive sólo en la corrida de Base.
+ */
+const isRealShortTermApiMovement = (m: FinancialMovement): boolean => {
+  if (m.id.startsWith('cxc:')) return true;
+  if (m.id.startsWith('purchase:') || m.id.startsWith('po:')) return true;
+  if (m.id.startsWith('payroll:')) return !m.id.includes(':forecast:');
+  return false;
+};
+
+/**
  * Outer entry — gates the heavy planning pipeline behind a paint.
  *
  * The inner dashboard runs `buildFinancialProjectionSourceData` plus 3+
@@ -510,7 +527,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         })
         : [];
       const movementsBeforeAdjust = isBase
-        ? source.movements
+        ? source.movements.filter(isRealShortTermApiMovement)
         : [...source.movements, ...manualMovements];
       // applyAdjustmentsToMovements es determinístico sobre input idéntico —
       // calculamos una sola vez y lo reusamos como seed fiscal y como base

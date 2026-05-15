@@ -310,6 +310,33 @@ export function isInternalTransfer(
   return false;
 }
 
+/**
+ * ¿La contraparte de una factura de cobranza es una empresa propia del
+ * grupo? Reusa la lista autoritativa de RFCs/nombres internos (la misma que
+ * `isInternalTransfer` usa para movimientos bancarios) para que exista un
+ * solo lugar donde mantener qué es "interno".
+ *
+ * Una factura cuya razón social/RFC pertenece al grupo es un movimiento
+ * intercompañía (traspaso disfrazado de venta), NO una cobranza real
+ * externa, y NO debe proyectarse como entrada de caja en el calendario.
+ *
+ * Señal fuerte: RFC en `INTERNAL_RFCS`. Señales de nombre: beneficiarios y
+ * siglas curadas del grupo. NO usamos códigos genéricos para no atrapar
+ * clientes externos por accidente.
+ */
+export function isInternalCounterparty(
+  rfc: string | undefined,
+  name: string | undefined,
+): boolean {
+  const r = (rfc ?? '').trim();
+  if (r && INTERNAL_RFC_PATTERN && INTERNAL_RFC_PATTERN.test(r)) return true;
+  const n = (name ?? '').trim();
+  if (!n) return false;
+  if (INTERNAL_BENEFICIARY_PATTERN && INTERNAL_BENEFICIARY_PATTERN.test(n)) return true;
+  if (INTERNAL_COMPANY_CODE_PATTERN && INTERNAL_COMPANY_CODE_PATTERN.test(n)) return true;
+  return false;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Pair-matched detector
 //
