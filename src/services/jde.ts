@@ -1663,6 +1663,11 @@ export async function fetchRol(
   const merged: JdeClientConfig = {
     baseUrl: apiConfig.citi.baseUrl,
     authValue: apiConfig.citi.authValue || undefined,
+    // El endpoint /citi/roldiario es notablemente lento. fetchRolRange ya
+    // trocea por mes, pero un mes pesado puede acercarse al techo global de
+    // 120s. Subimos el timeout SOLO para roldiario (5 min) — no toca el
+    // default global de jdeClient ni el resto de endpoints.
+    timeoutMs: 300_000,
     ...config,
   };
   let raw: unknown;
