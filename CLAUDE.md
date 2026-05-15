@@ -104,7 +104,7 @@ buildFinancialProjectionSourceData()  ← src/modules/financial-projection/servi
   │ LRU-cached by content fingerprint.
   ▼
 FinancialPlanningDashboard.tsx
-  ├─ ensureCoreScenarios() — bootstraps Base + Approved (Base copies sourceBaseScenario shell, NO scenario.movements field; movements flow through source.movements directly)
+  ├─ ensureCoreScenarios() — bootstraps Base + Approved (Base copies sourceBaseScenario shell, NO scenario.movements field; movements flow through source.movements directly — but Base filters them to real short-term API only via isRealShortTermApiMovement, see Base scenario invariant)
   ├─ buildScenarioRun() per scenario:
   │     base movements
   │   + manual entries (expandManualPlanningEntriesToMovements)
@@ -207,7 +207,8 @@ The Base scenario (`id === 'base'`) is special and non-negotiable:
 - No propuestas attached.
 - No manual cell overrides.
 - No manual entries spliced in (`includeManualEntries === false` for Base in `buildScenarioRun`).
-- No tax movement injection (Base reads the raw canonical projection only).
+- No tax movement injection.
+- **Real short-term API data only.** Base does NOT read the full canonical projection. `buildScenarioRun` filters `source.movements` through `isRealShortTermApiMovement` (FinancialPlanningDashboard.tsx) so Base keeps only: real JDE cobranza (`cxc:` — invoices for executed trips, the business calls this *rol*), JDE purchase orders/receipts (`purchase:` / `po:` — *órdenes de compra*) and real TRESS payroll (`payroll:` without `:forecast:` — *nómina*). It drops rule-projected collections (`client:`), CXP (`cxp:`), recurring providers (`recurring-*`), budget reserve (`budget-opex-gap:`), the synthetic canonical balancer (`canonical-*`) and synthetic payroll fill. The shared canonical engine is NOT modified — the cut lives only in the Base run, so Dashboard/Proyección still get the full projection. Don't move this filter into `canonicalProjection.ts`.
 - Read-only in the UI (forecast popover shows lock icon).
 
 If you touch scenario selection, persistence, or the spreadsheet editor, validate this invariant explicitly.

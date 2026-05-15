@@ -51,6 +51,7 @@ import {
   buildOwnAccountsIndex,
   buildPairMatchedKeys,
   classifyMovement,
+  isInternalCounterparty,
 } from '../../../domain/netCashFlowEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
@@ -722,6 +723,7 @@ function collectInflowLines(
   });
 
   for (const client of inputs.clients) {
+    if (isInternalCounterparty(client.rfc, client.name)) continue;
     const coveredMonths = context.cxcCoverageByClientMonth.get(client.id);
     let evIdx = 0;
     for (const scan of monthsToScan) {
@@ -787,6 +789,9 @@ function collectCxcInflowLines(
 
   for (const record of context.cxcRecords) {
     if (record.importePendientePesos <= 0) continue;
+    // Factura intercompañía (empresa propia del grupo): traspaso, no
+    // cobranza real. No proyectar como entrada de caja.
+    if (isInternalCounterparty(record.rfc, record.nombreCliente)) continue;
     const key = cxcFacturaKey(record);
     if (seen.has(key)) continue;
     seen.add(key);

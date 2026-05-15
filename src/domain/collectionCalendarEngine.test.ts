@@ -166,6 +166,58 @@ describe('buildCollectionCalendar', () => {
     expect(event?.statusLabel).toContain('JDE');
   });
 
+  it('usa la regla del API (Nombre_Dia_Pago_CC13 + Dias_Credito) sobre el catálogo', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'F-API',
+      noCliente: '9001',
+      nombreCliente: 'IMPULSORA INDUSTRIAL MONTERREY',
+      importeBrutoPesos: 1000,
+      fechaFactura: '2026-01-01',
+      fechaVence: '2026-01-31',
+      diaPagoNombre: 'Viernes',
+      diasCredito: 30,
+    });
+    // Catálogo viejo/incorrecto: lunes, 999 días. El API debe ganar.
+    const client = makeClient({
+      creditDays: 999,
+      paymentDay: { kind: 'DOW', days: [1] },
+      paymentDayRaw: 'Lunes',
+    });
+    const calendar = buildCollectionCalendar({
+      clients: [client],
+      assumptions: ASSUMPTIONS,
+      cobranzaRecords: [factura],
+      reconciliation: reconcileRealCollections([factura], []),
+    });
+
+    const event = calendar.events.find(e => e.source === 'JDE_OPEN_PROJECTED' && e.noFactura === 'F-API');
+    expect(event?.date).toBe('2026-02-06');
+    expect(event?.dateReason).toContain('30 dias');
+    expect(event?.dateReason).toContain('dia pago API');
+  });
+
+  it('no proyecta facturas intercompañía (RFC de empresa propia del grupo)', () => {
+    const interna = makeFactura({
+      cia: '00011',
+      noFactura: 'F-INTER',
+      noCliente: '9001',
+      nombreCliente: 'TRANSPORTES TAMAULIPAS',
+      rfc: 'TTA4906038F4',
+      importeBrutoPesos: 5000,
+      fechaFactura: '2026-01-01',
+      fechaVence: '2026-01-31',
+    });
+    const calendar = buildCollectionCalendar({
+      clients: [makeClient()],
+      assumptions: ASSUMPTIONS,
+      cobranzaRecords: [interna],
+      reconciliation: reconcileRealCollections([interna], []),
+    });
+
+    expect(calendar.events.some(e => e.noFactura === 'F-INTER')).toBe(false);
+  });
+
   it('calendariza factura JDE pendiente sin regla en fecha de vencimiento', () => {
     const factura = makeFactura({
       cia: '00011',
