@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { MidasStore, loadStore, saveStore, exportStore, CXPRecord } from './domain/persistence';
+import { MidasStore, loadStoreAsync, saveStore, saveStoreAsync, exportStore, CXPRecord } from './domain/persistence';
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import {
   fetchCompanies,
@@ -302,12 +302,46 @@ export default function App() {
   // Lo computamos UNA sola vez aquí y lo pasamos a CollectionProjection,
   // Bancos y Dashboard. Evita recomputar el motor (subset-sum + filtros
   // textuales) cada vez que el usuario cambia de pestaña o aplica un
-  // filtro local. Memo invalida solo cuando cambian las facturas reales o
-  // los movimientos bancarios — es estable bajo navegación normal.
-  const cobranzaReconciliation = useMemo(
-    () => reconcileRealCollections(cobranzaRecords, bankStatements),
-    [cobranzaRecords, bankStatements],
+  // filtro local.
+  //
+  // El engine es síncrono y O(N · M) con subset-sum, ~200-800ms con data
+  // productiva (10k facturas × 5k abonos). Para no bloquear el main thread
+  // durante boot — donde recibimos múltiples invalidaciones consecutivas
+  // de cobranzaRecords/bankStatements — lo deferimos a `requestIdleCallback`.
+  // Cancelamos la idle pendiente en cada invalidación para que solo corra
+  // UNA vez con los inputs más recientes (vs. correr 8 veces durante el
+  // boot con cada cía cargada). Ver perfilado 2026-05-03 en COBRANZA-HANDOFF.md.
+  const [cobranzaReconciliation, setCobranzaReconciliation] = useState(
+    () => reconcileRealCollections([], []),
   );
+  useEffect(() => {
+    let cancelled = false;
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (h: number) => void;
+    });
+    const run = () => {
+      if (cancelled) return;
+      const result = reconcileRealCollections(cobranzaRecords, bankStatements);
+      if (!cancelled) setCobranzaReconciliation(result);
+    };
+    let handle: number;
+    if (ric.requestIdleCallback) {
+      handle = ric.requestIdleCallback(run, { timeout: 1500 });
+      return () => {
+        cancelled = true;
+        if (ric.cancelIdleCallback) ric.cancelIdleCallback(handle);
+      };
+    } else {
+      // Safari < 18 fallback — al menos sale del frame actual.
+      handle = (setTimeout(run, 0) as unknown) as number;
+      return () => {
+        cancelled = true;
+        clearTimeout(handle);
+      };
+    }
+  }, [cobranzaRecords, bankStatements]);
+
   const cobranzaFacturaIndex = useMemo(
     () => buildFacturaIndex(cobranzaReconciliation.matches),
     [cobranzaReconciliation],
@@ -339,10 +373,17 @@ export default function App() {
     onTabSwitch: (n) => { if (n >= 1 && n <= TAB_IDS.length) setActiveTab(TAB_IDS[n - 1]); },
   });
 
-  // Load from persistence on mount
+  // Load from persistence on mount.
+  //
+  // Async-first (IndexedDB): no bloquea la primera pintura. Si IDB no tiene
+  // datos pero localStorage sí (primer boot tras la migración), `loadStoreAsync`
+  // migra transparentemente y devuelve el store. La sincrónica `loadStore` se
+  // sigue usando como fallback síncrono para tests.
   useEffect(() => {
-    const stored = loadStore();
-    if (stored) {
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadStoreAsync();
+      if (cancelled || !stored) return;
       if (stored.providers.length) setProviders(stored.providers);
       if (stored.clients.length) setClients(stored.clients);
       if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
@@ -353,7 +394,8 @@ export default function App() {
       if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
       setAssumptions(stored.assumptions);
       setCatalogLoaded(true);
-    }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Catalog bootstrap tracking — splash waits for both bundled CSVs to settle.
@@ -445,10 +487,16 @@ export default function App() {
       .finally(() => setProvidersCatalogDone(true));
   }, []);
 
-  // Save to localStorage after changes. Debounce coalesces bursts, but we also
-  // flush synchronously on tab hide/close so the last change never gets lost
-  // if the user navigates away within the debounce window.
+  // Save to localStorage after changes. Debounce coalesces bursts y movemos
+  // la escritura real (JSON.stringify de hasta ~5MB + localStorage.setItem)
+  // a `requestIdleCallback` para que NO bloquee el main thread durante
+  // interacciones. En boot, con 8 cobranza setStates + ~16 bank fetches + N
+  // más, el debounce previo de 200ms disparaba múltiples saves de 4MB
+  // sincrónicos durante la carga inicial — esto era ~30% del tiempo de
+  // freeze observado en el perfilado del 2026-05-03 (ver COBRANZA-HANDOFF.md).
+  // Flush sincrónico en visibility/unload para no perder datos en cierre.
   const latestStoreRef = useRef<MidasStore | null>(null);
+  const idleHandleRef = useRef<number | null>(null);
   useEffect(() => {
     const snapshot: MidasStore = {
       providers, clients,
@@ -458,7 +506,38 @@ export default function App() {
       lastSaved: new Date().toISOString(),
     };
     latestStoreRef.current = snapshot;
-    const timer = setTimeout(() => saveStore(snapshot), 200);
+
+    // Cancel any prior idle save still pending — siempre persistimos solo el
+    // snapshot más reciente.
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (h: number) => void;
+    });
+    if (idleHandleRef.current !== null) {
+      if (ric.cancelIdleCallback) ric.cancelIdleCallback(idleHandleRef.current);
+      else clearTimeout(idleHandleRef.current);
+      idleHandleRef.current = null;
+    }
+
+    const SAVE_DEBOUNCE_MS = 1500;
+    const timer = setTimeout(() => {
+      const run = () => {
+        // saveStoreAsync escribe en IndexedDB sin bloquear el main thread y
+        // sin chocar con el quota de 5MB de localStorage. Si IDB falla cae a
+        // localStorage por dentro, así que siempre algo se persiste.
+        if (latestStoreRef.current) void saveStoreAsync(latestStoreRef.current);
+        idleHandleRef.current = null;
+      };
+      if (ric.requestIdleCallback) {
+        // timeout de 2s asegura que aunque el main thread esté ocupado, el save
+        // eventualmente corre. Sin esto, un main thread saturado podría posponer
+        // la idle callback indefinidamente y perder datos en una recarga.
+        idleHandleRef.current = ric.requestIdleCallback(run, { timeout: 2000 });
+      } else {
+        // Safari < 18 no tiene requestIdleCallback; fallback a setTimeout.
+        idleHandleRef.current = (setTimeout(run, 0) as unknown) as number;
+      }
+    }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [
     providers, clients,
@@ -469,6 +548,14 @@ export default function App() {
 
   useEffect(() => {
     const flush = () => {
+      // Cancel pending idle save y persistir sincrónico — no podemos confiar
+      // en que el browser corra la idle callback antes de cerrar la pestaña.
+      const ric = (window as unknown as { cancelIdleCallback?: (h: number) => void });
+      if (idleHandleRef.current !== null) {
+        if (ric.cancelIdleCallback) ric.cancelIdleCallback(idleHandleRef.current);
+        else clearTimeout(idleHandleRef.current);
+        idleHandleRef.current = null;
+      }
       if (latestStoreRef.current) saveStore(latestStoreRef.current);
     };
     const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
@@ -606,19 +693,43 @@ export default function App() {
     yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
     const fechaInicial = yearAgo.toISOString().slice(0, 10);
 
+    // Batched state writes: el fetch sigue siendo secuencial por restricción
+    // del API JDE (parallel revienta el orchestrator), pero acumulamos todos
+    // los resultados localmente y hacemos UNA sola escritura al state al
+    // final. Antes hacíamos `setCobranzaRecords` dentro del loop, lo que
+    // disparaba 8 re-renders de App.tsx + 8 recálculos del engine de cruce
+    // (`reconcileRealCollections`), cada uno sobre el array creciente. Con
+    // 10k+ facturas esto congelaba el main thread durante todo el boot.
+    // Ver perfilado 2026-05-03 en COBRANZA-HANDOFF.md.
     const errors: string[] = [];
+    const collected: Array<{ cia: string; records: CobranzaRecord[] }> = [];
+    const loadedAt: Record<string, string> = {};
     let totalRecords = 0;
     for (const cia of activeCias) {
       try {
         const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
         const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
-        setCobranzaRecords(prev => [...prev.filter(r => r.cia !== cia), ...stamped]);
-        setCobranzaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+        collected.push({ cia, records: stamped });
+        loadedAt[cia] = new Date().toISOString();
         totalRecords += stamped.length;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         errors.push(`${cia}: ${msg}`);
       }
+    }
+
+    // Una sola escritura: reemplaza los registros de las cías recién
+    // pedidas (filter por `cia`) y concatena los nuevos. Mantiene el
+    // contrato anterior (refresh de una cía individual no duplica).
+    if (collected.length > 0) {
+      const updatedCias = new Set(collected.map(c => c.cia));
+      setCobranzaRecords(prev => {
+        const filtered = prev.filter(r => !updatedCias.has(r.cia));
+        const additions: CobranzaRecord[] = [];
+        for (const c of collected) additions.push(...c.records);
+        return [...filtered, ...additions];
+      });
+      setCobranzaLoadedCias(prev => ({ ...prev, ...loadedAt }));
     }
 
     if (errors.length > 0) {
@@ -694,7 +805,17 @@ export default function App() {
   // refresh button can share the same code path.
   const refreshBankStatementsRange = useCallback(async (force: boolean = false) => {
     const today = new Date().toISOString().slice(0, 10);
-    const yearStart = `${new Date().getUTCFullYear()}-01-01`;
+    // Range: últimos 365 días (alineado con el rango de cobranza en
+    // refreshCobranza para que el motor de cruce tenga ABONOs disponibles
+    // donde haya facturas con fechaCobro). Antes era YTD (1-enero), lo que
+    // dejaba sin bank data los meses anteriores al año fiscal y producía
+    // calendario vacío + match rate falsamente bajo cuando una cobranza
+    // estaba pagada en (digamos) 2025-12 pero los movimientos bancarios
+    // de 2025-12 nunca se traían. Ver perfilado 2026-05-03 en
+    // COBRANZA-HANDOFF.md.
+    const yearAgo = new Date();
+    yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
+    const yearStart = yearAgo.toISOString().slice(0, 10);
     const defaultFormat: BankStatementFormat = 'SWIFT';
 
     // Cache hit: skip unless forced.
@@ -1528,7 +1649,6 @@ function CompanySelector({
               {/* Actions */}
               <div className="flex gap-2 pt-1">
                 <button
-                  onClick={() => setMode('select')}
                   className="flex-1 h-9 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
                 >
                   Cancelar
