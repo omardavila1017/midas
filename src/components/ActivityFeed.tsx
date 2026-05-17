@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import {
   Bell,
   Plus,
@@ -173,7 +173,26 @@ interface ActivityFeedProviderProps {
 }
 
 export function ActivityFeedProvider({ children }: ActivityFeedProviderProps) {
-  const [entries, setEntries] = useState<ActivityEntry[]>(() => loadFromStorage());
+  // Defer the localStorage read out of the sync init path — the activity feed
+  // is a non-critical history panel, so starting empty for one tick keeps the
+  // initial render off the JSON.parse + LEGACY_STORAGE_KEY migration code.
+  const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  useEffect(() => {
+    type IdleHandle = number;
+    const idle: (cb: () => void) => IdleHandle =
+      typeof window !== 'undefined' && 'requestIdleCallback' in window
+        ? (cb) => (window as unknown as { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(cb)
+        : (cb) => window.setTimeout(cb, 0);
+    const cancel: (h: IdleHandle) => void =
+      typeof window !== 'undefined' && 'cancelIdleCallback' in window
+        ? (h) => (window as unknown as { cancelIdleCallback: (h: number) => void }).cancelIdleCallback(h)
+        : (h) => window.clearTimeout(h);
+    const handle = idle(() => {
+      const loaded = loadFromStorage();
+      if (loaded.length) setEntries(loaded);
+    });
+    return () => cancel(handle);
+  }, []);
 
   const log = useCallback(
     (entry: Omit<ActivityEntry, 'id' | 'timestamp'>) => {
@@ -314,7 +333,7 @@ export function ActivityFeedPanel({
                 color: 'var(--primary)',
               }}
             />
-            <h2 className="text-base font-semibold">Actividad reciente</h2>
+            <h2 className="text-base font-bold">Actividad reciente</h2>
             {entries.length > 0 && (
               <span
                 className="text-xs font-medium px-2 py-1 rounded-full"
@@ -330,7 +349,7 @@ export function ActivityFeedPanel({
 
           <button
             onClick={handleClose}
-            className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+            className="p-1 hover:bg-gray-100 rounded-[var(--radius-md)] transition-colors"
             aria-label="Cerrar"
           >
             <X className="w-5 h-5" />
@@ -355,7 +374,7 @@ export function ActivityFeedPanel({
                 <div key={group}>
                   {/* Date Group Header */}
                   <div
-                    className="sticky top-0 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
+                    className="sticky top-0 px-4 py-2 text-xs font-bold uppercase tracking-[0.08em]"
                     style={{
                       backgroundColor: 'var(--gray-50)',
                       color: 'var(--gray-500)',
@@ -390,7 +409,7 @@ export function ActivityFeedPanel({
           >
             <button
               onClick={clear}
-              className="w-full text-center text-xs font-medium py-2 rounded-lg transition-colors hover:bg-gray-100"
+              className="w-full text-center text-xs font-medium py-2 rounded-[var(--radius-md)] transition-colors hover:bg-gray-100"
               style={{
                 color: 'var(--gray-500)',
               }}
@@ -440,7 +459,7 @@ function ActivityEntryItem({ entry, onNavigate }: ActivityEntryItemProps) {
       <div className="flex gap-3 px-4 py-3">
         {/* Icon */}
         <div
-          className="mt-1 p-2 rounded-lg flex-shrink-0"
+          className="mt-1 p-2 rounded-[var(--radius-md)] flex-shrink-0"
           style={{
             backgroundColor: `${entityColor}15`,
             color: entityColor,
@@ -474,7 +493,7 @@ function ActivityEntryItem({ entry, onNavigate }: ActivityEntryItemProps) {
 
           {/* Entity name */}
           <p
-            className="text-sm font-semibold truncate"
+            className="text-sm font-bold truncate"
             style={{
               color: 'var(--gray-950)',
             }}

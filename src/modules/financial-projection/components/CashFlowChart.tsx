@@ -1,11 +1,11 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import {
+  Area,
   Bar,
   CartesianGrid,
   ComposedChart,
   Legend,
   Line,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,7 +13,12 @@ import {
 } from 'recharts';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
-import type { FinancialMovement, ForecastRun, ProjectionBucket } from '../../shared-finance/types';
+import type {
+  FinancialMovement,
+  ForecastRun,
+  ProbabilisticForecastRun,
+  ProjectionBucket,
+} from '../../shared-finance/types';
 import {
   effectiveAmount,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
@@ -30,6 +35,13 @@ interface SupplierLine {
   name: string;
   amount: number;
   count: number;
+}
+
+function isRealMovement(movement: FinancialMovement): boolean {
+  return movement.status === 'REAL'
+    || movement.status === 'EXECUTED'
+    || movement.sourceSystem === 'BANK'
+    || Boolean(movement.actualDate);
 }
 
 function buildCategoryBreakdown(movements: FinancialMovement[]): CategoryBreakdown[] {
@@ -51,7 +63,7 @@ function buildCategoryBreakdown(movements: FinancialMovement[]): CategoryBreakdo
     DEBT: 'Deuda',
     CAPEX: 'CAPEX',
     OPEX: 'OPEX',
-    TRANSFER: 'Transferencias',
+    TRANSFER: 'Otros Egresos',
     MANUAL: 'Manual',
   };
   return Array.from(map.entries())
@@ -81,11 +93,13 @@ function CashFlowChartImpl({
   projection,
   baseProjection,
   comparisonProjection,
+  probabilisticProjection,
   onNavigateToTax,
 }: {
   projection: ForecastRun;
   baseProjection?: ForecastRun;
   comparisonProjection?: ForecastRun;
+  probabilisticProjection?: ProbabilisticForecastRun | null;
   onNavigateToTax?: () => void;
 }) {
   const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null);
@@ -106,23 +120,63 @@ function CashFlowChartImpl({
     const comparisonByDate = comparisonProjection?.buckets.length
       ? new Map(comparisonProjection.buckets.map((bucket) => [bucket.date, bucket.closingCash]))
       : null;
+    const probabilisticByDate = probabilisticProjection?.buckets.length
+      ? new Map(probabilisticProjection.buckets.map((bucket) => [bucket.date, bucket]))
+      : null;
+    const movementById = new Map<string, FinancialMovement>();
+    for (const m of projection.movements) movementById.set(m.id, m);
     const activeBuckets = projection.buckets;
     const out = new Array(activeBuckets.length);
     for (let i = 0; i < activeBuckets.length; i++) {
       const bucket = activeBuckets[i];
+      // Split bucket totals into real vs projected so the chart can render
+      // solid bars for what already happened and striped bars for what's
+      // still forecast — same convention as Flujo mensual on the Dashboard.
+      // Mes en curso queda mixto: días pasados ya están como BANK/REAL,
+      // días por venir entran como PROJECTED_BASE.
+      let realInflows = 0;
+      let realOutflows = 0;
+      for (const id of bucket.movementIds) {
+        const movement = movementById.get(id);
+        if (!movement) continue;
+        const amount = effectiveAmount(movement);
+        if (isRealMovement(movement)) {
+          if (movement.type === 'INFLOW') realInflows += amount;
+          else realOutflows += amount;
+        }
+      }
+      const realInflowsClamped = Math.min(realInflows, bucket.inflows);
+      const realOutflowsClamped = Math.min(realOutflows, bucket.outflows);
       out[i] = {
         date: bucket.label,
         rawDate: bucket.date,
-        entradas: bucket.inflows,
-        salidas: bucket.outflows,
+        entradasReal: realInflowsClamped,
+        entradasProy: Math.max(0, bucket.inflows - realInflowsClamped),
+        salidasReal: realOutflowsClamped,
+        salidasProy: Math.max(0, bucket.outflows - realOutflowsClamped),
+        entradasTotal: bucket.inflows,
+        salidasTotal: bucket.outflows,
         caja: bucket.closingCash,
         minimo: bucket.minimumCash,
         base: baseByDate ? baseByDate.get(bucket.date) : undefined,
         comparison: comparisonByDate ? comparisonByDate.get(bucket.date) : undefined,
+        riskBand: probabilisticByDate?.get(bucket.date)
+          ? [
+            probabilisticByDate.get(bucket.date)?.cash.p10 ?? bucket.closingCash,
+            probabilisticByDate.get(bucket.date)?.cash.p90 ?? bucket.closingCash,
+          ]
+          : undefined,
+        p50: probabilisticByDate?.get(bucket.date)?.cash.p50,
       };
     }
     return out;
-  }, [projection.buckets, baseProjection?.buckets, comparisonProjection?.buckets]);
+  }, [
+    projection.buckets,
+    projection.movements,
+    baseProjection?.buckets,
+    comparisonProjection?.buckets,
+    probabilisticProjection?.buckets,
+  ]);
 
   // Reset the open breakdown when the underlying buckets change shape (e.g.
   // granularity flipped) — the previous index would point to the wrong row.
@@ -150,14 +204,14 @@ function CashFlowChartImpl({
   );
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">
             Caja proyectada
           </h2>
           <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-            Entradas, salidas, cierre y caja mínima.
+            Barra sólida = real · Barra rayada = proyectado.
             {baseProjection ? ' La línea punteada es el escenario base.' : ' Vista del escenario base.'}
             {interactiveBars ? ' Haz clic en una barra para ver el desglose.' : ''}
           </p>
@@ -166,6 +220,21 @@ function CashFlowChartImpl({
           {projection.startDate} → {projection.endDate}
         </div>
       </div>
+      {/* Patrones SVG para las barras proyectadas — convenio idéntico al
+          chart de Flujo mensual del Dashboard: relleno sólido = real,
+          relleno rayado = proyectado. */}
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
+        <defs>
+          <pattern id="cfcHatchIncome" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill="#ecfdf5" />
+            <line x1="0" y1="0" x2="0" y2="6" stroke="#10b981" strokeWidth="2.5" />
+          </pattern>
+          <pattern id="cfcHatchExpense" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill="#fef2f2" />
+            <line x1="0" y1="0" x2="0" y2="6" stroke="#ef4444" strokeWidth="2.5" />
+          </pattern>
+        </defs>
+      </svg>
       <div className="mt-4" style={{ height: 340 }}>
         {/* `debounce` rate-limits Recharts' resize storm during layout shifts
             (the page has many collapsibles), which used to thrash the chart
@@ -174,7 +243,7 @@ function CashFlowChartImpl({
             instead of a 1.5s cascade where each series re-tweens. */}
         <ResponsiveContainer width="100%" height="100%" debounce={120}>
           <ComposedChart data={data} margin={{ top: 12, right: 18, bottom: 0, left: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <CartesianGrid strokeDasharray="3 3" className="recharts-cartesian-grid" vertical={false} />
             <XAxis
               dataKey="date"
               tick={{ fontSize: 11, fill: 'var(--gray-400)' }}
@@ -186,7 +255,10 @@ function CashFlowChartImpl({
               width={72}
             />
             <Tooltip
-              formatter={(value: number, name: string) => [fmtCurrency(value), name]}
+              formatter={(value: number | [number, number], name: string) => {
+                if (Array.isArray(value)) return [`${fmtCurrency(value[0])} a ${fmtCurrency(value[1])}`, name];
+                return [fmtCurrency(value), name];
+              }}
               labelFormatter={(_, payload) => payload?.[0]?.payload?.rawDate ?? ''}
               isAnimationActive={false}
               contentStyle={{
@@ -196,10 +268,36 @@ function CashFlowChartImpl({
               }}
             />
             <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+            {probabilisticProjection && (
+              <Area
+                type="monotone"
+                dataKey="riskBand"
+                name="Rango P10-P90"
+                fill="#dbeafe"
+                fillOpacity={0.8}
+                stroke="none"
+                isAnimationActive={false}
+                connectNulls={false}
+              />
+            )}
             <Bar
-              dataKey="entradas"
-              name="Ingresos"
-              fill="var(--success)"
+              dataKey="entradasReal"
+              stackId="entradas"
+              name="Ingresos (real)"
+              fill="#059669"
+              barSize={interactiveBars ? 12 : 4}
+              radius={[0, 0, 0, 0]}
+              cursor={interactiveBars ? 'pointer' : 'default'}
+              isAnimationActive={false}
+              onClick={handleBarClick}
+            />
+            <Bar
+              dataKey="entradasProy"
+              stackId="entradas"
+              name="Ingresos (proy.)"
+              fill="url(#cfcHatchIncome)"
+              stroke="#10b981"
+              strokeWidth={1}
               barSize={interactiveBars ? 12 : 4}
               radius={[3, 3, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}
@@ -207,9 +305,23 @@ function CashFlowChartImpl({
               onClick={handleBarClick}
             />
             <Bar
-              dataKey="salidas"
-              name="Egresos"
-              fill="var(--danger)"
+              dataKey="salidasReal"
+              stackId="salidas"
+              name="Egresos (real)"
+              fill="#dc2626"
+              barSize={interactiveBars ? 12 : 4}
+              radius={[0, 0, 0, 0]}
+              cursor={interactiveBars ? 'pointer' : 'default'}
+              isAnimationActive={false}
+              onClick={handleBarClick}
+            />
+            <Bar
+              dataKey="salidasProy"
+              stackId="salidas"
+              name="Egresos (proy.)"
+              fill="url(#cfcHatchExpense)"
+              stroke="#ef4444"
+              strokeWidth={1}
               barSize={interactiveBars ? 12 : 4}
               radius={[3, 3, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}
@@ -221,10 +333,22 @@ function CashFlowChartImpl({
               dataKey="caja"
               name="Caja final"
               stroke="#1d4ed8"
-              strokeWidth={2.5}
+              strokeWidth={1.5}
               dot={false}
               isAnimationActive={false}
             />
+            {probabilisticProjection && (
+              <Line
+                type="monotone"
+                dataKey="p50"
+                name="Caja P50"
+                stroke="#7c3aed"
+                strokeWidth={1.5}
+                strokeDasharray="5 4"
+                dot={false}
+                isAnimationActive={false}
+              />
+            )}
             {baseProjection && (
               <Line
                 type="monotone"
@@ -249,17 +373,6 @@ function CashFlowChartImpl({
                 isAnimationActive={false}
               />
             )}
-            <ReferenceLine
-              y={projection.summary.minimumCashRequired}
-              stroke="var(--warning)"
-              strokeDasharray="3 3"
-              label={{
-                value: 'Caja mínima',
-                position: 'right',
-                fill: 'var(--warning)',
-                fontSize: 10,
-              }}
-            />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -286,6 +399,7 @@ export const CashFlowChart = memo(CashFlowChartImpl, (prev, next) =>
   prev.projection === next.projection
   && prev.baseProjection === next.baseProjection
   && prev.comparisonProjection === next.comparisonProjection
+  && prev.probabilisticProjection === next.probabilisticProjection
   && prev.onNavigateToTax === next.onNavigateToTax,
 );
 
@@ -309,10 +423,10 @@ function BreakdownPanel({
   const outflowCategories = breakdown.filter((c) => c.outflows > 0);
 
   return (
-    <div className="mt-4 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)]">
+    <div className="mt-4 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)]">
       <div className="flex items-center justify-between border-b border-[var(--gray-200)] px-4 py-2.5">
         <div>
-          <span className="text-[13px] font-semibold text-[var(--gray-950)]">
+          <span className="text-[13px] font-bold text-[var(--gray-950)]">
             Desglose: {bucket.label}
           </span>
           <span className="ml-2 text-[11px] text-[var(--gray-400)]">
@@ -321,7 +435,7 @@ function BreakdownPanel({
         </div>
         <button
           onClick={onClose}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--gray-200)] transition-colors"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--gray-200)] transition-colors"
         >
           <X className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
         </button>
@@ -331,8 +445,8 @@ function BreakdownPanel({
         {/* Entradas */}
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Entradas</span>
-            <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--success)' }}>
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Entradas</span>
+            <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--success)' }}>
               {fmtCompact(totalInflows)}
             </span>
           </div>
@@ -358,8 +472,8 @@ function BreakdownPanel({
         {/* Salidas */}
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Salidas</span>
-            <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--danger)' }}>
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Salidas</span>
+            <span className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--danger)' }}>
               {fmtCompact(totalOutflows)}
             </span>
           </div>
@@ -427,7 +541,7 @@ function CategoryRow({
   const showDetail = supplierLines.length > 0;
 
   return (
-    <div className="rounded-lg border border-[var(--gray-200)] bg-white">
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white">
       <button
         onClick={showDetail ? onToggle : undefined}
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
@@ -444,7 +558,7 @@ function CategoryRow({
           {category.label}
           <span className="ml-1.5 text-[10px] text-[var(--gray-400)]">{movements.length} mov.</span>
         </span>
-        <span className="text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">
+        <span className="text-[12px] font-bold tabular-nums text-[var(--gray-950)]">
           {fmtCompact(amount)}
         </span>
         <span className="w-[40px] text-right text-[10px] tabular-nums text-[var(--gray-400)]">
@@ -477,7 +591,7 @@ function CategoryRow({
           {onNavigateToTax && (
             <button
               onClick={(e) => { e.stopPropagation(); onNavigateToTax(); }}
-              className="mt-2 inline-flex h-7 items-center rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--gray-50)]"
+              className="mt-2 inline-flex h-7 items-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--gray-50)]"
             >
               Ver módulo de impuestos →
             </button>

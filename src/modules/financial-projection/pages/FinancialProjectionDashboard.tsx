@@ -1,9 +1,13 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   AlertTriangle,
-  Banknote,
+  CalendarClock,
+  Copy,
   GitCompare,
-  ShieldAlert,
+  Plus,
+  Split,
+  TrendingDown,
+  TrendingUp,
   Wallet,
   AlertTriangle as AlertIcon,
 } from 'lucide-react';
@@ -11,12 +15,15 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
+import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
+import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import { fmtCompact, fmtCurrency } from '../../../formatters';
 import {
   applyAdjustmentsToMovements,
   applyCellOverridesToBuckets,
-  buildBucketDates,
   calculateBaseProjection,
+  effectiveAmount,
+  effectiveMovementDate,
   summarizeBucketsForScenario,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
@@ -26,56 +33,83 @@ import type {
   FinancialScenario,
   ForecastRun,
   ManualPlanningEntry,
+  PayrollCostRecord,
   PlanningCustomRow,
   PlanningRow,
-  ProjectionAlert,
   ProjectionGranularity,
+  PurchaseReceiptRecord,
 } from '../../shared-finance/types';
 
 type ScenarioRun = ForecastRun & {
   rows: PlanningRow[];
   overrides: CellOverride[];
+  supplierPlan: import('../../financial-planning/services/supplierPaymentSchedule').SupplierPaymentPlan;
 };
 import { CashFlowChart } from '../components/CashFlowChart';
 import { MovementDrillDownDrawer } from '../components/MovementDrillDownDrawer';
 import { ScenarioReadOnlyTabs } from '../components/ScenarioReadOnlyTabs';
 import { ComparisonControl } from '../components/ComparisonControl';
-import { CollapsibleSection } from '../components/CollapsibleSection';
-import { BucketDetailTable } from '../components/BucketDetailTable';
-import { AlertsPanel } from '../components/AlertsPanel';
-import { MovementsTable } from '../components/MovementsTable';
 import { DeferredMount } from '../components/DeferredMount';
-import { ChartSkeleton, TableSkeleton } from '../components/SectionSkeletons';
+import { ChartSkeleton } from '../components/SectionSkeletons';
 import { cachedRun, fingerprintArray } from '../services/projectionCache';
 import {
   buildFinancialProjectionSourceData,
+  calculateCurrentBankCash,
   calculateInitialCash,
   tryGetCachedFinancialProjectionSourceData,
   type FinancialProjectionSourceData,
 } from '../services/financialProjectionService';
+import { yieldToMain } from '../services/yieldToMain';
+import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
 import {
   loadManualPlanningEntries,
+  saveManualPlanningEntries,
   expandManualPlanningEntriesToMovements,
 } from '../../financial-planning/services/manualPlanningEntries';
 import {
   loadPlanningAdjustments,
   loadPlanningScenarios,
+  savePlanningAdjustments,
+  savePlanningScenarios,
 } from '../../financial-planning/services/financialPlanningStorage';
-import { loadCellOverrides } from '../../financial-planning/services/cellOverridesStorage';
-import { loadCustomRows } from '../../financial-planning/services/customRowsStorage';
+import { loadCellOverrides, saveCellOverrides } from '../../financial-planning/services/cellOverridesStorage';
+import { loadCustomRows, saveCustomRows } from '../../financial-planning/services/customRowsStorage';
 import { buildPlanningRows, conceptKeyForMovement } from '../../financial-planning/services/planningRowTaxonomy';
+import { createNewDraft, duplicateDraft } from '../../financial-planning/services/scenarioDuplicate';
+import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
+import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
+import { scheduleSupplierPaymentsByScore } from '../../financial-planning/services/supplierPaymentSchedule';
 import {
-  buildSupplierCriticalAlerts,
-  type SupplierCriticalAlert,
-} from '../services/supplierCriticalAlerts';
+  createQuickMovementAdjustment,
+} from '../services/projectionPredictionEngine';
 import {
+  buildAutomaticTaxReserveMovements,
   buildApprovedTaxPaymentMovements,
   buildTaxDashboardView,
   defaultTaxStore,
   loadTaxStore,
+  TAX_STORE_CHANGED_EVENT,
+  TAX_STORE_KEY,
 } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
+import EmptyState from '../../shared-finance/components/EmptyState';
+import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
+import {
+  toneByFloor,
+  toneByCount,
+  toneByDelta,
+} from '../../shared-finance/components/tone';
+import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
+import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
+import { ProbabilisticRiskStrip } from '../components/ProbabilisticRiskStrip';
+import { useProbabilisticForecast } from '../services/probabilisticForecastService';
+import {
+  FORECAST_MODELS,
+  type ForecastModelId,
+  type ForecastOutput,
+} from '../../../domain/comprasForecastModels';
 
 interface Props {
   companyCode: string;
@@ -83,10 +117,25 @@ interface Props {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  cobranzaPayments?: CobranzaPayment[];
+  cobranzaReconciliation?: RealReconciliationResult;
+  /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
+  paidCxpKeys?: Set<string>;
+  /** CARGO bancarios matcheados a PagoProveedor — reclasifican como AP_PAYMENT. */
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
   onNavigateToTax?: () => void;
+  /** Modelo seleccionado para forecast de futuras OCs. */
+  forecastModelId?: ForecastModelId;
+  /** Cambia el modelo y persiste. */
+  onForecastModelChange?: (id: ForecastModelId) => void;
+  /** Salida del modelo seleccionado: receipts + estadísticas por proveedor. */
+  forecastSummary?: ForecastOutput;
 }
 
 const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> = [
@@ -96,19 +145,19 @@ const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> =
 ];
 
 /**
- * Proyección Financiera — visualización read-only de escenarios.
+ * Proyección Financiera — centro de escenarios predictivos y edición rápida.
  *
  * - Default activo: Aprobado (main branch).
  * - Selector: Base + Aprobado + drafts activos.
  * - Pipeline: movements ∪ manual ∪ tax → adjustments → projection → cell overrides
  *   (sincroniza con Planeación).
  * - Layout: secciones colapsables persistidas en sessionStorage.
- * - Toda mutación se canaliza a Planeación.
+ * - Toda mutación se persiste en los mismos storages que usa Planeación.
  *
  * Mount strategy:
  *   The canonical projection (`buildFinancialProjectionSourceData` →
  *   `computeBaseCashFlow`) is the single most expensive thing this page
- *   does — it iterates clients × months × CXP × budget. We outer-gate the
+ *   does — it iterates clients × months × CXP. We outer-gate the
  *   inner dashboard so the chrome (header, KPI placeholders, section
  *   shells) paints in one frame and the heavy compute lands on the next
  *   idle slot. Cache hits short-circuit the gating completely.
@@ -125,6 +174,13 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.clients,
       props.providers,
       props.cxpRecords,
+      props.cobranzaRecords,
+      props.cobranzaPayments,
+      props.cobranzaReconciliation,
+      props.paidCxpKeys,
+      props.cargoEnrichments,
+      props.purchaseReceipts,
+      props.payrollCosts,
       props.assumptions,
       props.budget,
       props.startingBalance,
@@ -142,34 +198,87 @@ export default function FinancialProjectionDashboard(props: Props) {
 
   // If we don't have the source cached, schedule the canonical build for
   // *after* the first paint so the user sees the chrome immediately.
+  //
+  // Cancellation: synchronous compute can't be interrupted mid-flight, so
+  // the only safe interrupt window is *before* it starts. We yield to the
+  // main thread twice (rAF then MessageChannel macrotask) so any queued
+  // tab-switch click is processed first. If the user navigates away during
+  // that window, `cancelled` flips and we never enter the heavy block.
+  // PERF (2026-05-14): mismo patrón que Planning — el build ahora vive en
+  // Web Worker para no pinear el thread varios segundos. Fallback sync si
+  // Worker falla. Logs en `[projection.source]` para diagnóstico.
+  const sourceWorkerRef = useRef<Worker | null>(null);
+  const sourceJobRef = useRef(0);
   useEffect(() => {
     if (cachedSource) {
       setSource(cachedSource);
       return;
     }
     let cancelled = false;
-    const ric = (window as unknown as {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    });
-    const run = () => {
+    const jobId = ++sourceJobRef.current;
+    const tStart = performance.now();
+    // eslint-disable-next-line no-console
+    console.info(`[projection.source] requesting jobId=${jobId} cxp=${cacheProbeInput.cxpRecords.length} cobranza=${cacheProbeInput.cobranzaRecords?.length ?? 0}`);
+
+    const runSyncFallback = async () => {
+      await yieldToMain();
       if (cancelled) return;
-      const built = buildFinancialProjectionSourceData(cacheProbeInput);
-      if (!cancelled) setSource(built);
+      const t0 = performance.now();
+      try {
+        const built = buildFinancialProjectionSourceData(cacheProbeInput);
+        if (!cancelled && sourceJobRef.current === jobId) setSource(built);
+      } catch {
+        /* swallow — empty-state shows */
+      }
+      // eslint-disable-next-line no-console
+      console.info(`[projection.source] sync fallback ${(performance.now() - t0).toFixed(0)}ms`);
     };
-    if (typeof ric.requestIdleCallback === 'function') {
-      const id = ric.requestIdleCallback(run, { timeout: 200 });
-      return () => {
-        cancelled = true;
-        if (typeof ric.cancelIdleCallback === 'function') ric.cancelIdleCallback(id);
-      };
+
+    if (typeof Worker === 'undefined') {
+      void runSyncFallback();
+      return () => { cancelled = true; };
     }
-    const id = window.setTimeout(run, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(id);
-    };
+
+    try {
+      if (!sourceWorkerRef.current) {
+        sourceWorkerRef.current = new Worker(
+          new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
+          { type: 'module' },
+        );
+      }
+      const worker = sourceWorkerRef.current;
+      worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
+        if (cancelled || event.data.jobId !== sourceJobRef.current) return;
+        const totalElapsed = performance.now() - tStart;
+        if (event.data.result) {
+          // eslint-disable-next-line no-console
+          console.info(`[projection.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms`);
+          setSource(event.data.result);
+        } else if (event.data.error) {
+          console.warn(`[projection.source] worker error, fallback`, event.data.error);
+          void runSyncFallback();
+        }
+      };
+      worker.onerror = (event) => {
+        if (cancelled) return;
+        console.warn('[projection.source] worker exception, fallback', event.message);
+        void runSyncFallback();
+      };
+      worker.postMessage({ jobId, input: cacheProbeInput });
+    } catch (err) {
+      console.warn('[projection.source] worker spawn failed, fallback', err);
+      void runSyncFallback();
+    }
+
+    return () => { cancelled = true; };
   }, [cachedSource, cacheProbeInput]);
+
+  useEffect(() => {
+    return () => {
+      sourceWorkerRef.current?.terminate();
+      sourceWorkerRef.current = null;
+    };
+  }, []);
 
   if (!source) {
     return <ProjectionWarmupShell />;
@@ -180,40 +289,19 @@ export default function FinancialProjectionDashboard(props: Props) {
 
 /**
  * Lightweight skeleton shown for the first paint when the canonical
- * projection still needs to build. Mirrors the eventual layout (header,
- * scenario tabs, KPI grid, chart card) so there's no shift.
+ * projection still needs to build. Delegates to the shared
+ * DashboardLoadingShell so every dashboard warms up with the same
+ * shimmer + stagger language.
  */
 function ProjectionWarmupShell() {
   return (
-    <div className="space-y-4 animate-page-in" aria-busy="true" aria-label="Calculando proyección">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="skeleton h-4 w-44 rounded opacity-60" />
-          <div className="skeleton mt-2 h-3 w-64 rounded opacity-50" />
-        </div>
-        <div className="skeleton h-10 w-48 rounded-xl opacity-50" />
-      </div>
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <div className="skeleton h-3 w-20 rounded opacity-50" />
-          <div className="skeleton h-9 w-32 rounded-xl opacity-50" />
-          <div className="skeleton h-9 w-32 rounded-xl opacity-50" />
-        </div>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {Array.from({ length: 4 }).map((_, idx) => (
-          <div key={idx} className="rounded-xl border border-[var(--gray-200)] bg-white p-4">
-            <div className="skeleton h-3 w-1/2 rounded opacity-50" />
-            <div className="skeleton mt-3 h-5 w-3/4 rounded opacity-60" />
-            <div className="skeleton mt-2 h-3 w-2/3 rounded opacity-40" />
-          </div>
-        ))}
-      </div>
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
-        <div className="skeleton h-3 w-40 rounded opacity-50" />
-        <div className="skeleton mt-3 h-[280px] w-full rounded-xl opacity-50" />
-      </div>
-    </div>
+    <DashboardLoadingShell
+      kpis={4}
+      showFilterBar
+      showChart
+      tableRows={4}
+      label="Calculando proyección"
+    />
   );
 }
 
@@ -223,16 +311,66 @@ function ProjectionWarmupShell() {
  */
 function ProjectionDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
-  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
-  const yearStart = `${currentYear}-01-01`;
-  const yearEnd = `${currentYear}-12-31`;
+  const goTo = useNavigateToTab();
+  const yearStart = today;
+  const yearEnd = useMemo(() => addUtcDays(today, 364), [today]);
 
-  const [storedScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
-  const [storedAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
+  const [storedScenarios, setStoredScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
+  const [storedAdjustments, setStoredAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
   const [manualEntries] = useState<ManualPlanningEntry[]>(() => loadManualPlanningEntries([]));
-  const [cellOverrides] = useState<CellOverride[]>(() => loadCellOverrides([]));
-  const [customRows] = useState<PlanningCustomRow[]>(() => loadCustomRows([]));
-  const [taxStore] = useState(() => loadTaxStore(defaultTaxStore()));
+  const [cellOverrides, setCellOverrides] = useState<CellOverride[]>(() => loadCellOverrides([]));
+  const [customRows, setCustomRows] = useState<PlanningCustomRow[]>(() => loadCustomRows([]));
+  const [changeLog, setChangeLog] = useState(() => loadChangeLog([]));
+  const [taxStore, setTaxStore] = useState(() => loadTaxStore(defaultTaxStore()));
+
+  // Skip the first invocation of each save effect. The state was just
+  // hydrated from localStorage; re-serializing the same payload on mount
+  // costs main-thread time during the projection's heaviest frame. Each
+  // ref starts false and flips after the first commit — the saver only
+  // fires on genuine changes.
+  const savedScenariosRef = useRef(false);
+  const savedAdjustmentsRef = useRef(false);
+  const savedManualRef = useRef(false);
+  const savedOverridesRef = useRef(false);
+  const savedCustomRowsRef = useRef(false);
+  const savedChangeLogRef = useRef(false);
+  useEffect(() => {
+    if (!savedScenariosRef.current) { savedScenariosRef.current = true; return; }
+    savePlanningScenarios(storedScenarios);
+  }, [storedScenarios]);
+  useEffect(() => {
+    if (!savedAdjustmentsRef.current) { savedAdjustmentsRef.current = true; return; }
+    savePlanningAdjustments(storedAdjustments);
+  }, [storedAdjustments]);
+  useEffect(() => {
+    if (!savedManualRef.current) { savedManualRef.current = true; return; }
+    saveManualPlanningEntries(manualEntries);
+  }, [manualEntries]);
+  useEffect(() => {
+    if (!savedOverridesRef.current) { savedOverridesRef.current = true; return; }
+    saveCellOverrides(cellOverrides);
+  }, [cellOverrides]);
+  useEffect(() => {
+    if (!savedCustomRowsRef.current) { savedCustomRowsRef.current = true; return; }
+    saveCustomRows(customRows);
+  }, [customRows]);
+  useEffect(() => {
+    if (!savedChangeLogRef.current) { savedChangeLogRef.current = true; return; }
+    saveChangeLog(changeLog);
+  }, [changeLog]);
+
+  useEffect(() => {
+    const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === TAX_STORE_KEY) reloadTaxStore();
+    };
+    window.addEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   const sourceBaseScenario = source.scenarios.find((scenario) => scenario.kind === 'BASE') ?? source.scenarios[0];
   const baseScenario = storedScenarios.find((scenario) => scenario.kind === 'BASE' && !scenario.archivedAt) ?? sourceBaseScenario;
@@ -253,6 +391,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const [granularity, setGranularityState] = useState<ProjectionGranularity>('monthly');
   const [drillMovement, setDrillMovement] = useState<FinancialMovement | null>(null);
   const [drillAnchor, setDrillAnchor] = useState<DOMRect | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   // Granularity flips run inside a transition so React keeps the previous
   // chart/tables on screen while the new data warms up — no stutter, no
@@ -276,11 +415,23 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     if (comparisonScenarioId === activeScenarioId) setComparisonScenarioId(null);
   }, [comparisonScenarioId, activeScenarioId]);
 
+  useEffect(() => {
+    if (!statusMessage) return;
+    const handle = window.setTimeout(() => setStatusMessage(null), 4500);
+    return () => window.clearTimeout(handle);
+  }, [statusMessage]);
+
   const initialCash = useMemo(
-    () => calculateInitialCash(props.bankStatements, props.startingBalance),
-    [props.bankStatements, props.startingBalance],
+    () => calculateInitialCash(props.bankStatements, props.startingBalance, {
+      companyCode: props.companyCode,
+    }),
+    [props.bankStatements, props.startingBalance, props.companyCode],
   );
-  const minimumCash = useMemo(() => minimumCashFor(props), [props.budget]);
+  const supplierInitialCash = useMemo(
+    () => calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash),
+    [props.bankStatements, props.companyCode, initialCash],
+  );
+  const minimumCash = useMemo(() => minimumCashFor(), []);
 
   // Pre-index storage by scenario for O(1) per-scenario lookups.
   const customRowsByScenario = useMemo(() => {
@@ -316,27 +467,37 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     const movementsKey = fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount));
     const adjustmentsKey = fingerprintArray(storedAdjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt);
     const manualKey = fingerprintArray(manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? ''));
-    const taxKey = fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status);
+    const taxKey = [
+      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
+      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
+      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
+      taxStore.overdueBalance,
+    ].join(':');
+    const providerKey = fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? ''));
     return [
       movementsKey,
       adjustmentsKey,
       manualKey,
       taxKey,
+      providerKey,
       yearStart,
       yearEnd,
       today,
       initialCash,
+      supplierInitialCash,
       minimumCash,
     ].join('|');
   }, [
     source.movements,
     storedAdjustments,
     manualEntries,
-    taxStore.obligations,
+    taxStore,
+    props.providers,
     yearStart,
     yearEnd,
     today,
     initialCash,
+    supplierInitialCash,
     minimumCash,
   ]);
 
@@ -358,25 +519,64 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       ].join('||');
 
       return cachedRun<ScenarioRun>(cacheKey, () => {
-        const taxMovements = buildApprovedTaxPaymentMovements({
-          obligations: taxStore.obligations,
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        });
         const manualMovements = expandManualPlanningEntriesToMovements(manualEntries, {
           scenarioId,
           startDate: yearStart,
           endDate: yearEnd,
           asOfDate: today,
         });
+        const preTaxMovements = applyAdjustmentsToMovements(
+          [...source.movements, ...manualMovements],
+          storedAdjustments,
+          scenarioId,
+        );
+        const taxSeedView = buildTaxDashboardView({
+          clients: props.clients,
+          providers: props.providers,
+          assumptions: props.assumptions,
+          cxpRecords: props.cxpRecords,
+          purchaseReceipts: props.purchaseReceipts,
+          payrollCosts: props.payrollCosts,
+          cobranzaPayments: props.cobranzaPayments,
+          budget: props.budget,
+          companyCode: props.companyCode,
+          startDate: yearStart,
+          endDate: yearEnd,
+          movements: preTaxMovements,
+          store: taxStore,
+          today,
+        });
+        const taxMovements = [
+          ...buildApprovedTaxPaymentMovements({
+            obligations: taxSeedView.obligations,
+            scenarioId,
+            startDate: yearStart,
+            endDate: yearEnd,
+            asOfDate: today,
+          }),
+          ...buildAutomaticTaxReserveMovements({
+            obligations: taxSeedView.obligations,
+            scenarioId,
+            startDate: yearStart,
+            endDate: yearEnd,
+            asOfDate: today,
+          }),
+        ];
         const adjustedMovements = applyAdjustmentsToMovements(
           [...source.movements, ...manualMovements, ...taxMovements],
           storedAdjustments,
           scenarioId,
         );
-        const rawProjection = calculateBaseProjection(adjustedMovements, {
+        const supplierSchedule = scheduleSupplierPaymentsByScore({
+          movements: adjustedMovements,
+          providers: props.providers,
+          startDate: today,
+          endDate: yearEnd,
+          initialCash: supplierInitialCash,
+          minimumCash,
+          scenarioId,
+        });
+        const rawProjection = calculateBaseProjection(supplierSchedule.movements, {
           startDate: yearStart,
           endDate: yearEnd,
           initialCash,
@@ -403,9 +603,10 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         return {
           ...rawProjection,
           buckets,
-          summary: summarizeBucketsForScenario(buckets, rawProjection.movements, minimumCash),
+          summary: summarizeBucketsForScenario(buckets, rawProjection.movements, minimumCash, gran),
           rows,
           overrides: scenarioOverrides,
+          supplierPlan: supplierSchedule.plan,
         };
       });
     };
@@ -418,11 +619,13 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     source.movements,
     storedAdjustments,
     manualEntries,
-    taxStore.obligations,
+    taxStore,
+    props.providers,
     yearStart,
     yearEnd,
     today,
     initialCash,
+    supplierInitialCash,
     minimumCash,
   ]);
 
@@ -446,19 +649,12 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     return buildRun(comparisonScenarioId, deferredGranularity);
   }, [buildRun, comparisonScenarioId, baseScenario.id, baseRun, activeScenarioId, activeRun, deferredGranularity]);
 
-  // Bucket columns for chart range info — uses the deferred granularity so
-  // it stays consistent with the currently rendered runs.
-  const bucketDates = useMemo(
-    () => buildBucketDates(yearStart, yearEnd, deferredGranularity),
-    [yearStart, yearEnd, deferredGranularity],
-  );
-
   // Pre-warm the *other* two granularities for the active scenario in idle
-  // time. Once the initial paint settles, we silently build the alternate
-  // weekly/daily runs and stash them in the LRU. Result: when the user
-  // actually flips the segmented control, it's a sub-millisecond cache hit
-  // instead of a 50–150ms compute. Cancellation prevents wasted work if
-  // the user changes scenario mid-warm.
+  // time. We hold off until the page has been visible long enough that
+  // initial compute + first interaction has settled — otherwise the
+  // pre-warm tasks fight the heavy first paint and cause exactly the kind
+  // of mid-load freeze that traps tab-switch clicks. 2.5 s + yields gives
+  // the user a real window to navigate away cheaply.
   useEffect(() => {
     const others: ProjectionGranularity[] = ['monthly', 'weekly', 'daily']
       .filter((g): g is ProjectionGranularity => g !== deferredGranularity);
@@ -468,17 +664,20 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       cancelIdleCallback?: (handle: number) => void;
     });
     const handles: Array<number | ReturnType<typeof setTimeout>> = [];
-    others.forEach((gran, i) => {
-      const run = () => {
+    const scheduleRun = (gran: ProjectionGranularity, delay: number) => {
+      const fire = async () => {
         if (cancelled) return;
-        try { buildRun(activeScenarioId, gran); } catch { /* swallow — pre-warm is best-effort */ }
+        await yieldToMain();
+        if (cancelled) return;
+        try { buildRun(activeScenarioId, gran); } catch { /* best-effort */ }
       };
       if (typeof ric.requestIdleCallback === 'function') {
-        handles.push(ric.requestIdleCallback(run, { timeout: 800 + i * 400 }));
+        handles.push(ric.requestIdleCallback(fire, { timeout: delay + 2000 }));
       } else {
-        handles.push(setTimeout(run, 200 + i * 200));
+        handles.push(setTimeout(fire, delay));
       }
-    });
+    };
+    others.forEach((gran, i) => scheduleRun(gran, 2500 + i * 1500));
     return () => {
       cancelled = true;
       handles.forEach((h) => {
@@ -496,6 +695,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const comparisonReference = comparisonRun ? comparisonRun.summary.finalCash : baseRun.summary.finalCash;
   const finalCashDelta = summary.finalCash - comparisonReference;
   const comparisonLabel = comparisonRun ? comparisonRun.name : baseRun.name;
+  const probabilistic = useProbabilisticForecast(activeRun, summary.minimumCashRequired);
 
   // Tab strip needs final-cash deltas for *every* draft. We resolve those
   // lazily through the same cache so unselected drafts only build when the
@@ -514,52 +714,6 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     [buildRun, baseScenario.id, baseRun, activeScenarioId, activeRun, comparisonRun, deferredGranularity],
   );
 
-  // Auxiliary computations.
-  const taxView = useMemo(
-    () => buildTaxDashboardView({
-      projection: activeRun,
-      store: taxStore,
-      providers: props.providers,
-      cxpRecords: props.cxpRecords,
-      today,
-    }),
-    [activeRun, props.cxpRecords, props.providers, taxStore, today],
-  );
-  const supplierAlerts = useMemo(
-    () => buildSupplierCriticalAlerts({
-      providers: props.providers,
-      cxpRecords: props.cxpRecords,
-      movements: activeRun.movements,
-      manualEntries,
-      bankStatements: props.bankStatements,
-      scenarioId: activeScenarioId,
-      today,
-    }),
-    [activeRun.movements, activeScenarioId, manualEntries, props.bankStatements, props.cxpRecords, props.providers, today],
-  );
-
-  const tableMovements = useMemo(
-    () => activeRun.movements
-      .filter((movement) => {
-        const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
-        return date >= yearStart && date <= yearEnd;
-      })
-      .sort((a, b) => {
-        const da = a.actualDate ?? a.adjustedDate ?? a.projectedDate;
-        const db = b.actualDate ?? b.adjustedDate ?? b.projectedDate;
-        return da.localeCompare(db);
-      }),
-    [activeRun.movements, yearStart, yearEnd],
-  );
-
-  const handleSelectMovement = useMemo(
-    () => (movement: FinancialMovement, anchor: DOMRect) => {
-      setDrillMovement(movement);
-      setDrillAnchor(anchor);
-    },
-    [],
-  );
-
   const handleCloseDrawer = useMemo(
     () => () => {
       setDrillMovement(null);
@@ -568,14 +722,93 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     [],
   );
 
+  const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? approvedScenario;
+
+  const handleCreateDraft = useCallback((name?: string): string => {
+    const { newScenario, seedEntry } = createNewDraft({
+      approved: approvedScenario,
+      name,
+      user: 'tesoreria@senda.local',
+    });
+    setStoredScenarios((current) => [...current, newScenario]);
+    setChangeLog((current) => [seedEntry, ...current]);
+    setActiveScenarioId(newScenario.id);
+    setStatusMessage(`Escenario "${newScenario.name}" creado.`);
+    return newScenario.id;
+  }, [approvedScenario]);
+
+  const ensureEditableScenario = useCallback((reason: string): string => {
+    const current = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? approvedScenario;
+    if (current.kind === 'DRAFT') return current.id;
+    return handleCreateDraft(reason);
+  }, [activeScenarioId, approvedScenario, handleCreateDraft, scenarios]);
+
+  const handleDuplicateActive = useCallback(() => {
+    const sourceScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? approvedScenario;
+    const result = duplicateDraft({
+      source: sourceScenario,
+      approvedScenarioId: approvedScenario.id,
+      allOverrides: cellOverrides,
+      allCustomRows: customRows,
+      changeLog,
+      user: 'tesoreria@senda.local',
+    });
+    setStoredScenarios((current) => [...current, result.newScenario]);
+    setCellOverrides(result.cellOverrides);
+    setCustomRows(result.customRows);
+    setChangeLog(result.changeLog);
+    setActiveScenarioId(result.newScenario.id);
+    setStatusMessage(`Escenario duplicado como "${result.newScenario.name}".`);
+  }, [activeScenarioId, approvedScenario, cellOverrides, changeLog, customRows, scenarios]);
+
+const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'SHIFT_DATE' | 'AMOUNT_OVERRIDE' | 'SPLIT_PAYMENT') => {
+    if (movement.lockState === 'LOCKED') {
+      setStatusMessage('Movimiento bloqueado. Crea el ajuste desde Planeación con autorización.');
+      return;
+    }
+    const scenarioId = ensureEditableScenario('Ajuste rápido desde Proyección');
+    const baseAmount = effectiveAmount(movement);
+    const date = effectiveMovementDate(movement);
+    const adjustment = createQuickMovementAdjustment({
+      movement,
+      scenarioId,
+      action: kind,
+      asOfDate: today,
+      targetDate: kind === 'SHIFT_DATE'
+        ? shiftIsoDate(date, movement.type === 'INFLOW' ? -7 : 7, today)
+        : undefined,
+      targetAmount: kind === 'AMOUNT_OVERRIDE'
+        ? baseAmount * (movement.type === 'INFLOW' ? 1.1 : 0.9)
+        : undefined,
+      splitCount: 2,
+    });
+    setStoredAdjustments((current) => [...current, adjustment]);
+    setChangeLog((current) => [
+      newChangeLogEntry({
+        scenarioId,
+        kind: 'EDIT_CELL',
+        autoDescription: `Ajuste rápido en ${movement.counterpartyName ?? movement.concept}.`,
+        payload: {
+          adjustmentId: adjustment.id,
+          movementId: movement.id,
+          action: kind,
+        },
+        createdBy: 'tesoreria@senda.local',
+      }),
+      ...current,
+    ]);
+    setStatusMessage('Ajuste aplicado. La proyección se recalculó.');
+  }, [ensureEditableScenario, today]);
+
   const drawerInvoiceContext = useMemo(
     () => ({
       cxpRecords: props.cxpRecords,
+      cobranzaRecords: props.cobranzaRecords ?? [],
       clients: props.clients,
       assumptions: props.assumptions,
       budget: props.budget,
     }),
-    [props.cxpRecords, props.clients, props.assumptions, props.budget],
+    [props.cxpRecords, props.cobranzaRecords, props.clients, props.assumptions, props.budget],
   );
 
   if (!source.hasData) {
@@ -593,6 +826,11 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         title="Proyección Financiera"
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <ForecastModelSelector
+              value={props.forecastModelId}
+              onChange={props.onForecastModelChange}
+              summary={props.forecastSummary}
+            />
             <SegmentedControl
               value={granularity}
               options={GRANULARITY_OPTIONS}
@@ -605,9 +843,31 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
               comparisonScenarioId={comparisonScenarioId}
               onChange={setComparisonScenarioId}
             />
+            <button
+              type="button"
+              onClick={() => handleCreateDraft()}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+            >
+              <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Nuevo
+            </button>
+            <button
+              type="button"
+              onClick={handleDuplicateActive}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+            >
+              <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Duplicar
+            </button>
           </div>
         }
       />
+
+      {statusMessage && (
+        <div className="rounded-xl border border-[var(--gray-200)] bg-white px-4 py-2 text-[12px] font-medium text-[var(--gray-700)]">
+          {statusMessage}
+        </div>
+      )}
 
       <ScenarioReadOnlyTabs
         scenarios={scenarios}
@@ -617,151 +877,107 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         onSelect={setActiveScenarioId}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <KpiCard
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
           icon={<Wallet className="w-4 h-4" strokeWidth={1.5} />}
-          color={tone(summary.finalCash, summary.minimumCashRequired)}
-          sublabel={`${currentYear} · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          color={toneByFloor(summary.finalCash, summary.minimumCashRequired)}
+          sublabel={`12 meses · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          onClick={() => goTo({ tab: 'financialPlanning', focus: 'caja-final' })}
+          navHint="Abrir Planeación"
         />
         <KpiCard
           label="Días en déficit"
           value={String(summary.deficitDays)}
           icon={<AlertIcon className="w-4 h-4" strokeWidth={1.5} />}
-          color={summary.deficitDays > 0 ? 'var(--danger)' : 'var(--success)'}
+          color={toneByCount(summary.deficitDays)}
           sublabel={summary.maxRiskDate ? `Máx riesgo ${summary.maxRiskDate}` : 'Sin fecha crítica'}
-        />
-        <KpiCard
-          label="Crédito requerido"
-          value={fmtCurrency(summary.creditRequired)}
-          icon={<Banknote className="w-4 h-4" strokeWidth={1.5} />}
-          color={summary.creditRequired > 0 ? 'var(--warning)' : 'var(--gray-950)'}
-          sublabel={`Ingresos ${fmtCompact(summary.totalInflows)} · egresos ${fmtCompact(summary.totalOutflows)}`}
+          onClick={() => goTo({ tab: 'financialPlanning', focus: 'deficit' })}
+          navHint="Ver días en déficit"
         />
         <KpiCard
           label={`Δ vs ${comparisonLabel}`}
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
           icon={<GitCompare className="w-4 h-4" strokeWidth={1.5} />}
-          color={finalCashDelta > 0 ? 'var(--success)' : finalCashDelta < 0 ? 'var(--danger)' : 'var(--gray-950)'}
+          color={toneByDelta(finalCashDelta)}
           sublabel={comparisonRun ? 'Comparación activa' : 'vs Base'}
         />
       </div>
 
-      <CollapsibleSection
-        title="Trayectoria de caja"
-        storageKey="proyeccion.section.trajectory"
-        description="Ingresos, egresos, cierre y caja mínima a lo largo del año."
-        actions={
-          <span className="text-[11px] text-[var(--gray-400)] tabular-nums">
-            {bucketDates.length} {bucketDates.length === 1 ? 'período' : 'períodos'} · {yearStart} → {yearEnd}
-          </span>
-        }
-      >
-        <div className="px-4 py-3">
-          <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
-            <CashFlowChart
-              projection={activeRun}
-              baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
-              comparisonProjection={comparisonRun ?? undefined}
-              onNavigateToTax={props.onNavigateToTax}
-            />
-          </DeferredMount>
-        </div>
-      </CollapsibleSection>
+      <ProbabilisticRiskStrip
+        run={probabilistic.run}
+        loading={probabilistic.loading}
+        error={probabilistic.error}
+      />
 
-      <CollapsibleSection
-        title="Detalle por período"
-        storageKey="proyeccion.section.bucket"
-        description="Cada período se desglosa en conceptos de Planeación al expandir."
-        count={activeRun.buckets.length}
-        lazy
-      >
-        <DeferredMount delayMs={140} fallback={<TableSkeleton rows={6} />}>
-          <BucketDetailTable
-            buckets={activeRun.buckets}
-            movements={activeRun.movements}
-            rows={activeRun.rows}
-            overrides={activeRun.overrides}
-            granularity={deferredGranularity}
-            comparisonBuckets={comparisonRun?.buckets}
-            onSelectMovement={handleSelectMovement}
-          />
-        </DeferredMount>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Movimientos"
-        storageKey="proyeccion.section.movements"
-        description="Lista filtrable. Clic en una fila para ver factura y origen."
-        count={tableMovements.length}
-        lazy
-      >
-        <DeferredMount delayMs={220} fallback={<TableSkeleton rows={5} />}>
-          <MovementsTable
-            movements={tableMovements}
-            granularity={deferredGranularity}
-            today={today}
-            onSelectMovement={handleSelectMovement}
-          />
-        </DeferredMount>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Proveedores críticos"
-        storageKey="proyeccion.section.suppliers"
-        defaultOpen={false}
-        lazy
-        count={supplierAlerts.length}
-        badge={supplierAlerts.some((alert) => alert.severity === 'CRITICAL') ? <ShieldAlert className="h-3.5 w-3.5 text-[var(--danger)]" strokeWidth={1.5} /> : undefined}
-        description="Estatus de pago consolidado: real, programado, manual o pendiente."
-      >
-        <SupplierAlertsList alerts={supplierAlerts} />
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Impuestos"
-        storageKey="proyeccion.section.taxes"
-        defaultOpen={false}
-        lazy
-        description="IVA neto, ISN, IMSS y total con saldo vencido."
-        actions={props.onNavigateToTax ? (
-          <button
-            type="button"
-            onClick={props.onNavigateToTax}
-            className="text-[11px] font-medium text-[var(--primary)] hover:underline"
-          >
-            Abrir módulo →
-          </button>
-        ) : undefined}
-      >
-        <div className="grid grid-cols-2 gap-3 p-4 md:grid-cols-4">
-          <TaxStat label="Saldo vencido" value={fmtCompact(taxView.overdueBalance)} tone="danger" />
-          <TaxStat label="IVA período" value={fmtCompact(taxView.totals.ivaNet)} tone={taxView.totals.ivaNet > 0 ? 'warning' : 'neutral'} />
-          <TaxStat label="ISN/IMSS" value={fmtCompact(taxView.totals.isn + taxView.totals.imss)} tone="warning" />
-          <TaxStat label="Total acumulado" value={fmtCompact(taxView.totals.totalWithOverdue)} tone="danger" />
-        </div>
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Alertas"
-        storageKey="proyeccion.section.alerts"
-        defaultOpen={false}
-        lazy
-        count={activeRun.alerts.length}
-        badge={activeRun.alerts.some((alert) => alert.severity === 'CRITICAL')
-          ? <span className="rounded-full bg-[var(--danger)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white">crítica</span>
-          : undefined}
-        description="Caja bajo mínimo, confianza baja, impuestos vencidos."
-      >
-        <AlertsPanel alerts={activeRun.alerts as ProjectionAlert[]} />
-      </CollapsibleSection>
+      <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
+        <CashFlowChart
+          projection={activeRun}
+          baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
+          comparisonProjection={comparisonRun ?? undefined}
+          probabilisticProjection={probabilistic.run}
+          onNavigateToTax={props.onNavigateToTax}
+        />
+      </DeferredMount>
 
       <MovementDrillDownDrawer
         movement={drillMovement}
         anchor={drillAnchor}
         onClose={handleCloseDrawer}
         invoiceContext={drawerInvoiceContext}
+        quickActions={drillMovement ? (
+          <QuickMovementActions
+            movement={drillMovement}
+            isDraft={activeScenario.kind === 'DRAFT'}
+            onShiftDate={() => commitQuickAdjustment(drillMovement, 'SHIFT_DATE')}
+            onAmountOverride={() => commitQuickAdjustment(drillMovement, 'AMOUNT_OVERRIDE')}
+            onSplit={() => commitQuickAdjustment(drillMovement, 'SPLIT_PAYMENT')}
+          />
+        ) : undefined}
+      />
+
+      <MidasBubble
+        cia={props.companyCode}
+        asOfDate={today}
+        activeRun={activeRun}
+        providers={props.providers}
+        adjustments={storedAdjustments}
+        activeScenarioId={activeScenario.id}
+        activeScenarioKind={activeScenario.kind}
+        onAcceptProposal={(suggestion: MidasProposalSuggestion) => {
+          try {
+            const targetScenarioId = ensureEditableScenario(`MIDAS · ${suggestion.draft.name}`.slice(0, 60));
+            const adjustment = createFinancialAdjustment({
+              name: suggestion.draft.name,
+              scenarioIds: [targetScenarioId],
+              type: suggestion.draft.type,
+              targetType: suggestion.draft.targetType,
+              targetExpression: suggestion.draft.targetExpression,
+              reasonCode: suggestion.draft.reasonCode,
+              justification: suggestion.draft.justification,
+              deltaAmount: suggestion.draft.deltaAmount,
+              deltaDays: suggestion.draft.deltaDays,
+              percentageChange: suggestion.draft.percentageChange,
+              adjustedValue: suggestion.draft.adjustedValue,
+              createdBy: 'midas@senda.local',
+            });
+            setStoredAdjustments((current) => [
+              ...current,
+              {
+                ...adjustment,
+                impactSummary: {
+                  cashImpact: suggestion.estimatedCashImpact,
+                  deficitDaysReduced: 0,
+                  riskChange: 0,
+                },
+              },
+            ]);
+            setStatusMessage(`MIDAS guardó propuesta "${adjustment.name}" como DRAFT.`);
+          } catch (err) {
+            alert(err instanceof Error ? err.message : 'No se pudo crear la propuesta.');
+          }
+        }}
       />
     </div>
   );
@@ -781,7 +997,7 @@ function SegmentedControl<T extends string>({
 }) {
   return (
     <div
-      className="inline-flex h-10 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5"
+      className="inline-flex h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5"
       aria-busy={pending || undefined}
     >
       {options.map((option) => {
@@ -792,7 +1008,7 @@ function SegmentedControl<T extends string>({
             type="button"
             onClick={() => onChange(option.id)}
             aria-pressed={active}
-            className={`px-3 text-[12px] font-medium rounded-lg transition-colors ${active && pending ? 'animate-soft-pulse' : ''}`}
+            className={`px-3 text-[12px] font-medium rounded-[var(--radius-md)] transition-colors ${active && pending ? 'animate-soft-pulse' : ''}`}
             style={{
               background: active ? 'white' : 'transparent',
               color: active ? 'var(--gray-950)' : 'var(--gray-500)',
@@ -807,98 +1023,132 @@ function SegmentedControl<T extends string>({
   );
 }
 
-function SupplierAlertsList({ alerts }: { alerts: SupplierCriticalAlert[] }) {
-  if (alerts.length === 0) {
+function QuickMovementActions({
+  movement,
+  isDraft,
+  onShiftDate,
+  onAmountOverride,
+  onSplit,
+}: {
+  movement: FinancialMovement;
+  isDraft: boolean;
+  onShiftDate: () => void;
+  onAmountOverride: () => void;
+  onSplit: () => void;
+}) {
+  const locked = movement.lockState === 'LOCKED';
+  if (locked) {
     return (
-      <div className="px-4 py-8 text-center text-[12px] text-[var(--gray-400)]">
-        Sin proveedores críticos pendientes.
-      </div>
+      <p className="text-[11px] leading-snug text-[var(--gray-500)]">
+        Este movimiento está bloqueado por fuente o criticidad. No se ajusta automáticamente desde Proyección.
+      </p>
     );
   }
   return (
-    <ul className="divide-y divide-[var(--gray-100)]">
-      {alerts.slice(0, 12).map((alert) => (
-        <li key={alert.id} className="px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-medium text-[var(--gray-950)]">{alert.providerName}</div>
-              <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
-                {alert.invoiceNumber ? `Factura ${alert.invoiceNumber}` : 'Factura s/n'} · {alert.dueDate ? `vence ${fmtDate(alert.dueDate)}` : 'sin vencimiento'}
-              </div>
-              {alert.detail && (
-                <div className="mt-1 text-[11px] text-[var(--gray-500)] leading-snug">{alert.detail}</div>
-              )}
-            </div>
-            <div className="shrink-0 text-right">
-              <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${supplierAlertClass(alert.severity)}`}>
-                {alert.statusLabel}
-              </span>
-              <div className="mt-1 text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">{fmtCompact(alert.pendingAmount)}</div>
-            </div>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function supplierAlertClass(severity: SupplierCriticalAlert['severity']): string {
-  if (severity === 'CRITICAL') return 'bg-[var(--danger)]/10 text-[var(--danger)]';
-  if (severity === 'WARNING') return 'bg-[var(--warning-muted)] text-[var(--warning)]';
-  return 'bg-[var(--success)]/10 text-[var(--success)]';
-}
-
-function TaxStat({
-  label,
-  value,
-  tone: statTone,
-}: {
-  label: string;
-  value: string;
-  tone: 'success' | 'warning' | 'danger' | 'neutral';
-}) {
-  const toneClass = statTone === 'success'
-    ? 'text-[var(--success)]'
-    : statTone === 'warning'
-      ? 'text-[var(--warning)]'
-      : statTone === 'danger'
-        ? 'text-[var(--danger)]'
-        : 'text-[var(--gray-950)]';
-  return (
-    <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</div>
-      <div className={`mt-1 text-[14px] font-semibold tabular-nums ${toneClass}`}>{value}</div>
+    <div className="space-y-2">
+      {!isDraft && (
+        <div className="rounded-lg bg-[var(--warning-muted)] px-2 py-1.5 text-[11px] text-[var(--warning)]">
+          Se creará un draft automáticamente para guardar el ajuste.
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={onShiftDate}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+        >
+          <CalendarClock className="h-3.5 w-3.5" strokeWidth={1.75} />
+          {movement.type === 'INFLOW' ? 'Adelantar 7d' : 'Diferir 7d'}
+        </button>
+        <button
+          type="button"
+          onClick={onAmountOverride}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+        >
+          {movement.type === 'INFLOW'
+            ? <TrendingUp className="h-3.5 w-3.5" strokeWidth={1.75} />
+            : <TrendingDown className="h-3.5 w-3.5" strokeWidth={1.75} />}
+          {movement.type === 'INFLOW' ? 'Subir 10%' : 'Bajar 10%'}
+        </button>
+        {movement.type === 'OUTFLOW' && (
+          <button
+            type="button"
+            onClick={onSplit}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[11px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+          >
+            <Split className="h-3.5 w-3.5" strokeWidth={1.75} />
+            Dividir en 2
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
-function tone(value: number, minimum: number): string {
-  if (value < minimum) return 'var(--danger)';
-  if (value < minimum * 1.2) return 'var(--warning)';
-  return 'var(--gray-950)';
+// Tone helpers moved to ../../shared-finance/components/tone.ts.
+
+function shiftIsoDate(date: string, days: number, floorDate: string): string {
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  const shifted = parsed.toISOString().slice(0, 10);
+  return days < 0 && shifted < floorDate ? floorDate : shifted;
 }
 
-function minimumCashFor(props: Props): number {
+function minimumCashFor(): number {
   const fallback = 20_000_000;
-  if (!props.budget) return fallback;
-  const month = new Date().getUTCMonth();
-  const monthlyExpense = props.budget.expenseTotal?.[month] ?? 0;
-  return monthlyExpense > 0 ? Math.round(monthlyExpense * 0.3) : fallback;
+  return fallback;
+}
+
+function addUtcDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function ForecastModelSelector({
+  value,
+  onChange,
+  summary,
+}: {
+  value?: ForecastModelId;
+  onChange?: (id: ForecastModelId) => void;
+  summary?: ForecastOutput;
+}) {
+  if (!value || !onChange) return null;
+  const totalForecasted = summary?.receipts.reduce((s, r) => s + r.amountMxn, 0) ?? 0;
+  const providersCount = summary?.perProvider.length ?? 0;
+  return (
+    <div className="inline-flex h-10 items-stretch overflow-hidden rounded-xl border border-[var(--gray-200)] bg-white">
+      <label
+        className="flex items-center px-3 text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]"
+        htmlFor="forecast-model-selector"
+      >
+        Modelo OC
+      </label>
+      <select
+        id="forecast-model-selector"
+        value={value}
+        onChange={(e) => onChange(e.target.value as ForecastModelId)}
+        className="border-l border-[var(--gray-200)] bg-transparent px-3 text-[12px] font-medium text-[var(--gray-700)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
+        title={`${providersCount} proveedores · forecast total ${fmtCompact(totalForecasted)} (12m)`}
+      >
+        {FORECAST_MODELS.map((m) => (
+          <option key={m.id} value={m.id} title={m.description}>{m.label}</option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function EmptyDataState() {
   return (
-    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-10 text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--warning-muted)]">
-        <AlertTriangle className="h-5 w-5" style={{ color: 'var(--warning)' }} strokeWidth={1.5} />
-      </div>
-      <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
-        Aún no hay datos suficientes para proyectar
-      </h2>
-      <p className="mx-auto mt-2 max-w-[480px] text-[12px] leading-relaxed text-[var(--gray-500)]">
-        Necesitamos estados de cuenta bancarios y al menos uno de:
-        catálogo de clientes, antigüedad de saldos, o presupuesto del año.
-      </p>
-    </div>
+    <EmptyState
+      tone="warning"
+      align="center"
+      icon={<AlertTriangle className="h-5 w-5" strokeWidth={1.5} />}
+      title="Aún no hay datos suficientes para proyectar"
+      description="Necesitamos estados de cuenta bancarios y al menos uno de: catálogo de clientes, antigüedad de saldos, CXP JDE o cobranza real."
+    />
   );
 }

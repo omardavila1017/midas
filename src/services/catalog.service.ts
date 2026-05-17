@@ -1,32 +1,15 @@
 import { Client, Provider } from '../domain/types';
 import { loadClientsCatalog } from '../domain/loadClientsCatalog';
 import { loadProvidersCatalog } from '../domain/loadProvidersCatalog';
-import { apiConfig } from '../config/api.config';
 
-async function fetchJson<T>(path: string): Promise<T | null> {
-  if (!apiConfig.cognos.baseUrl) return null;
-
-  try {
-    const response = await fetch(`${apiConfig.cognos.baseUrl}${path}`, {
-      headers: {
-        Authorization: `Bearer ${apiConfig.cognos.authValue}`,
-        Accept: 'application/json',
-        'X-Cognos-Namespace': apiConfig.cognos.namespace,
-      },
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  }
-}
+// Clientes y proveedores no tienen API propia: son catálogos derivados de
+// otras fuentes (bundled JSON + plantillas). No se hace fetch a un endpoint
+// dedicado — hacerlo solo generaba requests 404 ruidosas en la red.
 
 export async function fetchClientCatalog(): Promise<Client[]> {
-  const live = await fetchJson<Client[]>('/reports/midas/clientes');
-  return live ?? loadClientsCatalog();
+  return loadClientsCatalog();
 }
 
 export async function fetchProviderCatalog(): Promise<Provider[]> {
-  const live = await fetchJson<Provider[]>('/reports/midas/proveedores');
-  return live ?? loadProvidersCatalog();
+  return loadProvidersCatalog();
 }

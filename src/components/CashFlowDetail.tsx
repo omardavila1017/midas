@@ -1,12 +1,8 @@
-import { useMemo, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { CashFlowAssumptions } from '../domain/types';
 import {
   aggregateWeekly,
   aggregateMonthly,
-  classifyMovement,
-  buildOwnAccountsIndex,
-  buildOwnAccountDetector,
-  buildPairMatchedKeys,
   computeBankOnlyCashFlow,
   EnrichedBankMovement,
   INTERNAL_REASON_LABELS,
@@ -14,10 +10,9 @@ import {
 import type { BankAccountStatement } from '../services/jde';
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
-  TrendingUp,
-  TrendingDown,
-  Wallet,
   Calendar as CalendarIcon,
   Landmark,
   RefreshCw,
@@ -64,15 +59,6 @@ interface Props {
   confirmedPayments?: unknown;
 }
 
-/** Flatten bank statements into daily inflow/outflow totals + saldo snapshot */
-interface BankDaySummary {
-  date: string;
-  abonos: number;      // total inflows from bank
-  cargos: number;      // total outflows from bank
-  saldoFinal: number;  // last known saldo final across accounts
-  cuentas: number;     // how many accounts had movements
-}
-
 type Granularity = 'daily' | 'weekly' | 'monthly';
 
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -102,66 +88,9 @@ export default function CashFlowDetail({
   const [granularity, setGranularity] = useState<Granularity>('weekly');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [monthFilter, setMonthFilter] = useState<number | 'all'>('all');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
 
-  // Build company name lookup
-  const ciaNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const c of companies) map.set(c.cia, c.nombre);
-    return map;
-  }, [companies]);
-
-  // ── Flatten bank statements into day summaries ──
-  // Mismo principio que `computeBankOnlyCashFlow`: los traspasos internos
-  // (leyenda / RFC propio / beneficiario propio / cuenta propia / par
-  // simétrico) NO entran en `abonos`/`cargos` para que los totales reflejen
-  // sólo flujo real. La sección colapsable del drilldown sí los muestra.
-  const bankByDate = useMemo(() => {
-    const map = new Map<string, BankDaySummary>();
-    const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
-    const pairedKeys = buildPairMatchedKeys(bankStatements);
-    const ctx = { ownAccountDetector, pairedKeys };
-    for (const acc of bankStatements) {
-      for (const mov of acc.movimientos) {
-        const date = mov.fechaOperacion;
-        if (!date) continue;
-        if (classifyMovement(mov, ctx, acc.cia, acc.cuenta).kind === 'internal') continue;
-        let entry = map.get(date);
-        if (!entry) {
-          entry = { date, abonos: 0, cargos: 0, saldoFinal: 0, cuentas: 0 };
-          map.set(date, entry);
-        }
-        if (mov.tipoMovimiento === 'ABONO') entry.abonos += mov.importe;
-        else entry.cargos += mov.importe;
-      }
-      if (acc.saldoFinal !== undefined) {
-        const date = acc.fechaEstadoCuenta;
-        let entry = map.get(date);
-        if (!entry) {
-          entry = { date, abonos: 0, cargos: 0, saldoFinal: 0, cuentas: 0 };
-          map.set(date, entry);
-        }
-        entry.saldoFinal += acc.saldoFinal;
-        entry.cuentas += 1;
-      }
-    }
-    return map;
-  }, [bankStatements]);
-
-  // Totales de bancos
-  const totalBankSaldo = useMemo(
-    () => bankStatements.reduce((s, acc) => s + (acc.saldoFinal ?? acc.saldoInicial ?? 0), 0),
-    [bankStatements],
-  );
-  const totalBankAbonos = useMemo(() => {
-    let total = 0;
-    for (const entry of bankByDate.values()) total += entry.abonos;
-    return total;
-  }, [bankByDate]);
-  const totalBankCargos = useMemo(() => {
-    let total = 0;
-    for (const entry of bankByDate.values()) total += entry.cargos;
-    return total;
-  }, [bankByDate]);
+  void companies;
 
   // ──────────────────────────────────────────────────────────────
   // Fuente única de verdad: estados de cuenta del API de JDE.
@@ -179,20 +108,31 @@ export default function CashFlowDetail({
 
   // Filter by month if selected
   const filteredDaily = useMemo(() => {
-    if (monthFilter === 'all') return daily;
-    return daily.filter(d => Number(d.date.slice(5, 7)) - 1 === monthFilter);
-  }, [daily, monthFilter]);
+    const base = monthFilter === 'all'
+      ? daily
+      : daily.filter(d => Number(d.date.slice(5, 7)) - 1 === monthFilter);
+    const sorted = [...base].sort((a, b) =>
+      sortOrder === 'desc' ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date),
+    );
+    return sorted;
+  }, [daily, monthFilter, sortOrder]);
 
   const filteredWeekly = useMemo(() => {
-    if (monthFilter === 'all') return weekly;
-    return weekly.filter(w => Number(w.weekStart.slice(5, 7)) - 1 === monthFilter);
-  }, [weekly, monthFilter]);
+    const base = monthFilter === 'all'
+      ? weekly
+      : weekly.filter(w => Number(w.weekStart.slice(5, 7)) - 1 === monthFilter);
+    const sorted = [...base].sort((a, b) =>
+      sortOrder === 'desc' ? b.weekStart.localeCompare(a.weekStart) : a.weekStart.localeCompare(b.weekStart),
+    );
+    return sorted;
+  }, [weekly, monthFilter, sortOrder]);
 
-  // KPIs
-  const totalInflows = daily.reduce((s, d) => s + d.inflows, 0);
-  const totalOutflows = daily.reduce((s, d) => s + d.outflows, 0);
-  const netFlow = totalInflows - totalOutflows;
-  const finalBalance = daily.length > 0 ? daily[daily.length - 1].cumulative : startingBalance;
+  const sortedMonthly = useMemo(() => {
+    return [...monthly].sort((a, b) =>
+      sortOrder === 'desc' ? b.month - a.month : a.month - b.month,
+    );
+  }, [monthly, sortOrder]);
+
   const minBalance = daily.reduce((m, d) => Math.min(m, d.cumulative), startingBalance);
   const minBalanceDate = daily.find(d => d.cumulative === minBalance)?.date;
 
@@ -224,65 +164,7 @@ export default function CashFlowDetail({
 
   return (
     <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-5">
-      <PageHeader
-        title="Flujo de efectivo"
-        actions={
-          <button
-            onClick={handleExport}
-            className={`inline-flex items-center gap-2 h-9 px-3 rounded-lg border ${T.border} bg-white text-sm font-medium ${T.textMuted} ${T.rowHover} hover:text-[var(--card-foreground)] transition-colors duration-150`}
-          >
-            <Download size={16} strokeWidth={1.5} />
-            Exportar
-          </button>
-        }
-      />
-
-      {/* KPI grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KpiCard
-          label="Abonos"
-          value={totalInflows}
-          icon={TrendingUp}
-          tone="success"
-        />
-        <KpiCard
-          label="Cargos"
-          value={totalOutflows}
-          icon={TrendingDown}
-          tone="danger"
-        />
-        <KpiCard
-          label="Neto"
-          value={netFlow}
-          icon={Wallet}
-          tone={netFlow >= 0 ? 'primary' : 'danger'}
-        />
-        <KpiCard
-          label="Saldo final"
-          value={finalBalance}
-          icon={Wallet}
-          tone={finalBalance >= 0 ? 'primary' : 'danger'}
-        />
-      </div>
-
-      {/* Saldo real bancos */}
-      {bankStatements.length > 0 && (
-        <BankSummaryCard
-          bankStatements={bankStatements}
-          totalBankSaldo={totalBankSaldo}
-          totalBankAbonos={totalBankAbonos}
-          totalBankCargos={totalBankCargos}
-          ciaNameMap={ciaNameMap}
-          bankFetchStatus={bankFetchStatus}
-          bankFetchProgress={bankFetchProgress}
-          onRefreshBanks={onRefreshBanks}
-        />
-      )}
-
-      {/* Skeleton while first-time loading bank data */}
-      {bankStatements.length === 0 && bankFetchStatus !== 'idle' && (
-        <BankSkeleton />
-      )}
+      <PageHeader title="Flujo de efectivo" />
 
       {/* Alerta de saldo mínimo negativo */}
       {minBalance < 0 && minBalanceDate && (
@@ -295,7 +177,7 @@ export default function CashFlowDetail({
 
         <div className="flex items-center gap-3">
           <div
-            className={`flex items-center gap-2 h-9 px-3 rounded-lg border ${T.border} bg-white text-sm ${T.textMuted}`}
+            className={`flex items-center gap-2 h-9 px-3 rounded-[var(--radius-md)] border ${T.border} bg-white text-sm ${T.textMuted}`}
             title="Saldo inicial fijo por decisión de negocio."
           >
             <span>Saldo inicial</span>
@@ -306,11 +188,28 @@ export default function CashFlowDetail({
           <select
             value={monthFilter}
             onChange={e => setMonthFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-            className={`h-9 px-3 rounded-lg border ${T.border} bg-white text-sm ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
+            className={`h-9 px-3 rounded-[var(--radius-md)] border ${T.border} bg-white text-sm ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
           >
             <option value="all">Todo el año</option>
             {MONTH_NAMES.map((m, i) => <option key={m} value={i}>{m}</option>)}
           </select>
+          <select
+            value={sortOrder}
+            onChange={e => setSortOrder(e.target.value as 'desc' | 'asc')}
+            className={`h-9 px-3 rounded-[var(--radius-md)] border ${T.border} bg-white text-sm ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
+            title="Orden por fecha"
+          >
+            <option value="desc">Última a primera fecha</option>
+            <option value="asc">Primera a última fecha</option>
+          </select>
+          <button
+            onClick={handleExport}
+            className={`inline-flex items-center gap-1.5 text-xs ${T.textMuted} hover:text-[var(--primary)] transition-colors duration-150`}
+            title="Exportar CSV"
+          >
+            <Download size={14} strokeWidth={1.5} />
+            Exportar
+          </button>
         </div>
       </div>
 
@@ -340,7 +239,7 @@ export default function CashFlowDetail({
       )}
       {granularity === 'monthly' && (
         <MonthlyTable
-          monthly={monthly}
+          monthly={sortedMonthly}
           daily={daily}
           expandedKey={expandedKey}
           onToggle={setExpandedKey}
@@ -360,12 +259,12 @@ function CashFlowPageHeader() {
 
 function EmptyDataCard({ onRefreshBanks }: { onRefreshBanks?: () => void }) {
   return (
-    <div className={`${T.surface} border ${T.border} rounded-xl p-8 max-w-lg mx-auto`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] p-8 max-w-lg mx-auto`}>
       <div className="flex flex-col items-center text-center">
-        <div className="w-12 h-12 rounded-xl bg-[var(--surface-alt)] flex items-center justify-center mb-4">
+        <div className="w-12 h-12 rounded-[var(--radius)] bg-[var(--surface-alt)] flex items-center justify-center mb-4">
           <Landmark size={22} strokeWidth={1.5} className={T.textSubtle} />
         </div>
-        <h2 className={`text-base font-semibold ${T.text}`}>Sin movimientos bancarios</h2>
+        <h2 className={`text-base font-bold ${T.text}`}>Sin movimientos bancarios</h2>
         <p className={`text-sm mt-2 max-w-sm ${T.textMuted}`}>
           Esta vista usa únicamente los estados de cuenta del API de JDE como
           fuente de verdad. Refresca para traer los últimos movimientos del año.
@@ -373,7 +272,7 @@ function EmptyDataCard({ onRefreshBanks }: { onRefreshBanks?: () => void }) {
         {onRefreshBanks && (
           <button
             onClick={onRefreshBanks}
-            className={`mt-6 inline-flex items-center gap-2 h-9 px-4 rounded-lg border ${T.border} text-sm font-medium ${T.text} ${T.rowHover} transition-colors duration-150`}
+            className={`mt-6 inline-flex items-center gap-2 h-9 px-4 rounded-[var(--radius-md)] border ${T.border} text-sm font-medium ${T.text} ${T.rowHover} transition-colors duration-150`}
           >
             <RefreshCw size={14} strokeWidth={1.5} />
             Traer datos de bancos
@@ -384,7 +283,7 @@ function EmptyDataCard({ onRefreshBanks }: { onRefreshBanks?: () => void }) {
   );
 }
 
-function KpiCard({
+export function KpiCard({
   label, value, icon: Icon, tone,
 }: {
   label: string;
@@ -400,10 +299,10 @@ function KpiCard({
   }[tone];
 
   return (
-    <div className={`${T.surface} border ${T.border} rounded-xl p-5 hover:shadow-sm transition-shadow duration-150`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] p-5 hover:shadow-sm transition-shadow duration-150`}>
       <div className="flex items-center justify-between mb-3">
         <span className={`text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>{label}</span>
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${toneClasses.chip}`}>
+        <div className={`w-8 h-8 rounded-[var(--radius-md)] flex items-center justify-center ${toneClasses.chip}`}>
           <Icon size={16} strokeWidth={1.5} className={toneClasses.icon} />
         </div>
       </div>
@@ -414,39 +313,39 @@ function KpiCard({
   );
 }
 
-function BankSummaryCard({
-  bankStatements, totalBankSaldo, totalBankAbonos, totalBankCargos,
+export function BankSummaryCard({
+  bankStatements, balanceStatements, balanceDate, totalBankSaldo, totalBankAbonos, totalBankCargos,
+  activeDays,
   ciaNameMap, bankFetchStatus, bankFetchProgress, onRefreshBanks,
 }: {
   bankStatements: BankAccountStatement[];
+  balanceStatements: BankAccountStatement[];
+  balanceDate: string | null;
   totalBankSaldo: number;
   totalBankAbonos: number;
   totalBankCargos: number;
+  activeDays: number;
   ciaNameMap: Map<string, string>;
   bankFetchStatus: 'idle' | 'priming' | 'ranging';
   bankFetchProgress: { done: number; total: number } | null;
   onRefreshBanks?: () => void;
 }) {
-  // Días únicos cubiertos por movimientos
-  const diasCubiertos = useMemo(() => {
-    const s = new Set<string>();
-    for (const acc of bankStatements) for (const mov of acc.movimientos) s.add(mov.fechaOperacion);
-    return s.size;
-  }, [bankStatements]);
+  // Mismo conteo que la vista Diario: días con movimiento real (excluye traspasos internos).
+  const diasCubiertos = activeDays;
 
-  const empresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
-  const fechaCorte = bankStatements[0]?.fechaEstadoCuenta;
+  const empresas = Array.from(new Set(balanceStatements.map(a => a.cia).filter(Boolean)));
+  const staleAccounts = Math.max(0, bankStatements.length - balanceStatements.length);
   const isLoading = bankFetchStatus !== 'idle';
 
   return (
-    <section className={`${T.surface} border ${T.border} rounded-xl`}>
+    <section className={`${T.surface} border ${T.border} rounded-[var(--radius)]`}>
       {/* Header */}
       <div className={`flex flex-wrap items-center gap-3 px-5 py-4 border-b ${T.border}`}>
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-[var(--primary)]/10 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-[var(--radius-md)] bg-[var(--primary)]/10 flex items-center justify-center">
             <Landmark size={16} strokeWidth={1.5} className="text-[var(--primary)]" />
           </div>
-          <h3 className={`text-base font-semibold ${T.text}`}>Saldo real bancos</h3>
+          <h3 className={`text-base font-bold ${T.text}`}>Saldo real bancos</h3>
         </div>
 
         <div className="flex items-center gap-2 ml-auto">
@@ -461,10 +360,11 @@ function BankSummaryCard({
             </span>
           )}
           <span className={`text-xs ${T.textMuted}`}>
-            {bankStatements.length} cuenta{bankStatements.length !== 1 ? 's' : ''}
+            {balanceStatements.length} cuenta{balanceStatements.length !== 1 ? 's' : ''}
             {' · '}
             {diasCubiertos} día{diasCubiertos !== 1 ? 's' : ''} con actividad
-            {fechaCorte ? ` · Al ${formatDate(fechaCorte)}` : ''}
+            {balanceDate ? ` · Al ${formatDate(balanceDate)}` : ''}
+            {staleAccounts > 0 ? ` · ${staleAccounts} históricas no incluidas en saldo` : ''}
           </span>
           {onRefreshBanks && (
             <button
@@ -494,25 +394,99 @@ function BankSummaryCard({
       {/* Lista de empresas — fila dedicada con scroll horizontal para no
           romper el grid cuando son muchas. */}
       {empresas.length > 0 && (
-        <div className={`px-5 py-3 border-t ${T.border} bg-[var(--surface-alt)]`}>
-          <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin">
-            <span className={`text-[11px] font-medium uppercase tracking-wide ${T.textMuted} flex-shrink-0`}>
-              Activas
-            </span>
-            <div className="flex items-center gap-1.5 flex-nowrap">
-              {empresas.map(cia => (
-                <span
-                  key={cia}
-                  className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-md bg-white border ${T.border} text-[11px] font-medium ${T.textMuted} whitespace-nowrap`}
-                >
-                  {ciaNameMap.get(cia) ?? `Cia ${cia}`}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
+        <CompanyChipsRow empresas={empresas} ciaNameMap={ciaNameMap} />
       )}
     </section>
+  );
+}
+
+function CompanyChipsRow({
+  empresas,
+  ciaNameMap,
+}: {
+  empresas: string[];
+  ciaNameMap: Map<string, string>;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+
+  const updateAffordance = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanLeft(el.scrollLeft > 4);
+    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+
+  useEffect(() => {
+    updateAffordance();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', updateAffordance, { passive: true });
+    const ro = new ResizeObserver(updateAffordance);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener('scroll', updateAffordance);
+      ro.disconnect();
+    };
+  }, [empresas.length]);
+
+  const scrollBy = (delta: number) => {
+    scrollRef.current?.scrollBy({ left: delta, behavior: 'smooth' });
+  };
+
+  return (
+    <div className={`px-5 py-3 border-t ${T.border} bg-[var(--surface-alt)]`}>
+      <div className="flex items-center gap-2">
+        <span className={`text-[11px] font-medium uppercase tracking-wide ${T.textMuted} flex-shrink-0`}>
+          Activas
+        </span>
+        <div className="relative flex-1 min-w-0">
+          {canLeft && (
+            <>
+              <button
+                type="button"
+                onClick={() => scrollBy(-180)}
+                aria-label="Ver empresas anteriores"
+                className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white border ${T.border} shadow-sm ${T.textMuted} hover:text-[var(--card-foreground)]`}
+              >
+                <ChevronLeft size={12} strokeWidth={1.5} />
+              </button>
+              <div className="pointer-events-none absolute left-0 top-0 h-full w-8 bg-gradient-to-r from-[var(--surface-alt)] to-transparent" />
+            </>
+          )}
+          <div
+            ref={scrollRef}
+            className="flex items-center gap-1.5 flex-nowrap overflow-x-auto scrollbar-thin scroll-smooth"
+          >
+            {empresas.map(cia => (
+              <span
+                key={cia}
+                className={`inline-flex flex-shrink-0 px-2 py-0.5 rounded-md bg-white border ${T.border} text-[11px] font-medium ${T.textMuted} whitespace-nowrap`}
+              >
+                {ciaNameMap.get(cia) ?? `Cia ${cia}`}
+              </span>
+            ))}
+          </div>
+          {canRight && (
+            <>
+              <div className="pointer-events-none absolute right-0 top-0 h-full w-8 bg-gradient-to-l from-[var(--surface-alt)] to-transparent" />
+              <button
+                type="button"
+                onClick={() => scrollBy(180)}
+                aria-label="Ver más empresas"
+                className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white border ${T.border} shadow-sm ${T.textMuted} hover:text-[var(--card-foreground)]`}
+              >
+                <ChevronRight size={12} strokeWidth={1.5} />
+              </button>
+            </>
+          )}
+        </div>
+        <span className={`text-[11px] ${T.textMuted} flex-shrink-0`}>
+          {empresas.length} empresa{empresas.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -552,9 +526,9 @@ function BankMetric({
 
 function BankSkeleton() {
   return (
-    <div className={`${T.surface} border ${T.border} rounded-xl animate-pulse`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] animate-pulse`}>
       <div className={`px-5 py-4 border-b ${T.border} flex items-center gap-3`}>
-        <div className="w-8 h-8 rounded-lg bg-[var(--muted)]" />
+        <div className="w-8 h-8 rounded-[var(--radius-md)] bg-[var(--muted)]" />
         <div className="h-4 bg-[var(--muted)] rounded w-48" />
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[var(--gray-100)]">
@@ -571,12 +545,12 @@ function BankSkeleton() {
 
 function MinBalanceAlert({ minBalance, minBalanceDate }: { minBalance: number; minBalanceDate: string }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-[var(--warning)]/30 bg-[var(--warning)]/5 px-4 py-3">
+    <div className="flex items-start gap-3 rounded-[var(--radius)] border border-[var(--warning)]/30 bg-[var(--warning)]/5 px-4 py-3">
       <AlertTriangle size={18} strokeWidth={1.5} className="text-[var(--warning)] mt-0.5 flex-shrink-0" />
       <div className="flex-1">
         <p className={`text-sm font-medium ${T.text}`}>Saldo mínimo negativo</p>
         <p className={`text-sm ${T.textMuted} mt-0.5`}>
-          Tu saldo llegará a <span className={`font-semibold tabular-nums ${T.text}`}>{fmtCurrency(minBalance)}</span> el {formatDate(minBalanceDate)}.
+          Tu saldo llegará a <span className={`font-bold tabular-nums ${T.text}`}>{fmtCurrency(minBalance)}</span> el {formatDate(minBalanceDate)}.
           Ajusta el saldo inicial o reprograma pagos.
         </p>
       </div>
@@ -596,7 +570,7 @@ function GranularityTabs({
     { id: 'monthly', label: 'Mensual' },
   ];
   return (
-    <div className="inline-flex p-0.5 rounded-lg bg-[var(--muted)]" role="tablist">
+    <div className="inline-flex p-0.5 rounded-[var(--radius-md)] bg-[var(--muted)]" role="tablist">
       {items.map(it => {
         const active = value === it.id;
         return (
@@ -637,7 +611,7 @@ function DailyTable({
   if (daily.length === 0) return <EmptyTable msg="Sin actividad en el periodo" />;
 
   return (
-    <div className={`${T.surface} border ${T.border} rounded-xl overflow-hidden`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] overflow-hidden`}>
       <table className="w-full text-sm">
         <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
@@ -683,10 +657,10 @@ function DailyTable({
                   <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">
                     {d.outflows > 0 ? fmtCurrency(d.outflows) : <span className={T.textSubtle}>—</span>}
                   </td>
-                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${d.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums font-bold ${d.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
                     {fmtCurrency(d.net)}
                   </td>
-                  <td className={`px-4 py-3 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : T.text}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums ${d.cumulative < 0 ? 'text-[var(--danger)] font-bold' : T.text}`}>
                     {fmtCurrency(d.cumulative)}
                   </td>
                   <td className={`px-4 py-3 text-right tabular-nums text-xs ${T.textMuted}`}>{eventCount}</td>
@@ -755,7 +729,7 @@ function WeeklyTable({
   if (weekly.length === 0) return <EmptyTable msg="Sin actividad en el periodo" />;
 
   return (
-    <div className={`${T.surface} border ${T.border} rounded-xl overflow-hidden`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] overflow-hidden`}>
       <table className="w-full text-sm">
         <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
@@ -796,10 +770,10 @@ function WeeklyTable({
                   <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">
                     {w.outflows > 0 ? fmtCurrency(w.outflows) : <span className={T.textSubtle}>—</span>}
                   </td>
-                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${w.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums font-bold ${w.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
                     {fmtCurrency(w.net)}
                   </td>
-                  <td className={`px-4 py-3 text-right tabular-nums ${w.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : T.text}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums ${w.cumulative < 0 ? 'text-[var(--danger)] font-bold' : T.text}`}>
                     {fmtCurrency(w.cumulative)}
                   </td>
                   <td className={`px-4 py-3 text-right tabular-nums text-xs ${T.textMuted}`}>{weekDays.length}</td>
@@ -842,7 +816,7 @@ function MonthlyTable({
   const maxOutflow = Math.max(...monthly.map(m => m.outflows), 1);
 
   return (
-    <div className={`${T.surface} border ${T.border} rounded-xl overflow-hidden`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] overflow-hidden`}>
       <table className="w-full text-sm">
         <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
@@ -888,10 +862,10 @@ function MonthlyTable({
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--success)]">{fmtCurrency(m.inflows)}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">{fmtCurrency(m.outflows)}</td>
-                  <td className={`px-4 py-3 text-right tabular-nums font-semibold ${m.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums font-bold ${m.net >= 0 ? T.text : 'text-[var(--danger)]'}`}>
                     {fmtCurrency(m.net)}
                   </td>
-                  <td className={`px-4 py-3 text-right tabular-nums ${m.cumulative < 0 ? 'text-[var(--danger)] font-semibold' : T.text}`}>
+                  <td className={`px-4 py-3 text-right tabular-nums ${m.cumulative < 0 ? 'text-[var(--danger)] font-bold' : T.text}`}>
                     {fmtCurrency(m.cumulative)}
                   </td>
                 </tr>
@@ -903,7 +877,7 @@ function MonthlyTable({
                       </div>
                       <div className="grid grid-cols-7 gap-1.5">
                         {monthDays.map(d => (
-                          <div key={d.date} className={`${T.surface} border ${T.border} rounded-lg p-2`}>
+                          <div key={d.date} className={`${T.surface} border ${T.border} rounded-[var(--radius-md)] p-2`}>
                             <div className={`text-xs font-medium ${T.textMuted}`}>{d.date.slice(8)}</div>
                             <div className="text-xs tabular-nums text-[var(--success)] mt-0.5">{d.inflows > 0 ? fmtCompact(d.inflows) : ''}</div>
                             <div className="text-xs tabular-nums text-[var(--danger)]">{d.outflows > 0 ? `-${fmtCompact(d.outflows)}` : ''}</div>
@@ -958,7 +932,7 @@ function DayDetail({
       </div>
 
       {hasInternal && (
-        <div className={`border ${T.border} rounded-lg overflow-hidden`}>
+        <div className={`border ${T.border} rounded-[var(--radius-md)] overflow-hidden`}>
           <button
             type="button"
             onClick={() => setInternalOpen(o => !o)}
@@ -972,14 +946,14 @@ function DayDetail({
               <span className={`text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
                 Movimientos internos
               </span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-200)] text-[var(--gray-500)] font-bold">
                 {internalAbonos.length + internalCargos.length}
               </span>
             </div>
             <div className="flex items-center gap-3 text-xs tabular-nums text-[var(--gray-400)]">
               {internalAbonosSum > 0 && <span>+{fmtCurrency(internalAbonosSum)}</span>}
               {internalCargosSum > 0 && <span>−{fmtCurrency(internalCargosSum)}</span>}
-              <span className="text-[10px] uppercase tracking-wider">excluidos del neto</span>
+              <span className="text-[10px] uppercase tracking-[0.08em]">excluidos del neto</span>
             </div>
           </button>
           {internalOpen && (
@@ -1023,7 +997,7 @@ function MovementColumn({
         <span className={`text-xs ${T.textMuted}`}>{movements.length}</span>
       </div>
       {movements.length === 0 ? (
-        <div className={`text-sm ${T.textSubtle} py-4 text-center border border-dashed ${T.border} rounded-lg`}>{emptyMsg}</div>
+        <div className={`text-sm ${T.textSubtle} py-4 text-center border border-dashed ${T.border} rounded-[var(--radius-md)]`}>{emptyMsg}</div>
       ) : (
         <div className="space-y-1.5">
           {[...movements].sort((a, b) => b.amount - a.amount).map((m, i) => (
@@ -1049,7 +1023,7 @@ function MovementRow({ m, tone }: { m: EnrichedBankMovement; tone: 'success' | '
     : tone === 'success' ? 'text-[var(--success)]' : 'text-[var(--danger)]';
 
   return (
-    <div className={`${T.surface} rounded-lg border ${T.border} overflow-hidden`}>
+    <div className={`${T.surface} rounded-[var(--radius-md)] border ${T.border} overflow-hidden`}>
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
@@ -1061,7 +1035,7 @@ function MovementRow({ m, tone }: { m: EnrichedBankMovement; tone: 'success' | '
           <div className={`text-sm font-medium ${T.text} truncate flex items-center gap-1.5`}>
             <span className="truncate">{m.concepto}</span>
             {isInternal && (
-              <span className="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold flex-shrink-0">
+              <span className="text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-bold flex-shrink-0">
                 Interno
               </span>
             )}
@@ -1071,7 +1045,7 @@ function MovementRow({ m, tone }: { m: EnrichedBankMovement; tone: 'success' | '
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <div className={`text-sm font-semibold tabular-nums ${colorClass}`}>{fmtCurrency(m.amount)}</div>
+          <div className={`text-sm font-bold tabular-nums ${colorClass}`}>{fmtCurrency(m.amount)}</div>
           <ChevronDown
             className={`w-4 h-4 ${T.textMuted} transition-transform ${open ? 'rotate-180' : ''}`}
           />
@@ -1129,7 +1103,7 @@ function WeekDetail({
 }) {
   const [dayOpen, setDayOpen] = useState<string | null>(null);
   return (
-    <div className={`${T.surface} border ${T.border} rounded-lg overflow-hidden`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius-md)] overflow-hidden`}>
       <table className="w-full text-sm">
         <thead className={`${T.surfaceAlt} text-xs font-medium uppercase tracking-wide ${T.textMuted}`}>
           <tr>
@@ -1201,7 +1175,7 @@ function WeekDetail({
 // ---------------------------------------------------------------------------
 function EmptyTable({ msg }: { msg: string }) {
   return (
-    <div className={`${T.surface} border ${T.border} rounded-xl py-16 text-center`}>
+    <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] py-16 text-center`}>
       <CalendarIcon size={28} strokeWidth={1.5} className={`${T.textSubtle} mx-auto mb-3`} />
       <p className={`text-sm font-medium ${T.text}`}>{msg}</p>
       <p className={`text-xs ${T.textMuted} mt-1`}>Prueba con otro mes o carga más datos</p>

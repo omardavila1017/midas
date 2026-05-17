@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import {
   ComposedChart,
+  Bar,
   Line,
   XAxis,
   YAxis,
@@ -8,32 +9,26 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  Area,
-  ReferenceLine,
-  ReferenceDot,
 } from 'recharts';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
-import AnimatedNumber from '../../../components/ui/AnimatedNumber';
-import type { ForecastRun } from '../../shared-finance/types';
+import type { ForecastRun, ProbabilisticForecastRun } from '../../shared-finance/types';
 import { aggregateProjectionToMonths } from './cashTrajectoryAggregation';
 
 interface Props {
   projection: ForecastRun;
   baseProjection?: ForecastRun;
+  probabilisticProjection?: ProbabilisticForecastRun | null;
 }
 
-const COLOR = {
-  base: '#94a3b8',
-  forecast: '#1e293b',
-  grid: '#f1f5f9',
-  axis: '#e2e8f0',
-  tickText: '#64748b',
-  refLine: '#cbd5e1',
-  warning: '#f59e0b',
-  danger: '#dc2626',
-  dangerFill: '#fee2e2',
-  success: '#16a34a',
-  successFill: '#dcfce7',
+const CHART_COLORS = {
+  income:         '#16a34a',
+  incomePattern:  '#22c55e',
+  incomeBg:       '#dcfce7',
+  expense:        '#dc2626',
+  expensePattern: '#ef4444',
+  expenseBg:      '#fee2e2',
+  cash:           '#1e293b',
+  cashBase:       '#94a3b8',
 } as const;
 
 const MONTH_LABELS_SHORT = [
@@ -47,50 +42,50 @@ function formatMonthTick(yearMonth: string): string {
   return `${MONTH_LABELS_SHORT[(m - 1) % 12]} ${String(y).slice(2)}`;
 }
 
-const TOOLTIP_SERIES: Record<string, { label: string; color: string }> = {
-  base: { label: 'Caja base', color: '#475569' },
-  forecast: { label: 'Caja escenario', color: '#0f172a' },
-  deltaAbove: { label: 'Δ positivo', color: '#16a34a' },
-  deltaBelow: { label: 'Δ negativo', color: '#dc2626' },
+const SERIES_LABEL: Record<string, string> = {
+  realIncome: 'Ingresos (real)',
+  projIncome: 'Ingresos (proy.)',
+  realExpense: 'Egresos (real)',
+  projExpense: 'Egresos (proy.)',
+  cash: 'Caja final',
+  cashBase: 'Caja base',
 };
 
-const ChartTooltip: React.FC<{
-  active?: boolean;
-  payload?: Array<{ name?: string; value?: number | [number, number] | string }>;
-  label?: string;
-}> = ({ active, payload, label }) => {
+interface TooltipRow {
+  dataKey?: string;
+  name?: string;
+  value?: number;
+  color?: string;
+}
+
+const MonthTooltip: React.FC<{ active?: boolean; payload?: TooltipRow[]; label?: string }> = ({
+  active,
+  payload,
+  label,
+}) => {
   if (!active || !payload || payload.length === 0) return null;
   return (
     <div
       style={{
         borderRadius: 'var(--radius-md)',
-        border: `1px solid ${COLOR.axis}`,
+        border: '1px solid #e2e8f0',
         background: 'white',
         boxShadow: 'var(--shadow-sm)',
         padding: '8px 10px',
         fontSize: 12,
       }}
     >
-      <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--gray-950)', marginBottom: 4 }}>
+      <div style={{ fontWeight: 500, color: 'var(--gray-950)', marginBottom: 4 }}>
         {label ? formatMonthTick(label) : ''}
       </div>
       {payload.map((p, i) => {
-        const name = p.name ?? '';
-        const meta = TOOLTIP_SERIES[name];
-        if (!meta) return null;
-        let amount: number | null = null;
-        if (Array.isArray(p.value) && p.value.length === 2) {
-          const [lo, hi] = p.value;
-          if (typeof lo === 'number' && typeof hi === 'number') {
-            amount = Math.abs(hi - lo);
-          }
-        } else if (typeof p.value === 'number') {
-          amount = p.value;
-        }
-        if (amount === null) return null;
+        const key = p.dataKey ?? '';
+        const labelText = SERIES_LABEL[key] ?? p.name ?? key;
+        const v = typeof p.value === 'number' ? p.value : 0;
+        if (!v) return null;
         return (
-          <div key={i} style={{ padding: '2px 0', color: meta.color, fontWeight: 500 }}>
-            {meta.label} : {fmtCurrency(amount)}
+          <div key={i} style={{ padding: '2px 0', color: p.color, fontWeight: 500 }}>
+            {labelText} : {fmtCurrency(v)}
           </div>
         );
       })}
@@ -98,16 +93,10 @@ const ChartTooltip: React.FC<{
   );
 };
 
-const LastPointDot: React.FC<{ cx?: number; cy?: number }> = ({ cx, cy }) => {
-  if (cx === undefined || cy === undefined) return null;
-  return (
-    <g>
-      <circle cx={cx} cy={cy} r={8} fill={COLOR.forecast} fillOpacity={0.08} />
-      <circle cx={cx} cy={cy} r={4} fill={COLOR.forecast} />
-      <circle cx={cx} cy={cy} r={2} fill="white" />
-    </g>
-  );
-};
+function todayYm(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
 
 export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjection }) => {
   const months = useMemo(
@@ -116,35 +105,25 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
   );
 
   const hasBaseline = Boolean(baseProjection) && projection.scenarioId !== baseProjection?.scenarioId;
+  const currentYm = todayYm();
 
   const chartData = useMemo(() => months.map((m) => {
-    const base = m.baseClosingCash;
-    const forecast = m.forecastClosingCash;
+    const isPast = m.yearMonth < currentYm;
     return {
       yearMonth: m.yearMonth,
-      base,
-      forecast,
-      deltaAbove: hasBaseline && forecast > base ? [base, forecast] : null,
-      deltaBelow: hasBaseline && forecast < base ? [forecast, base] : null,
+      phase: isPast ? 'past' : 'future',
+      realIncome: isPast ? m.forecastIncome : 0,
+      projIncome: isPast ? 0 : m.forecastIncome,
+      realExpense: isPast ? m.forecastExpense : 0,
+      projExpense: isPast ? 0 : m.forecastExpense,
+      cash: m.forecastClosingCash,
+      cashBase: hasBaseline ? m.baseClosingCash : null,
     };
-  }), [months, hasBaseline]);
-
-  const crossesZero = useMemo(
-    () => chartData.some((d) => d.base < 0 || d.forecast < 0),
-    [chartData],
-  );
-
-  const lastPoint = chartData.length > 0 ? chartData[chartData.length - 1] : null;
-  const finalForecast = projection.summary.finalCash;
-  const finalBase = baseProjection?.summary.finalCash ?? finalForecast;
-  const delta = finalForecast - finalBase;
-  const deltaSign = delta >= 0 ? '+' : '−';
-  const deltaColor = delta >= 0 ? COLOR.success : COLOR.danger;
-  const minimumCash = projection.summary.minimumCashRequired;
+  }), [months, currentYm, hasBaseline]);
 
   if (chartData.length === 0) {
     return (
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
+      <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
         <div
           role="status"
           aria-live="polite"
@@ -162,190 +141,93 @@ export const CashTrajectoryChart: React.FC<Props> = ({ projection, baseProjectio
   }
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
-        <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
-            Trayectoria de la caja
-          </h2>
-          <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-            {hasBaseline
-              ? 'Línea base (gris) vs escenario activo (negro). El área sombreada es el impacto.'
-              : 'Cierre mensual proyectado del escenario activo.'}
-          </p>
-        </div>
-        <div className="text-right text-[12px] text-[var(--gray-400)]">
-          {projection.startDate} → {projection.endDate}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-6 pb-4 mb-2 border-b border-[var(--gray-100)]">
-        <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
-            Caja base (fin)
-          </p>
-          <AnimatedNumber
-            value={finalBase}
-            format={fmtCurrency}
-            className="block text-[15px] font-semibold tabular-nums mt-0.5"
-            style={{ color: 'var(--gray-700)' }}
-          />
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
-            Caja escenario (fin)
-          </p>
-          <AnimatedNumber
-            value={finalForecast}
-            format={fmtCurrency}
-            className="block text-[15px] font-semibold tabular-nums mt-0.5"
-            style={{ color: 'var(--gray-950)' }}
-          />
-        </div>
-        <div>
-          <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gray-400)' }}>
-            Δ vs base
-          </p>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-[15px] font-semibold tabular-nums" style={{ color: deltaColor }}>
-              {deltaSign}
-            </span>
-            <AnimatedNumber
-              value={Math.abs(delta)}
-              format={fmtCurrency}
-              className="text-[15px] font-semibold tabular-nums"
-              style={{ color: deltaColor }}
-            />
-          </div>
-        </div>
-      </div>
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-5">
+      <h2 className="text-[15px] font-bold tracking-tight mb-1" style={{ color: 'var(--gray-950)' }}>
+        Trayectoria de la caja
+      </h2>
+      <p className="text-[11px] mb-4" style={{ color: 'var(--gray-400)' }}>
+        Barra sólida = real · Barra de líneas = proyectado · Línea = caja final del escenario.
+        {hasBaseline ? ' Línea punteada gris = caja base.' : ''}
+      </p>
 
       <div
-        style={{ height: 360 }}
+        style={{ height: 340 }}
         role="img"
-        aria-label="Trayectoria de la caja: línea base vs escenario activo por mes"
+        aria-label="Trayectoria de la caja: ingresos y egresos por mes con línea de caja final"
       >
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 16, right: 24, left: 8, bottom: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} vertical={false} />
+          <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 10 }}>
+            <defs>
+              <pattern id="planHatchIncome" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+                <rect width="6" height="6" fill={CHART_COLORS.incomeBg} />
+                <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.incomePattern} strokeWidth="2.5" />
+              </pattern>
+              <pattern id="planHatchExpense" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+                <rect width="6" height="6" fill={CHART_COLORS.expenseBg} />
+                <line x1="0" y1="0" x2="0" y2="6" stroke={CHART_COLORS.expensePattern} strokeWidth="2.5" />
+              </pattern>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" className="recharts-cartesian-grid" />
             <XAxis
               dataKey="yearMonth"
+              tick={{ fontSize: 11 }}
               tickFormatter={formatMonthTick}
-              tick={{ fontSize: 11, fill: COLOR.tickText }}
-              tickLine={false}
-              axisLine={{ stroke: COLOR.axis }}
-              minTickGap={16}
             />
-            <YAxis
-              tickFormatter={(v) => fmtCompact(v)}
-              tick={{ fontSize: 11, fill: COLOR.tickText }}
-              tickLine={false}
-              axisLine={false}
-              width={64}
+            <YAxis tickFormatter={(v) => fmtCompact(v)} tick={{ fontSize: 11 }} width={70} />
+            <Tooltip content={<MonthTooltip />} cursor={{ fill: 'rgba(99, 102, 241, 0.06)' }} />
+            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+            <Bar
+              dataKey="realIncome"
+              stackId="income"
+              fill={CHART_COLORS.income}
+              name="Ingresos (real)"
+              radius={[0, 0, 0, 0]}
             />
-            <Tooltip
-              content={<ChartTooltip />}
-              cursor={{ stroke: COLOR.refLine, strokeWidth: 1 }}
-              isAnimationActive={false}
+            <Bar
+              dataKey="projIncome"
+              stackId="income"
+              fill="url(#planHatchIncome)"
+              stroke={CHART_COLORS.incomePattern}
+              strokeWidth={1}
+              name="Ingresos (proy.)"
+              radius={[4, 4, 0, 0]}
             />
-            <Legend
-              wrapperStyle={{ fontSize: 11, paddingTop: 8, color: COLOR.tickText }}
-              iconType="plainline"
+            <Bar
+              dataKey="realExpense"
+              stackId="expense"
+              fill={CHART_COLORS.expense}
+              name="Egresos (real)"
+              radius={[0, 0, 0, 0]}
             />
-
-            {hasBaseline && (
-              <Area
-                type="monotone"
-                dataKey="deltaAbove"
-                fill={COLOR.successFill}
-                fillOpacity={0.75}
-                stroke="none"
-                isAnimationActive
-                animationDuration={500}
-                animationEasing="ease-out"
-                name="deltaAbove"
-                legendType="none"
-                connectNulls={false}
-              />
-            )}
-            {hasBaseline && (
-              <Area
-                type="monotone"
-                dataKey="deltaBelow"
-                fill={COLOR.dangerFill}
-                fillOpacity={0.75}
-                stroke="none"
-                isAnimationActive
-                animationDuration={500}
-                animationEasing="ease-out"
-                name="deltaBelow"
-                legendType="none"
-                connectNulls={false}
-              />
-            )}
-
-            {crossesZero && (
-              <ReferenceLine
-                y={0}
-                stroke={COLOR.danger}
-                strokeDasharray="2 4"
-                strokeOpacity={0.5}
-                ifOverflow="extendDomain"
-              />
-            )}
-
-            {minimumCash > 0 && (
-              <ReferenceLine
-                y={minimumCash}
-                stroke={COLOR.warning}
-                strokeDasharray="3 3"
-                label={{
-                  value: 'Caja mínima',
-                  position: 'right',
-                  fill: COLOR.warning,
-                  fontSize: 10,
-                }}
-              />
-            )}
-
+            <Bar
+              dataKey="projExpense"
+              stackId="expense"
+              fill="url(#planHatchExpense)"
+              stroke={CHART_COLORS.expensePattern}
+              strokeWidth={1}
+              name="Egresos (proy.)"
+              radius={[4, 4, 0, 0]}
+            />
             {hasBaseline && (
               <Line
                 type="monotone"
-                dataKey="base"
-                stroke={COLOR.base}
+                dataKey="cashBase"
+                stroke={CHART_COLORS.cashBase}
                 strokeWidth={1.5}
                 strokeDasharray="4 4"
                 dot={false}
                 name="Caja base"
-                isAnimationActive
-                animationDuration={400}
-                animationBegin={0}
-                animationEasing="ease-out"
+                connectNulls
               />
             )}
             <Line
               type="monotone"
-              dataKey="forecast"
-              stroke={COLOR.forecast}
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4, strokeWidth: 0 }}
-              name={hasBaseline ? 'Caja escenario' : 'Caja final'}
-              isAnimationActive
-              animationDuration={520}
-              animationBegin={hasBaseline ? 200 : 0}
-              animationEasing="ease-out"
+              dataKey="cash"
+              stroke={CHART_COLORS.cash}
+              strokeWidth={1.5}
+              dot={{ r: 2 }}
+              name="Caja Final"
             />
-
-            {lastPoint && (
-              <ReferenceDot
-                x={lastPoint.yearMonth}
-                y={lastPoint.forecast}
-                shape={<LastPointDot />}
-                ifOverflow="extendDomain"
-                isFront
-              />
-            )}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

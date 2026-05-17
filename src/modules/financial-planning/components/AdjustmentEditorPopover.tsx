@@ -87,8 +87,15 @@ export function AdjustmentEditorPopover({
   }, [movement, onClose]);
 
   // Posición síncrona — sin useLayoutEffect, sin estado intermedio.
+  // Cuando no hay anchor (entrada vía Cmd+K / botón global) se renderiza
+  // como modal centrado en el viewport.
   const pos = useMemo(() => {
-    if (!anchor) return null;
+    if (!anchor) {
+      return {
+        top: Math.max(POPOVER_MARGIN, (window.innerHeight - POPOVER_EST_HEIGHT) / 2),
+        left: Math.max(POPOVER_MARGIN, (window.innerWidth - POPOVER_WIDTH) / 2),
+      };
+    }
     return computePosition(anchor);
   }, [anchor]);
 
@@ -102,7 +109,7 @@ export function AdjustmentEditorPopover({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [movement, scenarioId, type, date, amount, deltaDays, percentage, splitCount, reasonCode, justification]);
 
-  if (!movement || !anchor || !pos) return null;
+  if (!movement || !pos) return null;
   const currentMovement = movement;
 
   const handleSave = (status: FinancialAdjustment['status']) => {
@@ -126,7 +133,7 @@ export function AdjustmentEditorPopover({
   return (
     <div
       ref={popoverRef}
-      className="fixed z-[80] rounded-2xl border border-[var(--gray-200)] bg-white shadow-xl"
+      className="fixed z-[80] rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-xl"
       style={{
         top: pos.top,
         left: pos.left,
@@ -139,17 +146,17 @@ export function AdjustmentEditorPopover({
     >
       <div className="flex items-start justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3 sticky top-0 bg-white">
         <div className="min-w-0">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             Editor de ajuste
           </div>
-          <h2 className="mt-1 truncate text-[15px] font-semibold text-[var(--gray-950)]">{movement.concept}</h2>
+          <h2 className="mt-1 truncate text-[15px] font-bold text-[var(--gray-950)]">{movement.concept}</h2>
           <p className="mt-0.5 text-[11px] text-[var(--gray-500)]">
             Base {fmtCurrency(movement.baseAmount)} · {effectiveMovementDate(movement)}
           </p>
         </div>
         <button
           onClick={onClose}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
           aria-label="Cerrar editor"
         >
           <X className="h-4 w-4" strokeWidth={1.5} />
@@ -158,7 +165,7 @@ export function AdjustmentEditorPopover({
 
       <div className="grid gap-3 p-4 md:grid-cols-2">
         {warning && (
-          <div className="md:col-span-2 rounded-xl border border-[var(--warning)]/25 bg-[var(--warning-muted)] px-3 py-2 text-[11px] text-[var(--gray-700)]">
+          <div className="md:col-span-2 rounded-[var(--radius)] border border-[var(--warning)]/25 bg-[var(--warning-muted)] px-3 py-2 text-[11px] text-[var(--gray-700)]">
             <span className="inline-flex items-center gap-1.5 font-medium" style={{ color: 'var(--warning)' }}>
               <AlertTriangle className="h-3.5 w-3.5" strokeWidth={1.5} />
               {warning}
@@ -236,7 +243,7 @@ export function AdjustmentEditorPopover({
           />
         </Field>
 
-        <div className="md:col-span-2 rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5 text-[11px] text-[var(--gray-600)]">
+        <div className="md:col-span-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5 text-[11px] text-[var(--gray-600)]">
           El ajuste se guarda como diferencia del escenario activo. No modifica JDE ni los movimientos base.
           {draftAdjustment && adjustmentRequiresApproval(draftAdjustment) && (
             <span className="ml-1 font-medium" style={{ color: 'var(--warning)' }}>
@@ -252,13 +259,13 @@ export function AdjustmentEditorPopover({
       <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--gray-200)] px-4 py-3 sticky bottom-0 bg-white">
         <button
           onClick={onClose}
-          className="h-9 rounded-lg border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+          className="h-9 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
         >
           Cancelar
         </button>
         <button
           onClick={() => handleSave('DRAFT')}
-          className="h-9 rounded-lg bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
+          className="h-9 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]"
         >
           Guardar
         </button>
@@ -318,12 +325,12 @@ function computePosition(anchor: DOMRect): { top: number; left: number } {
   return { top, left };
 }
 
-const inputClass = 'h-9 w-full rounded-lg border border-[var(--gray-200)] bg-white px-2.5 text-[12px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
+const inputClass = 'h-9 w-full rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2.5 text-[12px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
 
 function Field({ label, children, span }: { label: string; children: ReactNode; span?: boolean }) {
   return (
     <label className={`block ${span ? 'md:col-span-2' : ''}`}>
-      <span className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+      <span className="mb-1 block text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
         {label}
       </span>
       {children}

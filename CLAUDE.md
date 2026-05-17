@@ -1,440 +1,274 @@
 # CLAUDE.md
 
-## Propósito
+## Purpose
 
-Este archivo resume el contexto operativo real de `midas` (antes `flowsense`) para cualquier agente que vaya a tocar el proyecto.
+Operational context for any agent or new dev touching `midas` (formerly `flowsense`). The repo is the source of truth — this file is a map, not a spec. Read the actual files before changing them.
 
-`README.md` y `ARCHITECTURE.md` ya fueron alineados con el estado actual del repo, pero el código sigue siendo la fuente final de verdad. Los archivos más importantes para validar comportamiento son:
+`README.md` covers the deploy / env / business surface. This file covers the code layout, the data flow, and the rules that bite if you ignore them.
 
-- `src/App.tsx`
-- `src/types.ts`
-- `src/domain/persistence.ts`
-- `src/domain/scenarioEngine.ts`
-- `src/domain/simulationCompiler.ts`
-- `src/components/ProposalCreator.tsx`
-- `src/components/Simulator.tsx`
-- `src/components/Forecast.tsx`
+## Stack
 
-## Stack y comandos
+- React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)
+- Charts: Recharts 2.12
+- Icons: `lucide-react`
+- Excel I/O: previously `exceljs`; package is currently in `dependencies` but **not imported anywhere** (verified 2026-05-14). Safe to remove with `npm uninstall exceljs`.
+- Tests: Vitest + Testing Library + jsdom; Playwright available for e2e
+- IndexedDB cache for daily JDE responses (`src/services/dailyApiCache.ts`); falls back to memory-only after 5s open timeout if locked by another tab.
 
-- Frontend: React 18 + Vite + TypeScript + Tailwind
-- Charts: Recharts
-- Tests: Vitest + Testing Library
-- Parsing Excel: `xlsx`
-
-Comandos principales:
+Commands:
 
 ```bash
-npm run dev
-npm test
-npm run build
+npm run dev        # vite dev server
+npm test           # vitest run
+npm run typecheck  # tsc --noEmit
+npm run build      # tsc && vite build
 ```
 
-## Regla crítica: semántica de negocio vs nombres internos
+Always run `npm test` and `npm run build` before declaring a change done. As of 2026-05-15 `npm run typecheck` and `npm run build` are clean (the prior ~12 `TS6133` leftovers in `CashFlowDetail.tsx` / `CashTrajectoryChart.tsx` are gone). Keep them clean — do not introduce new unused-locals errors.
 
-La UI y el lenguaje de negocio ya NO coinciden 1:1 con los nombres internos de TypeScript.
+## Where things live now
 
-### Lenguaje que debe ver el usuario
+```text
+src/
+├── App.tsx                      # Top-level shell, routing, store load/save, boot orchestrator
+├── main.tsx                     # Entry
+├── index.css                    # Senda DS tokens (OKLCH light + dark), keyframes, a11y, Tailwind dark-mode overrides
+├── theme.ts                     # Token + motion config
+├── formatters.ts                # MXN / es-MX number + date formatters
+├── types.ts                     # Cross-cutting types (CashFlowOverrides, etc.)
+├── config/
+│   └── api.config.ts            # Env-var driven API config (JDE, Cognos, TRESS)
+├── services/
+│   ├── jdeClient.ts             # Fetch client for JDE Orchestrator (120s timeout, 2 retries, 4s backoff cap)
+│   ├── jde.ts                   # JDE companies, CXP, bank statements, cobranza
+│   ├── jdeTypes.ts              # JDE request/response types
+│   ├── catalog.service.ts       # Cognos client/provider catalog
+│   ├── dailyApiCache.ts         # IndexedDB cache w/ 5s open-timeout safety
+│   └── tress*.ts                # TRESS nómina client
+├── domain/                      # Treasury / cash-flow engines (NOT scenarios)
+│   ├── persistence.ts           # midas-v11 store, normalizers, migrations
+│   ├── netCashFlowEngine.ts     # Internal transfer detection — misnamed; only filters, doesn't compute net
+│   ├── collectionEngine.ts      # Collection projection rules (used by canonical + planning)
+│   ├── reconciliationEngine.ts  # Projected events vs bank ABONOs (forecast cruce)
+│   ├── realReconciliationEngine.ts  # Real cobranza vs bank movements, 4-layer match (realized cruce)
+│   ├── operatingProjection*.ts  # Operating projection module + scenarios + taxes
+│   ├── projectionEngine.ts      # Active monthly projection — canonical for Dashboard
+│   ├── cashFlowEngine.ts        # Legacy historical baseline (used by Dashboard.tsx)
+│   ├── dashboardEngine.ts       # computeBaseCashFlow + bank starting balance
+│   ├── budget*.ts, calendar.ts, bankHolidays*.ts, bankStatements*.ts
+│   ├── santanderCsv.ts, providerCatalog.ts, expensePerProvider.ts
+│   └── ... (see folder)
+├── modules/
+│   ├── financial-planning/      # Scenarios + propuestas + spreadsheet UI
+│   │   ├── components/          # SpreadsheetGrid, ProposalWizard, ScenarioTabs, etc.
+│   │   ├── pages/               # FinancialPlanningDashboard.tsx (top-level)
+│   │   └── services/            # scenarioBootstrap, financialPlanningService, cellOverridesStorage, scenarioMerge…
+│   ├── financial-projection/    # KPIs, alerts, forward projection (canonical source for Planning)
+│   │   ├── components/, pages/, services/
+│   ├── shared-finance/          # Shared types, audit log, calc engine, permissions
+│   │   ├── audit/               # createAuditEvent + storage (minimal — no query/reporting yet)
+│   │   ├── calculation-engine/  # canonicalProjection.ts + financialProjectionEngine.ts (apply Δ + overrides)
+│   │   ├── components/, permissions/, types/
+│   ├── taxes/                   # Tax dashboard + service (tax movements wired into planning since 2026-05)
+│   │   ├── pages/, services/
+│   ├── concurso-mercantil/      # Convenio concursal: data/ (Excel→code, 29 trimestres + 80 acreedores, en miles) + pages/ (dashboard: calendario + cruce banco + futuro) + services/ (convenioMovements → DEBT egresos a Aprobado)
+│   │   ├── data/, pages/, services/
+│   ├── payroll/                 # TRESS nómina loader; expansion to movements happens INSIDE canonicalProjection
+│   └── midas-ai/                # MidasBubble proposal suggestion bot
+├── components/                  # Treasury UI: Dashboard, CXP, Bancos, Clients, Providers, etc.
+├── workers/                     # Web workers (reconciliation)
+├── data/                        # Static data (logos, etc.)
+└── assets/
+```
 
-- `Escenario Base`: pronóstico original, siempre visible, no editable, no eliminable.
-- `Simulación`: contenedor superior donde el usuario guarda un análisis.
-- `Escenario`: agrupación guardada dentro de una simulación.
-- `Propuesta`: ajuste financiero reusable que se asigna a uno o varios escenarios.
+Old files referenced by prior versions of this doc — `scenarioEngine.ts`, `simulationCompiler.ts`, `ProposalCreator.tsx`, `Forecast.tsx`, `Simulator.tsx`, **`forecastEngine.ts`** (deleted 2026-05-14, was only referenced by its own test) — no longer exist. Their responsibilities live in `src/modules/financial-planning/` and `src/modules/financial-projection/`.
 
-### Nombres internos actuales
+## Module integration map (data flow)
 
-En código todavía existe esta equivalencia:
+```
+JDE (REST)                          TRESS                LocalStorage / IDB
+  │ companies, CXP, cobranza,         │ payrollCosts        │ catalogs, overrides
+  │ compras, pagoProveedor,           │                     │ scenarios, propuestas
+  │ bank statements                   │                     │
+  ▼                                   ▼                     ▼
+App.tsx (boot orchestrator)
+  ├─ parallel fetches after companies (CXP, cobranza, compras, pagoProveedor, banks, nomina)
+  └─ hydrates MidasStore + bank caches via scheduleIdleTask (debounce 2.5s, no main-thread JSON.stringify on hot path)
+  │
+  ▼
+buildFinancialProjectionSourceData()  ← src/modules/financial-projection/services/financialProjectionService.ts
+  │ Wraps buildCanonicalProjection() which expands:
+  │   • CXC (cobranza + projections)
+  │   • CXP (CXPRecord + recurring providers)
+  │   • Payroll (TRESS, projected forward)
+  │   • Purchase receipts (compras) — OC egreso fechado en pago proyectado
+  │     (recepción/pedido + crédito). `comprasToPurchaseReceipts` deriva un
+  │     overlay de días-crédito por proveedor desde las propias OCs
+  │     (`buildComprasCreditOverlay`, "el API actualiza el catálogo") para
+  │     rellenar D_Credito=0. `buildPurchaseReceiptMovements` recibe
+  │     `providers?` y enriquece cada egreso con reglas del catálogo igual que
+  │     CXP (flexibilidad → `inamovible` LOCKED, criticidad, providerType).
+  │     Pasar `providers` aquí afecta Planeación/Proyección/Dashboard/Base;
+  │     el acumulador de IVA (taxes) lo omite a propósito (lockState irrelevante).
+  │ Returns { movements, scenarios (Base+Approved shells), customers, suppliers, canonical }
+  │ LRU-cached by content fingerprint.
+  ▼
+FinancialPlanningDashboard.tsx
+  ├─ ensureCoreScenarios() — bootstraps Base + Approved (Base copies sourceBaseScenario shell, NO scenario.movements field; movements flow through source.movements directly — but Base filters them to real short-term API only via isRealShortTermApiMovement, see Base scenario invariant)
+  ├─ buildScenarioRun() per scenario:
+  │     base movements
+  │   + manual entries (expandManualPlanningEntriesToMovements)
+  │   + adjustments (applyAdjustmentsToMovements)  ← computed ONCE per run; was duplicated before 2026-05-14
+  │   + tax movements (buildAutomaticTaxReserveMovements + buildApprovedTaxPaymentMovements, from buildTaxDashboardView)
+  │   + supplier payment schedule (scheduleSupplierPaymentsByScore)
+  │ → calculateBaseProjection() → KPIs, trajectory
+  └─ cellOverrides applied per cell at render (applyCellOverridesToBuckets)
+```
 
-- `Proposal` = lo que en UI se presenta como una **Simulación**
-- `Scenario` = **Escenario**
-- `Simulation` = lo que en UI se presenta como una **Propuesta**
+Open integration questions / known gaps:
+- `cashFlowEngine.ts` (legacy MA6 baseline) is still used by `Dashboard.tsx` + `MonthDrilldown.tsx`. The canonical path is `projectionEngine.ts`. Consider consolidating.
+- `netCashFlowEngine.ts` only exports internal-transfer helpers despite its name. Rename to `internalTransferFilter.ts` or extend to actually compute net.
+- Audit module (`shared-finance/audit/`) is write-only (`createAuditEvent`, `appendAuditEvent`); no query/timeline yet.
+- `CellOverride` (per-cell) vs `FinancialAdjustment` (scenario-wide propuesta) have overlapping semantics — both can mutate the same bucket. Cell override wins at render. Document or unify before changing precedence.
 
-Además:
+## Critical UI ↔ code terminology inversion
 
-- `Scenario.simulationIds` realmente significa: IDs de **propuestas** aplicadas al escenario.
-- `EvaluatedCell.simulationContributions` realmente representa contribuciones de **propuestas** aplicadas.
+The financial-planning module ships with this asymmetry between user language and code:
 
-Si cambias algo de esta zona, mantén esta compatibilidad mental para no invertir otra vez el modelo.
+| User sees (Spanish UI) | Code (English)                 |
+|------------------------|--------------------------------|
+| Simulación             | parent of `FinancialScenario`s |
+| Escenario              | `FinancialScenario`            |
+| Propuesta              | `FinancialAdjustment`          |
+| Escenario Base         | scenario where `id === 'base'` |
 
-## Estado global actual
+Concrete code names today (in `src/modules/shared-finance/types/` and `src/modules/financial-planning/services/scenarioBootstrap.ts`):
 
-El estado principal vive en `src/App.tsx`.
+- `FinancialScenario` is what the UI calls **Escenario**.
+- `FinancialAdjustment` is what the UI calls **Propuesta** (a reusable financial change applied to one or more scenarios).
+- `ManualPlanningEntry` is a hand-typed line in the spreadsheet.
+- `CellOverride` is a per-cell manual edit on a scenario.
+- `BASE_SCENARIO_ID = 'base'` (scenarioBootstrap.ts:13)
+- `APPROVED_SCENARIO_ID = 'approved'`
 
-Campos importantes:
+Before renaming or restructuring this layer, walk through both vocabularies and check what users see in the UI vs. what the type system calls it. The error of inverting these terms has happened before.
 
-- `plan`
-- `proposals`
-- `scenarios`
-- `simulations`
-- `scenarioCellOverrides`
-- `activeProposalId`
-- `activeScenarioId`
-- `forecastGranularity`
+## Persistence (current shape)
 
-Selección activa:
-
-- Si `activeScenarioId === BASE_SCENARIO_ID`, la app entra en modo Base.
-- En modo Base, `activeProposalId` debe quedar en `null`.
-- `selectScenario()` y la normalización del store ya contemplan esto.
-
-## Modelo de datos actual
-
-Definiciones en `src/types.ts`.
-
-### Base
-
-- `BASE_SCENARIO_ID = 'scenario-base'`
-- `BASE_SCENARIO_NAME = 'Escenario Base'`
-
-### Proposal
-
-Internamente sigue siendo:
+`src/domain/persistence.ts` owns the `midas-v11` store (bumped from v8 → v11 as Compras + PagoProveedor + jdeAccounts landed). The interface lives at `persistence.ts:93` (`MidasStore`):
 
 ```ts
-Proposal {
-  id,
-  name,
-  description,
-  status,
-  activeScenarioId?,
-  createdAt,
-  updatedAt
+MidasStore {
+  providers, clients,
+  assumptions,
+  confirmedPayments,
+  cxpRecords, cxpLoadedCias,
+  cobranzaRecords, cobranzaLoadedCias,
+  cobranzaPayments, cobranzaPaymentsLoadedCias,
+  comprasRecords, comprasLoadedCias,                   // v10
+  pagoProveedorRecords, pagoProveedorLoadedCias,       // v11
+  payrollCosts,                                        // TRESS
+  cashFlowOverrides,
+  lastSaved
 }
 ```
 
-En UI esto se interpreta como una **Simulación**.
-
-### Scenario
-
-```ts
-Scenario {
-  id,
-  proposalId,
-  kind,
-  name,
-  description,
-  probability,
-  startYearMonth,
-  horizonMonths,
-  simulationIds[],
-  locked?,
-  createdAt,
-  updatedAt
-}
-```
-
-En UI esto es un **Escenario**.
-
-### Simulation
+Notes:
 
-```ts
-Simulation {
-  id,
-  name,
-  description,
-  category,
-  type,
-  targetIds[],
-  startYearMonth,
-  endYearMonth?,
-  startDate?,
-  endDate?,
-  frequency?,
-  operation?,
-  amount?,
-  percent?,
-  installments?,
-  customAllocation?,
-  shiftMonths?,
-  shiftRatio?,
-  paymentLabel?,
-  comments?,
-  effects[],
-  createdAt,
-  updatedAt
-}
-```
+- Scenarios / propuestas / cell overrides do **not** live in `MidasStore`. They live inside `src/modules/financial-planning/` storage helpers (separate localStorage keys per concept).
+- `App.tsx` writes a handful of `localStorage` keys directly outside the main store: `midas.selectedCia`, `midas.bankStatements.v2`, `midas.bankSupplementalStatements.v1`, `midas.bankLastQuery.v2`. These are intentional — bank-statement caches can be multi-MB and use a **debounced idle-task save strategy** (`scheduleIdleTask`, ~2.5s delay) so we never block the main thread on a hot keystroke. Pulling them into `MidasStore` (which `JSON.stringify`s the whole object on every save) would regress UX. If you ever consolidate, build an async-aware sub-store; do not flatten naively.
+- `loadStore()` migrates `midas-v7..v10`, `midas-v6`, `midas-v5`, `flowsense-v5` (same shape, dropping any legacy proposal/scenario fields) and `flowsense-v1..v4` (incompatible legacy shapes; preserves clients/providers/cxp/assumptions only).
+- `normalizeStore()` is the defensive landing zone — assume any persisted payload may be partial or wrong-shaped; the normalizer enforces the schema.
+- `dailyApiCache.ts` uses IndexedDB with a **5s open timeout**. If another tab holds the DB locked, we fall back to memory-only writes so the session keeps working (logged once via `idbWarned`).
 
-En UI esto es una **Propuesta**.
+## API client tuning
 
-## Persistencia
+`src/services/jdeClient.ts` (post 2026-05-14 retune):
+- Timeout per request: **120s** (was 180s — too generous; locked workers for 2 extra minutes on hangs).
+- Retries: **2** (3 total attempts), backoff exponential w/ full jitter, **cap 4s** (was 8s). Total worst case ~12s of backoff instead of 24s.
+- Retried statuses: 408, 502, 503, 504. 4xx is not retried.
 
-La persistencia vive en `src/domain/persistence.ts`.
+JDE typical response: ~60s. If you see persistent timeouts, check upstream — don't push timeout back up.
 
-Puntos clave:
+## Engines
 
-- El store actual es `midas-v5` (el legacy `flowsense-v5` se migra tal cual; `flowsense-v4..v1` se migran descartando propuestas/escenarios).
-- `normalizeV2Store()` siempre reinyecta el escenario base.
-- `normalizeSimulation()` rellena simulaciones antiguas que no tengan los campos nuevos (`type`, `targetIds`, `startYearMonth`, etc.).
-- Si hay datos legacy, se migran a la estructura actual sin perder overrides.
+Treasury / cash-flow logic lives in `src/domain/`. Two reconciliation engines exist by design:
 
-### Regla importante
+- `reconciliationEngine.ts` — matches projected collection events against bank ABONOs (heuristic, ±5% tolerance).
+- `realReconciliationEngine.ts` — matches real cobranza invoices (JDE `/JDEdwards/cobranza`) against actual bank movements. 4-layer matching: exact → tolerance → subset-sum → unmatched.
 
-No asumas que el `localStorage` tiene objetos completos. La UI debe tolerar datos parciales y la persistencia debe seguir normalizando.
+These are not duplicates — they answer different questions (forecast vs. realized).
 
-## Motor de cálculo
+The forecast / scenario evaluation pipeline lives across `src/modules/financial-planning/services/` and `src/modules/shared-finance/calculation-engine/`. Order of computation for a non-base scenario is:
 
-La fuente de verdad del forecast es `src/domain/scenarioEngine.ts`.
+1. Base movements from `source.movements` (real CXP + cobranza + payroll + compras + recurring providers + manual entries)
+2. Active propuestas (`FinancialAdjustments`) applied via `applyAdjustmentsToMovements()` — **single call per run**; the previous double-call was deleted 2026-05-14
+3. Tax movements seeded from the post-adjustment view (`buildTaxDashboardView` → `buildApprovedTaxPaymentMovements` + `buildAutomaticTaxReserveMovements`)
+4. Convenio concursal: future quarterly payments injected as locked `DEBT` egresos (`buildConvenioPaymentMovements`, mirrors the tax pattern) — non-base only, clipped to the projection window. Calendar/data: `src/domain/convenioConcursal.ts` + `src/modules/concurso-mercantil/data/convenioSchedule.ts` (Excel baked to code, values in miles ×1000)
+5. Supplier payment schedule (`scheduleSupplierPaymentsByScore`) rewires CXP timing under the cash floor
+6. Manual cell overrides (`applyCellOverridesToBuckets`) at render
+7. Recompute KPIs and projections via `calculateBaseProjection`
 
-### Orden de cálculo
+## Base scenario invariant
 
-El orden actual es:
+The Base scenario (`id === 'base'`) is special and non-negotiable:
 
-1. Base del plan
-2. Propuestas activas del escenario
-3. Overrides manuales por celda
-4. Recomputar métricas y KPIs
+- Always present (bootstrap in `scenarioBootstrap.ts` ensures it).
+- Not deletable.
+- No propuestas attached.
+- No manual cell overrides.
+- No manual entries spliced in (`includeManualEntries === false` for Base in `buildScenarioRun`).
+- No tax movement injection.
+- **Real short-term API data only.** Base does NOT read the full canonical projection. `buildScenarioRun` filters `source.movements` through `isRealShortTermApiMovement` (FinancialPlanningDashboard.tsx) so Base keeps only: real JDE cobranza (`cxc:` — invoices for executed trips, the business calls this *rol*), JDE purchase orders/receipts (`purchase:` / `po:` — *órdenes de compra*) and real TRESS payroll (`payroll:` without `:forecast:` — *nómina*). It drops rule-projected collections (`client:`), CXP (`cxp:`), recurring providers (`recurring-*`), budget reserve (`budget-opex-gap:`), the synthetic canonical balancer (`canonical-*`) and synthetic payroll fill. The shared canonical engine is NOT modified — the cut lives only in the Base run, so Dashboard/Proyección still get the full projection. Don't move this filter into `canonicalProjection.ts`.
+- Read-only in the UI (forecast popover shows lock icon).
 
-La función principal es:
+If you touch scenario selection, persistence, or the spreadsheet editor, validate this invariant explicitly.
 
-```ts
-evaluateScenario(plan, proposal, scenario, simulations, overrides, { granularity? })
-```
+## Forecast / spreadsheet
 
-### Reglas importantes del motor
+Lives in `src/modules/financial-planning/components/`:
 
-- Los overrides son por `scenarioId`, no globales.
-- Solo celdas hoja son editables manualmente.
-- Subtotales y filas derivadas no deben aceptar override.
-- El Base no admite edición manual.
-- El mismo motor soporta `monthly`, `weekly` y `daily`.
-- La vista semanal sale de `weeklyData`.
-- La vista diaria se deriva repartiendo cada semana en 7 días.
-- Los overrides manuales siguen siendo mensuales y se reflejan en semana / día.
+- `FinancialPlanningDashboard.tsx` — top-level page, owns scenario selection.
+- `SpreadsheetGrid.tsx` (+ `spreadsheet/` subfolder) — the editable forecast grid.
+- `ScenarioTabs.tsx`, `ProposalWizard.tsx` (4-step guided creation, replaces the older flat `AddRowPopover`).
+- `CellDetailPopover.tsx` — on cell click, shows base / Δ propuestas / Δ manual / total / diff vs Base / comments. Read-only on Base.
 
-### Targets sintéticos
+The forecast must always tolerate partial / legacy data. Defensive rendering + the persistence normalizer are the two lines of defense.
 
-Existen estos targets globales:
+## Dark mode
 
-- `ROLE_TARGET_INCOME`
-- `ROLE_TARGET_EXPENSE`
-- `ROLE_TARGET_COLLECTIONS`
-- `ROLE_TARGET_PROVIDER_PAYMENTS`
+Dark mode is a class strategy (`html.dark`) wired via `src/index.css`. As of 2026-05-14:
 
-### Bug ya corregido
+- `tailwind.config.js` has `darkMode: 'class'` and CSS variables mapped under `theme.extend.colors` so `bg-card`, `border-border`, `text-foreground` resolve to tokens.
+- `:root` defines the OKLCH light palette; `html.dark` overrides every token with a slate-blue dark canvas (hue 248 across all neutrals so the dark UI looks carved from one slab).
+- Tailwind utilities with hardcoded literal colors (`bg-white`, `text-gray-900`, `border-gray-200`, etc.) seeded across ~40 components are intercepted by global `html.dark .bg-white { background: var(--card) }` rules in `index.css`. This lets us avoid rewriting every component with `dark:` variants. To escape this override in a specific spot (rare — e.g. branding over a photo), inline `style={{ background: '#fff' }}`.
+- Recharts: avoid inline `stroke="#hex"` on `CartesianGrid`. Use `className="recharts-cartesian-grid"` so the CSS rule in `index.css` (`.recharts-cartesian-grid-{horizontal,vertical} line`) governs both modes.
+- Native form controls (`input`, `select`, `textarea`) get dark-mode background / color / border from `index.css` directly. Autofill is overridden via `-webkit-box-shadow: inset` trick.
+- `color-scheme: dark` on `html.dark` tells the UA to draw native scrollbars + select popups in dark.
+- Focus visible ring uses `var(--accent-blue)`; in dark, it gains a 4px blue glow for keyboard discoverability.
 
-Los ajustes porcentuales globales (`+10% ingresos`, `-5% egresos`, etc.) antes no se reflejaban bien porque tomaban base `0` en esos targets sintéticos.
+## Risks that bite
 
-Eso ya quedó corregido en `evaluateScenario()` calculando una base agregada separada para:
+1. **Inverting the terminology again.** Simulación / Escenario / Propuesta in UI vs. proposal/scenario/adjustment in code. Check both before renaming.
+2. **Breaking the Base scenario.** Any active-scenario change can accidentally allow editing or attach a propuesta to base. Validate.
+3. **Assuming new persisted shape.** `localStorage` can hold partial / legacy payloads. Use the normalizer; never read raw fields blindly.
+4. **Doc drift.** This file is reality at the time of writing. If you change architecture, update this file in the same PR.
+5. **Heavy compute on the main thread.** Forecast and reconciliation are non-trivial. Move new heavy compute into `src/workers/` instead of growing `useEffect` recompute loops.
+6. **Duplicate adjustment calls.** `applyAdjustmentsToMovements` is deterministic; calling it twice on the same input is wasted CPU per scenario eval. The fix landed 2026-05-14 — don't reintroduce.
+7. **JDE timeout creep.** 120s is the current ceiling. If you raise it, document why; longer hangs make the boot orchestrator feel broken.
+8. **Removing the global dark-mode CSS overrides.** ~40 components rely on the `html.dark .bg-white` family of rules in `index.css`. Removing them without migrating each callsite to `bg-card` / token variables will visibly break dark mode.
 
-- ingresos
-- egresos
-- cobranza
-- pagos a proveedores
+## Spanish vs English
 
-No reviertas esta lógica por accidente.
+User-facing copy is Spanish (es-MX). Internal identifiers, code, comments, and commit messages are English. Do not translate type names. Do translate UI strings.
 
-## Compilación de propuestas a efectos
+Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you ever need to internationalize, that file is the single chokepoint to refactor.
 
-La capa que convierte la propuesta de negocio en efectos homogéneos vive en:
+## Before you ship
 
-- `src/domain/simulationCompiler.ts`
-
-Funciones importantes:
-
-- `buildSimulationEffects()`
-- `ensureBaseScenario()`
-- `isBaseScenario()`
-- `createBaseScenario()`
-
-Tipos soportados actualmente:
-
-- `percent_adjustment`
-- `amount_adjustment`
-- `recurring_series`
-- `installment_plan`
-- `timing_shift`
-- `pause_expense`
-
-Todos terminan compilando a `concept_delta`.
-
-## Propuestas: comportamiento dinámico del formulario
-
-La pantalla de Propuestas está en `src/components/ProposalCreator.tsx`.
-
-### Qué hace hoy
-
-- Expone 3 pasos visibles:
-  - Simulación
-  - Escenario
-  - Propuestas
-- Muestra un resumen de contexto arriba:
-  - simulación activa
-  - escenario activo
-  - cuántas propuestas están activas
-- En el formulario de propuesta, los conceptos disponibles cambian dinámicamente según:
-  - `type`
-  - `category`
-
-### Ejemplos
-
-- Si el usuario elige incremento de ingresos, debe ver solo ingresos relevantes.
-- Si elige reducción de costos, debe ver solo gastos relevantes.
-- Si elige mover cobros/pagos, debe ver cobranza o pagos.
-- Puede seleccionar uno o varios conceptos.
-
-### Regla importante
-
-No vuelvas a mostrar siempre el mismo selector plano de conceptos. El usuario pidió explícitamente una experiencia dinámica:
-
-- primero define qué quiere hacer
-- luego el sistema muestra en qué conceptos puede aplicarlo
-
-## Forecast
-
-La tabla de forecast está en `src/components/Forecast.tsx`.
-
-### Reglas importantes
-
-- Debe poder mostrar:
-  - Base
-  - Simulado
-  - Manual
-  - Diff
-- El Base es solo lectura.
-- El popover de una celda muestra:
-  - valor base
-  - delta de propuestas
-  - valor simulado
-  - delta manual
-  - valor final
-  - diff vs base
-  - comentarios
-
-### Terminología
-
-En la UI ya se habla de:
-
-- `Impactada por propuesta`
-- `Propuestas aplicadas`
-
-Pero internamente los nombres de tipos siguen siendo `simulationContributions`.
-
-## Simulator
-
-La vista de análisis está en `src/components/Simulator.tsx`.
-
-### Qué debe representar
-
-- Árbol de trabajo: simulaciones y escenarios
-- KPIs contra Base
-- Caja base vs escenario
-- Comparación entre escenarios
-- Biblioteca lateral de propuestas activables
-
-### Regla de negocio
-
-Si editas una propuesta, el cambio debe reflejarse en todos los escenarios donde esa propuesta esté asignada.
-
-Eso hoy ocurre naturalmente porque el escenario solo guarda IDs de propuestas.
-
-## Base scenario
-
-El `Escenario Base` es un caso especial:
-
-- siempre visible
-- no se elimina
-- no admite simulaciones/propuestas aplicadas
-- no admite overrides
-- es el punto de comparación permanente
-
-Si tocas selección, persistencia o UI de escenarios, esta regla no se negocia.
-
-## Tests existentes
-
-Actualmente hay cobertura sobre:
-
-- migración / persistencia
-- aislamiento de overrides por escenario
-- stacking determinista de efectos
-- restauración de celdas
-- ajuste porcentual sobre targets agregados
-- smoke test de edición en Forecast
-
-Archivos:
-
-- `src/domain/persistence.test.ts`
-- `src/domain/scenarioEngine.test.ts`
-- `src/components/Forecast.test.tsx`
-
-Siempre corre:
-
-```bash
-npm test
-npm run build
-```
-
-## Riesgos frecuentes
-
-### 1. Invertir otra vez la terminología
-
-El error más común aquí es volver a mezclar:
-
-- simulación
-- escenario
-- propuesta
-
-Antes de renombrar o mover algo, revisa cómo lo entiende el usuario y cómo está guardado realmente.
-
-### 2. Romper el Base
-
-Muchos cambios de selección activa pueden forzar accidentalmente un `proposalId` o permitir edición manual en Base.
-
-Valida siempre:
-
-- `activeScenarioId`
-- `activeProposalId`
-- `isBaseScenario()`
-
-### 3. Romper simulaciones legacy
-
-Hay datos guardados con estructura vieja. No asumas presencia de:
-
-- `targetIds`
-- `type`
-- `startYearMonth`
-
-La persistencia ya lo compensa; la UI también debe ser defensiva.
-
-### 4. Porcentajes sobre agregados
-
-No calcules `%` sobre `baseValuesByConceptId` cuando el target sea sintético global. Usa la base agregada ya preparada en el motor.
-
-### 5. UI demasiado compleja
-
-El usuario ha pedido varias veces que Propuestas sea más fácil de entender.
-
-Cuando hagas UX en esa zona:
-
-- prioriza preguntas simples
-- muestra pocos controles a la vez
-- cambia los conceptos disponibles según el tipo de ajuste
-- evita meter demasiados campos visibles de golpe
-
-## Si vas a seguir mejorando este módulo
-
-El siguiente paso natural de UX sería convertir la creación de propuestas en un flujo aún más guiado, por ejemplo:
-
-1. ¿Qué quieres cambiar?
-2. ¿En qué rubros aplica?
-3. ¿Cuánto cambia?
-4. ¿Desde cuándo y con qué frecuencia?
-
-Ese camino está alineado con lo que el usuario quiere.
-
-## Resumen corto para no equivocarte
-
-- UI:
-  - Simulación > Escenario > Propuesta
-- Código:
-  - Proposal > Scenario > Simulation
-- Base:
-  - siempre existe
-  - nunca editable
-- Forecast:
-  - base -> propuestas activas -> override manual
-- Propuestas:
-  - formulario dinámico según el tipo de ajuste
-- Antes de cerrar:
-  - `npm test`
-  - `npm run build`
+- `npm test` (13 pre-existing failures on main as of 2026-05-15, all in `CollectionProjection.test.tsx` + `MidasSplash.test.tsx` — verify count didn't grow)
+- `npm run typecheck` (clean as of 2026-05-15 — any error is yours)
+- `npm run build` (clean as of 2026-05-15)
+- Smoke `npm run dev` against real JDE data (or empty store) for the path you touched.
+- For visual changes, toggle dark mode (add `dark` class to `<html>` via DevTools) and verify your component reads correctly. The splash, dashboard, planning grid, charts, CommandPalette (⌘K), modals, and form inputs should all be coherent.
+- Update this file if you changed the architecture.

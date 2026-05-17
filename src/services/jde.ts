@@ -16,22 +16,55 @@
 
 import { jdeClient, JdeClientConfig } from './jdeClient';
 import {
+  fetchRangeWithDailyCache,
+  getDailyCached,
+  setDailyCached,
+  primeDailyCache,
+} from './dailyApiCache';
+import { apiConfig } from '../config/api.config';
+import { JdeApiError } from './jdeTypes';
+import type {
   AgedBalanceRecord,
   AgedBalanceRequest,
   BankAccountStatement,
   BankStatementLine,
   BankStatementRequest,
   BankStatementFormat,
+  CobranzaPayment,
+  CobranzaPaymentApplication,
+  CobranzaPaymentRequest,
   CobranzaRecord,
   CobranzaRequest,
+  ComprasRecord,
+  ComprasRequest,
   Company,
+  NominaRequest,
+  PagoProveedorRecord,
+  PagoProveedorRequest,
+  RolRecord,
+  RolRequest,
 } from './jdeTypes';
+import type {
+  PayrollCashTreatment,
+  PayrollCostRecord,
+} from '../modules/shared-finance/types';
 
 // ───────────────────────────────────────────────────────────────
 // Helpers de normalización
 // ───────────────────────────────────────────────────────────────
 
 type RawRecord = Record<string, unknown>;
+
+const LONG_RUNNING_TIMEOUT_MS = 240_000;
+const LONG_RUNNING_RETRIES = 1;
+
+function withLongRunningDefaults(config: JdeClientConfig = {}): JdeClientConfig {
+  return {
+    ...config,
+    timeoutMs: config.timeoutMs ?? LONG_RUNNING_TIMEOUT_MS,
+    retries: config.retries ?? LONG_RUNNING_RETRIES,
+  };
+}
 
 /** Busca una clave por varios alias (case-insensitive, snake/camel). */
 function pick(obj: RawRecord, aliases: string[]): unknown {
@@ -56,6 +89,38 @@ function toNum(v: unknown): number {
 function toStr(v: unknown): string {
   if (v === null || v === undefined) return '';
   return String(v).trim();
+}
+
+function trimIsoDate(v: unknown): string {
+  const s = toStr(v);
+  if (!s) return '';
+  return s.length >= 10 ? s.slice(0, 10) : s;
+}
+
+/**
+ * Normaliza un valor de `No_Recibo` a la llave de cruce canónica:
+ *   1. Descarta cualquier caracter que no sea dígito (espacios, guiones,
+ *      prefijos tipo "RI -", etc.).
+ *   2. Si quedan más de 8 dígitos, conserva solo los últimos 8.
+ *
+ * Contexto: el API de Bancos JDE devuelve `No_Recibo` con dígitos extra al
+ * frente (tipo de documento, padding contable, batch, etc.) que no aparecen
+ * en la columna `No_Recibo` de `cobranzaindicadores`. Para cruzar ambos
+ * lados con confianza, normalizamos a "los últimos 8 dígitos". Cuando el
+ * valor ya tiene 8 o menos dígitos (caso cobranzaindicadores típico) la
+ * función es idempotente y solo limpia separadores.
+ */
+function extractReciboKey(value: unknown): string {
+  const digits = toStr(value).replace(/\D/g, '');
+  if (!digits) return '';
+  return digits.length > 8 ? digits.slice(-8) : digits;
+}
+
+export function normalizeInvoiceRef(value: unknown): string {
+  return toStr(value)
+    .toUpperCase()
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\s+/g, '');
 }
 
 /**
@@ -99,6 +164,27 @@ function unwrapList(raw: unknown): RawRecord[] {
   return [];
 }
 
+function splitIntoFixedDayWindows(from: string, to: string, windowDays: number): Array<{ from: string; to: string }> {
+  const windows: Array<{ from: string; to: string }> = [];
+  const start = new Date(from + 'T00:00:00Z');
+  const end = new Date(to + 'T00:00:00Z');
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end || windowDays < 1) return windows;
+
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  while (cursor <= end) {
+    const winEnd = new Date(cursor);
+    winEnd.setUTCDate(winEnd.getUTCDate() + windowDays - 1);
+    const boundedEnd = winEnd <= end ? winEnd : end;
+    windows.push({
+      from: cursor.toISOString().slice(0, 10),
+      to: boundedEnd.toISOString().slice(0, 10),
+    });
+    cursor = new Date(boundedEnd);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return windows;
+}
+
 // ───────────────────────────────────────────────────────────────
 // 1. Antigüedad de Saldos
 // ───────────────────────────────────────────────────────────────
@@ -137,7 +223,7 @@ function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
 }
 
 /**
- * POST /v1/erp/tesoreria/antiguedadsaldos
+ * POST /JDEdwards/antiguedadsaldos
  * Retorna todos los saldos abiertos por proveedor para la compañía indicada.
  */
 export async function fetchAgedBalances(
@@ -221,9 +307,28 @@ function parseConcepto(inf1: unknown, inf2: unknown): string {
  *   Cuenta_Contable, Nombre_cuenta_Contable, Saldo_Inicial, Saldo_Final,
  *   tipo_Cuenta_Bancos, DESC039, Importe, Codigo_Transaccion_banco,
  *   Tipo_Movimiento ("DEBITO"/"CREDITO"), Referencia_Cliente,
- *   InF_ADI_1, InF_ADI_2, InF_ADI_3, Codigo_Categoria_33..38, DESC033..038
+ *   No_Recibo, InF_ADI_1, InF_ADI_2, InF_ADI_3,
+ *   Codigo_Categoria_33..38, DESC033..038
  */
 function mapBankLine(raw: RawRecord): BankStatementLine {
+  const gsaid = toStr(pick(raw, ['gsaid', 'GSAID']));
+  const cuentaContable = toStr(pick(raw, ['Cuenta_Contable', 'cuenta_contable']));
+  const cuentaBancos = toStr(pick(raw, ['Cuenta_Bancos', 'cuenta_bancos']));
+  const nombreCuentaContable = toStr(pick(raw, ['Nombre_cuenta_Contable', 'nombre_cuenta_contable']));
+  const fechaEstadoCuentaRaw = trimIsoDate(pick(raw, ['Fecha_Estado_Cuenta', 'fecha_estado_cuenta']));
+  const tipoCuentaBancos = toStr(pick(raw, ['tipo_Cuenta_Bancos', 'Tipo_Cuenta_Bancos', 'tipoCuentaBancos']));
+  const desc039 = toStr(pick(raw, ['DESC039', 'desc039']));
+  const desc036 = toStr(pick(raw, ['DESC036', 'desc036', 'moneda', 'currency']));
+  const codigoTransaccionBanco = toStr(pick(raw, ['Codigo_Transaccion_banco', 'codigo_transaccion_banco']));
+  const referenciaCliente = toStr(pick(raw, ['Referencia_Cliente', 'referencia_cliente']));
+  // No_Recibo viene del API de Bancos con dígitos extra al inicio; nos
+  // quedamos con los últimos 8 dígitos para cruzar 1:1 con la columna
+  // `No_Recibo` de cobranzaindicadores.
+  const noRecibo = extractReciboKey(pick(raw, ['No_Recibo', 'No Recibo', 'noRecibo', 'no_recibo']));
+  const infAdi1 = toStr(pick(raw, ['InF_ADI_1', 'INF_ADI_1', 'infAdi1']));
+  const infAdi2 = toStr(pick(raw, ['InF_ADI_2', 'INF_ADI_2', 'infAdi2']));
+  const infAdi3 = toStr(pick(raw, ['InF_ADI_3', 'INF_ADI_3', 'infAdi3']));
+
   // ── Importe ──
   const importeRaw = toNum(
     pick(raw, ['Importe', 'importe', 'monto', 'amount']),
@@ -257,32 +362,46 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
 
   // ── Empresa ── derivada de Cuenta_Contable (BU → cia con padding)
   const ciaExplicit = toStr(pick(raw, ['cia', 'compania']));
-  const cia = ciaExplicit || extractCiaFromCuentaContable(pick(raw, ['Cuenta_Contable', 'cuenta_contable']));
+  const cia = ciaExplicit ? normalizeCia(ciaExplicit) : extractCiaFromCuentaContable(cuentaContable);
 
-  // ── Banco ── nombre extraído de Nombre_cuenta_Contable + tipo de cuenta (DESC039)
+  // ── Banco ── nombre extraído de Nombre_cuenta_Contable.
+  // Antes concatenábamos `· ${desc039}` (e.g. "BANORTE · Pagadora") pero eso
+  // fragmenta el mismo banco en grupos distintos cuando tiene cuentas de
+  // varios tipos. Hoy `nombreBanco` es solo el banco; el tipo de cuenta
+  // (`desc039` / `tipoCuentaBancos`) queda disponible en la cuenta para que
+  // la UI lo muestre en la fila individual.
   const nombreBancoRaw = toStr(
-    pick(raw, ['Nombre_cuenta_Contable', 'nombreBanco', 'nombre_banco', 'bankName']),
+    nombreCuentaContable || pick(raw, ['nombreBanco', 'nombre_banco', 'bankName']),
   );
   const bankNameOnly = extractBankName(nombreBancoRaw);
-  const tipoCuenta = toStr(pick(raw, ['DESC039']));
-  const nombreBanco = bankNameOnly
-    ? (tipoCuenta ? `${bankNameOnly} · ${tipoCuenta}` : bankNameOnly)
-    : (tipoCuenta || undefined);
+  const nombreBanco = bankNameOnly || desc039 || undefined;
 
   // ── Cuenta bancaria ──
-  const cuenta = toStr(
-    pick(raw, ['Cuenta_Bancos', 'cuenta', 'numeroCuenta', 'numero_cuenta', 'account']),
-  );
+  // Para la mayoría de bancos (Banamex, Santander, etc.) `Cuenta_Bancos` viene
+  // estable por cuenta real. Para BANBAJIO el API devuelve un `Cuenta_Bancos`
+  // distinto en cada línea (es el folio SPEI / clave de rastreo del recibo),
+  // lo que rompe el agrupamiento y produce "74 cuentas" cuando en realidad
+  // es 1 cuenta con 74 movimientos. Como Cuenta_Contable también viene vacío
+  // para Bajío, forzamos un cuenta-sentinela "BANBAJIO" para que todas las
+  // líneas colapsen al mismo (cia, cuenta, moneda) en groupByAccount, y
+  // groupByAccount suma los saldos por cuentaBancos único (ver allí).
+  const bankIsBajio =
+    /BAJIO|BAJÍO/i.test(toStr(nombreCuentaContable)) ||
+    /BAJIO|BAJÍO/i.test(toStr(nombreBancoRaw));
+  const fallbackCuenta = toStr(pick(raw, ['cuenta', 'numeroCuenta', 'numero_cuenta', 'account']));
+  const cuenta = bankIsBajio
+    ? 'BANBAJIO'
+    : toStr(cuentaBancos || fallbackCuenta);
 
   // ── Concepto (parsing inteligente de InF_ADI) ──
   const concepto = parseConcepto(
-    pick(raw, ['InF_ADI_1']),
-    pick(raw, ['InF_ADI_2']),
+    infAdi1,
+    infAdi2,
   );
 
   // ── Referencia ──
   const referencia = toStr(
-    pick(raw, ['Referencia_Cliente', 'referencia', 'folio', 'reference']),
+    referenciaCliente || pick(raw, ['referencia', 'folio', 'reference']),
   );
 
   // ── Banco ── usamos el nombre extraído como código también (no hay campo banco dedicado en JDE)
@@ -291,7 +410,7 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
   );
 
   // ── Moneda ── JDE no la devuelve explícitamente; inferimos de categorías si posible
-  const descMoneda = toStr(pick(raw, ['DESC036', 'moneda', 'currency']));
+  const descMoneda = desc036;
   const moneda = descMoneda.includes('M.N.') || descMoneda.includes('MXN') ? 'MXN'
     : descMoneda.includes('USD') || descMoneda.includes('DLS') || descMoneda.includes('Dólar') ? 'USD'
     : descMoneda || 'MXN';
@@ -305,10 +424,24 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
     fechaOperacion,
     fechaValor: undefined,
     referencia,
+    noRecibo,
     concepto,
     tipoMovimiento,
     importe: absImporte,
     saldo: undefined, // saldos se manejan a nivel de cuenta, no por línea
+    gsaid,
+    cuentaContable,
+    cuentaBancos,
+    nombreCuentaContable,
+    fechaEstadoCuenta: fechaEstadoCuentaRaw,
+    tipoCuentaBancos,
+    desc039,
+    desc036,
+    codigoTransaccionBanco,
+    referenciaCliente,
+    infAdi1,
+    infAdi2,
+    infAdi3,
   };
 }
 
@@ -326,8 +459,22 @@ function groupByAccount(
 ): BankAccountStatement[] {
   const map = new Map<string, {
     acc: BankAccountStatement;
-    saldoInicial: number | undefined;
-    saldoFinal: number | undefined;
+    saldoInicial: number;
+    saldoFinal: number;
+    // Flags separados: una línea que trae Saldo_Inicial pero no Saldo_Final
+    // antes guardaba `saldoFinal = 0` (default) y el UI `saldoFinal ?? saldoInicial`
+    // resolvía a 0 — borrando el saldo real. Cuentas afectadas: BANBAJIO
+    // (centinela colapsado) y cualquier Santander/Banamex con Saldo_Final null
+    // en el último día consultado.
+    saldoInicialSeen: boolean;
+    saldoFinalSeen: boolean;
+    /**
+     * Sub-cuentas únicas dentro del grupo. Para la mayoría de bancos esto
+     * tiene 1 elemento (cada cuenta real = un Cuenta_Bancos estable). Para
+     * Bajío colapsamos N líneas en una cuenta sentinela, así que aquí se
+     * acumulan los Cuenta_Bancos / saldos por sub-cuenta original.
+     */
+    sources: Map<string, { saldoInicial?: number; saldoFinal?: number }>;
   }>();
 
   for (let i = 0; i < mappedLines.length; i++) {
@@ -337,9 +484,6 @@ function groupByAccount(
 
     let entry = map.get(key);
     if (!entry) {
-      // Tomar saldos del primer registro raw del grupo
-      const si = pick(r, ['Saldo_Inicial', 'saldoInicial', 'saldo_inicial']);
-      const sf = pick(r, ['Saldo_Final', 'saldoFinal', 'saldo_final']);
       entry = {
         acc: {
           cia: l.cia,
@@ -348,20 +492,44 @@ function groupByAccount(
           cuenta: l.cuenta,
           moneda: l.moneda,
           fechaEstadoCuenta,
+          cuentaContable: l.cuentaContable,
+          cuentaBancos: l.cuentaBancos,
+          nombreCuentaContable: l.nombreCuentaContable,
+          tipoCuentaBancos: l.tipoCuentaBancos,
+          desc039: l.desc039,
+          desc036: l.desc036,
           movimientos: [],
         },
-        saldoInicial: si !== undefined && si !== null ? toNum(si) : undefined,
-        saldoFinal: sf !== undefined && sf !== null ? toNum(sf) : undefined,
+        saldoInicial: 0,
+        saldoFinal: 0,
+        saldoInicialSeen: false,
+        saldoFinalSeen: false,
+        sources: new Map(),
       };
       map.set(key, entry);
     }
     entry.acc.movimientos.push(l);
+
+    // Sumar saldos por sub-cuenta única: para Bajío esto suma 74 saldos
+    // distintos en una sola "cuenta"; para Banamex (mismo Cuenta_Bancos en
+    // todas las líneas) sigue siendo el valor único de esa cuenta.
+    const sourceKey = toStr(pick(r, ['Cuenta_Bancos', 'cuenta_bancos']))
+      || toStr(pick(r, ['gsaid', 'GSAID']))
+      || String(i);
+    if (!entry.sources.has(sourceKey)) {
+      const si = pick(r, ['Saldo_Inicial', 'saldoInicial', 'saldo_inicial']);
+      const sf = pick(r, ['Saldo_Final', 'saldoFinal', 'saldo_final']);
+      const siNum = si !== undefined && si !== null ? toNum(si) : undefined;
+      const sfNum = sf !== undefined && sf !== null ? toNum(sf) : undefined;
+      entry.sources.set(sourceKey, { saldoInicial: siNum, saldoFinal: sfNum });
+      if (siNum !== undefined) { entry.saldoInicial += siNum; entry.saldoInicialSeen = true; }
+      if (sfNum !== undefined) { entry.saldoFinal += sfNum; entry.saldoFinalSeen = true; }
+    }
   }
 
-  // Asignar saldos y ordenar movimientos
-  for (const { acc, saldoInicial, saldoFinal } of map.values()) {
-    acc.saldoInicial = saldoInicial;
-    acc.saldoFinal = saldoFinal;
+  for (const { acc, saldoInicial, saldoFinal, saldoInicialSeen, saldoFinalSeen } of map.values()) {
+    acc.saldoInicial = saldoInicialSeen ? saldoInicial : undefined;
+    acc.saldoFinal = saldoFinalSeen ? saldoFinal : undefined;
     acc.movimientos.sort((a, b) => a.fechaOperacion.localeCompare(b.fechaOperacion));
   }
 
@@ -369,7 +537,7 @@ function groupByAccount(
 }
 
 /**
- * POST /v1/erp/tesoreria/bancos
+ * POST /JDEdwards/bancos
  * Retorna el estado de cuenta agrupado por cuenta bancaria.
  */
 export async function fetchBankStatements(
@@ -423,7 +591,16 @@ export async function fetchBankStatementsRange(
   } = {},
 ): Promise<BankAccountStatement[]> {
   const concurrency = Math.max(1, options.concurrency ?? 6);
-  const config = options.config ?? {};
+  // Per-day /bancos es una foto chica — debe responder en segundos. Forzamos
+  // timeout 30s + 0 retries internos del jdeClient: este worker ya reintenta
+  // vía MAX_ATTEMPTS con su propio backoff. Sin esto el retry queda anidado
+  // (3 worker × 3 jdeClient × 120s ≈ 18min por UN día colgado → barra atorada
+  // en "730/731"). El caller puede override vía options.config.
+  const config: JdeClientConfig = {
+    timeoutMs: 30_000,
+    retries: 0,
+    ...(options.config ?? {}),
+  };
 
   // Build the list of dates [from..to] inclusive.
   const dates: string[] = [];
@@ -440,15 +617,33 @@ export async function fetchBankStatementsRange(
     dates.push(d.toISOString().slice(0, 10));
   }
 
-  // Parallel fetch with a simple worker pool.
+  // Parallel fetch with a simple worker pool, gated por cache por día.
+  // El cache (en IDB, ver dailyApiCache.ts) sirve días pasados sin tocar la
+  // red. "Hoy" siempre se re-fetch. Días que no estaban en cache se guardan
+  // al regresar.
   // Cada día puede fallar por timeout transitorio del proxy serverless o
   // por contención del API JDE (devuelve 500 cuando se le encima la cola).
-  // Reintentamos hasta 2 veces con backoff antes de aceptar 0 movimientos —
-  // en producción esto recupera la mayoría de días que de otro modo se
-  // perderían y dejaban al usuario viendo solo los pocos días que pasaron
-  // a la primera.
+  // Reintentamos hasta 2 veces con backoff antes de aceptar 0 movimientos.
+  await primeDailyCache();
+  const cacheApiKey = `banks.${formato}`;
+  const today = new Date().toISOString().slice(0, 10);
   const results: BankAccountStatement[][] = new Array(dates.length);
+  const needsFetch: number[] = [];
+  for (let i = 0; i < dates.length; i++) {
+    if (dates[i] < today) {
+      const cached = getDailyCached<BankAccountStatement>(cacheApiKey, dates[i]);
+      if (cached !== null) {
+        results[i] = cached;
+        continue;
+      }
+    }
+    needsFetch.push(i);
+  }
+  let done = dates.length - needsFetch.length;
+  options.onProgress?.(done, dates.length);
+
   let cursor = 0;
+<<<<<<< HEAD
   let done = 0;
 
   // Throttle del callback de progreso. Si el caller persiste estado de React
@@ -467,19 +662,24 @@ export async function fetchBankStatementsRange(
     }
   };
 
+=======
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   const MAX_ATTEMPTS = 3;
   const worker = async () => {
     while (true) {
-      const idx = cursor++;
-      if (idx >= dates.length) return;
+      const slot = cursor++;
+      if (slot >= needsFetch.length) return;
+      const idx = needsFetch[slot];
       let attempt = 0;
       let dayResult: BankAccountStatement[] = [];
+      let succeeded = false;
       while (attempt < MAX_ATTEMPTS) {
         try {
           dayResult = await fetchBankStatements(
             { fechaEstadoCuenta: dates[idx], formatoElectronico: formato },
             config,
           );
+          succeeded = true;
           break;
         } catch {
           attempt++;
@@ -494,12 +694,15 @@ export async function fetchBankStatementsRange(
         }
       }
       results[idx] = dayResult;
+      if (succeeded) {
+        setDailyCached(cacheApiKey, dates[idx], dayResult);
+      }
       done++;
       emitProgress();
     }
   };
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, dates.length) }, worker),
+    Array.from({ length: Math.min(concurrency, needsFetch.length || 1) }, worker),
   );
   // Forzar el último emit para que el caller siempre vea done == total.
   emitProgress(true);
@@ -525,6 +728,12 @@ export async function fetchBankStatementsRange(
           fechaEstadoCuenta: s.fechaEstadoCuenta,
           saldoInicial: s.saldoInicial,
           saldoFinal: s.saldoFinal,
+          cuentaContable: s.cuentaContable,
+          cuentaBancos: s.cuentaBancos,
+          nombreCuentaContable: s.nombreCuentaContable,
+          tipoCuentaBancos: s.tipoCuentaBancos,
+          desc039: s.desc039,
+          desc036: s.desc036,
           movimientos: [],
         };
         merged.set(key, acc);
@@ -544,6 +753,12 @@ export async function fetchBankStatementsRange(
         if (s.saldoFinal !== undefined) acc.saldoFinal = s.saldoFinal;
         // Keep the most recent human-readable bank label too.
         if (s.nombreBanco) acc.nombreBanco = s.nombreBanco;
+        if (s.cuentaContable) acc.cuentaContable = s.cuentaContable;
+        if (s.cuentaBancos) acc.cuentaBancos = s.cuentaBancos;
+        if (s.nombreCuentaContable) acc.nombreCuentaContable = s.nombreCuentaContable;
+        if (s.tipoCuentaBancos) acc.tipoCuentaBancos = s.tipoCuentaBancos;
+        if (s.desc039) acc.desc039 = s.desc039;
+        if (s.desc036) acc.desc036 = s.desc036;
       }
 
       const seenSet = seen.get(key)!;
@@ -583,7 +798,7 @@ function mapCompany(raw: RawRecord): Company {
 }
 
 /**
- * GET /v1/erp/tesoreria/empresas
+ * GET /JDEdwards/empresas
  * Retorna el catálogo de compañías disponible para el usuario autenticado.
  */
 export async function fetchCompanies(config: JdeClientConfig = {}): Promise<Company[]> {
@@ -659,20 +874,16 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
   // appendear "T12:00:00Z" sobre una cadena que YA tiene una T producía
   // un Date inválido (NaN) que rompía ventanas de fecha en el motor de
   // cruce.
-  const trimDate = (v: unknown): string => {
-    const s = toStr(v);
-    if (!s) return '';
-    return s.length >= 10 ? s.slice(0, 10) : s;
-  };
-  const fechaFactura = trimDate(pick(raw, ['fechaFactura', 'fecha_factura', 'Fecha_Factura', 'fechaEmision', 'fecha_emision']));
-  const fechaVence = trimDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento', 'fecha_vencimiento', 'Fecha_Vencimiento', 'dueDate']));
+  const fechaFactura = trimIsoDate(pick(raw, ['fechaFactura', 'fecha_factura', 'Fecha_Factura', 'fechaEmision', 'fecha_emision']));
+  const fechaVence = trimIsoDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento', 'fecha_vencimiento', 'Fecha_Vencimiento', 'dueDate']));
   // Fecha de pago efectiva — JDE la llama Fecha_Pago. Para nosotros es el
   // ancla de cruce más tight (±5 días) cuando la factura ya está cobrada.
-  const fechaCobro = trimDate(pick(raw, [
+  const fechaCobro = trimIsoDate(pick(raw, [
     'fechaCobro', 'fecha_cobro',
     'fecha_pago', 'Fecha_Pago', // ← shape real del API
     'fechaProgramacionCobro', 'fechaProgCobro', 'fechaCobrado',
   ]));
+  const fechaContable = trimIsoDate(pick(raw, ['fechaContable', 'fecha_contable', 'Fecha_Contable']));
 
   // ── Días vencida ──
   // El API regresa `Dias_Fecha_Vencimiento_vs_Fecha_Pago` solo cuando la
@@ -716,14 +927,37 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
   // toStr ya hace trim. Si no viene, dejamos vacío.
   const condPago = toStr(pick(raw, ['condPago', 'cond_pago', 'condicionPago', 'dias_credito', 'Dias_Credito']));
 
+  // ── Días de crédito numéricos ── (campo nuevo 2026-05-14)
+  // El API trae "Dias_Credito" como string padded ("30 ", "1  "); convertimos
+  // a number. Si no parsea, undefined (cae a fallback de client.creditDays
+  // catálogo). Mantener condPago para compatibilidad histórica.
+  const diasCreditoRaw = pick(raw, ['diasCredito', 'dias_credito', 'Dias_Credito']);
+  const diasCreditoNum = diasCreditoRaw == null ? undefined : toNum(diasCreditoRaw);
+  const diasCredito = diasCreditoNum && Number.isFinite(diasCreditoNum) && diasCreditoNum > 0
+    ? Math.round(diasCreditoNum)
+    : undefined;
+
+  // ── Cliente padre (grupo comercial JDE) ── (campo nuevo 2026-05-14)
+  // Autoridad sobre commercialGroupName del catálogo cuando viene poblado.
+  const noClientePadreRaw = toStr(pick(raw, ['noClientePadre', 'no_cliente_padre', 'No_Cliente_Padre']));
+  const noClientePadre = noClientePadreRaw && noClientePadreRaw !== '0' ? noClientePadreRaw : undefined;
+  const nombreClientePadre = toStr(pick(raw, ['nombreClientePadre', 'nombre_cliente_padre', 'Nombre_Cliente_Padre'])) || undefined;
+
+  // ── Día de pago preferido (CC13) ── (campo nuevo 2026-05-14)
+  // Regla del cliente: "paga los viernes". Útil para snap-to-day en proyección.
+  const diaPagoClave = toStr(pick(raw, ['diaPagoClave', 'claveDiaPagoCc13', 'clave_dia_pago_cc13', 'Clave_Dia_Pago_CC13'])) || undefined;
+  const diaPagoNombre = toStr(pick(raw, ['diaPagoNombre', 'nombreDiaPagoCc13', 'nombre_dia_pago_cc13', 'Nombre_Dia_Pago_CC13'])) || undefined;
+
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),
     noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'No_Cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
     nombreCliente:           toStr(pick(raw, ['nombreCliente', 'nombre_cliente', 'Nombre_Cliente', 'nombre', 'razonSocial', 'razon_social', 'customerName'])),
+    rfc:                     toStr(pick(raw, ['rfc', 'RFC'])),
     noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura', 'Factura', 'invoice', 'invoiceNo'])),
     fechaFactura,
     fechaVence,
     fechaCobro,
+    fechaContable,
     diasVencida,
     importeBrutoPesos,
     importePendientePesos,
@@ -733,6 +967,24 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     condPago,
     estatus,
     tipoCambio:              toNum(pick(raw, ['tipoCambio', 'tipo_cambio', 'tc'])),
+    tasaFiscal:              toStr(pick(raw, ['tasaFiscal', 'TasaFiscal', 'tasa_fiscal'])),
+    subTotal:                toNum(pick(raw, ['subTotal', 'SubTotal', 'sub_total'])),
+    importeIVA:              toNum(pick(raw, ['importeIVA', 'Importe_IVA', 'importe_iva'])),
+    importeRetencion:        toNum(pick(raw, ['importeRetencion', 'Importe_RETENCION', 'importe_retencion'])),
+    uuidFiscal:              toStr(pick(raw, ['uuidFiscal', 'UUID_Fiscal', 'uuid_fiscal'])),
+    claveDiaPagoCc13:        diaPagoClave ?? '',
+    nombreDiaPagoCc13:       diaPagoNombre ?? '',
+    noReciboSePagoFactura:   toStr(pick(raw, [
+      'noReciboSePagoFactura',
+      'No_recibo_Se_Pago_Factura',
+      'No_Recibo_Se_Pago_Factura',
+      'no_recibo_se_pago_factura',
+    ])),
+    noClientePadre,
+    nombreClientePadre,
+    diasCredito,
+    diaPagoClave,
+    diaPagoNombre,
     // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
     // campos cada una, el JSON.stringify del store excedía el quota de
     // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se
@@ -743,7 +995,7 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
 }
 
 /**
- * POST /v1/erp/tesoreria/cobranza
+ * POST /JDEdwards/cobranza
  *
  * Retorna las facturas de cobranza (CXC) abiertas/históricas para la
  * compañía indicada en el rango de fechas dado.
@@ -769,9 +1021,15 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  * Notas:
  *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
  *     compañías llamar en serie y mergear.
+<<<<<<< HEAD
  *   • El token productivo lo inyecta server-side la Vercel Function
  *     (api/jde/[...path].ts) leyendo `JDE_TOKEN`. En dev local, usa
  *     `VITE_JDE_TOKEN`.
+=======
+ *   • `fechaInicial: null` trae todo el histórico hasta `fechaFinal`.
+ *   • El browser llama a `/api/jde`; Atlas/backend o el proxy de Vite local
+ *     inyectan el token server-side.
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
  */
 export async function fetchCobranza(
   req: CobranzaRequest,
@@ -813,8 +1071,870 @@ export async function fetchCobranza(
   return list.map(mapCobranza);
 }
 
+// ───────────────────────────────────────────────────────────────
+// 5. Indicadores de Cobranza (recibos / aplicaciones)
+// ───────────────────────────────────────────────────────────────
+
+function mapCobranzaPaymentApplication(raw: RawRecord, idPago: string, cia: string): CobranzaPaymentApplication | null {
+  const noFactura = toStr(pick(raw, [
+    'No Factura', 'No_Factura', 'noFactura', 'no_factura', 'factura',
+  ]));
+  if (!noFactura) return null;
+
+  return {
+    idPago,
+    cia,
+    fechaAplicacion: trimIsoDate(pick(raw, ['Fecha aplicacion', 'Fecha_aplicacion', 'fechaAplicacion', 'fecha_aplicacion'])),
+    noCliente: toStr(pick(raw, ['No Cliente', 'No_Cliente', 'noCliente', 'no_cliente'])),
+    cliente: toStr(pick(raw, ['Cliente', 'cliente'])),
+    tipoDocto: toStr(pick(raw, ['Tipo Docto', 'Tipo_Docto', 'tipoDocto', 'tipo_docto'])),
+    noFactura,
+    noFacturaNormalizada: normalizeInvoiceRef(noFactura),
+    fechaFactura: trimIsoDate(pick(raw, ['Fecha Factura', 'Fecha_Factura', 'fechaFactura', 'fecha_factura'])),
+    fechaVencimiento: trimIsoDate(pick(raw, ['Fecha vencimiento', 'Fecha_Vencimiento', 'fechaVencimiento', 'fecha_vencimiento'])),
+    diasAntiguedadFafv: toNum(pick(raw, ['Dias Antiguedad FAFV', 'Dias_Antiguedad_FAFV', 'diasAntiguedadFafv'])),
+    importeCobrado: toNum(pick(raw, ['Importe Cobrado', 'Importe_Cobrado', 'importeCobrado', 'importe_cobrado'])),
+    importeOriginalFactura: toNum(pick(raw, ['Importe Original Factura', 'Importe_Original_Factura', 'importeOriginalFactura'])),
+    importePteFactura: toNum(pick(raw, ['Importe Pte Factura', 'Importe_Pte_Factura', 'importePteFactura'])),
+    tasaIva: toStr(pick(raw, ['tasa iva', 'tasa_iva', 'tasaIva', 'Tasa_IVA'])),
+    importeIvaFacturaOriginal: toNum(pick(raw, [
+      'Importe Iva Factura original',
+      'Importe_Iva_Factura_original',
+      'importeIvaFacturaOriginal',
+      'importe_iva_factura_original',
+    ])),
+  };
+}
+
+function mapCobranzaPaymentHeader(rows: RawRecord[], idPago: string, ciaFallback: string): CobranzaPayment {
+  const header = rows.reduce((best, row) => {
+    const current = toNum(pick(row, ['Importe Recibo', 'Importe_Recibo', 'importeRecibo', 'importe_recibo']));
+    const previous = toNum(pick(best, ['Importe Recibo', 'Importe_Recibo', 'importeRecibo', 'importe_recibo']));
+    return current > previous ? row : best;
+  }, rows[0]);
+  const cia = normalizeCia(pick(header, ['CIA', 'Cia', 'cia', 'compania'])) || ciaFallback;
+
+  return {
+    idPago,
+    cia,
+    fechaCobro: trimIsoDate(pick(header, ['Fecha Cobro', 'Fecha_Cobro', 'fechaCobro', 'fecha_cobro'])),
+    fechaContable: trimIsoDate(pick(header, ['Fecha Contable', 'Fecha_Contable', 'fechaContable', 'fecha_contable'])),
+    cuentaBancaria: toStr(pick(header, ['cta bancaria', 'cta_bancaria', 'cuentaBancaria', 'cuenta_bancaria'])),
+    banco: toStr(pick(header, ['Banco', 'banco'])),
+    // Cruzamos por `No_Recibo` contra el banco; normalizamos al mismo
+    // formato (solo dígitos, últimos 8) para que ambos lados produzcan la
+    // misma llave aún si cobranzaindicadores trae prefijos tipo "RI - ".
+    noRecibo: extractReciboKey(pick(header, ['No Recibo', 'No_Recibo', 'noRecibo', 'no_recibo'])),
+    importeRecibo: toNum(pick(header, ['Importe Recibo', 'Importe_Recibo', 'importeRecibo', 'importe_recibo'])),
+    pendienteAplicar: toNum(pick(header, ['Pendiente de Aplicar', 'Pendiente_de_Aplicar', 'pendienteAplicar'])),
+    noCliente: toStr(pick(header, ['No Cliente', 'No_Cliente', 'noCliente', 'no_cliente'])),
+    cliente: toStr(pick(header, ['Cliente', 'cliente'])),
+    noBatch: toStr(pick(header, ['no batch', 'no_batch', 'noBatch', 'No_Batch'])),
+    tipoCambio: toNum(pick(header, ['tipo cambio', 'tipo_cambio', 'tipoCambio'])),
+    applications: rows
+      .map(row => mapCobranzaPaymentApplication(row, idPago, cia))
+      .filter((app): app is CobranzaPaymentApplication => app !== null),
+  };
+}
+
+export function normalizeCobranzaPayments(rows: Record<string, unknown>[], ciaFallback = ''): CobranzaPayment[] {
+  const groups = new Map<string, RawRecord[]>();
+  for (const row of rows) {
+    const idPago = toStr(pick(row, ['Id Pago', 'Id_Pago', 'idPago', 'id_pago']));
+    if (!idPago) continue;
+    const list = groups.get(idPago) ?? [];
+    list.push(row);
+    groups.set(idPago, list);
+  }
+
+  return Array.from(groups.entries())
+    .map(([idPago, group]) => mapCobranzaPaymentHeader(group, idPago, ciaFallback))
+    .filter(payment => payment.fechaCobro && payment.cuentaBancaria && payment.importeRecibo > 0)
+    .sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro) || a.idPago.localeCompare(b.idPago));
+}
+
+/**
+ * POST /cobranzaindicadores vía el proxy JDE estándar.
+ *
+ * Reporte de pagos/recibos y aplicaciones de cobranza. Liberado en producción
+ * el 2026-05-07 en `api.gruposenda.com/JDEdwards/cobranzaindicadores`,
+ * por lo que ya usa el mismo cliente, token y proxy que el resto de las APIs
+ * JDE — sin upstream separado ni headers de auth custom. La respuesta plana
+ * se normaliza a un pago por `Id Pago`, con sus facturas aplicadas anidadas.
+ */
+export async function fetchIndicadoresCobranza(
+  req: CobranzaPaymentRequest,
+  config: JdeClientConfig = {},
+): Promise<CobranzaPayment[]> {
+  const raw = await jdeClient.post<unknown>('/cobranzaindicadores', req, withLongRunningDefaults(config));
+  return normalizeCobranzaPayments(unwrapList(raw), req.cia);
+}
+
+// ───────────────────────────────────────────────────────────────
+// 6. Compras (Órdenes de Compra)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * JDE marca fechas "vacías" como 1899-12-31. Para F_Recepcion eso significa
+ * "OC todavía no recibida"; para F_Cancelada significa "no cancelada".
+ * Tratamos ese centinela como ausencia.
+ */
+function isSentinelJdeDate(iso: string): boolean {
+  if (!iso) return true;
+  return iso.startsWith('1899-') || iso.startsWith('0001-');
+}
+
+/** Suma N días a un YYYY-MM-DD; devuelve '' si la entrada no es parseable. */
+function addDaysIso(iso: string, days: number): string {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime())) return '';
+  d.setUTCDate(d.getUTCDate() + (Number.isFinite(days) ? Math.floor(days) : 0));
+  return d.toISOString().slice(0, 10);
+}
+
+function mapCompras(raw: RawRecord): ComprasRecord {
+  const fechaPedido = trimIsoDate(pick(raw, ['F_Pedido', 'f_pedido', 'fechaPedido']));
+  const fechaRecepcionRaw = trimIsoDate(pick(raw, ['F_Recepcion', 'F_Recepción', 'f_recepcion', 'fechaRecepcion']));
+  const fechaRecepcion = isSentinelJdeDate(fechaRecepcionRaw) ? '' : fechaRecepcionRaw;
+  const fechaCanceladaRaw = trimIsoDate(pick(raw, ['F_Cancelada', 'f_cancelada', 'fechaCancelada']));
+  const cancelada = !isSentinelJdeDate(fechaCanceladaRaw);
+  const noFactura = toStr(pick(raw, ['N_Factura', 'n_factura', 'noFactura']));
+  const facturada = noFactura.length > 0;
+  const diasCredito = toNum(pick(raw, ['D_Credito', 'd_credito', 'diasCredito']));
+  const fechaPagoProyectada = fechaRecepcion ? addDaysIso(fechaRecepcion, diasCredito) : '';
+
+  return {
+    cia:               normalizeCia(pick(raw, ['Compañia', 'Compania', 'compania', 'cia', 'company'])),
+    noProveedor:       toStr(pick(raw, ['C_Proveedor', 'c_proveedor', 'noProveedor'])),
+    nombreProveedor:   toStr(pick(raw, ['N_Proveedor', 'n_proveedor', 'nombreProveedor'])),
+    noOrden:           toStr(pick(raw, ['N_Orden', 'n_orden', 'noOrden'])),
+    tipoOrden:         toStr(pick(raw, ['T_Orden', 't_orden', 'tipoOrden'])),
+    descTipoOrden:     toStr(pick(raw, ['D_T_Orden', 'd_t_orden', 'descTipoOrden'])),
+    lineaOrden:        toNum(pick(raw, ['L_Orden', 'l_orden', 'lineaOrden'])),
+    noProducto:        toStr(pick(raw, ['C_Producto', 'c_producto', 'noProducto'])),
+    descProducto:      toStr(pick(raw, ['D_Producto', 'd_producto', 'descProducto'])),
+    concepto:          toStr(pick(raw, ['Concepto', 'concepto'])),
+    cantidad:          toNum(pick(raw, ['Cantidad', 'cantidad'])),
+    precioUnitario:    toNum(pick(raw, ['Precio_U', 'precio_u', 'precioUnitario'])),
+    importeTotal:      toNum(pick(raw, ['Precio_T', 'precio_t', 'importeTotal', 'importe'])),
+    moneda:            toStr(pick(raw, ['T_Moneda', 't_moneda', 'moneda', 'currency'])) || 'MXP',
+    tipoCambio:        toNum(pick(raw, ['Tipo_Cambio', 'tipo_cambio', 'tipoCambio'])) || 1,
+    fechaPedido,
+    fechaRecepcion,
+    diasCredito,
+    fechaPagoProyectada,
+    noFactura,
+    centroCostos:      toStr(pick(raw, ['Centro_Costos', 'centro_costos', 'centroCostos'])),
+    categoria:         toStr(pick(raw, ['Categoria', 'categoria'])),
+    descCategoria:     toStr(pick(raw, ['Desc_Categoria', 'desc_categoria', 'descCategoria'])),
+    familia:           toStr(pick(raw, ['Familia', 'familia'])),
+    descFamilia:       toStr(pick(raw, ['Desc_Familia', 'desc_familia', 'descFamilia'])),
+    subFamilia:        toStr(pick(raw, ['SubFamilia', 'sub_familia', 'subFamilia'])),
+    descSubFamilia:    toStr(pick(raw, ['Desc_SubFamilia', 'desc_sub_familia', 'descSubFamilia'])),
+    estadoSiguiente:   toStr(pick(raw, ['Edo_Sig', 'edo_sig', 'estadoSiguiente'])),
+    tasaFiscal:        toStr(pick(raw, ['Tasa_Fiscal', 'tasa_fiscal', 'tasaFiscal'])),
+    cancelada,
+    facturada,
+  };
+}
+
+/**
+ * POST /JDEdwards/compras
+ *
+ * Devuelve las órdenes de compra del rango indicado. JDE solo procesa hasta
+ * 30 días por request — para rangos mayores usar `fetchComprasRange`.
+ *
+ * El payload trae ~40 campos por OC; consumimos todos pero solo proyectamos
+ * egreso a corto plazo con un subset (ver `ComprasRecord`).
+ */
+export async function fetchCompras(
+  req: ComprasRequest,
+  config: JdeClientConfig = {},
+): Promise<ComprasRecord[]> {
+  const raw = await jdeClient.post<unknown>('/compras', req, config);
+  return unwrapList(raw).map(mapCompras);
+}
+
+/**
+ * Fetch órdenes de compra en bloques de 1 día con cache por día en localStorage.
+ *
+ * JDE limita /compras a rangos pequeños; usamos 1 día por request para poder
+ * cachear cada día individualmente bajo `midas.daily.compras.__all__.{YYYY-MM-DD}`.
+ * Días pasados se sirven del cache sin pegar al endpoint. "Hoy" siempre se
+ * re-fetch (los datos del día cambian intradía).
+ *
+ * Deduplica por `(cia, noOrden, lineaOrden)` para tolerar registros repetidos
+ * entre días contiguos (raro, pero el chunker viejo de 30 días lo manejaba y
+ * lo mantenemos por seguridad).
+ *
+ * @param from   YYYY-MM-DD inclusive.
+ * @param to     YYYY-MM-DD inclusive.
+ * @param options Concurrencia (default 3), callback de progreso, config JDE.
+ */
+export async function fetchComprasRange(
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<ComprasRecord[]> {
+  const config = options.config ?? {};
+
+  // JDE /compras devuelve 500 intermitente. Reintentar con backoff exponencial
+  // cubre el flakeo upstream sin perder días enteros.
+  const MAX_ATTEMPTS = 3;
+  const fetchDayWithRetry = async (day: string): Promise<ComprasRecord[]> => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await fetchCompras({ fechaInicial: day, fechaFinal: day }, config);
+      } catch (err) {
+        lastErr = err;
+        if (attempt === MAX_ATTEMPTS) break;
+        const delayMs = 500 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    throw lastErr;
+  };
+
+  const all = await fetchRangeWithDailyCache<ComprasRecord>('compras', {
+    from,
+    to,
+    fetchDay: fetchDayWithRetry,
+    onProgress: options.onProgress,
+    concurrency: options.concurrency ?? 3,
+  });
+
+  const seen = new Set<string>();
+  const merged: ComprasRecord[] = [];
+  for (const rec of all) {
+    const key = `${rec.cia}::${rec.noOrden}::${rec.lineaOrden}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+  }
+  return merged;
+}
+
+/**
+ * Fetch cobranza (CXC) para una cía en rango de fechas — snapshot único.
+ *
+ * El endpoint /cobranza con `fechaInicial=null, fechaFinal=today` devuelve TODAS
+ * las facturas abiertas/históricas para la cía. Por eso una sola llamada por cía
+ * basta y NO conviene chunkear por día (sería 365 requests por cía).
+ *
+ * El cache vive en `MidasStore.cobranzaRecords` (localStorage) + TTL por cia en
+ * `cobranzaLoadedCias`. Adicionalmente persistimos un snapshot en IDB para que
+ * el siguiente boot tenga los datos sin esperar a la red mientras el TTL fresh
+ * sea válido.
+ */
+export async function fetchCobranzaRange(
+  cia: string,
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<CobranzaRecord[]> {
+  const config = options.config ?? {};
+  options.onProgress?.(0, 1);
+  // Una sola llamada por cía con el rango completo. El upstream regresa TODAS
+  // las facturas abiertas/históricas — chunkear por día explotaría a 365 calls
+  // por cía sin ganancia de cache (los registros del mismo día rara vez se
+  // repiten en queries posteriores).
+  const records = await fetchCobranza({ cia, fechaInicial: from, fechaFinal: to }, config);
+  options.onProgress?.(1, 1);
+  return records;
+}
+
+/**
+ * Fetch indicadores de cobranza (recibos/pagos) para una cía — snapshot único.
+ *
+ * Mismo razonamiento que fetchCobranzaRange: una llamada por cía cubre todo.
+ * El cache vive en MidasStore.cobranzaPayments + cobranzaPaymentsLoadedCias.
+ */
+export async function fetchIndicadoresCobranzaRange(
+  cia: string,
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<CobranzaPayment[]> {
+  const config = options.config ?? {};
+  const windows = splitIntoMonthlyWindows(from, to);
+  if (windows.length === 0) return [];
+
+  options.onProgress?.(0, windows.length);
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  const results: CobranzaPayment[][] = new Array(windows.length);
+  const failedWindows: string[] = [];
+  let cursor = 0;
+  let completed = 0;
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const slot = cursor++;
+      if (slot >= windows.length) return;
+      const w = windows[slot];
+      try {
+        results[slot] = await fetchIndicadoresCobranza(
+          { cia, fechaInicial: w.from, fechaFinal: w.to },
+          config,
+        );
+      } catch (err) {
+        failedWindows.push(`${w.from}..${w.to}`);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[cobranzaindicadores] ${cia} ventana ${w.from}..${w.to} falló: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        results[slot] = [];
+      } finally {
+        completed += 1;
+        options.onProgress?.(completed, windows.length);
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, windows.length) }, worker),
+  );
+
+  if (failedWindows.length === windows.length) {
+    throw new JdeApiError(
+      `JDE /cobranzaindicadores no respondió para ${cia} en ninguna ventana mensual`,
+      504,
+      '/cobranzaindicadores',
+      { cia, from, to, failedWindows },
+    );
+  }
+
+  if (failedWindows.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[cobranzaindicadores] ${cia} completó parcial: ${windows.length - failedWindows.length}/${windows.length} ventanas`,
+    );
+  }
+
+  const byId = new Map<string, CobranzaPayment>();
+  for (const payment of results.flat()) {
+    byId.set(payment.idPago, payment);
+  }
+  return Array.from(byId.values()).sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro) || a.idPago.localeCompare(b.idPago));
+}
+
 // Flag para que el log de shape solo aparezca una vez por sesión.
 let cobranzaShapeLogged = false;
+
+// ───────────────────────────────────────────────────────────────
+// 6. Nómina (TRESS)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Mapping naive (basado solo en `TipoConcepto`) hacia `PayrollCashTreatment`.
+ *
+ * Esta es la primera capa de clasificación que aplica el mapper. Una segunda
+ * capa más fina vive en `payrollModuleService` (PR2) y refina por
+ * `Concepto`/`IDConcepto` para separar:
+ *   - Deducción ISR / IMSS empleado → WITHHOLDING_PAYABLE (lo entera la
+ *     empresa al SAT/IMSS en la fecha de entero, no el día de la nómina).
+ *   - Deducción préstamo / pensión alimenticia → DEDUCTION (resta del neto
+ *     que recibe el empleado en FechaPago).
+ *   - Vales / provisiones registradas como percepción pero no efectivo →
+ *     NON_CASH.
+ *
+ * Por defecto el mapper asigna el tratamiento más conservador para que el
+ * flujo de efectivo no se subestime mientras la tabla fina no esté cargada.
+ */
+const TIPO_CONCEPTO_TO_CASH_TREATMENT: Record<string, PayrollCashTreatment> = {
+  'percepcion': 'CASH_OUT',
+  'percepción': 'CASH_OUT',
+  'deduccion': 'DEDUCTION',
+  'deducción': 'DEDUCTION',
+  'aportacion': 'EMPLOYER_TAX',
+  'aportación': 'EMPLOYER_TAX',
+  'patronal': 'EMPLOYER_TAX',
+  // TRESS prod usa "Obligación Empresa" para todo lo que el empleador entera
+  // al SAT/IMSS/INFONAVIT — IMSS patronal, RCV, INFONAVIT, ISR retenido,
+  // provisión ISN, etc. + algunos informativos exentos. El default es
+  // EMPLOYER_TAX; `refineCashTreatment` separa los informativos (EXENTO,
+  // GRAVADO, PROVISION) y el ISR retenido (WITHHOLDING_PAYABLE).
+  'obligacion empresa': 'EMPLOYER_TAX',
+  'obligación empresa': 'EMPLOYER_TAX',
+  // "Prestación" en TRESS son mayoritariamente vales de despensa (no cash al
+  // empleado en FechaPago, salen por monedero electrónico). Default NON_CASH
+  // y `refineCashTreatment` promueve a CASH_OUT los pagos reales: indemnización,
+  // gratificación por separación, prima de antigüedad.
+  'prestacion': 'NON_CASH',
+  'prestación': 'NON_CASH',
+  'informativo': 'NON_CASH',
+};
+
+function inferCashTreatment(tipoConcepto: string): PayrollCashTreatment {
+  const key = tipoConcepto.trim().toLowerCase();
+  if (!key) return 'NON_CASH';
+  const direct = TIPO_CONCEPTO_TO_CASH_TREATMENT[key];
+  if (direct) return direct;
+  // Substring match para tolerar variantes ("Aportación Patronal", "Deducción Empleado", etc.).
+  for (const token of Object.keys(TIPO_CONCEPTO_TO_CASH_TREATMENT)) {
+    if (key.includes(token)) return TIPO_CONCEPTO_TO_CASH_TREATMENT[token];
+  }
+  return 'NON_CASH';
+}
+
+function mapNominaRow(raw: RawRecord): PayrollCostRecord {
+  const idEmpresaRaw = pick(raw, ['IDEmpresa', 'idEmpresa', 'id_empresa', 'cia', 'compania']);
+  const empresa = toStr(pick(raw, ['Empresa', 'empresa', 'nombreEmpresa', 'razonSocial']));
+  const monto = toNum(pick(raw, ['Monto', 'monto', 'importe', 'amount']));
+  const periodo = pick(raw, ['Periodo', 'periodo', 'numPeriodo']);
+  const mes = toStr(pick(raw, ['Mes', 'mes']));
+  const idConcepto = pick(raw, ['IDConcepto', 'idConcepto', 'id_concepto']);
+  const concepto = toStr(pick(raw, ['Concepto', 'concepto', 'nombreConcepto']));
+  const tipoNomina = toStr(pick(raw, ['TipoNomina', 'tipoNomina', 'tipo_nomina']));
+  const tipoConcepto = toStr(pick(raw, ['TipoConcepto', 'tipoConcepto', 'tipo_concepto']));
+
+  // Aliases defensivos para el typo `Fechainical` en producción.
+  const fechaInicial = trimIsoDate(
+    pick(raw, ['Fechainical', 'fechainical', 'FechaInicial', 'fechaInicial', 'fecha_inicial']),
+  );
+  const fechaFinal = trimIsoDate(pick(raw, ['FechaFinal', 'fechaFinal', 'fecha_final']));
+  const fechaPago = trimIsoDate(pick(raw, ['FechaPago', 'fechaPago', 'fecha_pago']));
+
+  // Año/mes derivados de la fecha de pago (la fuente más confiable para
+  // alinear el evento de cash con el calendario fiscal). Si falta, intentamos
+  // parsear desde el body de la request via campos auxiliares.
+  let year = 0;
+  let month = 0;
+  if (fechaPago) {
+    const parts = fechaPago.split('-');
+    year = toNum(parts[0]);
+    month = toNum(parts[1]);
+  }
+  if (!year) year = toNum(pick(raw, ['anio', 'Anio', 'year']));
+  if (!month) month = toNum(pick(raw, ['mes_num', 'numMes', 'monthNumber']));
+
+  return {
+    // `cia` se normaliza al mismo padding de 5 dígitos que usan CXP/bancos
+    // para garantizar joins por compañía a nivel store.
+    cia: normalizeCia(idEmpresaRaw),
+    empresaNomina: empresa,
+    year,
+    month,
+    paymentDate: fechaPago,
+    periodStartDate: fechaInicial || undefined,
+    periodEndDate: fechaFinal || undefined,
+    payrollPeriod: typeof periodo === 'number' ? periodo : toStr(periodo) || mes,
+    payrollType: tipoNomina,
+    conceptId: typeof idConcepto === 'number' ? idConcepto : toStr(idConcepto),
+    conceptName: concepto,
+    conceptType: tipoConcepto,
+    cashTreatment: inferCashTreatment(tipoConcepto),
+    amount: monto,
+  };
+}
+
+/**
+ * POST /nomina (TRESS) — devuelve registros normalizados a `PayrollCostRecord`.
+ *
+ * Nota sobre `idEmpresa=99` y `tipoNomina=99`: ambos valores funcionan como
+ * comodín ("Todas") según el contrato del API. Para backfill anual basta con
+ * 12 requests, una por mes.
+ *
+ * Sanity-check retry: AWS API Gateway puede truncar responses >1MB (ver
+ * vite.config.ts:26), produciendo payloads que solo traen Percepciones (sin
+ * Deducciones ni Aportaciones). Detectamos esa firma y reintentamos hasta
+ * MAX_NOMINA_PARTIAL_RETRIES veces. Si tras los retries el response sigue
+ * sospechoso, devolvemos lo que llegó (best-effort) — el caller decide si
+ * mergea o no. Lanzar aquí dejaba al usuario con "Sin datos" hasta que
+ * pulsara refresh manual.
+ */
+const MAX_NOMINA_PARTIAL_RETRIES = 2;
+
+function isNominaResponseSuspect(records: PayrollCostRecord[]): boolean {
+  if (records.length === 0) return false; // empty es legítimo
+  return !records.some(
+    r => r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'EMPLOYER_TAX',
+  );
+}
+
+export async function fetchNomina(
+  req: NominaRequest,
+  config: JdeClientConfig = {},
+): Promise<PayrollCostRecord[]> {
+  const merged: JdeClientConfig = {
+    baseUrl: apiConfig.tress.baseUrl,
+    ...config,
+  };
+  let records: PayrollCostRecord[] = [];
+  for (let attempt = 0; attempt <= MAX_NOMINA_PARTIAL_RETRIES; attempt++) {
+    const raw = await jdeClient.post<unknown>('/Nomina', req, merged);
+    records = unwrapList(raw).map(mapNominaRow);
+    if (!isNominaResponseSuspect(records)) return records;
+    if (attempt < MAX_NOMINA_PARTIAL_RETRIES) {
+      console.warn(
+        `[fetchNomina] response sospechoso (${records.length} records, solo Percepciones — sin Deducciones ni Aportaciones) para ${JSON.stringify(req)} — retry ${attempt + 1}/${MAX_NOMINA_PARTIAL_RETRIES}`,
+      );
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+  console.error(
+    `[fetchNomina] response sigue sospechoso tras ${MAX_NOMINA_PARTIAL_RETRIES} retries para ${JSON.stringify(req)} (${records.length} records sin Deducciones/Aportaciones). Devolviendo best-effort.`,
+  );
+  return records;
+}
+
+// Exporta helpers internos para que los unit tests puedan ejercitarlos sin
+// montar un mock del cliente HTTP.
+export const __internal = {
+  mapCobranza,
+  mapNominaRow,
+  inferCashTreatment,
+};
+
+// ───────────────────────────────────────────────────────────────
+// 8. PagoProveedor (pagos ejecutados — espejo egreso de cobranza)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Normaliza fecha JDE en formato "DD-MM-YYYY" a "YYYY-MM-DD".
+ *
+ * Solo este endpoint usa día-primero; los demás devuelven ISO con timestamp.
+ * Si no matchea el formato esperado, intenta `trimIsoDate` como fallback
+ * (cubre el caso raro de que JDE cambie a ISO en una versión futura).
+ */
+function trimDmyDate(v: unknown): string {
+  const s = toStr(v);
+  if (!s) return '';
+  const m = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return trimIsoDate(v);
+}
+
+function mapPagoProveedor(raw: RawRecord): PagoProveedorRecord {
+  return {
+    tipoPago:                          toStr(pick(raw, ['tipo_pago', 'tipoPago', 'TipoPago'])),
+    noPago:                            toStr(pick(raw, ['no_pago', 'noPago', 'NoPago'])),
+    cia:                               normalizeCia(pick(raw, ['No_Cia', 'no_cia', 'noCia', 'cia', 'compania'])),
+    nombreCia:                         toStr(pick(raw, ['Nombre_Cia', 'nombre_cia', 'nombreCia'])),
+    cuentaBancaria:                    toStr(pick(raw, ['Cuenta_Bancaria', 'cuenta_bancaria', 'cuentaBancaria'])),
+    cuentaBanco:                       toStr(pick(raw, ['Cuenta_Banco', 'cuenta_banco', 'cuentaBanco'])),
+    fechaPago:                         trimDmyDate(pick(raw, ['Fecha_Pago', 'fecha_pago', 'fechaPago'])),
+    importePesos:                      toNum(pick(raw, ['Importe_Pago_Pesos', 'importe_pago_pesos', 'importePesos'])),
+    importeDolares:                    toNum(pick(raw, ['Importe_Pago_Dolares', 'importe_pago_dolares', 'importeDolares'])),
+    moneda:                            toStr(pick(raw, ['Moneda', 'moneda', 'currency'])) || 'MXP',
+    batchPago:                         toStr(pick(raw, ['Batch_pago', 'batch_pago', 'batchPago'])),
+    claveProveedor:                    toStr(pick(raw, ['Clave_Proveedor', 'clave_proveedor', 'claveProveedor'])),
+    rfcProveedor:                      toStr(pick(raw, ['RFC_Proveedor', 'rfc_proveedor', 'rfcProveedor'])),
+    nombreProveedor:                   toStr(pick(raw, ['Nombre_Proveedor', 'nombre_proveedor', 'nombreProveedor'])),
+    tipoBusqueda:                      toStr(pick(raw, ['Tipo_busqueda', 'tipo_busqueda', 'tipoBusqueda'])),
+    clasificacionProveedor:            toStr(pick(raw, ['Clasificacion_proveedor', 'clasificacion_proveedor', 'clasificacionProveedor'])),
+    clasificacionProveedorFinanciera:  toStr(pick(raw, ['clasificacion_Proveedor_Financiera', 'Clasificacion_Proveedor_Financiera', 'clasificacionProveedorFinanciera'])),
+    comentarioPago:                    toStr(pick(raw, ['Comentario_Pago', 'comentario_pago', 'comentarioPago'])),
+  };
+}
+
+/**
+ * POST /JDEdwards/pagoproveedor
+ *
+ * Devuelve los pagos ejecutados a proveedores en el rango. Es el espejo
+ * egreso de /cobranza (cobros ejecutados). Sin chunking forzado upstream
+ * pero para rangos amplios usar `fetchPagoProveedorRange` con cache diario.
+ */
+export async function fetchPagoProveedor(
+  req: PagoProveedorRequest,
+  config: JdeClientConfig = {},
+): Promise<PagoProveedorRecord[]> {
+  const raw = await jdeClient.post<unknown>('/pagoproveedor', req, config);
+  return unwrapList(raw).map(mapPagoProveedor);
+}
+
+/**
+ * Fetch pagos a proveedor en bloques de 1 día con cache por día.
+ *
+ * Mismo patrón que /cobranza y /compras: cada día se cachea bajo
+ * `midas.daily.pagoproveedor.__all__.{YYYY-MM-DD}`. Días pasados se sirven
+ * del cache; "hoy" siempre se re-fetch (los datos del día cambian intradía).
+ *
+ * Deduplica por `(cia, noPago)` para tolerar registros repetidos.
+ *
+ * @param from   YYYY-MM-DD inclusive.
+ * @param to     YYYY-MM-DD inclusive.
+ */
+export async function fetchPagoProveedorRange(
+  from: string,
+  to: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<PagoProveedorRecord[]> {
+  const config = options.config ?? {};
+
+  const MAX_ATTEMPTS = 3;
+  const fetchDayWithRetry = async (day: string): Promise<PagoProveedorRecord[]> => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await fetchPagoProveedor({ fechaInicial: day, fechaFinal: day }, config);
+      } catch (err) {
+        lastErr = err;
+        if (attempt === MAX_ATTEMPTS) break;
+        const delayMs = 500 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    throw lastErr;
+  };
+
+  const all = await fetchRangeWithDailyCache<PagoProveedorRecord>('pagoproveedor', {
+    from,
+    to,
+    fetchDay: fetchDayWithRetry,
+    onProgress: options.onProgress,
+    concurrency: options.concurrency ?? 3,
+  });
+
+  const seen = new Set<string>();
+  const merged: PagoProveedorRecord[] = [];
+  for (const rec of all) {
+    const key = `${rec.cia}::${rec.noPago}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+  }
+  return merged;
+}
+
+// ───────────────────────────────────────────────────────────────
+// 9. ROL Diario (CITI — viajes ejecutados)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Calcula la fecha del lunes ISO de la semana indicada. Se usa para inferir
+ * la fecha de despacho del viaje hasta que el API CITI exponga un campo de
+ * fecha exacta.
+ *
+ * ISO 8601: la semana 1 contiene el primer jueves del año (equivalente: la
+ * semana que contiene el 4 de enero).
+ */
+function isoWeekMonday(year: number, week: number): string {
+  if (!Number.isFinite(year) || !Number.isFinite(week) || week < 1 || week > 53) return '';
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  // En JS: domingo=0; ISO: domingo=7.
+  const jan4Dow = jan4.getUTCDay() || 7;
+  // Lunes de la semana 1: 4-enero menos (jan4Dow - 1) días.
+  const week1Monday = new Date(jan4);
+  week1Monday.setUTCDate(jan4.getUTCDate() - (jan4Dow - 1));
+  const target = new Date(week1Monday);
+  target.setUTCDate(week1Monday.getUTCDate() + (week - 1) * 7);
+  return target.toISOString().slice(0, 10);
+}
+
+function toBool(v: unknown): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const t = v.trim().toLowerCase();
+    return t === 'true' || t === '1' || t === 'si' || t === 'sí';
+  }
+  return false;
+}
+
+function mapRol(raw: RawRecord): RolRecord {
+  const anio = toNum(pick(raw, ['anio', 'Anio', 'año', 'Ano', 'year']));
+  const semana = toNum(pick(raw, ['semana', 'Semana', 'week']));
+  const fechaViaje = isoWeekMonday(anio, semana);
+
+  return {
+    cia:             normalizeCia(pick(raw, ['cia', 'Cia', 'compania', 'company'])),
+    empresa:         toStr(pick(raw, ['empresa', 'D_Empresa', 'd_empresa'])),
+    kCliente:        toNum(pick(raw, ['kCliente', 'K_Cliente', 'k_cliente'])),
+    cCliente:        toStr(pick(raw, ['cCliente', 'C_Cliente', 'c_cliente'])),
+    dCliente:        toStr(pick(raw, ['dCliente', 'D_Cliente', 'd_cliente'])),
+    rfc:             toStr(pick(raw, ['rfc', 'RFC'])),
+    claveJDE:        toStr(pick(raw, ['claveJDE', 'Clave_JDE', 'clave_jde'])),
+    facturacionTipo: toStr(pick(raw, ['facturacionTipo', 'D_Facturacion_Tipo', 'd_facturacion_tipo'])),
+    iva:             toNum(pick(raw, ['iva', 'IVA'])),
+    tipoViaje:       toStr(pick(raw, ['tipoViaje', 'D_Tipo_Viaje', 'd_tipo_viaje'])),
+    ruta:            toStr(pick(raw, ['ruta', 'D_Ruta', 'd_ruta'])),
+    costoRuta:       toNum(pick(raw, ['costoRuta', 'Costo_Ruta', 'costo_ruta'])),
+    viajes:          toNum(pick(raw, ['viajes', 'Viajes'])),
+    subTotal:        toNum(pick(raw, ['subTotal', 'SubTotal', 'sub_total'])),
+    despachado:      toBool(pick(raw, ['despachado', 'B_Despachado', 'b_despachado'])),
+    efectuado:       toBool(pick(raw, ['efectuado', 'B_Efectuado', 'b_efectuado'])),
+    anio,
+    semana,
+    fechaViaje,
+    factura:         toStr(pick(raw, ['factura', 'Factura'])) || undefined,
+    uuidFiscal:      toStr(pick(raw, ['uuidFiscal', 'UUID_Fiscal', 'uuid_fiscal'])) || undefined,
+    plazaCiti:       toStr(pick(raw, ['plazaCiti', 'Plaza_CITI', 'plaza_citi'])) || undefined,
+  };
+}
+
+let rolShapeLogged = false;
+
+/**
+ * POST /citi/roldiario
+ *
+ * Retorna viajes ejecutados del rango indicado. Endpoint productivo Senda
+ * Citi (campos B_Despachado/B_Efectuado/Factura/UUID_Fiscal). El body usa
+ * los nombres de campo confirmados por CITI (`f_Inicio`, `f_Final`,
+ * `k_Servidor`) — ver `RolRequest`. La consulta es lenta (~20s+).
+ */
+export async function fetchRol(
+  req: RolRequest,
+  config: JdeClientConfig = {},
+): Promise<RolRecord[]> {
+  const merged = withLongRunningDefaults({
+    baseUrl: apiConfig.citi.baseUrl,
+    authValue: apiConfig.citi.authValue || undefined,
+    // El endpoint /citi/roldiario es notablemente lento. fetchRolRange ya
+    // trocea por mes, pero un mes pesado puede acercarse al techo global de
+    // 120s. Subimos el timeout SOLO para roldiario (5 min) — no toca el
+    // default global de jdeClient ni el resto de endpoints.
+    timeoutMs: 300_000,
+    ...config,
+  });
+  let raw: unknown;
+  try {
+    raw = await jdeClient.post<unknown>('/roldiario', req, merged);
+  } catch (err) {
+    // El endpoint CITI es nuevo (2026-05-14); si el body que mandamos no
+    // empata con lo que espera, log el detalle del error para diagnosticar
+    // sin tener que rebootar la app.
+    // eslint-disable-next-line no-console
+    console.warn(`[rol] fetch error: ${err instanceof Error ? err.message : String(err)} · body sent: ${JSON.stringify(req)}`);
+    if (err instanceof JdeApiError) {
+      // eslint-disable-next-line no-console
+      console.warn(`[rol] server response body: ${typeof err.body === 'string' ? err.body : JSON.stringify(err.body)}`);
+    }
+    throw err;
+  }
+  const list = unwrapList(raw);
+
+  if (typeof window !== 'undefined' && !rolShapeLogged) {
+    rolShapeLogged = true;
+    // eslint-disable-next-line no-console
+    console.info(`[rol] ${list.length} registros entre ${req.f_Inicio} y ${req.f_Final} (k_Servidor=${req.k_Servidor ?? -1})`);
+    if (list.length > 0) {
+      // eslint-disable-next-line no-console
+      console.info('[rol] sample raw record:', list[0]);
+      // eslint-disable-next-line no-console
+      console.info('[rol] sample mapped record:', mapRol(list[0]));
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[rol] respuesta VACÍA. Posibles causas: (1) endpoint sin permisos, (2) rango sin viajes, (3) body rechazado.');
+    }
+  }
+
+  return list.map(mapRol);
+}
+
+/** Parte [from..to] (YYYY-MM-DD, inclusive) en ventanas por mes calendario. */
+function splitIntoMonthlyWindows(from: string, to: string): Array<{ from: string; to: string }> {
+  const windows: Array<{ from: string; to: string }> = [];
+  const start = new Date(from + 'T00:00:00Z');
+  const end = new Date(to + 'T00:00:00Z');
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return windows;
+  let cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+  while (cursor <= end) {
+    // Último día del mes de `cursor` (día 0 del mes siguiente).
+    const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
+    const winEnd = monthEnd <= end ? monthEnd : end;
+    windows.push({ from: cursor.toISOString().slice(0, 10), to: winEnd.toISOString().slice(0, 10) });
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
+  }
+  return windows;
+}
+
+/**
+ * Wrapper para histórico del ROL diario. Dedup por
+ * (cia, kCliente, anio, semana, ruta, tipoViaje) para tolerar duplicados.
+ *
+ * El endpoint /citi/roldiario es lento; un solo request del año entero rebasa
+ * el timeout del cliente/proxy y al colgarse retiene un slot del semáforo
+ * global. Por eso troceamos por día y corremos con concurrencia baja.
+ * Una ventana que falla se trata como 0 viajes — no aborta el rango completo.
+ */
+export async function fetchRolRange(
+  fechaInicial: string,
+  fechaFinal: string,
+  options: {
+    kServidor?: number;
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<RolRecord[]> {
+  const kServidor = options.kServidor ?? -1;
+  const config = options.config ?? {};
+  const windows = splitIntoFixedDayWindows(fechaInicial, fechaFinal, 1);
+  if (windows.length === 0) return [];
+
+  options.onProgress?.(0, windows.length);
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  const results: RolRecord[][] = new Array(windows.length);
+  const failedWindows: string[] = [];
+  let cursor = 0;
+  let completed = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const slot = cursor++;
+      if (slot >= windows.length) return;
+      const w = windows[slot];
+      try {
+        results[slot] = await fetchRol(
+          { f_Inicio: w.from, f_Final: w.to, k_Servidor: kServidor },
+          config,
+        );
+      } catch (err) {
+        failedWindows.push(`${w.from}..${w.to}`);
+        // eslint-disable-next-line no-console
+        console.warn(`[rol] ventana ${w.from}..${w.to} falló: ${err instanceof Error ? err.message : String(err)}`);
+        results[slot] = [];
+      } finally {
+        completed += 1;
+        options.onProgress?.(completed, windows.length);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, windows.length) }, worker),
+  );
+
+  if (failedWindows.length === windows.length) {
+    throw new JdeApiError(
+      `CITI /roldiario no respondió en ninguna ventana diaria`,
+      504,
+      '/roldiario',
+      { fechaInicial, fechaFinal, failedWindows },
+    );
+  }
+
+  if (failedWindows.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`[rol] completó parcial: ${windows.length - failedWindows.length}/${windows.length} ventanas`);
+  }
+
+  const seen = new Set<string>();
+  const merged: RolRecord[] = [];
+  for (const rec of results.flat()) {
+    const key = `${rec.cia}::${rec.kCliente}::${rec.anio}::${rec.semana}::${rec.ruta}::${rec.tipoViaje}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+  }
+  return merged;
+}
 
 // Re-exports convenientes
 export type {
@@ -825,8 +1945,19 @@ export type {
   BankStatementRequest,
   BankStatementFormat,
   BankMovementType,
+  CobranzaPayment,
+  CobranzaPaymentApplication,
+  CobranzaPaymentRequest,
   CobranzaRecord,
   CobranzaRequest,
+  ComprasRecord,
+  ComprasRequest,
   Company,
+  NominaRequest,
+  NominaRawRecord,
+  PagoProveedorRecord,
+  PagoProveedorRequest,
+  RolRecord,
+  RolRequest,
 } from './jdeTypes';
 export { JdeApiError } from './jdeTypes';

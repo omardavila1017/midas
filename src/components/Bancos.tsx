@@ -17,6 +17,7 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   Upload,
+  Building2,
 } from 'lucide-react';
 import {
   fetchBankStatements,
@@ -34,18 +35,28 @@ import {
   type ClassificationContext,
   type InternalReason,
 } from '../domain/netCashFlowEngine';
-import {
-  bankMovementKey,
-  type AbonoEnrichment,
-} from '../domain/realReconciliationEngine';
+import { bankMovementKey } from '../domain/bankMovementKey';
+import type { AbonoEnrichment } from '../domain/realReconciliationEngine';
 import {
   attachImportedStatementsToKnownCompanies,
+  bankStatementBalance,
+  currentBankStatements,
+  latestStatementDate,
   mergeBankStatements,
+  sumBankStatementBalances,
   type BankQueryState,
 } from '../domain/bankStatements';
 import { parseSantanderFile, SANTANDER_FILE_FORMAT } from '../domain/santanderCsv';
 import { hex } from '../theme';
 import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
+import {
+  bankAccountBusinessUnitLabel,
+  bankAccountFlowLabel,
+  bankAccountRoleLabel,
+  bankAccountSearchText,
+  findBankAccount,
+  type BankAccountCatalogEntry,
+} from '../domain/bankAccountsCatalog';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Props
@@ -67,6 +78,13 @@ interface BancosProps {
    * pestaña sigue funcionando como antes.
    */
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
+  /**
+   * Mapa de bankMovementKey(mov) → CargoPaymentEnrichment, memoizado desde
+   * App.tsx tras correr el motor de PagoProveedor. Espejo egreso de
+   * `abonoEnrichmentIndex`: revela qué pagos a proveedor generaron cada
+   * CARGO y resalta CARGOs huérfanos (sin pago asociado).
+   */
+  cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }
 
 type BancosView = 'form' | 'dashboard';
@@ -109,6 +127,43 @@ const csvEscape = (v: string | number | undefined): string => {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
+
+function accountCatalogEntry(acc: Pick<BankAccountStatement, 'cuenta' | 'cuentaBancos'>): BankAccountCatalogEntry | null {
+  return findBankAccount(acc.cuentaBancos ?? acc.cuenta);
+}
+
+function catalogFlowClass(flow: string | undefined): string {
+  if (flow === 'ingreso') return 'bg-[var(--success-muted)] text-[var(--success)]';
+  if (flow === 'egreso') return 'bg-[var(--danger-muted)] text-[var(--danger)]';
+  return 'bg-[var(--gray-100)] text-[var(--gray-500)]';
+}
+
+function BankAccountBadges({ entry }: { entry: BankAccountCatalogEntry | null }) {
+  if (!entry) {
+    return (
+      <span className="inline-flex h-5 items-center rounded-full bg-[var(--warning-muted)] px-2 text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--warning)]">
+        Sin catálogo
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="inline-flex h-5 items-center rounded-full bg-[var(--primary-muted)] px-2 text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--primary)]">
+        {bankAccountBusinessUnitLabel(entry.unidadNegocio)}
+      </span>
+      <span className="inline-flex h-5 items-center rounded-full bg-[var(--gray-100)] px-2 text-[10px] font-medium text-[var(--gray-600)]">
+        {bankAccountRoleLabel(entry.role)}
+      </span>
+      <span className={`inline-flex h-5 items-center rounded-full px-2 text-[10px] font-medium ${catalogFlowClass(entry.flow)}`}>
+        {bankAccountFlowLabel(entry.flow)}
+      </span>
+      <span className="min-w-0 max-w-[360px] truncate text-[11px] text-[var(--gray-400)]" title={`${entry.razonSocial} · ${entry.concepto}`}>
+        {entry.concepto}
+      </span>
+    </div>
+  );
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    Form view — inicial / nueva consulta
@@ -182,13 +237,13 @@ const BancosForm = ({
   return (
     <div className="w-full max-w-lg mx-auto">
       <div className="text-center mb-8">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
+        <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
           <Landmark className="text-white" size={26} />
         </div>
         <h1 className="text-[28px] font-bold text-white tracking-tight">Bancos</h1>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
+      <div className="bg-white rounded-[var(--radius-lg)] shadow-sm border border-[var(--gray-200)] p-8">
         {!loading && !success && (
           <div className="space-y-5">
             <div>
@@ -197,7 +252,7 @@ const BancosForm = ({
                 type="date"
                 value={fecha}
                 onChange={e => setFecha(e.target.value)}
-                className="w-full px-3 h-10 rounded-xl border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
+                className="w-full px-3 h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
               />
             </div>
             <div>
@@ -205,7 +260,7 @@ const BancosForm = ({
               <select
                 value={formato}
                 onChange={e => setFormato(e.target.value as BankStatementFormat)}
-                className="w-full px-3 h-10 rounded-xl border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
+                className="w-full px-3 h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[13.5px] text-[var(--gray-950)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 focus:border-[var(--primary)]"
               >
                 {FORMATS.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
@@ -213,14 +268,14 @@ const BancosForm = ({
             <button
               onClick={consultar}
               disabled={!fecha}
-              className="w-full h-11 rounded-xl bg-[var(--primary)] text-white text-[14px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+              className="w-full h-11 rounded-[var(--radius)] bg-[var(--primary)] text-white text-[14px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
             >
               <Landmark className="w-4 h-4" /> Consultar
             </button>
 
             <div className="flex items-center gap-3 py-1">
               <div className="h-px flex-1 bg-[var(--gray-100)]" />
-              <span className="text-[11px] font-medium uppercase tracking-wider text-[var(--gray-300)]">o</span>
+              <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-300)]">o</span>
               <div className="h-px flex-1 bg-[var(--gray-100)]" />
             </div>
 
@@ -241,7 +296,7 @@ const BancosForm = ({
               <button
                 type="button"
                 onClick={() => santanderInputRef.current?.click()}
-                className="w-full h-11 rounded-xl border border-dashed border-[var(--gray-200)] bg-[var(--gray-50)] text-[13.5px] font-medium text-[var(--gray-700)] hover:border-[var(--primary)] hover:bg-[var(--primary-subtle)] transition flex items-center justify-center gap-2"
+                className="w-full h-11 rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] bg-[var(--gray-50)] text-[13.5px] font-medium text-[var(--gray-700)] hover:border-[var(--primary)] hover:bg-[var(--primary-subtle)] transition flex items-center justify-center gap-2"
               >
                 <Upload className="w-4 h-4" />
                 Subir archivo Santander
@@ -252,11 +307,11 @@ const BancosForm = ({
             </div>
 
             {error && (
-              <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl p-4">
+              <div className="bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] p-4">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
                   <div>
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)]">
+                    <p className="text-[13px] font-bold text-[var(--gray-950)]">
                       {errorSource === 'file' ? 'Error al leer archivo Santander' : 'Error al consultar JDE'}
                     </p>
                     <p className="text-[12px] text-[var(--gray-500)] mt-1">{error}</p>
@@ -282,7 +337,7 @@ const BancosForm = ({
         {success && (
           <div className="text-center py-14">
             <CheckCircle className="w-12 h-12 text-[var(--success)] mx-auto mb-3" />
-            <p className="text-[15px] font-semibold text-[var(--gray-950)]">{count.toLocaleString()} cuenta{count !== 1 ? 's' : ''} cargada{count !== 1 ? 's' : ''}</p>
+            <p className="text-[15px] font-bold text-[var(--gray-950)]">{count.toLocaleString()} cuenta{count !== 1 ? 's' : ''} cargada{count !== 1 ? 's' : ''}</p>
             <p className="text-[13px] text-[var(--gray-400)] mt-1">Abriendo dashboard...</p>
           </div>
         )}
@@ -308,6 +363,7 @@ const BancosDashboard = ({
   refreshError,
   companies = [],
   abonoEnrichmentIndex,
+  cargoEnrichmentIndex,
 }: {
   statements: BankAccountStatement[];
   query: BankQueryState;
@@ -321,6 +377,7 @@ const BancosDashboard = ({
   refreshError: string | null;
   companies?: { cia: string; nombre: string }[];
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
+  cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }) => {
   const santanderInputRef = useRef<HTMLInputElement | null>(null);
   const refreshBlockedReason = 'Este dataset viene solo de archivo Santander. Para actualizarlo desde JDE, primero corre una consulta.';
@@ -332,10 +389,13 @@ const BancosDashboard = ({
   }, [companies]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [collapsedBanks, setCollapsedBanks] = useState<Set<string>>(new Set());
+  const seenBanksRef = useRef<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [bancoFilter, setBancoFilter] = useState<string>('all');
   const [monedaFilter, setMonedaFilter] = useState<string>('all');
   const [tipoFilter, setTipoFilter] = useState<TipoFilter>('all');
+  const [unidadFilter, setUnidadFilter] = useState<string>('all');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
 
   // Construir el contexto de clasificación una sola vez sobre el universo
   // completo (no sobre el subset filtrado) para que la detección de cuenta
@@ -358,12 +418,15 @@ const BancosDashboard = ({
   // those accounts show regardless of company filter.
   const accountsFiltered = useMemo(() => {
     return statements.filter(s => {
+      const catalogEntry = accountCatalogEntry(s);
       if (selectedCia !== 'all' && s.cia && s.cia !== selectedCia) return false;
       if (bancoFilter !== 'all' && (s.nombreBanco ?? s.banco) !== bancoFilter) return false;
       if (monedaFilter !== 'all' && s.moneda !== monedaFilter) return false;
+      if (unidadFilter !== 'all' && (catalogEntry?.unidadNegocio ?? '__uncatalogued__') !== unidadFilter) return false;
+      if (roleFilter !== 'all' && (catalogEntry?.role ?? '__uncatalogued__') !== roleFilter) return false;
       return true;
     });
-  }, [statements, selectedCia, bancoFilter, monedaFilter]);
+  }, [statements, selectedCia, bancoFilter, monedaFilter, unidadFilter, roleFilter]);
 
   // Movement-level filter (search + tipo). Los traspasos internos NUNCA se
   // filtran fuera por sí mismos: aparecen siempre, en gris, restando de los
@@ -372,17 +435,38 @@ const BancosDashboard = ({
   const accountsView = useMemo(() => {
     const needle = searchTerm.trim().toLowerCase();
     return accountsFiltered.map(acc => {
+      const catalogEntry = accountCatalogEntry(acc);
+      const accountHay = [
+        acc.banco,
+        acc.nombreBanco,
+        acc.cia,
+        acc.cuenta,
+        acc.cuentaBancos,
+        acc.cuentaContable,
+        acc.nombreCuentaContable,
+        acc.desc039,
+        acc.desc036,
+        bankAccountSearchText(catalogEntry),
+      ].filter(Boolean).join(' ').toLowerCase();
+      const accountMatches = needle !== '' && accountHay.includes(needle);
       const movimientos = acc.movimientos.filter(m => {
         if (tipoFilter !== 'all' && m.tipoMovimiento !== tipoFilter) return false;
+        if (accountMatches) return true;
         if (needle) {
-          const hay = `${m.referencia} ${m.concepto}`.toLowerCase();
+          const hay = `${m.referencia} ${m.concepto} ${m.noRecibo ?? ''} ${m.cuentaBancos ?? ''} ${m.cuenta ?? ''}`.toLowerCase();
           if (!hay.includes(needle)) return false;
         }
         return true;
       });
       return { ...acc, movimientos };
-    });
+    }).filter(acc => !needle || acc.movimientos.length > 0 || bankAccountSearchText(accountCatalogEntry(acc)).toLowerCase().includes(needle));
   }, [accountsFiltered, searchTerm, tipoFilter]);
+
+  const balanceDate = useMemo(() => latestStatementDate(accountsView), [accountsView]);
+  const balanceAccountsView = useMemo(
+    () => currentBankStatements(accountsView, balanceDate),
+    [accountsView, balanceDate],
+  );
 
   const accountsByBank = useMemo(() => {
     type Acc = typeof accountsView[number];
@@ -395,12 +479,41 @@ const BancosDashboard = ({
     return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [accountsView]);
 
+  useEffect(() => {
+    const newOnes: string[] = [];
+    for (const [bankName] of accountsByBank) {
+      if (!seenBanksRef.current.has(bankName)) {
+        seenBanksRef.current.add(bankName);
+        newOnes.push(bankName);
+      }
+    }
+    if (newOnes.length > 0) {
+      setCollapsedBanks(prev => {
+        const next = new Set(prev);
+        for (const n of newOnes) next.add(n);
+        return next;
+      });
+    }
+  }, [accountsByBank]);
+
   const bancoOptions = useMemo(
     () => Array.from(new Set(statements.map(s => s.nombreBanco ?? s.banco).filter(Boolean))).sort(),
     [statements],
   );
   const monedaOptions = useMemo(
     () => Array.from(new Set(statements.map(s => s.moneda))).sort(),
+    [statements],
+  );
+  const unidadOptions = useMemo(
+    () => Array.from(new Set(
+      statements.map(s => accountCatalogEntry(s)?.unidadNegocio ?? '__uncatalogued__'),
+    )).sort((a, b) => bankAccountBusinessUnitLabel(a).localeCompare(bankAccountBusinessUnitLabel(b), 'es-MX')),
+    [statements],
+  );
+  const roleOptions = useMemo(
+    () => Array.from(new Set(
+      statements.map(s => accountCatalogEntry(s)?.role ?? '__uncatalogued__'),
+    )).sort((a, b) => bankAccountRoleLabel(a).localeCompare(bankAccountRoleLabel(b), 'es-MX')),
     [statements],
   );
 
@@ -411,7 +524,7 @@ const BancosDashboard = ({
     let totalCuentas = 0;
     let totalMovs = 0;
     let totalMovsInternal = 0;
-    let saldoTotal = 0;
+    const saldoTotal = sumBankStatementBalances(balanceAccountsView);
     let cargosBruto = 0;
     let cargosReal = 0;
     let abonosBruto = 0;
@@ -419,7 +532,6 @@ const BancosDashboard = ({
     for (const a of accountsView) {
       totalCuentas += 1;
       totalMovs += a.movimientos.length;
-      saldoTotal += a.saldoFinal ?? a.saldoInicial ?? 0;
       for (const m of a.movimientos) {
         const isInternal = internalReasonOf(a.cia, a.cuenta, m) !== null;
         if (isInternal) totalMovsInternal += 1;
@@ -433,22 +545,65 @@ const BancosDashboard = ({
       }
     }
     return { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal };
-  }, [accountsView, internalReasonOf]);
+  }, [accountsView, balanceAccountsView, internalReasonOf]);
   const { totalCuentas, totalMovs, totalMovsInternal, saldoTotal, cargosBruto, cargosReal, abonosBruto, abonosReal } = kpis;
   const totalCargos = cargosReal;
   const totalAbonos = abonosReal;
+  const balanceCuentas = balanceAccountsView.length;
+  const staleCuentas = Math.max(0, totalCuentas - balanceCuentas);
 
-  const hasFilters = bancoFilter !== 'all' || monedaFilter !== 'all' || tipoFilter !== 'all' || searchTerm !== '';
-  const clearFilters = () => { setBancoFilter('all'); setMonedaFilter('all'); setTipoFilter('all'); setSearchTerm(''); };
+  const unitSummaries = useMemo(() => {
+    const summaries = new Map<string, { label: string; accounts: number; movimientos: number; saldo: number; abonos: number; cargos: number }>();
+    for (const acc of accountsView) {
+      const entry = accountCatalogEntry(acc);
+      const key = entry?.unidadNegocio ?? '__uncatalogued__';
+      const current = summaries.get(key) ?? {
+        label: entry ? bankAccountBusinessUnitLabel(entry.unidadNegocio) : 'Sin catálogo',
+        accounts: 0,
+        movimientos: 0,
+        saldo: 0,
+        abonos: 0,
+        cargos: 0,
+      };
+      current.accounts += 1;
+      current.movimientos += acc.movimientos.length;
+      current.saldo += bankStatementBalance(acc);
+      for (const m of acc.movimientos) {
+        if (internalReasonOf(acc.cia, acc.cuenta, m) !== null) continue;
+        if (m.tipoMovimiento === 'ABONO') current.abonos += m.importe;
+        if (m.tipoMovimiento === 'CARGO') current.cargos += m.importe;
+      }
+      summaries.set(key, current);
+    }
+    return Array.from(summaries.entries())
+      .map(([key, value]) => ({ key, ...value }))
+      .sort((a, b) => b.saldo - a.saldo || a.label.localeCompare(b.label, 'es-MX'));
+  }, [accountsView, internalReasonOf]);
+
+  const hasFilters = bancoFilter !== 'all' || monedaFilter !== 'all' || tipoFilter !== 'all' || unidadFilter !== 'all' || roleFilter !== 'all' || searchTerm !== '';
+  const clearFilters = () => {
+    setBancoFilter('all');
+    setMonedaFilter('all');
+    setTipoFilter('all');
+    setUnidadFilter('all');
+    setRoleFilter('all');
+    setSearchTerm('');
+  };
 
   const exportCsv = () => {
-    const header = ['cia','empresa','banco','cuenta','moneda','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo'];
+    const header = ['cia','empresa','banco','cuenta','moneda','unidadNegocio','rolCuenta','flujoCuenta','razonSocialCuenta','conceptoCuenta','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo'];
     const rows: string[] = [header.join(',')];
     accountsView.forEach(acc => {
       const empresaNombre = ciaNameMap.get(acc.cia) ?? '';
+      const catalogEntry = accountCatalogEntry(acc);
       acc.movimientos.forEach(m => {
         rows.push([
           acc.cia, empresaNombre, acc.banco, acc.cuenta, acc.moneda,
+          catalogEntry ? bankAccountBusinessUnitLabel(catalogEntry.unidadNegocio) : '',
+          catalogEntry ? bankAccountRoleLabel(catalogEntry.role) : '',
+          catalogEntry ? bankAccountFlowLabel(catalogEntry.flow) : '',
+          catalogEntry?.razonSocial ?? '',
+          catalogEntry?.concepto ?? '',
           m.fechaOperacion, m.fechaValor ?? '',
           m.referencia, m.concepto, m.tipoMovimiento,
           m.importe, m.saldo ?? '',
@@ -466,41 +621,59 @@ const BancosDashboard = ({
 
   return (
     <div className="space-y-4">
-      {/* ── Top bar ── */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center bg-white rounded-full border border-[var(--gray-200)] px-3 py-1.5 gap-2 shadow-sm">
+      {/* ── Toolbar ── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex h-9 min-w-[280px] flex-1 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 shadow-sm">
           <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
           <input
             type="text"
-            placeholder="Buscar referencia o concepto..."
+            placeholder="Buscar cuenta, CLABE, razón social, unidad, referencia..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
-            className="text-[13px] bg-transparent border-none outline-none w-64 placeholder:text-[var(--gray-300)]"
+            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--gray-300)]"
           />
           {searchTerm && <button onClick={() => setSearchTerm('')}><X className="w-3.5 h-3.5 text-[var(--gray-400)]" /></button>}
         </div>
 
         <select value={bancoFilter} onChange={e => setBancoFilter(e.target.value)}
-          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer">
           <option value="all">Todos los bancos</option>
           {bancoOptions.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
 
+        <select value={unidadFilter} onChange={e => setUnidadFilter(e.target.value)}
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer"
+          title="Unidad de negocio">
+          <option value="all">Todas las unidades</option>
+          {unidadOptions.map(u => (
+            <option key={u} value={u}>{u === '__uncatalogued__' ? 'Sin catálogo' : bankAccountBusinessUnitLabel(u)}</option>
+          ))}
+        </select>
+
+        <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer"
+          title="Rol de cuenta">
+          <option value="all">Todos los roles</option>
+          {roleOptions.map(r => (
+            <option key={r} value={r}>{r === '__uncatalogued__' ? 'Sin catálogo' : bankAccountRoleLabel(r)}</option>
+          ))}
+        </select>
+
         <select value={monedaFilter} onChange={e => setMonedaFilter(e.target.value)}
-          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer">
           <option value="all">Todas las monedas</option>
           {monedaOptions.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
 
         <select value={tipoFilter} onChange={e => setTipoFilter(e.target.value as TipoFilter)}
-          className="text-[13px] bg-white rounded-full border border-[var(--gray-200)] px-4 py-1.5 shadow-sm text-[var(--gray-950)] cursor-pointer">
+          className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] text-[var(--gray-950)] shadow-sm cursor-pointer">
           <option value="all">Cargos y abonos</option>
           <option value="ABONO">Solo abonos</option>
           <option value="CARGO">Solo cargos</option>
         </select>
 
         {hasFilters && (
-          <button onClick={clearFilters} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition">
+          <button onClick={clearFilters} className="h-9 rounded-[var(--radius)] px-2 text-[12px] text-[var(--gray-500)] hover:bg-[var(--gray-100)] hover:text-[var(--primary)] flex items-center gap-1 transition">
             <Filter className="w-3 h-3" /> Limpiar filtros
           </button>
         )}
@@ -551,7 +724,7 @@ const BancosDashboard = ({
 
       {/* ── cia filter banner ── */}
       {selectedCia !== 'all' && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-[var(--radius)] px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
           <Filter className="w-3.5 h-3.5" />
           Filtrando por {ciaNameMap.get(selectedCia) ?? `compañía ${selectedCia}`} — {totalCuentas} cuenta{totalCuentas !== 1 ? 's' : ''}
           {statements.some(s => !s.cia) && (
@@ -563,13 +736,13 @@ const BancosDashboard = ({
       )}
 
       {refreshError && (
-        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--danger)] font-medium">
+        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--danger)] font-medium">
           <AlertCircle className="w-3.5 h-3.5" /> {refreshError}
         </div>
       )}
 
       {query.hasUploadedSantander && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-[var(--radius)] px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--primary)] font-medium">
           <Upload className="w-3.5 h-3.5" />
           {canRefresh
             ? 'Archivo Santander agregado al dataset actual.'
@@ -577,13 +750,52 @@ const BancosDashboard = ({
         </div>
       )}
 
-      {/* ── KPI cards ── */}
+      {unitSummaries.length > 0 && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {unitSummaries.map(unit => (
+            <button
+              key={unit.key}
+              type="button"
+              onClick={() => setUnidadFilter(unit.key)}
+              className={`rounded-[var(--radius-lg)] border p-3 text-left transition ${
+                unidadFilter === unit.key
+                  ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
+                  : 'border-[var(--gray-200)] bg-white hover:border-[var(--gray-300)] hover:bg-[var(--gray-50)]'
+              }`}
+              title={`Filtrar por ${unit.label}`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Building2 className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
+                  <p className="truncate text-[12px] font-bold text-[var(--gray-950)]">{unit.label}</p>
+                </div>
+                <span className="shrink-0 text-[10px] font-medium text-[var(--gray-400)]">
+                  {unit.accounts} cuenta{unit.accounts === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[14px] font-bold text-[var(--gray-950)]">{fmtCurrency(unit.saldo)}</p>
+                  <p className="text-[10px] text-[var(--gray-400)]">{unit.movimientos.toLocaleString()} mov.</p>
+                </div>
+                <div className="text-right text-[10px] tabular-nums">
+                  <p className="text-[var(--success)]">+{fmtCurrency(unit.abonos)}</p>
+                  <p className="text-[var(--danger)]">-{fmtCurrency(unit.cargos)}</p>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── KPI cards (hidden) ── */}
+      {false && (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           {
             label: 'Saldo Total',
             value: fmtCurrency(saldoTotal),
-            sub: `${totalCuentas} cuenta${totalCuentas !== 1 ? 's' : ''}`,
+            sub: `${balanceCuentas} cuenta${balanceCuentas !== 1 ? 's' : ''} al corte${staleCuentas > 0 ? ` · ${staleCuentas} históricas fuera` : ''}`,
             icon: Wallet,
             color: hex.primary,
           },
@@ -617,10 +829,17 @@ const BancosDashboard = ({
         ].map((kpi, i) => {
           const Icon = kpi.icon;
           return (
-            <div key={i} className="bg-white rounded-2xl border border-[var(--gray-200)] p-4 shadow-sm">
+            <div
+              key={i}
+              className="rounded-[var(--radius-lg)] border border-[var(--skeuo-paper-edge)] p-4 skeuo-brackets"
+              style={{
+                background: 'var(--skeuo-paper)',
+                boxShadow: 'var(--skeuo-emboss-md)',
+              }}
+            >
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-wider">{kpi.label}</p>
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
+                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-[0.08em]">{kpi.label}</p>
+                <div className="w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
                   <Icon className="w-3.5 h-3.5" style={{ color: kpi.color }} />
                 </div>
               </div>
@@ -630,19 +849,28 @@ const BancosDashboard = ({
           );
         })}
       </div>
+      )}
 
-      {/* ── Query chip ── */}
+      {/* ── Query chip (hidden) ── */}
+      {false && (
       <div className="inline-flex items-center gap-2 text-[12px] text-[var(--gray-500)] bg-white border border-[var(--gray-200)] rounded-full px-3 py-1 shadow-sm w-fit">
         <Calendar className="w-3.5 h-3.5" />
         <span>Estado al <span className="text-[var(--gray-950)] font-medium">{query.fechaEstadoCuenta}</span></span>
         <span className="text-[var(--gray-300)]">·</span>
         <span>Formato <span className="text-[var(--gray-950)] font-medium">{formatSourceLabel(query.formatoElectronico, query.hasUploadedSantander)}</span></span>
       </div>
+      )}
 
       {/* ── Accounts list ── */}
-      <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
+      <div
+        className="rounded-[var(--radius-lg)] border border-[var(--skeuo-paper-edge)] overflow-hidden"
+        style={{
+          background: 'var(--skeuo-paper)',
+          boxShadow: 'var(--skeuo-emboss-md)',
+        }}
+      >
         <div className="p-4 border-b border-[var(--gray-100)]">
-          <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
+          <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
             Cuentas <span className="text-[var(--gray-400)] font-normal ml-1">({accountsView.length.toLocaleString()})</span>
           </h2>
         </div>
@@ -655,11 +883,18 @@ const BancosDashboard = ({
           <div>
             {accountsByBank.map(([bankName, accs], bankIdx) => {
               const bankCollapsed = collapsedBanks.has(bankName);
-              const monedas = new Set(accs.map(a => a.moneda));
-              const sumSaldo = monedas.size === 1
-                ? accs.reduce((s, a) => s + (a.saldoFinal ?? a.saldoInicial ?? 0), 0)
-                : null;
-              const moneda = monedas.size === 1 ? accs[0].moneda : null;
+              const currentAccs = currentBankStatements(accs, balanceDate);
+              // Saldos por moneda (un banco puede tener cuentas MXN + USD).
+              // Antes ocultábamos el total si había mezcla; ahora mostramos
+              // un total por cada moneda para no perder la cifra.
+              const totalsByMoneda = (() => {
+                const m = new Map<string, number>();
+                for (const a of accs) {
+                  m.set(a.moneda, (m.get(a.moneda) ?? 0) + bankStatementBalance(a));
+                }
+                return Array.from(m.entries()).sort((x, y) => x[0].localeCompare(y[0]));
+              })();
+              const staleBankAccounts = Math.max(0, accs.length - currentAccs.length);
               return (
                 <div key={bankName} className={bankIdx > 0 ? 'border-t border-[var(--gray-100)]' : ''}>
                   <button
@@ -676,16 +911,22 @@ const BancosDashboard = ({
                       ? <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />
                       : <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" />}
                     <Landmark className="w-4 h-4 text-[var(--primary)] flex-shrink-0" />
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)] truncate">
+                    <p className="text-[13px] font-bold text-[var(--gray-950)] truncate">
                       {bankName}
                       <span className="text-[var(--gray-400)] font-normal ml-2">({accs.length} cuenta{accs.length !== 1 ? 's' : ''})</span>
                     </p>
                     <div className="ml-auto text-right">
-                      {sumSaldo !== null && moneda && (
-                        <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(sumSaldo, moneda)}</p>
-                      )}
+                      {totalsByMoneda.map(([moneda, total]) => (
+                        <p key={moneda} className="text-[13px] font-mono font-bold text-[var(--gray-950)]">
+                          {fmtCurrency(total, moneda)}
+                          {totalsByMoneda.length > 1 && (
+                            <span className="ml-1 text-[10px] font-normal text-[var(--gray-400)]">{moneda}</span>
+                          )}
+                        </p>
+                      ))}
                       <p className="text-[10px] text-[var(--gray-400)]">
                         {accs.reduce((s, a) => s + a.movimientos.length, 0).toLocaleString()} mov.
+                        {staleBankAccounts > 0 ? ` · ${staleBankAccounts} históricas fuera` : ''}
                       </p>
                     </div>
                   </button>
@@ -695,7 +936,12 @@ const BancosDashboard = ({
                       {accs.map(acc => {
                         const key = `${acc.cia}::${acc.cuenta}::${acc.moneda}`;
                         const isExpanded = expanded === key;
-                        const saldo = acc.saldoFinal ?? acc.saldoInicial ?? 0;
+                        const catalogEntry = accountCatalogEntry(acc);
+                        const saldo = bankStatementBalance(acc);
+                        const saldoIsDerived =
+                          (acc.saldoFinal === undefined || acc.saldoFinal === 0)
+                          && acc.saldoInicial !== undefined
+                          && acc.movimientos.length > 0;
                         return (
                           <div key={key}>
                             <button
@@ -709,9 +955,12 @@ const BancosDashboard = ({
                               <div className="flex-1 min-w-0">
                                 <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">
                                   {acc.cuenta || 'Cuenta bancaria'}
+                                  {acc.desc039 && (
+                                    <span className="ml-2 text-[11px] font-normal text-[var(--gray-500)]">· {acc.desc039}</span>
+                                  )}
                                 </p>
                                 <div className="flex items-center gap-2 mt-0.5">
-                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[var(--gray-50)] text-[var(--gray-500)]">{acc.moneda}</span>
                                   {acc.cia && (
                                     <span className="text-[11px] text-[var(--gray-400)]">
                                       {ciaNameMap.get(acc.cia) ?? `Cia ${acc.cia}`}
@@ -719,12 +968,24 @@ const BancosDashboard = ({
                                   )}
                                   <span className="text-[11px] text-[var(--gray-400)]">{acc.cia ? '· ' : ''}{acc.movimientos.length} mov.</span>
                                 </div>
+                                <div className="mt-1.5">
+                                  <BankAccountBadges entry={catalogEntry} />
+                                </div>
                               </div>
 
                               <div className="text-right w-36">
-                                <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
-                                <p className="text-[10px] text-[var(--gray-400)]">
-                                  {acc.saldoFinal !== undefined ? 'Saldo final' : acc.saldoInicial !== undefined ? 'Saldo inicial' : 'Sin saldo'}
+                                <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmtCurrency(saldo, acc.moneda)}</p>
+                                <p
+                                  className="text-[10px] text-[var(--gray-400)]"
+                                  title={saldoIsDerived ? 'Saldo final reportado fue 0/nulo; estimado desde saldoInicial + movimientos del periodo.' : undefined}
+                                >
+                                  {saldoIsDerived
+                                    ? 'Estimado'
+                                    : acc.saldoFinal !== undefined
+                                      ? 'Saldo final'
+                                      : acc.saldoInicial !== undefined
+                                        ? 'Saldo inicial'
+                                        : 'Sin saldo'}
                                 </p>
                               </div>
                             </button>
@@ -734,6 +995,7 @@ const BancosDashboard = ({
                                 acc={acc}
                                 internalReasonOf={internalReasonOf}
                                 abonoEnrichmentIndex={abonoEnrichmentIndex}
+                                cargoEnrichmentIndex={cargoEnrichmentIndex}
                               />
                             )}
                           </div>
@@ -759,10 +1021,12 @@ const BancosMovimientos = ({
   acc,
   internalReasonOf,
   abonoEnrichmentIndex,
+  cargoEnrichmentIndex,
 }: {
   acc: BankAccountStatement & { movimientos: BankStatementLine[] };
   internalReasonOf: (cia: string, cuenta: string, mov: BankStatementLine) => InternalReason | null;
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
+  cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }) => {
   if (acc.movimientos.length === 0) {
     return (
@@ -797,12 +1061,12 @@ const BancosMovimientos = ({
         <table className="w-full text-[11px]">
           <thead>
             <tr className="border-b border-[var(--gray-100)]">
-              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Fecha</th>
-              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Referencia</th>
-              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Concepto</th>
-              <th className="text-center py-2 text-[var(--gray-400)] font-semibold">Tipo</th>
-              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Importe</th>
-              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Saldo</th>
+              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Fecha</th>
+              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Referencia</th>
+              <th className="text-left py-2 text-[var(--gray-400)] font-bold">Concepto</th>
+              <th className="text-center py-2 text-[var(--gray-400)] font-bold">Tipo</th>
+              <th className="text-right py-2 text-[var(--gray-400)] font-bold">Importe</th>
+              <th className="text-right py-2 text-[var(--gray-400)] font-bold">Saldo</th>
             </tr>
           </thead>
           <tbody>
@@ -818,11 +1082,15 @@ const BancosMovimientos = ({
                 ? 'text-[var(--gray-400)] line-through'
                 : isCargo ? 'text-[var(--danger)]' : 'text-[var(--success)]';
 
-              // ── Cobranza enrichment ──
-              // Solo aplica a ABONOs que NO sean traspaso interno; los CARGOs
-              // siguen rumbos de pago de proveedor que no se cruzan acá.
+              // ── Cobranza enrichment (ABONOs) ──
+              // Solo aplica a ABONOs que NO sean traspaso interno.
               const enrichment = !isInternal && m.tipoMovimiento === 'ABONO' && abonoEnrichmentIndex
                 ? abonoEnrichmentIndex.get(bankMovementKey(m))
+                : undefined;
+              // ── PagoProveedor enrichment (CARGOs) ──
+              // Espejo egreso: revela qué pago a proveedor originó este CARGO.
+              const cargoEnrichment = !isInternal && m.tipoMovimiento === 'CARGO' && cargoEnrichmentIndex
+                ? cargoEnrichmentIndex.get(bankMovementKey(m))
                 : undefined;
               return (
                 <tr key={i} className={`border-b border-[var(--gray-50)] ${rowMuted}`} title={isInternal ? tooltip : undefined}>
@@ -830,14 +1098,22 @@ const BancosMovimientos = ({
                   <td className="py-1.5 font-mono text-[var(--gray-950)]">{m.referencia || '—'}</td>
                   <td className="py-1.5 text-[var(--gray-500)] max-w-[320px] truncate" title={tooltip}>
                     {m.concepto || '—'}
+                    {m.noRecibo && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--gray-100)] text-[var(--gray-600)] font-bold align-middle"
+                        title={`No Recibo banco ${m.noRecibo}`}
+                      >
+                        Recibo {m.noRecibo}
+                      </span>
+                    )}
                     {isInternal && (
-                      <span className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-semibold align-middle">
+                      <span className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--gray-200)] text-[var(--gray-500)] font-bold align-middle">
                         Interno
                       </span>
                     )}
                     {enrichment?.status === 'factura-cobrada' && enrichment.facturas && enrichment.facturas.length > 0 && (
                       <span
-                        className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--success-muted)] text-[var(--success)] font-semibold align-middle"
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--success-muted)] text-[var(--success)] font-bold align-middle"
                         title={enrichment.facturas
                           .map(f => `${f.cia} · ${f.noFactura} · ${f.nombreCliente}`)
                           .join('\n')}
@@ -847,15 +1123,33 @@ const BancosMovimientos = ({
                     )}
                     {enrichment?.status === 'cobranza-sin-factura' && (
                       <span
-                        className="ml-1.5 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] font-semibold align-middle"
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] font-bold align-middle"
                         title="ABONO no cruzó con ninguna factura JDE — probable anticipo o factura fuera del rango cargado."
                       >
                         Sin factura
                       </span>
                     )}
+                    {cargoEnrichment?.status === 'MATCHED' && cargoEnrichment.payments && cargoEnrichment.payments.length > 0 && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--info-muted)] text-[var(--info)] font-bold align-middle"
+                        title={cargoEnrichment.payments
+                          .map(p => `${p.noPago} · ${p.nombreProveedor} · ${p.tier}`)
+                          .join('\n')}
+                      >
+                        ✓ Pago{cargoEnrichment.payments.length > 1 ? `s ×${cargoEnrichment.payments.length}` : ` ${cargoEnrichment.payments[0].nombreProveedor.split(' ').slice(0, 2).join(' ')}`}
+                      </span>
+                    )}
+                    {cargoEnrichment?.status === 'ORPHAN' && (
+                      <span
+                        className="ml-1.5 text-[9px] uppercase tracking-[0.08em] px-1 py-0.5 rounded bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] font-bold align-middle"
+                        title="CARGO sin pago a proveedor asociado — probable comisión, traspaso o pago fuera del rango cargado."
+                      >
+                        Sin pago
+                      </span>
+                    )}
                   </td>
                   <td className="py-1.5 text-center">
-                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${tipoColor}`}>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${tipoColor}`}>
                       {m.tipoMovimiento}
                     </span>
                   </td>
@@ -868,7 +1162,7 @@ const BancosMovimientos = ({
                 </tr>
               );
             })}
-            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold">
+            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-bold">
               <td className="py-2" colSpan={3}>
                 Totales visibles
                 {internalCount > 0 && (
@@ -889,7 +1183,7 @@ const BancosMovimientos = ({
                 )}
               </td>
               <td className="py-2 text-right font-mono text-[var(--gray-950)]">
-                {acc.saldoFinal !== undefined ? fmtCurrency(acc.saldoFinal, acc.moneda) : '—'}
+                {fmtCurrency(bankStatementBalance(acc), acc.moneda)}
               </td>
             </tr>
           </tbody>
@@ -913,6 +1207,7 @@ const Bancos = ({
   onLastQueryChange,
   companies = [],
   abonoEnrichmentIndex,
+  cargoEnrichmentIndex,
 }: BancosProps) => {
   const [view, setView] = useState<BancosView>(
     statements.length > 0 && lastQuery ? 'dashboard' : 'form'
@@ -1030,6 +1325,7 @@ const Bancos = ({
       refreshError={refreshError}
       companies={companies}
       abonoEnrichmentIndex={abonoEnrichmentIndex}
+      cargoEnrichmentIndex={cargoEnrichmentIndex}
     />
   );
 };

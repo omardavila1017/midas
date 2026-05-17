@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Clock, X } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import type { ScenarioChangeLogEntry } from '../../shared-finance/types';
 
 export interface ChangeLogDrawerProps {
@@ -9,7 +9,7 @@ export interface ChangeLogDrawerProps {
   onClose: () => void;
 }
 
-export function ChangeLogDrawer({ open, scenarioName, entries, onClose }: ChangeLogDrawerProps) {
+export function ChangeLogDrawer({ open, scenarioName, entries }: ChangeLogDrawerProps) {
   const sorted = useMemo(
     () => [...entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [entries],
@@ -23,19 +23,9 @@ export function ChangeLogDrawer({ open, scenarioName, entries, onClose }: Change
       style={{ width: 320 }}
       aria-label="Historial de cambios del borrador"
     >
-      <header className="flex items-center justify-between border-b border-[var(--gray-200)] px-4 py-3">
-        <div>
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Cambios</h3>
-          <p className="mt-0.5 text-[11px] text-[var(--gray-400)]">{scenarioName}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Cerrar historial"
-          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-700)]"
-        >
-          <X className="h-4 w-4" strokeWidth={2} />
-        </button>
+      <header className="border-b border-[var(--gray-200)] px-4 py-3">
+        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Cambios</h3>
+        <p className="mt-0.5 text-[11px] text-[var(--gray-400)]">{scenarioName}</p>
       </header>
 
       <div className="flex-1 overflow-auto px-2 py-2" style={{ maxHeight: 480 }}>

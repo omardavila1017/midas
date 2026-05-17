@@ -5,8 +5,23 @@ import {
   eventKey,
 } from './types';
 import { projectClientMonth, projectYear } from './collectionEngine';
+import type { CobranzaRecord } from '../services/jdeTypes';
 
-export type ClientGroupSource = 'manual' | 'rfc' | 'domain' | 'address' | 'name' | 'single';
+/**
+ * Source de la agrupación. Ordenado por autoridad (mayor a menor):
+ *   'jde-padre' → autoridad JDE (Nombre_Cliente_Padre); no editable.
+ *   'manual'    → override del usuario; gana sobre heurística pero no sobre JDE.
+ *   'rfc' / 'domain' / 'address' / 'name' → heurística automática.
+ *   'single'    → cuenta sola, sin grupo detectable.
+ */
+export type ClientGroupSource = 'jde-padre' | 'manual' | 'rfc' | 'domain' | 'address' | 'name' | 'single';
+
+/**
+ * `49080179` "Resto Clientes" es un bucket genérico de JDE para huérfanos sin
+ * padre real asignado. NO debe colapsar todos esos clientes en un solo grupo;
+ * los tratamos como individuales.
+ */
+const RESTO_CLIENTES_PADRE_ID = '49080179';
 
 export interface ClientAccountNode {
   client: Client;
@@ -15,8 +30,16 @@ export interface ClientAccountNode {
   pendingInvoices: number;
   confirmedCollections: number;
   confirmedInvoices: number;
+  /** Lag promedio en días (puede ser fraccional). Histórico cuando hay paid invoices, proyección sino. */
   avgLagDays: number;
+  /** Días de crédito según JDE (Dias_Credito) o catálogo si no hay API. */
+  creditDaysApi: number;
+  /** Días extra sobre crédito contractual = max(0, realCreditDays - creditDaysApi). */
+  lagDaysExtra: number;
+  /** Días totales hasta cobro real = creditDaysApi + lagDaysExtra. */
   realCreditDays: number;
+  /** Día de pago preferido (Nombre_Dia_Pago_CC13), p.ej. "Viernes". Vacío si no API. */
+  paymentDayName: string;
 }
 
 export interface ClientGroupNode {
@@ -32,6 +55,9 @@ export interface ClientGroupNode {
   confirmedCollections: number;
   confirmedInvoices: number;
   avgLagDays: number;
+  /** Promedio de creditDaysApi de las cuentas del grupo. */
+  creditDaysApi: number;
+  lagDaysExtra: number;
   realCreditDays: number;
 }
 
@@ -47,6 +73,88 @@ export interface BuildClientHierarchyOptions {
   assumptions?: CashFlowAssumptions;
   confirmedPayments?: ConfirmedPayment[];
   today?: string;
+  /**
+   * Cobranza records — fuente de verdad para Nombre_Cliente_Padre,
+   * Dias_Credito numérico, día de pago preferido, y lag real de cobro.
+   * Cuando un cliente tiene jdeAccounts matched con cobranza, la agrupación
+   * pasa a source 'jde-padre' (autoridad JDE) y los días de crédito vienen
+   * del API en vez del catálogo manual.
+   */
+  cobranzaRecords?: CobranzaRecord[];
+}
+
+/**
+ * Datos derivados por (cia, noCliente) desde cobranza. Indexado por la llave
+ * compuesta `${cia}::${noCliente}` que usa el matcher. Las llaves padre se
+ * comparten entre múltiples cuentas — el lookup devuelve el primer match.
+ */
+interface CobranzaAccountInfo {
+  noClientePadre?: string;
+  nombreClientePadre?: string;
+  diasCredito?: number;
+  diaPagoNombre?: string;
+  /** Samples de (Fecha_Pago - Fecha_Factura) en días para facturas pagadas. */
+  lagSamples: number[];
+}
+
+function buildCobranzaAccountInfo(records: CobranzaRecord[]): Map<string, CobranzaAccountInfo> {
+  const map = new Map<string, CobranzaAccountInfo>();
+  for (const rec of records) {
+    if (!rec.cia || !rec.noCliente) continue;
+    const key = `${rec.cia}::${rec.noCliente}`;
+    let entry = map.get(key);
+    if (!entry) {
+      entry = { lagSamples: [] };
+      map.set(key, entry);
+    }
+    // Tomar el más reciente que esté poblado — los registros se procesan en
+    // orden cronológico arbitrario; el último gana cuando hay conflicto.
+    if (rec.noClientePadre && !entry.noClientePadre) entry.noClientePadre = rec.noClientePadre;
+    if (rec.nombreClientePadre && !entry.nombreClientePadre) entry.nombreClientePadre = rec.nombreClientePadre;
+    if (rec.diasCredito && !entry.diasCredito) entry.diasCredito = rec.diasCredito;
+    if (rec.diaPagoNombre && !entry.diaPagoNombre) entry.diaPagoNombre = rec.diaPagoNombre;
+    // Lag sample: factura cobrada con ambas fechas válidas.
+    if (rec.fechaFactura && rec.fechaCobro && rec.importePendientePesos === 0) {
+      const facturaMs = Date.parse(rec.fechaFactura);
+      const cobroMs = Date.parse(rec.fechaCobro);
+      if (Number.isFinite(facturaMs) && Number.isFinite(cobroMs) && cobroMs >= facturaMs) {
+        const lag = Math.round((cobroMs - facturaMs) / 86_400_000);
+        if (lag >= 0 && lag <= 365) entry.lagSamples.push(lag);
+      }
+    }
+  }
+  return map;
+}
+
+/**
+ * Combina la info JDE de todas las cuentas matched del cliente. Para campos
+ * únicos (padre, creditDays, diaPago) toma del primero poblado. Para lag,
+ * concatena samples de todas las cuentas.
+ */
+function infoForClient(
+  client: Client,
+  byAccount: Map<string, CobranzaAccountInfo>,
+): CobranzaAccountInfo | null {
+  const links = client.jdeAccounts ?? [];
+  if (links.length === 0) return null;
+  let noClientePadre: string | undefined;
+  let nombreClientePadre: string | undefined;
+  let diasCredito: number | undefined;
+  let diaPagoNombre: string | undefined;
+  const lagSamples: number[] = [];
+  let anyFound = false;
+  for (const link of links) {
+    const entry = byAccount.get(`${link.cia}::${link.noCliente}`);
+    if (!entry) continue;
+    anyFound = true;
+    if (entry.noClientePadre && !noClientePadre) noClientePadre = entry.noClientePadre;
+    if (entry.nombreClientePadre && !nombreClientePadre) nombreClientePadre = entry.nombreClientePadre;
+    if (entry.diasCredito && !diasCredito) diasCredito = entry.diasCredito;
+    if (entry.diaPagoNombre && !diaPagoNombre) diaPagoNombre = entry.diaPagoNombre;
+    lagSamples.push(...entry.lagSamples);
+  }
+  if (!anyFound) return null;
+  return { noClientePadre, nombreClientePadre, diasCredito, diaPagoNombre, lagSamples };
 }
 
 const KNOWN_BRANDS: Array<{ pattern: RegExp; label: string }> = [
@@ -200,7 +308,19 @@ function inferNameSignal(client: Client): GroupSignal {
   };
 }
 
-function groupSignalForClient(client: Client): GroupSignal {
+function groupSignalForClient(client: Client, jdeInfo: CobranzaAccountInfo | null): GroupSignal {
+  // Autoridad JDE: padre comercial declarado por el API gana sobre todo,
+  // excepto el bucket genérico "Resto Clientes" que se trata como individual.
+  if (jdeInfo?.noClientePadre && jdeInfo.noClientePadre !== RESTO_CLIENTES_PADRE_ID && jdeInfo.nombreClientePadre) {
+    return {
+      id: `client-padre-${jdeInfo.noClientePadre}`,
+      name: titleCase(jdeInfo.nombreClientePadre),
+      source: 'jde-padre',
+      confidence: 1,
+      signal: `JDE padre ${jdeInfo.noClientePadre}`,
+    };
+  }
+
   if (client.commercialGroupName?.trim()) {
     const name = client.commercialGroupName.trim();
     return {
@@ -258,15 +378,35 @@ function accountNode(
   assumptions: CashFlowAssumptions,
   confirmedSet: Set<string>,
   today: string,
+  jdeInfo: CobranzaAccountInfo | null,
 ): ClientAccountNode {
   const yearEvents = projectYear([client], assumptions);
   const pendingEvents = yearEvents.filter((event) => event.realDate >= today && !confirmedSet.has(eventKey(event)));
   const confirmedEvents = yearEvents.filter((event) => confirmedSet.has(eventKey(event)));
-  const avgLagDays = yearEvents.length > 0
-    ? yearEvents.reduce((sum, event) => sum + event.lagDays, 0) / yearEvents.length
-    : projectClientMonth(client, assumptions.year, new Date(`${today}T12:00:00`).getMonth(), assumptions)
-        .reduce((sum, event, _, arr) => sum + event.lagDays / Math.max(arr.length, 1), 0);
-  const realCreditDays = client.creditDays + Math.max(0, Math.round(avgLagDays));
+
+  // Días de crédito: prioriza API JDE. Fallback al catálogo manual del cliente.
+  const creditDaysApi = jdeInfo?.diasCredito ?? client.creditDays;
+
+  // Lag real desde cobranza histórica:
+  // realCreditDays = avg(Fecha_Pago - Fecha_Factura) cuando hay samples reales.
+  // Sin samples cae al lag proyectado por el motor (regla teórica de día pago).
+  let realCreditDays: number;
+  let avgLagDays: number;
+  if (jdeInfo && jdeInfo.lagSamples.length >= 3) {
+    // 3+ facturas pagadas → confiable usar promedio real.
+    const meanLag = jdeInfo.lagSamples.reduce((s, v) => s + v, 0) / jdeInfo.lagSamples.length;
+    realCreditDays = Math.round(meanLag);
+    avgLagDays = Math.max(0, realCreditDays - creditDaysApi);
+  } else {
+    // Sin samples reales: usa motor de proyección (snap a día semanal).
+    avgLagDays = yearEvents.length > 0
+      ? yearEvents.reduce((sum, event) => sum + event.lagDays, 0) / yearEvents.length
+      : projectClientMonth(client, assumptions.year, new Date(`${today}T12:00:00`).getMonth(), assumptions)
+          .reduce((sum, event, _, arr) => sum + event.lagDays / Math.max(arr.length, 1), 0);
+    realCreditDays = creditDaysApi + Math.max(0, Math.round(avgLagDays));
+  }
+
+  const lagDaysExtra = Math.max(0, realCreditDays - creditDaysApi);
   const projectedReceivable = pendingEvents.reduce((sum, event) => sum + event.amount, 0);
 
   return {
@@ -277,7 +417,10 @@ function accountNode(
     confirmedCollections: confirmedEvents.reduce((sum, event) => sum + event.amount, 0),
     confirmedInvoices: confirmedEvents.length,
     avgLagDays,
+    creditDaysApi,
+    lagDaysExtra,
     realCreditDays,
+    paymentDayName: jdeInfo?.diaPagoNombre ?? client.paymentDayName ?? '',
   };
 }
 
@@ -292,9 +435,13 @@ function finalizeGroup(signal: GroupSignal, accounts: ClientAccountNode[]): Clie
   const avgLag = accounts.length
     ? accounts.reduce((sum, account) => sum + account.avgLagDays, 0) / accounts.length
     : 0;
+  const creditApi = accounts.length
+    ? Math.round(accounts.reduce((sum, account) => sum + account.creditDaysApi, 0) / accounts.length)
+    : 0;
   const realCredit = accounts.length
     ? Math.round(accounts.reduce((sum, account) => sum + account.realCreditDays, 0) / accounts.length)
     : 0;
+  const lagExtra = Math.max(0, realCredit - creditApi);
 
   return {
     ...signal,
@@ -307,6 +454,8 @@ function finalizeGroup(signal: GroupSignal, accounts: ClientAccountNode[]): Clie
     confirmedCollections,
     confirmedInvoices,
     avgLagDays: avgLag,
+    creditDaysApi: creditApi,
+    lagDaysExtra: lagExtra,
     realCreditDays: realCredit,
   };
 }
@@ -322,14 +471,18 @@ export function buildClientHierarchy(
     factorajeDays: 30,
   };
   const confirmedSet = new Set((options.confirmedPayments ?? []).map((payment) => payment.key));
+  const cobranzaByAccount = buildCobranzaAccountInfo(options.cobranzaRecords ?? []);
 
   const groups = new Map<string, { signal: GroupSignal; accounts: ClientAccountNode[] }>();
 
   for (const client of clients) {
-    const signal = groupSignalForClient(client);
+    const jdeInfo = infoForClient(client, cobranzaByAccount);
+    const signal = groupSignalForClient(client, jdeInfo);
     const current = groups.get(signal.id) ?? { signal, accounts: [] };
-    current.accounts.push(accountNode(client, assumptions, confirmedSet, today));
-    if (signal.source === 'manual') current.signal = signal;
+    current.accounts.push(accountNode(client, assumptions, confirmedSet, today, jdeInfo));
+    // JDE-padre gana sobre cualquier otra señal del grupo (autoridad API).
+    if (signal.source === 'jde-padre') current.signal = signal;
+    else if (signal.source === 'manual' && current.signal.source !== 'jde-padre') current.signal = signal;
     groups.set(signal.id, current);
   }
 

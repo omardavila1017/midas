@@ -44,6 +44,7 @@ export interface FinancialMovement {
   counterpartyId?: string;
   counterpartyName?: string;
   counterpartyType?: FinancialCounterpartyType;
+  providerCategory?: string;
   concept: string;
   currency: string;
   originalAmount: number;
@@ -68,6 +69,86 @@ export interface FinancialMovement {
   comments?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type PurchaseConfidence = 'CONFIRMED' | 'PROJECTED';
+
+export interface PurchaseReceiptRecord {
+  cia: string;
+  noProveedor: string;
+  supplierName: string;
+  invoiceNo: string;
+  purchaseOrderNo: string;
+  receiptNo: string;
+  orderDate: string;
+  /**
+   * Fecha de recepción real. Vacía si la OC aún no se recibió (en ese caso
+   * `confidence === 'PROJECTED'` y `estimatedDueDate` se derivó de
+   * `orderDate + leadTime + creditDays`).
+   */
+  receiptDate: string;
+  creditDays: number;
+  estimatedDueDate: string;
+  currency: string;
+  exchangeRate: number;
+  totalAmount: number;
+  amountMxn: number;
+  taxCode?: string;
+  taxRateCode?: string;
+  taxRate?: FinancialTaxRate;
+  taxTreatment: FinancialTaxTreatment;
+  taxBaseAmount?: number;
+  taxAmount?: number;
+  cancelledAt?: string;
+  isCancelled: boolean;
+  status: FinancialDataStatus;
+  costCenter?: string;
+  productCode?: string;
+  productDescription?: string;
+  productType?: string;
+  categoryCode?: string;
+  categoryName?: string;
+  familyCode?: string;
+  familyName?: string;
+  subfamilyCode?: string;
+  subfamilyName?: string;
+  /**
+   * CONFIRMED = OC ya recibida, `receiptDate` real, fecha de pago cierta.
+   * PROJECTED = OC pedida sin recepción, `estimatedDueDate` derivado de
+   * lead time histórico. Menor confianza, alimenta forecast a largo plazo.
+   */
+  confidence?: PurchaseConfidence;
+  /** Lead time en días usado cuando confidence = PROJECTED. */
+  projectedLeadTimeDays?: number;
+  /** Fuente del lead time (cia-familia, familia, global, default, etc.). */
+  projectedLeadTimeSource?: string;
+  /** Estado workflow JDE (Edo_Sig). Para diagnóstico/filtros downstream. */
+  workflowState?: string;
+}
+
+export type PayrollCashTreatment =
+  | 'CASH_OUT'
+  | 'EMPLOYER_TAX'
+  | 'WITHHOLDING_PAYABLE'
+  | 'DEDUCTION'
+  | 'NON_CASH';
+
+export interface PayrollCostRecord {
+  cia: string;
+  empresaNomina: string;
+  year: number;
+  month: number;
+  paymentDate: string;
+  periodStartDate?: string;
+  periodEndDate?: string;
+  payrollPeriod: string | number;
+  payrollType: string;
+  conceptId: string | number;
+  conceptName: string;
+  conceptType: string;
+  cashTreatment: PayrollCashTreatment;
+  amount: number;
+  costCenter?: string;
 }
 
 export type FinancialScenarioKind = 'BASE' | 'APPROVED' | 'DRAFT';
@@ -100,6 +181,9 @@ export type ManualPlanningCategory =
   | 'MANUAL_OUTFLOW'
   | 'SUPPLIER_PAYMENT'
   | 'TAX_PAYMENT'
+  | 'PAYROLL'
+  | 'CAPEX'
+  | 'OPEX'
   | 'OTHER';
 
 export type ManualPlanningRecurrence = 'ONE_TIME' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'QUARTERLY';
@@ -114,6 +198,8 @@ export interface ManualPlanningEntry {
   startDate: string;
   endDate?: string;
   recurrence: ManualPlanningRecurrence;
+  companyId?: string;
+  businessUnitId?: string;
   counterpartyName?: string;
   description?: string;
   taxTreatment: FinancialTaxTreatment;
@@ -121,6 +207,10 @@ export interface ManualPlanningEntry {
   taxBaseAmount?: number;
   taxAmount?: number;
   status: 'DRAFT' | 'APPROVED';
+  replacedBySourceSystem?: FinancialSourceSystem;
+  replacedBySourceObjectId?: string;
+  replacedAt?: string;
+  replacementNote?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -237,6 +327,74 @@ export interface ForecastRun {
 
 export type ProjectionGranularity = 'daily' | 'weekly' | 'monthly';
 
+export type ProbabilisticModelKind = 'ARIMA' | 'ETS' | 'EMPIRICAL_FALLBACK';
+export type ProbabilisticConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface PercentileBand {
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+export interface ModelDiagnostics {
+  modelKind: ProbabilisticModelKind;
+  confidence: ProbabilisticConfidence;
+  sampleSize: number;
+  inflowVolatility: number;
+  outflowVolatility: number;
+  netResidualStd: number;
+  autocorrelation: number;
+  fallbackReason?: string;
+}
+
+export interface ProbabilisticBucket {
+  date: string;
+  label: string;
+  cash: PercentileBand;
+  probabilityBelowZero: number;
+  probabilityBelowMinimumCash: number;
+  expectedCreditRequired: number;
+  p90CreditRequired: number;
+}
+
+export interface ProbabilisticSummary {
+  probabilityOfDeficit: number;
+  probabilityBelowMinimumCash: number;
+  expectedCreditRequired: number;
+  p90CreditRequired: number;
+  maxRiskDate?: string;
+  confidence: ProbabilisticConfidence;
+}
+
+export interface ProbabilisticForecastRun {
+  id: string;
+  baseForecastId: string;
+  scenarioId: string;
+  granularity: ProjectionGranularity;
+  startDate: string;
+  endDate: string;
+  generatedAt: string;
+  simulations: number;
+  buckets: ProbabilisticBucket[];
+  summary: ProbabilisticSummary;
+  diagnostics: ModelDiagnostics;
+}
+
+export interface ProbabilisticForecastRequest {
+  jobId?: number;
+  baseProjection: ForecastRun;
+  minimumCash: number;
+  simulations?: number;
+  seed?: number;
+  horizonDays?: number;
+}
+
+export interface ProbabilisticForecastResponse {
+  jobId?: number;
+  result?: ProbabilisticForecastRun;
+  error?: string;
+}
+
 export type CellOverrideMode = 'REPLACE' | 'DELTA';
 
 export interface CellOverride {
@@ -259,9 +417,11 @@ export interface PlanningRow {
   conceptKey: string;
   label: string;
   group: string;
+  bucketLabel: string;
   type: FinancialMovementType;
   category: FinancialMovementCategory;
   subgroupLabel?: string;
+  providerCategoryLabel?: string;
   isCustom?: boolean;
 }
 

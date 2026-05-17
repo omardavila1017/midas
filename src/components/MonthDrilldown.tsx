@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useRef } from 'react';
-import { X, TrendingUp, TrendingDown, ChevronRight } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { X, TrendingUp, TrendingDown, ChevronDown, ChevronRight } from 'lucide-react';
 import type { BankAccountStatement, AgedBalanceRecord } from '../services/jde';
 import { fmtCurrency, fmtYearMonthLong } from '../formatters';
 import { toYearMonth, compareYearMonth } from '../domain/cashFlowEngine';
 import type { MonthlyProjection, ProjectionOverrides } from '../domain/projectionEngine';
 import {
-  isInternalTransfer,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
+  buildPairMatchedKeys,
+  classifyMovement,
 } from '../domain/netCashFlowEngine';
 import CashFlowTable, { type CashFlowTableRow } from './CashFlowTable';
 
@@ -29,12 +30,22 @@ interface ConceptRow {
   label: string;
   count: number;
   amount: number;
+  details?: ConceptDetailRow[];
   /** Etiqueta de flexibilidad cuando el row viene de un proveedor del catálogo. */
   flexibility?: 'inamovible' | 'flexible' | 'revisar' | 'unknown';
   /** Día de crédito (paymentPeriod) del proveedor, si está clasificado. */
   paymentPeriod?: string;
   /** Fuente del número: scheduled (CXP), recurring (banco), mixed. */
   source?: 'scheduled' | 'recurring' | 'mixed' | 'real';
+}
+
+interface ConceptDetailRow {
+  id: string;
+  date?: string;
+  title: string;
+  subtitle?: string;
+  amount: number;
+  meta?: string;
 }
 
 interface GroupedRows {
@@ -51,6 +62,7 @@ function topByAmount(rows: ConceptRow[], limit = 6): GroupedRows {
     label: `Otros (${remaining.length})`,
     count: remaining.reduce((s, r) => s + r.count, 0),
     amount: remaining.reduce((s, r) => s + r.amount, 0),
+    details: remaining.flatMap((r) => r.details ?? []),
   };
   return { top, rest };
 }
@@ -117,7 +129,7 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
   return (
     <section
       ref={ref}
-      className="rounded-2xl border border-[var(--gray-200)] bg-white overflow-hidden animate-slide-down"
+      className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white overflow-hidden animate-slide-down"
       aria-label={`Detalle del flujo de ${fmtYearMonthLong(yearMonth)}`}
     >
       {/* Header */}
@@ -125,11 +137,11 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
         <div className="flex items-center gap-3 min-w-0">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-[16px] font-semibold tracking-tight" style={{ color: 'var(--gray-950)' }}>
+              <h3 className="text-[16px] font-bold tracking-tight" style={{ color: 'var(--gray-950)' }}>
                 {fmtYearMonthLong(yearMonth)}
               </h3>
               <span
-                className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                className="text-[10px] font-bold uppercase tracking-[0.08em] px-2 py-0.5 rounded-full"
                 style={{ background: phaseBadge.bg, color: phaseBadge.color }}
               >
                 {phaseBadge.label}
@@ -142,7 +154,7 @@ const MonthDrilldown: React.FC<MonthDrilldownProps> = ({
         </div>
         <button
           onClick={onClose}
-          className="w-8 h-8 flex items-center justify-center rounded-lg text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)] transition-colors flex-shrink-0"
+          className="w-8 h-8 flex items-center justify-center rounded-[var(--radius-md)] text-[var(--gray-400)] hover:bg-[var(--gray-100)] hover:text-[var(--gray-950)] transition-colors flex-shrink-0"
           aria-label="Cerrar detalle"
         >
           <X className="w-4 h-4" />
@@ -218,14 +230,21 @@ function monthsDistance(a: string, b: string): number {
   return (ay - by) * 12 + (am - bm);
 }
 
+function formatShortDate(iso: string): string {
+  const value = iso.includes('T') ? iso : `${iso}T12:00:00`;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' });
+}
+
 const SummaryCell: React.FC<{ label: string; value: number; color: string; showSign?: boolean }> = ({
   label, value, color, showSign,
 }) => (
   <div className="px-5 py-3">
-    <p className="text-[10px] font-medium uppercase tracking-wider mb-0.5" style={{ color: 'var(--gray-400)' }}>
+    <p className="text-[10px] font-medium uppercase tracking-[0.08em] mb-0.5" style={{ color: 'var(--gray-400)' }}>
       {label}
     </p>
-    <p className="text-[18px] font-semibold tabular-nums" style={{ color }}>
+    <p className="text-[18px] font-bold tabular-nums" style={{ color }}>
       {showSign && value > 0 ? '+' : ''}{fmtCurrency(value)}
     </p>
   </div>
@@ -262,7 +281,7 @@ const Column: React.FC<ColumnProps> = ({
     <div className={`p-5 ${borderRight ? 'lg:border-r lg:border-[var(--gray-100)]' : ''}`}>
       <div className="flex items-center gap-2 mb-3">
         <span style={{ color: accent }}>{icon}</span>
-        <h4 className="text-[13px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gray-700)' }}>
+        <h4 className="text-[13px] font-bold uppercase tracking-[0.08em]" style={{ color: 'var(--gray-700)' }}>
           {title}
         </h4>
       </div>
@@ -364,9 +383,9 @@ const SubBlock: React.FC<{
     <div className="flex items-center justify-between mb-1.5">
       <div className="flex items-center gap-2">
         <Swatch accent={accent} striped={striped} />
-        <span className="text-[12px] font-semibold" style={{ color: 'var(--gray-700)' }}>{label}</span>
+        <span className="text-[12px] font-bold" style={{ color: 'var(--gray-700)' }}>{label}</span>
       </div>
-      <span className="text-[12px] font-semibold tabular-nums" style={{ color: 'var(--gray-950)' }}>
+      <span className="text-[12px] font-bold tabular-nums" style={{ color: 'var(--gray-950)' }}>
         {fmtCurrency(total)}
       </span>
     </div>
@@ -387,7 +406,7 @@ const FlexChip: React.FC<{ flexibility?: ConceptRow['flexibility'] }> = ({ flexi
   if (!s) return null;
   return (
     <span
-      className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+      className="text-[9px] font-bold uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-full"
       style={{ background: s.bg, color: s.fg }}
     >
       {s.label}
@@ -411,47 +430,100 @@ const SourceChip: React.FC<{ source?: ConceptRow['source'] }> = ({ source }) => 
   );
 };
 
-const RowList: React.FC<{ rows: GroupedRows }> = ({ rows }) => (
-  <ul>
-    {rows.top.map((r, idx) => (
+const RowList: React.FC<{ rows: GroupedRows }> = ({ rows }) => {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggle = (key: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const renderRow = (r: ConceptRow, idx: number, isRest = false) => {
+    const key = `${r.label}:${idx}:${isRest ? 'rest' : 'top'}`;
+    const isOpen = expanded.has(key);
+    const hasDetails = (r.details?.length ?? 0) > 0;
+
+    return (
       <li
-        key={r.label}
-        className="flex items-center justify-between gap-3 py-1.5 text-[12px]"
+        key={key}
+        className="text-[12px]"
         style={{ borderTop: idx === 0 ? 'none' : '1px solid var(--gray-100)' }}
       >
-        <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          <ChevronRight className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--gray-300)' }} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <p className="truncate" style={{ color: 'var(--gray-900)' }}>{r.label}</p>
-              <FlexChip flexibility={r.flexibility} />
-              <SourceChip source={r.source} />
+        <button
+          type="button"
+          onClick={() => hasDetails && toggle(key)}
+          disabled={!hasDetails}
+          className={`flex w-full items-center justify-between gap-3 py-1.5 text-left transition-colors ${hasDetails ? 'cursor-pointer rounded-[var(--radius-sm)] hover:bg-[var(--gray-50)]' : 'cursor-default'}`}
+          aria-expanded={hasDetails ? isOpen : undefined}
+        >
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            {hasDetails
+              ? isOpen
+                ? <ChevronDown className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--gray-400)' }} />
+                : <ChevronRight className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--gray-400)' }} />
+              : <span className="w-3 h-3 flex-shrink-0" />}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <p className="truncate" style={{ color: isRest ? 'var(--gray-500)' : 'var(--gray-900)' }}>{r.label}</p>
+                <FlexChip flexibility={r.flexibility} />
+                <SourceChip source={r.source} />
+              </div>
+              <p className="text-[10px]" style={{ color: 'var(--gray-400)' }}>
+                {r.paymentPeriod
+                  ? `Crédito ${r.paymentPeriod}${r.count > 1 ? ` · ${r.count} mov.` : ''}`
+                  : `${r.count} mov.`}
+              </p>
             </div>
-            <p className="text-[10px]" style={{ color: 'var(--gray-400)' }}>
-              {r.paymentPeriod
-                ? `Crédito ${r.paymentPeriod}${r.count > 1 ? ` · ${r.count} mov.` : ''}`
-                : `${r.count} mov.`}
-            </p>
           </div>
-        </div>
-        <span className="tabular-nums font-medium flex-shrink-0" style={{ color: 'var(--gray-950)' }}>
-          {fmtCurrency(r.amount)}
-        </span>
+          <span className={`tabular-nums flex-shrink-0 ${isRest ? '' : 'font-medium'}`} style={{ color: isRest ? 'var(--gray-700)' : 'var(--gray-950)' }}>
+            {fmtCurrency(r.amount)}
+          </span>
+        </button>
+        {isOpen && hasDetails && (
+          <div className="mb-2 ml-4 overflow-hidden rounded-[var(--radius-md)] border border-[var(--gray-100)] bg-[var(--gray-50)]/70">
+            <div className="max-h-80 overflow-y-auto">
+              {r.details!.map((detail) => (
+                <div
+                  key={detail.id}
+                  className="grid grid-cols-[74px_minmax(0,1fr)_auto] items-start gap-2 border-t border-[var(--gray-100)] px-3 py-2 first:border-t-0"
+                >
+                  <span className="text-[10px] tabular-nums whitespace-nowrap" style={{ color: 'var(--gray-400)' }}>
+                    {detail.date ? formatShortDate(detail.date) : '-'}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate font-medium" style={{ color: 'var(--gray-800)' }}>{detail.title}</p>
+                    {detail.subtitle && (
+                      <p className="truncate text-[10px]" style={{ color: 'var(--gray-400)' }}>{detail.subtitle}</p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className="tabular-nums font-medium whitespace-nowrap" style={{ color: 'var(--gray-950)' }}>
+                      {fmtCurrency(detail.amount)}
+                    </p>
+                    {detail.meta && (
+                      <p className="text-[10px] whitespace-nowrap" style={{ color: 'var(--gray-400)' }}>{detail.meta}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </li>
-    ))}
-    {rows.rest && (
-      <li
-        className="flex items-center justify-between gap-3 py-1.5 text-[12px]"
-        style={{ borderTop: rows.top.length > 0 ? '1px solid var(--gray-100)' : 'none' }}
-      >
-        <span className="pl-4" style={{ color: 'var(--gray-500)' }}>{rows.rest.label}</span>
-        <span className="tabular-nums flex-shrink-0" style={{ color: 'var(--gray-700)' }}>
-          {fmtCurrency(rows.rest.amount)}
-        </span>
-      </li>
-    )}
-  </ul>
-);
+    );
+  };
+
+  return (
+    <ul>
+      {rows.top.map((r, idx) => renderRow(r, idx))}
+      {rows.rest && renderRow(rows.rest, rows.top.length, true)}
+    </ul>
+  );
+};
 
 // ── Lógica de armado del detalle ─────────────────────────────────────────
 
@@ -478,8 +550,8 @@ function buildDrilldownData(args: {
     : 0;
   const daysRemaining = Math.max(0, daysInMonth - daysElapsed);
 
-  const incomeByConcept = new Map<string, { count: number; amount: number }>();
-  const expenseByConcept = new Map<string, { count: number; amount: number }>();
+  const incomeByConcept = new Map<string, { count: number; amount: number; details: ConceptDetailRow[] }>();
+  const expenseByConcept = new Map<string, { count: number; amount: number; details: ConceptDetailRow[] }>();
   const filteredBank = companyCode === 'all' || !companyCode
     ? bankStatements
     : bankStatements.filter((s) => s.cia === companyCode);
@@ -489,20 +561,44 @@ function buildDrilldownData(args: {
   const ownAccountDetector = buildOwnAccountDetector(
     buildOwnAccountsIndex(bankStatements),
   );
+  const pairedKeys = buildPairMatchedKeys(bankStatements);
   for (const acc of filteredBank) {
     for (const mov of acc.movimientos) {
       if (toYearMonth(mov.fechaOperacion) !== yearMonth) continue;
-      // Los traspasos entre cuentas propias no son ingresos ni egresos reales
-      // del negocio — se compensan entre sí. No deben aparecer en el drilldown.
-      if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      // Mismo clasificador que usa el Dashboard para los totales del chart:
+      // excluye traspasos por RFC/cuenta propia y pares CARGO/ABONO simétricos.
+      if (
+        classifyMovement(
+          mov,
+          { ownAccountDetector, pairedKeys },
+          acc.cia,
+          acc.cuenta,
+        ).kind === 'internal'
+      ) continue;
       const bucket = mov.tipoMovimiento === 'ABONO' ? incomeByConcept
         : mov.tipoMovimiento === 'CARGO' ? expenseByConcept
         : null;
       if (!bucket) continue;
       const label = (mov.concepto || 'Sin concepto').trim() || 'Sin concepto';
-      const prev = bucket.get(label) ?? { count: 0, amount: 0 };
+      const prev = bucket.get(label) ?? { count: 0, amount: 0, details: [] };
       prev.count += 1;
       prev.amount += mov.importe;
+      prev.details.push({
+        id: [
+          acc.cia,
+          acc.cuenta,
+          mov.fechaOperacion,
+          mov.tipoMovimiento,
+          mov.referencia,
+          String(mov.importe),
+          String(prev.count),
+        ].join(':'),
+        date: mov.fechaOperacion,
+        title: (mov.referencia || mov.concepto || 'Movimiento bancario').trim(),
+        subtitle: [acc.nombreBanco ?? acc.banco, acc.cuenta].filter(Boolean).join(' · '),
+        amount: mov.importe,
+        meta: mov.moneda || acc.moneda,
+      });
       bucket.set(label, prev);
     }
   }
@@ -512,15 +608,33 @@ function buildDrilldownData(args: {
   const filteredAged = companyCode === 'all' || !companyCode
     ? agedBalances
     : agedBalances.filter((r) => r.cia === companyCode);
-  const committedByProvider = new Map<string, { count: number; amount: number }>();
+  const committedByProvider = new Map<string, { count: number; amount: number; details: ConceptDetailRow[] }>();
   let committedTotal = 0;
   let committedInRemainingDays = 0;
   for (const r of filteredAged) {
     if (toYearMonth(r.fechaProgramacionPago) !== yearMonth) continue;
     const label = (r.nombre || r.noProveedor || 'Proveedor s/n').trim();
-    const prev = committedByProvider.get(label) ?? { count: 0, amount: 0 };
+    const prev = committedByProvider.get(label) ?? { count: 0, amount: 0, details: [] };
     prev.count += 1;
     prev.amount += r.importePendientePesos;
+    prev.details.push({
+      id: [
+        r.cia,
+        r.noProveedor,
+        r.noFactura,
+        r.fechaProgramacionPago,
+        String(prev.count),
+      ].join(':'),
+      date: r.fechaProgramacionPago || r.fechaVence || r.fechaFactura,
+      title: r.noFactura ? `Factura ${r.noFactura}` : 'Factura s/n',
+      subtitle: [
+        r.fechaVence ? `Vence ${formatShortDate(r.fechaVence)}` : '',
+        r.condPago ? `Cond. ${r.condPago}` : '',
+        r.edoPago ? `Estado ${r.edoPago}` : '',
+      ].filter(Boolean).join(' · '),
+      amount: r.importePendientePesos,
+      meta: r.moneda,
+    });
     committedByProvider.set(label, prev);
     committedTotal += r.importePendientePesos;
     if (phase === 'current') {
@@ -610,6 +724,7 @@ function buildDrilldownData(args: {
         label: l.providerName,
         count: 1,
         amount: l.amount,
+        details: committedByProvider.get(l.providerName)?.details,
         flexibility: l.flexibility,
         paymentPeriod: l.paymentPeriod,
         source: l.source,
@@ -628,12 +743,17 @@ function buildDrilldownData(args: {
     expenseProjectedNote,
   };
 
-  function toRows(map: Map<string, { count: number; amount: number }>) {
+  function toRows(map: Map<string, { count: number; amount: number; details: ConceptDetailRow[] }>) {
     let total = 0;
     const rows: ConceptRow[] = [];
     for (const [label, v] of map) {
       total += v.amount;
-      rows.push({ label, count: v.count, amount: v.amount });
+      rows.push({
+        label,
+        count: v.count,
+        amount: v.amount,
+        details: v.details.sort((a, b) => (a.date ?? '').localeCompare(b.date ?? '')),
+      });
     }
     return { total, rows };
   }

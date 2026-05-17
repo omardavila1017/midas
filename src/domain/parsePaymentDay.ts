@@ -183,3 +183,39 @@ function sortPatternNumber(value: number): number {
 export function detectsFactoraje(raw: string): boolean {
   return /factoraje/i.test(raw);
 }
+
+/**
+ * Expande la forma corta del catálogo JDE CC13 (`Nombre_Dia_Pago_CC13`,
+ * p.ej. "LUN", "VIE") al nombre completo en español que `parsePaymentDay`
+ * sabe interpretar. Si la cadena ya viene completa ("Viernes") o no es un
+ * código conocido, se regresa tal cual.
+ */
+export function expandCc13PaymentDay(raw: string): string {
+  const value = raw.trim().toUpperCase();
+  const map: Record<string, string> = {
+    DOM: 'domingo',
+    LUN: 'lunes',
+    MAR: 'martes',
+    MIE: 'miercoles',
+    MIÉ: 'miercoles',
+    JUE: 'jueves',
+    VIE: 'viernes',
+    SAB: 'sabado',
+    SÁB: 'sabado',
+  };
+  return map[value] ?? raw;
+}
+
+/**
+ * Parsea el día de pago tal como lo expone el API de cobranza/ROL en
+ * `Nombre_Dia_Pago_CC13`. Solo acepta el NOMBRE (no la clave numérica
+ * `Clave_Dia_Pago_CC13` tipo "027", que `parsePaymentDay` confundiría con
+ * un día del mes). Regresa `null` cuando no hay regla parseable.
+ */
+export function parseCc13PaymentDay(raw: string | undefined | null): PaymentDayPattern | null {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return null;
+  // Una clave puramente numérica del catálogo no es un día parseable.
+  if (/^\d+$/.test(trimmed)) return null;
+  return parsePaymentDay(expandCc13PaymentDay(trimmed));
+}

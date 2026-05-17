@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────
 // financialProjectionService — adapta los catálogos de Midas (clientes,
-// proveedores, CXP, bancos, presupuesto) al modelo de "movimientos" que
+// proveedores, CXP, bancos y cobranza real) al modelo de "movimientos" que
 // consume Proyección Financiera y Planeación Financiera.
 //
 // Reglas duras:
@@ -12,14 +12,22 @@
 //   2. La trayectoria de caja viene del motor canónico del Dashboard
 //      (computeBaseCashFlow) vía `buildCanonicalProjection`. No se
 //      vuelve a calcular aquí.
-//   3. La caja inicial coincide con la del Dashboard (FIXED_STARTING_BALANCE
-//      o budget.openingCash[0] o saldoInicial bancario, en ese orden).
+//   3. La caja inicial anual coincide con el Dashboard. La caja operativa
+//      diaria para decidir pagos se calcula aparte con el saldo bancario
+//      más reciente por cuenta.
 // ─────────────────────────────────────────────────────────────────────────
 
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
+import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import type { BankAccountStatement } from '../../../services/jde';
+import type { CobranzaRecord } from '../../../services/jdeTypes';
+import {
+  currentBankStatements,
+  latestStatementDate,
+  sumBankStatementBalances,
+} from '../../../domain/bankStatements';
 import {
   buildCanonicalProjection,
   hasSufficientCanonicalData,
@@ -30,6 +38,8 @@ import type {
   FinancialAdjustment,
   FinancialMovement,
   FinancialScenario,
+  PayrollCostRecord,
+  PurchaseReceiptRecord,
   SupplierFinancialProfile,
   TaxObligation,
 } from '../../shared-finance/types';
@@ -40,10 +50,38 @@ export interface FinancialProjectionSourceInput {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
+  /**
+   * Resultado del cruce JDE ↔ banco. Cuando se pasa, las facturas con
+   * `match.status === 'cobrada-banco'` no se vuelven a proyectar como
+   * cobro pendiente. Forma parte del cache key: cuando el worker emite
+   * un nuevo cruce, la proyección se recalcula automáticamente.
+   */
+  cobranzaReconciliation?: RealReconciliationResult;
+  /**
+   * Set de cxpKeys (`${cia}::${noFactura}::${noProveedor}`) marcadas PAID
+   * por PagoProveedor. Espejo egreso de cobranzaReconciliation. Cuando se
+   * pasa, las CXPs pagadas se excluyen del egreso proyectado (el cargo
+   * bancario real ya descontó el dinero).
+   */
+  paidCxpKeys?: Set<string>;
+  /**
+   * Mapa `bankMovementKey` → enriquecimiento PagoProveedor. Cuando un CARGO
+   * histórico empata con un pago a proveedor, la proyección lo emite como
+   * AP_PAYMENT (con nombre de proveedor) en vez de TRANSFER/Otros Egresos.
+   */
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
   asOfDate?: string;
+  /**
+   * Si false, el canonical no entrena el motor predictivo. Planning no usa
+   * `predictive`, así que pasar false ahorra varios cientos de ms.
+   */
+  enablePredictive?: boolean;
 }
 
 export interface FinancialProjectionSourceData {
@@ -62,13 +100,13 @@ export interface FinancialProjectionSourceData {
   taxes: TaxObligation[];
   /** Resultado canónico subyacente (mensual + bridge). */
   canonical: CanonicalProjectionResult;
-  /** True cuando hay banco + (clientes/CXP/budget). */
+  /** True cuando hay banco o CXC JDE suficiente para proyectar flujo. */
   hasData: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Module-level memo for `buildFinancialProjectionSourceData`. The canonical
-// projection iterates clients × months × CXP × budget through
+// projection iterates clients × months × CXP through
 // `computeBaseCashFlow`, which is by far the heaviest piece of work in the
 // module — anywhere from 80–250ms on a real catalog. The dashboard's
 // `useMemo` only caches *per mount*, so navigating away from the tab and
@@ -82,7 +120,7 @@ export interface FinancialProjectionSourceData {
 
 type CacheKey = string;
 const SOURCE_CACHE = new Map<CacheKey, FinancialProjectionSourceData>();
-const SOURCE_CACHE_LIMIT = 6;
+const SOURCE_CACHE_LIMIT = 20;
 
 function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string): CacheKey {
   // We mix array references via WeakRef-like identity sentinels: each
@@ -93,6 +131,12 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.clients),
     refId(input.providers),
     refId(input.cxpRecords),
+    refId(input.cobranzaRecords),
+    refId(input.purchaseReceipts),
+    refId(input.payrollCosts),
+    refId(input.cobranzaReconciliation),
+    refId(input.paidCxpKeys),
+    refId(input.cargoEnrichments),
     refId(input.assumptions),
     refId(input.budget),
   ];
@@ -135,9 +179,16 @@ export function buildFinancialProjectionSourceData(
     clients: input.clients,
     providers: input.providers,
     cxpRecords: input.cxpRecords,
+    cobranzaRecords: input.cobranzaRecords ?? [],
+    purchaseReceipts: input.purchaseReceipts ?? [],
+    payrollCosts: input.payrollCosts ?? [],
+    cobranzaReconciliation: input.cobranzaReconciliation,
+    paidCxpKeys: input.paidCxpKeys,
+    cargoEnrichments: input.cargoEnrichments,
     assumptions: input.assumptions,
     budget: input.budget,
     startingBalance: input.startingBalance,
+    enablePredictive: input.enablePredictive,
     asOfDate,
   };
   const hasData = hasSufficientCanonicalData(canonicalInputs);
@@ -189,22 +240,48 @@ export function __clearProjectionSourceCache(): void {
 }
 
 /**
- * Caja inicial canónica — mismo dato que usa el Dashboard. Antes este
- * helper sumaba `saldoFinal` de las cuentas (que no es la caja inicial:
- * es la caja al cierre de cada cuenta), y se desviaba completamente del
- * Dashboard. Ahora simplemente expone la caja inicial congruente con el
- * resto del producto.
+ * Caja inicial canónica — misma prioridad operativa que `computeBaseCashFlow`
+ * del Dashboard:
+ *   1. `startingBalance` numérico (override manual del usuario)
+ *   2. Σ saldoInicial de los estados de cuenta de la compañía activa
+ *
+ * Antes este helper ignoraba `startingBalance` y sumaba el saldoInicial
+ * de TODAS las cuentas sin filtrar por
+ * `companyCode`. Eso inflaba la caja proyectada de Trayectoria de caja
+ * cuando el usuario tenía una sola compañía seleccionada o un override
+ * manual de caja inicial — la línea de caja en Caja proyectada no empataba
+ * con el Flujo mensual del Dashboard.
  */
 export function calculateInitialCash(
   bankStatements: BankAccountStatement[],
-  fallback: number,
+  startingBalance: number | undefined,
+  options?: { companyCode?: string },
 ): number {
-  if (bankStatements.length === 0) return fallback;
-  const sumSaldoInicial = bankStatements.reduce(
+  if (typeof startingBalance === 'number') return startingBalance;
+  const companyCode = options?.companyCode;
+  const filtered = !companyCode || companyCode === 'all'
+    ? bankStatements
+    : bankStatements.filter((s) => s.cia === companyCode);
+  if (filtered.length === 0) return startingBalance ?? 0;
+  return filtered.reduce(
     (sum, statement) => sum + (statement.saldoInicial ?? 0),
     0,
   );
-  return sumSaldoInicial > 0 ? sumSaldoInicial : fallback;
+}
+
+export function calculateCurrentBankCash(
+  bankStatements: BankAccountStatement[],
+  companyCode = 'all',
+  fallback = 0,
+): number {
+  const scoped = companyCode === 'all' || !companyCode
+    ? bankStatements
+    : bankStatements.filter((statement) => statement.cia === companyCode);
+  const latest = latestStatementDate(scoped);
+  const current = currentBankStatements(scoped, latest);
+  if (current.length === 0) return fallback;
+  const total = sumBankStatementBalances(current);
+  return total > 0 ? total : fallback;
 }
 
 function defaultScenarios(asOfDate: string): FinancialScenario[] {

@@ -6,7 +6,9 @@ import type {
   PlanningCustomRow,
   PlanningRow,
 } from '../../shared-finance/types';
+import { bankAccountBusinessUnitLabel } from '../../../domain/bankAccountsCatalog';
 import { slug } from './customRowsStorage';
+import { macroBucketForSupplier } from './providerCategoryGeneralization';
 
 export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   AR_COLLECTION: 'Cobranza',
@@ -16,12 +18,33 @@ export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   DEBT: 'Deuda',
   CAPEX: 'CAPEX',
   OPEX: 'OPEX',
-  TRANSFER: 'Transferencias',
+  TRANSFER: 'Otros Egresos',
   MANUAL: 'Manual',
 };
 
+const INCOME_BUCKETS = new Set([
+  'AC',
+  'Clientes Citi',
+  'Federal',
+  'Multicarga',
+  'Reserva',
+  'Turimex LLC',
+  'Viajes Especiales',
+  'Otros ingresos',
+]);
+
+function inflowBucketFor(movement: FinancialMovement): string {
+  if (movement.type !== 'INFLOW') return '';
+  if (movement.businessUnitId) {
+    return bankAccountBusinessUnitLabel(movement.businessUnitId);
+  }
+  const sub = movement.subcategory;
+  if (sub && INCOME_BUCKETS.has(sub)) return sub;
+  return 'Otros ingresos';
+}
+
 export function conceptKeyForMovement(movement: FinancialMovement): string {
-  const tail = movement.counterpartyName ?? movement.subcategory ?? 'general';
+  const tail = rowLabelForMovement(movement);
   return `${movement.type}:${movement.category}:${slug(tail)}`;
 }
 
@@ -37,14 +60,25 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
   for (const movement of args.movements) {
     const key = conceptKeyForMovement(movement);
     if (map.has(key)) continue;
-    const tail = movement.counterpartyName ?? movement.subcategory ?? 'General';
+    const tail = rowLabelForMovement(movement);
+    const group = movement.type === 'INFLOW'
+      ? `Ingresos · ${inflowBucketFor(movement)}`
+      : rowGroup(movement.type, movement.category);
+    const subgroupLabel = movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT'
+      ? movement.subcategory ?? 'Sin clasificar'
+      : movement.counterpartyName;
+    const providerCategoryLabel = movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT'
+      ? movement.providerCategory
+      : undefined;
     map.set(key, {
       conceptKey: key,
       label: tail,
-      group: rowGroup(movement.type, movement.category),
+      group,
+      bucketLabel: bucketForMovement(movement),
       type: movement.type,
       category: movement.category,
-      subgroupLabel: movement.counterpartyName,
+      subgroupLabel,
+      providerCategoryLabel,
     });
   }
 
@@ -54,6 +88,7 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
       conceptKey: custom.conceptKey,
       label: custom.label,
       group: rowGroup(custom.type, custom.category),
+      bucketLabel: bucketForCategory(custom.type, custom.category),
       type: custom.type,
       category: custom.category,
       isCustom: true,
@@ -67,6 +102,7 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
       conceptKey: override.conceptKey,
       label: humanizeConceptKey(override.conceptKey),
       group: rowGroup(override.type, inferredCategory),
+      bucketLabel: bucketForCategory(override.type, inferredCategory),
       type: override.type,
       category: inferredCategory,
       isCustom: override.conceptKey.startsWith('custom:'),
@@ -80,9 +116,62 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
   });
 }
 
+function rowLabelForMovement(movement: FinancialMovement): string {
+  if (movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT') {
+    return movement.counterpartyName ?? movement.subcategory ?? 'Sin proveedor';
+  }
+  return movement.counterpartyName
+    ?? movement.subcategory
+    ?? cleanConceptLabel(movement.concept)
+    ?? 'General';
+}
+
+function cleanConceptLabel(concept: string | undefined): string | null {
+  const trimmed = concept?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\s+/g, ' ');
+}
+
+const CATEGORY_BUCKET_LABEL: Record<FinancialMovementCategory, string> = {
+  AR_COLLECTION: 'Cobranza',
+  AP_PAYMENT: 'Otros proveedores',
+  PAYROLL: 'Nómina',
+  TAX: 'Impuestos',
+  DEBT: 'Deuda',
+  CAPEX: 'CAPEX',
+  OPEX: 'OPEX',
+  TRANSFER: 'Otros movimientos',
+  MANUAL: 'Manual',
+};
+
+export function bucketForMovement(movement: FinancialMovement): string {
+  if (movement.type === 'INFLOW') return inflowBucketFor(movement);
+  if (movement.category === 'AP_PAYMENT') {
+    return macroBucketForSupplier({
+      counterpartyId: movement.counterpartyId,
+      counterpartyName: movement.counterpartyName,
+    });
+  }
+  if (movement.category === 'TRANSFER') return 'Otros egresos';
+  return CATEGORY_BUCKET_LABEL[movement.category];
+}
+
+function bucketForCategory(type: FinancialMovementType, category: FinancialMovementCategory): string {
+  if (type === 'INFLOW') return category === 'AR_COLLECTION' ? 'Otros ingresos' : 'Otros ingresos';
+  if (category === 'TRANSFER') return 'Otros egresos';
+  return CATEGORY_BUCKET_LABEL[category];
+}
+
 export function rowGroup(type: FinancialMovementType, category: FinancialMovementCategory): string {
   const sectionLabel = type === 'INFLOW' ? 'Ingresos' : 'Egresos';
-  return `${sectionLabel} · ${CATEGORY_LABELS[category]}`;
+  // TRANSFER cae tanto en ingreso (ABONOs sin cobranza match) como en
+  // egreso (CARGOs sin pago match). El label `'Otros Egresos'` sólo
+  // tiene sentido para egresos; en ingresos lo etiquetamos como
+  // `'Otros Ingresos'`.
+  const tail = category === 'TRANSFER'
+    ? (type === 'INFLOW' ? 'Otros Ingresos' : 'Otros Egresos')
+    : CATEGORY_LABELS[category];
+  return `${sectionLabel} · ${tail}`;
 }
 
 export function aggregateRowValueForBucket(args: {

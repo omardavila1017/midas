@@ -91,7 +91,7 @@ Midas is a treasury and cash-flow workbench for transport companies. It lets use
 - Existing `src/services/`: yes — `jde.ts`, `jdeClient.ts`, `jdeTypes.ts`
 - Existing `src/config/`: no — `src/config/api.config.ts` is missing
 - Existing `.env` files: `.env.example`, `.env.local`
-- Env vars currently read: `VITE_JDE_BASE_URL`, `VITE_JDE_TOKEN`
+- Env vars currently read by the browser: `VITE_JDE_BASE_URL` and non-secret proxy paths. JDE/Cognos/OpenAI tokens must be server-side only.
 - Current JDE integration points: companies, accounts payable aging, bank account statements
 - Current static sources: `public/clientes-db.json`, `src/assets/providerCatalog.json`, uploaded `.xlsx/.xls`, uploaded `.csv`
 
@@ -112,7 +112,7 @@ Midas is a treasury and cash-flow workbench for transport companies. It lets use
 **Baseline verdict:** Below 90 threshold — pipeline has work to do in axes 2, 3, 4, and targeted cleanup in axes 1 and 5.
 
 ## 11. Atlas Deployment Notes
-- Env vars required (detected so far): `VITE_JDE_BASE_URL`, `VITE_JDE_TOKEN`, `VITE_JDE_UPSTREAM`
+- Env vars required (detected so far): browser proxy paths plus server-side `JDE_TOKEN`, `COGNOS_TOKEN`, and `OPENAI_API_KEY` where live integrations are enabled.
 - Integration points identified: JDE/Tesorería companies, accounts payable aging, bank statements; static client and provider catalogs should be moved behind Atlas-managed data services.
 - Deployment blockers: Senda DS not applied, docs incomplete, active Excel dependency, missing central API config, and visible upload flows that bypass official systems.
 - Build status: PASS with warnings about a large chunk and a dynamic import that cannot split `src/services/jde.ts`.

@@ -26,6 +26,7 @@ import {
   toISODate,
 } from './calendar';
 import { isNonOperatingDay } from './bankHolidays';
+import { parseCc13PaymentDay } from './parsePaymentDay';
 
 const DAY_MS = 86_400_000;
 const AVG_DAYS_PER_MONTH = 30;
@@ -76,6 +77,11 @@ export function projectClientMonth(
   // Invoice date: 1st of the month. (TODO: accept per-event invoice dates.)
   let invoiceDate = new Date(Date.UTC(invoiceYear, invoiceMonth, 1));
 
+  // `paymentDayName` (Nombre_Dia_Pago_CC13, sincronizado del API/ROL) es la
+  // autoridad de la regla de día de pago; cae a `paymentDay` estructurado
+  // histórico solo si el catálogo no tiene el dato del API.
+  const paymentPattern = parseCc13PaymentDay(client.paymentDayName) ?? client.paymentDay;
+
   for (let i = 0; i < splits; i++) {
     // Theoretical cash date = invoice + credit days.
     const theoretical = new Date(invoiceDate.getTime() + client.creditDays * DAY_MS);
@@ -83,7 +89,7 @@ export function projectClientMonth(
     // Factoraje uses its own term from invoice date and ignores payment-day.
     let real = client.factoraje
       ? new Date(invoiceDate.getTime() + assumptions.factorajeDays * DAY_MS)
-      : resolveRealPaymentDate(theoretical, client.paymentDay, client.frequency);
+      : resolveRealPaymentDate(theoretical, paymentPattern, client.frequency);
     // Ley de Transparencia: si el cobro cae en inhábil/fin de semana,
     // el efectivo entra el siguiente día hábil.
     while (isNonOperatingDay(real)) real = new Date(real.getTime() + DAY_MS);

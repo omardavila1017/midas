@@ -1,6 +1,6 @@
 # Cobranza JDE + Cruce con Bancos — Handoff
 
-**Para el próximo Claude que tome este branch.** Este archivo resume todo el trabajo hecho en una sesión continua de Cowork (3 may 2026) integrando el endpoint `/v1/erp/tesoreria/cobranza` (CXC) y cruzándolo contra los movimientos bancarios. Hay bugs abiertos que el usuario sigue viendo en su navegador y que debes resolver.
+**Para el próximo Claude que tome este branch.** Este archivo resume todo el trabajo hecho en una sesión continua de Cowork (3 may 2026) integrando el endpoint `/JDEdwards/cobranza` (CXC) y cruzándolo contra los movimientos bancarios. Hay bugs abiertos que el usuario sigue viendo en su navegador y que debes resolver.
 
 > Lee también `CLAUDE.md` para el contexto general del repo. Esto es solo el subconjunto cobranza/cruce.
 
@@ -48,7 +48,7 @@
 
 ## Shape REAL del API productivo (validado 2026-05-03)
 
-POST `https://api.gruposenda.com/v1/erp/tesoreria/cobranza`
+POST `https://api.gruposenda.com/JDEdwards/cobranza`
 
 **Body:**
 ```json
@@ -102,15 +102,14 @@ La coma trailing en `cia` NO es typo. El cliente la pide así.
 
 ## Configuración de entorno
 
-`.env.local` ya tiene el token productivo (no commitear):
+`.env.local` debe usar placeholders o credenciales locales rotadas (no commitear):
 ```
-JDE_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-VITE_JDE_TOKEN=<mismo token>
-JDE_UPSTREAM=https://api.gruposenda.com/v1/erp/tesoreria
+JDE_TOKEN=<server-side-jde-token>
+VITE_JDE_UPSTREAM=https://api.gruposenda.com/JDEdwards
 VITE_JDE_ENVIRONMENT=PD920
 ```
 
-En **Vercel** debe estar `JDE_TOKEN` (server-side) en Production y Preview. La Vercel Function `api/jde/[...path].ts` lo inyecta sin que el bundle del cliente lo vea.
+El browser debe llamar a `/api/jde`; Vite local o Atlas/backend inyectan el Bearer fuera del bundle.
 
 ---
 

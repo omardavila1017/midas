@@ -13,7 +13,6 @@ export interface ScenarioTabsProps {
   onDuplicateDraft: (scenarioId: string) => void;
   onRenameDraft: (scenarioId: string, name: string) => void;
   onDiscardDraft: (scenarioId: string) => void;
-  onMergeDraft: (scenarioId: string) => void;
 }
 
 export function ScenarioTabs(props: ScenarioTabsProps) {
@@ -27,7 +26,6 @@ export function ScenarioTabs(props: ScenarioTabsProps) {
     onDuplicateDraft,
     onRenameDraft,
     onDiscardDraft,
-    onMergeDraft,
   } = props;
 
   const baseScenario = scenarios.find((s) => s.kind === 'BASE');
@@ -35,9 +33,15 @@ export function ScenarioTabs(props: ScenarioTabsProps) {
   const drafts = scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt);
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5">
+    <section
+      className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] px-3 py-2.5"
+      style={{
+        background: 'var(--skeuo-paper)',
+        borderBottom: '1px solid var(--skeuo-brass)',
+      }}
+    >
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+        <span className="mr-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-500)]">
           Escenarios
         </span>
         {baseScenario && (
@@ -72,16 +76,15 @@ export function ScenarioTabs(props: ScenarioTabsProps) {
               onDuplicate={() => onDuplicateDraft(draft.id)}
               onRename={(name) => onRenameDraft(draft.id, name)}
               onDiscard={() => onDiscardDraft(draft.id)}
-              onMerge={() => onMergeDraft(draft.id)}
             />
           );
         })}
         <button
           type="button"
-          onClick={onCreateDraft}
-          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-[var(--gray-300)] bg-white px-3 text-[12px] font-medium text-[var(--gray-500)] hover:border-[var(--primary)] hover:text-[var(--primary)] transition-colors"
+          onClick={() => onCreateDraft()}
+          className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius)] border border-dashed border-[var(--gray-300)] bg-white px-3 text-[12px] font-medium text-[var(--gray-500)] transition-colors duration-150 hover:border-[var(--primary)] hover:text-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/30"
         >
-          <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+          <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
           Nueva propuesta
         </button>
       </div>
@@ -104,8 +107,13 @@ function CoreTab({
 }) {
   const Icon = tone === 'base' ? Lock : ShieldCheck;
   const badge = tone === 'base' ? 'base' : 'main';
-  const bg = active ? 'var(--gray-950)' : 'white';
+  const bg = active ? 'var(--gray-950)' : 'var(--skeuo-paper)';
   const color = active ? 'white' : 'var(--gray-700)';
+  const iconColor = active
+    ? 'currentColor'
+    : tone === 'base'
+      ? 'var(--skeuo-brass-deep)'
+      : 'currentColor';
   const tooltip = tone === 'base'
     ? 'Solo lectura · proyección original'
     : 'Solo lectura · cambia mediante merge de un draft';
@@ -115,13 +123,18 @@ function CoreTab({
       onClick={onClick}
       aria-pressed={active}
       title={tooltip}
-      className="inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors"
-      style={{ background: bg, color, borderColor: active ? 'var(--gray-950)' : 'var(--gray-200)' }}
+      className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border px-3 text-[12px] font-medium transition-colors"
+      style={{
+        background: bg,
+        color,
+        borderColor: active ? 'var(--gray-950)' : 'var(--skeuo-paper-edge)',
+        boxShadow: active ? 'var(--skeuo-emboss-md)' : 'var(--skeuo-deboss-sm)',
+      }}
     >
-      <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+      <Icon className="h-3.5 w-3.5" strokeWidth={1.5} style={{ color: iconColor }} />
       <span className="truncate max-w-[160px]">{scenario.name}</span>
       <span
-        className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+        className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em]"
         style={{
           background: active ? 'rgba(255,255,255,0.15)' : 'var(--gray-100)',
           color: active ? 'white' : 'var(--gray-500)',
@@ -131,7 +144,7 @@ function CoreTab({
       </span>
       {delta !== null && delta !== 0 && (
         <span
-          className="text-[11px] tabular-nums font-semibold"
+          className="text-[11px] tabular-nums font-bold"
           style={{ color: active ? 'rgba(255,255,255,0.85)' : delta > 0 ? 'var(--success)' : 'var(--danger)' }}
         >
           {`${delta > 0 ? '+' : ''}${fmtCompact(delta)}`}
@@ -149,7 +162,6 @@ function DraftTab({
   onDuplicate,
   onRename,
   onDiscard,
-  onMerge,
 }: {
   draft: FinancialScenario;
   active: boolean;
@@ -158,7 +170,6 @@ function DraftTab({
   onDuplicate: () => void;
   onRename: (name: string) => void;
   onDiscard: () => void;
-  onMerge: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -188,14 +199,15 @@ function DraftTab({
         type="button"
         onClick={onSelect}
         aria-pressed={active}
-        className="inline-flex h-9 items-center gap-2 rounded-l-xl border-l border-y px-3 text-[12px] font-medium transition-colors"
+        className="inline-flex h-9 items-center gap-2 rounded-l-[var(--radius)] border-l border-y px-3 text-[12px] font-medium transition-colors"
         style={{
-          background: active ? 'var(--primary)' : 'white',
+          background: active ? 'var(--primary)' : 'var(--skeuo-paper)',
           color: active ? 'white' : 'var(--gray-700)',
-          borderColor: active ? 'var(--primary)' : 'var(--gray-200)',
+          borderColor: active ? 'var(--primary)' : 'var(--skeuo-paper-edge)',
+          boxShadow: active ? 'var(--skeuo-emboss-md)' : 'var(--skeuo-deboss-sm)',
         }}
       >
-        <GitBranch className="h-3.5 w-3.5" strokeWidth={2} />
+        <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} />
         {renaming ? (
           <input
             value={draftName}
@@ -219,7 +231,7 @@ function DraftTab({
         )}
         {delta !== 0 && (
           <span
-            className="text-[11px] tabular-nums font-semibold"
+            className="text-[11px] tabular-nums font-bold"
             style={{ color: active ? 'rgba(255,255,255,0.85)' : delta > 0 ? 'var(--success)' : 'var(--danger)' }}
           >
             {`${delta > 0 ? '+' : ''}${fmtCompact(delta)}`}
@@ -230,39 +242,35 @@ function DraftTab({
         type="button"
         onClick={() => setMenuOpen((open) => !open)}
         aria-label="Acciones del borrador"
-        className="inline-flex h-9 w-7 items-center justify-center rounded-r-xl border-r border-y transition-colors"
+        className="inline-flex h-9 w-7 items-center justify-center rounded-r-[var(--radius)] border-r border-y transition-colors"
         style={{
-          background: active ? 'var(--primary)' : 'white',
+          background: active ? 'var(--primary)' : 'var(--skeuo-paper)',
           color: active ? 'white' : 'var(--gray-500)',
-          borderColor: active ? 'var(--primary)' : 'var(--gray-200)',
+          borderColor: active ? 'var(--primary)' : 'var(--skeuo-paper-edge)',
+          boxShadow: active ? 'var(--skeuo-emboss-md)' : 'var(--skeuo-deboss-sm)',
         }}
       >
-        <MoreHorizontal className="h-3.5 w-3.5" strokeWidth={2} />
+        <MoreHorizontal className="h-3.5 w-3.5" strokeWidth={1.5} />
       </button>
       {menuOpen && (
         <div
           ref={menuRef}
-          className="absolute right-0 top-10 z-40 w-44 rounded-xl border border-[var(--gray-200)] bg-white p-1 shadow-lg"
+          className="absolute right-0 top-10 z-40 w-44 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-1 shadow-lg"
         >
           <MenuItem
-            label="Mergear a Aprobado"
-            icon={<ShieldCheck className="h-3.5 w-3.5" strokeWidth={2} />}
-            onClick={() => { setMenuOpen(false); onMerge(); }}
-          />
-          <MenuItem
             label="Duplicar"
-            icon={<Copy className="h-3.5 w-3.5" strokeWidth={2} />}
+            icon={<Copy className="h-3.5 w-3.5" strokeWidth={1.5} />}
             onClick={() => { setMenuOpen(false); onDuplicate(); }}
           />
           <MenuItem
             label="Renombrar"
-            icon={<Pencil className="h-3.5 w-3.5" strokeWidth={2} />}
+            icon={<Pencil className="h-3.5 w-3.5" strokeWidth={1.5} />}
             onClick={() => { setMenuOpen(false); setRenaming(true); }}
           />
           <div className="my-1 h-px bg-[var(--gray-100)]" />
           <MenuItem
             label="Descartar"
-            icon={<Trash2 className="h-3.5 w-3.5" strokeWidth={2} />}
+            icon={<Trash2 className="h-3.5 w-3.5" strokeWidth={1.5} />}
             danger
             onClick={() => { setMenuOpen(false); onDiscard(); }}
           />
@@ -287,7 +295,7 @@ function MenuItem({
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] font-medium transition-colors ${
+      className={`flex w-full items-center gap-2 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left text-[12px] font-medium transition-colors ${
         danger ? 'text-[var(--danger)] hover:bg-[var(--danger)]/8' : 'text-[var(--gray-700)] hover:bg-[var(--gray-50)]'
       }`}
     >

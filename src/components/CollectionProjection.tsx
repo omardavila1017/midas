@@ -5,15 +5,26 @@ import { isBankHoliday } from '../domain/bankHolidays';
 import { isInternalTransfer, buildOwnAccountsIndex, buildOwnAccountDetector } from '../domain/netCashFlowEngine';
 import { reconcileCollections, buildReconciliationMap, type ReconciliationMatch, type ReconciliationSummary } from '../domain/reconciliationEngine';
 import {
-  reconcileRealCollections,
   type RealReconciliationMatch,
   type RealReconciliationResult,
-  type MatchTier as RealMatchTier,
+  type RealReconciliationBankCoverage,
 } from '../domain/realReconciliationEngine';
+import { emptyRealReconciliationResult } from '../domain/emptyRealReconciliationResult';
+import {
+  applyManualConfirmations,
+  useConfirmedReviewKeys,
+} from '../domain/reconciliationConfirmations';
+import {
+  buildCollectionCalendar,
+  COLLECTION_CALENDAR_SOURCE_LABELS,
+  type BuildCollectionCalendarResult,
+  type CollectionCalendarEvent,
+  type CollectionCalendarEventSource,
+} from '../domain/collectionCalendarEngine';
 import { CXPRecord } from '../domain/persistence';
-import type { BankAccountStatement, CobranzaRecord } from '../services/jde';
+import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jde';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, FileSpreadsheet } from 'lucide-react';
+import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency, fmtCompact } from '../formatters';
@@ -41,12 +52,14 @@ interface Props {
   bankStatements?: BankAccountStatement[];
   companies?: { cia: string; nombre: string }[];
   /**
-   * CXC real proveniente de POST /v1/erp/tesoreria/cobranza. Cada registro es
+   * CXC real proveniente de POST /JDEdwards/cobranza. Cada registro es
    * una factura abierta o reciente (últimos 12 meses). Cuando llega vacío,
    * la pestaña sigue funcionando en modo Proyectada y la sección "Real (JDE)"
    * muestra empty state.
    */
   cobranzaRecords?: CobranzaRecord[];
+  /** Pagos/recibos de CobranzaIndicadores, agrupados por Id Pago. */
+  cobranzaPayments?: CobranzaPayment[];
   /**
    * ISO timestamp por compañía del último fetch exitoso de /cobranza. Hoy
    * solo se usa para mostrar "Actualizado hace X" en la vista raw; en fases
@@ -69,6 +82,9 @@ interface Props {
   onRefreshCobranza?: () => void;
   /** Indica si un refresh está en curso para deshabilitar el botón. */
   cobranzaRefreshing?: boolean;
+  /** Carga bancos sólo para el rango visible de cobranza y mergea al cache. */
+  onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
+  bankCoverageLoading?: boolean;
   /**
    * Cía seleccionada globalmente (header del shell). Cuando viene un valor
    * distinto a 'all', el CobranzaRealView abre filtrado por esa cía;
@@ -76,6 +92,12 @@ interface Props {
    * global del app.
    */
   selectedCia?: string;
+}
+
+interface EnsureBankCoverageRequest {
+  from: string;
+  to: string;
+  ciaFilter?: string[];
 }
 
 type ViewMode = 'month' | 'client' | 'calendar';
@@ -98,7 +120,7 @@ function defaultActiveMonth(year: number): number {
   return now.getFullYear() === year ? now.getMonth() : 0;
 }
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaPayments = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -106,12 +128,10 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   const [showSettings, setShowSettings] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [activeMonth, setActiveMonth] = useState(() => defaultActiveMonth(assumptions.year));
-  // Default a 'real' cuando hay datos JDE, 'projected' si no — para que el
-  // primer abrir la pestaña muestre lo más cercano a la realidad sin
-  // requerir clic. El usuario puede saltar entre ambos siempre.
-  const [sourceMode, setSourceMode] = useState<SourceMode>(() =>
-    cobranzaRecords.length > 0 ? 'real' : 'projected',
-  );
+  // Unified: show real view when JDE data or companies are available,
+  // fall back to projected-only when there's no JDE connection at all.
+  const hasJdeConnection = companies.length > 0 || cobranzaRecords.length > 0;
+  const sourceMode: SourceMode = hasJdeConnection ? 'real' : 'projected';
 
   useEffect(() => {
     setActiveMonth(defaultActiveMonth(assumptions.year));
@@ -162,10 +182,10 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   if (clients.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center animate-page-in">
-        <div className="w-16 h-16 rounded-2xl bg-[var(--primary-muted)] flex items-center justify-center mb-4 animate-scale-in">
+        <div className="w-16 h-16 rounded-[var(--radius-lg)] bg-[var(--primary-muted)] flex items-center justify-center mb-4 animate-scale-in">
           <Inbox className="w-7 h-7 text-[var(--primary)]" />
         </div>
-        <h2 className="text-xl font-semibold text-[var(--gray-950)]">Sin clientes cargados</h2>
+        <h2 className="text-xl font-bold text-[var(--gray-950)]">Sin clientes cargados</h2>
         <p className="text-[13px] text-[var(--gray-400)] mt-1 max-w-sm">
           Importa el catálogo en la pestaña Clientes para ver la proyección.
         </p>
@@ -176,29 +196,9 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
   return (
     <div className="space-y-5 animate-page-in">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <PageHeader title="Proyección de cobranza" />
-        {/* Toggle Real (JDE) / Proyectada.
-            Antes solo se mostraba cuando había registros de cobranza en
-            cache, lo que ocultaba el caso "JDE devolvió vacío". Ahora se
-            muestra siempre que haya catálogo de compañías cargado, para
-            que el usuario pueda entrar al modo Real, ver el error y
-            disparar un refresh manual. */}
-        {(companies.length > 0 || cobranzaRecords.length > 0) && (
-          <nav className="flex bg-[var(--gray-50)] rounded-full p-0.5 text-[12px] border border-[var(--gray-200)]/60">
-            <button
-              onClick={() => setSourceMode('real')}
-              className={`px-3.5 py-1.5 rounded-full font-medium hover-press flex items-center gap-1.5 ${sourceMode === 'real' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-            >
-              <Database className="w-3.5 h-3.5" /> Real (JDE)
-            </button>
-            <button
-              onClick={() => setSourceMode('projected')}
-              className={`px-3.5 py-1.5 rounded-full font-medium hover-press flex items-center gap-1.5 ${sourceMode === 'projected' ? 'bg-white text-[var(--gray-950)] shadow-sm' : 'text-[var(--gray-400)]'}`}
-            >
-              <CalendarRange className="w-3.5 h-3.5" /> Proyectada
-            </button>
-          </nav>
-        )}
+        <PageHeader title="Calendario de cobranza" />
+        {/* Source mode indicator — no toggle needed; real view is
+            always shown when JDE companies are available. */}
       </div>
 
       {/* ── Vista Real (JDE) — Fase 1: tabla raw ──────────
@@ -208,7 +208,10 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           de % cruzado y el aging por cliente. */}
       {sourceMode === 'real' ? (
         <CobranzaRealView
+          clients={clients}
+          assumptions={assumptions}
           records={cobranzaRecords}
+          payments={cobranzaPayments}
           loadedCias={cobranzaLoadedCias}
           companies={companies}
           bankStatements={bankStatements}
@@ -218,18 +221,20 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           onRefresh={onRefreshCobranza}
           refreshing={!!cobranzaRefreshing}
           defaultCia={selectedCia}
+          onEnsureBankCoverage={onEnsureBankCoverage}
+          bankCoverageLoading={!!bankCoverageLoading}
         />
       ) : (
       <>
 
       {/* ── Summary strip ─────────────────────────────────── */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 animate-card-in stagger-1 hover-lift">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5 flex items-end gap-8 animate-card-in stagger-1 hover-lift">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Total proyectado {assumptions.year}</div>
           <AnimatedNumber
             value={total}
             format={fmtCurrency}
-            className="block text-3xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+            className="block text-3xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
         </div>
         <div>
@@ -241,18 +246,19 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           />
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Clientes</div>
+          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Clientes en cartera</div>
           <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
             <AnimatedNumber value={filteredClients.length} format={(n) => Math.round(n).toString()} />
             {filteredClients.length !== clients.length && (
               <span className="text-[var(--gray-400)] text-[13px]"> / {clients.length}</span>
             )}
           </div>
+          <div className="text-[11px] text-[var(--gray-400)]">Activos en el catálogo</div>
         </div>
         <div className="ml-auto">
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-400)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+            className="flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[13px] text-[var(--gray-400)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
           >
             <Settings2 className="w-3.5 h-3.5" />
             Supuestos
@@ -265,7 +271,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       {bankStatements.length > 0 && (() => {
         const bankEmpresas = Array.from(new Set(bankStatements.map(a => a.cia).filter(Boolean)));
         return (
-          <div className="bg-white border border-[var(--gray-200)] rounded-xl animate-card-in stagger-1">
+          <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] animate-card-in stagger-1">
             <div className="flex items-end gap-8 p-4">
               <div className="flex items-center gap-2">
                 <Landmark className="w-4 h-4 text-[var(--primary)]" />
@@ -274,7 +280,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
                   <AnimatedNumber
                     value={totalBankSaldo}
                     format={fmtCurrency}
-                    className="block text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5"
+                    className="block text-xl font-bold tabular-nums text-[var(--primary)] mt-0.5"
                   />
                 </div>
               </div>
@@ -283,12 +289,12 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
                 <AnimatedNumber
                   value={bankRealAbonos}
                   format={fmtCurrency}
-                  className="block text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5"
+                  className="block text-xl font-bold tabular-nums text-[var(--success)] mt-0.5"
                 />
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Empresas</div>
-                <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5">
+                <div className="text-xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5">
                   {bankEmpresas.length > 0 ? bankEmpresas.length : <span className="text-[var(--gray-300)]">—</span>}
                 </div>
               </div>
@@ -320,7 +326,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       })()}
 
       {showSettings && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex gap-6 items-end animate-slide-down">
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 flex gap-6 items-end animate-slide-down">
           <Field label="Año">
             <input
               type="number"
@@ -362,14 +368,14 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
       />
 
       {/* ── Más vistas y filtros (colapsable) ─────────────── */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-6">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-6">
         <button
           onClick={() => setShowMore(!showMore)}
           className="w-full flex items-center justify-between px-5 py-3 hover:bg-[var(--gray-50)]/50 transition-colors"
         >
           <div className="flex items-center gap-2.5">
             <SlidersHorizontal className="w-4 h-4 text-[var(--gray-400)]" />
-            <span className="text-[13px] font-semibold text-[var(--gray-950)]">Filtros y otras vistas</span>
+            <span className="text-[13px] font-bold text-[var(--gray-950)]">Filtros y otras vistas</span>
             {(query || freqFilter.size > 0 || factorajeFilter !== 'all') && (
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--primary-muted)] text-[var(--primary)] font-medium">
                 Filtros activos
@@ -487,7 +493,10 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
   const byId = new Map(clients.map(c => [c.id, c]));
   const confirmedSet = useMemo(() => new Set(confirmedPayments.map(p => p.key)), [confirmedPayments]);
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
 
   // ── Bank Reconciliation ──
   const { matches: reconMatches, summary: reconSummary } = useMemo(
@@ -592,22 +601,22 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
   return (
     <div className="space-y-4">
       {/* Month summary — compact strip */}
-      <div className="bg-white border border-[var(--gray-200)] rounded-xl p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
+      <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] p-4 flex items-end gap-8 flex-wrap animate-card-in stagger-4">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobranza total</div>
           <AnimatedNumber
             value={monthTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--gray-950)] mt-0.5"
           />
-          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes</div>
+          <div className="text-[11px] text-[var(--gray-400)]">{monthEvents} pagos · {uniqueClients} clientes con pagos</div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cobrado (real)</div>
           <AnimatedNumber
             value={confirmedTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--success)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--success)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">{confirmedCount} confirmados</div>
         </div>
@@ -616,14 +625,14 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
           <AnimatedNumber
             value={projectedTotal}
             format={fmtCurrency}
-            className="block text-xl font-semibold tabular-nums text-[var(--primary)] mt-0.5"
+            className="block text-xl font-bold tabular-nums text-[var(--primary)] mt-0.5"
           />
           <div className="text-[11px] text-[var(--gray-400)]">{monthEvents - confirmedCount} pendientes</div>
         </div>
         <div className="ml-auto min-w-[200px]">
           <div className="flex items-baseline justify-between">
             <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">% Avance</div>
-            <div className="text-xl font-semibold tabular-nums text-[var(--gray-950)]">
+            <div className="text-xl font-bold tabular-nums text-[var(--gray-950)]">
               {monthTotal > 0 ? (
                 <AnimatedNumber value={progressPct} format={(n) => `${n.toFixed(0)}%`} />
               ) : (
@@ -642,14 +651,14 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
       {/* ── Reconciliation Panel ─────────────────────── */}
       {bankStatements.length > 0 && reconSummary && (
-        <div className="bg-white border border-[var(--primary)]/20 rounded-xl overflow-hidden animate-card-in stagger-4">
+        <div className="bg-white border border-[var(--primary)]/20 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-4">
           <button
             onClick={() => setShowReconciliation(!showReconciliation)}
             className="w-full flex items-center justify-between px-5 py-3 hover:bg-[var(--gray-50)]/50 transition-colors"
           >
             <div className="flex items-center gap-2.5">
               <ArrowRightLeft className="w-4 h-4 text-[var(--primary)]" />
-              <span className="text-[13px] font-semibold text-[var(--gray-950)]">Reconciliación Bancaria</span>
+              <span className="text-[13px] font-bold text-[var(--gray-950)]">Reconciliación Bancaria</span>
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--primary-muted)] text-[var(--primary)] font-medium">
                 {(reconSummary.matchRate * 100).toFixed(0)}% cruzado
               </span>
@@ -659,36 +668,36 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
           {showReconciliation && (
             <div className="px-5 pb-4 pt-1 space-y-3">
               <div className="grid grid-cols-4 gap-4">
-                <div className="p-3 rounded-lg bg-[var(--success)]/5 border border-[var(--success)]/20">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--success)]/5 border border-[var(--success)]/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--success)]">Cruzados</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--success)]">{fmtCurrency(reconSummary.totalMatched)}</div>
+                  <div className="text-lg font-bold tabular-nums text-[var(--success)]">{fmtCurrency(reconSummary.totalMatched)}</div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.matchedCount} pago{reconSummary.matchedCount !== 1 ? 's' : ''} confirmados en banco</div>
                 </div>
-                <div className="p-3 rounded-lg bg-[var(--info)]/5 border border-[var(--info)]/20">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--info)]/5 border border-[var(--info)]/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <HelpCircle className="w-3.5 h-3.5 text-[var(--info)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--info)]">Probables</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--info)]">{fmtCurrency(reconSummary.totalLikely)}</div>
+                  <div className="text-lg font-bold tabular-nums text-[var(--info)]">{fmtCurrency(reconSummary.totalLikely)}</div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.likelyCount} pago{reconSummary.likelyCount !== 1 ? 's' : ''} con match parcial</div>
                 </div>
-                <div className="p-3 rounded-lg bg-[var(--warning)]/5 border border-[var(--warning)]/20">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--warning)]/5 border border-[var(--warning)]/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <AlertTriangle className="w-3.5 h-3.5 text-[var(--warning)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--warning)]">Sin cruzar</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--warning)]">{fmtCurrency(reconSummary.totalUnmatched)}</div>
+                  <div className="text-lg font-bold tabular-nums text-[var(--warning)]">{fmtCurrency(reconSummary.totalUnmatched)}</div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.unmatchedCount} pago{reconSummary.unmatchedCount !== 1 ? 's' : ''} sin movimiento bancario</div>
                 </div>
-                <div className="p-3 rounded-lg bg-[var(--gray-50)] border border-[var(--gray-200)]/60">
+                <div className="p-3 rounded-[var(--radius-md)] bg-[var(--gray-50)] border border-[var(--gray-200)]/60">
                   <div className="flex items-center gap-1.5 mb-1">
                     <Banknote className="w-3.5 h-3.5 text-[var(--gray-400)]" />
                     <span className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Abonos no asignados</span>
                   </div>
-                  <div className="text-lg font-semibold tabular-nums text-[var(--gray-700)]">
+                  <div className="text-lg font-bold tabular-nums text-[var(--gray-700)]">
                     {fmtCurrency(reconSummary.unmatchedBankAbonos.reduce((s, a) => s + a.importe, 0))}
                   </div>
                   <div className="text-[11px] text-[var(--gray-400)]">{reconSummary.unmatchedBankAbonos.length} depósito{reconSummary.unmatchedBankAbonos.length !== 1 ? 's' : ''} sin proyección</div>
@@ -724,11 +733,11 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                   <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)] mb-1.5">Depósitos bancarios sin proyección asociada</div>
                   <div className="space-y-1 max-h-32 overflow-y-auto">
                     {reconSummary.unmatchedBankAbonos.slice(0, 8).map((a, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-lg bg-[var(--gray-50)] text-[12px]">
+                      <div key={i} className="flex items-center gap-2 py-1.5 px-3 rounded-[var(--radius-md)] bg-[var(--gray-50)] text-[12px]">
                         <span className="text-[var(--gray-400)]">{a.fechaOperacion}</span>
                         <span className="text-[var(--gray-700)] truncate flex-1">{a.concepto}</span>
                         <span className="text-[var(--gray-400)]">{a.referencia}</span>
-                        <span className="font-semibold tabular-nums text-[var(--success)]">+{fmtCurrency(a.importe)}</span>
+                        <span className="font-bold tabular-nums text-[var(--success)]">+{fmtCurrency(a.importe)}</span>
                       </div>
                     ))}
                     {reconSummary.unmatchedBankAbonos.length > 8 && (
@@ -745,16 +754,16 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
       )}
 
       {/* Calendar (header oscuro + grid en una sola card) */}
-      <div key={`grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden animate-card-in stagger-5">
+      <div key={`grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-5">
         <div className="flex items-center justify-between px-4 py-3 bg-[var(--gray-950)]">
           <button
             onClick={prevMonth}
             aria-label="Mes anterior"
-            className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+            className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <h2 key={`${year}-${month}`} className="text-lg font-semibold text-white flex items-center gap-2 animate-slide-down">
+          <h2 key={`${year}-${month}`} className="text-lg font-bold text-white flex items-center gap-2 animate-slide-down">
             <CalendarRange className="w-4 h-4 text-white/60" />
             <span>{MONTH_NAMES[month]} {year}</span>
           </h2>
@@ -763,14 +772,14 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
               onClick={handleExport}
               title="Exportar mes"
               aria-label="Exportar mes"
-              className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+              className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={nextMonth}
               aria-label="Mes siguiente"
-              className="p-1.5 rounded-lg hover:bg-white/10 text-white/70 hover:text-white transition-colors"
+              className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
             >
               <ChevronRight className="w-5 h-5" />
             </button>
@@ -853,7 +862,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                     {d.getUTCDate()}
                   </span>
                   {isHoliday && isCurrentMonth && (
-                    <span className="text-[9px] uppercase tracking-wide font-semibold text-[var(--warning)] leading-none mt-0.5">Inhábil</span>
+                    <span className="text-[9px] uppercase tracking-wide font-bold text-[var(--warning)] leading-none mt-0.5">Inhábil</span>
                   )}
                   {dayEvents.length > 0 && (
                     <div className="flex items-center gap-0.5">
@@ -867,7 +876,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                 </div>
                 {dayTotal > 0 && isCurrentMonth && (
                   <div className="mt-1">
-                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
+                    <div className="rounded-md px-1.5 py-0.5 text-[11px] font-bold tabular-nums" style={{ backgroundColor: pillBg, color: pillFg }}>
                       {dayTotal >= 1_000_000 ? `${(dayTotal / 1_000_000).toFixed(1)}M` : dayTotal >= 1000 ? `${Math.round(dayTotal / 1000)}K` : fmtCurrency(dayTotal)}
                     </div>
                     {someConfirmed && (
@@ -895,12 +904,12 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
       {/* Day detail panel */}
       {selectedDay && selectedEvents.length > 0 && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 animate-slide-down">
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 animate-slide-down">
           <div className="flex justify-between items-center mb-3">
-            <h3 className="font-semibold text-[14px] text-[var(--gray-950)]">
+            <h3 className="font-bold text-[14px] text-[var(--gray-950)]">
               {new Date(selectedDay + 'T12:00:00').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
             </h3>
-            <span className="text-lg font-semibold tabular-nums text-[var(--success)]">
+            <span className="text-lg font-bold tabular-nums text-[var(--success)]">
               +{fmtCurrency(selectedTotal)}
             </span>
           </div>
@@ -923,7 +932,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                       ? 'bg-[var(--warning)]/10 border border-[var(--warning)]/30'
                       : 'bg-[var(--gray-50)] border border-transparent';
               return (
-                <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-lg ${rowBg} hover:brightness-95 transition-colors`}>
+                <div key={i} className={`flex items-center gap-2 py-2 px-3 rounded-[var(--radius-md)] ${rowBg} hover:brightness-95 transition-colors`}>
                   {/* Confirm / Unconfirm toggle */}
                   <button
                     onClick={() => {
@@ -957,12 +966,12 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                     <div className="flex items-center gap-1.5">
                       <span className="text-[13px] font-medium text-[var(--gray-950)] truncate">{c?.name ?? e.clientId}</span>
                       {isReconciled && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--success)]/15 text-[var(--success)] font-semibold uppercase tracking-wide flex-shrink-0">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--success)]/15 text-[var(--success)] font-bold uppercase tracking-wide flex-shrink-0">
                           Cruzado
                         </span>
                       )}
                       {isLikely && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--info)]/15 text-[var(--info)] font-semibold uppercase tracking-wide flex-shrink-0">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--info)]/15 text-[var(--info)] font-bold uppercase tracking-wide flex-shrink-0">
                           Probable
                         </span>
                       )}
@@ -992,7 +1001,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
                     )}
                   </div>
                   <div className="text-right ml-3">
-                    <div className={`text-[13px] font-semibold tabular-nums ${isConfirmed || isReconciled ? 'text-[var(--success)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(e.amount)}</div>
+                    <div className={`text-[13px] font-bold tabular-nums ${isConfirmed || isReconciled ? 'text-[var(--success)]' : 'text-[var(--gray-950)]'}`}>{fmtCurrency(e.amount)}</div>
                     {recon?.actualAmount && Math.abs((recon.actualAmount ?? 0) - e.amount) > 0.01 && (
                       <div className={`text-[10px] font-medium tabular-nums ${(recon.amountDelta ?? 0) > 0 ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
                         Banco: {fmtCurrency(recon.actualAmount)} ({(recon.amountDelta ?? 0) > 0 ? '+' : ''}{fmtCurrency(recon.amountDelta ?? 0)})
@@ -1009,8 +1018,8 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
 
       {/* Weekly breakdown */}
       {Object.keys(weeklyTotals).length > 0 && (
-        <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 hover-lift animate-card-in">
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 hover-lift animate-card-in">
+          <h3 className="text-[13px] font-bold text-[var(--gray-950)] mb-3">Cobranza semanal</h3>
           <div className="space-y-2">
             {Object.entries(weeklyTotals).sort(([a], [b]) => a.localeCompare(b)).map(([week, total], i) => {
               const pct = monthTotal ? (total / monthTotal) * 100 : 0;
@@ -1044,9 +1053,9 @@ function MonthView({ events, total }: { events: CollectionEvent[]; total: number
   const max = Math.max(...monthly, 1);
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 hover-lift animate-card-in stagger-4">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-5 hover-lift animate-card-in stagger-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Entrada de efectivo por mes</h3>
+        <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Entrada de efectivo por mes</h3>
         <span className="text-[12px] text-[var(--gray-400)]">
           Barra = monto del mes · % = participación sobre el total anual
         </span>
@@ -1080,7 +1089,7 @@ function MonthView({ events, total }: { events: CollectionEvent[]; total: number
       </div>
       <div className="mt-4 pt-3 border-t border-[var(--gray-200)]/40 flex justify-between text-[13px]">
         <span className="text-[var(--gray-400)]">Total anual</span>
-        <AnimatedNumber value={total} format={fmtCurrency} className="font-semibold tabular-nums" />
+        <AnimatedNumber value={total} format={fmtCurrency} className="font-bold tabular-nums" />
       </div>
     </div>
   );
@@ -1112,9 +1121,9 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
   const maxTotal = rows[0]?.total ?? 1;
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden hover-lift animate-card-in stagger-5">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden hover-lift animate-card-in stagger-5">
       <div className="px-5 py-3 border-b border-[var(--gray-200)]/40 flex items-center justify-between">
-        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Ranking por cliente</h3>
+        <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Ranking por cliente</h3>
         <span className="text-[12px] text-[var(--gray-400)]">Ordenado por monto proyectado</span>
       </div>
       <table className="w-full text-[13px]">
@@ -1133,7 +1142,7 @@ function ClientView({ events, clients, total }: { events: CollectionEvent[]; cli
             const share = total ? (rowTotal / total) * 100 : 0;
             const delay = `${Math.min(i, 20) * 25}ms`;
             return (
-              <tr key={c.id} className="border-t border-[var(--gray-200)]/40 hover-row animate-slide-up" style={{ animationDelay: delay }}>
+              <tr key={c.id} className="cv-row border-t border-[var(--gray-200)]/40 hover-row animate-slide-up" style={{ animationDelay: delay }}>
                 <td className="px-5 py-2.5">
                   <div className="flex items-center gap-2">
                     {c.factoraje && (
@@ -1186,10 +1195,10 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
     a.clientId.localeCompare(b.clientId),
   );
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden hover-lift">
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden hover-lift">
       <div className="px-4 py-3 border-b border-[var(--gray-200)]/40 flex items-center justify-between">
         <div>
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Detalle de eventos</h3>
+          <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Detalle de eventos</h3>
           <p className="text-[12px] text-[var(--gray-400)] mt-0.5">
             Secuencia auditada: fecha de factura, fecha teórica por crédito y fecha real de cobro.
           </p>
@@ -1214,7 +1223,7 @@ function DetailView({ events, clients }: { events: CollectionEvent[]; clients: C
             {sorted.slice(0, 1000).map((e, i) => {
               const c = byId.get(e.clientId);
               return (
-                <tr key={i} className="border-t border-[var(--gray-200)]/40 hover-row">
+                <tr key={i} className="cv-row border-t border-[var(--gray-200)]/40 hover-row">
                   <td className="px-4 py-2">{c?.name ?? e.clientId}</td>
                   <td className="px-4 py-2 text-[var(--gray-400)]">{e.invoiceDate}</td>
                   <td className="px-4 py-2 text-[var(--gray-400)]">{e.theoreticalDate}</td>
@@ -1269,112 +1278,142 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
+  color: string;
+  rgb: string;
+  textClass: string;
+  borderClass: string;
+}> = {
+  BANK_MATCHED: {
+    color: '#10b981',
+    rgb: '16,185,129',
+    textClass: 'text-[var(--success)]',
+    borderClass: 'border-[var(--success)]/30',
+  },
+  BANK_UNMATCHED: {
+    color: '#f59e0b',
+    rgb: '245,158,11',
+    textClass: 'text-[var(--warning,_#d97706)]',
+    borderClass: 'border-[var(--warning,_#f59e0b)]/30',
+  },
+  JDE_PAID_UNMATCHED: {
+    color: '#2563eb',
+    rgb: '37,99,235',
+    textClass: 'text-[var(--primary)]',
+    borderClass: 'border-[var(--primary)]/30',
+  },
+  JDE_OPEN_PROJECTED: {
+    color: '#7c3aed',
+    rgb: '124,58,237',
+    textClass: 'text-[#6d28d9]',
+    borderClass: 'border-[#7c3aed]/30',
+  },
+  CLIENT_PROJECTED: {
+    color: '#64748b',
+    rgb: '100,116,139',
+    textClass: 'text-[var(--gray-500)]',
+    borderClass: 'border-[var(--gray-300)]',
+  },
+};
+
+function PaymentLagBadge({ lag, expected }: { lag: number; expected?: string }) {
+  if (lag === 0) {
+    return (
+      <span
+        title={expected ? `Esperado ${expected}` : undefined}
+        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--success)]/10 text-[var(--success)]"
+      >
+        Puntual
+      </span>
+    );
+  }
+  const late = lag > 0;
+  const cls = late
+    ? 'bg-[var(--danger)]/10 text-[var(--danger)]'
+    : 'bg-[var(--primary)]/10 text-[var(--primary)]';
+  const sign = late ? '+' : '−';
+  const word = late ? 'tarde' : 'temprano';
+  return (
+    <span
+      title={expected ? `Esperado ${expected}` : undefined}
+      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}
+    >
+      {sign}{Math.abs(lag)}d {word}
+    </span>
+  );
+}
+
+function CollectionSourceBadge({ source }: { source: CollectionCalendarEventSource }) {
+  const style = COLLECTION_CALENDAR_SOURCE_STYLES[source];
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border bg-white text-[11px] font-medium ${style.textClass} ${style.borderClass}`}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: style.color }} />
+      {COLLECTION_CALENDAR_SOURCE_LABELS[source]}
+    </span>
+  );
+}
+
+function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: string): boolean {
+  if (ciaFilter === 'all') return true;
+  // Las proyecciones vienen del catalogo de clientes y no siempre tienen cia
+  // JDE; se mantienen visibles para que el calendario futuro no desaparezca
+  // al filtrar una compania.
+  if (event.source === 'CLIENT_PROJECTED') return true;
+  return event.cia === ciaFilter;
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────
-// CobranzaRealCalendar — Calendario de ingresos reales (ABONOs ↔ cobranza)
+// CobranzaRealCalendar — calendario unico de banco + JDE + CXC + proyeccion.
 //
-// Vista principal del modo "Real". Muestra el mes activo en grid Lun-Dom
-// con cada día coloreado por el monto total recibido. Click en un día
-// abre un panel lateral con la lista de ABONOs y, cuando aplica, las
-// facturas JDE que ese ABONO cobró.
-//
-// Filtros:
-//   - ciaFilter (heredado del padre): aplica al mismo set de ABONOs.
-//   - traspasos internos: ya excluidos por el motor.
-//
-// Heat coloring:
-//   - Tonos de verde de claro a oscuro proporcional al monto del día.
-//   - Un día sin abonos queda blanco.
-//
-// Las facturas se identifican vía `abonoEnrichmentIndex` indirecto: la
-// `reconciliation` contiene `abonoEnrichments[]` con la lista de facturas
-// que cubrió cada ABONO (1 para match individual, 2-4 para subset).
+// El input ya viene normalizado por `collectionCalendarEngine`; esta vista
+// solo filtra, pinta barras por fuente y expone el drill-down operativo.
 // ─────────────────────────────────────────────────────────────────────────
 function CobranzaRealCalendar({
-  bankStatements,
-  reconciliation,
+  calendar,
   ciaFilter,
+  bankCoverage,
+  onEnsureBankCoverage,
+  bankCoverageLoading,
 }: {
-  bankStatements: BankAccountStatement[];
-  reconciliation: RealReconciliationResult;
+  calendar: BuildCollectionCalendarResult;
   ciaFilter: string;
+  bankCoverage?: RealReconciliationBankCoverage;
+  onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
+  bankCoverageLoading?: boolean;
 }) {
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
-  // Indexar enrichments por movement key para lookup O(1).
-  const enrichmentByMovementKey = useMemo(() => {
-    const m = new Map<string, typeof reconciliation.abonoEnrichments[number]>();
-    for (const e of reconciliation.abonoEnrichments) m.set(e.movementKey, e);
-    return m;
-  }, [reconciliation.abonoEnrichments]);
-
-  // Recolectar todos los ABONOs no-internos del mes (los traspasos internos
-  // ya están excluidos en el enrichmentIndex; pero aquí filtramos a partir
-  // de los enrichments para mostrar exactamente lo que el motor consideró).
-  const monthAbonos = useMemo(() => {
+  const monthEvents = useMemo(() => {
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}`;
-    const list: Array<{
-      key: string;
-      cia: string;
-      cuenta: string;
-      fecha: string;
-      importe: number;
-      concepto: string;
-      referencia: string;
-      facturas: NonNullable<typeof reconciliation.abonoEnrichments[number]['facturas']>;
-      matched: boolean;
-      matchTier?: typeof reconciliation.abonoEnrichments[number]['matchTier'];
-    }> = [];
-    for (const e of reconciliation.abonoEnrichments) {
-      if (!e.fechaOperacion.startsWith(prefix)) continue;
-      if (ciaFilter !== 'all' && e.cia && e.cia !== ciaFilter) continue;
-      list.push({
-        key: e.movementKey,
-        cia: e.cia,
-        cuenta: e.cuenta,
-        fecha: e.fechaOperacion,
-        importe: e.importe,
-        concepto: e.concepto,
-        referencia: e.referencia,
-        facturas: e.facturas ?? [],
-        matched: e.status === 'factura-cobrada',
-        matchTier: e.matchTier,
-      });
-    }
-    return list;
-  }, [reconciliation.abonoEnrichments, year, month, ciaFilter]);
+    return calendar.events.filter(event => {
+      if (!event.date.startsWith(prefix)) return false;
+      if (!collectionEventMatchesCia(event, ciaFilter)) return false;
+      if (event.source === 'BANK_UNMATCHED') return false;
+      return true;
+    });
+  }, [calendar.events, year, month, ciaFilter]);
 
-  // Bucket por día.
   const byDay = useMemo(() => {
-    const map = new Map<string, typeof monthAbonos>();
-    for (const a of monthAbonos) {
-      const list = map.get(a.fecha) ?? [];
-      list.push(a);
-      map.set(a.fecha, list);
+    const map = new Map<string, CollectionCalendarEvent[]>();
+    for (const event of monthEvents) {
+      const list = map.get(event.date) ?? [];
+      list.push(event);
+      map.set(event.date, list);
     }
     return map;
-  }, [monthAbonos]);
+  }, [monthEvents]);
 
-  const totalMes = monthAbonos.reduce((s, a) => s + a.importe, 0);
-  const matchedMes = monthAbonos.filter(a => a.matched).reduce((s, a) => s + a.importe, 0);
-  const pctMes = totalMes > 0 ? (matchedMes / totalMes) * 100 : 0;
-  void enrichmentByMovementKey; // reservado para drill-down futuro
-
-  // Calendar grid (Lun-Sun).
   const firstDay = new Date(Date.UTC(year, month, 1));
   const lastDay = new Date(Date.UTC(year, month + 1, 0));
-  const startPad = (firstDay.getUTCDay() + 6) % 7; // 0=Lunes
+  const startPad = (firstDay.getUTCDay() + 6) % 7;
   const days: Date[] = [];
   for (let i = -startPad; i < lastDay.getUTCDate() + (7 - ((lastDay.getUTCDay() + 6) % 7 + 1) % 7); i++) {
     days.push(new Date(Date.UTC(year, month, i + 1)));
   }
   while (days.length % 7 !== 0) days.push(new Date(Date.UTC(year, month, days.length - startPad + 1)));
-
-  const maxDayMonto = Math.max(
-    ...Array.from(byDay.values()).map(list => list.reduce((s, a) => s + a.importe, 0)),
-    1,
-  );
 
   const prevMonth = () => {
     if (month === 0) { setYear(year - 1); setMonth(11); }
@@ -1393,110 +1432,175 @@ function CobranzaRealCalendar({
     timeZone: 'UTC',
   });
 
-  const selectedAbonos = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
-  const selectedTotal = selectedAbonos.reduce((s, a) => s + a.importe, 0);
-  const selectedMatched = selectedAbonos.filter(a => a.matched).length;
+  const selectedEvents = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
+  const selectedTotal = selectedEvents.reduce((s, event) => s + event.amount, 0);
+
+  useEffect(() => {
+    if (selectedDay && !byDay.has(selectedDay)) setSelectedDay(null);
+  }, [selectedDay, byDay]);
+
+  // Totales semanales (lunes-domingo). Replica el bloque "Cobranza
+  // semanal" del calendario legacy. Si el mes no tiene eventos
+  // visibles la sección no se renderiza.
+  const weeklyTotals = useMemo(() => {
+    const weeks: Record<string, { real: number; projected: number }> = {};
+    for (const [date, evts] of byDay.entries()) {
+      const d = new Date(date + 'T12:00:00');
+      const weekStart = new Date(d);
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+      const key = weekStart.toISOString().slice(0, 10);
+      const slot = weeks[key] ?? { real: 0, projected: 0 };
+      for (const e of evts) {
+        if (e.source === 'BANK_MATCHED' || e.source === 'JDE_PAID_UNMATCHED') {
+          slot.real += e.amount;
+        } else if (
+          e.source === 'JDE_OPEN_PROJECTED'
+          || e.source === 'CLIENT_PROJECTED'
+        ) {
+          slot.projected += e.amount;
+        }
+      }
+      weeks[key] = slot;
+    }
+    return weeks;
+  }, [byDay]);
+
+  const todayISO = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
 
   return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
-      {/* Header: navegador y resumen del mes */}
-      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-1">
+    <div className="space-y-4">
+      {/* ── Calendario (header oscuro + chips + grid + detalle) ──
+          Una sola card con la cabecera navy del legacy, la fila de
+          chips de fuente con estilo legacy (primary cuando activo),
+          el grid de celdas verticales y el panel de detalle. */}
+      <div key={`real-grid-${year}-${month}`} className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden animate-card-in stagger-5">
+        <div className="flex items-center justify-between px-4 py-3 bg-[var(--gray-950)]">
           <button
             onClick={prevMonth}
-            className="w-7 h-7 rounded-md hover:bg-white border border-[var(--gray-200)] flex items-center justify-center text-[var(--gray-500)]"
             aria-label="Mes anterior"
+            className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
-            <ChevronLeft className="w-4 h-4" />
+            <ChevronLeft className="w-5 h-5" />
           </button>
+          <h2 key={`${year}-${month}`} className="text-lg font-bold text-white flex items-center gap-2 capitalize animate-slide-down">
+            <CalendarRange className="w-4 h-4 text-white/60" />
+            <span>{monthLabel}</span>
+          </h2>
           <button
             onClick={nextMonth}
-            className="w-7 h-7 rounded-md hover:bg-white border border-[var(--gray-200)] flex items-center justify-center text-[var(--gray-500)]"
             aria-label="Mes siguiente"
+            className="p-1.5 rounded-[var(--radius-md)] hover:bg-white/10 text-white/70 hover:text-white transition-colors"
           >
-            <ChevronRight className="w-4 h-4" />
+            <ChevronRight className="w-5 h-5" />
           </button>
         </div>
-        <span className="text-[14px] font-semibold text-[var(--gray-950)] capitalize">
-          {monthLabel}
-        </span>
-        <div className="ml-auto flex items-center gap-6 text-[12px]">
-          <div>
-            <span className="text-[var(--gray-400)]">Ingresos del mes: </span>
-            <span className="font-semibold text-[var(--success)] tabular-nums">{fmtCurrency(totalMes)}</span>
-          </div>
-          <div>
-            <span className="text-[var(--gray-400)]">Cruzado: </span>
-            <span className={`font-semibold tabular-nums ${pctMes >= 95 ? 'text-[var(--success)]' : pctMes >= 70 ? 'text-[var(--warning,_#d97706)]' : 'text-[var(--danger)]'}`}>
-              {pctMes.toFixed(1)}%
-            </span>
-          </div>
-          <div>
-            <span className="text-[var(--gray-400)]">Abonos: </span>
-            <span className="font-semibold text-[var(--gray-950)] tabular-nums">{monthAbonos.length}</span>
-          </div>
-        </div>
-      </div>
 
-      {/* Grid del calendario */}
-      <div className="p-4">
-        {/* Headers Lun-Dom */}
-        <div className="grid grid-cols-7 gap-1 mb-1">
-          {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
-            <div key={d} className="text-[10px] uppercase text-center text-[var(--gray-400)] font-semibold py-1">{d}</div>
+        {/* Leyenda — explica los colores que aparecen en cada día. */}
+        <div className="px-4 py-2.5 border-b border-[var(--gray-200)]/60 bg-white flex items-center gap-4 text-[11px] text-[var(--gray-500)] flex-wrap">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#2563eb]" />
+            <span><strong className="text-[var(--gray-950)]">Ingreso</strong> · cruzado con banco</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#7c3aed]" />
+            <span><strong className="text-[var(--gray-950)]">Proyección</strong> · esperado sin cruce</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm border border-[var(--gray-300)] bg-white" />
+            <span><strong className="text-[var(--gray-950)]">Δ</strong> · ingreso − proyección</span>
+          </span>
+        </div>
+
+        {/* Cabecera de días de la semana — fondo surface-alt como legacy */}
+        <div className="grid grid-cols-7 border-b border-[var(--gray-200)]/40">
+          {DOW_HEADERS.map(d => (
+            <div key={d} className="px-2 py-2 text-center text-[11px] font-medium text-[var(--gray-400)] bg-[var(--surface-alt)] uppercase tracking-wide">{d}</div>
           ))}
         </div>
-        {/* Day cells */}
-        <div className="grid grid-cols-7 gap-1">
+
+        {/* Grid de días — celdas verticales min-h-[84px] tipo agenda
+            (NO aspect-square). Mantiene aria-label, breakdown de
+            fuente con dots y tinte por fuente dominante. */}
+        <div className="grid grid-cols-7">
           {days.map((d, i) => {
             const inMonth = d.getUTCMonth() === month;
             const iso = d.toISOString().slice(0, 10);
-            const dayAbonos = byDay.get(iso) ?? [];
-            const dayTotal = dayAbonos.reduce((s, a) => s + a.importe, 0);
-            const dayMatched = dayAbonos.filter(a => a.matched).length;
+            const dayEvents = byDay.get(iso) ?? [];
+            const dayTotal = dayEvents.reduce((s, event) => s + event.amount, 0);
+            const dayRealTotal = dayEvents
+              .filter(event =>
+                event.source === 'BANK_MATCHED'
+                || event.source === 'JDE_PAID_UNMATCHED',
+              )
+              .reduce((s, event) => s + event.amount, 0);
+            const dayProjectedTotal = dayEvents
+              .filter(event =>
+                event.source === 'JDE_OPEN_PROJECTED'
+                || event.source === 'CLIENT_PROJECTED',
+              )
+              .reduce((s, event) => s + event.amount, 0);
+            const dayDiff = dayRealTotal - dayProjectedTotal;
             const isSelected = selectedDay === iso;
-            // Heat: 0..1 proporcional al maxDayMonto. Verde claro → oscuro.
-            const heat = dayTotal / maxDayMonto;
-            const bg = dayTotal > 0
-              ? `rgba(16, 185, 129, ${0.08 + heat * 0.5})` // emerald-500 with alpha
-              : 'transparent';
+            const isToday = iso === todayISO;
+            const isWeekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
             return (
               <button
                 key={i}
-                onClick={() => setSelectedDay(isSelected ? null : iso)}
+                onClick={() => dayEvents.length > 0 && setSelectedDay(isSelected ? null : iso)}
                 disabled={!inMonth}
-                className={`
-                  relative aspect-square rounded-md border text-left p-1.5 flex flex-col justify-between
-                  ${inMonth ? 'border-[var(--gray-200)]' : 'border-transparent opacity-30'}
-                  ${isSelected ? 'ring-2 ring-[var(--primary)] border-[var(--primary)]' : 'hover:border-[var(--primary)]'}
-                  ${dayTotal > 0 ? 'cursor-pointer' : 'cursor-default'}
+                aria-label={`${iso}: ${dayEvents.length} evento${dayEvents.length !== 1 ? 's' : ''}${dayTotal > 0 ? ` por ${fmtCurrency(dayTotal)}` : ''}`}
+                className={`min-h-[84px] border-b border-r border-[var(--gray-200)]/30 p-1.5 text-left transition-colors duration-150 flex flex-col
+                  ${!inMonth ? 'bg-[var(--surface-alt)] opacity-30' : ''}
+                  ${isWeekend && inMonth ? 'bg-[var(--surface-alt)]' : ''}
+                  ${isSelected ? 'ring-2 ring-[var(--primary)] ring-inset' : ''}
+                  ${isToday && !isSelected ? 'ring-2 ring-[var(--success)] ring-inset' : ''}
+                  ${inMonth && dayEvents.length > 0 ? 'hover:bg-[var(--gray-50)]/60 cursor-pointer' : 'cursor-default'}
                 `}
-                style={{ backgroundColor: bg }}
               >
-                <div className="flex items-center justify-between">
-                  <span className={`text-[11px] tabular-nums ${inMonth ? 'text-[var(--gray-950)] font-medium' : 'text-[var(--gray-300)]'}`}>
+                <div className="flex justify-between items-start">
+                  <span className={`text-[12px] font-medium ${
+                    isToday && inMonth
+                      ? 'bg-[var(--success)] text-white w-5 h-5 rounded-full flex items-center justify-center text-[11px]'
+                      : inMonth ? 'text-[var(--gray-950)]' : 'text-[var(--gray-200)]'
+                  }`}>
                     {d.getUTCDate()}
                   </span>
-                  {dayAbonos.length > 0 && (
-                    <span className="text-[9px] text-[var(--gray-500)] tabular-nums">{dayAbonos.length}</span>
+                  {dayEvents.length > 0 && (
+                    <span className="text-[10px] text-[var(--gray-400)] tabular-nums">{dayEvents.length}</span>
                   )}
                 </div>
-                {dayTotal > 0 && (
-                  <div className="text-[10px] tabular-nums font-semibold text-[var(--gray-950)] truncate">
-                    {fmtCompact(dayTotal)}
-                  </div>
-                )}
-                {dayAbonos.length > 0 && (
-                  <div className="flex items-center gap-0.5">
-                    {dayMatched === dayAbonos.length && dayAbonos.length > 0 ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" title={`${dayMatched} cruzados`} />
-                    ) : dayMatched > 0 ? (
-                      <>
-                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" title={`${dayMatched} cruzados`} />
-                        <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning,_#f59e0b)]" title={`${dayAbonos.length - dayMatched} sin factura`} />
-                      </>
-                    ) : (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning,_#f59e0b)]" title="Ningún abono cruzó" />
+                {dayTotal > 0 && inMonth && (
+                  <div className="mt-1 space-y-0.5">
+                    {dayRealTotal > 0 && (
+                      <div
+                        className="rounded-md bg-[#dbeafe] text-[#1d4ed8] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
+                        title="Ingreso real (cruzado con banco o JDE pagada)"
+                      >
+                        Ing. {fmtCompact(dayRealTotal)}
+                      </div>
+                    )}
+                    {dayProjectedTotal > 0 && (
+                      <div
+                        className="rounded-md bg-[#ede9fe] text-[#5b21b6] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
+                        title="Proyección esperada sin cruce con banco"
+                      >
+                        Proy. {fmtCompact(dayProjectedTotal)}
+                      </div>
+                    )}
+                    {(dayRealTotal > 0 || dayProjectedTotal > 0) && iso <= todayISO && (
+                      <div
+                        className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit ${
+                          dayDiff >= 0
+                            ? 'bg-[#dcfce7] text-[#15803d]'
+                            : 'bg-[#fee2e2] text-[#b91c1c]'
+                        }`}
+                        title="Diferencia entre ingreso real y proyección"
+                      >
+                        Δ {dayDiff >= 0 ? '+' : '−'}{fmtCompact(Math.abs(dayDiff))}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1504,310 +1608,164 @@ function CobranzaRealCalendar({
             );
           })}
         </div>
-      </div>
 
-      {/* Panel del día seleccionado */}
-      {selectedDay && (
-        <div className="border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)]">
-          <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-            <span className="text-[13px] font-semibold text-[var(--gray-950)]">
-              {new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </span>
-            <span className="text-[11px] text-[var(--gray-500)]">
-              {selectedAbonos.length} abono{selectedAbonos.length !== 1 ? 's' : ''} · {fmtCurrency(selectedTotal)} · {selectedMatched} con factura
-            </span>
-            <button
-              onClick={() => setSelectedDay(null)}
-              className="ml-auto text-[12px] text-[var(--primary)] hover:underline"
-            >
-              Cerrar
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12px]">
-              <thead className="text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
-                <tr>
-                  <th className="text-left px-3 py-2">Cía / Cuenta</th>
-                  <th className="text-left px-3 py-2">Concepto</th>
-                  <th className="text-left px-3 py-2">Referencia</th>
-                  <th className="text-right px-3 py-2">Importe</th>
-                  <th className="text-left px-3 py-2">Cruce</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedAbonos.map(a => (
-                  <tr key={a.key} className="border-t border-[var(--gray-100)]">
-                    <td className="px-3 py-2">
-                      <div className="text-[var(--gray-950)] tabular-nums">{a.cia || '—'}</div>
-                      <div className="text-[10px] text-[var(--gray-400)] tabular-nums">{a.cuenta}</div>
-                    </td>
-                    <td className="px-3 py-2 max-w-[260px] truncate" title={a.concepto}>
-                      {a.concepto || '—'}
-                    </td>
-                    <td className="px-3 py-2">
-                      <code className="font-mono text-[11px] text-[var(--gray-500)]">{a.referencia || '—'}</code>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--success)]">
-                      {fmtCurrency(a.importe)}
-                    </td>
-                    <td className="px-3 py-2">
-                      {a.matched && a.facturas.length > 0 ? (
-                        <div className="space-y-0.5">
-                          {a.facturas.slice(0, 3).map((f, i) => (
-                            <div key={i} className="flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3 text-[var(--success)] flex-shrink-0" />
-                              <span className="text-[11px] text-[var(--gray-950)] tabular-nums">{f.noFactura}</span>
-                              <span className="text-[10px] text-[var(--gray-400)] truncate max-w-[180px]" title={f.nombreCliente}>· {f.nombreCliente}</span>
-                            </div>
-                          ))}
-                          {a.facturas.length > 3 && (
-                            <div className="text-[10px] text-[var(--gray-400)]">+{a.facturas.length - 3} factura{a.facturas.length - 3 !== 1 ? 's' : ''} más</div>
+        {/* Detalle del día — mismo card, look legacy */}
+        {selectedDay && (
+          <div className="border-t border-[var(--gray-200)]/60 bg-[var(--surface-alt)] animate-slide-down">
+            <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
+              <span className="text-[13px] font-bold text-[var(--gray-950)] capitalize">
+                {new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}
+              </span>
+              <span className="text-[11px] text-[var(--gray-500)]">
+                {selectedEvents.length} evento{selectedEvents.length !== 1 ? 's' : ''} · {fmtCurrency(selectedTotal)}
+              </span>
+              <button
+                onClick={() => setSelectedDay(null)}
+                className="ml-auto text-[12px] text-[var(--primary)] hover:underline"
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead className="text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
+                  <tr>
+                    <th className="text-left px-3 py-2">Fuente del dato</th>
+                    <th className="text-left px-3 py-2">Cliente / factura</th>
+                    <th className="text-left px-3 py-2">Fecha / regla</th>
+                    <th className="text-left px-3 py-2">Origen / cruce</th>
+                    <th className="text-right px-3 py-2">Importe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedEvents.map(event => (
+                    <tr key={event.id} className="cv-row border-t border-[var(--gray-100)]">
+                      <td className="px-3 py-2">
+                        <CollectionSourceBadge source={event.source} />
+                        <div className="text-[10px] text-[var(--gray-400)] mt-1">{event.statusLabel}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-[var(--gray-950)] truncate max-w-[260px]" title={event.clientName}>
+                          {event.clientName}
+                        </div>
+                        <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
+                          {event.cia ? `${event.cia} · ` : ''}
+                          {event.noCliente ? `#${event.noCliente}` : event.clientId ?? 'Sin cliente'}
+                          {event.noFactura ? ` · Fact. ${event.noFactura}` : ''}
+                        </div>
+                        {event.facturas.length > 1 && (
+                          <div className="text-[10px] text-[var(--gray-400)] mt-0.5">
+                            {event.facturas.length} facturas cruzadas
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="tabular-nums text-[var(--gray-950)] flex items-center gap-1.5">
+                          <span>{event.date}</span>
+                          {typeof event.paymentLagDays === 'number' && (
+                            <PaymentLagBadge lag={event.paymentLagDays} expected={event.expectedPayDate} />
                           )}
                         </div>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--warning,_#d97706)]">
-                          <AlertTriangle className="w-3 h-3" /> Sin factura
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {selectedAbonos.length === 0 && (
-                  <tr><td colSpan={5} className="text-center text-[11px] text-[var(--gray-400)] py-6">Sin abonos este día.</td></tr>
-                )}
-              </tbody>
-            </table>
+                        <div className="text-[10px] text-[var(--gray-500)] max-w-[300px]">{event.dateReason}</div>
+                        <div className="text-[10px] text-[var(--gray-400)] max-w-[300px]">{event.ruleApplied}</div>
+                      </td>
+                      <td className="px-3 py-2">
+                        {event.bank ? (
+                          <div className="space-y-0.5">
+                            <div className="text-[var(--gray-950)] tabular-nums">{event.bank.cia} · {event.bank.cuenta}</div>
+                            <div className="text-[10px] text-[var(--gray-400)] max-w-[260px] truncate" title={event.bank.concepto}>{event.bank.concepto || 'Sin concepto'}</div>
+                            <code className="font-mono text-[10px] text-[var(--gray-500)]">{event.bank.referencia || 'Sin referencia'}</code>
+                            {typeof event.confidence === 'number' && (
+                              <div className="text-[10px] text-[var(--gray-400)]">Confianza {(event.confidence * 100).toFixed(0)}%</div>
+                            )}
+                          </div>
+                        ) : event.projected ? (
+                          <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura JDE emitida.</span>
+                        ) : event.source === 'JDE_PAID_UNMATCHED' ? (
+                          <span className="text-[11px] text-[var(--gray-500)]">JDE reporta Fecha_Pago; no se requiere banco cargado.</span>
+                        ) : (
+                          <span className="text-[11px] text-[var(--gray-500)]">Factura JDE emitida pendiente de cobro.</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums font-bold text-[var(--gray-950)]">
+                        {fmtCurrency(event.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                  {selectedEvents.length === 0 && (
+                    <tr><td colSpan={5} className="text-center text-[11px] text-[var(--gray-400)] py-6">Sin cobranza este día.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// ClientAgingTable — Top clientes con saldo abierto
-//
-// Aging por cliente (no por factura): agrupa las facturas filtradas por
-// cliente, calcula el saldo total + buckets de antigüedad (por vencer,
-// 1-30, 31-60, 61-90, 90+), y muestra el % cruzado con banco para cada
-// cliente. Las top 20 facturas individuales siguen visibles abajo en la
-// tabla raw — esta tabla es para el primer scan visual.
-//
-// Cuando hay datos de bancos cargados, también muestra una columna
-// "Cobrado banco" con el porcentaje de facturas del cliente que cruzaron
-// — si un cliente tiene 4 facturas y 3 cruzaron, dice "75%".
-// ─────────────────────────────────────────────────────────────────────────
-function ClientAgingTable({
-  records,
-  matchByFactura,
-  bankActive,
-}: {
-  records: CobranzaRecord[];
-  matchByFactura: Map<string, RealReconciliationMatch>;
-  bankActive: boolean;
-}) {
-  // Agrupar por cliente. Usamos `${cia}::${noCliente}` para no fusionar el
-  // mismo cliente entre dos compañías (caso real: HOMEX puede facturar a
-  // Senda Norte y Senda Sur — son dos cuentas diferentes en JDE).
-  const aging = useMemo(() => {
-    type Bucket = { saldo: number; bruto: number };
-    type Aging = {
-      key: string;
-      cia: string;
-      noCliente: string;
-      nombreCliente: string;
-      saldoTotal: number;
-      brutoTotal: number;
-      facturasTotal: number;
-      facturasCobradas: number;
-      porVencer: Bucket;
-      v1_30: Bucket;
-      v31_60: Bucket;
-      v61_90: Bucket;
-      mas90: Bucket;
-    };
-    const map = new Map<string, Aging>();
-    for (const r of records) {
-      const key = `${r.cia}::${r.noCliente}`;
-      let a = map.get(key);
-      if (!a) {
-        a = {
-          key, cia: r.cia, noCliente: r.noCliente, nombreCliente: r.nombreCliente,
-          saldoTotal: 0, brutoTotal: 0, facturasTotal: 0, facturasCobradas: 0,
-          porVencer: { saldo: 0, bruto: 0 },
-          v1_30: { saldo: 0, bruto: 0 },
-          v31_60: { saldo: 0, bruto: 0 },
-          v61_90: { saldo: 0, bruto: 0 },
-          mas90: { saldo: 0, bruto: 0 },
-        };
-        map.set(key, a);
-      }
-      a.saldoTotal += r.importePendientePesos;
-      a.brutoTotal += r.importeBrutoPesos;
-      a.facturasTotal += 1;
-      const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
-      if (m?.status === 'cobrada-banco') a.facturasCobradas += 1;
-
-      const bucket = r.diasVencida <= 0 ? a.porVencer
-        : r.diasVencida <= 30 ? a.v1_30
-        : r.diasVencida <= 60 ? a.v31_60
-        : r.diasVencida <= 90 ? a.v61_90
-        : a.mas90;
-      bucket.saldo += r.importePendientePesos;
-      bucket.bruto += r.importeBrutoPesos;
-    }
-    return Array.from(map.values()).sort((a, b) => b.saldoTotal - a.saldoTotal);
-  }, [records, matchByFactura]);
-
-  const top = aging.slice(0, 20);
-  const restoSaldo = aging.slice(20).reduce((s, a) => s + a.saldoTotal, 0);
-
-  if (top.length === 0) return null;
-
-  const maxSaldo = Math.max(...top.map(a => a.saldoTotal), 1);
-
-  return (
-    <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
-      <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
-        <Banknote className="w-4 h-4 text-[var(--gray-400)]" />
-        <span className="text-[13px] font-semibold text-[var(--gray-950)]">
-          Top {Math.min(20, aging.length)} clientes — antigüedad de saldo
-        </span>
-        {aging.length > 20 && (
-          <span className="text-[11px] text-[var(--gray-400)] ml-auto">
-            +{aging.length - 20} clientes más · {fmtCurrency(restoSaldo)}
-          </span>
         )}
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-[12px]">
-          <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
-            <tr>
-              <th className="text-left px-3 py-2">Cliente</th>
-              <th className="text-right px-3 py-2">Saldo</th>
-              <th className="text-left px-3 py-2 w-32">Distribución</th>
-              <th className="text-right px-3 py-2">Por vencer</th>
-              <th className="text-right px-3 py-2">1–30</th>
-              <th className="text-right px-3 py-2">31–60</th>
-              <th className="text-right px-3 py-2">61–90</th>
-              <th className="text-right px-3 py-2">90+</th>
-              <th className="text-right px-3 py-2">Facturas</th>
-              {bankActive && <th className="text-right px-3 py-2">Cruzadas</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {top.map((a) => {
-              // Mini barra apilada con los 5 buckets — solo % relativos al saldoTotal.
-              const seg = (b: number) => a.saldoTotal > 0 ? (b / a.saldoTotal) * 100 : 0;
-              const widthPct = (a.saldoTotal / maxSaldo) * 100;
-              return (
-                <tr
-                  key={a.key}
-                  className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
-                >
-                  <td className="px-3 py-2">
-                    <div className="font-medium text-[var(--gray-950)] truncate max-w-[280px]" title={a.nombreCliente}>
-                      {a.nombreCliente || '—'}
-                    </div>
-                    <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
-                      {a.cia} · #{a.noCliente}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-semibold">
-                    {fmtCurrency(a.saldoTotal)}
-                  </td>
-                  <td className="px-3 py-2">
-                    {/* Barra apilada: verde "por vencer" + amarillos progresivos. */}
-                    <div className="w-full h-2 bg-[var(--gray-100)] rounded-full overflow-hidden flex" style={{ width: `${Math.max(20, widthPct)}%` }}>
-                      <div className="h-full bg-[var(--success)]" style={{ width: `${seg(a.porVencer.saldo)}%` }} />
-                      <div className="h-full bg-[var(--warning,_#f59e0b)] opacity-60" style={{ width: `${seg(a.v1_30.saldo)}%` }} />
-                      <div className="h-full bg-[var(--warning,_#f59e0b)] opacity-80" style={{ width: `${seg(a.v31_60.saldo)}%` }} />
-                      <div className="h-full bg-[var(--danger)] opacity-70" style={{ width: `${seg(a.v61_90.saldo)}%` }} />
-                      <div className="h-full bg-[var(--danger)]" style={{ width: `${seg(a.mas90.saldo)}%` }} />
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--success)]">
-                    {a.porVencer.saldo > 0 ? fmtCurrency(a.porVencer.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--warning,_#b45309)]">
-                    {a.v1_30.saldo > 0 ? fmtCurrency(a.v1_30.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--warning,_#b45309)]">
-                    {a.v31_60.saldo > 0 ? fmtCurrency(a.v31_60.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)]">
-                    {a.v61_90.saldo > 0 ? fmtCurrency(a.v61_90.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--danger)] font-semibold">
-                    {a.mas90.saldo > 0 ? fmtCurrency(a.mas90.saldo) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-500)]">
-                    {a.facturasTotal}
-                  </td>
-                  {bankActive && (
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {a.facturasTotal > 0
-                        ? <span className={a.facturasCobradas / a.facturasTotal >= 0.8 ? 'text-[var(--success)]' : 'text-[var(--gray-500)]'}>
-                            {Math.round((a.facturasCobradas / a.facturasTotal) * 100)}%
-                          </span>
-                        : '—'}
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
 
-/**
- * Pill que resume el cruce de una factura contra bancos.
- *
- * Estados:
- *   - cobrada-banco (matched): verde, muestra fecha y monto del ABONO.
- *     Si fue parte de un subset (un ABONO pagó N facturas) lo indica.
- *   - cobrada-jde-sin-banco: gris, factura ya cobrada en JDE pero sin
- *     ABONO equivalente — caso normal cuando el ABONO está fuera de la
- *     ventana de últimos 12 meses.
- *   - pendiente: ámbar tenue.
- *
- * El tier (exact / tolerance / subset) se muestra como sufijo cuando hay
- * match — el usuario sabe si fue un cruce limpio o si tuvo que aplicar
- * tolerancia.
- */
-function BankBadge({ match }: { match?: RealReconciliationMatch }) {
-  if (!match) {
-    return <span className="text-[10px] text-[var(--gray-300)]">—</span>;
-  }
-  if (match.status === 'cobrada-banco') {
-    const tierLabel: Record<RealMatchTier, string> = {
-      exact: 'Exacto',
-      tolerance: '±0.5%',
-      subset: `Subset ×${match.subsetSize ?? 2}`,
-    };
-    const tier = match.matchTier ?? 'exact';
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--success-muted,_#dcfce7)] text-[var(--success)] text-[11px] font-medium">
-        <CheckCircle2 className="w-3 h-3" />
-        {match.bankDate ? match.bankDate.slice(0, 10) : '—'}
-        <span className="text-[10px] opacity-70 ml-0.5">{tierLabel[tier]}</span>
-      </span>
-    );
-  }
-  if (match.status === 'cobrada-jde-sin-banco') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--gray-100)] text-[var(--gray-500)] text-[11px]">
-        <Check className="w-3 h-3" /> JDE (sin abono)
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--warning-muted,_#fef3c7)] text-[var(--warning)] text-[11px]">
-      <AlertTriangle className="w-3 h-3" /> Pendiente
-    </span>
+      {/* Cobranza semanal — dos barras por semana: ingreso real
+          (cruzado con banco) arriba y proyección abajo, escaladas al
+          monto semanal más grande para hacer comparable la magnitud. */}
+      {Object.keys(weeklyTotals).length > 0 && (() => {
+        const entries = Object.entries(weeklyTotals).sort(([a], [b]) => a.localeCompare(b));
+        const maxWeek = Math.max(
+          ...entries.map(([, w]) => Math.max(w.real, w.projected)),
+          1,
+        );
+        return (
+          <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 animate-card-in">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Cobranza semanal</h3>
+              <div className="flex items-center gap-3 text-[11px] text-[var(--gray-500)]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-[#2563eb]" />
+                  Ingreso real
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-[#a78bfa]" />
+                  Proyección
+                </span>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {entries.map(([week, w], i) => {
+                const realPct = (w.real / maxWeek) * 100;
+                const projPct = (w.projected / maxWeek) * 100;
+                const delay = `${i * 60}ms`;
+                return (
+                  <div key={week} className="grid grid-cols-[90px_1fr_180px] items-center gap-3 animate-slide-up" style={{ animationDelay: delay }}>
+                    <span className="text-[12px] text-[var(--gray-400)]">
+                      Sem. {new Date(week + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
+                    </span>
+                    <div className="space-y-1">
+                      <div className="h-3 bg-[var(--gray-50)] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#2563eb] rounded-full animate-progress-fill"
+                          style={{ width: `${Math.min(100, realPct)}%`, animationDelay: delay }}
+                        />
+                      </div>
+                      <div className="h-3 bg-[var(--gray-50)] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[#a78bfa] rounded-full animate-progress-fill"
+                          style={{ width: `${Math.min(100, projPct)}%`, animationDelay: delay }}
+                        />
+                      </div>
+                    </div>
+                    <div className="text-right space-y-0.5">
+                      <div className="text-[12px] font-semibold tabular-nums text-[#2563eb]">
+                        {fmtCurrency(w.real)}
+                      </div>
+                      <div className="text-[11px] tabular-nums text-[#7c3aed]">
+                        {fmtCurrency(w.projected)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+    </div>
   );
 }
 
@@ -1831,7 +1789,10 @@ function BankBadge({ match }: { match?: RealReconciliationMatch }) {
 // los datos de JDE son los esperados.
 // ─────────────────────────────────────────────────────────────────────────
 function CobranzaRealView({
+  clients,
+  assumptions,
   records,
+  payments,
   loadedCias,
   companies,
   bankStatements,
@@ -1841,8 +1802,13 @@ function CobranzaRealView({
   onRefresh,
   refreshing,
   defaultCia,
+  onEnsureBankCoverage,
+  bankCoverageLoading,
 }: {
+  clients: Client[];
+  assumptions: CashFlowAssumptions;
   records: CobranzaRecord[];
+  payments: CobranzaPayment[];
   loadedCias: Record<string, string>;
   companies: { cia: string; nombre: string }[];
   bankStatements: BankAccountStatement[];
@@ -1852,6 +1818,8 @@ function CobranzaRealView({
   onRefresh?: () => void;
   refreshing?: boolean;
   defaultCia?: string;
+  onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
+  bankCoverageLoading?: boolean;
 }) {
   // Default del filtro local: si el global selectedCia es una cía válida
   // (no 'all'), arrancamos filtrados por esa cía. Si después el usuario
@@ -1865,18 +1833,37 @@ function CobranzaRealView({
   }, [defaultCia]);
   const [estatusFilter, setEstatusFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
-  const [crossFilter, setCrossFilter] = useState<'all' | 'matched' | 'pending'>('all');
+  const [crossFilter, setCrossFilter] = useState<'all' | 'matched' | 'review' | 'pending'>('all');
 
   // ── Motor de cruce (Fase 2/3) ──────────────────────────────────────────
   // Default: usar el resultado pre-computado de App.tsx. Si por alguna razón
   // no llegó (renders aislados, tests, embed externo) caemos a un cómputo
   // local — la pestaña debe seguir funcionando aunque el padre no haya
   // cableado la prop.
-  const localReconciliation = useMemo(
-    () => externalReconciliation ?? reconcileRealCollections(records, bankStatements),
-    [externalReconciliation, records, bankStatements],
+  const confirmedReviewKeys = useConfirmedReviewKeys();
+  const [fallbackReconciliation, setFallbackReconciliation] = useState<RealReconciliationResult>(() =>
+    emptyRealReconciliationResult(),
   );
-  const reconciliation = localReconciliation;
+  useEffect(() => {
+    if (externalReconciliation) return;
+    if (records.length === 0 && payments.length === 0) {
+      setFallbackReconciliation(emptyRealReconciliationResult());
+      return;
+    }
+
+    let cancelled = false;
+    void import('../domain/realReconciliationEngine')
+      .then(({ reconcileRealCollections }) => {
+        if (cancelled) return;
+        const raw = reconcileRealCollections(records, bankStatements, { cobranzaPayments: payments });
+        if (!cancelled) setFallbackReconciliation(applyManualConfirmations(raw, confirmedReviewKeys));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [externalReconciliation, records, bankStatements, payments, confirmedReviewKeys]);
+  const reconciliation = externalReconciliation ?? fallbackReconciliation;
   const matchByFactura = useMemo(() => {
     if (externalFacturaIndex) return externalFacturaIndex;
     const m = new Map<string, RealReconciliationMatch>();
@@ -1885,6 +1872,35 @@ function CobranzaRealView({
     }
     return m;
   }, [externalFacturaIndex, reconciliation.matches]);
+  const collectionCalendar = useMemo(
+    () => buildCollectionCalendar({
+      clients,
+      assumptions,
+      cobranzaRecords: records,
+      reconciliation,
+    }),
+    [clients, assumptions, records, reconciliation],
+  );
+  const calendarEventByFactura = useMemo(() => {
+    const priority: Record<CollectionCalendarEventSource, number> = {
+      BANK_MATCHED: 0,
+      BANK_UNMATCHED: 1,
+      JDE_PAID_UNMATCHED: 2,
+      JDE_OPEN_PROJECTED: 3,
+      CLIENT_PROJECTED: 4,
+    };
+    const map = new Map<string, CollectionCalendarEvent>();
+    for (const event of collectionCalendar.events) {
+      for (const factura of event.facturas) {
+        const key = `${factura.cia}::${factura.noFactura}`;
+        const previous = map.get(key);
+        if (!previous || priority[event.source] < priority[previous.source]) {
+          map.set(key, event);
+        }
+      }
+    }
+    return map;
+  }, [collectionCalendar.events]);
 
   const ciaName = useMemo(() => {
     const m = new Map<string, string>();
@@ -1911,8 +1927,10 @@ function CobranzaRealView({
       if (crossFilter !== 'all') {
         const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
         const matched = m?.status === 'cobrada-banco';
+        const review = m?.reviewStatus === 'review';
         if (crossFilter === 'matched' && !matched) return false;
-        if (crossFilter === 'pending' && matched) return false;
+        if (crossFilter === 'review' && !review) return false;
+        if (crossFilter === 'pending' && (matched || review)) return false;
       }
       if (query) {
         const q = query.toLowerCase();
@@ -1926,30 +1944,13 @@ function CobranzaRealView({
     });
   }, [records, ciaFilter, estatusFilter, crossFilter, query, matchByFactura]);
 
-  // ── KPIs ──
-  const totalSaldo = filtered.reduce((s, r) => s + (r.importePendientePesos || 0), 0);
-  const totalBruto = filtered.reduce((s, r) => s + (r.importeBrutoPesos || 0), 0);
-  const vencidoSaldo = filtered
-    .filter(r => r.diasVencida > 0)
-    .reduce((s, r) => s + (r.importePendientePesos || 0), 0);
-  const pctVencido = totalSaldo > 0 ? (vencidoSaldo / totalSaldo) * 100 : 0;
-
-  // Cuándo se actualizó la cia más reciente (si hay alguna)
-  const lastUpdate = useMemo(() => {
-    const ts = Object.values(loadedCias)
-      .map(s => new Date(s).getTime())
-      .filter(n => Number.isFinite(n));
-    if (ts.length === 0) return null;
-    return new Date(Math.max(...ts));
-  }, [loadedCias]);
-
-  if (records.length === 0) {
+  if (records.length === 0 && payments.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-xl">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--primary-muted)] flex items-center justify-center mb-3">
+      <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)]">
+        <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary-muted)] flex items-center justify-center mb-3">
           <Database className="w-6 h-6 text-[var(--primary)]" />
         </div>
-        <h3 className="text-base font-semibold text-[var(--gray-950)]">Sin cobranza JDE cargada</h3>
+        <h3 className="text-base font-bold text-[var(--gray-950)]">Sin cobranza JDE cargada</h3>
         {error ? (
           <p className="text-[13px] text-[var(--danger)] mt-1 max-w-md">
             {error}
@@ -1966,7 +1967,7 @@ function CobranzaRealView({
           <button
             onClick={onRefresh}
             disabled={refreshing}
-            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary)]/90 disabled:opacity-50"
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-[var(--radius-md)] border border-[var(--primary)] bg-[var(--primary)] text-white text-[13px] font-medium hover:bg-[var(--primary)]/90 disabled:opacity-50"
           >
             {refreshing ? 'Reintentando…' : 'Reintentar carga'}
           </button>
@@ -1977,76 +1978,8 @@ function CobranzaRealView({
 
   return (
     <div className="space-y-4">
-      {/* KPIs */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-5 flex items-end gap-8 flex-wrap">
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Saldo CXC pendiente</div>
-          <AnimatedNumber
-            value={totalSaldo}
-            format={fmtCurrency}
-            className="block text-2xl font-semibold tabular-nums text-[var(--gray-950)] mt-0.5"
-          />
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Importe bruto facturado</div>
-          <AnimatedNumber
-            value={totalBruto}
-            format={fmtCurrency}
-            className="block text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5"
-          />
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Vencido (% del saldo)</div>
-          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
-            <span className={pctVencido > 30 ? 'text-[var(--danger)]' : pctVencido > 10 ? 'text-[var(--warning)]' : 'text-[var(--success)]'}>
-              {pctVencido.toFixed(1)}%
-            </span>
-            <span className="text-[12px] text-[var(--gray-400)] ml-2">
-              {fmtCurrency(vencidoSaldo)}
-            </span>
-          </div>
-        </div>
-        {/* KPI principal de Fase 2: % cruzado con bancos.
-            - Verde >= 95%: cobranza altamente reconciliada.
-            - Ámbar 70-95%: hueco probable, revisar abonos sin factura.
-            - Rojo  < 70%:  algo está mal (token, fechas, mapeo). */}
-        {bankStatements.length > 0 && (() => {
-          const pctCruzado = reconciliation.summary.pctAbonosCruzados * 100;
-          const pctColor = pctCruzado >= 95
-            ? 'text-[var(--success)]'
-            : pctCruzado >= 70
-              ? 'text-[var(--warning)]'
-              : 'text-[var(--danger)]';
-          return (
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Cobranza cruzada con banco</div>
-              <div className="text-xl font-medium tabular-nums mt-0.5">
-                <span className={pctColor}>{pctCruzado.toFixed(1)}%</span>
-                <span className="text-[12px] text-[var(--gray-400)] ml-2">
-                  {reconciliation.summary.abonosFacturaCobrada} / {reconciliation.summary.totalAbonos} abonos
-                </span>
-              </div>
-            </div>
-          );
-        })()}
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-[var(--gray-400)]">Facturas</div>
-          <div className="text-xl font-medium tabular-nums text-[var(--gray-950)] mt-0.5">
-            {filtered.length.toLocaleString('es-MX')}
-            {filtered.length !== records.length && (
-              <span className="text-[var(--gray-400)] text-[13px]"> / {records.length.toLocaleString('es-MX')}</span>
-            )}
-          </div>
-        </div>
-        {lastUpdate && (
-          <div className="ml-auto text-[11px] text-[var(--gray-400)]">
-            Actualizado: {lastUpdate.toLocaleString('es-MX')}
-          </div>
-        )}
-      </div>
-
       {/* Filtros */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl p-4 flex flex-wrap gap-2 items-center">
+      <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4 flex flex-wrap gap-2 items-center">
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <Search className="w-4 h-4 text-[var(--gray-400)] absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -2084,12 +2017,13 @@ function CobranzaRealView({
         {bankStatements.length > 0 && (
           <select
             value={crossFilter}
-            onChange={e => setCrossFilter(e.target.value as 'all' | 'matched' | 'pending')}
+            onChange={e => setCrossFilter(e.target.value as 'all' | 'matched' | 'review' | 'pending')}
             className="input text-[12px] h-8"
           >
             <option value="all">Todas (cruce)</option>
             <option value="matched">Solo cruzadas con banco</option>
-            <option value="pending">Solo pendientes / sin cruce</option>
+            <option value="review">Solo por revisar</option>
+            <option value="pending">Solo sin datos / sin cruce</option>
           </select>
         )}
 
@@ -2102,6 +2036,42 @@ function CobranzaRealView({
           </button>
         )}
 
+        {/* Indicador único: % de abonos bancarios que vienen tagueados con
+            un noRecibo JDE — proxy rápido y exacto del cruce. Cuenta sobre
+            todos los movimientos de los estados de cuenta cargados, sin
+            depender del motor pesado de reconciliación que corre en worker
+            (puede tardar minutos). Solo aparece cuando hay estados de cuenta. */}
+        {bankStatements.length > 0 && (() => {
+          let totalAbonos = 0;
+          let abonosConRecibo = 0;
+          for (const account of bankStatements) {
+            for (const mov of account.movimientos) {
+              if (mov.tipoMovimiento !== 'ABONO') continue;
+              totalAbonos++;
+              if ((mov.noRecibo ?? '').trim()) abonosConRecibo++;
+            }
+          }
+          const pctCruzado = totalAbonos > 0 ? (abonosConRecibo / totalAbonos) * 100 : 0;
+          const pctColor = pctCruzado >= 95
+            ? 'text-[var(--success)]'
+            : pctCruzado >= 70
+              ? 'text-[var(--warning)]'
+              : 'text-[var(--danger)]';
+          return (
+            <div
+              className="ml-auto inline-flex items-center gap-2 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--surface-alt)]"
+              title={`${abonosConRecibo.toLocaleString('es-MX')} de ${totalAbonos.toLocaleString('es-MX')} abonos bancarios del rango cargado vienen con número de recibo JDE.`}
+            >
+              <Landmark className="w-3.5 h-3.5 text-[var(--gray-400)]" />
+              <span className="text-[11px] uppercase tracking-wide text-[var(--gray-500)]">Cruzado con banco</span>
+              <span className={`text-[13px] font-bold tabular-nums ${pctColor}`}>{pctCruzado.toFixed(1)}%</span>
+              <span className="text-[11px] text-[var(--gray-400)] tabular-nums">
+                {abonosConRecibo.toLocaleString('es-MX')}/{totalAbonos.toLocaleString('es-MX')}
+              </span>
+            </div>
+          );
+        })()}
+
         {/* Export del cruce — incluye TODAS las columnas de la factura más
             las del banco cuando hay match. Ideal para mandar a contabilidad
             o reconciliar manualmente lo que el motor no cruzó. Respeta los
@@ -2110,6 +2080,7 @@ function CobranzaRealView({
           onClick={() => {
             const rows = filtered.map(r => {
               const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
+              const calendarEvent = calendarEventByFactura.get(`${r.cia}::${r.noFactura}`);
               return {
                 Cia: r.cia,
                 Cliente: r.nombreCliente,
@@ -2123,21 +2094,31 @@ function CobranzaRealView({
                 PendienteMXN: r.importePendientePesos,
                 Moneda: r.moneda,
                 EstatusJDE: r.estatus,
+                FuenteDato: calendarEvent ? COLLECTION_CALENDAR_SOURCE_LABELS[calendarEvent.source] : '',
+                FechaCalendario: calendarEvent?.date ?? '',
+                EstadoCalendario: calendarEvent?.statusLabel ?? '',
+                ReglaAplicada: calendarEvent?.ruleApplied ?? '',
+                MotivoFecha: calendarEvent?.dateReason ?? '',
                 EstatusCruce: m?.status ?? 'pendiente',
+                RevisionCruce: m?.reviewStatus ?? 'unmatched',
+                MotivoCruce: m?.matchReason ?? '',
                 BancoMatch: m?.matchTier ?? '',
-                ConfianzaCruce: m?.confidence ? `${(m.confidence * 100).toFixed(0)}%` : '',
+                ConfianzaCruce: (m?.confidence ?? calendarEvent?.confidence)
+                  ? `${((m?.confidence ?? calendarEvent?.confidence ?? 0) * 100).toFixed(0)}%`
+                  : '',
                 FechaBanco: m?.bankDate ?? '',
                 RefBanco: m?.bankRef ?? '',
                 MontoBanco: m?.bankAmount ?? '',
                 CuentaBanco: m?.bankAccount ?? '',
                 ConceptoBanco: m?.bankConcept ?? '',
+                MovimientosBanco: m?.bankMovements?.length ?? '',
                 SubsetID: m?.subsetGroupId ?? '',
               };
             });
             const stamp = new Date().toISOString().slice(0, 10);
             downloadFile(toCSV(rows), `cobranza-cruce-${stamp}.csv`);
           }}
-          className="ml-auto inline-flex items-center gap-1.5 px-3 h-8 rounded-lg border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+          className="inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
           disabled={filtered.length === 0}
           title="Exporta lo visible con todas las columnas de cruce."
         >
@@ -2152,98 +2133,13 @@ function CobranzaRealView({
           calendar view de la versión proyectada cuando estamos en modo
           Real. */}
       <CobranzaRealCalendar
-        bankStatements={bankStatements}
-        reconciliation={reconciliation}
+        calendar={collectionCalendar}
         ciaFilter={ciaFilter}
+        bankCoverage={reconciliation.bankCoverage}
+        onEnsureBankCoverage={onEnsureBankCoverage}
+        bankCoverageLoading={bankCoverageLoading}
       />
 
-      {/* Aging por cliente — Top 20 con mayor saldo abierto */}
-      <ClientAgingTable
-        records={filtered}
-        matchByFactura={matchByFactura}
-        bankActive={bankStatements.length > 0}
-      />
-
-      {/* Tabla raw */}
-      <div className="bg-white border border-[var(--gray-200)]/60 rounded-xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-[var(--gray-200)]/60 bg-[var(--surface-alt)] flex items-center gap-2">
-          <FileSpreadsheet className="w-4 h-4 text-[var(--gray-400)]" />
-          <span className="text-[13px] font-semibold text-[var(--gray-950)]">Facturas (CXC)</span>
-          <span className="text-[11px] text-[var(--gray-400)] ml-auto">
-            {bankStatements.length > 0
-              ? `Cruce activo · ${reconciliation.summary.facturasCobradasBanco} cobradas con banco`
-              : 'Sube/carga estados de cuenta para activar el cruce.'}
-          </span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]">
-            <thead className="bg-[var(--surface-alt)] text-[var(--gray-500)] text-[11px] uppercase tracking-wide">
-              <tr>
-                <th className="text-left px-3 py-2">Cía</th>
-                <th className="text-left px-3 py-2">Cliente</th>
-                <th className="text-left px-3 py-2">Factura</th>
-                <th className="text-left px-3 py-2">F. emisión</th>
-                <th className="text-left px-3 py-2">F. vencimiento</th>
-                <th className="text-right px-3 py-2">Días venc.</th>
-                <th className="text-right px-3 py-2">Bruto MXN</th>
-                <th className="text-right px-3 py-2">Pendiente MXN</th>
-                <th className="text-left px-3 py-2">Moneda</th>
-                <th className="text-left px-3 py-2">Estatus</th>
-                {bankStatements.length > 0 && (
-                  <th className="text-left px-3 py-2">Banco</th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.slice(0, 500).map((r, idx) => {
-                const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
-                return (
-                  <tr
-                    key={`${r.cia}-${r.noFactura}-${idx}`}
-                    className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]/50"
-                  >
-                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">{r.cia}</td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-[var(--gray-950)]">{r.nombreCliente || '—'}</div>
-                      {r.noCliente && (
-                        <div className="text-[10px] text-[var(--gray-400)] tabular-nums">#{r.noCliente}</div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 tabular-nums">{r.noFactura || '—'}</td>
-                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
-                      {r.fechaFactura ? r.fechaFactura.slice(0, 10) : '—'}
-                    </td>
-                    <td className="px-3 py-2 tabular-nums text-[var(--gray-500)]">
-                      {r.fechaVence ? r.fechaVence.slice(0, 10) : '—'}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${r.diasVencida > 0 ? 'text-[var(--danger)] font-medium' : 'text-[var(--gray-400)]'}`}>
-                      {r.diasVencida}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {fmtCurrency(r.importeBrutoPesos)}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">
-                      {fmtCurrency(r.importePendientePesos)}
-                    </td>
-                    <td className="px-3 py-2 text-[var(--gray-500)]">{r.moneda || '—'}</td>
-                    <td className="px-3 py-2 text-[var(--gray-500)]">{r.estatus || '—'}</td>
-                    {bankStatements.length > 0 && (
-                      <td className="px-3 py-2">
-                        <BankBadge match={m} />
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {filtered.length > 500 && (
-            <div className="px-4 py-2 text-[11px] text-[var(--gray-400)] border-t border-[var(--gray-100)] bg-[var(--surface-alt)]">
-              Mostrando 500 de {filtered.length.toLocaleString('es-MX')} — usa los filtros para acotar.
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }

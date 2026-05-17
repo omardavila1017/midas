@@ -39,6 +39,9 @@ import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, Provid
 import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
 import { projectYear } from '../domain/collectionEngine';
 import type { Budget } from '../domain/budget';
+import type { CxpPaymentCoverage } from '../domain/paymentReconciliationEngine';
+import { excludeConcursoMercantil } from '../domain/concursoMercantil';
+import { buildProviderIndex, findProviderByRef, type ProviderIndex } from '../domain/providerIdentity';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -114,6 +117,7 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerDtiCriticidad?: 'Alta' | 'Media' | 'Baja';
   providerLastPaymentDate?: string;
   providerLastPaymentAmount?: number;
+  providerScore?: number;
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
   alerts: CxpAlert[];
@@ -129,6 +133,7 @@ interface AgingBucket {
 
 interface SupplierSummary {
   nombre: string;
+  noProveedor: string;
   total: number;
   count: number;
   maxDias: number;
@@ -137,6 +142,9 @@ interface SupplierSummary {
   providerFlexibility: ProviderFlexibility;
   creditLimit?: number;
   records: EnrichedCXPRecord[];
+  bucketTotals: number[];
+  vencido: number;
+  sortedRecords: EnrichedCXPRecord[];
 }
 
 type DashboardTab = 'resumen' | 'triage' | 'proveedores';
@@ -341,14 +349,12 @@ function paymentPriority(record: EnrichedCXPRecord): PaymentPriority {
 
 function enrichCxpRecord(
   record: CXPRecord,
-  providersByName: Map<string, Provider>,
-  providersByJde?: Map<string, Provider>,
+  providerIndex: ProviderIndex,
 ): EnrichedCXPRecord {
-  // Primero matcheamos por número JDE (más confiable); fallback a nombre normalizado.
-  const noProveedorTrim = record.noProveedor ? String(record.noProveedor).trim() : '';
-  const provider: Provider | undefined =
-    (noProveedorTrim ? providersByJde?.get(noProveedorTrim) : undefined)
-    ?? providersByName.get(normName(record.nombre));
+  const provider: Provider | undefined = findProviderByRef(providerIndex, {
+    jdeCode: record.noProveedor,
+    name: record.nombre,
+  }).provider ?? undefined;
   const catalog = enrichFromCatalog({
     supplier: record.nombre,
     classification: record.clasificacionProveedor,
@@ -369,6 +375,7 @@ function enrichCxpRecord(
     providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,
     providerLastPaymentDate: catalog.lastPayment?.ultimaFecha,
     providerLastPaymentAmount: catalog.lastPayment?.ultimoMonto,
+    providerScore: provider?.score,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
     alerts: [],
@@ -551,8 +558,8 @@ const ChartTooltip = ({ active, payload }: any) => {
   if (!active || !payload?.[0]) return null;
   const item = payload[0].payload;
   return (
-    <div className="bg-white border border-[var(--gray-200)] rounded-xl px-3 py-2 shadow-lg">
-      <p className="text-[12px] font-semibold text-[var(--gray-950)]">{item.name || payload[0].name}</p>
+    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] px-3 py-2 shadow-lg">
+      <p className="text-[12px] font-bold text-[var(--gray-950)]">{item.name || payload[0].name}</p>
       <p className="text-[12px] font-mono text-[var(--gray-500)]">{fmtFull(payload[0].value)}</p>
       {typeof item.percent === 'number' && (
         <p className="text-[11px] text-[var(--gray-400)]">{(item.percent * 100).toFixed(1)}% del total</p>
@@ -573,6 +580,7 @@ const CXPDashboard = ({
   clients,
   assumptions,
   bankStatements,
+  paymentCoverage,
 }: {
   records: CXPRecord[];
   onReset: () => void;
@@ -581,6 +589,7 @@ const CXPDashboard = ({
   clients: Client[];
   assumptions: CashFlowAssumptions;
   bankStatements: BankAccountStatement[];
+  paymentCoverage?: Map<string, CxpPaymentCoverage>;
 }) => {
   /** Resolve a cia code (e.g. "00011") to its short name from the catalog. */
   const ciaName = useCallback((code: string): string => {
@@ -643,20 +652,10 @@ const CXPDashboard = ({
     }
   }, [records, selectedCia]);
 
-  const providersByName = useMemo(
-    () => new Map(providers.map((provider) => [normName(provider.name), provider])),
-    [providers],
-  );
-  const providersByJde = useMemo(() => {
-    const map = new Map<string, Provider>();
-    providers.forEach((p) => {
-      if (p.numProveedorJDE) map.set(String(p.numProveedorJDE).trim(), p);
-    });
-    return map;
-  }, [providers]);
+  const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
 
   const enrichedRecords = useMemo(() => {
-    const base = records.map((record) => enrichCxpRecord(record, providersByName, providersByJde));
+    const base = records.map((record) => enrichCxpRecord(record, providerIndex));
     const duplicateCounts = new Map<string, number>();
     const exposureBySupplier = new Map<string, number>();
     base.forEach((record) => {
@@ -672,7 +671,7 @@ const CXPDashboard = ({
         alerts: buildCxpAlerts(record, duplicateCounts.get(invoiceKey(record)) ?? 0, supplierExposure),
       };
     });
-  }, [providersByName, providersByJde, records]);
+  }, [providerIndex, records]);
 
   // ── Filtered Records ──
   const filtered = useMemo(() => {
@@ -803,6 +802,7 @@ const CXPDashboard = ({
       if (!map.has(k)) {
         map.set(k, {
           nombre: k,
+          noProveedor: r.noProveedor || '',
           total: 0,
           count: 0,
           maxDias: 0,
@@ -811,15 +811,26 @@ const CXPDashboard = ({
           providerFlexibility: r.providerFlexibility,
           creditLimit: r.providerCreditLimit,
           records: [],
+          bucketTotals: new Array(BUCKET_KEYS.length).fill(0),
+          vencido: 0,
+          sortedRecords: [],
         });
       }
       const e = map.get(k)!;
       e.total += r.importePendientePesos;
       e.count++;
       e.maxDias = Math.max(e.maxDias, r.diasVencida);
+      BUCKET_KEYS.forEach((key, index) => {
+        const value = r[key] as number;
+        e.bucketTotals[index] += value;
+        if (index > 0) e.vencido += value;
+      });
       e.records.push(r);
     });
-    const arr = Array.from(map.values());
+    const arr = Array.from(map.values()).map((supplier) => ({
+      ...supplier,
+      sortedRecords: [...supplier.records].sort((a, b) => b.diasVencida - a.diasVencida),
+    }));
     arr.sort((a, b) => {
       const mul = sortDir === 'desc' ? -1 : 1;
       if (sortKey === 'nombre') return mul * a.nombre.localeCompare(b.nombre);
@@ -935,7 +946,7 @@ const CXPDashboard = ({
   return (
     <div className="relative space-y-4">
       {/* ── Header Bar ── */}
-      <div className="rounded-2xl border border-[var(--gray-200)] bg-white px-3 py-2.5 shadow-sm">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5 shadow-sm">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex min-w-[240px] flex-1 items-center rounded-full border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-1.5 gap-2">
             <Search className="w-3.5 h-3.5 text-[var(--gray-400)]" />
@@ -991,7 +1002,7 @@ const CXPDashboard = ({
 
       {/* ── Active filter chips ── */}
       {hasDrill && (
-        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3 animate-slide-down">
+        <div className="bg-[var(--primary-muted)] border border-[var(--primary)]/20 rounded-[var(--radius)] px-4 py-2.5 flex items-center justify-between gap-3 animate-slide-down">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] text-[var(--primary)] font-medium">
             <Filter className="w-3.5 h-3.5 flex-shrink-0" />
             {activeFilterChips.map(chip => (
@@ -1032,12 +1043,12 @@ const CXPDashboard = ({
                 setActiveKpi(activeKpi === kpi.kpi ? null : kpi.kpi);
                 setTab('proveedores');
               }}
-              className={`animate-card-in stagger-${i + 1} bg-white rounded-2xl border p-4 shadow-sm hover-lift cursor-pointer ${
+              className={`animate-card-in stagger-${i + 1} bg-white rounded-[var(--radius-lg)] border p-4 shadow-sm hover-lift cursor-pointer ${
                 active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/20' : 'border-[var(--gray-200)]'
               }`}>
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-wider">{kpi.label}</p>
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
+                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-[0.08em]">{kpi.label}</p>
+                <div className="w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
                   <Icon className="w-3.5 h-3.5" style={{ color: kpi.color }} />
                 </div>
               </div>
@@ -1086,9 +1097,9 @@ const CXPDashboard = ({
       {tab === 'resumen' && (
         <>
           {/* Aging Bar Chart */}
-          <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-5">
+          <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Distribución por Antigüedad</h2>
+              <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Distribución por Antigüedad</h2>
               <p className="text-[12px] text-[var(--gray-400)]">Click en barra para filtrar</p>
             </div>
             <ResponsiveContainer width="100%" height={300}>
@@ -1113,7 +1124,7 @@ const CXPDashboard = ({
                 <div key={i} className="flex items-center gap-1.5 bg-[var(--gray-50)] rounded-full px-2.5 py-1 text-[11px]">
                   <div className="w-2 h-2 rounded-full" style={{ backgroundColor: b.color }} />
                   <span className="text-[var(--gray-500)]">{b.name}:</span>
-                  <span className="font-mono font-semibold text-[var(--gray-950)]">{fmt(b.total)}</span>
+                  <span className="font-mono font-bold text-[var(--gray-950)]">{fmt(b.total)}</span>
                   <span className="text-[var(--gray-400)]">({b.count})</span>
                 </div>
               ))}
@@ -1121,11 +1132,11 @@ const CXPDashboard = ({
           </div>
 
           {/* Two columns: Tipo proveedor + Top Proveedores */}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-7">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-5">
             {/* Provider Type Donut */}
-            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
+            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Por tipo de proveedor</h2>
+                <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Por tipo de proveedor</h2>
                 <p className="text-[12px] text-[var(--gray-400)]">Click para filtrar</p>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
@@ -1174,7 +1185,7 @@ const CXPDashboard = ({
                           toggleCategoryGroup(e.categories);
                           setTab('proveedores');
                         }}
-                        className={`grid w-full grid-cols-[10px_1fr_auto] items-center gap-2 rounded-lg px-2 py-1.5 text-left transition ${
+                        className={`grid w-full grid-cols-[10px_1fr_auto] items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-left transition ${
                           active ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
                         }`}
                         title={`${e.name}: ${fmtFull(e.value)} (${pct(e.value, totalPendiente)})`}
@@ -1192,14 +1203,14 @@ const CXPDashboard = ({
             </div>
 
             {/* Top 10 Proveedores */}
-            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm hover-lift">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-3">Top 10 Proveedores</h2>
+            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm hover-lift">
+              <h2 className="text-[15px] font-bold text-[var(--gray-950)] mb-3">Top 10 Proveedores</h2>
               <div className="space-y-1.5">
                 {supplierData.slice(0, 10).map((s, i) => {
                   const barPct = supplierData[0]?.total > 0 ? (s.total / supplierData[0].total) : 0;
                   return (
                     <div key={i}
-                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-lg transition-colors duration-150"
+                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-[var(--radius-md)] transition-colors duration-150"
                       onClick={() => { clearDrill(); setSearchTerm(s.nombre.slice(0, 20)); setTab('proveedores'); setExpandedSupplier(s.nombre); setProvPage(0); }}>
                       <span className="text-[11px] font-mono text-[var(--gray-400)] w-4 text-right">{i + 1}</span>
                       <div className="flex-1 min-w-0">
@@ -1209,7 +1220,7 @@ const CXPDashboard = ({
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-[12px] font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</p>
+                        <p className="text-[12px] font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</p>
                         <p className="text-[10px] text-[var(--gray-400)]">{s.count} fact.</p>
                       </div>
                     </div>
@@ -1228,17 +1239,17 @@ const CXPDashboard = ({
 
           {/* Company breakdown (if multiple) */}
           {ciaData.length > 1 && (
-            <div className="bg-white rounded-2xl border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-9">
-              <h2 className="text-[15px] font-semibold text-[var(--gray-950)] mb-4">Desglose por Compañía</h2>
+            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-9">
+              <h2 className="text-[15px] font-bold text-[var(--gray-950)] mb-4">Desglose por Compañía</h2>
               <div className="grid grid-cols-2 gap-3">
                 {ciaData.map((c, i) => (
-                  <div key={i} className="flex items-center gap-3 p-3 bg-[var(--surface-alt)] rounded-xl">
+                  <div key={i} className="flex items-center gap-3 p-3 bg-[var(--surface-alt)] rounded-[var(--radius)]">
                     <div className="w-2 h-8 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-[12px] font-medium text-[var(--gray-950)] truncate">{c.name}</p>
                       <p className="text-[11px] text-[var(--gray-400)]">{pct(c.value, totalPendiente)}</p>
                     </div>
-                    <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmt(c.value)}</p>
+                    <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmt(c.value)}</p>
                   </div>
                 ))}
               </div>
@@ -1251,10 +1262,10 @@ const CXPDashboard = ({
          PROVEEDORES TAB
          ════════════════════════════════════════════════════════════════ */}
       {tab === 'proveedores' && (
-        <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden">
+        <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden">
           {/* Header with sort controls */}
           <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">
+            <h2 className="text-[15px] font-bold text-[var(--gray-950)]">
               Proveedores
               <span className="text-[var(--gray-400)] font-normal ml-1">({supplierData.length.toLocaleString()})</span>
             </h2>
@@ -1266,7 +1277,7 @@ const CXPDashboard = ({
                 ['nombre', 'Nombre'],
               ] as [SortKey, string][]).map(([k, label]) => (
                 <button key={k} onClick={() => toggleSort(k)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition flex items-center gap-1 ${
+                  className={`px-2.5 py-1 rounded-[var(--radius-md)] text-[11px] font-medium transition flex items-center gap-1 ${
                     sortKey === k ? 'bg-[var(--primary)] text-white' : 'bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)]'
                   }`}>
                   {label}
@@ -1280,7 +1291,6 @@ const CXPDashboard = ({
           <div className="divide-y divide-[var(--gray-50)]">
             {pagedSuppliers.map(s => {
               const isExpanded = expandedSupplier === s.nombre;
-              const vencido = s.records.reduce((sum, r) => sum + r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180, 0);
               const severity = s.maxDias > 120 ? hex.danger : s.maxDias > 60 ? hex.warning : s.maxDias > 0 ? hex.primary : hex.success;
 
               return (
@@ -1292,6 +1302,11 @@ const CXPDashboard = ({
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">{s.nombre}</p>
                       <div className="flex items-center gap-2 mt-0.5">
+                        {s.noProveedor && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--gray-100)] text-[var(--gray-500)]" title="Número de proveedor JDE">
+                            JDE {s.noProveedor}
+                          </span>
+                        )}
                         <span className="text-[11px] text-[var(--gray-400)]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-100)] text-[var(--gray-500)]">{s.providerType}</span>
                         <span
@@ -1312,15 +1327,15 @@ const CXPDashboard = ({
                     {/* Mini aging bar */}
                     <div className="w-40 flex h-2.5 rounded-full overflow-hidden bg-[var(--gray-100)]" title={agingTooltip(s.maxDias)}>
                       {BUCKET_KEYS.map((key, bi) => {
-                        const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
+                        const bval = s.bucketTotals[bi] ?? 0;
                         const bpct = s.total > 0 ? (bval / s.total) * 100 : 0;
                         return bpct > 0 ? <div key={bi} style={{ width: `${bpct}%`, backgroundColor: AGING_COLORS[bi] }} /> : null;
                       })}
                     </div>
 
                     <div className="text-right w-28">
-                      <p className="text-[13px] font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</p>
-                      {vencido > 0 && <p className="text-[10px] font-mono text-[var(--danger)]">{fmt(vencido)} vencido</p>}
+                      <p className="text-[13px] font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</p>
+                      {s.vencido > 0 && <p className="text-[10px] font-mono text-[var(--danger)]">{fmt(s.vencido)} vencido</p>}
                       {s.creditLimit !== undefined && s.creditLimit > 0 && (
                         <p className={`text-[10px] font-mono ${s.total > s.creditLimit ? 'text-[var(--warning)]' : 'text-[var(--gray-400)]'}`}>
                           lim {fmt(s.creditLimit)}
@@ -1335,7 +1350,7 @@ const CXPDashboard = ({
                       {/* Aging summary for this supplier */}
                       <div className="flex gap-1.5 mb-3 flex-wrap">
                         {BUCKET_KEYS.map((key, bi) => {
-                          const bval = s.records.reduce((sum, r) => sum + (r[key] as number), 0);
+                          const bval = s.bucketTotals[bi] ?? 0;
                           if (bval === 0) return null;
                           return (
                             <div key={bi} className="flex items-center gap-1 bg-white rounded-full px-2 py-0.5 text-[10px] border border-[var(--gray-100)]">
@@ -1355,7 +1370,9 @@ const CXPDashboard = ({
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">F. Factura</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Vence</th>
                               <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Días</th>
+                              <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Score</th>
                               <th className="text-right py-2 text-[var(--gray-400)] font-semibold">Pendiente</th>
+                              <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Fecha plan</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold pl-3">Mon.</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Cond. Pago</th>
                               <th className="text-left py-2 text-[var(--gray-400)] font-semibold">Prioridad</th>
@@ -1363,24 +1380,40 @@ const CXPDashboard = ({
                             </tr>
                           </thead>
                           <tbody>
-                            {s.records.sort((a, b) => b.diasVencida - a.diasVencida).map((r, ri) => (
+                            {s.sortedRecords.map((r, ri) => (
                               <tr
                                 key={ri}
                                 onClick={() => setSelectedRecord(r)}
                                 className="cursor-pointer border-b border-[var(--gray-50)] hover:bg-white"
                               >
-                                <td className="py-1.5 font-mono text-[var(--gray-950)]">{r.noFactura}</td>
+                                <td className="py-1.5 font-mono text-[var(--gray-950)]">
+                                  <div className="flex items-center gap-1.5">
+                                    <span>{r.noFactura}</span>
+                                    {paymentCoverage?.get(`${r.cia}::${r.noFactura}::${r.noProveedor}`)?.status === 'PAID' && (
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--success-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--success)] uppercase tracking-wide" title="Pagada según PagoProveedor JDE">
+                                        Pagada
+                                      </span>
+                                    )}
+                                    {paymentCoverage?.get(`${r.cia}::${r.noFactura}::${r.noProveedor}`)?.status === 'PARTIAL' && (
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--warning-muted)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--warning)] uppercase tracking-wide" title="Pago parcial registrado">
+                                        Parcial
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaFactura}</td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaVence}</td>
                                 <td className="py-1.5 text-right font-mono">
                                   <span
-                                    className={r.diasVencida > 90 ? 'text-[var(--danger)] font-semibold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}
+                                    className={r.diasVencida > 90 ? 'text-[var(--danger)] font-bold' : r.diasVencida > 30 ? 'text-[var(--warning)]' : 'text-[var(--gray-950)]'}
                                     title={agingTooltip(r.diasVencida)}
                                   >
                                     {r.diasVencida}
                                   </span>
                                 </td>
+                                <td className="py-1.5 text-right font-mono font-semibold text-[var(--gray-950)]">{r.providerScore ?? '—'}</td>
                                 <td className="py-1.5 text-right font-mono font-medium text-[var(--gray-950)]">{fmtFull(r.importePendientePesos)}</td>
+                                <td className="py-1.5 text-[var(--gray-500)]">{dueDateForRecord(r) ?? '-'}</td>
                                 <td className="py-1.5 pl-3 text-[var(--gray-400)]">{r.moneda}</td>
                                 <td className="py-1.5 text-[var(--gray-400)]">{r.condPago}</td>
                                 <td className="py-1.5">
@@ -1421,12 +1454,12 @@ const CXPDashboard = ({
               </p>
               <div className="flex gap-1">
                 <button onClick={() => setProvPage(p => Math.max(0, p - 1))} disabled={provPage === 0}
-                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
+                  className="px-3 py-1 rounded-[var(--radius-md)] text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
                   Anterior
                 </button>
                 <span className="px-3 py-1 text-[12px] text-[var(--gray-400)]">{provPage + 1} / {totalPages}</span>
                 <button onClick={() => setProvPage(p => Math.min(totalPages - 1, p + 1))} disabled={provPage >= totalPages - 1}
-                  className="px-3 py-1 rounded-lg text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
+                  className="px-3 py-1 rounded-[var(--radius-md)] text-[12px] font-medium bg-[var(--gray-50)] text-[var(--gray-500)] hover:bg-[var(--gray-100)] disabled:opacity-30 transition">
                   Siguiente
                 </button>
               </div>
@@ -1506,31 +1539,31 @@ function AgingMatrix({
   filteredCount: number;
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-[var(--gray-200)] shadow-sm overflow-hidden animate-card-in stagger-8">
+    <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden animate-card-in stagger-8">
       <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
-        <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
+        <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
         <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-[11px]">
           <thead className="sticky top-0 bg-white z-10">
             <tr className="border-b-2 border-[var(--gray-200)]">
-              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-semibold w-[200px] min-w-[200px]">Proveedor</th>
-              <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-semibold w-[90px]">Total</th>
-              <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-semibold w-[40px]">#</th>
+              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-bold w-[200px] min-w-[200px]">Proveedor</th>
+              <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-bold w-[90px]">Total</th>
+              <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-bold w-[40px]">#</th>
               {BUCKET_LABELS.map((label, i) => (
-                <th key={i} className="text-right py-2.5 px-2 font-semibold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
+                <th key={i} className="text-right py-2.5 px-2 font-bold w-[85px]" style={{ color: AGING_COLORS[i] }}>{label}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {supplierData.slice(0, 100).map((s, si) => {
-              const bucketVals = BUCKET_KEYS.map(key => s.records.reduce((sum, r) => sum + (r[key] as number), 0));
+              const bucketVals = s.bucketTotals;
               const maxBucket = Math.max(...bucketVals);
               return (
                 <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
                   <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
-                  <td className="py-2 px-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmt(s.total)}</td>
+                  <td className="py-2 px-2 text-right font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</td>
                   <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
                   {bucketVals.map((val, bi) => {
                     const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
@@ -1561,7 +1594,7 @@ function AgingMatrix({
                 </tr>
               );
             })}
-            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-semibold sticky bottom-0">
+            <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-bold sticky bottom-0">
               <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
               <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
               <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{filteredCount}</td>
@@ -1586,9 +1619,9 @@ function TriageAlertBoard({
   onSelect: (type: CxpAlertType) => void;
 }) {
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white p-4 shadow-sm">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">Clasificación de triage</h2>
+        <h2 className="text-[14px] font-bold text-[var(--gray-950)]">Clasificación de triage</h2>
         <span className="text-[11px] text-[var(--gray-400)]">Click para ver facturas</span>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
@@ -1596,7 +1629,7 @@ function TriageAlertBoard({
           <button
             key={bucket.type}
             onClick={() => onSelect(bucket.type)}
-            className={`rounded-xl border px-3 py-2 text-left transition ${
+            className={`rounded-[var(--radius)] border px-3 py-2 text-left transition ${
               active === bucket.type
                 ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
                 : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
@@ -1605,13 +1638,13 @@ function TriageAlertBoard({
           >
             <p className="truncate text-[11px] text-[var(--gray-500)]">{bucket.label}</p>
             <div className="mt-1 flex items-end justify-between gap-2">
-              <span className="font-mono text-[18px] font-semibold text-[var(--gray-950)]">{bucket.count}</span>
+              <span className="font-mono text-[18px] font-bold text-[var(--gray-950)]">{bucket.count}</span>
               <span className="font-mono text-[11px] text-[var(--gray-500)]">{fmt(bucket.total)}</span>
             </div>
           </button>
         ))}
         {buckets.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
+          <div className="col-span-full rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
             No hay alertas con los filtros actuales.
           </div>
         )}
@@ -1630,9 +1663,9 @@ function TriageDetailTable({
   onRecordSelect: (record: EnrichedCXPRecord) => void;
 }) {
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
       <header className="flex items-center justify-between gap-3 border-b border-[var(--gray-100)] px-4 py-3">
-        <h2 className="text-[14px] font-semibold text-[var(--gray-950)]">{title}</h2>
+        <h2 className="text-[14px] font-bold text-[var(--gray-950)]">{title}</h2>
         <span className="text-[11px] text-[var(--gray-400)]">{records.length} facturas</span>
       </header>
       <div className="overflow-x-auto">
@@ -1643,8 +1676,10 @@ function TriageDetailTable({
               <th className="px-4 py-2 text-left font-medium">Proveedor</th>
               <th className="px-4 py-2 text-left font-medium">Causa</th>
               <th className="px-4 py-2 text-right font-medium">Días</th>
+              <th className="px-4 py-2 text-right font-medium">Score</th>
               <th className="px-4 py-2 text-right font-medium">Monto</th>
               <th className="px-4 py-2 text-left font-medium">Vence</th>
+              <th className="px-4 py-2 text-left font-medium">Fecha plan</th>
             </tr>
           </thead>
           <tbody>
@@ -1655,7 +1690,12 @@ function TriageDetailTable({
                 className="cursor-pointer border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]"
               >
                 <td className="px-4 py-2 font-mono text-[var(--gray-950)]">{record.noFactura || '-'}</td>
-                <td className="px-4 py-2 text-[var(--gray-950)]">{record.nombre || '-'}</td>
+                <td className="px-4 py-2 text-[var(--gray-950)]">
+                  <div>{record.nombre || '-'}</div>
+                  {record.noProveedor && (
+                    <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">JDE {record.noProveedor}</div>
+                  )}
+                </td>
                 <td className="px-4 py-2">
                   <div className="flex max-w-[420px] flex-wrap gap-1">
                     {record.alerts.slice(0, 3).map(alert => (
@@ -1666,7 +1706,9 @@ function TriageDetailTable({
                   </div>
                 </td>
                 <td className="px-4 py-2 text-right font-mono text-[var(--gray-950)]">{record.diasVencida}</td>
+                <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{record.providerScore ?? '—'}</td>
                 <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmtFull(record.importePendientePesos)}</td>
+                <td className="px-4 py-2 text-[var(--gray-500)]">{record.fechaVence || '-'}</td>
                 <td className="px-4 py-2 text-[var(--gray-500)]">{dueDateForRecord(record) ?? '-'}</td>
               </tr>
             ))}
@@ -1699,11 +1741,11 @@ function TriageColumn({
         : 'bg-[var(--warning-muted)] text-[var(--warning)]';
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
       <header className="border-b border-[var(--gray-100)] p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-[15px] font-semibold text-[var(--gray-950)]">{title}</h2>
+            <h2 className="text-[15px] font-bold text-[var(--gray-950)]">{title}</h2>
             <p className="mt-1 text-[11px] leading-4 text-[var(--gray-400)]">{detail}</p>
           </div>
           <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
@@ -1714,21 +1756,21 @@ function TriageColumn({
       </header>
       <div className="max-h-[620px] space-y-2 overflow-y-auto bg-[var(--surface-alt)] p-3">
         {records.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-[var(--gray-200)] bg-white p-5 text-center text-[12px] text-[var(--gray-400)]">
+          <div className="rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] bg-white p-5 text-center text-[12px] text-[var(--gray-400)]">
             Sin facturas en este balde.
           </div>
         ) : records.slice(0, 40).map((record) => (
           <button
             key={`${record.noProveedor}-${record.noFactura}-${record.fechaVence}`}
             onClick={() => onRecordSelect(record)}
-            className="block w-full rounded-xl border border-[var(--gray-200)] bg-white p-3 text-left shadow-sm transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
+            className="block w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3 text-left shadow-sm transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="truncate text-[12px] font-semibold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
+                <p className="truncate text-[12px] font-bold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
                 <p className="mt-0.5 text-[10px] text-[var(--gray-400)]">{record.providerType}</p>
               </div>
-              <p className="shrink-0 font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmt(record.importePendientePesos)}</p>
+              <p className="shrink-0 font-mono text-[12px] font-bold text-[var(--gray-950)]">{fmt(record.importePendientePesos)}</p>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(record.paymentPriority)}`} title={priorityReason(record)}>
@@ -1738,12 +1780,22 @@ function TriageColumn({
               <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
                 {flexibilityLabel(record.providerFlexibility)}
               </span>
-              <span
-                className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]"
-                title={agingTooltip(record.diasVencida)}
-              >
-                {record.diasVencida > 0 ? `${record.diasVencida}d vencido` : 'por vencer'}
-              </span>
+              {record.diasVencida > 0 ? (
+                <span
+                  className="skeuo-stamp"
+                  data-tone="danger"
+                  title={agingTooltip(record.diasVencida)}
+                >
+                  {`${record.diasVencida}d vencido`}
+                </span>
+              ) : (
+                <span
+                  className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]"
+                  title={agingTooltip(record.diasVencida)}
+                >
+                  por vencer
+                </span>
+              )}
               <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
                 vence {dueDateForRecord(record) ?? 'sin fecha'}
               </span>
@@ -1787,10 +1839,10 @@ function InvoiceDetailPanel({
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Detalle de factura</p>
-              <h2 className="mt-1 truncate text-[18px] font-semibold text-[var(--gray-950)]">{record.noFactura || 'Sin factura'}</h2>
+              <h2 className="mt-1 truncate text-[18px] font-bold text-[var(--gray-950)]">{record.noFactura || 'Sin factura'}</h2>
               <p className="mt-1 truncate text-[12px] text-[var(--gray-500)]">{record.nombre}</p>
             </div>
-            <button onClick={onClose} className="rounded-lg p-1.5 text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]">
+            <button onClick={onClose} className="rounded-[var(--radius-md)] p-1.5 text-[var(--gray-400)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-950)]">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -1800,8 +1852,8 @@ function InvoiceDetailPanel({
           <div className="grid grid-cols-2 gap-3">
             <DetailMetric label="Pendiente" value={fmtFull(record.importePendientePesos)} />
             <DetailMetric label="Días vencida" value={`${record.diasVencida}d`} />
-            <DetailMetric label="Vence" value={dueDateForRecord(record) ?? '-'} />
-            <DetailMetric label="Moneda" value={record.moneda || '-'} />
+            <DetailMetric label="Score proveedor" value={record.providerScore != null ? String(record.providerScore) : '—'} />
+            <DetailMetric label="Fecha plan" value={dueDateForRecord(record) ?? '-'} />
           </div>
 
           <DetailSection title="Causa de triage">
@@ -1821,6 +1873,7 @@ function InvoiceDetailPanel({
             <DetailGrid rows={[
               ['Tipo', record.providerType],
               ['Riesgo', record.providerRisk],
+              ['Score', record.providerScore != null ? String(record.providerScore) : 'Sin score'],
               ['Flexibilidad', flexibilityLabel(record.providerFlexibility)],
               ['Fecha último pago proveedor', lastPaymentDate],
               ['Monto último pago proveedor', lastPaymentAmount],
@@ -1836,7 +1889,8 @@ function InvoiceDetailPanel({
               ['Proveedor #', record.noProveedor || '-'],
               ['Fecha factura', record.fechaFactura || '-'],
               ['Fecha vencimiento', record.fechaVence || '-'],
-              ['Fecha programada', record.fechaProgramacionPago || '-'],
+              ['Fecha programada JDE', record.fechaProgramacionPago || '-'],
+              ['Fecha usada por planeación', dueDateForRecord(record) ?? '-'],
               ['Condición de pago', record.condPago || '-'],
               ['Subtotal', fmtFull(record.importeSubtotalPesos)],
               ['IVA / impuestos', fmtFull(record.importeImpuestosPesos)],
@@ -1860,10 +1914,10 @@ function InvoiceDetailPanel({
             ) : (
               <div className="space-y-2">
                 {bankMatches.map((movement, index) => (
-                  <div key={`${movement.referencia}-${index}`} className="rounded-lg border border-[var(--gray-200)] px-3 py-2">
+                  <div key={`${movement.referencia}-${index}`} className="rounded-[var(--radius-md)] border border-[var(--gray-200)] px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[12px] font-medium text-[var(--gray-950)]">{movement.fechaOperacion}</span>
-                      <span className="font-mono text-[12px] font-semibold text-[var(--gray-950)]">{fmtFull(movement.importe)}</span>
+                      <span className="font-mono text-[12px] font-bold text-[var(--gray-950)]">{fmtFull(movement.importe)}</span>
                     </div>
                     <p className="mt-1 text-[11px] text-[var(--gray-500)]">{movement.referencia} · {movement.concepto}</p>
                   </div>
@@ -1884,9 +1938,9 @@ function InvoiceDetailPanel({
 
 function DetailMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-[var(--gray-50)] px-3 py-2">
+    <div className="rounded-[var(--radius)] bg-[var(--gray-50)] px-3 py-2">
       <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--gray-400)]">{label}</p>
-      <p className="mt-1 truncate font-mono text-[15px] font-semibold text-[var(--gray-950)]" title={value}>{value}</p>
+      <p className="mt-1 truncate font-mono text-[15px] font-bold text-[var(--gray-950)]" title={value}>{value}</p>
     </div>
   );
 }
@@ -1894,8 +1948,8 @@ function DetailMetric({ label, value }: { label: string; value: string }) {
 function DetailSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
-      <h3 className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-[var(--gray-400)]">{title}</h3>
-      <div className="rounded-xl border border-[var(--gray-200)] p-3">{children}</div>
+      <h3 className="mb-2 text-[12px] font-bold uppercase tracking-wide text-[var(--gray-400)]">{title}</h3>
+      <div className="rounded-[var(--radius)] border border-[var(--gray-200)] p-3">{children}</div>
     </section>
   );
 }
@@ -1932,21 +1986,21 @@ function PlanningCard({
 }) {
   const toneClass =
     tone === 'danger'
-      ? 'text-[var(--danger)] bg-[var(--danger-muted)] border-red-100'
+      ? 'text-[var(--danger)] bg-[var(--danger-muted)] border-[var(--danger-muted)]'
       : tone === 'success'
-        ? 'text-[var(--success)] bg-[var(--success-muted)] border-green-100'
-        : 'text-[var(--warning)] bg-[var(--warning-muted)] border-yellow-100';
+        ? 'text-[var(--success)] bg-[var(--success-muted)] border-[var(--success-muted)]'
+        : 'text-[var(--warning)] bg-[var(--warning-muted)] border-[var(--warning-muted)]';
 
   return (
     <button
       onClick={onClick}
-      className={`rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+      className={`rounded-[var(--radius-lg)] border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
         active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/15' : 'border-[var(--gray-200)]'
       }`}
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[12px] font-semibold text-[var(--gray-950)]">{title}</p>
+          <p className="text-[12px] font-bold text-[var(--gray-950)]">{title}</p>
           <p className="mt-2 text-[22px] font-bold font-mono text-[var(--gray-950)]">{fmt(amount)}</p>
         </div>
         <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
@@ -1971,6 +2025,13 @@ interface CXPProps {
   clients: Client[];
   assumptions: CashFlowAssumptions;
   bankStatements: BankAccountStatement[];
+  /**
+   * Map de `${cia}::${noFactura}::${noProveedor}` → coverage de pagos
+   * ya ejecutados (PagoProveedor). Si una CXP aparece como PAID, se
+   * muestra chip "Pagada" para que el controller financiero no la
+   * vuelva a proyectar/programar.
+   */
+  paymentCoverage?: Map<string, CxpPaymentCoverage>;
   budget: Budget | null;
   onMergeCia: (cia: string, records: CXPRecord[]) => void;
   onReplaceAll: (records: CXPRecord[], cias: string[]) => void;
@@ -1986,6 +2047,7 @@ const CXP = ({
   clients,
   assumptions,
   bankStatements,
+  paymentCoverage,
   onMergeCia,
   onReplaceAll,
   onReset,
@@ -2001,10 +2063,12 @@ const CXP = ({
   );
   const loadedCiaList = useMemo(() => Object.keys(loadedCias), [loadedCias]);
 
-  // Visible records = filtered by header's selectedCia
+  // Visible records = filtered by header's selectedCia, excluding Concurso
+  // Mercantil (fechaFactura ≤ 2022-12-31). Esos saldos viven en su propio
+  // módulo (Operación → Concurso Mercantil) y no se reflejan acá.
   const visibleRecords = useMemo(() => {
-    if (selectedCia === 'all') return records;
-    return records.filter(r => r.cia === selectedCia);
+    const scoped = selectedCia === 'all' ? records : records.filter(r => r.cia === selectedCia);
+    return excludeConcursoMercantil(scoped);
   }, [records, selectedCia]);
 
   const hasData = visibleRecords.length > 0;
@@ -2149,13 +2213,13 @@ const CXP = ({
       <div className="min-h-[60vh] flex items-center justify-center p-6">
         <div className="w-full max-w-3xl mx-auto">
           <div className="text-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
+            <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
               <Clock className="text-white" size={26} />
             </div>
             <h1 className="text-[28px] font-bold text-white tracking-tight">Cuentas por Pagar</h1>
           </div>
 
-          <div className="bg-white rounded-2xl shadow-sm border border-[var(--gray-200)] p-8">
+          <div className="bg-white rounded-[var(--radius-lg)] shadow-sm border border-[var(--gray-200)] p-8">
             {loading ? (
               <div className="text-center py-14">
                 <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-3" />
@@ -2167,14 +2231,14 @@ const CXP = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="border-2 border-[var(--primary)]/30 bg-[var(--primary-subtle)] rounded-2xl p-10 text-center hover:border-[var(--primary)] hover:bg-[var(--primary-muted)] transition-colors">
+                <div className="border-2 border-[var(--primary)]/30 bg-[var(--primary-subtle)] rounded-[var(--radius-lg)] p-10 text-center hover:border-[var(--primary)] hover:bg-[var(--primary-muted)] transition-colors">
                   <Database className="w-10 h-10 mx-auto mb-3 text-[var(--primary)]" />
-                  <p className="text-[15px] font-semibold text-[var(--gray-950)]">Consultar desde JDE</p>
+                  <p className="text-[15px] font-bold text-[var(--gray-950)]">Consultar desde JDE</p>
                   <p className="text-[12px] text-[var(--gray-400)] mt-1">{scopeLabel}</p>
                   <button
                     onClick={() => selectedCia === 'all' ? loadAll() : loadSingle(selectedCia)}
                     disabled={loading || (selectedCia === 'all' && activeCias.length === 0)}
-                    className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-xl bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    className="mt-4 inline-flex items-center gap-2 px-5 h-10 rounded-[var(--radius)] bg-[var(--primary)] text-white text-[13.5px] font-medium hover:bg-[var(--primary-hover)] shadow-sm shadow-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
                   >
                     <Database className="w-4 h-4" />
                     {selectedCia === 'all' ? 'Consultar todas' : 'Consultar antigüedad'}
@@ -2183,10 +2247,10 @@ const CXP = ({
 
                 <div
                   onClick={() => csvInput.current?.click()}
-                  className="border-2 border-dashed border-[var(--gray-200)] rounded-2xl p-10 text-center cursor-pointer hover:border-[var(--primary)] hover:bg-[var(--gray-50)] transition-colors"
+                  className="border-2 border-dashed border-[var(--gray-200)] rounded-[var(--radius-lg)] p-10 text-center cursor-pointer hover:border-[var(--primary)] hover:bg-[var(--gray-50)] transition-colors"
                 >
                   <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
-                  <p className="text-[15px] font-semibold text-[var(--gray-950)]">Subir CSV</p>
+                  <p className="text-[15px] font-bold text-[var(--gray-950)]">Subir CSV</p>
                   <p className="text-[13px] text-[var(--gray-400)] mt-1">Opcional · si JDE no está disponible</p>
                   <input
                     ref={csvInput} type="file" accept=".csv" className="hidden"
@@ -2197,11 +2261,11 @@ const CXP = ({
             )}
 
             {error && !loading && (
-              <div className="mt-4 bg-[var(--danger-muted)] border border-red-100 rounded-xl p-4">
+              <div className="mt-4 bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] p-4">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="text-[var(--danger)] flex-shrink-0 mt-0.5" size={18} />
                   <div className="flex-1">
-                    <p className="text-[13px] font-semibold text-[var(--gray-950)]">Error al consultar JDE</p>
+                    <p className="text-[13px] font-bold text-[var(--gray-950)]">Error al consultar JDE</p>
                     <p className="text-[12px] text-[var(--gray-500)] mt-1">{error}</p>
                     <button
                       onClick={refresh}
@@ -2275,7 +2339,7 @@ const CXP = ({
       </div>
 
       {error && (
-        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-xl px-4 py-2.5 flex items-center justify-between gap-3">
+        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] px-4 py-2.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-[12.5px] text-[var(--danger)] font-medium">
             <AlertCircle className="w-3.5 h-3.5" /> {error}
           </div>
@@ -2296,6 +2360,7 @@ const CXP = ({
         clients={clients}
         assumptions={assumptions}
         bankStatements={bankStatements}
+        paymentCoverage={paymentCoverage}
       />
     </div>
   );

@@ -51,6 +51,29 @@ export type Frequency =
 // ---------------------------------------------------------------------------
 // Client catalog
 // ---------------------------------------------------------------------------
+/** Niveles de match generados por clientCobranzaMatcher. */
+export type ClientCobranzaMatchTier = 'rfc-exact' | 'name-exact' | 'substring' | 'token-overlap';
+
+/**
+ * Enlace persistido entre un Client del catálogo y una cuenta JDE de cobranza
+ * (cia + noCliente). Un mismo Client puede tener varios enlaces — caso típico
+ * de grupos comerciales con cuentas separadas por línea de negocio.
+ */
+export interface JdeAccountLink {
+  cia: string;
+  noCliente: string;
+  nombreCliente: string;
+  rfc?: string;
+  /** ISO date en que se creó o re-confirmó el enlace. */
+  matchedAt: string;
+  /** Origen del match: 'auto' = matcher, 'user' = wizard. */
+  matchedBy: 'auto' | 'user';
+  /** Confianza 0..1 del matcher si fue automático. */
+  confidence?: number;
+  /** Tier que disparó el match cuando fue automático. */
+  tier?: ClientCobranzaMatchTier;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -62,6 +85,11 @@ export interface Client {
   commercialGroupName?: string;
   /** Stable group ID for manual overrides. Accounts sharing this ID render together. */
   commercialGroupId?: string;
+  /** Marca al cliente como "tocado por el usuario" — mover, separar, renombrar
+   *  o asignar grupo a mano. El matcher automático NO modifica `commercialGroup*`
+   *  mientras este flag esté en true. Vuelve a `false` cuando el usuario
+   *  selecciona "Automático". */
+  manualGroupOverride?: boolean;
   /** Email/web domain used as a grouping signal when available. */
   emailDomain?: string;
   /** Fiscal or delivery address used as a weak grouping signal when available. */
@@ -70,9 +98,21 @@ export interface Client {
   paymentDayRaw?: string;
   /** Structured, computable version of paymentDayRaw. */
   paymentDay: PaymentDayPattern;
+  /**
+   * Día de pago preferido del cliente según JDE (Nombre_Dia_Pago_CC13), p.ej.
+   * "Viernes". Cuando viene del API toma precedencia sobre `paymentDay` para
+   * snap-to-day en proyección de ingresos. Vacío = cae a `paymentDay`.
+   */
+  paymentDayName?: string;
   frequency: Frequency;
   /** Days of credit granted from invoice date. */
   creditDays: number;
+  /**
+   * `true` cuando `creditDays` viene del API cobranza (Dias_Credito) y NO debe
+   * editarse manualmente. La UI muestra el input deshabilitado. Por default
+   * `false` (catálogo manual histórico).
+   */
+  creditDaysFromApi?: boolean;
   /** Monthly billing — one value per calendar month (Jan..Dec).
    *  Captures seasonality from historical data. Engine divides each month's
    *  value by `eventsPerMonth(frequency)` to get the per-event amount. */
@@ -85,6 +125,13 @@ export interface Client {
   notes?: string;
   /** IVA rate applied to this client's invoices. 8 = frontera norte, 16 = general. */
   ivaRate?: 8 | 16;
+  /**
+   * Cuentas JDE (cia + noCliente) enlazadas a este Client. La unión de sus
+   * facturas alimenta la facturación histórica y la proyección por regresión.
+   * `undefined` significa "no auto-seed corrido todavía" — distinto a `[]`
+   * que significa "no hay match (huérfano o forzado por el usuario)".
+   */
+  jdeAccounts?: JdeAccountLink[];
 }
 
 // ---------------------------------------------------------------------------

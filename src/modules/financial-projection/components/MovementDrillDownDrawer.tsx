@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { FileText, X } from 'lucide-react';
 import { fmtCurrency, fmtDate, fmtPctInt } from '../../../formatters';
 import {
@@ -16,7 +16,14 @@ import type {
   Client,
   CollectionEvent,
 } from '../../../domain/types';
+import type { CobranzaRecord } from '../../../services/jdeTypes';
 import { projectClientMonth } from '../../../domain/collectionEngine';
+import {
+  bankAccountBusinessUnitLabel,
+  bankAccountFlowLabel,
+  bankAccountRoleLabel,
+  findBankAccount,
+} from '../../../domain/bankAccountsCatalog';
 
 const POPOVER_WIDTH = 480;
 const POPOVER_MARGIN = 8;
@@ -30,13 +37,13 @@ const POPOVER_EST_HEIGHT = 620;
  *   - AP_PAYMENT  → registro CXP (factura JDE) por `noFactura`.
  *   - AR_COLLECTION → eventos de cobranza derivados del catálogo del
  *     cliente para el mes proyectado (synthetic invoices).
- *   - PAYROLL/TAX/OPEX/CAPEX/DEBT → línea del presupuesto que originó
- *     el movimiento (cuando aplica).
+ *   - PAYROLL/TAX/OPEX/CAPEX/DEBT → detalle operativo o legado cuando aplica.
  *
  * Si no se pasa contexto, el drawer cae al modo "trazabilidad" anterior.
  */
 export interface InvoiceContext {
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
@@ -53,11 +60,13 @@ export function MovementDrillDownDrawer({
   anchor,
   onClose,
   invoiceContext,
+  quickActions,
 }: {
   movement: FinancialMovement | null;
   anchor: DOMRect | null;
   onClose: () => void;
   invoiceContext?: InvoiceContext;
+  quickActions?: ReactNode;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -95,6 +104,7 @@ export function MovementDrillDownDrawer({
   }, [anchor]);
 
   if (!movement || !anchor || !pos) return null;
+  const bankAccount = movement.bankAccountId ? findBankAccount(movement.bankAccountId) : null;
 
   const rows: [string, string][] = [
     ['Fuente', `${movement.sourceSystem}${movement.sourceObjectId ? ` · ${movement.sourceObjectId}` : ''}`],
@@ -114,7 +124,7 @@ export function MovementDrillDownDrawer({
   return (
     <div
       ref={popoverRef}
-      className="fixed z-[80] rounded-2xl border border-[var(--gray-200)] bg-white shadow-xl"
+      className="fixed z-[80] rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-xl"
       style={{
         top: pos.top,
         left: pos.left,
@@ -127,10 +137,10 @@ export function MovementDrillDownDrawer({
     >
       <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-[var(--gray-200)] bg-white px-4 py-3">
         <div className="min-w-0">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             Detalle del movimiento
           </div>
-          <h2 className="mt-1 truncate text-[15px] font-semibold text-[var(--gray-950)]">
+          <h2 className="mt-1 truncate text-[15px] font-bold text-[var(--gray-950)]">
             {movement.concept}
           </h2>
           <p className="mt-0.5 text-[11px] text-[var(--gray-500)]">
@@ -139,7 +149,7 @@ export function MovementDrillDownDrawer({
         </div>
         <button
           onClick={onClose}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
           aria-label="Cerrar detalle"
         >
           <X className="h-4 w-4" strokeWidth={1.5} />
@@ -148,12 +158,12 @@ export function MovementDrillDownDrawer({
 
       <div className="space-y-3 p-4">
         <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-lg border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">Estado</div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">Estado</div>
             <div className="mt-1.5"><StatusBadge status={movement.status} /></div>
           </div>
-          <div className="rounded-lg border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">Confianza</div>
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-2.5">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">Confianza</div>
             <div className="mt-1.5">
               <ConfidenceBadge band={movement.confidenceBand} score={movement.confidenceScore} />
             </div>
@@ -161,13 +171,38 @@ export function MovementDrillDownDrawer({
         </div>
 
         {/* Sección nueva: detalle al nivel de factura. Sólo cuando el
-            caller pasa el contexto (catálogos, CXP y presupuesto). */}
+            caller pasa el contexto operativo. */}
         {invoiceContext && (
           <InvoiceDetailSection movement={movement} context={invoiceContext} />
         )}
 
-        <div className="rounded-lg border border-[var(--gray-200)]">
-          <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+        {(movement.sourceSystem === 'BANK' || bankAccount) && (
+          <DetailBlock
+            title="Clasificación bancaria"
+            items={[
+              ['Unidad', bankAccount ? bankAccountBusinessUnitLabel(bankAccount.unidadNegocio) : movement.businessUnitId ?? '—'],
+              ['Banco', bankAccount?.banco ?? '—'],
+              ['Cuenta', bankAccount?.cuenta ?? movement.bankAccountId ?? '—'],
+              ['Razón social', bankAccount?.razonSocial ?? '—'],
+              ['Concepto cuenta', bankAccount?.concepto ?? movement.subcategory ?? '—'],
+              ['Rol', bankAccount ? bankAccountRoleLabel(bankAccount.role) : '—'],
+              ['Flujo', bankAccount ? bankAccountFlowLabel(bankAccount.flow) : '—'],
+              ['Contraparte', movement.counterpartyName ?? '—'],
+            ]}
+          />
+        )}
+
+        {quickActions && (
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] p-3">
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
+              Ajustes rápidos
+            </div>
+            {quickActions}
+          </div>
+        )}
+
+        <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)]">
+          <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             Trazabilidad
           </div>
           <div className="divide-y divide-[var(--gray-100)]">
@@ -213,8 +248,8 @@ export function MovementDrillDownDrawer({
         )}
 
         {movement.comments && movement.comments.length > 0 && (
-          <div className="rounded-lg border border-[var(--gray-200)] p-3">
-            <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] p-3">
+            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
               Comentarios
             </div>
             <div className="mt-1.5 space-y-1.5">
@@ -264,6 +299,19 @@ function InvoiceDetailSection({
   }
 
   if (movement.category === 'AR_COLLECTION') {
+    const cxcRecords = findCobranzaRecords(context.cobranzaRecords ?? [], movement);
+    if (cxcRecords.length > 0) {
+      return (
+        <SectionCard title={cxcRecords.length === 1 ? 'Factura CXC JDE' : `Facturas CXC JDE (${cxcRecords.length})`}>
+          <div className="divide-y divide-[var(--gray-100)]">
+            {cxcRecords.map((record, idx) => (
+              <CobranzaRecordRow key={`${record.cia}-${record.noFactura}-${idx}`} record={record} />
+            ))}
+          </div>
+        </SectionCard>
+      );
+    }
+
     const events = computeRelatedCollectionEvents(context, movement);
     if (events.length === 0) {
       return (
@@ -302,19 +350,19 @@ function InvoiceDetailSection({
     if (!breakdown) {
       return (
         <SourceMissingNote
-          title="Concepto del presupuesto"
-          message="Este movimiento se deriva del presupuesto. No se encontró un concepto coincidente."
+          title="Detalle operativo no disponible"
+          message="No se encontró una factura, documento o fuente operativa coincidente."
         />
       );
     }
     return (
-      <SectionCard title="Concepto del presupuesto">
+      <SectionCard title="Detalle de plantilla legacy">
         <div className="px-3 py-2.5 space-y-1.5">
           <Row label="Concepto" value={breakdown.concept} />
           <Row label="Mes" value={breakdown.monthLabel} />
           <Row label="Importe del mes" value={fmtCurrency(breakdown.monthAmount)} accent />
           <Row label="Importe anual" value={fmtCurrency(breakdown.annualAmount)} />
-          <Row label="Origen" value="Plantilla del presupuesto (Operativa)" />
+          <Row label="Origen" value="Plantilla legacy" />
         </div>
       </SectionCard>
     );
@@ -323,20 +371,63 @@ function InvoiceDetailSection({
   return null;
 }
 
+function CobranzaRecordRow({ record }: { record: CobranzaRecord }) {
+  const overdue = (record.diasVencida ?? 0) > 0;
+  return (
+    <div className="px-3 py-2.5 space-y-1.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[12px] font-bold text-[var(--gray-950)]">
+            <FileText className="h-3.5 w-3.5 text-[var(--gray-500)]" strokeWidth={1.75} />
+            <span className="truncate">Factura {record.noFactura || 'sin folio'}</span>
+          </div>
+          <div className="text-[11px] text-[var(--gray-500)]">{record.nombreCliente || 'Cliente sin nombre'}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
+            {fmtCurrency(record.importePendientePesos)}
+          </div>
+          <div className="text-[10px] text-[var(--gray-400)]">
+            Pendiente · {record.moneda || 'MXN'}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1 text-[11px]">
+        <Row label="Cliente" value={record.noCliente || '—'} compact />
+        <Row label="Empresa" value={record.cia || '—'} compact />
+        <Row label="Emisión" value={fmtSafeDate(record.fechaFactura)} compact />
+        <Row label="Vencimiento" value={fmtSafeDate(record.fechaVence)} compact />
+        <Row label="Cobro JDE" value={fmtSafeDate(record.fechaCobro)} compact />
+        <Row
+          label="Días vencida"
+          value={String(record.diasVencida ?? 0)}
+          compact
+          accentColor={overdue ? 'var(--danger)' : undefined}
+        />
+        <Row label="Cond. pago" value={record.condPago || '—'} compact />
+        <Row label="Estatus" value={record.estatus || '—'} compact />
+        <Row label="Importe bruto" value={fmtCurrency(record.importeBrutoPesos)} compact />
+        <Row label="Saldo pendiente" value={fmtCurrency(record.importePendientePesos)} compact accent />
+      </div>
+    </div>
+  );
+}
+
 function CxpRecordRow({ record }: { record: CXPRecord }) {
   const overdue = (record.diasVencida ?? 0) > 0;
   return (
     <div className="px-3 py-2.5 space-y-1.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+          <div className="flex items-center gap-1.5 text-[12px] font-bold text-[var(--gray-950)]">
             <FileText className="h-3.5 w-3.5 text-[var(--gray-500)]" strokeWidth={1.75} />
             <span className="truncate">Factura {record.noFactura || 'sin folio'}</span>
           </div>
           <div className="text-[11px] text-[var(--gray-500)]">{record.nombre}</div>
         </div>
         <div className="text-right">
-          <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">
+          <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
             {fmtCurrency(record.importePendientePesos)}
           </div>
           <div className="text-[10px] text-[var(--gray-400)]">
@@ -363,7 +454,7 @@ function CxpRecordRow({ record }: { record: CXPRecord }) {
 
       {hasAgingBuckets(record) && (
         <div className="pt-1.5">
-          <div className="text-[10px] uppercase tracking-wider text-[var(--gray-400)]">Antigüedad</div>
+          <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">Antigüedad</div>
           <div className="mt-1 grid grid-cols-7 gap-1">
             <AgingPill label="Por vencer" value={record.porVencer} tone="ok" />
             <AgingPill label="1-30" value={record.v1_30} tone="warn" />
@@ -393,17 +484,17 @@ function CollectionEventRow({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+          <div className="flex items-center gap-1.5 text-[12px] font-bold text-[var(--gray-950)]">
             <FileText className="h-3.5 w-3.5 text-[var(--gray-500)]" strokeWidth={1.75} />
             <span>Cobro proyectado</span>
             {highlight && (
-              <span className="inline-flex h-4 items-center rounded-full bg-[var(--primary,var(--gray-700))] px-1.5 text-[9px] font-medium uppercase tracking-wider text-white">
+              <span className="inline-flex h-4 items-center rounded-full bg-[var(--primary,var(--gray-700))] px-1.5 text-[9px] font-medium uppercase tracking-[0.08em] text-white">
                 Este movimiento
               </span>
             )}
           </div>
         </div>
-        <div className="text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">
+        <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
           {fmtCurrency(event.amount)}
         </div>
       </div>
@@ -424,8 +515,8 @@ function CollectionEventRow({
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-[var(--gray-200)]">
-      <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)]">
+      <div className="border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
         {title}
       </div>
       {children}
@@ -492,8 +583,8 @@ function AgingPill({
         color: empty ? 'var(--gray-400)' : palette.fg,
       }}
     >
-      <div className="text-[9px] uppercase tracking-wider opacity-80">{label}</div>
-      <div className="text-[10px] font-semibold tabular-nums">
+      <div className="text-[9px] uppercase tracking-[0.08em] opacity-80">{label}</div>
+      <div className="text-[10px] font-bold tabular-nums">
         {empty ? '—' : compactCurrency(value)}
       </div>
     </div>
@@ -528,6 +619,17 @@ function findCxpRecords(records: CXPRecord[], movement: FinancialMovement): CXPR
   );
   if (exact.length > 0) return exact;
   // Fallback: si la empresa no coincidió, devolvemos cualquier match por folio.
+  return records.filter((record) => record.noFactura === movement.sourceObjectId);
+}
+
+function findCobranzaRecords(records: CobranzaRecord[], movement: FinancialMovement): CobranzaRecord[] {
+  if (!movement.sourceObjectId) return [];
+  const exact = records.filter(
+    (record) =>
+      record.noFactura === movement.sourceObjectId
+      && (!movement.companyId || record.cia === movement.companyId),
+  );
+  if (exact.length > 0) return exact;
   return records.filter((record) => record.noFactura === movement.sourceObjectId);
 }
 
@@ -650,8 +752,8 @@ function computePosition(anchor: DOMRect): { top: number; left: number } {
 
 function DetailBlock({ title, items }: { title: string; items: [string, string][] }) {
   return (
-    <div className="rounded-lg border border-[var(--gray-200)] p-3">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{title}</div>
+    <div className="rounded-[var(--radius-md)] border border-[var(--gray-200)] p-3">
+      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{title}</div>
       <div className="mt-2 grid gap-1.5">
         {items.map(([label, value]) => (
           <div key={label} className="flex items-start justify-between gap-3 text-[11px]">

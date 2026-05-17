@@ -12,6 +12,7 @@
 
 import { CollectionEvent, ConfirmedPayment, eventKey } from './types';
 import { CXPRecord } from './persistence';
+import type { ComprasRecord } from '../services/jdeTypes';
 import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
 import type { BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 
@@ -59,6 +60,23 @@ import type { BankAccountStatement, BankStatementLine } from '../services/jdeTyp
  * "TRANSFERENCIA A PROVEEDOR", "PAGO A TERCEROS", etc.
  */
 const INTERNAL_TRANSFER_PATTERN = /\bTRA(?:N?S(?:P(?:ASO)?|F(?:ER(?:ENCIA)?)?)?)?[\s._/\-]*REF/i;
+
+/**
+ * Patrones complementarios sin "REF" sufijo, agregados después de detectar
+ * que algunos traspasos entre empresas llegan a "Otros Egresos" en
+ * Planeación cuando la leyenda omite la palabra REF (caso: el detector
+ * principal exige REF). Capturan inter-compañía explícitamente:
+ *
+ *   - `TRASLADO` solo o seguido por contexto bancario.
+ *   - `INTERCIA` / `INTERCIAS` (abreviaturas comunes en chequeras corporativas).
+ *   - `ENTRE CIAS`, `ENTRE EMPRESAS`, `ENTRE COMPAÑIAS` (con tilde o sin).
+ *
+ * Riesgo controlado: TRASLADO en contexto bancario MX siempre denota traspaso
+ * entre cuentas; INTERCIA(S) y ENTRE CIAS son específicos del grupo. Si alguna
+ * vez aparecen como descripción legítima de un pago a tercero, agregar
+ * negative-lookahead aquí.
+ */
+const INTERNAL_INTERCOMPANY_PATTERN = /\b(?:TRASLADO|INTERCIAS?|ENTRE\s+(?:CIAS|EMPRESAS|COMPA(?:N|Ñ)IAS))\b/i;
 
 /**
  * RFCs de empresas propias del grupo. Cuando aparece uno de estos en el
@@ -148,6 +166,37 @@ const INTERNAL_RFC_PATTERN = buildSubstringPattern(INTERNAL_RFCS);
 const INTERNAL_BENEFICIARY_PATTERN = buildSubstringPattern(INTERNAL_BENEFICIARIES);
 const INTERNAL_COMPANY_CODE_PATTERN = buildWordPattern(INTERNAL_COMPANY_CODES);
 
+// ─────────────────────────────────────────────────────────────────────────
+// Patrones de "ruido" en ABONOs (ingresos) — conceptos opacos que
+// históricamente eran transferencias internas o referencias bancarias sin
+// contraparte identificable.
+//
+// Sólo se aplican a movimientos ABONO. Los CARGO con los mismos conceptos
+// pueden ser pagos reales (SPEI a proveedor, etc.) y NO deben filtrarse.
+//
+// IMPORTANT: la versión original incluía dos regex agresivos
+// (`PURE_NUMERIC` y `NUMERIC_SHORT_TOKEN`) que también atrapaban refs CIE
+// legítimas de cobranza corporativa (típicamente folios numéricos puros
+// 8-12 dígitos). Resultado: ingresos YTD subvaluados ~3x. Por eso esos
+// dos patrones quedaron desactivados — sólo conservamos los tres
+// patrones específicos cuyo texto literal es inequívocamente bancario.
+//
+// Si en el futuro queremos volver a filtrar folios puros, hay que
+// cruzarlos contra `noCliente` del catálogo antes de marcar como interno.
+// ─────────────────────────────────────────────────────────────────────────
+const OPAQUE_INCOME_ABONO_PTE = /^\s*ABONO\s+PTE\b/i;
+const OPAQUE_INCOME_ABONO_SPEI = /^\s*ABONO\s+TRANSFERENCIA\s+SPEI\s*\.?\s*$/i;
+const OPAQUE_INCOME_BCO_BENEFIC = /\bBCO\b[^\n]*\bBENEFIC\w*\b/i;
+
+function isOpaqueIncomeConcept(concepto: string): boolean {
+  if (!concepto) return false;
+  return (
+    OPAQUE_INCOME_ABONO_PTE.test(concepto)
+    || OPAQUE_INCOME_ABONO_SPEI.test(concepto)
+    || OPAQUE_INCOME_BCO_BENEFIC.test(concepto)
+  );
+}
+
 /**
  * Longitud mínima que debe tener un número de cuenta para considerarse en el
  * detector de "cuenta destino interna". Evita falsos positivos con códigos
@@ -232,6 +281,10 @@ export function isInternalTransfer(
   if (concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) return true;
   if (referencia && INTERNAL_TRANSFER_PATTERN.test(referencia)) return true;
 
+  // 1b. Leyendas inter-compañía sin REF (TRASLADO, INTERCIAS, ENTRE CIAS).
+  if (concepto && INTERNAL_INTERCOMPANY_PATTERN.test(concepto)) return true;
+  if (referencia && INTERNAL_INTERCOMPANY_PATTERN.test(referencia)) return true;
+
   // 2. RFC de empresa propia en cualquier parte del texto.
   if (INTERNAL_RFC_PATTERN) {
     if (concepto && INTERNAL_RFC_PATTERN.test(concepto)) return true;
@@ -254,6 +307,33 @@ export function isInternalTransfer(
   // 4. Cuenta destino es otra cuenta nuestra del grupo.
   if (ownAccountDetector && ownAccountDetector(mov)) return true;
 
+  return false;
+}
+
+/**
+ * ¿La contraparte de una factura de cobranza es una empresa propia del
+ * grupo? Reusa la lista autoritativa de RFCs/nombres internos (la misma que
+ * `isInternalTransfer` usa para movimientos bancarios) para que exista un
+ * solo lugar donde mantener qué es "interno".
+ *
+ * Una factura cuya razón social/RFC pertenece al grupo es un movimiento
+ * intercompañía (traspaso disfrazado de venta), NO una cobranza real
+ * externa, y NO debe proyectarse como entrada de caja en el calendario.
+ *
+ * Señal fuerte: RFC en `INTERNAL_RFCS`. Señales de nombre: beneficiarios y
+ * siglas curadas del grupo. NO usamos códigos genéricos para no atrapar
+ * clientes externos por accidente.
+ */
+export function isInternalCounterparty(
+  rfc: string | undefined,
+  name: string | undefined,
+): boolean {
+  const r = (rfc ?? '').trim();
+  if (r && INTERNAL_RFC_PATTERN && INTERNAL_RFC_PATTERN.test(r)) return true;
+  const n = (name ?? '').trim();
+  if (!n) return false;
+  if (INTERNAL_BENEFICIARY_PATTERN && INTERNAL_BENEFICIARY_PATTERN.test(n)) return true;
+  if (INTERNAL_COMPANY_CODE_PATTERN && INTERNAL_COMPANY_CODE_PATTERN.test(n)) return true;
   return false;
 }
 
@@ -347,15 +427,32 @@ export function buildPairMatchedKeys(
     const cargos = list.filter(e => e.tipo === 'CARGO');
     const abonos = list.filter(e => e.tipo === 'ABONO');
     if (cargos.length === 0 || abonos.length === 0) continue;
-    if (cargos.length !== abonos.length) continue;
-    const cargoCuentas = new Set(cargos.map(e => e.cuenta));
-    const abonoCuentas = new Set(abonos.map(e => e.cuenta));
-    let overlap = false;
-    for (const c of cargoCuentas) {
-      if (abonoCuentas.has(c)) { overlap = true; break; }
+
+    // Greedy pairing across distinct cuentas. Permite cardinalidad asimétrica
+    // (K CARGOs + N ABONOs, K ≠ N): se parean min(K,N) movimientos siempre
+    // que cada par esté en cuentas distintas. El sobrante queda como real.
+    // Orden determinista por (cuenta, key) para que la elección de cuáles
+    // se marcan no dependa del orden de iteración.
+    const sortedCargos = [...cargos].sort((a, b) =>
+      a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
+    );
+    const sortedAbonos = [...abonos].sort((a, b) =>
+      a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
+    );
+    const usedAbono = new Set<number>();
+    for (const cargo of sortedCargos) {
+      let matchedIdx = -1;
+      for (let i = 0; i < sortedAbonos.length; i++) {
+        if (usedAbono.has(i)) continue;
+        if (sortedAbonos[i].cuenta === cargo.cuenta) continue;
+        matchedIdx = i;
+        break;
+      }
+      if (matchedIdx === -1) continue;
+      usedAbono.add(matchedIdx);
+      out.add(cargo.key);
+      out.add(sortedAbonos[matchedIdx].key);
     }
-    if (overlap) continue;
-    for (const e of list) out.add(e.key);
   }
 
   return out;
@@ -366,11 +463,13 @@ export function buildPairMatchedKeys(
 // ─────────────────────────────────────────────────────────────────────────
 
 export type InternalReason =
-  | 'legend'         // "TRASPASO REF", "TRANSFERENCIA REF", etc.
-  | 'rfc'            // RFC de empresa del grupo embebido en concepto/referencia
-  | 'beneficiary'    // nombre de empresa del grupo como beneficiario
-  | 'own-account'    // cuenta destino es otra cuenta del grupo
-  | 'pair-matched';  // CARGO-ABONO simétrico el mismo día en cuentas distintas
+  | 'legend'           // "TRASPASO REF", "TRANSFERENCIA REF", etc.
+  | 'legend-extended'  // TRASLADO, INTERCIAS, ENTRE CIAS (leyendas sin REF)
+  | 'rfc'              // RFC de empresa del grupo embebido en concepto/referencia
+  | 'beneficiary'      // nombre de empresa del grupo como beneficiario
+  | 'own-account'      // cuenta destino es otra cuenta del grupo
+  | 'pair-matched'     // CARGO-ABONO simétrico el mismo día en cuentas distintas
+  | 'opaque-income';   // ABONO con concepto opaco (folios, ABONO PTE, BCO BENEFIC)
 
 export interface MovementClassification {
   kind: 'real' | 'internal';
@@ -379,10 +478,12 @@ export interface MovementClassification {
 
 export const INTERNAL_REASON_LABELS: Record<InternalReason, string> = {
   legend: 'Marcado como traspaso interno por leyenda',
+  'legend-extended': 'Marcado como traspaso entre empresas (TRASLADO / INTERCIAS / ENTRE CIAS)',
   rfc: 'RFC de empresa del grupo en el concepto/referencia',
   beneficiary: 'Beneficiario es una empresa del grupo',
   'own-account': 'Cuenta destino pertenece al grupo',
   'pair-matched': 'CARGO y ABONO simétricos el mismo día en otra cuenta del grupo',
+  'opaque-income': 'Concepto opaco (folio bancario, ABONO PTE, BCO BENEFIC, SPEI sin detalle)',
 };
 
 export interface ClassificationContext {
@@ -411,6 +512,9 @@ export function classifyMovement(
   if ((concepto && INTERNAL_TRANSFER_PATTERN.test(concepto)) || (referencia && INTERNAL_TRANSFER_PATTERN.test(referencia))) {
     return { kind: 'internal', reason: 'legend' };
   }
+  if ((concepto && INTERNAL_INTERCOMPANY_PATTERN.test(concepto)) || (referencia && INTERNAL_INTERCOMPANY_PATTERN.test(referencia))) {
+    return { kind: 'internal', reason: 'legend-extended' };
+  }
   if (INTERNAL_RFC_PATTERN && ((concepto && INTERNAL_RFC_PATTERN.test(concepto)) || (referencia && INTERNAL_RFC_PATTERN.test(referencia)))) {
     return { kind: 'internal', reason: 'rfc' };
   }
@@ -428,6 +532,17 @@ export function classifyMovement(
     if (ctx.pairedKeys.has(key)) {
       return { kind: 'internal', reason: 'pair-matched' };
     }
+  }
+  // ABONOs con conceptos opacos (puros numéricos, ABONO PTE, BCO BENEFIC,
+  // SPEI genérico, folios cortos) se tratan como transferencias internas
+  // para no ensuciar la trayectoria de ingresos del Dashboard / Planeación.
+  // SÓLO aplica a ABONO — los CARGO con los mismos conceptos pueden ser
+  // pagos legítimos (SPEI a proveedor, etc.) y siguen siendo 'real'.
+  if (
+    mov.tipoMovimiento === 'ABONO'
+    && (isOpaqueIncomeConcept(concepto) || isOpaqueIncomeConcept(referencia))
+  ) {
+    return { kind: 'internal', reason: 'opaque-income' };
   }
   return { kind: 'real' };
 }
@@ -1009,6 +1124,51 @@ export function extractPaymentEvents(
   // Sort by date for efficient grouping
   events.sort((a, b) => a.date.localeCompare(b.date));
 
+  return events;
+}
+
+/**
+ * Convierte órdenes de compra (Compras / `/JDEdwards/compras`) en
+ * eventos de pago proyectado.
+ *
+ * Una OC representa un compromiso de egreso **antes** de que JDE genere la
+ * factura (CXP). Esto permite anticipar el egreso 0-30 días antes que CXP
+ * lo refleje. Reglas:
+ *   - Si `cancelada` → ignorada.
+ *   - Si `facturada` → ignorada (CXP / API Facturas la cubrirá; evita doble
+ *     conteo cuando se concatena con `extractPaymentEvents(cxp,...)`).
+ *   - Si `fechaPagoProyectada` vacía (OC sin recepción) → ignorada para cash
+ *     flow; la UI puede mostrar el bucket "Pendiente recepción" por su lado.
+ *   - Resto → evento `kind: 'pending'` con monto = `importeTotal` en
+ *     `fechaPagoProyectada` = `fechaRecepcion + diasCredito`.
+ *
+ * El catálogo de proveedores se consulta vía `enrichFromCatalog` igual que
+ * en `extractPaymentEvents` para que la flexibilidad y criticidad estén
+ * disponibles en la proyección.
+ */
+export function extractComprasPaymentEvents(
+  comprasRecords: ComprasRecord[],
+): PaymentEvent[] {
+  const events: PaymentEvent[] = [];
+  for (const record of comprasRecords) {
+    if (record.cancelada || record.facturada) continue;
+    if (!record.fechaPagoProyectada) continue;
+    const amount = record.importeTotal || 0;
+    if (amount <= 0) continue;
+    const supplier = record.nombreProveedor || 'Unknown';
+    const classification = record.descFamilia || record.descCategoria || 'Uncategorized';
+    const enrich = enrichFromCatalog({ supplier, classification });
+    events.push({
+      date: record.fechaPagoProyectada,
+      amount,
+      supplier,
+      classification,
+      kind: 'pending',
+      flexibility: enrich.flexibility,
+      criticidad: enrich.criticidad,
+    });
+  }
+  events.sort((a, b) => a.date.localeCompare(b.date));
   return events;
 }
 

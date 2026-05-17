@@ -128,6 +128,23 @@ describe('detectRecurringExpenses', () => {
     expect(base).toBe(0);
     expect(top).toHaveLength(0);
   });
+
+  it('does not treat recurrent card transfer concepts as operating expense', () => {
+    const bank: BankAccountStatement[] = [
+      mkBank([
+        mkMov('2025-10-05', 'CARGO', 30_000, 'TARJ.NO.5579 6211 F.TRANS.2'),
+        mkMov('2025-11-05', 'CARGO', 30_000, 'TARJ.NO.5579 6211 F.TRANS.2'),
+        mkMov('2025-12-05', 'CARGO', 30_000, 'TARJ.NO.5579 6211 F.TRANS.2'),
+        mkMov('2026-01-05', 'CARGO', 30_000, 'TARJ.NO.5579 6211 F.TRANS.2'),
+        mkMov('2026-02-05', 'CARGO', 30_000, 'TARJ.NO.5579 6211 F.TRANS.2'),
+        mkMov('2026-03-05', 'CARGO', 30_000, 'TARJ.NO.5579 6211 F.TRANS.2'),
+      ]),
+    ];
+
+    const { base, top } = detectRecurringExpenses(bank, '2026-04-22');
+    expect(base).toBe(0);
+    expect(top).toHaveLength(0);
+  });
 });
 
 describe('resolveExpenseForMonth', () => {
@@ -137,6 +154,11 @@ describe('resolveExpenseForMonth', () => {
     expect(r.scheduled).toBe(100);
     expect(r.recurring).toBe(200);
     expect(r.baseline).toBe(150);
+  });
+
+  it('uses budget as a floor without cutting a stronger operating projection', () => {
+    expect(resolveExpenseForMonth(100, 200, 150, [], [], 250).total).toBe(250);
+    expect(resolveExpenseForMonth(100, 300, 150, [], [], 250).total).toBe(300);
   });
 });
 

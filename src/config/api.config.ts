@@ -2,68 +2,59 @@
  * Configuración de APIs para el frontend.
  *
  * AVISO DE SEGURIDAD:
- *   Todas las variables `VITE_*` quedan EMBEBIDAS en el bundle del cliente.
- *   No coloques credenciales reales aquí en producción — usa el proxy
- *   serverless (`api/jde/[...path].ts`) que lee `JDE_TOKEN` server-side.
- *   `VITE_JDE_TOKEN` y `VITE_COGNOS_TOKEN` solo deben tener valor en
- *   `.env.local` para desarrollo. En Vercel deja esas variables vacías.
+ *   Todas las variables `VITE_*` quedan embebidas en el bundle del cliente.
+ *   Los tokens reales deben vivir server-side (`JDE_TOKEN`, `COGNOS_TOKEN`,
+ *   `OPENAI_API_KEY`) y ser inyectados por el proxy Atlas/backend.
  *
- * Default `baseUrl = /api/jde`:
- *   En producción la Vercel Function `api/jde/[...path].ts` resuelve la
- *   llamada e inyecta `JDE_TOKEN` server-side. En desarrollo el proxy de
- *   Vite (vite.config.ts) reescribe `/api/jde/*` hacia el upstream JDE.
- *   Por eso el default cubre ambos entornos sin pedir `VITE_JDE_BASE_URL`.
- *   Antes se usaba `?? ''` y, como `??` no atrapa string vacío, el fallback
- *   posterior `?? '/api/jde'` en `jdeClient.resolveBaseUrl` no llegaba a
- *   ejecutarse: las llamadas terminaban en el origen ('/empresas', '/bancos')
- *   y el rewrite SPA devolvía `index.html`, así que todo el cliente JDE se
- *   quedaba "cargando" sin datos en producción.
+ * Default `baseUrl = /api/jde`: el proxy de Vite (vite.config.ts) reescribe
+ * `/api/jde/*` hacia el upstream JDE para evitar CORS en dev.
  */
 const DEFAULT_JDE_BASE_URL = '/api/jde';
+const DEFAULT_TRESS_BASE_URL = '/api/tress';
+const DEFAULT_COGNOS_BASE_URL = '/api/cognos';
+const DEFAULT_OPENAI_BASE_URL = '/api/openai';
+const DEFAULT_CITI_BASE_URL = '/api/citi';
 
 export const apiConfig = {
   jde: {
     baseUrl: import.meta.env.VITE_JDE_BASE_URL || DEFAULT_JDE_BASE_URL,
-    authValue: import.meta.env.VITE_JDE_TOKEN ?? '',
+    authValue: '',
     environment: import.meta.env.VITE_JDE_ENVIRONMENT ?? 'DV920',
   },
+  // TRESS comparte el token JDE pero vive en un namespace upstream distinto
+  // (/v1/erp/tress). El cliente lo consume con `jdeClient` pasando
+  // `baseUrl: apiConfig.tress.baseUrl` — no hay clase aparte.
+  tress: {
+    baseUrl: import.meta.env.VITE_TRESS_BASE_URL || DEFAULT_TRESS_BASE_URL,
+    authValue: '',
+  },
+  // CITI / Senda Citi — namespace para el ROL diario (viajes ejecutados).
+  // Endpoint productivo: http://srv-desarrollo:92/CITI/RolDiario. En dev el
+  // proxy de Vite (vite.config.ts) reescribe `/api/citi/*` hacia upstream
+  // para evitar CORS. Comparte el token JDE — son el mismo backend Senda.
+  citi: {
+    baseUrl: import.meta.env.VITE_CITI_BASE_URL || DEFAULT_CITI_BASE_URL,
+    authValue: '',
+  },
   cognos: {
-    baseUrl: import.meta.env.VITE_COGNOS_BASE_URL ?? '',
-    authValue: import.meta.env.VITE_COGNOS_TOKEN ?? '',
+    baseUrl: import.meta.env.VITE_COGNOS_BASE_URL || DEFAULT_COGNOS_BASE_URL,
+    authValue: '',
     namespace: import.meta.env.VITE_COGNOS_NAMESPACE ?? 'CognosEx',
   },
   atlas: {
     artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'midas',
   },
+  openai: {
+    model: import.meta.env.VITE_OPENAI_MODEL ?? 'gpt-4o-mini',
+    baseUrl: import.meta.env.VITE_OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL,
+  },
 } as const;
-
-// Aviso visible en consola si el bundle de producción carga con un token VITE_
-// configurado: significa que la credencial está expuesta a cualquier visitante.
-if (
-  typeof window !== 'undefined' &&
-  import.meta.env.PROD &&
-  (apiConfig.jde.authValue || apiConfig.cognos.authValue)
-) {
-  // eslint-disable-next-line no-console
-  console.warn(
-    '[security] VITE_JDE_TOKEN/VITE_COGNOS_TOKEN definidos en build de ' +
-      'producción → la credencial es visible en el bundle público. Migra al ' +
-      'proxy serverless (api/jde/[...path].ts) y vacía la VITE_ en Vercel.',
-  );
-}
 
 export function validateApiConfig(): string[] {
   const missing: string[] = [];
-  // JDE: en producción el token vive server-side (`JDE_TOKEN`) y lo inyecta
-  // la Vercel Function. Solo flagueamos `VITE_JDE_TOKEN` faltante en dev,
-  // donde el proxy de Vite no inyecta credencial.
   if (!apiConfig.jde.baseUrl) missing.push('VITE_JDE_BASE_URL');
-  if (import.meta.env.DEV && !apiConfig.jde.authValue) {
-    missing.push('VITE_JDE_TOKEN');
-  }
+  if (!apiConfig.tress.baseUrl) missing.push('VITE_TRESS_BASE_URL');
+  if (!apiConfig.citi.baseUrl) missing.push('VITE_CITI_BASE_URL');
   if (!apiConfig.cognos.baseUrl) missing.push('VITE_COGNOS_BASE_URL');
-  if (import.meta.env.DEV && !apiConfig.cognos.authValue) {
-    missing.push('VITE_COGNOS_TOKEN');
-  }
   return missing;
 }

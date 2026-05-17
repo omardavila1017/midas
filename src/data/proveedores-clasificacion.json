@@ -1,7 +1,7 @@
 {
   "meta": {
-    "generadoDesde": "Plantilla de Provedores2.xlsx",
-    "fechaGeneracion": "2026-04-28",
+    "generadoDesde": "Plantilla de Provedores (Alberto).xlsx",
+    "fechaGeneracion": "2026-05-04",
     "totalProveedores": 478,
     "totalConHistoricoPagos": 345,
     "multiplicadoresFrecuencia": {
@@ -62,7 +62,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -76,14 +76,14 @@
       "montoPromedioPago": 53360,
       "numPagos2025": 1,
       "montoTotal2025": 53360,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 2,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -104,8 +104,8 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 33.8,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "30590540",
@@ -125,8 +125,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 36.3,
-      "clasificacionAutomatica": "BAJO"
+      "score": 49.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "51099362",
@@ -146,8 +146,8 @@
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 51.2,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 61.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "51099371",
@@ -167,8 +167,8 @@
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 51.2,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 61.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "63327342",
@@ -188,8 +188,8 @@
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 51.2,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 61.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "103086",
@@ -207,9 +207,9 @@
         "sustituibilidad": 5,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
-        "diasCredito": 4
+        "diasCredito": 3
       },
-      "score": 66.3,
+      "score": 70.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -228,9 +228,9 @@
         "sustituibilidad": 5,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
-        "diasCredito": 4
+        "diasCredito": 3
       },
-      "score": 66.3,
+      "score": 70.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -244,15 +244,15 @@
       "montoPromedioPago": 1855,
       "numPagos2025": 24,
       "montoTotal2025": 44522,
-      "gastoMinimoMensual": 1855,
+      "gastoMinimoMensual": 1855.0,
       "scoreCriterios": {
-        "sustituibilidad": 5,
+        "sustituibilidad": 2,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
-        "diasCredito": 4
+        "diasCredito": 3
       },
-      "score": 66.3,
-      "clasificacionAutomatica": "ALTO"
+      "score": 52.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1346011",
@@ -265,15 +265,15 @@
       "montoPromedioPago": 5538,
       "numPagos2025": 62,
       "montoTotal2025": 343339,
-      "gastoMinimoMensual": 5538,
+      "gastoMinimoMensual": 5538.0,
       "scoreCriterios": {
-        "sustituibilidad": 5,
-        "impactoOperativo": 3,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 2,
+        "impactoOperativo": 2,
+        "riesgoLegal": 1,
+        "diasCredito": 1
       },
-      "score": 66.3,
-      "clasificacionAutomatica": "ALTO"
+      "score": 35.0,
+      "clasificacionAutomatica": "BAJO"
     },
     {
       "numProveedor": "1386873",
@@ -286,14 +286,14 @@
       "montoPromedioPago": 7565,
       "numPagos2025": 25,
       "montoTotal2025": 189132,
-      "gastoMinimoMensual": 7565,
+      "gastoMinimoMensual": 7565.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
-        "diasCredito": 4
+        "diasCredito": 1
       },
-      "score": 66.3,
+      "score": 64.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -307,14 +307,14 @@
       "montoPromedioPago": 3391,
       "numPagos2025": 11,
       "montoTotal2025": 37306,
-      "gastoMinimoMensual": 3391,
+      "gastoMinimoMensual": 3391.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
-        "diasCredito": 4
+        "diasCredito": 1
       },
-      "score": 66.3,
+      "score": 64.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -331,12 +331,12 @@
       "gastoMinimoMensual": 83937.05,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 3,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "impactoOperativo": 5,
+        "riesgoLegal": 5,
+        "diasCredito": 5
       },
-      "score": 66.3,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "69390220",
@@ -349,14 +349,14 @@
       "montoPromedioPago": 17226,
       "numPagos2025": 11,
       "montoTotal2025": 189486,
-      "gastoMinimoMensual": 17226,
+      "gastoMinimoMensual": 17226.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 3,
-        "riesgoLegal": 5,
+        "riesgoLegal": 3,
         "diasCredito": 4
       },
-      "score": 73.8,
+      "score": 75.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -370,14 +370,14 @@
       "montoPromedioPago": 56095,
       "numPagos2025": 70,
       "montoTotal2025": 3926650,
-      "gastoMinimoMensual": 56095,
+      "gastoMinimoMensual": 56095.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 3,
+        "impactoOperativo": 2,
         "riesgoLegal": 5,
-        "diasCredito": 4
+        "diasCredito": 1
       },
-      "score": 73.8,
+      "score": 61.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -395,10 +395,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 3,
-        "riesgoLegal": 5,
+        "riesgoLegal": 3,
         "diasCredito": 4
       },
-      "score": 73.8,
+      "score": 75.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -412,15 +412,15 @@
       "montoPromedioPago": 112000,
       "numPagos2025": 1,
       "montoTotal2025": 112000,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 1,
-        "impactoOperativo": 2,
+        "sustituibilidad": 5,
+        "impactoOperativo": 3,
         "riesgoLegal": 1,
-        "diasCredito": 2
+        "diasCredito": 3
       },
-      "score": 15.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 68.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1102906",
@@ -435,18 +435,18 @@
       "montoTotal2025": 6305000,
       "gastoMinimoMensual": 1186982.9,
       "scoreCriterios": {
-        "sustituibilidad": 1,
-        "impactoOperativo": 2,
+        "sustituibilidad": 5,
+        "impactoOperativo": 3,
         "riesgoLegal": 1,
-        "diasCredito": 2
+        "diasCredito": 3
       },
-      "score": 15.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 68.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1100126",
       "nombre": "SUPER SERVICIO ZARATE, SA CV",
-      "categoria": "GRUAS",
+      "categoria": "CORRALÓN (Obligatorio)",
       "clasificacionAlberto": "FLEX_ALTO",
       "clasificacionAlbertoRaw": "(b) Flex Alto",
       "override": null,
@@ -456,18 +456,18 @@
       "montoTotal2025": 99171,
       "gastoMinimoMensual": 828.15,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 5,
         "impactoOperativo": 4,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "riesgoLegal": 3,
+        "diasCredito": 3
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 81.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "1169035",
       "nombre": "GRUAS MONTERREY, S.A. DE C.V.",
-      "categoria": "GRUAS",
+      "categoria": "CORRALÓN (Obligatorio)",
       "clasificacionAlberto": "FLEX_ALTO",
       "clasificacionAlbertoRaw": "(b) Flex Alto",
       "override": null,
@@ -475,20 +475,20 @@
       "montoPromedioPago": 8062,
       "numPagos2025": 203,
       "montoTotal2025": 1636527,
-      "gastoMinimoMensual": 16124,
+      "gastoMinimoMensual": 16124.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 5,
         "impactoOperativo": 4,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "riesgoLegal": 3,
+        "diasCredito": 3
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 81.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "60982501",
       "nombre": "JUAN DANIEL MARTINEZ RODRIGUEZ",
-      "categoria": "GRUAS",
+      "categoria": "CORRALÓN (Obligatorio)",
       "clasificacionAlberto": "FLEX_ALTO",
       "clasificacionAlbertoRaw": "(b) Flex Alto",
       "override": null,
@@ -496,15 +496,15 @@
       "montoPromedioPago": 66271,
       "numPagos2025": 6,
       "montoTotal2025": 397627,
-      "gastoMinimoMensual": 66271,
+      "gastoMinimoMensual": 66271.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 5,
         "impactoOperativo": 4,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "riesgoLegal": 3,
+        "diasCredito": 3
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 81.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "1360260",
@@ -520,12 +520,12 @@
       "gastoMinimoMensual": 17744.34,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 27.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 51.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "19154940",
@@ -541,12 +541,12 @@
       "gastoMinimoMensual": 83378.48,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 27.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 51.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "36346513",
@@ -559,14 +559,14 @@
       "montoPromedioPago": 20880,
       "numPagos2025": 14,
       "montoTotal2025": 292320,
-      "gastoMinimoMensual": 20880,
+      "gastoMinimoMensual": 20880.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 5,
+        "sustituibilidad": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 76.2,
+      "score": 66.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -580,14 +580,14 @@
       "montoPromedioPago": 150212,
       "numPagos2025": 1,
       "montoTotal2025": 150212,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -608,7 +608,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -625,12 +625,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "impactoOperativo": 3,
+        "riesgoLegal": 4,
         "diasCredito": 4
       },
-      "score": 85.0,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 77.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "31810090",
@@ -643,15 +643,15 @@
       "montoPromedioPago": 184322,
       "numPagos2025": 1,
       "montoTotal2025": 184322,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "impactoOperativo": 3,
+        "riesgoLegal": 1,
         "diasCredito": 3
       },
-      "score": 81.2,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 68.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "72170800",
@@ -664,14 +664,14 @@
       "montoPromedioPago": 155434,
       "numPagos2025": 12,
       "montoTotal2025": 1865205,
-      "gastoMinimoMensual": 155434,
+      "gastoMinimoMensual": 155434.0,
       "scoreCriterios": {
         "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 72.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -689,10 +689,10 @@
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
-        "riesgoLegal": 3,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 46.2,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -713,7 +713,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -727,14 +727,14 @@
       "montoPromedioPago": 2412,
       "numPagos2025": 252,
       "montoTotal2025": 607791,
-      "gastoMinimoMensual": 4824,
+      "gastoMinimoMensual": 4824.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 1,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -755,7 +755,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -769,14 +769,14 @@
       "montoPromedioPago": 39220,
       "numPagos2025": 29,
       "montoTotal2025": 1137392,
-      "gastoMinimoMensual": 78440,
+      "gastoMinimoMensual": 78440.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 1,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -797,7 +797,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -811,14 +811,14 @@
       "montoPromedioPago": 8218,
       "numPagos2025": 78,
       "montoTotal2025": 641010,
-      "gastoMinimoMensual": 16436,
+      "gastoMinimoMensual": 16436.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 2,
-        "riesgoLegal": 2,
+        "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 25.0,
+      "score": 38.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -832,14 +832,14 @@
       "montoPromedioPago": 11539,
       "numPagos2025": 11,
       "montoTotal2025": 126927,
-      "gastoMinimoMensual": 11539,
+      "gastoMinimoMensual": 11539.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 2,
-        "riesgoLegal": 2,
+        "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 25.0,
+      "score": 38.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -853,14 +853,14 @@
       "montoPromedioPago": 4699,
       "numPagos2025": 47,
       "montoTotal2025": 220836,
-      "gastoMinimoMensual": 9398,
+      "gastoMinimoMensual": 9398.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 2,
-        "riesgoLegal": 2,
+        "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 25.0,
+      "score": 38.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -874,14 +874,14 @@
       "montoPromedioPago": 23685,
       "numPagos2025": 78,
       "montoTotal2025": 1847400,
-      "gastoMinimoMensual": 47370,
+      "gastoMinimoMensual": 47370.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 2,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -895,14 +895,14 @@
       "montoPromedioPago": 36157,
       "numPagos2025": 1,
       "montoTotal2025": 36157,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 2,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -916,15 +916,15 @@
       "montoPromedioPago": 20817,
       "numPagos2025": 2,
       "montoTotal2025": 41633,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 3,
+        "sustituibilidad": 1,
+        "impactoOperativo": 2,
+        "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 46.2,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 32.0,
+      "clasificacionAutomatica": "BAJO"
     },
     {
       "numProveedor": "2289021",
@@ -937,14 +937,14 @@
       "montoPromedioPago": 608211,
       "numPagos2025": 51,
       "montoTotal2025": 31018773,
-      "gastoMinimoMensual": 1216422,
+      "gastoMinimoMensual": 1216422.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -958,14 +958,14 @@
       "montoPromedioPago": 78747,
       "numPagos2025": 21,
       "montoTotal2025": 1653696,
-      "gastoMinimoMensual": 157494,
+      "gastoMinimoMensual": 157494.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -981,13 +981,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 3
       },
-      "score": 63.7,
-      "clasificacionAutomatica": "ALTO"
+      "score": 56.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "10912521",
@@ -1000,15 +1000,15 @@
       "montoPromedioPago": 10916,
       "numPagos2025": 1,
       "montoTotal2025": 10916,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 3
       },
-      "score": 63.7,
-      "clasificacionAutomatica": "ALTO"
+      "score": 56.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1151919",
@@ -1023,13 +1023,13 @@
       "montoTotal2025": 18717,
       "gastoMinimoMensual": 748.8,
       "scoreCriterios": {
-        "sustituibilidad": 4,
+        "sustituibilidad": 2,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 3
+        "riesgoLegal": 2,
+        "diasCredito": 4
       },
-      "score": 80.0,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 73.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1251485",
@@ -1044,13 +1044,13 @@
       "montoTotal2025": 2085892,
       "gastoMinimoMensual": 29418.02,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 3
+        "sustituibilidad": 2,
+        "impactoOperativo": 4,
+        "riesgoLegal": 1,
+        "diasCredito": 1
       },
-      "score": 80.0,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 53.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "19995263",
@@ -1063,14 +1063,14 @@
       "montoPromedioPago": 12012,
       "numPagos2025": 22392,
       "montoTotal2025": 268975554,
-      "gastoMinimoMensual": 264264,
+      "gastoMinimoMensual": 264264.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
+        "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
+        "riesgoLegal": 1,
         "diasCredito": 3
       },
-      "score": 80.0,
+      "score": 86.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1087,12 +1087,12 @@
       "gastoMinimoMensual": 1740.0,
       "scoreCriterios": {
         "sustituibilidad": 4,
-        "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 3
+        "impactoOperativo": 2,
+        "riesgoLegal": 5,
+        "diasCredito": 1
       },
-      "score": 80.0,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 55.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "27052775",
@@ -1110,9 +1110,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1131,9 +1131,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1152,9 +1152,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1173,9 +1173,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1194,9 +1194,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1215,9 +1215,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1236,9 +1236,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1257,9 +1257,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1278,9 +1278,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1299,9 +1299,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1320,9 +1320,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1341,9 +1341,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1362,9 +1362,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1383,9 +1383,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1404,9 +1404,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1425,9 +1425,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1446,9 +1446,9 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1467,15 +1467,15 @@
         "sustituibilidad": 4,
         "impactoOperativo": 5,
         "riesgoLegal": 3,
-        "diasCredito": 3
+        "diasCredito": 4
       },
-      "score": 80.0,
+      "score": 87.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "79954922",
       "nombre": "GRUAS MARROQUIN JR S.A DE C.V",
-      "categoria": "CORRALÓN",
+      "categoria": "CORRALÓN (Obligatorio)",
       "clasificacionAlberto": "CRITICO",
       "clasificacionAlbertoRaw": "(a) Crítico",
       "override": null,
@@ -1485,18 +1485,18 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "sustituibilidad": 5,
+        "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 3
       },
-      "score": 50.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 81.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "79979281",
       "nombre": "Sergio Fletes Garibay",
-      "categoria": "CORRALÓN",
+      "categoria": "CORRALÓN (Obligatorio)",
       "clasificacionAlberto": "CRITICO",
       "clasificacionAlbertoRaw": "(a) Crítico",
       "override": null,
@@ -1506,13 +1506,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "sustituibilidad": 5,
+        "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 3
       },
-      "score": 50.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 81.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "77267256",
@@ -1532,7 +1532,7 @@
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
+      "score": 73.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -1546,14 +1546,14 @@
       "montoPromedioPago": 20488,
       "numPagos2025": 30,
       "montoTotal2025": 614636,
-      "gastoMinimoMensual": 20488,
+      "gastoMinimoMensual": 20488.0,
       "scoreCriterios": {
         "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 72.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -1567,15 +1567,15 @@
       "montoPromedioPago": 17827,
       "numPagos2025": 12,
       "montoTotal2025": 213927,
-      "gastoMinimoMensual": 17827,
+      "gastoMinimoMensual": 17827.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1370020",
@@ -1590,13 +1590,13 @@
       "montoTotal2025": 2217835,
       "gastoMinimoMensual": 266758.31,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
+        "sustituibilidad": 5,
+        "impactoOperativo": 5,
+        "riesgoLegal": 1,
         "diasCredito": 3
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 86.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "1238918",
@@ -1609,14 +1609,14 @@
       "montoPromedioPago": 5806,
       "numPagos2025": 154,
       "montoTotal2025": 894121,
-      "gastoMinimoMensual": 5806,
+      "gastoMinimoMensual": 5806.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "riesgoLegal": 2,
         "diasCredito": 4
       },
-      "score": 85.0,
+      "score": 82.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1630,14 +1630,14 @@
       "montoPromedioPago": 95063,
       "numPagos2025": 9,
       "montoTotal2025": 855570,
-      "gastoMinimoMensual": 95063,
+      "gastoMinimoMensual": 95063.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "riesgoLegal": 2,
         "diasCredito": 4
       },
-      "score": 85.0,
+      "score": 82.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1651,14 +1651,14 @@
       "montoPromedioPago": 14816,
       "numPagos2025": 24,
       "montoTotal2025": 355585,
-      "gastoMinimoMensual": 14816,
+      "gastoMinimoMensual": 14816.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "riesgoLegal": 2,
         "diasCredito": 4
       },
-      "score": 85.0,
+      "score": 82.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1672,14 +1672,14 @@
       "montoPromedioPago": 6464,
       "numPagos2025": 15,
       "montoTotal2025": 96963,
-      "gastoMinimoMensual": 6464,
+      "gastoMinimoMensual": 6464.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "riesgoLegal": 2,
         "diasCredito": 4
       },
-      "score": 85.0,
+      "score": 82.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -1695,13 +1695,13 @@
       "montoTotal2025": 30548,
       "gastoMinimoMensual": 4073.2,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 2,
-        "riesgoLegal": 3,
-        "diasCredito": 3
+        "sustituibilidad": 5,
+        "impactoOperativo": 3,
+        "riesgoLegal": 1,
+        "diasCredito": 1
       },
-      "score": 38.7,
-      "clasificacionAutomatica": "BAJO"
+      "score": 62.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "55108801",
@@ -1714,15 +1714,15 @@
       "montoPromedioPago": 56570,
       "numPagos2025": 1,
       "montoTotal2025": 56570,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 2,
-        "riesgoLegal": 3,
-        "diasCredito": 3
+        "sustituibilidad": 5,
+        "impactoOperativo": 3,
+        "riesgoLegal": 1,
+        "diasCredito": 1
       },
-      "score": 38.7,
-      "clasificacionAutomatica": "BAJO"
+      "score": 62.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "3772014",
@@ -1735,15 +1735,15 @@
       "montoPromedioPago": 6327,
       "numPagos2025": 9,
       "montoTotal2025": 56941,
-      "gastoMinimoMensual": 12654,
+      "gastoMinimoMensual": 12654.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "21699156",
@@ -1759,12 +1759,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "34259838",
@@ -1780,12 +1780,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "51543515",
@@ -1801,12 +1801,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "52641272",
@@ -1822,12 +1822,12 @@
       "gastoMinimoMensual": 4070.2,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "52783473",
@@ -1843,12 +1843,12 @@
       "gastoMinimoMensual": 5157.03,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "68642510",
@@ -1864,12 +1864,12 @@
       "gastoMinimoMensual": 8439.17,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "71546887",
@@ -1885,12 +1885,12 @@
       "gastoMinimoMensual": 4914.55,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "71675620",
@@ -1906,12 +1906,12 @@
       "gastoMinimoMensual": 3598.23,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "71712005",
@@ -1927,12 +1927,12 @@
       "gastoMinimoMensual": 5360.54,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "71804954",
@@ -1948,12 +1948,12 @@
       "gastoMinimoMensual": 3602.56,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "74170985",
@@ -1969,12 +1969,12 @@
       "gastoMinimoMensual": 3836.38,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "76803248",
@@ -1990,12 +1990,12 @@
       "gastoMinimoMensual": 10430.97,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "80260653",
@@ -2011,12 +2011,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 2,
+        "impactoOperativo": 5,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 66.2,
-      "clasificacionAutomatica": "ALTO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "67599716",
@@ -2029,14 +2029,14 @@
       "montoPromedioPago": 44225,
       "numPagos2025": 12,
       "montoTotal2025": 530700,
-      "gastoMinimoMensual": 44225,
+      "gastoMinimoMensual": 44225.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 2,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
+      "score": 58.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -2050,15 +2050,15 @@
       "montoPromedioPago": 22403,
       "numPagos2025": 18,
       "montoTotal2025": 403252,
-      "gastoMinimoMensual": 22403,
+      "gastoMinimoMensual": 22403.0,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 3,
-        "diasCredito": 3
+        "sustituibilidad": 5,
+        "impactoOperativo": 5,
+        "riesgoLegal": 5,
+        "diasCredito": 5
       },
-      "score": 31.2,
-      "clasificacionAutomatica": "BAJO"
+      "score": 100.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "105387",
@@ -2078,7 +2078,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -2092,14 +2092,14 @@
       "montoPromedioPago": 9563,
       "numPagos2025": 30,
       "montoTotal2025": 286897,
-      "gastoMinimoMensual": 9563,
+      "gastoMinimoMensual": 9563.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -2113,15 +2113,15 @@
       "montoPromedioPago": 60418,
       "numPagos2025": 21,
       "montoTotal2025": 1268787,
-      "gastoMinimoMensual": 120836,
+      "gastoMinimoMensual": 120836.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "5807330",
@@ -2134,15 +2134,15 @@
       "montoPromedioPago": 14131,
       "numPagos2025": 14,
       "montoTotal2025": 197832,
-      "gastoMinimoMensual": 14131,
+      "gastoMinimoMensual": 14131.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "11458797",
@@ -2155,15 +2155,15 @@
       "montoPromedioPago": 14000,
       "numPagos2025": 16,
       "montoTotal2025": 223999,
-      "gastoMinimoMensual": 14000,
+      "gastoMinimoMensual": 14000.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "15487026",
@@ -2176,15 +2176,15 @@
       "montoPromedioPago": 17400,
       "numPagos2025": 2,
       "montoTotal2025": 34800,
-      "gastoMinimoMensual": 17400,
+      "gastoMinimoMensual": 17400.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "16436677",
@@ -2199,13 +2199,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "28565994",
@@ -2218,15 +2218,15 @@
       "montoPromedioPago": 340042,
       "numPagos2025": 13,
       "montoTotal2025": 4420540,
-      "gastoMinimoMensual": 340042,
+      "gastoMinimoMensual": 340042.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "34288954",
@@ -2241,13 +2241,13 @@
       "montoTotal2025": 1692909,
       "gastoMinimoMensual": 46395.95,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "53549398",
@@ -2260,15 +2260,15 @@
       "montoPromedioPago": 18234,
       "numPagos2025": 17,
       "montoTotal2025": 309976,
-      "gastoMinimoMensual": 18234,
+      "gastoMinimoMensual": 18234.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "55094868",
@@ -2281,15 +2281,15 @@
       "montoPromedioPago": 9500,
       "numPagos2025": 4,
       "montoTotal2025": 38001,
-      "gastoMinimoMensual": 19000,
+      "gastoMinimoMensual": 19000.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "56654812",
@@ -2304,13 +2304,13 @@
       "montoTotal2025": 1968951,
       "gastoMinimoMensual": 69314.64,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "58097360",
@@ -2325,13 +2325,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "57635171",
@@ -2348,10 +2348,10 @@
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
-        "riesgoLegal": 3,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 46.2,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -2365,14 +2365,14 @@
       "montoPromedioPago": 10896,
       "numPagos2025": 90,
       "montoTotal2025": 980673,
-      "gastoMinimoMensual": 10896,
+      "gastoMinimoMensual": 10896.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 1,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2386,20 +2386,20 @@
       "montoPromedioPago": 17724,
       "numPagos2025": 24,
       "montoTotal2025": 425379,
-      "gastoMinimoMensual": 17724,
+      "gastoMinimoMensual": 17724.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 2,
-        "riesgoLegal": 3,
+        "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 27.5,
+      "score": 38.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
       "numProveedor": "75790836",
       "nombre": "WOLF&MEDUSSA DEL NORTE",
-      "categoria": "VIGILANCIA",
+      "categoria": "SERVICIOS DE VIGILANCIA",
       "clasificacionAlberto": "FLEX_MEDIO",
       "clasificacionAlbertoRaw": "(c) Flex Medio",
       "override": null,
@@ -2414,8 +2414,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 36.3,
-      "clasificacionAutomatica": "BAJO"
+      "score": 49.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "19473473",
@@ -2430,12 +2430,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "sustituibilidad": 1,
+        "impactoOperativo": 1,
+        "riesgoLegal": 1,
+        "diasCredito": 1
       },
-      "score": 25.0,
+      "score": 20.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2456,7 +2456,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2477,7 +2477,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2491,14 +2491,14 @@
       "montoPromedioPago": 100553,
       "numPagos2025": 123,
       "montoTotal2025": 12368058,
-      "gastoMinimoMensual": 201106,
+      "gastoMinimoMensual": 201106.0,
       "scoreCriterios": {
         "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 72.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -2512,14 +2512,14 @@
       "montoPromedioPago": 4640,
       "numPagos2025": 1,
       "montoTotal2025": 4640,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
-        "riesgoLegal": 3,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 46.2,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -2535,12 +2535,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 1,
+        "sustituibilidad": 2,
         "impactoOperativo": 1,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "riesgoLegal": 1,
+        "diasCredito": 5
       },
-      "score": 6.2,
+      "score": 38.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2554,14 +2554,14 @@
       "montoPromedioPago": 22600,
       "numPagos2025": 2,
       "montoTotal2025": 45200,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 1,
+        "sustituibilidad": 2,
         "impactoOperativo": 1,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "riesgoLegal": 1,
+        "diasCredito": 5
       },
-      "score": 6.2,
+      "score": 38.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2577,12 +2577,12 @@
       "montoTotal2025": 11105,
       "gastoMinimoMensual": 634.4,
       "scoreCriterios": {
-        "sustituibilidad": 1,
+        "sustituibilidad": 2,
         "impactoOperativo": 1,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "riesgoLegal": 1,
+        "diasCredito": 5
       },
-      "score": 6.2,
+      "score": 38.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2596,15 +2596,10 @@
       "montoPromedioPago": 27042,
       "numPagos2025": 56,
       "montoTotal2025": 1514363,
-      "gastoMinimoMensual": 54084,
-      "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 4,
-        "diasCredito": 2
-      },
-      "score": 48.7,
-      "clasificacionAutomatica": "MEDIO"
+      "gastoMinimoMensual": 54084.0,
+      "scoreCriterios": null,
+      "score": null,
+      "clasificacionAutomatica": null
     },
     {
       "numProveedor": "41445196",
@@ -2619,12 +2614,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 2,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
+      "score": 58.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -2645,7 +2640,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2666,7 +2661,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2680,14 +2675,14 @@
       "montoPromedioPago": 17655,
       "numPagos2025": 1,
       "montoTotal2025": 17655,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 2,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2708,7 +2703,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2729,7 +2724,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2750,7 +2745,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2771,7 +2766,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2792,7 +2787,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2813,7 +2808,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2834,7 +2829,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2855,7 +2850,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2876,7 +2871,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2897,7 +2892,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2918,7 +2913,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2939,7 +2934,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2960,7 +2955,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2981,7 +2976,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -2998,12 +2993,12 @@
       "gastoMinimoMensual": 1068.46,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 27.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 51.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "75455456",
@@ -3019,12 +3014,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 27.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 51.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1276295",
@@ -3040,12 +3035,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 27.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 51.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "33851936",
@@ -3060,13 +3055,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "34708218",
@@ -3081,13 +3076,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "39302313",
@@ -3102,13 +3097,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "40304551",
@@ -3123,13 +3118,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "49925901",
@@ -3144,13 +3139,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "53414792",
@@ -3165,13 +3160,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "53529864",
@@ -3186,13 +3181,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "58715834",
@@ -3207,13 +3202,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "79332963",
@@ -3228,13 +3223,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
-        "diasCredito": 4
+        "sustituibilidad": 5,
+        "impactoOperativo": 1,
+        "riesgoLegal": 4,
+        "diasCredito": 1
       },
-      "score": 32.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 50.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "17771469",
@@ -3249,12 +3244,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 5,
+        "sustituibilidad": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 76.2,
+      "score": 66.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -3268,14 +3263,14 @@
       "montoPromedioPago": 12789213,
       "numPagos2025": 1,
       "montoTotal2025": 12789213,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -3289,20 +3284,20 @@
       "montoPromedioPago": 241185,
       "numPagos2025": 28,
       "montoTotal2025": 6753190,
-      "gastoMinimoMensual": 241185,
+      "gastoMinimoMensual": 241185.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1328964",
       "nombre": "PABLO HIGINIO GARCIA ZAMARRON",
-      "categoria": "VIGILANCIA",
+      "categoria": "SERVICIOS DE VIGILANCIA",
       "clasificacionAlberto": "PAUSAR",
       "clasificacionAlbertoRaw": "Pausar",
       "override": null,
@@ -3317,13 +3312,13 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 36.3,
-      "clasificacionAutomatica": "BAJO"
+      "score": 49.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "45933859",
       "nombre": "ALSE FIRE SYSTEMS SA DE CV",
-      "categoria": "VIGILANCIA",
+      "categoria": "SERVICIOS DE VIGILANCIA",
       "clasificacionAlberto": "PAUSAR",
       "clasificacionAlbertoRaw": "Pausar",
       "override": null,
@@ -3338,13 +3333,13 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 36.3,
-      "clasificacionAutomatica": "BAJO"
+      "score": 49.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "57160161",
       "nombre": "MER.K SERVICIOS S.A DE C.V.",
-      "categoria": "VIGILANCIA",
+      "categoria": "SERVICIOS DE VIGILANCIA",
       "clasificacionAlberto": "PAUSAR",
       "clasificacionAlbertoRaw": "Pausar",
       "override": null,
@@ -3359,13 +3354,13 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 36.3,
-      "clasificacionAutomatica": "BAJO"
+      "score": 49.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "70563896",
       "nombre": "SSM PROYECTOS S.A. DE C.V.",
-      "categoria": "VIGILANCIA",
+      "categoria": "SERVICIOS DE VIGILANCIA",
       "clasificacionAlberto": "PAUSAR",
       "clasificacionAlbertoRaw": "Pausar",
       "override": null,
@@ -3380,13 +3375,13 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 36.3,
-      "clasificacionAutomatica": "BAJO"
+      "score": 49.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "72965194",
       "nombre": "EASY FAST ADMINISTRATIVA",
-      "categoria": "VIGILANCIA",
+      "categoria": "SERVICIOS DE VIGILANCIA",
       "clasificacionAlberto": "PAUSAR",
       "clasificacionAlbertoRaw": "Pausar",
       "override": null,
@@ -3394,15 +3389,15 @@
       "montoPromedioPago": 262296,
       "numPagos2025": 28,
       "montoTotal2025": 7344280,
-      "gastoMinimoMensual": 524592,
+      "gastoMinimoMensual": 524592.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 36.3,
-      "clasificacionAutomatica": "BAJO"
+      "score": 49.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "41349989",
@@ -3418,11 +3413,11 @@
       "gastoMinimoMensual": 696000.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 4,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 46.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -3436,14 +3431,14 @@
       "montoPromedioPago": 2890013,
       "numPagos2025": 10,
       "montoTotal2025": 28900134,
-      "gastoMinimoMensual": 2890013,
+      "gastoMinimoMensual": 2890013.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 4,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 46.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -3457,14 +3452,14 @@
       "montoPromedioPago": 450872,
       "numPagos2025": 33,
       "montoTotal2025": 14878771,
-      "gastoMinimoMensual": 450872,
+      "gastoMinimoMensual": 450872.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 4,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 46.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -3485,8 +3480,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "122154",
@@ -3506,8 +3501,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1149683",
@@ -3520,15 +3515,15 @@
       "montoPromedioPago": 106415,
       "numPagos2025": 81,
       "montoTotal2025": 8619579,
-      "gastoMinimoMensual": 212830,
+      "gastoMinimoMensual": 212830.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 2,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1158651",
@@ -3548,8 +3543,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1165974",
@@ -3569,8 +3564,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1192420",
@@ -3590,8 +3585,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1201787",
@@ -3611,8 +3606,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1232225",
@@ -3632,8 +3627,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1267225",
@@ -3653,8 +3648,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1364161",
@@ -3674,8 +3669,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1378793",
@@ -3695,8 +3690,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1403451",
@@ -3716,8 +3711,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "2675773",
@@ -3737,8 +3732,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "2991901",
@@ -3758,8 +3753,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "4043104",
@@ -3779,8 +3774,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "8877704",
@@ -3800,8 +3795,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "9550711",
@@ -3821,8 +3816,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "11145820",
@@ -3842,8 +3837,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "28687545",
@@ -3863,8 +3858,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "29403209",
@@ -3884,8 +3879,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "37585786",
@@ -3905,8 +3900,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "42007219",
@@ -3926,8 +3921,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "42896837",
@@ -3947,8 +3942,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "45375877",
@@ -3968,8 +3963,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "48567701",
@@ -3989,8 +3984,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "49139661",
@@ -4010,8 +4005,8 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 40.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1286240",
@@ -4028,10 +4023,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
+        "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 95.0,
+      "score": 100.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4049,10 +4044,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
+        "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 95.0,
+      "score": 100.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4066,14 +4061,14 @@
       "montoPromedioPago": 14474,
       "numPagos2025": 35,
       "montoTotal2025": 506601,
-      "gastoMinimoMensual": 14474,
+      "gastoMinimoMensual": 14474.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4087,14 +4082,14 @@
       "montoPromedioPago": 16736,
       "numPagos2025": 38,
       "montoTotal2025": 635965,
-      "gastoMinimoMensual": 16736,
+      "gastoMinimoMensual": 16736.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4108,14 +4103,14 @@
       "montoPromedioPago": 320990,
       "numPagos2025": 16,
       "montoTotal2025": 5135847,
-      "gastoMinimoMensual": 641980,
+      "gastoMinimoMensual": 641980.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4129,14 +4124,14 @@
       "montoPromedioPago": 26041,
       "numPagos2025": 18,
       "montoTotal2025": 468745,
-      "gastoMinimoMensual": 26041,
+      "gastoMinimoMensual": 26041.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4154,10 +4149,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4171,14 +4166,14 @@
       "montoPromedioPago": 11042,
       "numPagos2025": 48,
       "montoTotal2025": 529999,
-      "gastoMinimoMensual": 11042,
+      "gastoMinimoMensual": 11042.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4192,14 +4187,14 @@
       "montoPromedioPago": 75057,
       "numPagos2025": 63,
       "montoTotal2025": 4728618,
-      "gastoMinimoMensual": 75057,
+      "gastoMinimoMensual": 75057.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4217,10 +4212,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4238,10 +4233,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4259,10 +4254,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4280,10 +4275,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4301,10 +4296,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4322,10 +4317,10 @@
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 5,
-        "riesgoLegal": 3,
-        "diasCredito": 4
+        "riesgoLegal": 2,
+        "diasCredito": 5
       },
-      "score": 91.2,
+      "score": 94.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -4339,15 +4334,15 @@
       "montoPromedioPago": 56196,
       "numPagos2025": 1,
       "montoTotal2025": 56196,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
         "diasCredito": 5
       },
-      "score": 88.8,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "3792955",
@@ -4360,15 +4355,15 @@
       "montoPromedioPago": 92101,
       "numPagos2025": 1,
       "montoTotal2025": 92101,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 4,
-        "riesgoLegal": 5,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
         "diasCredito": 5
       },
-      "score": 88.8,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "8473806",
@@ -4384,12 +4379,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 4,
-        "impactoOperativo": 5,
+        "impactoOperativo": 3,
         "riesgoLegal": 3,
         "diasCredito": 4
       },
-      "score": 83.7,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 69.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "37521299",
@@ -4405,12 +4400,12 @@
       "gastoMinimoMensual": 171238.51,
       "scoreCriterios": {
         "sustituibilidad": 4,
-        "impactoOperativo": 5,
+        "impactoOperativo": 3,
         "riesgoLegal": 3,
         "diasCredito": 4
       },
-      "score": 83.7,
-      "clasificacionAutomatica": "CRITICO"
+      "score": 69.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1255734",
@@ -4423,15 +4418,15 @@
       "montoPromedioPago": 25149,
       "numPagos2025": 25,
       "montoTotal2025": 628714,
-      "gastoMinimoMensual": 25149,
+      "gastoMinimoMensual": 25149.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 3,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 77.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 82.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "1364068",
@@ -4447,11 +4442,11 @@
       "gastoMinimoMensual": 594067.34,
       "scoreCriterios": {
         "sustituibilidad": 5,
-        "impactoOperativo": 3,
+        "impactoOperativo": 1,
         "riesgoLegal": 5,
         "diasCredito": 4
       },
-      "score": 73.8,
+      "score": 61.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4472,7 +4467,7 @@
         "riesgoLegal": 4,
         "diasCredito": 3
       },
-      "score": 71.2,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4486,14 +4481,14 @@
       "montoPromedioPago": 206386,
       "numPagos2025": 14,
       "montoTotal2025": 2889402,
-      "gastoMinimoMensual": 206386,
+      "gastoMinimoMensual": 206386.0,
       "scoreCriterios": {
         "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 4,
         "diasCredito": 3
       },
-      "score": 71.2,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4507,14 +4502,14 @@
       "montoPromedioPago": 212952,
       "numPagos2025": 17,
       "montoTotal2025": 3620185,
-      "gastoMinimoMensual": 212952,
+      "gastoMinimoMensual": 212952.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4528,14 +4523,14 @@
       "montoPromedioPago": 7103,
       "numPagos2025": 18,
       "montoTotal2025": 127847,
-      "gastoMinimoMensual": 7103,
+      "gastoMinimoMensual": 7103.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4549,14 +4544,14 @@
       "montoPromedioPago": 31175,
       "numPagos2025": 12,
       "montoTotal2025": 374100,
-      "gastoMinimoMensual": 31175,
+      "gastoMinimoMensual": 31175.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4570,14 +4565,14 @@
       "montoPromedioPago": 762592,
       "numPagos2025": 12,
       "montoTotal2025": 9151103,
-      "gastoMinimoMensual": 762592,
+      "gastoMinimoMensual": 762592.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4591,14 +4586,14 @@
       "montoPromedioPago": 130924,
       "numPagos2025": 13,
       "montoTotal2025": 1702017,
-      "gastoMinimoMensual": 130924,
+      "gastoMinimoMensual": 130924.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4612,14 +4607,14 @@
       "montoPromedioPago": 178208,
       "numPagos2025": 15,
       "montoTotal2025": 2673123,
-      "gastoMinimoMensual": 178208,
+      "gastoMinimoMensual": 178208.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4633,14 +4628,14 @@
       "montoPromedioPago": 37506,
       "numPagos2025": 29,
       "montoTotal2025": 1087665,
-      "gastoMinimoMensual": 37506,
+      "gastoMinimoMensual": 37506.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4656,12 +4651,12 @@
       "montoTotal2025": 172623,
       "gastoMinimoMensual": 8631.2,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4677,12 +4672,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4696,14 +4691,14 @@
       "montoPromedioPago": 535189,
       "numPagos2025": 15,
       "montoTotal2025": 8027835,
-      "gastoMinimoMensual": 535189,
+      "gastoMinimoMensual": 535189.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4717,14 +4712,14 @@
       "montoPromedioPago": 947314,
       "numPagos2025": 15,
       "montoTotal2025": 14209717,
-      "gastoMinimoMensual": 947314,
+      "gastoMinimoMensual": 947314.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4738,14 +4733,14 @@
       "montoPromedioPago": 6055,
       "numPagos2025": 13,
       "montoTotal2025": 78719,
-      "gastoMinimoMensual": 6055,
+      "gastoMinimoMensual": 6055.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4759,14 +4754,14 @@
       "montoPromedioPago": 181047,
       "numPagos2025": 12,
       "montoTotal2025": 2172566,
-      "gastoMinimoMensual": 181047,
+      "gastoMinimoMensual": 181047.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4780,14 +4775,14 @@
       "montoPromedioPago": 30312,
       "numPagos2025": 12,
       "montoTotal2025": 363743,
-      "gastoMinimoMensual": 30312,
+      "gastoMinimoMensual": 30312.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4803,12 +4798,12 @@
       "montoTotal2025": 29,
       "gastoMinimoMensual": 1.2,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4822,14 +4817,14 @@
       "montoPromedioPago": 98208,
       "numPagos2025": 20,
       "montoTotal2025": 1964170,
-      "gastoMinimoMensual": 98208,
+      "gastoMinimoMensual": 98208.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4843,14 +4838,14 @@
       "montoPromedioPago": 17660,
       "numPagos2025": 14,
       "montoTotal2025": 247235,
-      "gastoMinimoMensual": 17660,
+      "gastoMinimoMensual": 17660.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4864,14 +4859,14 @@
       "montoPromedioPago": 175662,
       "numPagos2025": 15,
       "montoTotal2025": 2634924,
-      "gastoMinimoMensual": 175662,
+      "gastoMinimoMensual": 175662.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4885,14 +4880,14 @@
       "montoPromedioPago": 10800,
       "numPagos2025": 13,
       "montoTotal2025": 140400,
-      "gastoMinimoMensual": 10800,
+      "gastoMinimoMensual": 10800.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4906,14 +4901,14 @@
       "montoPromedioPago": 27247,
       "numPagos2025": 12,
       "montoTotal2025": 326964,
-      "gastoMinimoMensual": 27247,
+      "gastoMinimoMensual": 27247.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4929,12 +4924,12 @@
       "montoTotal2025": 94,
       "gastoMinimoMensual": 3.6,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4948,14 +4943,14 @@
       "montoPromedioPago": 8174,
       "numPagos2025": 13,
       "montoTotal2025": 106263,
-      "gastoMinimoMensual": 8174,
+      "gastoMinimoMensual": 8174.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4969,14 +4964,14 @@
       "montoPromedioPago": 17400,
       "numPagos2025": 13,
       "montoTotal2025": 226200,
-      "gastoMinimoMensual": 17400,
+      "gastoMinimoMensual": 17400.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -4990,14 +4985,14 @@
       "montoPromedioPago": 9515,
       "numPagos2025": 57,
       "montoTotal2025": 542358,
-      "gastoMinimoMensual": 9515,
+      "gastoMinimoMensual": 9515.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5011,14 +5006,14 @@
       "montoPromedioPago": 236739,
       "numPagos2025": 14,
       "montoTotal2025": 3314340,
-      "gastoMinimoMensual": 236739,
+      "gastoMinimoMensual": 236739.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5032,14 +5027,14 @@
       "montoPromedioPago": 130771,
       "numPagos2025": 27,
       "montoTotal2025": 3530814,
-      "gastoMinimoMensual": 130771,
+      "gastoMinimoMensual": 130771.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5053,14 +5048,14 @@
       "montoPromedioPago": 41613,
       "numPagos2025": 12,
       "montoTotal2025": 499360,
-      "gastoMinimoMensual": 41613,
+      "gastoMinimoMensual": 41613.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5074,14 +5069,14 @@
       "montoPromedioPago": 43561,
       "numPagos2025": 13,
       "montoTotal2025": 566292,
-      "gastoMinimoMensual": 43561,
+      "gastoMinimoMensual": 43561.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5095,14 +5090,14 @@
       "montoPromedioPago": 7000,
       "numPagos2025": 13,
       "montoTotal2025": 91000,
-      "gastoMinimoMensual": 7000,
+      "gastoMinimoMensual": 7000.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5116,14 +5111,14 @@
       "montoPromedioPago": 52200,
       "numPagos2025": 13,
       "montoTotal2025": 678600,
-      "gastoMinimoMensual": 52200,
+      "gastoMinimoMensual": 52200.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5137,14 +5132,14 @@
       "montoPromedioPago": 47748,
       "numPagos2025": 24,
       "montoTotal2025": 1145961,
-      "gastoMinimoMensual": 47748,
+      "gastoMinimoMensual": 47748.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5158,14 +5153,14 @@
       "montoPromedioPago": 18212,
       "numPagos2025": 26,
       "montoTotal2025": 473512,
-      "gastoMinimoMensual": 18212,
+      "gastoMinimoMensual": 18212.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5179,14 +5174,14 @@
       "montoPromedioPago": 30528,
       "numPagos2025": 11,
       "montoTotal2025": 335813,
-      "gastoMinimoMensual": 30528,
+      "gastoMinimoMensual": 30528.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5202,12 +5197,12 @@
       "montoTotal2025": 44231,
       "gastoMinimoMensual": 2527.6,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5223,12 +5218,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5244,12 +5239,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5265,12 +5260,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5284,14 +5279,14 @@
       "montoPromedioPago": 408928,
       "numPagos2025": 41,
       "montoTotal2025": 16766053,
-      "gastoMinimoMensual": 408928,
+      "gastoMinimoMensual": 408928.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5307,12 +5302,12 @@
       "montoTotal2025": 25137,
       "gastoMinimoMensual": 2513.6,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5326,14 +5321,14 @@
       "montoPromedioPago": 7417,
       "numPagos2025": 16,
       "montoTotal2025": 118677,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 3,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 65.0,
+      "score": 77.0,
       "clasificacionAutomatica": "ALTO"
     },
     {
@@ -5347,15 +5342,15 @@
       "montoPromedioPago": 104400,
       "numPagos2025": 1,
       "montoTotal2025": 104400,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 3,
-        "riesgoLegal": 5,
-        "diasCredito": 3
+        "sustituibilidad": 3,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
+        "diasCredito": 2
       },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "74410678",
@@ -5368,15 +5363,15 @@
       "montoPromedioPago": 13519,
       "numPagos2025": 54,
       "montoTotal2025": 730020,
-      "gastoMinimoMensual": 27038,
+      "gastoMinimoMensual": 27038.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1178169",
@@ -5389,15 +5384,15 @@
       "montoPromedioPago": 7977,
       "numPagos2025": 11,
       "montoTotal2025": 87747,
-      "gastoMinimoMensual": 7977,
+      "gastoMinimoMensual": 7977.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1206799",
@@ -5417,8 +5412,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1219936",
@@ -5438,8 +5433,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1252998",
@@ -5452,15 +5447,15 @@
       "montoPromedioPago": 5652,
       "numPagos2025": 103,
       "montoTotal2025": 582129,
-      "gastoMinimoMensual": 11304,
+      "gastoMinimoMensual": 11304.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1266265",
@@ -5473,15 +5468,15 @@
       "montoPromedioPago": 9342,
       "numPagos2025": 95,
       "montoTotal2025": 887531,
-      "gastoMinimoMensual": 18684,
+      "gastoMinimoMensual": 18684.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1368000",
@@ -5501,8 +5496,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "2243233",
@@ -5522,8 +5517,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "6895896",
@@ -5543,8 +5538,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "13463864",
@@ -5564,8 +5559,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "15947993",
@@ -5585,8 +5580,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "36075792",
@@ -5606,8 +5601,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "70029394",
@@ -5620,15 +5615,15 @@
       "montoPromedioPago": 1933,
       "numPagos2025": 6,
       "montoTotal2025": 11600,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "76264299",
@@ -5641,15 +5636,15 @@
       "montoPromedioPago": 18317,
       "numPagos2025": 36,
       "montoTotal2025": 659429,
-      "gastoMinimoMensual": 36634,
+      "gastoMinimoMensual": 36634.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "76601312",
@@ -5669,8 +5664,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107615",
@@ -5690,8 +5685,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107616",
@@ -5711,8 +5706,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107652",
@@ -5732,8 +5727,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107663",
@@ -5746,15 +5741,15 @@
       "montoPromedioPago": 7335,
       "numPagos2025": 34,
       "montoTotal2025": 249376,
-      "gastoMinimoMensual": 7335,
+      "gastoMinimoMensual": 7335.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107671",
@@ -5767,15 +5762,15 @@
       "montoPromedioPago": 1137,
       "numPagos2025": 573,
       "montoTotal2025": 651262,
-      "gastoMinimoMensual": 2274,
+      "gastoMinimoMensual": 2274.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107677",
@@ -5795,8 +5790,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107764",
@@ -5816,8 +5811,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107841",
@@ -5837,8 +5832,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1165675",
@@ -5851,15 +5846,15 @@
       "montoPromedioPago": 16023,
       "numPagos2025": 29,
       "montoTotal2025": 464667,
-      "gastoMinimoMensual": 32046,
+      "gastoMinimoMensual": 32046.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1192690",
@@ -5872,15 +5867,15 @@
       "montoPromedioPago": 2672,
       "numPagos2025": 199,
       "montoTotal2025": 531629,
-      "gastoMinimoMensual": 5344,
+      "gastoMinimoMensual": 5344.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1234888",
@@ -5900,8 +5895,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1256585",
@@ -5921,8 +5916,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1363217",
@@ -5942,8 +5937,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1380439",
@@ -5963,8 +5958,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "2761461",
@@ -5984,8 +5979,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "3284766",
@@ -6005,8 +6000,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "3908874",
@@ -6019,15 +6014,15 @@
       "montoPromedioPago": 14902,
       "numPagos2025": 13,
       "montoTotal2025": 193720,
-      "gastoMinimoMensual": 14902,
+      "gastoMinimoMensual": 14902.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "4079254",
@@ -6040,15 +6035,15 @@
       "montoPromedioPago": 7111,
       "numPagos2025": 39,
       "montoTotal2025": 277335,
-      "gastoMinimoMensual": 7111,
+      "gastoMinimoMensual": 7111.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "4103082",
@@ -6068,8 +6063,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "11747863",
@@ -6082,15 +6077,15 @@
       "montoPromedioPago": 11383,
       "numPagos2025": 45,
       "montoTotal2025": 512225,
-      "gastoMinimoMensual": 22766,
+      "gastoMinimoMensual": 22766.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "14225024",
@@ -6103,15 +6098,15 @@
       "montoPromedioPago": 2447,
       "numPagos2025": 135,
       "montoTotal2025": 330300,
-      "gastoMinimoMensual": 4894,
+      "gastoMinimoMensual": 4894.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "15141391",
@@ -6131,8 +6126,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "16799734",
@@ -6152,8 +6147,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "24562446",
@@ -6173,8 +6168,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "25098649",
@@ -6194,8 +6189,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "25370391",
@@ -6215,8 +6210,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "31745128",
@@ -6229,15 +6224,15 @@
       "montoPromedioPago": 5237,
       "numPagos2025": 133,
       "montoTotal2025": 696540,
-      "gastoMinimoMensual": 10474,
+      "gastoMinimoMensual": 10474.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "35903189",
@@ -6257,8 +6252,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "36275153",
@@ -6278,8 +6273,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "42703847",
@@ -6292,15 +6287,15 @@
       "montoPromedioPago": 1887,
       "numPagos2025": 39,
       "montoTotal2025": 73612,
-      "gastoMinimoMensual": 3774,
+      "gastoMinimoMensual": 3774.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "44757831",
@@ -6320,8 +6315,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "45476109",
@@ -6334,15 +6329,15 @@
       "montoPromedioPago": 12104,
       "numPagos2025": 30,
       "montoTotal2025": 363122,
-      "gastoMinimoMensual": 24208,
+      "gastoMinimoMensual": 24208.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "51763745",
@@ -6355,15 +6350,15 @@
       "montoPromedioPago": 27990,
       "numPagos2025": 18,
       "montoTotal2025": 503821,
-      "gastoMinimoMensual": 27990,
+      "gastoMinimoMensual": 27990.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "52709097",
@@ -6376,15 +6371,15 @@
       "montoPromedioPago": 18583,
       "numPagos2025": 30,
       "montoTotal2025": 557496,
-      "gastoMinimoMensual": 37166,
+      "gastoMinimoMensual": 37166.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "57866868",
@@ -6397,15 +6392,15 @@
       "montoPromedioPago": 16332,
       "numPagos2025": 13,
       "montoTotal2025": 212318,
-      "gastoMinimoMensual": 16332,
+      "gastoMinimoMensual": 16332.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "58599378",
@@ -6425,8 +6420,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "61497381",
@@ -6446,8 +6441,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "62865835",
@@ -6460,15 +6455,15 @@
       "montoPromedioPago": 3934,
       "numPagos2025": 66,
       "montoTotal2025": 259620,
-      "gastoMinimoMensual": 3934,
+      "gastoMinimoMensual": 3934.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "70318153",
@@ -6488,8 +6483,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "72170818",
@@ -6509,8 +6504,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "75608635",
@@ -6523,15 +6518,15 @@
       "montoPromedioPago": 70148,
       "numPagos2025": 3,
       "montoTotal2025": 210443,
-      "gastoMinimoMensual": 70148,
+      "gastoMinimoMensual": 70148.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107786",
@@ -6551,8 +6546,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107810",
@@ -6572,8 +6567,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1100610",
@@ -6593,8 +6588,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1104901",
@@ -6614,8 +6609,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1209746",
@@ -6635,8 +6630,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1233560",
@@ -6656,8 +6651,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1350660",
@@ -6670,15 +6665,15 @@
       "montoPromedioPago": 9573,
       "numPagos2025": 49,
       "montoTotal2025": 469092,
-      "gastoMinimoMensual": 19146,
+      "gastoMinimoMensual": 19146.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1365001",
@@ -6691,15 +6686,15 @@
       "montoPromedioPago": 8365,
       "numPagos2025": 36,
       "montoTotal2025": 301136,
-      "gastoMinimoMensual": 8365,
+      "gastoMinimoMensual": 8365.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "2640888",
@@ -6719,8 +6714,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "3983591",
@@ -6740,8 +6735,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "4257778",
@@ -6761,8 +6756,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "5289763",
@@ -6782,8 +6777,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "5454870",
@@ -6803,8 +6798,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "9137978",
@@ -6817,15 +6812,15 @@
       "montoPromedioPago": 44273,
       "numPagos2025": 25,
       "montoTotal2025": 1106825,
-      "gastoMinimoMensual": 44273,
+      "gastoMinimoMensual": 44273.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "12949539",
@@ -6845,8 +6840,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "13047959",
@@ -6866,8 +6861,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "15583376",
@@ -6887,8 +6882,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "23198507",
@@ -6908,8 +6903,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "36003908",
@@ -6922,15 +6917,15 @@
       "montoPromedioPago": 110533,
       "numPagos2025": 9,
       "montoTotal2025": 994800,
-      "gastoMinimoMensual": 110533,
+      "gastoMinimoMensual": 110533.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "36165202",
@@ -6950,8 +6945,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "36346505",
@@ -6971,8 +6966,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "38983348",
@@ -6992,8 +6987,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "42418536",
@@ -7013,8 +7008,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "42934899",
@@ -7034,8 +7029,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "43785469",
@@ -7048,15 +7043,15 @@
       "montoPromedioPago": 9698,
       "numPagos2025": 29,
       "montoTotal2025": 281255,
-      "gastoMinimoMensual": 9698,
+      "gastoMinimoMensual": 9698.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "44724596",
@@ -7076,8 +7071,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "50381956",
@@ -7097,8 +7092,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "61497399",
@@ -7118,8 +7113,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "68565500",
@@ -7132,15 +7127,15 @@
       "montoPromedioPago": 20022,
       "numPagos2025": 20,
       "montoTotal2025": 400432,
-      "gastoMinimoMensual": 40044,
+      "gastoMinimoMensual": 40044.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "70361098",
@@ -7160,8 +7155,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "76127817",
@@ -7174,15 +7169,15 @@
       "montoPromedioPago": 9631,
       "numPagos2025": 4,
       "montoTotal2025": 38524,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "76908154",
@@ -7195,15 +7190,15 @@
       "montoPromedioPago": 21905,
       "numPagos2025": 6,
       "montoTotal2025": 131428,
-      "gastoMinimoMensual": 43810,
+      "gastoMinimoMensual": 43810.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "79838454",
@@ -7223,8 +7218,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "79892979",
@@ -7244,8 +7239,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1270256",
@@ -7258,15 +7253,15 @@
       "montoPromedioPago": 43064,
       "numPagos2025": 115,
       "montoTotal2025": 4952337,
-      "gastoMinimoMensual": 43064,
+      "gastoMinimoMensual": 43064.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
-        "riesgoLegal": 2,
+        "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 66.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1274812",
@@ -7281,12 +7276,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 1,
         "impactoOperativo": 4,
-        "riesgoLegal": 2,
+        "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 55.0,
+      "score": 50.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7302,12 +7297,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 1,
         "impactoOperativo": 4,
-        "riesgoLegal": 2,
+        "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 55.0,
+      "score": 50.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7323,12 +7318,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 4,
+        "riesgoLegal": 1,
         "diasCredito": 3
       },
-      "score": 52.5,
+      "score": 59.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7345,11 +7340,11 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 4,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 46.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7366,11 +7361,11 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
-        "riesgoLegal": 4,
+        "impactoOperativo": 2,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 48.7,
+      "score": 46.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7391,7 +7386,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 41.2,
+      "score": 53.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7412,7 +7407,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 41.2,
+      "score": 53.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7433,7 +7428,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 41.2,
+      "score": 53.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7454,7 +7449,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 41.2,
+      "score": 53.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7475,7 +7470,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 41.2,
+      "score": 53.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7496,7 +7491,7 @@
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 41.2,
+      "score": 53.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -7510,15 +7505,15 @@
       "montoPromedioPago": 47667,
       "numPagos2025": 12,
       "montoTotal2025": 571998,
-      "gastoMinimoMensual": 47667,
+      "gastoMinimoMensual": 47667.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 2,
-        "riesgoLegal": 4,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 37.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "46542147",
@@ -7531,15 +7526,15 @@
       "montoPromedioPago": 11913,
       "numPagos2025": 45,
       "montoTotal2025": 536096,
-      "gastoMinimoMensual": 11913,
+      "gastoMinimoMensual": 11913.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 2,
-        "riesgoLegal": 4,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 37.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 46.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "28139856",
@@ -7552,14 +7547,14 @@
       "montoPromedioPago": 7192,
       "numPagos2025": 1,
       "montoTotal2025": 7192,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 3,
-        "riesgoLegal": 2,
-        "diasCredito": 2
+        "sustituibilidad": 1,
+        "impactoOperativo": 1,
+        "riesgoLegal": 1,
+        "diasCredito": 1
       },
-      "score": 36.3,
+      "score": 20.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7580,8 +7575,8 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 33.8,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1166029",
@@ -7601,13 +7596,13 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 33.8,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "13189834",
       "nombre": "PARQUE FUNERAL VALLE DE LAS FLORES SA D",
-      "categoria": "FUNERALES",
+      "categoria": "FUNERALES (Arreglos Florales)",
       "clasificacionAlberto": "FLEX_BAJO",
       "clasificacionAlbertoRaw": "(d) Flex Bajo",
       "override": null,
@@ -7615,14 +7610,14 @@
       "montoPromedioPago": 3422,
       "numPagos2025": 12,
       "montoTotal2025": 41064,
-      "gastoMinimoMensual": 3422,
+      "gastoMinimoMensual": 3422.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
-        "impactoOperativo": 2,
-        "riesgoLegal": 3,
-        "diasCredito": 2
+        "impactoOperativo": 1,
+        "riesgoLegal": 1,
+        "diasCredito": 5
       },
-      "score": 20.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7636,15 +7631,15 @@
       "montoPromedioPago": 20261,
       "numPagos2025": 133,
       "montoTotal2025": 2694753,
-      "gastoMinimoMensual": 40522,
+      "gastoMinimoMensual": 40522.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 17.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 43.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "77797425",
@@ -7660,12 +7655,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 1,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 17.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 43.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "2298630",
@@ -7685,7 +7680,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7699,14 +7694,14 @@
       "montoPromedioPago": 5237,
       "numPagos2025": 8,
       "montoTotal2025": 41892,
-      "gastoMinimoMensual": 5237,
+      "gastoMinimoMensual": 5237.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 2,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7727,7 +7722,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 32.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7744,11 +7739,11 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 1,
-        "impactoOperativo": 2,
+        "impactoOperativo": 1,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7765,11 +7760,11 @@
       "gastoMinimoMensual": 1178.8,
       "scoreCriterios": {
         "sustituibilidad": 1,
-        "impactoOperativo": 2,
+        "impactoOperativo": 1,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 15.0,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7783,14 +7778,14 @@
       "montoPromedioPago": 100000,
       "numPagos2025": 12,
       "montoTotal2025": 1200000,
-      "gastoMinimoMensual": 100000,
+      "gastoMinimoMensual": 100000.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 1,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 6.2,
+      "score": 25.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7804,14 +7799,14 @@
       "montoPromedioPago": 15000,
       "numPagos2025": 12,
       "montoTotal2025": 180000,
-      "gastoMinimoMensual": 15000,
+      "gastoMinimoMensual": 15000.0,
       "scoreCriterios": {
         "sustituibilidad": 1,
         "impactoOperativo": 1,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 6.2,
+      "score": 25.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -7828,12 +7823,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 1,
-        "impactoOperativo": 1,
-        "riesgoLegal": 1,
+        "impactoOperativo": 3,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 3.7,
-      "clasificacionAutomatica": "BAJO"
+      "score": 43.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "70703887",
@@ -7849,12 +7844,12 @@
       "gastoMinimoMensual": 1349.03,
       "scoreCriterios": {
         "sustituibilidad": 1,
-        "impactoOperativo": 1,
-        "riesgoLegal": 1,
+        "impactoOperativo": 3,
+        "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 3.7,
-      "clasificacionAutomatica": "BAJO"
+      "score": 43.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1188017",
@@ -7872,9 +7867,9 @@
         "sustituibilidad": 5,
         "impactoOperativo": 5,
         "riesgoLegal": 5,
-        "diasCredito": 4
+        "diasCredito": 5
       },
-      "score": 96.2,
+      "score": 100.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -7888,14 +7883,14 @@
       "montoPromedioPago": 217907,
       "numPagos2025": 13,
       "montoTotal2025": 2832785,
-      "gastoMinimoMensual": 217907,
+      "gastoMinimoMensual": 217907.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 4,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 88.8,
+      "score": 91.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -7909,14 +7904,14 @@
       "montoPromedioPago": 966828,
       "numPagos2025": 311,
       "montoTotal2025": 300683403,
-      "gastoMinimoMensual": 1933656,
+      "gastoMinimoMensual": 1933656.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 4,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 88.8,
+      "score": 91.0,
       "clasificacionAutomatica": "CRITICO"
     },
     {
@@ -7930,15 +7925,15 @@
       "montoPromedioPago": 112678,
       "numPagos2025": 24,
       "montoTotal2025": 2704274,
-      "gastoMinimoMensual": 112678,
+      "gastoMinimoMensual": 112678.0,
       "scoreCriterios": {
         "sustituibilidad": 5,
         "impactoOperativo": 3,
         "riesgoLegal": 5,
         "diasCredito": 5
       },
-      "score": 77.5,
-      "clasificacionAutomatica": "ALTO"
+      "score": 82.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "25293161",
@@ -7951,15 +7946,10 @@
       "montoPromedioPago": 27572,
       "numPagos2025": 15,
       "montoTotal2025": 413587,
-      "gastoMinimoMensual": 27572,
-      "scoreCriterios": {
-        "sustituibilidad": 4,
-        "impactoOperativo": 4,
-        "riesgoLegal": 2,
-        "diasCredito": 2
-      },
-      "score": 62.5,
-      "clasificacionAutomatica": "ALTO"
+      "gastoMinimoMensual": 27572.0,
+      "scoreCriterios": null,
+      "score": null,
+      "clasificacionAutomatica": null
     },
     {
       "numProveedor": "107854",
@@ -7972,15 +7962,15 @@
       "montoPromedioPago": 45409,
       "numPagos2025": 18,
       "montoTotal2025": 817361,
-      "gastoMinimoMensual": 90818,
+      "gastoMinimoMensual": 90818.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "76796287",
@@ -7993,15 +7983,15 @@
       "montoPromedioPago": 154352,
       "numPagos2025": 1,
       "montoTotal2025": 154352,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1185511",
@@ -8016,12 +8006,12 @@
       "montoTotal2025": 1403361,
       "gastoMinimoMensual": 114654.07,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8035,15 +8025,15 @@
       "montoPromedioPago": 104703,
       "numPagos2025": 85,
       "montoTotal2025": 8899726,
-      "gastoMinimoMensual": 209406,
+      "gastoMinimoMensual": 209406.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "107949",
@@ -8056,14 +8046,14 @@
       "montoPromedioPago": 25059,
       "numPagos2025": 18,
       "montoTotal2025": 451069,
-      "gastoMinimoMensual": 50118,
+      "gastoMinimoMensual": 50118.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8077,14 +8067,14 @@
       "montoPromedioPago": 4688,
       "numPagos2025": 114,
       "montoTotal2025": 534386,
-      "gastoMinimoMensual": 9376,
+      "gastoMinimoMensual": 9376.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8100,12 +8090,12 @@
       "montoTotal2025": 1778888,
       "gastoMinimoMensual": 60650.31,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8121,12 +8111,12 @@
       "montoTotal2025": 6613449,
       "gastoMinimoMensual": 114086.84,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8142,12 +8132,12 @@
       "montoTotal2025": 144814,
       "gastoMinimoMensual": 52254.44,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8161,15 +8151,15 @@
       "montoPromedioPago": 30027,
       "numPagos2025": 26,
       "montoTotal2025": 780709,
-      "gastoMinimoMensual": 60054,
+      "gastoMinimoMensual": 60054.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1364188",
@@ -8189,8 +8179,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "34253532",
@@ -8210,8 +8200,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "64027851",
@@ -8231,8 +8221,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "66431049",
@@ -8252,8 +8242,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "71160722",
@@ -8273,8 +8263,8 @@
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 67.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1212911",
@@ -8287,14 +8277,14 @@
       "montoPromedioPago": 14116,
       "numPagos2025": 44,
       "montoTotal2025": 621098,
-      "gastoMinimoMensual": 28232,
+      "gastoMinimoMensual": 28232.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8310,12 +8300,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8331,12 +8321,12 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8350,14 +8340,14 @@
       "montoPromedioPago": 250000,
       "numPagos2025": 1,
       "montoTotal2025": 250000,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
-        "impactoOperativo": 4,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 3
       },
-      "score": 58.8,
+      "score": 52.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8378,8 +8368,8 @@
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 57.5,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 66.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1182301",
@@ -8392,15 +8382,15 @@
       "montoPromedioPago": 9981,
       "numPagos2025": 130,
       "montoTotal2025": 1297549,
-      "gastoMinimoMensual": 9981,
+      "gastoMinimoMensual": 9981.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 4,
         "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 57.5,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 66.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "54900215",
@@ -8415,13 +8405,13 @@
       "montoTotal2025": 2042910,
       "gastoMinimoMensual": 268052.98,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1364126",
@@ -8436,13 +8426,13 @@
       "montoTotal2025": 200859,
       "gastoMinimoMensual": 8927.2,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "4063261",
@@ -8457,13 +8447,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "44866498",
@@ -8476,15 +8466,15 @@
       "montoPromedioPago": 313630,
       "numPagos2025": 25,
       "montoTotal2025": 7840745,
-      "gastoMinimoMensual": 313630,
+      "gastoMinimoMensual": 313630.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "55470894",
@@ -8499,13 +8489,13 @@
       "montoTotal2025": 2747385,
       "gastoMinimoMensual": 156993.6,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "72428583",
@@ -8518,15 +8508,15 @@
       "montoPromedioPago": 18940,
       "numPagos2025": 44,
       "montoTotal2025": 833365,
-      "gastoMinimoMensual": 18940,
+      "gastoMinimoMensual": 18940.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "103192",
@@ -8539,15 +8529,15 @@
       "montoPromedioPago": 14416,
       "numPagos2025": 555,
       "montoTotal2025": 8001038,
-      "gastoMinimoMensual": 28832,
+      "gastoMinimoMensual": 28832.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "33582019",
@@ -8562,13 +8552,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 4,
         "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 55.0,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 70.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "62480151",
@@ -8581,15 +8571,15 @@
       "montoPromedioPago": 17370,
       "numPagos2025": 12,
       "montoTotal2025": 208438,
-      "gastoMinimoMensual": 17370,
+      "gastoMinimoMensual": 17370.0,
       "scoreCriterios": {
-        "sustituibilidad": 3,
+        "sustituibilidad": 5,
         "impactoOperativo": 3,
         "riesgoLegal": 5,
-        "diasCredito": 2
+        "diasCredito": 5
       },
-      "score": 51.2,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 82.0,
+      "clasificacionAutomatica": "CRITICO"
     },
     {
       "numProveedor": "1317798",
@@ -8602,14 +8592,14 @@
       "montoPromedioPago": 16356,
       "numPagos2025": 5,
       "montoTotal2025": 81780,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8630,7 +8620,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8644,14 +8634,14 @@
       "montoPromedioPago": 20113,
       "numPagos2025": 2,
       "montoTotal2025": 40226,
-      "gastoMinimoMensual": 40226,
+      "gastoMinimoMensual": 40226.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8672,7 +8662,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8693,7 +8683,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8707,14 +8697,14 @@
       "montoPromedioPago": 24882,
       "numPagos2025": 1,
       "montoTotal2025": 24882,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8728,14 +8718,14 @@
       "montoPromedioPago": 0,
       "numPagos2025": 10,
       "montoTotal2025": 4,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8749,14 +8739,14 @@
       "montoPromedioPago": 39143,
       "numPagos2025": 13,
       "montoTotal2025": 508858,
-      "gastoMinimoMensual": 39143,
+      "gastoMinimoMensual": 39143.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8770,14 +8760,14 @@
       "montoPromedioPago": 2170,
       "numPagos2025": 234,
       "montoTotal2025": 507719,
-      "gastoMinimoMensual": 4340,
+      "gastoMinimoMensual": 4340.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8798,7 +8788,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8819,7 +8809,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8840,7 +8830,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8861,7 +8851,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8882,7 +8872,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8903,7 +8893,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8917,14 +8907,14 @@
       "montoPromedioPago": 14542,
       "numPagos2025": 66,
       "montoTotal2025": 959800,
-      "gastoMinimoMensual": 29084,
+      "gastoMinimoMensual": 29084.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8938,14 +8928,14 @@
       "montoPromedioPago": 19477,
       "numPagos2025": 10,
       "montoTotal2025": 194767,
-      "gastoMinimoMensual": 38954,
+      "gastoMinimoMensual": 38954.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8966,7 +8956,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -8980,14 +8970,14 @@
       "montoPromedioPago": 3633,
       "numPagos2025": 11,
       "montoTotal2025": 39962,
-      "gastoMinimoMensual": 3633,
+      "gastoMinimoMensual": 3633.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9008,7 +8998,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9022,14 +9012,14 @@
       "montoPromedioPago": 36540,
       "numPagos2025": 22,
       "montoTotal2025": 803880,
-      "gastoMinimoMensual": 73080,
+      "gastoMinimoMensual": 73080.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9050,7 +9040,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9071,7 +9061,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9092,7 +9082,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9113,7 +9103,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9134,7 +9124,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9148,14 +9138,14 @@
       "montoPromedioPago": 31289,
       "numPagos2025": 1,
       "montoTotal2025": 31289,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9169,14 +9159,14 @@
       "montoPromedioPago": 11569,
       "numPagos2025": 6,
       "montoTotal2025": 69412,
-      "gastoMinimoMensual": 23138,
+      "gastoMinimoMensual": 23138.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9197,7 +9187,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9218,7 +9208,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9232,14 +9222,14 @@
       "montoPromedioPago": 25392,
       "numPagos2025": 1,
       "montoTotal2025": 25392,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9253,14 +9243,14 @@
       "montoPromedioPago": 20947,
       "numPagos2025": 7,
       "montoTotal2025": 146628,
-      "gastoMinimoMensual": 20947,
+      "gastoMinimoMensual": 20947.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9281,7 +9271,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9302,7 +9292,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9316,14 +9306,14 @@
       "montoPromedioPago": 12783,
       "numPagos2025": 5,
       "montoTotal2025": 63916,
-      "gastoMinimoMensual": 12783,
+      "gastoMinimoMensual": 12783.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9344,7 +9334,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9358,14 +9348,14 @@
       "montoPromedioPago": 78300,
       "numPagos2025": 2,
       "montoTotal2025": 156600,
-      "gastoMinimoMensual": 156600,
+      "gastoMinimoMensual": 156600.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
         "impactoOperativo": 3,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9386,7 +9376,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9407,7 +9397,7 @@
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
+      "score": 55.0,
       "clasificacionAutomatica": "MEDIO"
     },
     {
@@ -9421,15 +9411,15 @@
       "montoPromedioPago": 13344,
       "numPagos2025": 69,
       "montoTotal2025": 920725,
-      "gastoMinimoMensual": 13344,
+      "gastoMinimoMensual": 13344.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "4852905",
@@ -9445,12 +9435,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "25956640",
@@ -9463,15 +9453,15 @@
       "montoPromedioPago": 20547,
       "numPagos2025": 12,
       "montoTotal2025": 246562,
-      "gastoMinimoMensual": 20547,
+      "gastoMinimoMensual": 20547.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "30480279",
@@ -9487,12 +9477,12 @@
       "gastoMinimoMensual": 168370.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "70550462",
@@ -9505,15 +9495,15 @@
       "montoPromedioPago": 67474,
       "numPagos2025": 20,
       "montoTotal2025": 1349472,
-      "gastoMinimoMensual": 67474,
+      "gastoMinimoMensual": 67474.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "76727450",
@@ -9526,15 +9516,15 @@
       "montoPromedioPago": 20460,
       "numPagos2025": 3,
       "montoTotal2025": 61381,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "7103299",
@@ -9547,15 +9537,15 @@
       "montoPromedioPago": 28597,
       "numPagos2025": 109,
       "montoTotal2025": 3117077,
-      "gastoMinimoMensual": 28597,
+      "gastoMinimoMensual": 28597.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "8886176",
@@ -9568,15 +9558,15 @@
       "montoPromedioPago": 15793,
       "numPagos2025": 56,
       "montoTotal2025": 884388,
-      "gastoMinimoMensual": 31586,
+      "gastoMinimoMensual": 31586.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "23758172",
@@ -9592,12 +9582,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "32324712",
@@ -9610,15 +9600,15 @@
       "montoPromedioPago": 690460,
       "numPagos2025": 14,
       "montoTotal2025": 9666440,
-      "gastoMinimoMensual": 690460,
+      "gastoMinimoMensual": 690460.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "46690895",
@@ -9634,12 +9624,12 @@
       "gastoMinimoMensual": 241264.8,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "72567815",
@@ -9652,15 +9642,15 @@
       "montoPromedioPago": 69919,
       "numPagos2025": 28,
       "montoTotal2025": 1957721,
-      "gastoMinimoMensual": 69919,
+      "gastoMinimoMensual": 69919.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "74189053",
@@ -9676,12 +9666,12 @@
       "gastoMinimoMensual": 12998.4,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "12724268",
@@ -9697,12 +9687,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "30986780",
@@ -9715,15 +9705,15 @@
       "montoPromedioPago": 38627,
       "numPagos2025": 24,
       "montoTotal2025": 927045,
-      "gastoMinimoMensual": 77254,
+      "gastoMinimoMensual": 77254.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "74410660",
@@ -9736,15 +9726,15 @@
       "montoPromedioPago": 52059,
       "numPagos2025": 9,
       "montoTotal2025": 468534,
-      "gastoMinimoMensual": 52059,
+      "gastoMinimoMensual": 52059.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "46968615",
@@ -9760,12 +9750,12 @@
       "gastoMinimoMensual": 1153.3,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "52629409",
@@ -9778,15 +9768,15 @@
       "montoPromedioPago": 51040,
       "numPagos2025": 1,
       "montoTotal2025": 51040,
-      "gastoMinimoMensual": null,
+      "gastoMinimoMensual": 0.0,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "55568015",
@@ -9802,12 +9792,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 3,
-        "impactoOperativo": 3,
+        "impactoOperativo": 4,
         "riesgoLegal": 2,
         "diasCredito": 2
       },
-      "score": 43.8,
-      "clasificacionAutomatica": "MEDIO"
+      "score": 64.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "1345220",
@@ -9827,8 +9817,8 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 33.8,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "15964013",
@@ -9848,8 +9838,8 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 33.8,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "63213142",
@@ -9862,15 +9852,15 @@
       "montoPromedioPago": 68223,
       "numPagos2025": 15,
       "montoTotal2025": 1023341,
-      "gastoMinimoMensual": 68223,
+      "gastoMinimoMensual": 68223.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 3,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 33.8,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "64418297",
@@ -9890,8 +9880,8 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 33.8,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1335208",
@@ -9904,15 +9894,15 @@
       "montoPromedioPago": 13633,
       "numPagos2025": 141,
       "montoTotal2025": 1922279,
-      "gastoMinimoMensual": 27266,
+      "gastoMinimoMensual": 27266.0,
       "scoreCriterios": {
         "sustituibilidad": 2,
         "impactoOperativo": 2,
         "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 30.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 44.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "4001633",
@@ -9927,13 +9917,13 @@
       "montoTotal2025": null,
       "gastoMinimoMensual": null,
       "scoreCriterios": {
-        "sustituibilidad": 2,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
+        "sustituibilidad": 3,
+        "impactoOperativo": 5,
+        "riesgoLegal": 4,
         "diasCredito": 2
       },
-      "score": 25.0,
-      "clasificacionAutomatica": "BAJO"
+      "score": 77.0,
+      "clasificacionAutomatica": "ALTO"
     },
     {
       "numProveedor": "64657415",
@@ -9949,12 +9939,12 @@
       "gastoMinimoMensual": 203613.92,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 22.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "78943041",
@@ -9970,12 +9960,12 @@
       "gastoMinimoMensual": null,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 22.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "1323750",
@@ -9991,12 +9981,12 @@
       "gastoMinimoMensual": 502570.11,
       "scoreCriterios": {
         "sustituibilidad": 2,
-        "impactoOperativo": 2,
+        "impactoOperativo": 3,
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 22.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 47.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "45414127",
@@ -10009,15 +9999,15 @@
       "montoPromedioPago": 3480,
       "numPagos2025": 39,
       "montoTotal2025": 135720,
-      "gastoMinimoMensual": 3480,
+      "gastoMinimoMensual": 3480.0,
       "scoreCriterios": {
-        "sustituibilidad": 1,
-        "impactoOperativo": 2,
-        "riesgoLegal": 2,
+        "sustituibilidad": 2,
+        "impactoOperativo": 3,
+        "riesgoLegal": 3,
         "diasCredito": 2
       },
-      "score": 17.5,
-      "clasificacionAutomatica": "BAJO"
+      "score": 51.0,
+      "clasificacionAutomatica": "MEDIO"
     },
     {
       "numProveedor": "71601541",
@@ -10037,7 +10027,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -10058,7 +10048,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     },
     {
@@ -10079,7 +10069,7 @@
         "riesgoLegal": 1,
         "diasCredito": 2
       },
-      "score": 3.7,
+      "score": 23.0,
       "clasificacionAutomatica": "BAJO"
     }
   ]

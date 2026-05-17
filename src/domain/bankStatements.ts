@@ -6,6 +6,20 @@ export interface BankQueryState {
   hasUploadedSantander?: boolean;
 }
 
+/**
+ * BAJIO se muestra en la pestaña Bancos pero NO se contabiliza ni se proyecta.
+ * El excedente cae siempre en Banamex, así que incluir BAJIO duplica flujo.
+ */
+export function isBajioStatement(stmt: Pick<BankAccountStatement, 'banco' | 'nombreBanco'>): boolean {
+  const name = (stmt.nombreBanco ?? '').toUpperCase();
+  const code = (stmt.banco ?? '').toUpperCase();
+  return name.includes('BAJIO') || name.includes('BAJÍO') || code.includes('BAJIO');
+}
+
+export function excludeBajio<T extends Pick<BankAccountStatement, 'banco' | 'nombreBanco'>>(stmts: readonly T[]): T[] {
+  return stmts.filter(s => !isBajioStatement(s));
+}
+
 function accountKey(statement: Pick<BankAccountStatement, 'cia' | 'cuenta' | 'moneda'>): string {
   return `${statement.cia}::${statement.cuenta}::${statement.moneda}`;
 }
@@ -22,6 +36,62 @@ function movementSortKey(movement: Pick<BankStatementLine, 'fechaOperacion' | 'f
     movement.tipoMovimiento ?? '',
     String(movement.importe ?? ''),
   ].join('|');
+}
+
+export function latestStatementDate(statements: readonly Pick<BankAccountStatement, 'fechaEstadoCuenta'>[]): string | null {
+  let latest: string | null = null;
+  for (const statement of statements) {
+    if (!latest || statement.fechaEstadoCuenta > latest) latest = statement.fechaEstadoCuenta;
+  }
+  return latest;
+}
+
+export function currentBankStatements<T extends Pick<BankAccountStatement, 'fechaEstadoCuenta'>>(
+  statements: readonly T[],
+  asOfDate = latestStatementDate(statements),
+): T[] {
+  if (!asOfDate) return [];
+  return statements.filter(statement => statement.fechaEstadoCuenta === asOfDate);
+}
+
+/**
+ * Balance "más confiable" para una cuenta:
+ *
+ *   1. `saldoFinal` cuando viene definido y NO es 0. Es el valor autoritativo
+ *      de JDE/Santander para el cierre del último día del rango.
+ *   2. Si `saldoFinal` falta o es 0 (sentinela frecuente cuando el API responde
+ *      Saldo_Final null o el centinela Bajío suma sub-cuentas que se cancelan),
+ *      derivamos: `saldoInicial + Σ(abonos) - Σ(cargos)` sobre el rango cargado.
+ *      Esto es matemáticamente equivalente a saldoFinal cuando ambos vienen
+ *      bien — y recupera el valor cuando saldoFinal está bugged.
+ *   3. Fallback final: `saldoInicial` o 0.
+ *
+ * Cuentas afectadas observadas en producción: BANBAJIO (centinela) y SANTANDER
+ * (Saldo_Final null) mostraban $0.00 en la pestaña Bancos pese a tener
+ * saldoInicial real y movimientos del periodo.
+ */
+export function bankStatementBalance(
+  statement: Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial' | 'movimientos'>,
+): number {
+  if (statement.saldoFinal !== undefined && statement.saldoFinal !== 0) {
+    return statement.saldoFinal;
+  }
+  const movs = statement.movimientos ?? [];
+  if (statement.saldoInicial !== undefined && movs.length > 0) {
+    let net = 0;
+    for (const m of movs) {
+      if (m.tipoMovimiento === 'ABONO') net += m.importe;
+      else if (m.tipoMovimiento === 'CARGO') net -= m.importe;
+    }
+    return statement.saldoInicial + net;
+  }
+  return statement.saldoFinal ?? statement.saldoInicial ?? 0;
+}
+
+export function sumBankStatementBalances(
+  statements: readonly Pick<BankAccountStatement, 'saldoFinal' | 'saldoInicial' | 'movimientos'>[],
+): number {
+  return statements.reduce((sum, statement) => sum + bankStatementBalance(statement), 0);
 }
 
 export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAccountStatement[] {
@@ -44,6 +114,12 @@ export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAc
           fechaEstadoCuenta: statement.fechaEstadoCuenta,
           saldoInicial: statement.saldoInicial,
           saldoFinal: statement.saldoFinal,
+          cuentaContable: statement.cuentaContable,
+          cuentaBancos: statement.cuentaBancos,
+          nombreCuentaContable: statement.nombreCuentaContable,
+          tipoCuentaBancos: statement.tipoCuentaBancos,
+          desc039: statement.desc039,
+          desc036: statement.desc036,
           movimientos: [],
         };
         merged.set(key, acc);
@@ -62,6 +138,12 @@ export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAc
         if (statement.saldoFinal !== undefined) acc.saldoFinal = statement.saldoFinal;
         if (statement.nombreBanco) acc.nombreBanco = statement.nombreBanco;
         if (statement.banco) acc.banco = statement.banco;
+        if (statement.cuentaContable) acc.cuentaContable = statement.cuentaContable;
+        if (statement.cuentaBancos) acc.cuentaBancos = statement.cuentaBancos;
+        if (statement.nombreCuentaContable) acc.nombreCuentaContable = statement.nombreCuentaContable;
+        if (statement.tipoCuentaBancos) acc.tipoCuentaBancos = statement.tipoCuentaBancos;
+        if (statement.desc039) acc.desc039 = statement.desc039;
+        if (statement.desc036) acc.desc036 = statement.desc036;
       }
 
       const seen = seenMovements.get(key)!;

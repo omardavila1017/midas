@@ -12,18 +12,18 @@ Artifact: flujo-senda
 
 | EXCEL SOURCE | JDE/COGNOS TARGET | SERVICE FILE | ENV VARS | STATUS |
 |-------------|-------------------|--------------|----------|--------|
-| Cash-flow plan upload | Cognos cash-flow planning report | `src/services/cashFlow.service.ts` | `VITE_COGNOS_BASE_URL`, `VITE_COGNOS_TOKEN`, `VITE_COGNOS_NAMESPACE` | Migrated — service fallback active |
-| Provider workbook import | Cognos supplier catalog / JDE supplier master enrichment | `src/services/catalog.service.ts` | `VITE_COGNOS_BASE_URL`, `VITE_COGNOS_TOKEN`, `VITE_COGNOS_NAMESPACE` | Migrated — service fallback active |
-| Client workbook parser | Cognos client billing and payment-terms report | `src/services/catalog.service.ts` | `VITE_COGNOS_BASE_URL`, `VITE_COGNOS_TOKEN`, `VITE_COGNOS_NAMESPACE` | Migrated — service fallback active |
+| Cash-flow plan upload | Cognos cash-flow planning report | `src/services/cashFlow.service.ts` | `/api/cognos` + server-side `COGNOS_TOKEN` | Migrated — service fallback active |
+| Provider workbook import | Cognos supplier catalog / JDE supplier master enrichment | `src/services/catalog.service.ts` | `/api/cognos` + server-side `COGNOS_TOKEN` | Migrated — service fallback active |
+| Client workbook parser | Cognos client billing and payment-terms report | `src/services/catalog.service.ts` | `/api/cognos` + server-side `COGNOS_TOKEN` | Migrated — service fallback active |
 | `xlsx` runtime package | Not needed after service migration | N/A | N/A | Removed from `package.json` and lockfile |
-| CXP aging data | JDE `/antiguedadsaldos` | `src/services/jde.ts` | `VITE_JDE_BASE_URL`, `VITE_JDE_TOKEN`, `VITE_JDE_ENVIRONMENT` | Already service-backed |
-| Bank statements | JDE `/bancos` | `src/services/jde.ts` | `VITE_JDE_BASE_URL`, `VITE_JDE_TOKEN`, `VITE_JDE_ENVIRONMENT` | Already service-backed |
-| Company catalog | JDE `/empresas` | `src/services/jde.ts` | `VITE_JDE_BASE_URL`, `VITE_JDE_TOKEN`, `VITE_JDE_ENVIRONMENT` | Already service-backed |
+| CXP aging data | JDE `/antiguedadsaldos` | `src/services/jde.ts` | `/api/jde` + server-side `JDE_TOKEN` | Already service-backed |
+| Bank statements | JDE `/bancos` | `src/services/jde.ts` | `/api/jde` + server-side `JDE_TOKEN` | Already service-backed |
+| Company catalog | JDE `/empresas` | `src/services/jde.ts` | `/api/jde` + server-side `JDE_TOKEN` | Already service-backed |
 
 ## Service Files Created
 
 ### `src/config/api.config.ts`
-Centralizes Atlas runtime configuration for JDE, Cognos, and artifact metadata. All sensitive values are read from Vite environment variables, and `validateApiConfig()` reports missing Atlas settings.
+Centralizes Atlas runtime configuration for JDE, Cognos, OpenAI, and artifact metadata. Browser-visible values are only proxy paths and non-secret settings; sensitive values must be server-side env vars injected by Atlas/backend.
 
 ### `src/services/cashFlow.service.ts`
 Fetches the consolidated cash-flow plan from a Cognos report endpoint. When Cognos is not configured, it returns a deterministic mock plan so the UI remains usable in development and Atlas staging.
@@ -44,13 +44,15 @@ To activate live data connections in Atlas:
 | VARIABLE | VALUE | WHERE TO GET IT |
 |----------|-------|-----------------|
 | `VITE_ATLAS_ARTIFACT_ID` | `midas` | Atlas admin |
-| `VITE_JDE_BASE_URL` | Production JDE Orchestrator URL or Atlas proxy path | JDE / Atlas admin |
-| `VITE_JDE_TOKEN` | Bearer credential | JDE admin |
+| `VITE_JDE_BASE_URL` | `/api/jde` | Atlas admin |
+| `VITE_TRESS_BASE_URL` | `/api/tress` | Atlas admin |
+| `VITE_COGNOS_BASE_URL` | `/api/cognos` | Atlas admin |
+| `VITE_OPENAI_BASE_URL` | `/api/openai` | Atlas admin |
 | `VITE_JDE_ENVIRONMENT` | `PD920` for production | JDE admin |
-| `VITE_COGNOS_BASE_URL` | Cognos Analytics REST base URL | Cognos admin |
-| `VITE_COGNOS_TOKEN` | Cognos REST credential | Cognos admin |
-| `VITE_COGNOS_NAMESPACE` | Cognos namespace, default `CognosEx` | Cognos admin |
-| `VITE_JDE_UPSTREAM` | Dev proxy upstream only | SWAT engineer |
+| `JDE_TOKEN` | Server-side bearer credential | JDE admin |
+| `COGNOS_TOKEN` | Server-side Cognos credential | Cognos admin |
+| `OPENAI_API_KEY` | Server-side OpenAI credential | OpenAI admin |
+| `JDE_UPSTREAM` / `TRESS_UPSTREAM` / `COGNOS_UPSTREAM` | Upstream API base URLs | SWAT engineer |
 
 3. Redeploy the artifact after setting variables.
 

@@ -9,20 +9,34 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { CalendarDays, Check, ChevronDown, ChevronRight, FileText, Landmark, Pencil, Plus, RotateCcw, Wallet, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, ChevronRight, FileText, Pencil, Plus, RotateCcw, Trash2, Wallet, X } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
+import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
+import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import type { CargoPaymentEnrichment, CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
-import { buildFinancialProjectionSourceData } from '../../financial-projection/services/financialProjectionService';
+import EmptyState from '../../shared-finance/components/EmptyState';
+import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
+import {
+  toneByOutstanding,
+  toneByRequirement,
+  TONE_SUCCESS,
+  TONE_NEUTRAL,
+} from '../../shared-finance/components/tone';
+import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
+import { useFinancialProjectionSource } from '../../shared-finance/hooks/useFinancialProjectionSource';
 import type {
+  PayrollCostRecord,
   TaxManualAdjustment,
   TaxObligation,
   TaxPaymentPlanItem,
   TaxType,
+  PurchaseReceiptRecord,
 } from '../../shared-finance/types';
 import {
   addTaxPaymentPlanItem,
@@ -31,6 +45,7 @@ import {
   createTaxManualAdjustment,
   defaultTaxStore,
   loadTaxStore,
+  removeTaxPaymentPlanItem,
   saveTaxStore,
   taxDueDate,
   updateTaxPaymentPlanItem,
@@ -50,13 +65,24 @@ interface Props {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  cobranzaPayments?: CobranzaPayment[];
+  cobranzaReconciliation?: RealReconciliationResult;
+  /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
+  paidCxpKeys?: Set<string>;
+  /** Cobertura PagoProveedor → CXP para fechar IVA acreditable con pagos reales. */
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
+  /** Enriquecimiento PagoProveedor → CARGO bancario para reclasificar egresos reales. */
+  cargoEnrichments?: Map<string, CargoPaymentEnrichment>;
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
 }
 
 type RangePreset = '90d' | 'eoy';
-type DetailTab = 'iva' | 'isn' | 'imss' | 'payments';
+type DetailTab = 'summary' | 'iva' | 'isn' | 'imss' | 'payments';
 type IvaLineMode = 'caused' | 'creditable';
 
 const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
@@ -81,7 +107,7 @@ export default function TaxDashboard(props: Props) {
     return loaded;
   });
   const [selectedPeriod, setSelectedPeriod] = useState<string>(today.slice(0, 7));
-  const [detailTab, setDetailTab] = useState<DetailTab>('iva');
+  const [detailTab, setDetailTab] = useState<DetailTab>('summary');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -89,8 +115,8 @@ export default function TaxDashboard(props: Props) {
     saveTaxStore(taxStore);
   }, [taxStore]);
 
-  const source = useMemo(
-    () => buildFinancialProjectionSourceData({ ...props, asOfDate: today }),
+  const cacheProbeInput = useMemo(
+    () => ({ ...props, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -98,6 +124,12 @@ export default function TaxDashboard(props: Props) {
       props.clients,
       props.providers,
       props.cxpRecords,
+      props.cobranzaRecords,
+      props.cobranzaReconciliation,
+      props.paidCxpKeys,
+      props.cargoEnrichments,
+      props.purchaseReceipts,
+      props.payrollCosts,
       props.assumptions,
       props.budget,
       props.startingBalance,
@@ -105,22 +137,32 @@ export default function TaxDashboard(props: Props) {
     ],
   );
 
+  // Heavy canonical build runs in a Web Worker — see hook docstring. `source`
+  // is null until it resolves; we render DashboardLoadingShell meanwhile so
+  // the tab stays responsive instead of freezing the whole renderer.
+  const source = useFinancialProjectionSource(cacheProbeInput);
+
   const view = useMemo(
     () => buildTaxDashboardView({
       clients: props.clients,
       providers: props.providers,
       assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
+      cxpPaymentCoverage: props.cxpPaymentCoverage,
+      purchaseReceipts: props.purchaseReceipts,
+      payrollCosts: props.payrollCosts,
+      cobranzaPayments: props.cobranzaPayments,
       budget: props.budget,
       companyCode: props.companyCode,
       startDate: fiscalYearStart,
       endDate,
-      movements: source.movements,
+      movements: source?.movements ?? [],
       store: taxStore,
       today,
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cxpRecords, props.providers, source.movements, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
   );
+  const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 
   useEffect(() => {
     if (view.periods.length === 0) return;
@@ -133,7 +175,7 @@ export default function TaxDashboard(props: Props) {
   const hasFiscalData = props.clients.length > 0
     || props.cxpRecords.length > 0
     || props.budget != null
-    || source.movements.length > 0
+    || (source?.movements.length ?? 0) > 0
     || taxStore.adjustments.length > 0
     || taxStore.obligations.length > 0
     || taxStore.overdueBalance > 0;
@@ -161,9 +203,11 @@ export default function TaxDashboard(props: Props) {
 
   const handleApproveSuggestedPayment = (obligation: TaxObligation) => {
     const pending = Math.max(0, obligation.totalAmount - obligation.paymentPlan
-      .filter((payment) => payment.status === 'PAID')
       .reduce((sum, payment) => sum + payment.amount, 0));
-    if (pending <= 0) return;
+    if (pending <= 0) {
+      setStatusMessage(`Pago ya programado para ${obligation.taxType} ${obligation.period}.`);
+      return;
+    }
     const next = addTaxPaymentPlanItem({
       obligation,
       date: obligation.dueDate < today ? today : obligation.dueDate,
@@ -180,6 +224,12 @@ export default function TaxDashboard(props: Props) {
     setTaxStore((current) => upsertTaxObligation(current, next));
   };
 
+  const handleRemovePayment = (obligation: TaxObligation, paymentId: string) => {
+    const next = removeTaxPaymentPlanItem(obligation, paymentId);
+    setTaxStore((current) => upsertTaxObligation(current, next));
+    setStatusMessage(`Pago eliminado para ${obligation.taxType} ${obligation.period}.`);
+  };
+
   const handleUpdateTaxRate = (target: TaxRateTarget, rate: 8 | 16) => {
     setTaxStore((current) => upsertTaxRateOverride(current, {
       ...target,
@@ -192,17 +242,25 @@ export default function TaxDashboard(props: Props) {
   const resetView = () => {
     setPreset('eoy');
     setSelectedPeriod(today.slice(0, 7));
-    setDetailTab('iva');
+    setDetailTab('summary');
     setShowAddForm(false);
   };
+
+  if (!source) {
+    return <DashboardLoadingShell label="Cargando Impuestos" tableRows={6} />;
+  }
 
   if (!hasFiscalData) {
     return (
       <div className="space-y-5">
         <PageHeader title="Impuestos" />
-        <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-10 text-center text-[12px] text-[var(--gray-500)]">
-          Carga clientes, CXP o captura una obligación manual para calcular el seguimiento fiscal.
-        </div>
+        <EmptyState
+          tone="info"
+          align="center"
+          icon={<FileText className="h-5 w-5" strokeWidth={1.5} />}
+          title="Sin datos fiscales todavía"
+          description="Carga clientes, CXP o captura una obligación manual para calcular el seguimiento fiscal."
+        />
       </div>
     );
   }
@@ -215,14 +273,14 @@ export default function TaxDashboard(props: Props) {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowAddForm((v) => !v)}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+              className="inline-flex h-10 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
             >
               <Plus className="h-4 w-4" strokeWidth={1.5} />
               Captura manual
             </button>
             <button
               onClick={resetView}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+              className="inline-flex h-10 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
             >
               <RotateCcw className="h-4 w-4" strokeWidth={1.5} />
               Restablecer
@@ -232,7 +290,7 @@ export default function TaxDashboard(props: Props) {
       />
 
       {statusMessage && (
-        <div className="flex items-center justify-between rounded-xl border border-[var(--gray-200)] bg-white px-4 py-2">
+        <div className="flex items-center justify-between rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-4 py-2">
           <span className="text-[12px] font-medium text-[var(--gray-700)]">{statusMessage}</span>
           <button onClick={() => setStatusMessage(null)} className="text-[var(--gray-400)] hover:text-[var(--gray-600)]">
             <X className="h-3.5 w-3.5" strokeWidth={1.5} />
@@ -240,7 +298,7 @@ export default function TaxDashboard(props: Props) {
         </div>
       )}
 
-      <section className="rounded-2xl border border-[var(--gray-200)] bg-white px-4 py-3">
+      <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <SegmentedControl label="Rango" value={preset} options={RANGE_PRESETS} onChange={setPreset} />
           <div className="ml-auto text-[12px] text-[var(--gray-500)]">
@@ -249,13 +307,16 @@ export default function TaxDashboard(props: Props) {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <KpiCard label="Saldo vencido" value={fmtCurrency(view.overdueBalance)} icon={<CalendarDays className="w-4 h-4" />} color="var(--danger)" sublabel="Impuestos acumulados" />
-        <KpiCard label="IVA neto" value={fmtCurrency(view.totals.ivaNet)} icon={<FileText className="w-4 h-4" />} color={view.totals.ivaNet > 0 ? 'var(--warning)' : 'var(--success)'} sublabel="Causado menos acreditable" />
-        <KpiCard label="ISN" value={fmtCurrency(view.totals.isn)} icon={<Landmark className="w-4 h-4" />} color="var(--gray-950)" sublabel="3% sobre nómina pagada" />
-        <KpiCard label="IMSS" value={fmtCurrency(view.totals.imss)} icon={<Check className="w-4 h-4" />} color={view.totals.imss > 0 ? 'var(--danger)' : 'var(--gray-950)'} sublabel="JDE o captura manual" />
-        <KpiCard label="Total acumulado" value={fmtCurrency(view.totals.totalWithOverdue)} icon={<Wallet className="w-4 h-4" />} color="var(--danger)" sublabel="Vencido + nuevos periodos" />
-      </div>
+      <TaxOperationalOverview view={view} today={today} />
+
+      <TaxCashPlanningPanel
+        obligations={view.obligations}
+        schedule={paymentSchedule}
+        onSelectPeriod={(period) => {
+          setSelectedPeriod(period);
+          setDetailTab('payments');
+        }}
+      />
 
       {/* Overdue balance tracker */}
       <section className="grid gap-5 xl:grid-cols-2">
@@ -294,10 +355,177 @@ export default function TaxDashboard(props: Props) {
             onUpdateTaxRate={handleUpdateTaxRate}
             onApprovePayment={handleApproveSuggestedPayment}
             onUpdatePayment={handleUpdatePayment}
+            onRemovePayment={handleRemovePayment}
           />
         )}
       </div>
     </div>
+  );
+}
+
+interface TaxPaymentScheduleRow {
+  obligationId: string;
+  paymentId: string;
+  taxType: TaxType;
+  period: string;
+  label: string;
+  dueDate: string;
+  date: string;
+  amount: number;
+  status: TaxPaymentPlanItem['status'];
+  note?: string;
+}
+
+function buildTaxPaymentSchedule(obligations: TaxObligation[]): TaxPaymentScheduleRow[] {
+  return obligations
+    .flatMap((obligation) => obligation.paymentPlan.map((payment) => ({
+      obligationId: obligation.id,
+      paymentId: payment.id,
+      taxType: obligation.taxType,
+      period: obligation.period,
+      label: obligation.label,
+      dueDate: obligation.dueDate,
+      date: payment.date,
+      amount: payment.amount,
+      status: payment.status,
+      note: payment.note,
+    })))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.taxType.localeCompare(b.taxType));
+}
+
+function TaxOperationalOverview({ view, today }: { view: TaxDashboardView; today: string }) {
+  const goTo = useNavigateToTab();
+  const scheduledCash = view.totals.cashImpact;
+  const unscheduled = view.obligations.reduce((sum, obligation) => {
+    const committed = obligation.paymentPlan
+      .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0);
+    return sum + Math.max(0, obligation.totalAmount - committed);
+  }, 0);
+  const soonLimit = addDays(today, 15);
+  const dueSoon = view.obligations
+    .filter((obligation) => obligation.pendingAmount > 0 && obligation.dueDate >= today && obligation.dueDate <= soonLimit)
+    .reduce((sum, obligation) => sum + obligation.pendingAmount, 0);
+
+  return (
+    <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <KpiCard
+        label="Por pagar"
+        value={fmtCurrency(view.totals.totalWithOverdue)}
+        icon={<Wallet className="w-4 h-4" />}
+        color={toneByOutstanding(view.totals.totalWithOverdue)}
+        sublabel="Vencido + periodos visibles"
+      />
+      <KpiCard
+        label="Vence pronto"
+        value={fmtCurrency(dueSoon)}
+        icon={<CalendarDays className="w-4 h-4" />}
+        color={toneByRequirement(dueSoon)}
+        sublabel="Próximos 15 días"
+      />
+      <KpiCard
+        label="Programado en caja"
+        value={fmtCurrency(scheduledCash)}
+        icon={<Check className="w-4 h-4" />}
+        color={scheduledCash > 0 ? TONE_SUCCESS : TONE_NEUTRAL}
+        sublabel="Aprobado o pagado · impacta Proyección"
+        onClick={() => goTo({ tab: 'financialProjection', focus: 'tax-cash' })}
+        navHint="Ver en Proyección"
+      />
+      <KpiCard
+        label="Sin programar"
+        value={fmtCurrency(unscheduled)}
+        icon={<FileText className="w-4 h-4" />}
+        color={toneByOutstanding(unscheduled)}
+        sublabel="Pendiente de calendarizar"
+      />
+    </section>
+  );
+}
+
+function TaxCashPlanningPanel({
+  obligations,
+  schedule,
+  onSelectPeriod,
+}: {
+  obligations: TaxObligation[];
+  schedule: TaxPaymentScheduleRow[];
+  onSelectPeriod: (period: string) => void;
+}) {
+  const cashImpact = schedule
+    .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  const draftAmount = schedule
+    .filter((payment) => payment.status === 'DRAFT')
+    .reduce((sum, payment) => sum + payment.amount, 0);
+  const pendingWithoutPlan = obligations.reduce((sum, obligation) => {
+    const approvedOrPaid = obligation.paymentPlan
+      .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0);
+    return sum + Math.max(0, obligation.totalAmount - approvedOrPaid);
+  }, 0);
+  const nextRows = schedule.slice(0, 8);
+
+  return (
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--gray-200)] px-4 py-3">
+        <div>
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Pagos fiscales en caja</h2>
+          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+            Los pagos aprobados o pagados alimentan Planeación y Proyección como salidas de caja de impuestos.
+          </p>
+        </div>
+        <span className="rounded-full border border-[var(--primary)]/20 bg-[var(--primary-muted)] px-3 py-1 text-[11px] font-bold text-[var(--primary)]">
+          Conectado a Planeación/Proyección
+        </span>
+      </div>
+      <div className="grid gap-2 border-b border-[var(--gray-200)] p-4 sm:grid-cols-3">
+        <MiniStat label="Con impacto" value={fmtCurrency(cashImpact)} />
+        <MiniStat label="Borrador" value={fmtCurrency(draftAmount)} />
+        <MiniStat label="Pendiente por calendarizar" value={fmtCurrency(pendingWithoutPlan)} />
+      </div>
+      <div className="overflow-x-auto">
+        {nextRows.length === 0 ? (
+          <div className="px-4 py-8 text-center text-[12px] text-[var(--gray-400)]">
+            Todavía no hay pagos calendarizados. Programa pagos desde el detalle de un periodo.
+          </div>
+        ) : (
+          <table className="w-full min-w-[760px] text-[12px]">
+            <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
+              <tr>
+                <th className="px-4 py-2.5">Fecha pago</th>
+                <th className="px-4 py-2.5">Impuesto</th>
+                <th className="px-4 py-2.5">Periodo</th>
+                <th className="px-4 py-2.5 text-right">Monto</th>
+                <th className="px-4 py-2.5">Estatus</th>
+                <th className="px-4 py-2.5">Caja proyectada</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nextRows.map((payment) => (
+                <tr
+                  key={`${payment.obligationId}-${payment.paymentId}`}
+                  onClick={() => onSelectPeriod(payment.period)}
+                  className="cursor-pointer border-t border-[var(--gray-200)] hover:bg-[var(--gray-50)]"
+                >
+                  <td className="px-4 py-3 tabular-nums text-[var(--gray-700)]">{fmtDate(payment.date)}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-bold text-[var(--gray-950)]">{payment.taxType}</div>
+                    <div className="max-w-[240px] truncate text-[10.5px] text-[var(--gray-400)]" title={payment.label}>{payment.label}</div>
+                  </td>
+                  <td className="px-4 py-3 tabular-nums text-[var(--gray-600)]">{payment.period}</td>
+                  <td className="px-4 py-3 text-right font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(payment.amount)}</td>
+                  <td className="px-4 py-3"><PaymentStatusPill status={payment.status} /></td>
+                  <td className="px-4 py-3">
+                    <PaymentImpactPill status={payment.status} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -377,13 +605,13 @@ function TaxForms({
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="flex items-center justify-between border-b border-[var(--gray-200)] px-4 py-3">
         <div>
-          <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Captura manual</h2>
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Captura manual</h2>
           <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Ajustes, overrides y obligaciones sin tocar JDE ni banco.</p>
         </div>
-        <button onClick={onClose} className="inline-flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--gray-100)]">
+        <button onClick={onClose} className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] hover:bg-[var(--gray-100)]">
           <X className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
         </button>
       </div>
@@ -494,17 +722,24 @@ function OverdueBalanceSection({
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
-      <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Seguimiento de deuda fiscal</h2>
+    <section
+      className="rounded-[var(--radius-lg)] border border-[var(--skeuo-paper-edge)] skeuo-sat-bg"
+      data-stamp="SAT"
+      style={{
+        background: 'var(--skeuo-paper)',
+        boxShadow: 'var(--skeuo-emboss-md)',
+      }}
+    >
+      <div className="border-b border-[var(--skeuo-paper-edge)] px-4 py-3">
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)] skeuo-letterpress">Seguimiento de deuda fiscal</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
           Saldo vencido acumulado + nuevas obligaciones por periodo. Haz clic en el monto para editarlo.
         </p>
       </div>
       <div className="grid gap-2 p-4 sm:grid-cols-4">
         {/* Saldo vencido */}
-        <div className="rounded-xl border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--danger)]">
+        <div className="rounded-[var(--radius)] border border-[var(--danger)]/30 bg-[var(--danger)]/5 px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--danger)]">
             Saldo vencido acumulado
           </div>
           {editing ? (
@@ -520,7 +755,7 @@ function OverdueBalanceSection({
                 if (e.key === 'Escape') setEditing(false);
               }}
               onBlur={commit}
-              className="mt-1 h-8 w-full rounded-lg border border-[var(--danger)] bg-white px-2 text-right text-[16px] font-bold tabular-nums text-[var(--danger)] outline-none"
+              className="mt-1 h-8 w-full rounded-[var(--radius-md)] border border-[var(--danger)] bg-white px-2 text-right text-[16px] font-bold tabular-nums text-[var(--danger)] outline-none"
             />
           ) : (
             <button
@@ -534,8 +769,8 @@ function OverdueBalanceSection({
         </div>
 
         {/* Nuevas obligaciones del periodo */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Nuevos impuestos</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Nuevos impuestos</div>
           <div className="mt-1 flex items-baseline justify-between gap-2">
             <span className="text-[18px] font-bold tabular-nums text-[var(--warning)]">{fmtCurrency(newPeriodTotal)}</span>
           </div>
@@ -545,22 +780,22 @@ function OverdueBalanceSection({
         </div>
 
         {/* Benchmark 8% */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Referencia (8% Ingresos)</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Referencia (8% Ingresos)</div>
           <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-400)]">{fmtCurrency(benchmark8)}</div>
           <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Meta basada en facturación</div>
         </div>
 
         {/* Total acumulado */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Total acumulado</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Total acumulado</div>
           <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(runningTotal)}</div>
           <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Vencido + nuevos periodos</div>
         </div>
 
         {/* Neto pendiente */}
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">Neto pendiente</div>
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-4 py-3">
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Neto pendiente</div>
           <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(netPending)}</div>
           <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">Total − pagos aprobados/ejecutados</div>
         </div>
@@ -571,8 +806,8 @@ function OverdueBalanceSection({
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</span>
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</span>
       {children}
     </div>
   );
@@ -621,16 +856,16 @@ function TaxPeriodTable({
   const cancelEdit = () => setEditingCell(null);
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Obligaciones por periodo</h2>
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Obligaciones por periodo</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
           Haz clic en un monto de IVA, ISN o IMSS para editarlo. Selecciona un periodo para ver su detalle.
         </p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] text-[12px]">
-          <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">
+          <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             <tr>
               <th className="px-4 py-2.5">Periodo</th>
               <th className="px-4 py-2.5 text-right">IVA neto</th>
@@ -652,7 +887,7 @@ function TaxPeriodTable({
                   className="cursor-pointer border-t border-[var(--gray-200)] hover:bg-[var(--gray-50)]"
                   style={{ background: active ? 'var(--gray-50)' : undefined }}
                 >
-                  <td className="px-4 py-3 font-semibold text-[var(--gray-950)]">{period.period}</td>
+                  <td className="px-4 py-3 font-bold text-[var(--gray-950)]">{period.period}</td>
                   <EditableCell
                     value={period.ivaNet}
                     editing={editingCell?.period === period.period && editingCell.field === 'iva'}
@@ -680,7 +915,7 @@ function TaxPeriodTable({
                     onCommit={commitEdit}
                     onCancel={cancelEdit}
                   />
-                  <td className="px-4 py-3 text-right font-semibold tabular-nums text-[var(--gray-950)]">{fmtCurrency(period.total)}</td>
+                  <td className="px-4 py-3 text-right font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(period.total)}</td>
                   <td className="px-4 py-3 text-[var(--gray-600)]">{fmtDate(period.dueDate)}</td>
                   <td className="px-4 py-3"><TaxStatusPill status={period.status} /></td>
                   <td className="px-4 py-3 text-right tabular-nums text-[var(--danger)]">{period.cashImpact > 0 ? fmtCurrency(period.cashImpact) : '—'}</td>
@@ -731,7 +966,7 @@ function EditableCell({
             if (e.key === 'Escape') onCancel();
           }}
           onBlur={onCommit}
-          className="h-8 w-full rounded-lg border border-[var(--primary)] bg-white px-2 text-right text-[12px] tabular-nums text-[var(--gray-950)] outline-none"
+          className="h-8 w-full rounded-[var(--radius-md)] border border-[var(--primary)] bg-white px-2 text-right text-[12px] tabular-nums text-[var(--gray-950)] outline-none"
         />
       </td>
     );
@@ -760,6 +995,7 @@ function TaxPeriodDetail({
   onUpdateTaxRate,
   onApprovePayment,
   onUpdatePayment,
+  onRemovePayment,
 }: {
   period: TaxPeriodSummary;
   detailTab: DetailTab;
@@ -767,8 +1003,10 @@ function TaxPeriodDetail({
   onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
   onApprovePayment: (obligation: TaxObligation) => void;
   onUpdatePayment: (obligation: TaxObligation, paymentId: string, patch: Partial<TaxPaymentPlanItem>) => void;
+  onRemovePayment: (obligation: TaxObligation, paymentId: string) => void;
 }) {
   const sourceCount = (tab: DetailTab) => {
+    if (tab === 'summary') return period.obligations.length;
     if (tab === 'iva') return period.iva.incomeLines.length + period.iva.expenseLines.length;
     if (tab === 'isn') return period.payrollLines.length;
     if (tab === 'imss') return period.imssLines.length;
@@ -776,9 +1014,9 @@ function TaxPeriodDetail({
   };
 
   return (
-    <section className="rounded-2xl border border-[var(--gray-200)] bg-white">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
-        <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">Detalle {period.period}</h2>
+        <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Detalle {period.period}</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">Origen de cada impuesto y plan de pagos.</p>
       </div>
 
@@ -793,14 +1031,16 @@ function TaxPeriodDetail({
         <SegmentedControl
           value={detailTab}
           options={[
+            { id: 'summary' as const, label: 'Resumen' },
             { id: 'iva' as const, label: `IVA (${sourceCount('iva')})` },
-            { id: 'isn' as const, label: `ISN (${sourceCount('isn')})` },
+            { id: 'isn' as const, label: `Nómina / ISN (${sourceCount('isn')})` },
             { id: 'imss' as const, label: `IMSS (${sourceCount('imss')})` },
             { id: 'payments' as const, label: `Pagos (${sourceCount('payments')})` },
           ]}
           onChange={onDetailTabChange}
         />
       </div>
+      {detailTab === 'summary' && <PeriodOperationalSummary period={period} onApprovePayment={onApprovePayment} />}
       {detailTab === 'iva' && <IvaDetail iva={period.iva} onUpdateTaxRate={onUpdateTaxRate} />}
       {detailTab === 'isn' && <IsnDetail period={period} />}
       {detailTab === 'imss' && <ImssDetail period={period} />}
@@ -809,9 +1049,80 @@ function TaxPeriodDetail({
           obligations={period.obligations}
           onApprovePayment={onApprovePayment}
           onUpdatePayment={onUpdatePayment}
+          onRemovePayment={onRemovePayment}
         />
       )}
     </section>
+  );
+}
+
+function PeriodOperationalSummary({
+  period,
+  onApprovePayment,
+}: {
+  period: TaxPeriodSummary;
+  onApprovePayment: (obligation: TaxObligation) => void;
+}) {
+  const committed = period.obligations.reduce((sum, obligation) => (
+    sum + obligation.paymentPlan
+      .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+  ), 0);
+  const paid = period.obligations.reduce((sum, obligation) => (
+    sum + obligation.paymentPlan
+      .filter((payment) => payment.status === 'PAID')
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+  ), 0);
+  const pending = Math.max(0, period.total - committed);
+  const unscheduled = Math.max(0, period.total - period.obligations.reduce((sum, obligation) => (
+    sum + obligation.paymentPlan.reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+  ), 0));
+  const primaryObligation = period.obligations.find((obligation) => obligation.pendingAmount > 0)
+    ?? period.obligations[0];
+  const sourceSummary = summarizeObligationSources(period.obligations);
+
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="Total periodo" value={fmtCurrency(period.total)} />
+        <MiniStat label="Vencimiento" value={fmtDate(period.dueDate)} />
+        <MiniStat label="Programado" value={fmtCurrency(committed)} />
+        <MiniStat label="Pendiente" value={fmtCurrency(pending)} />
+      </div>
+      <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">Estado operativo</div>
+            <div className="mt-1 text-[13px] font-bold text-[var(--gray-950)]">
+              {pending > 0 && unscheduled > 0
+                ? 'Falta calendarizar pago'
+                : pending > 0
+                  ? 'Pago en borrador pendiente de aprobar'
+                  : paid >= period.total ? 'Pagado' : 'Pago calendarizado'}
+            </div>
+            <div className="mt-0.5 text-[11px] text-[var(--gray-500)]">
+              Fuente: {sourceSummary}. Pagado: {fmtCurrency(paid)}.
+            </div>
+          </div>
+          {primaryObligation && (
+            <button
+              type="button"
+              onClick={() => onApprovePayment(primaryObligation)}
+              disabled={unscheduled <= 0}
+              className={taxButtonClass}
+            >
+              <CalendarDays className="h-4 w-4" strokeWidth={1.5} />
+              {unscheduled > 0 ? 'Programar pago' : 'Pago ya programado'}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
+        <MiniStat label="ISN" value={fmtCurrency(period.isn)} />
+        <MiniStat label="IMSS" value={fmtCurrency(period.imss)} />
+      </div>
+    </div>
   );
 }
 
@@ -852,7 +1163,7 @@ function IvaDetail({
       />
 
       {(iva.unclassifiedIncome > 0 || iva.unclassifiedExpense > 0) && (
-        <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[11px] text-[var(--gray-500)]">
+        <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[11px] text-[var(--gray-500)]">
           Sin clasificar: {fmtCurrency(iva.unclassifiedIncome + iva.unclassifiedExpense)}
         </div>
       )}
@@ -870,13 +1181,13 @@ function IvaLinesTable({
   onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--gray-200)]">
+    <div className="overflow-hidden rounded-[var(--radius)] border border-[var(--gray-200)]">
       <div className="max-h-[360px] overflow-auto">
         {lines.length === 0 ? (
           <div className="px-3 py-8 text-center text-[12px] text-[var(--gray-400)]">{empty}</div>
         ) : (
           <table className="w-full min-w-[560px] text-[11.5px]">
-            <thead className="sticky top-0 bg-[var(--gray-50)] text-left text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
+            <thead className="sticky top-0 bg-[var(--gray-50)] text-left text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">
               <tr>
                 <th className="px-3 py-2">Documento / concepto</th>
                 <th className="px-3 py-2">Fecha</th>
@@ -906,7 +1217,7 @@ function IvaLinesTable({
                         if (!line.rateTarget) return;
                         onUpdateTaxRate(line.rateTarget, Number(event.target.value) as 8 | 16);
                       }}
-                      className="h-8 rounded-lg border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-700)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
+                      className="h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-700)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
                     >
                       <option value={16}>16%</option>
                       <option value={8}>8%</option>
@@ -979,7 +1290,7 @@ function CollapsibleSourceLines({
   onToggle: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-[var(--gray-200)]">
+    <div className="rounded-[var(--radius)] border border-[var(--gray-200)]">
       <button
         onClick={onToggle}
         className="flex w-full items-center gap-2 border-b border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-left"
@@ -987,7 +1298,7 @@ function CollapsibleSourceLines({
         {expanded
           ? <ChevronDown className="h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />
           : <ChevronRight className="h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />}
-        <span className="text-[11px] font-semibold text-[var(--gray-950)]">{title}</span>
+        <span className="text-[11px] font-bold text-[var(--gray-950)]">{title}</span>
       </button>
       {expanded && (
         <div className="max-h-[320px] overflow-auto">
@@ -995,7 +1306,7 @@ function CollapsibleSourceLines({
             <div className="px-3 py-5 text-center text-[12px] text-[var(--gray-400)]">{empty}</div>
           ) : (
             <table className="w-full min-w-[460px] text-[11.5px]">
-              <thead className="text-left text-[10px] uppercase tracking-wider text-[var(--gray-400)]">
+              <thead className="text-left text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]">
                 <tr>
                   <th className="px-3 py-2">Documento</th>
                   <th className="px-3 py-2">Fecha</th>
@@ -1028,70 +1339,110 @@ function PaymentPlanDetail({
   obligations,
   onApprovePayment,
   onUpdatePayment,
+  onRemovePayment,
 }: {
   obligations: TaxObligation[];
   onApprovePayment: (obligation: TaxObligation) => void;
   onUpdatePayment: (obligation: TaxObligation, paymentId: string, patch: Partial<TaxPaymentPlanItem>) => void;
+  onRemovePayment: (obligation: TaxObligation, paymentId: string) => void;
 }) {
   return (
     <div className="divide-y divide-[var(--gray-100)]">
-      {obligations.map((obligation) => (
-        <div key={obligation.id} className="space-y-3 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="font-semibold text-[var(--gray-950)]">{obligation.label}</div>
-              <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
-                {obligation.source} · vence {fmtDate(obligation.dueDate)} · pendiente {fmtCompact(obligation.pendingAmount)}
-              </div>
-            </div>
-            <button onClick={() => onApprovePayment(obligation)} className={taxButtonClass}>
-              <CalendarDays className="h-4 w-4" strokeWidth={1.5} />
-              Programar pago
-            </button>
-          </div>
-          {obligation.paymentPlan.length === 0 ? (
-            <div className="rounded-xl border border-[var(--gray-200)] px-3 py-4 text-center text-[12px] text-[var(--gray-400)]">
-              Sin pagos parciales programados.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {obligation.paymentPlan.map((payment) => (
-                <div key={payment.id} className="grid gap-2 rounded-xl border border-[var(--gray-200)] p-2 md:grid-cols-[130px_1fr_120px_110px]">
-                  <input
-                    type="date"
-                    value={payment.date}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { date: event.target.value })}
-                    className={taxInputClass}
-                  />
-                  <input
-                    value={payment.note ?? ''}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { note: event.target.value })}
-                    className={taxInputClass}
-                    placeholder="Nota"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={payment.amount}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { amount: Number(event.target.value) })}
-                    className={`${taxInputClass} text-right tabular-nums`}
-                  />
-                  <select
-                    value={payment.status}
-                    onChange={(event) => onUpdatePayment(obligation, payment.id, { status: event.target.value as TaxPaymentPlanItem['status'] })}
-                    className={taxInputClass}
-                  >
-                    <option value="DRAFT">Borrador</option>
-                    <option value="APPROVED">Aprobado</option>
-                    <option value="PAID">Pagado</option>
-                  </select>
+      {obligations.map((obligation) => {
+        const plannedAmount = obligation.paymentPlan.reduce((sum, payment) => sum + payment.amount, 0);
+        const remainingToPlan = Math.max(0, obligation.totalAmount - plannedAmount);
+        return (
+          <div key={obligation.id} className="space-y-3 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate font-bold text-[var(--gray-950)]" title={obligation.label}>{obligation.label}</div>
+                <div className="mt-0.5 text-[11px] text-[var(--gray-400)]">
+                  {obligation.source} · vence {fmtDate(obligation.dueDate)} · pendiente {fmtCompact(Math.max(0, obligation.totalAmount - plannedAmount))}
                 </div>
-              ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => onApprovePayment(obligation)}
+                disabled={remainingToPlan <= 0}
+                className={taxButtonClass}
+              >
+                <CalendarDays className="h-4 w-4" strokeWidth={1.5} />
+                <span className="hidden sm:inline">{remainingToPlan > 0 ? 'Programar pago' : 'Pago ya programado'}</span>
+                <span className="sm:hidden">{remainingToPlan > 0 ? 'Programar' : 'Listo'}</span>
+              </button>
             </div>
-          )}
-        </div>
-      ))}
+            {obligation.paymentPlan.length === 0 ? (
+              <div className="rounded-[var(--radius)] border border-[var(--gray-200)] px-3 py-4 text-center text-[12px] text-[var(--gray-400)]">
+                Sin pagos programados.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {obligation.paymentPlan.map((payment) => (
+                  <div key={payment.id} data-testid="tax-payment-card" className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
+                      <div className="grid grid-cols-2 gap-2">
+                        <Field label="Fecha">
+                          <input
+                            type="date"
+                            value={payment.date}
+                            onChange={(event) => onUpdatePayment(obligation, payment.id, { date: event.target.value })}
+                            className={taxInputClass}
+                          />
+                        </Field>
+                        <Field label="Monto">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={payment.amount}
+                            onChange={(event) => onUpdatePayment(obligation, payment.id, { amount: Number(event.target.value) })}
+                            className={`${taxInputClass} text-right tabular-nums`}
+                          />
+                        </Field>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <Field label="Estatus">
+                          <select
+                            value={payment.status}
+                            onChange={(event) => onUpdatePayment(obligation, payment.id, { status: event.target.value as TaxPaymentPlanItem['status'] })}
+                            className={taxInputClass}
+                          >
+                            <option value="DRAFT">Borrador</option>
+                            <option value="APPROVED">Aprobado</option>
+                            <option value="PAID">Pagado</option>
+                          </select>
+                        </Field>
+                        <button
+                          type="button"
+                          onClick={() => onRemovePayment(obligation, payment.id)}
+                          className="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-[var(--radius)] border border-[var(--gray-200)] bg-white text-[var(--gray-400)] hover:border-[var(--danger)]/30 hover:bg-[var(--danger)]/5 hover:text-[var(--danger)]"
+                          aria-label={`Borrar pago ${obligation.label}`}
+                        >
+                          <Trash2 className="h-4 w-4" strokeWidth={1.5} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2">
+                      <Field label="Nota">
+                        <input
+                          value={payment.note ?? ''}
+                          onChange={(event) => onUpdatePayment(obligation, payment.id, { note: event.target.value })}
+                          className={taxInputClass}
+                          placeholder="Nota opcional"
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <PaymentImpactPill status={payment.status} />
+                      <span className="text-[11px] tabular-nums text-[var(--gray-400)]">{fmtCurrency(payment.amount)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
       {obligations.length === 0 && (
         <div className="px-4 py-8 text-center text-[12px] text-[var(--gray-400)]">Sin obligaciones fiscales en este periodo.</div>
       )}
@@ -1105,10 +1456,42 @@ function PaymentPlanDetail({
 
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</div>
-      <div className="mt-1 text-[13px] font-semibold tabular-nums text-[var(--gray-950)]">{value}</div>
+    <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</div>
+      <div className="mt-1 text-[13px] font-bold tabular-nums text-[var(--gray-950)]">{value}</div>
     </div>
+  );
+}
+
+function PaymentStatusPill({ status }: { status: TaxPaymentPlanItem['status'] }) {
+  const cls = status === 'PAID'
+    ? 'bg-[var(--success-muted)] text-[var(--success)]'
+    : status === 'APPROVED'
+      ? 'bg-[var(--primary-muted)] text-[var(--primary)]'
+      : 'bg-[var(--gray-100)] text-[var(--gray-600)]';
+  const label = status === 'PAID'
+    ? 'Pagado, ejecutado'
+    : status === 'APPROVED'
+      ? 'Aprobado, entra a Planeación'
+      : 'Borrador, no impacta caja';
+  return <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${cls}`}>{label}</span>;
+}
+
+function PaymentImpactPill({ status }: { status: TaxPaymentPlanItem['status'] }) {
+  const impactsProjection = status === 'APPROVED' || status === 'PAID';
+  const label = status === 'PAID'
+    ? 'Pagado: ejecutado'
+    : status === 'APPROVED'
+      ? 'Aprobado: impacta caja'
+      : 'Borrador: no impacta caja';
+  return (
+    <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${
+      impactsProjection
+        ? 'bg-[var(--success-muted)] text-[var(--success)]'
+        : 'bg-[var(--gray-100)] text-[var(--gray-500)]'
+    }`}>
+      {label}
+    </span>
   );
 }
 
@@ -1141,16 +1524,16 @@ function SegmentedControl<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      {label && <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--gray-400)]">{label}</span>}
-      <div className="inline-flex h-9 items-center rounded-xl border border-[var(--gray-200)] bg-white p-0.5">
+    <div className="flex flex-wrap items-center gap-2">
+      {label && <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</span>}
+      <div className="flex min-w-0 flex-wrap items-center gap-1 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-0.5">
         {options.map((option) => {
           const active = value === option.id;
           return (
             <button
               key={option.id}
               onClick={() => onChange(option.id)}
-              className="h-8 rounded-lg px-3 text-[12px] font-medium transition-colors"
+              className="h-8 rounded-[var(--radius-md)] px-3 text-[12px] font-medium transition-colors"
               style={{
                 background: active ? 'var(--gray-950)' : 'transparent',
                 color: active ? 'white' : 'var(--gray-700)',
@@ -1171,8 +1554,17 @@ function addDays(date: string, days: number): string {
   return parsed.toISOString().slice(0, 10);
 }
 
-const taxInputClass = 'h-10 w-full rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
-const taxButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed';
+function summarizeObligationSources(obligations: TaxObligation[]): string {
+  if (obligations.length === 0) return 'sin obligación';
+  const sources = Array.from(new Set(obligations.map((obligation) => obligation.source)));
+  if (sources.includes('MANUAL') && sources.length === 1) return 'manual';
+  if (sources.includes('JDE')) return sources.length > 1 ? 'JDE + manual' : 'JDE';
+  if (sources.includes('CALCULATED') && sources.length === 1) return 'calculado';
+  return sources.join(' + ').toLowerCase();
+}
+
+const taxInputClass = 'h-10 w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] text-[var(--gray-950)] outline-none focus:border-[var(--primary)]';
+const taxButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)] disabled:opacity-40 disabled:cursor-not-allowed';
 /* ────────────────────────────────────────────────────────────── */
 /* Trajectory Chart                                              */
 /* ────────────────────────────────────────────────────────────── */
@@ -1193,15 +1585,15 @@ function TaxTrajectoryChart({ view }: { view: TaxDashboardView }) {
   }, [view.overdueBalance, view.periods]);
 
   return (
-    <div className="rounded-2xl border border-[var(--gray-200)] bg-white p-4">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
       <div className="mb-4">
-        <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Trayectoria de Deuda Fiscal</h3>
+        <h3 className="text-[13px] font-bold text-[var(--gray-950)]">Trayectoria de Deuda Fiscal</h3>
         <p className="text-[11px] text-[var(--gray-400)]">Evolución del saldo acumulado proyectado vs pagos aprobados.</p>
       </div>
       <div className="h-[180px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+            <CartesianGrid strokeDasharray="3 3" vertical={false} className="recharts-cartesian-grid" />
             <XAxis dataKey="name" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
             <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={40} />
             <Tooltip
@@ -1210,7 +1602,7 @@ function TaxTrajectoryChart({ view }: { view: TaxDashboardView }) {
             />
             <Bar dataKey="nuevos" fill="var(--warning)" radius={[4, 4, 0, 0]} barSize={20} name="Nuevos" />
             <Bar dataKey="pagos" fill="var(--success)" radius={[4, 4, 0, 0]} barSize={20} name="Pagos" />
-            <Line type="monotone" dataKey="acumulado" stroke="var(--danger)" strokeWidth={2} dot={{ r: 3 }} name="Saldo Acumulado" />
+            <Line type="monotone" dataKey="acumulado" stroke="var(--danger)" strokeWidth={1.5} dot={{ r: 3 }} name="Saldo Acumulado" />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

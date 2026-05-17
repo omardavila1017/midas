@@ -19,6 +19,8 @@ export interface ManualPlanningEntryInput {
   startDate: string;
   endDate?: string;
   recurrence: ManualPlanningRecurrence;
+  companyId?: string;
+  businessUnitId?: string;
   counterpartyName?: string;
   description?: string;
   taxTreatment?: FinancialTaxTreatment;
@@ -41,6 +43,9 @@ export const MANUAL_PLANNING_CATEGORY_LABELS: Record<ManualPlanningCategory, str
   MANUAL_OUTFLOW: 'Pago manual',
   SUPPLIER_PAYMENT: 'Proveedor',
   TAX_PAYMENT: 'Impuesto',
+  PAYROLL: 'Nómina',
+  CAPEX: 'CAPEX',
+  OPEX: 'OPEX',
   OTHER: 'Otro',
 };
 
@@ -70,6 +75,8 @@ export function createManualPlanningEntry(input: ManualPlanningEntryInput): Manu
     startDate: input.startDate,
     endDate: input.endDate,
     recurrence: input.recurrence,
+    companyId: input.companyId?.trim() || undefined,
+    businessUnitId: input.businessUnitId?.trim() || undefined,
     counterpartyName: input.counterpartyName?.trim() || undefined,
     description: input.description?.trim() || undefined,
     taxTreatment: input.taxTreatment ?? defaultTaxTreatment(input.type, input.category),
@@ -115,7 +122,7 @@ export function expandManualPlanningEntriesToMovements(
   options: ExpandManualPlanningEntriesOptions,
 ): FinancialMovement[] {
   return entries
-    .filter((entry) => entry.scenarioIds.includes(options.scenarioId))
+    .filter((entry) => entry.scenarioIds.includes(options.scenarioId) && !entry.replacedAt)
     .flatMap((entry) => expandEntry(entry, options));
 }
 
@@ -146,6 +153,8 @@ function expandEntry(
     category: movementCategory(entry),
     counterpartyName: entry.counterpartyName,
     counterpartyType: counterpartyType(entry),
+    companyId: entry.companyId,
+    businessUnitId: entry.businessUnitId,
     concept: occurrenceConcept(entry, index, dates.length),
     currency: 'MXN',
     originalAmount: entry.amount,
@@ -208,12 +217,15 @@ function nextOccurrence(date: Date, recurrence: ManualPlanningRecurrence): Date 
 function movementCategory(entry: ManualPlanningEntry): FinancialMovementCategory {
   if (entry.category === 'SUPPLIER_PAYMENT') return 'AP_PAYMENT';
   if (entry.category === 'TAX_PAYMENT') return 'TAX';
+  if (entry.category === 'PAYROLL' || entry.category === 'CAPEX' || entry.category === 'OPEX') return entry.category;
   return 'MANUAL';
 }
 
 function counterpartyType(entry: ManualPlanningEntry): FinancialMovement['counterpartyType'] {
   if (entry.category === 'SUPPLIER_PAYMENT') return 'SUPPLIER';
   if (entry.category === 'TAX_PAYMENT') return 'TAX_AUTHORITY';
+  if (entry.category === 'PAYROLL') return 'EMPLOYEE';
+  if (entry.category === 'CAPEX' || entry.category === 'OPEX') return 'SUPPLIER';
   if (entry.type === 'INFLOW') return 'CUSTOMER';
   return 'INTERNAL';
 }
@@ -228,7 +240,8 @@ function defaultTaxTreatment(
   category: ManualPlanningCategory,
 ): FinancialTaxTreatment {
   if (category === 'TAX_PAYMENT') return 'IVA_EXEMPT';
-  if (category === 'SUPPLIER_PAYMENT') return 'IVA_CREDITABLE';
+  if (category === 'PAYROLL') return 'IVA_EXEMPT';
+  if (category === 'SUPPLIER_PAYMENT' || category === 'CAPEX' || category === 'OPEX') return 'IVA_CREDITABLE';
   if (type === 'INFLOW') return 'IVA_CAUSED';
   return 'UNCLASSIFIED';
 }
@@ -256,6 +269,8 @@ function normalizeManualPlanningEntry(value: unknown, index: number): ManualPlan
     startDate,
     endDate: endDate && endDate >= startDate ? endDate : undefined,
     recurrence,
+    companyId: typeof raw.companyId === 'string' && raw.companyId.trim() ? raw.companyId.trim() : undefined,
+    businessUnitId: typeof raw.businessUnitId === 'string' && raw.businessUnitId.trim() ? raw.businessUnitId.trim() : undefined,
     counterpartyName: typeof raw.counterpartyName === 'string' && raw.counterpartyName.trim()
       ? raw.counterpartyName.trim()
       : undefined,
@@ -265,6 +280,12 @@ function normalizeManualPlanningEntry(value: unknown, index: number): ManualPlan
     taxBaseAmount: finiteOptional(raw.taxBaseAmount),
     taxAmount: finiteOptional(raw.taxAmount),
     status: raw.status === 'APPROVED' ? 'APPROVED' : 'DRAFT',
+    replacedBySourceSystem: normalizeSourceSystem(raw.replacedBySourceSystem),
+    replacedBySourceObjectId: typeof raw.replacedBySourceObjectId === 'string' && raw.replacedBySourceObjectId.trim()
+      ? raw.replacedBySourceObjectId.trim()
+      : undefined,
+    replacedAt: typeof raw.replacedAt === 'string' && raw.replacedAt.trim() ? raw.replacedAt.trim() : undefined,
+    replacementNote: typeof raw.replacementNote === 'string' && raw.replacementNote.trim() ? raw.replacementNote.trim() : undefined,
     createdBy: typeof raw.createdBy === 'string' && raw.createdBy.trim() ? raw.createdBy.trim() : 'tesoreria@senda.local',
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
@@ -277,9 +298,25 @@ function normalizeCategory(value: unknown): ManualPlanningCategory | null {
     || value === 'MANUAL_OUTFLOW'
     || value === 'SUPPLIER_PAYMENT'
     || value === 'TAX_PAYMENT'
+    || value === 'PAYROLL'
+    || value === 'CAPEX'
+    || value === 'OPEX'
     || value === 'OTHER'
   ) return value;
   return null;
+}
+
+function normalizeSourceSystem(value: unknown): ManualPlanningEntry['replacedBySourceSystem'] {
+  if (
+    value === 'JDE'
+    || value === 'BANK'
+    || value === 'EXCEL'
+    || value === 'MANUAL'
+    || value === 'FORECAST'
+    || value === 'PAYROLL'
+    || value === 'TAX'
+  ) return value;
+  return undefined;
 }
 
 function normalizeRecurrence(value: unknown): ManualPlanningRecurrence | null {
