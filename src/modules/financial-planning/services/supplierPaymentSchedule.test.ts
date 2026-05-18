@@ -129,7 +129,7 @@ describe('supplierPaymentSchedule', () => {
 
     expect(result.plan.decisions).toHaveLength(0);
     expect(result.movements.find((item) => item.id === 'm-critical')).toBeTruthy();
-    expect(result.plan.dailyRows.find((row) => row.date === '2026-05-02')?.closingCash).toBe(0);
+    expect(result.plan.dailyRows.find((row) => row.date === '2026-05-02')?.closingCash).toBe(-400);
   });
 
   it('partially schedules unlocked tax outflows while locked taxes remain fixed', () => {

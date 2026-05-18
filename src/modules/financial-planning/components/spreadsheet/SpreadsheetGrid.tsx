@@ -321,7 +321,6 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             onClick={() => {
               setSelection({ rowIndex, colIndex });
               setIsEditing(false);
-              onInspectCell?.(row.conceptKey, column.key);
               if (isReadOnly) onReadOnlyAttempt?.();
             }}
             onDoubleClick={() => {

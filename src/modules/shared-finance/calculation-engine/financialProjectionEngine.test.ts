@@ -22,7 +22,7 @@ describe('financialProjectionEngine', () => {
     expect(projection.summary.finalCash).toBe(10_600);
   });
 
-  it('keeps visible projected cash at zero while preserving the real liquidity shortfall', () => {
+  it('shows signed projected cash while preserving the real liquidity shortfall', () => {
     const projection = calculateBaseProjection([
       movement('out-1', 'OUTFLOW', 'PAYROLL', '2026-05-02', 1_200),
       movement('out-2', 'OUTFLOW', 'TAX', '2026-05-03', 300),
@@ -34,9 +34,9 @@ describe('financialProjectionEngine', () => {
       granularity: 'daily',
     });
 
-    expect(projection.buckets[1].closingCash).toBe(0);
-    expect(projection.buckets[2].closingCash).toBe(0);
-    expect(projection.summary.minCash).toBe(0);
+    expect(projection.buckets[1].closingCash).toBe(-200);
+    expect(projection.buckets[2].closingCash).toBe(-500);
+    expect(projection.summary.minCash).toBe(-500);
     expect(projection.summary.deficitDays).toBe(2);
     expect(projection.summary.creditRequired).toBe(600);
   });

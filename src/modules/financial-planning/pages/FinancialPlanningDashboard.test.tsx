@@ -78,6 +78,74 @@ describe('<FinancialPlanningDashboard />', () => {
     expect(drafts.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('shows proposal actions and opens the pending-change review', async () => {
+    localStorage.setItem(
+      'midas.financialPlanning.scenarios.v1',
+      JSON.stringify([{
+        id: 'draft-test',
+        name: 'Propuesta Prueba',
+        kind: 'DRAFT',
+        status: 'DRAFT',
+        adjustmentIds: [],
+        parentScenarioId: 'approved',
+        createdBy: 'test',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:00:00.000Z',
+      }]),
+    );
+    localStorage.setItem(
+      'midas.financialPlanning.customRows.v1',
+      JSON.stringify([{
+        id: 'custom-row-test',
+        scenarioId: 'draft-test',
+        conceptKey: 'custom:OUTFLOW:pago-extra:abc123',
+        label: 'Pago extra',
+        type: 'OUTFLOW',
+        category: 'MANUAL',
+        createdBy: 'test',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:00:00.000Z',
+      }]),
+    );
+    localStorage.setItem(
+      'midas.financialPlanning.cellOverrides.v1',
+      JSON.stringify([{
+        id: 'co-test',
+        scenarioId: 'draft-test',
+        conceptKey: 'custom:OUTFLOW:pago-extra:abc123',
+        granularity: 'monthly',
+        bucketKey: '2026-05-01',
+        type: 'OUTFLOW',
+        mode: 'REPLACE',
+        value: 1000,
+        createdBy: 'test',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:00:00.000Z',
+      }]),
+    );
+
+    render(
+      <FinancialPlanningDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={10_000}
+      />,
+    );
+
+    await flushPlanningWarmup();
+    fireEvent.click(screen.getByText('Propuesta Prueba'));
+    expect(screen.getByRole('button', { name: /Aplicar al Aprobado/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Revisar cambios/i }));
+    expect(screen.getByRole('dialog', { name: /Aplicar propuesta al Aprobado/i })).toBeTruthy();
+    expect(screen.getByText(/Cambios a aplicar/i)).toBeTruthy();
+  });
+
   it('purges legacy scenario kinds during bootstrap', async () => {
     localStorage.setItem(
       'midas.financialPlanning.scenarios.v1',

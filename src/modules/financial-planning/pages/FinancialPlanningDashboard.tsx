@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
-import { AlertTriangle, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -9,15 +9,11 @@ import type { CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
 import {
-  applyAdjustmentsToMovements,
-  applyCellOverridesToBuckets,
   bucketKeyForDate,
   bucketLabel as engineBucketLabel,
   buildBucketDates,
-  calculateBaseProjection,
   effectiveAmount,
   effectiveMovementDate,
-  summarizeBucketsForScenario,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
   CellOverride,
@@ -26,7 +22,6 @@ import type {
   FinancialMovementCategory,
   FinancialMovementType,
   FinancialScenario,
-  ForecastRun,
   ManualPlanningEntry,
   PayrollCostRecord,
   PlanningCustomRow,
@@ -54,19 +49,8 @@ import {
   tryGetCachedFinancialProjectionSourceData,
   type FinancialProjectionSourceData,
 } from '../../financial-projection/services/financialProjectionService';
+import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
 import {
-  buildAutomaticTaxReserveMovements,
-  buildApprovedTaxPaymentMovements,
-  buildTaxDashboardView,
-  defaultTaxStore,
-  loadTaxStore,
-  TAX_STORE_CHANGED_EVENT,
-  TAX_STORE_KEY,
-} from '../../taxes/services/taxModuleService';
-import { buildConvenioPaymentMovements } from '../../concurso-mercantil/services/convenioMovements';
-import { buildFideicomisoMovements } from '../../fideicomiso/services/fideicomisoMovements';
-import {
-  expandManualPlanningEntriesToMovements,
   loadManualPlanningEntries,
   saveManualPlanningEntries,
 } from '../services/manualPlanningEntries';
@@ -91,10 +75,7 @@ import {
 import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../services/scenarioBootstrap';
 import { conceptKeyForMovement, buildPlanningRows } from '../services/planningRowTaxonomy';
 import { createNewDraft, duplicateDraft } from '../services/scenarioDuplicate';
-import {
-  scheduleSupplierPaymentsByScore,
-  type SupplierPaymentPlan,
-} from '../services/supplierPaymentSchedule';
+import { buildScenarioForecastRun, type ScenarioForecastRun } from '../services/scenarioForecastRun';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
@@ -139,25 +120,8 @@ interface Props {
 }
 
 const USER = 'tesoreria@senda.local';
-type PlanningScenarioRun = ForecastRun & { supplierPlan: SupplierPaymentPlan };
+type PlanningScenarioRun = ScenarioForecastRun;
 type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
-
-/**
- * Base scenario invariant: Base proyecta SÓLO datos reales de las APIs de
- * corto plazo. En el dominio Senda eso es cobranza real de JDE (facturas CXC
- * de viajes ya ejecutados — lo que el negocio llama "rol"), órdenes de compra
- * de JDE (`compras`) y nómina real de TRESS. NO debe incluir forecast por
- * regla (`client:` projectClientMonth), CXP, proveedores recurrentes, relleno
- * presupuestal ni el sintético de balanceo canónico. Filtramos por prefijo de
- * `id` porque el motor canónico es compartido (Dashboard/Proyección lo usan
- * completo) y no debe alterarse — el recorte vive sólo en la corrida de Base.
- */
-const isRealShortTermApiMovement = (m: FinancialMovement): boolean => {
-  if (m.id.startsWith('cxc:')) return true;
-  if (m.id.startsWith('purchase:') || m.id.startsWith('po:')) return true;
-  if (m.id.startsWith('payroll:')) return !m.id.includes(':forecast:');
-  return false;
-};
 
 /**
  * Outer entry — gates the heavy planning pipeline behind a paint.
@@ -177,11 +141,9 @@ export default function FinancialPlanningDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const cacheProbeInput = useMemo(
-    // PERF (2026-05-14): Planning NO usa `predictive` (Holt-Winters tiered).
-    // Pasamos enablePredictive=false para que canonical no entrene el modelo
-    // — ahorra varios cientos de ms en cold mounts y elimina extractHistorical
-    // Series sobre 100k+ movimientos bancarios.
-    () => ({ ...props, asOfDate: today, enablePredictive: false }),
+    // Planeación consume la misma fuente predictiva que el Dashboard; las reglas
+    // de tesorería se aplican después en el pipeline compartido de escenarios.
+    () => ({ ...props, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -546,29 +508,23 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   ]);
 
   const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
-    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}`;
+    const scenarioCustomRows = customRows.filter((row) => row.scenarioId === scenarioId);
+    const scenarioOverrides = cellOverrides.filter((override) => override.scenarioId === scenarioId);
+    const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
+    const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
+    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
     return cachedRun<PlanningScenarioRun>(cacheKey, () => {
       const t0 = performance.now();
-      const result = (() => {
-      const isBase = scenarioId === BASE_SCENARIO_ID;
-      const manualMovements = !isBase && includeManualEntries
-        ? expandManualPlanningEntriesToMovements(manualEntries, {
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        })
-        : [];
-      const movementsBeforeAdjust = isBase
-        ? source.movements.filter(isRealShortTermApiMovement)
-        : [...source.movements, ...manualMovements];
-      // applyAdjustmentsToMovements es determinístico sobre input idéntico —
-      // calculamos una sola vez y lo reusamos como seed fiscal y como base
-      // del schedule. La versión anterior corría el motor dos veces (preTax +
-      // adjustedMovements) sobre exactamente los mismos inputs, duplicando CPU
-      // en cada eval de escenario.
-      const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
-      const taxSeedView = isBase ? null : buildTaxDashboardView({
+      const scenario = scenarios.find((s) => s.id === scenarioId);
+      const result = buildScenarioForecastRun({
+        scenarioId,
+        scenarioName: scenario?.name ?? scenarioId,
+        scenarioKind: scenario?.kind ?? 'DRAFT',
+        sourceMovements: source.movements,
+        adjustments: storedAdjustments,
+        manualEntries,
+        customRows: scenarioCustomRows,
+        overrides: scenarioOverrides,
         clients: props.clients,
         providers: props.providers,
         assumptions: props.assumptions,
@@ -577,73 +533,17 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         payrollCosts: props.payrollCosts,
         budget: props.budget,
         companyCode: props.companyCode,
+        taxStore,
         startDate: yearStart,
         endDate: yearEnd,
-        movements: adjustedMovements,
-        store: taxStore,
         today,
-      });
-      const taxMovements = taxSeedView
-        ? [
-          ...buildApprovedTaxPaymentMovements({
-            obligations: taxSeedView.obligations,
-            scenarioId,
-            startDate: yearStart,
-            endDate: yearEnd,
-            asOfDate: today,
-          }),
-          ...buildAutomaticTaxReserveMovements({
-            obligations: taxSeedView.obligations,
-            scenarioId,
-            startDate: yearStart,
-            endDate: yearEnd,
-            asOfDate: today,
-          }),
-        ]
-        : [];
-      // Convenio concursal: pagos futuros del convenio inyectados como
-      // egresos DEBT bloqueados (mismo patrón e invariante que impuestos:
-      // solo escenarios no-base, recortado a la ventana de proyección).
-      const convenioMovements = isBase
-        ? []
-        : buildConvenioPaymentMovements({
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        });
-      // Fideicomiso Dina: ingreso Corning real (Bajío) + egreso DINA mensual.
-      // Mismo invariante/patrón que convenio (solo no-base, ventana recortada).
-      const fideicomisoMovements = isBase
-        ? []
-        : buildFideicomisoMovements({
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-          bajioStatements: props.bajioStatements ?? [],
-        });
-      const movementsWithTax = [...adjustedMovements, ...taxMovements, ...convenioMovements, ...fideicomisoMovements];
-      const supplierSchedule = scheduleSupplierPaymentsByScore({
-        movements: movementsWithTax,
-        providers: props.providers,
-        startDate: today,
-        endDate: yearEnd,
-        initialCash: supplierInitialCash,
-        minimumCash,
-        scenarioId,
-      });
-      const projection = calculateBaseProjection(supplierSchedule.movements, {
-        startDate: yearStart,
-        endDate: yearEnd,
+        bajioStatements: props.bajioStatements ?? [],
         initialCash,
+        supplierInitialCash,
         minimumCash,
         granularity,
-        scenarioId,
-        name: scenarios.find((s) => s.id === scenarioId)?.name ?? scenarioId,
+        includeManualEntries,
       });
-      return { ...projection, supplierPlan: supplierSchedule.plan };
-      })();
       // eslint-disable-next-line no-console
       console.info(`[planning.scenarioRun] scenarioId=${scenarioId} ${(performance.now() - t0).toFixed(0)}ms · movements=${result.movements.length}`);
       return result;
@@ -654,13 +554,13 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, sharedRunInputsKey],
+    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, sharedRunInputsKey],
+    [baseScenario.id, sharedRunInputsKey, cellOverrides, customRows],
   );
 
   // Reuse approved/base when the active scenario is one of them — the cache
@@ -673,45 +573,15 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       return buildScenarioRun(activeScenario.id, true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey],
+    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows],
   );
 
   const activeOverrides = useMemo(
     () => cellOverrides.filter((override) => override.scenarioId === activeScenarioId),
     [cellOverrides, activeScenarioId],
   );
-  const activeCustomRows = useMemo(
-    () => customRows.filter((row) => row.scenarioId === activeScenarioId),
-    [customRows, activeScenarioId],
-  );
-
-  const rows = useMemo(
-    () => buildPlanningRows({
-      movements: activeRunRaw.movements,
-      customRows: activeCustomRows,
-      overrides: activeOverrides,
-    }),
-    [activeRunRaw.movements, activeCustomRows, activeOverrides],
-  );
-
-  const activeRun = useMemo(() => {
-    const buckets = applyCellOverridesToBuckets({
-      buckets: activeRunRaw.buckets,
-      overrides: activeOverrides,
-      movements: activeRunRaw.movements,
-      rows,
-      granularity,
-      conceptKeyForMovement,
-      asOfDate: today,
-      initialCash,
-    });
-    return {
-      ...activeRunRaw,
-      buckets,
-      summary: summarizeBucketsForScenario(buckets, activeRunRaw.movements, minimumCash, granularity),
-      supplierPlan: activeRunRaw.supplierPlan,
-    };
-  }, [activeRunRaw, activeOverrides, rows, granularity, today, initialCash, minimumCash]);
+  const rows = activeRunRaw.rows;
+  const activeRun = activeRunRaw;
   const probabilistic = useProbabilisticForecast(activeRun, activeRun.summary.minimumCashRequired);
 
   // Approved overrides for the diff and merge logic
@@ -720,30 +590,39 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     [cellOverrides, approvedScenario.id],
   );
 
-  const approvedRunWithOverrides = useMemo(() => {
-    const approvedCustomRowsScoped = customRows.filter((row) => row.scenarioId === approvedScenario.id);
-    const approvedRows = buildPlanningRows({
-      movements: approvedRun.movements,
-      customRows: approvedCustomRowsScoped,
-      overrides: approvedOverrides,
-    });
-    const buckets = applyCellOverridesToBuckets({
-      buckets: approvedRun.buckets,
-      overrides: approvedOverrides,
-      movements: approvedRun.movements,
-      rows: approvedRows,
-      granularity,
-      conceptKeyForMovement,
-      asOfDate: today,
-      initialCash,
-    });
-    return {
-      ...approvedRun,
-      buckets,
-      summary: summarizeBucketsForScenario(buckets, approvedRun.movements, minimumCash, granularity),
-      supplierPlan: approvedRun.supplierPlan,
-    };
-  }, [approvedRun, approvedOverrides, customRows, approvedScenario.id, granularity, today, initialCash, minimumCash]);
+  const approvedRunWithOverrides = approvedRun;
+
+  const runsWithOverridesByScenarioId = useMemo(() => {
+    const map = new Map<string, PlanningScenarioRun>();
+    for (const scenario of scenarios) {
+      if (scenario.archivedAt) continue;
+      const raw = scenario.id === activeScenario.id
+        ? activeRunRaw
+        : scenario.id === approvedScenario.id
+          ? approvedRun
+          : scenario.id === baseScenario.id
+            ? baseRun
+            : buildScenarioRun(scenario.id, true);
+      map.set(scenario.id, raw);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    scenarios,
+    activeScenario.id,
+    activeRunRaw,
+    approvedScenario.id,
+    approvedRun,
+    baseScenario.id,
+    baseRun,
+    cellOverrides,
+    customRows,
+    granularity,
+    today,
+    initialCash,
+    minimumCash,
+    sharedRunInputsKey,
+  ]);
 
   // Pre-override per-row aggregates (for cell display when no override).
   const rowAggregateMap = useMemo(() => {
@@ -1026,23 +905,24 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   };
 
   const handleDiscardDraft = (scenarioId: string) => {
-    if (!confirm('¿Descartar este borrador? Esta acción no se puede deshacer.')) return;
+    if (!confirm('¿Descartar esta propuesta? Esta acción no se puede deshacer.')) return;
     const now = new Date().toISOString();
     setStoredScenarios((current) => current.map((s) => (s.id === scenarioId ? { ...s, archivedAt: now, updatedAt: now } : s)));
     setActiveScenarioId(approvedScenario.id);
-    setStatusMessage('Borrador descartado.');
+    setStatusMessage('Propuesta descartada.');
   };
 
   const draftEntries = changeLog.filter((entry) => entry.scenarioId === activeScenarioId);
 
   // ------- Merge flow ---------
-  const mergeDiff: MergeDiffEntry[] = useMemo(() => {
-    if (!mergeOpen) return [];
-    const draft = scenarios.find((s) => s.id === mergeOpen);
+  const buildPendingChangesForDraft = useCallback((draftId: string): MergeDiffEntry[] => {
+    const draft = scenarios.find((s) => s.id === draftId);
     if (!draft) return [];
     const draftOverrides = cellOverrides.filter((o) => o.scenarioId === draft.id);
     const draftCustomScoped = customRows.filter((r) => r.scenarioId === draft.id);
     const approvedCustomScoped = customRows.filter((r) => r.scenarioId === approvedScenario.id);
+    const draftAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(draft.id));
+    const approvedAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(approvedScenario.id));
     const allRows = buildPlanningRows({
       movements: approvedRun.movements,
       customRows: [...approvedCustomScoped, ...draftCustomScoped],
@@ -1066,6 +946,9 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       draftOverrides,
       approvedCustomRows: approvedCustomScoped,
       draftCustomRows: draftCustomScoped,
+      approvedAdjustments,
+      draftAdjustments,
+      manualEntries,
       rowLabelLookup: (key) => labelByKey.get(key) ?? key,
       bucketLabelLookup: (key, gran) => engineBucketLabel(key, gran),
       approvedAggregateLookup: (key, bucketKey, gran) => {
@@ -1073,15 +956,27 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         return approvedAggregateMap.get(aggKey) ?? 0;
       },
     });
-  }, [mergeOpen, scenarios, cellOverrides, customRows, approvedScenario, approvedOverrides, approvedRun, granularity]);
+  }, [scenarios, cellOverrides, customRows, storedAdjustments, manualEntries, approvedScenario, approvedOverrides, approvedRun, granularity]);
 
-  const handleConfirmMerge = (args: { selectedKeys: MergeDiffEntry[]; archiveDraft: boolean }) => {
+  const mergeDiff: MergeDiffEntry[] = useMemo(
+    () => (mergeOpen ? buildPendingChangesForDraft(mergeOpen) : []),
+    [buildPendingChangesForDraft, mergeOpen],
+  );
+
+  const activeDraftDiff: MergeDiffEntry[] = useMemo(
+    () => (activeScenario.kind === 'DRAFT' ? buildPendingChangesForDraft(activeScenario.id) : []),
+    [activeScenario.id, activeScenario.kind, buildPendingChangesForDraft],
+  );
+
+  const handleConfirmMerge = (args: { selectedChanges: MergeDiffEntry[]; archiveDraft: boolean }) => {
     if (!mergeOpen) return;
     const draft = scenarios.find((s) => s.id === mergeOpen);
     if (!draft) return;
     const draftOverrides = cellOverrides.filter((o) => o.scenarioId === draft.id);
     const draftCustomScoped = customRows.filter((r) => r.scenarioId === draft.id);
     const approvedCustomScoped = customRows.filter((r) => r.scenarioId === approvedScenario.id);
+    const draftAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(draft.id));
+    const approvedAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(approvedScenario.id));
     const result = applyMerge({
       approved: approvedScenario,
       draft,
@@ -1089,21 +984,21 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       approvedOverrides,
       draftOverrides,
       allOverrides: cellOverrides,
+      approvedAdjustments,
+      draftAdjustments,
+      allAdjustments: storedAdjustments,
       approvedCustomRows: approvedCustomScoped,
       draftCustomRows: draftCustomScoped,
       allCustomRows: customRows,
       manualEntries,
       changeLog,
-      selectedKeys: args.selectedKeys.map((entry) => ({
-        conceptKey: entry.conceptKey,
-        bucketKey: entry.bucketKey,
-        granularity: entry.granularity,
-      })),
+      selectedChanges: args.selectedChanges.map((entry) => ({ kind: entry.kind, id: entry.id })),
       archiveDraft: args.archiveDraft,
       user: USER,
     });
     setStoredScenarios(result.scenarios);
     setCellOverrides(result.cellOverrides);
+    setStoredAdjustments(result.adjustments);
     setCustomRows(result.customRows);
     setManualEntries(result.manualEntries);
     setChangeLog(result.changeLog);
@@ -1113,7 +1008,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     }
     setMergeOpen(null);
     setActiveScenarioId(approvedScenario.id);
-    setStatusMessage(`Merge aplicado: ${args.selectedKeys.length} cambio${args.selectedKeys.length === 1 ? '' : 's'}.`);
+    setStatusMessage(`Cambios aplicados al Aprobado: ${args.selectedChanges.length}.`);
   };
 
   // ------- KPIs ---------
@@ -1122,11 +1017,11 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const isDraft = activeScenario.kind === 'DRAFT';
 
   const finalCashFor = (scenarioId: string): number => {
-    if (scenarioId === activeScenario.id) return activeRun.summary.finalCash;
-    if (scenarioId === approvedScenario.id) return approvedRunWithOverrides.summary.finalCash;
-    if (scenarioId === baseScenario.id) return baseRun.summary.finalCash;
-    return 0;
+    return runsWithOverridesByScenarioId.get(scenarioId)?.summary.finalCash ?? 0;
   };
+
+  const pendingChangeCount = activeDraftDiff.length;
+  const mergeRun = mergeOpen ? runsWithOverridesByScenarioId.get(mergeOpen) : null;
 
   if (!source.hasData) {
     return (
@@ -1181,6 +1076,17 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onDiscardDraft={handleDiscardDraft}
       />
 
+      {isDraft && (
+        <ProposalActionBar
+          scenarioName={activeScenario.name}
+          pendingCount={pendingChangeCount}
+          onReview={() => setMergeOpen(activeScenario.id)}
+          onApply={() => setMergeOpen(activeScenario.id)}
+          onDuplicate={() => handleDuplicateDraft(activeScenario.id)}
+          onDiscard={() => handleDiscardDraft(activeScenario.id)}
+        />
+      )}
+
       {scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt).length === 0 && (
         <FirstSimulationNudge onCreateDraft={handleCreateDraft} />
       )}
@@ -1209,7 +1115,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
           icon={<TrendingUp className="w-4 h-4" />}
           color={toneByDelta(finalCashDelta)}
-          sublabel={isDraft ? 'Borrador activo' : 'Misma referencia'}
+          sublabel={isDraft ? 'Propuesta activa' : 'Misma referencia'}
         />
       </div>
 
@@ -1233,7 +1139,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onClearCell={handleClearCell}
         onAddRow={handleAddRow}
         onClickRow={(conceptKey) => setSelectedCell({ conceptKey, bucketKey: columns.find((column) => column.isCurrent)?.key ?? columns[0]?.key ?? yearStart })}
-        onInspectCell={(conceptKey, bucketKey) => setSelectedCell({ conceptKey, bucketKey })}
+        onInspectCell={(conceptKey, bucketKey) => setInspectedCell({ conceptKey, bucketKey })}
         onReadOnlyAttempt={() => setStatusMessage('Solo lectura. Crea una propuesta para editar.')}
       />
 
@@ -1271,9 +1177,9 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         approved={approvedScenario}
         diff={mergeDiff}
         changeLog={changeLog.filter((entry) => entry.scenarioId === mergeOpen)}
-        draftFinalCash={mergeOpen ? finalCashFor(mergeOpen) : 0}
+        draftFinalCash={mergeRun?.summary.finalCash ?? 0}
         approvedFinalCash={approvedRunWithOverrides.summary.finalCash}
-        draftDeficitDays={mergeOpen ? activeRun.summary.deficitDays : 0}
+        draftDeficitDays={mergeRun?.summary.deficitDays ?? 0}
         approvedDeficitDays={approvedRunWithOverrides.summary.deficitDays}
         onClose={() => setMergeOpen(null)}
         onConfirm={handleConfirmMerge}
@@ -1391,6 +1297,75 @@ function SegmentedFilter<T extends string>({
         );
       })}
     </div>
+  );
+}
+
+function ProposalActionBar({
+  scenarioName,
+  pendingCount,
+  onReview,
+  onApply,
+  onDuplicate,
+  onDiscard,
+}: {
+  scenarioName: string;
+  pendingCount: number;
+  onReview: () => void;
+  onApply: () => void;
+  onDuplicate: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <section className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
+          Propuesta activa
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-2">
+          <span className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{scenarioName}</span>
+          <span className="rounded-full bg-[var(--gray-100)] px-2 py-0.5 text-[10px] font-bold text-[var(--gray-600)]">
+            {pendingCount} cambio{pendingCount === 1 ? '' : 's'}
+          </span>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onReview}
+          className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+        >
+          <Eye className="h-3.5 w-3.5" strokeWidth={1.5} />
+          Revisar cambios
+        </button>
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={pendingCount === 0}
+          className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-semibold text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+          Aplicar al Aprobado
+        </button>
+        <button
+          type="button"
+          onClick={onDuplicate}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-800)]"
+          aria-label="Duplicar propuesta"
+          title="Duplicar propuesta"
+        >
+          <Copy className="h-3.5 w-3.5" strokeWidth={1.5} />
+        </button>
+        <button
+          type="button"
+          onClick={onDiscard}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white text-[var(--danger)] hover:bg-[var(--danger)]/8"
+          aria-label="Descartar propuesta"
+          title="Descartar propuesta"
+        >
+          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+        </button>
+      </div>
+    </section>
   );
 }
 

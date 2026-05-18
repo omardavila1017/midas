@@ -30,6 +30,45 @@ import {
   type AgedBalanceRecord,
 } from '../services/jde';
 import type { RealReconciliationResult } from '../domain/realReconciliationEngine';
+import type { CobranzaRecord } from '../services/jdeTypes';
+import type {
+  PayrollCostRecord,
+  PurchaseReceiptRecord,
+} from '../modules/shared-finance/types';
+import {
+  effectiveAmount,
+} from '../modules/shared-finance/calculation-engine/financialProjectionEngine';
+import {
+  buildFinancialProjectionSourceData,
+  calculateCurrentBankCash,
+  calculateInitialCash,
+} from '../modules/financial-projection/services/financialProjectionService';
+import {
+  loadCellOverrides,
+} from '../modules/financial-planning/services/cellOverridesStorage';
+import {
+  loadCustomRows,
+} from '../modules/financial-planning/services/customRowsStorage';
+import {
+  loadManualPlanningEntries,
+} from '../modules/financial-planning/services/manualPlanningEntries';
+import {
+  loadPlanningAdjustments,
+  loadPlanningScenarios,
+} from '../modules/financial-planning/services/financialPlanningStorage';
+import {
+  APPROVED_SCENARIO_ID,
+  ensureCoreScenarios,
+} from '../modules/financial-planning/services/scenarioBootstrap';
+import {
+  buildScenarioForecastRun,
+} from '../modules/financial-planning/services/scenarioForecastRun';
+import {
+  defaultTaxStore,
+  loadTaxStore,
+  TAX_STORE_CHANGED_EVENT,
+  TAX_STORE_KEY,
+} from '../modules/taxes/services/taxModuleService';
 import MonthDrilldown from './MonthDrilldown';
 import { type CashFlowTableRow } from './CashFlowTable';
 import PageHeader from './ui/PageHeader';
@@ -50,6 +89,11 @@ interface DashboardProps {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cobranzaRecords?: CobranzaRecord[];
+  paidCxpKeys?: Set<string>;
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
+  purchaseReceipts?: PurchaseReceiptRecord[];
+  payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   onOpenFlow: () => void;
@@ -71,6 +115,16 @@ interface DashboardProps {
   payrollMonthlyActualJDE?: number;
 }
 
+type DashboardMonth = {
+  yearMonth: string;
+  isHistorical: boolean;
+  baseIncome: number;
+  baseExpense: number;
+  actualIncome: number;
+  actualExpense: number;
+  baseClosingCash: number;
+};
+
 const OVERRIDES_KEY = 'midas.dashboard.projectionOverrides.v1';
 const LEGACY_OVERRIDES_KEY = 'flowsense.dashboard.projectionOverrides.v1';
 
@@ -88,6 +142,13 @@ function migrateLegacyKey(newKey: string, legacyKey: string): string | null {
   } catch { return null; }
 }
 
+function isRealMovement(movement: { status?: string; actualDate?: string; sourceSystem?: string }): boolean {
+  return movement.status === 'REAL'
+    || movement.status === 'EXECUTED'
+    || Boolean(movement.actualDate)
+    || movement.sourceSystem === 'BANK';
+}
+
 export function loadOverrides(): ProjectionOverrides {
   try {
     const raw = migrateLegacyKey(OVERRIDES_KEY, LEGACY_OVERRIDES_KEY);
@@ -102,6 +163,11 @@ const Dashboard: React.FC<DashboardProps> = ({
   companyCode, bankStatements, clients, providers, cxpRecords, assumptions,
   budget, onOpenFlow,
   startingBalance,
+  cobranzaRecords,
+  paidCxpKeys,
+  cargoEnrichments,
+  purchaseReceipts,
+  payrollCosts,
   cobranzaReconciliation,
   payrollMonthlyActualJDE,
 }) => {
@@ -111,6 +177,20 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<ProjectionOverrides>(() => loadOverrides());
+  const [taxStore, setTaxStore] = useState(() => loadTaxStore(defaultTaxStore()));
+
+  useEffect(() => {
+    const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === TAX_STORE_KEY) reloadTaxStore();
+    };
+    window.addEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); } catch { /* ignore */ }
@@ -123,6 +203,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   }, [companyCode]);
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const currentYear = new Date().getFullYear();
+  const currentYm = toYearMonth(today);
+  const yearStart = `${currentYear}-01-01`;
+  const yearEnd = `${currentYear}-12-31`;
   const summaryScopeKey = useMemo(() => cashFlowSummaryScopeKey(companyCode), [companyCode]);
   const cachedSummary = useMemo(() => loadCashFlowSummary(summaryScopeKey), [summaryScopeKey]);
 
@@ -132,6 +216,125 @@ const Dashboard: React.FC<DashboardProps> = ({
     () => computeMinimumOperatingExpense(providers, null, payrollMonthlyActualJDE),
     [providers, payrollMonthlyActualJDE],
   );
+  const initialCash = useMemo(
+    () => calculateInitialCash(bankStatements, startingBalance, { companyCode }),
+    [bankStatements, startingBalance, companyCode],
+  );
+  const supplierInitialCash = useMemo(
+    () => calculateCurrentBankCash(bankStatements, companyCode, initialCash),
+    [bankStatements, companyCode, initialCash],
+  );
+  const minimumCash = 20_000_000;
+
+  const source = useMemo(
+    () => buildFinancialProjectionSourceData({
+      companyCode,
+      bankStatements,
+      clients,
+      providers,
+      cxpRecords,
+      cobranzaRecords: cobranzaRecords ?? [],
+      cobranzaReconciliation,
+      paidCxpKeys,
+      cargoEnrichments,
+      purchaseReceipts: purchaseReceipts ?? [],
+      payrollCosts: payrollCosts ?? [],
+      assumptions,
+      budget,
+      startingBalance,
+      asOfDate: today,
+    }),
+    [
+      companyCode,
+      bankStatements,
+      clients,
+      providers,
+      cxpRecords,
+      cobranzaRecords,
+      cobranzaReconciliation,
+      paidCxpKeys,
+      cargoEnrichments,
+      purchaseReceipts,
+      payrollCosts,
+      assumptions,
+      budget,
+      startingBalance,
+      today,
+    ],
+  );
+  const planningState = useMemo(() => {
+    const storedScenarios = loadPlanningScenarios([]);
+    const storedAdjustments = loadPlanningAdjustments([]);
+    const manualEntries = loadManualPlanningEntries([]);
+    const customRows = loadCustomRows([]);
+    const cellOverrides = loadCellOverrides([]);
+    const sourceBaseScenario = source.scenarios.find((scenario) => scenario.kind === 'BASE') ?? source.scenarios[0];
+    const bootstrap = ensureCoreScenarios({
+      storedScenarios,
+      storedAdjustments,
+      manualEntries,
+      customRows,
+      cellOverrides,
+      changeLog: [],
+      sourceBaseScenario,
+      user: 'tesoreria@senda.local',
+    });
+    return {
+      scenarios: bootstrap.scenarios,
+      adjustments: bootstrap.adjustments,
+      manualEntries: bootstrap.manualEntries,
+      customRows: bootstrap.customRows,
+      cellOverrides: bootstrap.cellOverrides,
+    };
+  }, [source.scenarios]);
+  const approvedScenario = planningState.scenarios.find((scenario) => scenario.id === APPROVED_SCENARIO_ID)
+    ?? planningState.scenarios.find((scenario) => scenario.kind === 'APPROVED')
+    ?? source.scenarios.find((scenario) => scenario.kind === 'APPROVED')
+    ?? source.scenarios[0];
+  const approvedRun = useMemo(() => buildScenarioForecastRun({
+    scenarioId: approvedScenario.id,
+    scenarioName: approvedScenario.name,
+    scenarioKind: approvedScenario.kind,
+    sourceMovements: source.movements,
+    adjustments: planningState.adjustments,
+    manualEntries: planningState.manualEntries,
+    customRows: planningState.customRows.filter((row) => row.scenarioId === approvedScenario.id),
+    overrides: planningState.cellOverrides.filter((override) => override.scenarioId === approvedScenario.id),
+    clients,
+    providers,
+    assumptions,
+    cxpRecords,
+    purchaseReceipts,
+    payrollCosts,
+    budget,
+    companyCode,
+    taxStore,
+    startDate: yearStart,
+    endDate: yearEnd,
+    today,
+    initialCash,
+    supplierInitialCash,
+    minimumCash,
+    granularity: 'monthly',
+  }), [
+    approvedScenario,
+    source.movements,
+    planningState,
+    clients,
+    providers,
+    assumptions,
+    cxpRecords,
+    purchaseReceipts,
+    payrollCosts,
+    budget,
+    companyCode,
+    taxStore,
+    yearStart,
+    yearEnd,
+    today,
+    initialCash,
+    supplierInitialCash,
+  ]);
 
   const { base, baseline, projection } = useMemo(
     () => computeBaseCashFlow({
@@ -141,7 +344,30 @@ const Dashboard: React.FC<DashboardProps> = ({
     }),
     [bankStatements, aged, clients, providers, cxpRecords, assumptions, companyCode, today, overrides, budget, startingBalance],
   );
-  const effectiveBase = base.length > 0 ? base : cachedSummary?.months ?? [];
+  const approvedMonthly = useMemo<DashboardMonth[]>(() => {
+    const movementById = new Map(approvedRun.movements.map((movement) => [movement.id, movement]));
+    return approvedRun.buckets.map((bucket) => {
+      let realIncome = 0;
+      let realExpense = 0;
+      for (const id of bucket.movementIds) {
+        const movement = movementById.get(id);
+        if (!movement || !isRealMovement(movement)) continue;
+        if (movement.type === 'INFLOW') realIncome += effectiveAmount(movement);
+        else realExpense += effectiveAmount(movement);
+      }
+      const yearMonth = bucket.date.slice(0, 7);
+      return {
+        yearMonth,
+        isHistorical: yearMonth <= currentYm,
+        baseIncome: bucket.inflows,
+        baseExpense: bucket.outflows,
+        actualIncome: Math.min(realIncome, bucket.inflows),
+        actualExpense: Math.min(realExpense, bucket.outflows),
+        baseClosingCash: bucket.closingCash,
+      };
+    });
+  }, [approvedRun, currentYm]);
+  const effectiveBase = approvedMonthly.length > 0 ? approvedMonthly : base.length > 0 ? base : cachedSummary?.months ?? [];
 
   useEffect(() => {
     if (base.length === 0) return;
@@ -167,15 +393,18 @@ const Dashboard: React.FC<DashboardProps> = ({
   // mensual cubra Ene–Dic incluso cuando no hay datos bancarios para algunos
   // meses (típico cuando el primer estado de cuenta arranca en abril).
   const evaluated = useMemo(() => {
-    const mapped = effectiveBase.map((m) => ({
-      yearMonth: m.yearMonth,
-      isHistorical: m.isHistorical,
-      baseIncome: m.income,
-      baseExpense: m.expense,
-      actualIncome: m.actualIncome ?? m.income,
-      actualExpense: m.actualExpense ?? m.expense,
-      baseClosingCash: m.closingCash,
-    }));
+    const mapped = effectiveBase.map((m) => {
+      if ('baseIncome' in m) return m;
+      return {
+        yearMonth: m.yearMonth,
+        isHistorical: m.isHistorical,
+        baseIncome: m.income,
+        baseExpense: m.expense,
+        actualIncome: m.actualIncome ?? m.income,
+        actualExpense: m.actualExpense ?? m.expense,
+        baseClosingCash: m.closingCash,
+      };
+    });
     if (mapped.length === 0) return { months: mapped };
     const presentYears = new Set(mapped.map((m) => m.yearMonth.slice(0, 4)));
     presentYears.add(String(new Date().getFullYear()));
@@ -206,8 +435,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     return { months: filled };
   }, [effectiveBase]);
 
-  const currentYear = new Date().getFullYear();
-  const currentYm = toYearMonth(today);
   const monthsThisYear = evaluated.months.filter((m) => m.yearMonth.startsWith(String(currentYear)));
 
   const histThisYear = monthsThisYear.filter((m) => m.isHistorical);
@@ -291,29 +518,27 @@ const Dashboard: React.FC<DashboardProps> = ({
     const projectedExpense = operationalMonthValue(ym, 'expense');
 
     if (cmp < 0) {
+      const realIncome = m.actualIncome;
+      const realExpense = m.actualExpense;
       const projectedIncomeTotal = override?.income ?? projectedIncome ?? m.baseIncome;
       const projectedExpenseTotal = override?.expense ?? projectedExpense ?? m.baseExpense;
-      const projIncGap = projectedIncomeTotal > 0
-        ? Math.max(0, projectedIncomeTotal - m.baseIncome)
-        : 0;
-      const projExpGap = projectedExpenseTotal > 0
-        ? Math.max(0, projectedExpenseTotal - m.baseExpense)
-        : 0;
-      const parts = partitionExpense(m.baseExpense, projExpGap, ym);
+      const projIncGap = Math.max(0, projectedIncomeTotal - realIncome);
+      const projExpGap = Math.max(0, projectedExpenseTotal - realExpense);
+      const parts = partitionExpense(realExpense, projExpGap, ym);
       const projIncomeOverrun =
-        projectedIncomeTotal > 0 && m.baseIncome > projectedIncomeTotal
+        projectedIncomeTotal > 0 && realIncome > projectedIncomeTotal
           ? projectedIncomeTotal
           : null;
       const projExpenseOverrun =
-        projectedExpenseTotal > 0 && m.baseExpense > projectedExpenseTotal
+        projectedExpenseTotal > 0 && realExpense > projectedExpenseTotal
           ? projectedExpenseTotal
           : null;
       return {
         yearMonth: ym,
-        realIncome: m.baseIncome,
+        realIncome,
         projIncomeGap: projIncGap,
         projIncomeTotal: projectedIncomeTotal || m.baseIncome,
-        realExpense: m.baseExpense,
+        realExpense,
         projExpenseGap: projExpGap,
         projExpenseTotal: projectedExpenseTotal || m.baseExpense,
         ...parts,
@@ -394,17 +619,17 @@ const Dashboard: React.FC<DashboardProps> = ({
       const projectedExpense = operationalMonthValue(ym, 'expense');
 
       if (phase === 'past') {
-        // En pasado mostramos el real; sólo un override manual puede agregar
-        // una columna proyectada contra el dato capturado.
+        // En pasado mostramos real + cualquier remanente proyectado del plan
+        // aprobado; esto mantiene el Dashboard alineado con Planeación.
         const projectedIncomeVal = override?.income ?? projectedIncome ?? 0;
         const projectedExpenseVal = override?.expense ?? projectedExpense ?? 0;
         return {
           yearMonth: ym,
           phase,
-          realIncome: m.baseIncome,
-          realExpense: m.baseExpense,
-          projectedIncome: projectedIncomeVal > 0 ? Math.max(0, projectedIncomeVal - m.baseIncome) : 0,
-          projectedExpense: projectedExpenseVal > 0 ? Math.max(0, projectedExpenseVal - m.baseExpense) : 0,
+          realIncome: m.actualIncome,
+          realExpense: m.actualExpense,
+          projectedIncome: projectedIncomeVal > 0 ? Math.max(0, projectedIncomeVal - m.actualIncome) : 0,
+          projectedExpense: projectedExpenseVal > 0 ? Math.max(0, projectedExpenseVal - m.actualExpense) : 0,
           closingCash: m.baseClosingCash,
           projectionDetail: projDetail,
           override,

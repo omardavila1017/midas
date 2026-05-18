@@ -180,4 +180,35 @@ describe('applyCellOverridesToBuckets', () => {
 
     expect(result[0].inflows).toBe(1_000_000);
   });
+
+  it('recomputes signed cash after an override creates a shortfall', () => {
+    const overrides: CellOverride[] = [{
+      id: 'co-shortfall',
+      scenarioId: 'draft-1',
+      conceptKey: 'OUTFLOW:PAYROLL:general',
+      granularity: 'monthly',
+      bucketKey: '2026-05-01',
+      type: 'OUTFLOW',
+      mode: 'REPLACE',
+      value: 2_000_000,
+      createdBy: 'x',
+      createdAt: '2026-04-29T00:00:00Z',
+      updatedAt: '2026-04-29T00:00:00Z',
+    }];
+
+    const result = applyCellOverridesToBuckets({
+      buckets: [bucket],
+      overrides,
+      movements,
+      rows,
+      granularity: 'monthly',
+      conceptKeyForMovement,
+      asOfDate: '2026-04-29',
+      initialCash: 500_000,
+    });
+
+    expect(result[0].net).toBe(-1_000_000);
+    expect(result[0].closingCash).toBe(-500_000);
+    expect(result[0].deficit).toBe(1_500_000);
+  });
 });

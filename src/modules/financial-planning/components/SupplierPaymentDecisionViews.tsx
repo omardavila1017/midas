@@ -96,10 +96,15 @@ export function SupplierPaymentDecisionTable({
                   </td>
                   <td className="px-3 py-3 text-[var(--gray-600)]">
                     {changed && comparison ? (
-                      <span>
+                      <div>
                         {statusLabel(comparison.status)} {comparison.estimatedDate ?? 's/f'} → {statusLabel(decision.status)} {decision.estimatedDate ?? 's/f'}
-                      </span>
-                    ) : '—'}
+                      </div>
+                    ) : (
+                      <div className="text-[var(--gray-400)]">Sin cambio vs referencia</div>
+                    )}
+                    <div className="mt-1 max-w-[260px] text-[10.5px] leading-snug text-[var(--gray-500)]">
+                      {decisionReasonText(decision)}
+                    </div>
                   </td>
                 </tr>
               );
@@ -216,6 +221,22 @@ function paymentDiagnosticText(plan: SupplierPaymentPlan): string {
     return `${diagnostics.missingProviderMatches} CXP no hicieron match con catálogo de proveedores; se usó score del movimiento como respaldo.`;
   }
   return 'Hay CXP detectada, pero no generó decisiones con los filtros actuales del escenario.';
+}
+
+function decisionReasonText(decision: SupplierPaymentDecision): string {
+  const priority = `Prioridad ${decision.score}/100`;
+  if (decision.status === 'PENDING') {
+    return `${priority}. ${decision.reason}`;
+  }
+  if (decision.status === 'PARTIAL') {
+    const paid = fmtCompact(decision.paidAmount);
+    const pending = fmtCompact(decision.pendingAmount);
+    return `${priority}. ${decision.reason} Pagado ${paid}; pendiente ${pending}.`;
+  }
+  if (decision.status === 'DEFERRED') {
+    return `${priority}. ${decision.reason} Se conserva caja mínima antes de liquidar.`;
+  }
+  return `${priority}. ${decision.reason}`;
 }
 
 function ListText({ values, muted }: { values: string[]; muted?: boolean }) {

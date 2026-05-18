@@ -123,8 +123,8 @@ export function calculateCashBalance(movements: FinancialMovement[], options: Pr
       .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
     const net = inflows - outflows;
     const rawClosingCash = rollingCash + net;
-    const openingCash = Math.max(0, rollingCash);
-    const closingCash = Math.max(0, rawClosingCash);
+    const openingCash = rollingCash;
+    const closingCash = rawClosingCash;
     const confidenceScore = bucketMovements.length === 0
       ? 100
       : bucketMovements.reduce((sum, movement) => sum + movement.confidenceScore, 0) / bucketMovements.length;
@@ -275,8 +275,8 @@ export function recomputeRollingCash(buckets: ProjectionBucket[], initialCash: n
     const rawClosing = rollingCash + bucket.net;
     const next: ProjectionBucket = {
       ...bucket,
-      openingCash: Math.max(0, rollingCash),
-      closingCash: Math.max(0, rawClosing),
+      openingCash: rollingCash,
+      closingCash: rawClosing,
       deficit: Math.max(0, bucket.minimumCash - rawClosing),
     };
     rollingCash = rawClosing;

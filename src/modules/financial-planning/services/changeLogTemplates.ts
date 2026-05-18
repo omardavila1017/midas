@@ -69,9 +69,9 @@ export function describeMergeToApproved(args: {
   rowCount: number;
   date: string;
 }): string {
-  const cells = `${args.cellCount} celda${args.cellCount === 1 ? '' : 's'}`;
-  const rows = `${args.rowCount} fila${args.rowCount === 1 ? '' : 's'} custom`;
-  return `Mergeada a Aprobado el ${args.date}. ${cells}, ${rows}.`;
+  const changes = `${args.cellCount} cambio${args.cellCount === 1 ? '' : 's'}`;
+  const rows = `${args.rowCount} fila${args.rowCount === 1 ? '' : 's'} personalizada${args.rowCount === 1 ? '' : 's'}`;
+  return `Aplicada al Aprobado el ${args.date}. ${changes}, ${rows}.`;
 }
 
 export function describeOverridePayload(override: CellOverride): Record<string, unknown> {

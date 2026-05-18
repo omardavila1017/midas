@@ -18,33 +18,18 @@ import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
-import {
-  applyAdjustmentsToMovements,
-  applyCellOverridesToBuckets,
-  calculateBaseProjection,
-  effectiveAmount,
-  effectiveMovementDate,
-  summarizeBucketsForScenario,
-} from '../../shared-finance/calculation-engine/financialProjectionEngine';
+import { effectiveAmount, effectiveMovementDate } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
   CellOverride,
   FinancialAdjustment,
   FinancialMovement,
   FinancialScenario,
-  ForecastRun,
   ManualPlanningEntry,
   PayrollCostRecord,
   PlanningCustomRow,
-  PlanningRow,
   ProjectionGranularity,
   PurchaseReceiptRecord,
 } from '../../shared-finance/types';
-
-type ScenarioRun = ForecastRun & {
-  rows: PlanningRow[];
-  overrides: CellOverride[];
-  supplierPlan: import('../../financial-planning/services/supplierPaymentSchedule').SupplierPaymentPlan;
-};
 import { CashFlowChart } from '../components/CashFlowChart';
 import { MovementDrillDownDrawer } from '../components/MovementDrillDownDrawer';
 import { ScenarioReadOnlyTabs } from '../components/ScenarioReadOnlyTabs';
@@ -64,7 +49,6 @@ import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/f
 import {
   loadManualPlanningEntries,
   saveManualPlanningEntries,
-  expandManualPlanningEntriesToMovements,
 } from '../../financial-planning/services/manualPlanningEntries';
 import {
   loadPlanningAdjustments,
@@ -74,23 +58,14 @@ import {
 } from '../../financial-planning/services/financialPlanningStorage';
 import { loadCellOverrides, saveCellOverrides } from '../../financial-planning/services/cellOverridesStorage';
 import { loadCustomRows, saveCustomRows } from '../../financial-planning/services/customRowsStorage';
-import { buildPlanningRows, conceptKeyForMovement } from '../../financial-planning/services/planningRowTaxonomy';
 import { createNewDraft, duplicateDraft } from '../../financial-planning/services/scenarioDuplicate';
 import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
 import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
-import { scheduleSupplierPaymentsByScore } from '../../financial-planning/services/supplierPaymentSchedule';
+import { buildScenarioForecastRun, type ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
 import {
   createQuickMovementAdjustment,
 } from '../services/projectionPredictionEngine';
-import {
-  buildAutomaticTaxReserveMovements,
-  buildApprovedTaxPaymentMovements,
-  buildTaxDashboardView,
-  defaultTaxStore,
-  loadTaxStore,
-  TAX_STORE_CHANGED_EVENT,
-  TAX_STORE_KEY,
-} from '../../taxes/services/taxModuleService';
+import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
@@ -110,6 +85,8 @@ import {
   type ForecastModelId,
   type ForecastOutput,
 } from '../../../domain/comprasForecastModels';
+
+type ScenarioRun = ScenarioForecastRun;
 
 interface Props {
   companyCode: string;
@@ -505,6 +482,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   // overrides are scenario-scoped so they fold into the cache key.
   const buildRun = useMemo(() => {
     return (scenarioId: string, gran: ProjectionGranularity): ScenarioRun => {
+      const scenario = scenarios.find((item) => item.id === scenarioId);
       const scenarioName = scenarioNameById.get(scenarioId) ?? scenarioId;
       const scenarioCustomRows = customRowsByScenario.get(scenarioId) ?? [];
       const scenarioOverrides = cellOverridesByScenario.get(scenarioId) ?? [];
@@ -518,102 +496,39 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         overrideKey,
       ].join('||');
 
-      return cachedRun<ScenarioRun>(cacheKey, () => {
-        const manualMovements = expandManualPlanningEntriesToMovements(manualEntries, {
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        });
-        const preTaxMovements = applyAdjustmentsToMovements(
-          [...source.movements, ...manualMovements],
-          storedAdjustments,
-          scenarioId,
-        );
-        const taxSeedView = buildTaxDashboardView({
-          clients: props.clients,
-          providers: props.providers,
-          assumptions: props.assumptions,
-          cxpRecords: props.cxpRecords,
-          purchaseReceipts: props.purchaseReceipts,
-          payrollCosts: props.payrollCosts,
-          cobranzaPayments: props.cobranzaPayments,
-          budget: props.budget,
-          companyCode: props.companyCode,
-          startDate: yearStart,
-          endDate: yearEnd,
-          movements: preTaxMovements,
-          store: taxStore,
-          today,
-        });
-        const taxMovements = [
-          ...buildApprovedTaxPaymentMovements({
-            obligations: taxSeedView.obligations,
-            scenarioId,
-            startDate: yearStart,
-            endDate: yearEnd,
-            asOfDate: today,
-          }),
-          ...buildAutomaticTaxReserveMovements({
-            obligations: taxSeedView.obligations,
-            scenarioId,
-            startDate: yearStart,
-            endDate: yearEnd,
-            asOfDate: today,
-          }),
-        ];
-        const adjustedMovements = applyAdjustmentsToMovements(
-          [...source.movements, ...manualMovements, ...taxMovements],
-          storedAdjustments,
-          scenarioId,
-        );
-        const supplierSchedule = scheduleSupplierPaymentsByScore({
-          movements: adjustedMovements,
-          providers: props.providers,
-          startDate: today,
-          endDate: yearEnd,
-          initialCash: supplierInitialCash,
-          minimumCash,
-          scenarioId,
-        });
-        const rawProjection = calculateBaseProjection(supplierSchedule.movements, {
-          startDate: yearStart,
-          endDate: yearEnd,
-          initialCash,
-          minimumCash,
-          granularity: gran,
-          scenarioId,
-          name: scenarioName,
-        });
-        const rows = buildPlanningRows({
-          movements: rawProjection.movements,
-          customRows: scenarioCustomRows,
-          overrides: scenarioOverrides,
-        });
-        const buckets = applyCellOverridesToBuckets({
-          buckets: rawProjection.buckets,
-          overrides: scenarioOverrides,
-          movements: rawProjection.movements,
-          rows,
-          granularity: gran,
-          conceptKeyForMovement,
-          asOfDate: today,
-          initialCash,
-        });
-        return {
-          ...rawProjection,
-          buckets,
-          summary: summarizeBucketsForScenario(buckets, rawProjection.movements, minimumCash, gran),
-          rows,
-          overrides: scenarioOverrides,
-          supplierPlan: supplierSchedule.plan,
-        };
-      });
+      return cachedRun<ScenarioRun>(cacheKey, () => buildScenarioForecastRun({
+        scenarioId,
+        scenarioName,
+        scenarioKind: scenario?.kind ?? 'DRAFT',
+        sourceMovements: source.movements,
+        adjustments: storedAdjustments,
+        manualEntries,
+        customRows: scenarioCustomRows,
+        overrides: scenarioOverrides,
+        clients: props.clients,
+        providers: props.providers,
+        assumptions: props.assumptions,
+        cxpRecords: props.cxpRecords,
+        purchaseReceipts: props.purchaseReceipts,
+        payrollCosts: props.payrollCosts,
+        cobranzaPayments: props.cobranzaPayments,
+        budget: props.budget,
+        companyCode: props.companyCode,
+        taxStore,
+        startDate: yearStart,
+        endDate: yearEnd,
+        today,
+        initialCash,
+        supplierInitialCash,
+        minimumCash,
+        granularity: gran,
+      }));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     sharedInputsKey,
     scenarioNameById,
+    scenarios,
     customRowsByScenario,
     cellOverridesByScenario,
     source.movements,
