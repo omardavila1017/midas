@@ -1,6 +1,7 @@
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
+import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
 import {
   applyAdjustmentsToMovements,
@@ -28,6 +29,7 @@ import {
   type TaxStore,
 } from '../../taxes/services/taxModuleService';
 import { buildConvenioPaymentMovements } from '../../concurso-mercantil/services/convenioMovements';
+import { buildFideicomisoMovements } from '../../fideicomiso/services/fideicomisoMovements';
 import { expandManualPlanningEntriesToMovements } from './manualPlanningEntries';
 import { buildPlanningRows, conceptKeyForMovement } from './planningRowTaxonomy';
 import { scheduleSupplierPaymentsByScore, type SupplierPaymentPlan } from './supplierPaymentSchedule';
@@ -57,6 +59,8 @@ export interface BuildScenarioForecastRunArgs {
   budget: Budget | null;
   companyCode: string;
   taxStore: TaxStore;
+  /** Bajío bank statements — used by fideicomiso (Dina) ingress reconciliation. */
+  bajioStatements?: BankAccountStatement[];
   startDate: string;
   endDate: string;
   today: string;
@@ -139,7 +143,24 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
       asOfDate: args.today,
     });
 
-  const movementsWithTreasuryRules = [...adjustedMovements, ...taxMovements, ...convenioMovements];
+  // Fideicomiso Dina: ingreso Corning real (Bajío) + egreso DINA mensual.
+  // Mismo invariante/patrón que convenio (solo no-base, ventana recortada).
+  const fideicomisoMovements = isBase
+    ? []
+    : buildFideicomisoMovements({
+      scenarioId: args.scenarioId,
+      startDate: args.startDate,
+      endDate: args.endDate,
+      asOfDate: args.today,
+      bajioStatements: args.bajioStatements ?? [],
+    });
+
+  const movementsWithTreasuryRules = [
+    ...adjustedMovements,
+    ...taxMovements,
+    ...convenioMovements,
+    ...fideicomisoMovements,
+  ];
   const supplierSchedule = scheduleSupplierPaymentsByScore({
     movements: movementsWithTreasuryRules,
     providers: args.providers,
