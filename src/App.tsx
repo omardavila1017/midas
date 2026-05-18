@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
+<<<<<<< HEAD
+import { MidasStore, loadStoreAsync, saveStore, saveStoreAsync, exportStore, CXPRecord } from './domain/persistence';
+=======
 import { MidasStore, loadLightStore, saveStore, saveLightStore, CXPRecord } from './domain/persistence';
 import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
@@ -12,6 +15,7 @@ import {
   type ForecastModelId,
 } from './domain/comprasForecastModels';
 import { clearAuth } from './components/Login';
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
 import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
 import { primeDailyCache, getMaxCachedDay, nextIsoDay, isDailyCachePersistent } from './services/dailyApiCache';
 import {
@@ -723,6 +727,52 @@ export default function App() {
     () => mergeBankStatements(bankJdeStatements, bankSupplementalStatements),
     [bankJdeStatements, bankSupplementalStatements],
   );
+<<<<<<< HEAD
+  // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
+  // Lo computamos UNA sola vez aquí y lo pasamos a CollectionProjection,
+  // Bancos y Dashboard. Evita recomputar el motor (subset-sum + filtros
+  // textuales) cada vez que el usuario cambia de pestaña o aplica un
+  // filtro local.
+  //
+  // El engine es síncrono y O(N · M) con subset-sum, ~200-800ms con data
+  // productiva (10k facturas × 5k abonos). Para no bloquear el main thread
+  // durante boot — donde recibimos múltiples invalidaciones consecutivas
+  // de cobranzaRecords/bankStatements — lo deferimos a `requestIdleCallback`.
+  // Cancelamos la idle pendiente en cada invalidación para que solo corra
+  // UNA vez con los inputs más recientes (vs. correr 8 veces durante el
+  // boot con cada cía cargada). Ver perfilado 2026-05-03 en COBRANZA-HANDOFF.md.
+  const [cobranzaReconciliation, setCobranzaReconciliation] = useState(
+    () => reconcileRealCollections([], []),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (h: number) => void;
+    });
+    const run = () => {
+      if (cancelled) return;
+      const result = reconcileRealCollections(cobranzaRecords, bankStatements);
+      if (!cancelled) setCobranzaReconciliation(result);
+    };
+    let handle: number;
+    if (ric.requestIdleCallback) {
+      handle = ric.requestIdleCallback(run, { timeout: 1500 });
+      return () => {
+        cancelled = true;
+        if (ric.cancelIdleCallback) ric.cancelIdleCallback(handle);
+      };
+    } else {
+      // Safari < 18 fallback — al menos sale del frame actual.
+      handle = (setTimeout(run, 0) as unknown) as number;
+      return () => {
+        cancelled = true;
+        clearTimeout(handle);
+      };
+    }
+  }, [cobranzaRecords, bankStatements]);
+
+=======
   // BAJIO se exhibe en la pestaña Bancos pero no se contabiliza ni se proyecta:
   // el excedente cae siempre en Banamex, así que incluirlo duplica flujo.
   const accountableBankStatements = useMemo(
@@ -955,6 +1005,7 @@ export default function App() {
       reconciliationWorkerRef.current = null;
     };
   }, []);
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   const cobranzaFacturaIndex = useMemo(
     () => buildFacturaIndex(cobranzaReconciliation.matches),
     [cobranzaReconciliation],
@@ -1172,6 +1223,31 @@ export default function App() {
     },
   });
 
+<<<<<<< HEAD
+  // Load from persistence on mount.
+  //
+  // Async-first (IndexedDB): no bloquea la primera pintura. Si IDB no tiene
+  // datos pero localStorage sí (primer boot tras la migración), `loadStoreAsync`
+  // migra transparentemente y devuelve el store. La sincrónica `loadStore` se
+  // sigue usando como fallback síncrono para tests.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadStoreAsync();
+      if (cancelled || !stored) return;
+      if (stored.providers.length) setProviders(stored.providers);
+      if (stored.clients.length) setClients(stored.clients);
+      if (stored.confirmedPayments.length) setConfirmedPayments(stored.confirmedPayments);
+      if (stored.cxpRecords.length) setCxpRecords(stored.cxpRecords);
+      if (stored.cxpLoadedCias) setCxpLoadedCias(stored.cxpLoadedCias);
+      if (stored.cobranzaRecords?.length) setCobranzaRecords(stored.cobranzaRecords);
+      if (stored.cobranzaLoadedCias) setCobranzaLoadedCias(stored.cobranzaLoadedCias);
+      if (stored.cashFlowOverrides) setCashFlowOverrides(stored.cashFlowOverrides);
+      setAssumptions(stored.assumptions);
+      setCatalogLoaded(true);
+    })();
+    return () => { cancelled = true; };
+=======
   // Load from persistence on mount. Async desde v12: heavies
   // (cobranza/cxp/compras/pagoproveedor/nómina/payments) viven en IDB porque
   // localStorage tenía cuota ~5MB que se rompía y dejaba el store sin
@@ -1244,6 +1320,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(fallbackTimer);
     };
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   }, []);
 
   useEffect(() => {
@@ -1653,6 +1730,16 @@ export default function App() {
       .finally(() => setProvidersCatalogDone(true));
   }, []);
 
+<<<<<<< HEAD
+  // Save to localStorage after changes. Debounce coalesces bursts y movemos
+  // la escritura real (JSON.stringify de hasta ~5MB + localStorage.setItem)
+  // a `requestIdleCallback` para que NO bloquee el main thread durante
+  // interacciones. En boot, con 8 cobranza setStates + ~16 bank fetches + N
+  // más, el debounce previo de 200ms disparaba múltiples saves de 4MB
+  // sincrónicos durante la carga inicial — esto era ~30% del tiempo de
+  // freeze observado en el perfilado del 2026-05-03 (ver COBRANZA-HANDOFF.md).
+  // Flush sincrónico en visibility/unload para no perder datos en cierre.
+=======
   // Save state changes — strategy v2 (post Page-Unresponsive fix):
   //
   // ANTES: una sola useEffect con TODOS los heavies como deps. Cada cambio
@@ -1669,7 +1756,9 @@ export default function App() {
   //
   // latestStoreRef sigue siendo el snapshot completo para el flush en
   // beforeunload (caso edge: usuario cierra antes que dispare debounce).
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   const latestStoreRef = useRef<MidasStore | null>(null);
+  const idleHandleRef = useRef<number | null>(null);
   useEffect(() => {
     latestStoreRef.current = {
       providers, clients,
@@ -1684,6 +1773,42 @@ export default function App() {
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
+<<<<<<< HEAD
+    latestStoreRef.current = snapshot;
+
+    // Cancel any prior idle save still pending — siempre persistimos solo el
+    // snapshot más reciente.
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (h: number) => void;
+    });
+    if (idleHandleRef.current !== null) {
+      if (ric.cancelIdleCallback) ric.cancelIdleCallback(idleHandleRef.current);
+      else clearTimeout(idleHandleRef.current);
+      idleHandleRef.current = null;
+    }
+
+    const SAVE_DEBOUNCE_MS = 1500;
+    const timer = setTimeout(() => {
+      const run = () => {
+        // saveStoreAsync escribe en IndexedDB sin bloquear el main thread y
+        // sin chocar con el quota de 5MB de localStorage. Si IDB falla cae a
+        // localStorage por dentro, así que siempre algo se persiste.
+        if (latestStoreRef.current) void saveStoreAsync(latestStoreRef.current);
+        idleHandleRef.current = null;
+      };
+      if (ric.requestIdleCallback) {
+        // timeout de 2s asegura que aunque el main thread esté ocupado, el save
+        // eventualmente corre. Sin esto, un main thread saturado podría posponer
+        // la idle callback indefinidamente y perder datos en una recarga.
+        idleHandleRef.current = ric.requestIdleCallback(run, { timeout: 2000 });
+      } else {
+        // Safari < 18 no tiene requestIdleCallback; fallback a setTimeout.
+        idleHandleRef.current = (setTimeout(run, 0) as unknown) as number;
+      }
+    }, SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+=======
   });
 
   // Light save: localStorage only. Deps son solo light fields → no re-fires
@@ -1699,6 +1824,7 @@ export default function App() {
       window.clearTimeout(timer);
       cancelIdle?.();
     };
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   }, [
     providers, clients, assumptions, confirmedPayments,
     cxpLoadedCias, cobranzaLoadedCias, cobranzaPaymentsLoadedCias,
@@ -1736,6 +1862,14 @@ export default function App() {
 
   useEffect(() => {
     const flush = () => {
+      // Cancel pending idle save y persistir sincrónico — no podemos confiar
+      // en que el browser corra la idle callback antes de cerrar la pestaña.
+      const ric = (window as unknown as { cancelIdleCallback?: (h: number) => void });
+      if (idleHandleRef.current !== null) {
+        if (ric.cancelIdleCallback) ric.cancelIdleCallback(idleHandleRef.current);
+        else clearTimeout(idleHandleRef.current);
+        idleHandleRef.current = null;
+      }
       if (latestStoreRef.current) saveStore(latestStoreRef.current);
     };
     const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
@@ -2002,6 +2136,34 @@ export default function App() {
     setDatasetSlot('pagos', 'loading');
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
+<<<<<<< HEAD
+    const yearAgo = new Date(today);
+    yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
+    const fechaInicial = yearAgo.toISOString().slice(0, 10);
+
+    // Batched state writes: el fetch sigue siendo secuencial por restricción
+    // del API JDE (parallel revienta el orchestrator), pero acumulamos todos
+    // los resultados localmente y hacemos UNA sola escritura al state al
+    // final. Antes hacíamos `setCobranzaRecords` dentro del loop, lo que
+    // disparaba 8 re-renders de App.tsx + 8 recálculos del engine de cruce
+    // (`reconcileRealCollections`), cada uno sobre el array creciente. Con
+    // 10k+ facturas esto congelaba el main thread durante todo el boot.
+    // Ver perfilado 2026-05-03 en COBRANZA-HANDOFF.md.
+    const errors: string[] = [];
+    const collected: Array<{ cia: string; records: CobranzaRecord[] }> = [];
+    const loadedAt: Record<string, string> = {};
+    let totalRecords = 0;
+    for (const cia of activeCias) {
+      try {
+        const data = await fetchCobranza({ cia, fechaInicial, fechaFinal });
+        const stamped = data.map(r => ({ ...r, cia: r.cia || cia }));
+        collected.push({ cia, records: stamped });
+        loadedAt[cia] = new Date().toISOString();
+        totalRecords += stamped.length;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`${cia}: ${msg}`);
+=======
     const lookback = new Date(today);
     lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
     const lookbackStart = lookback.toISOString().slice(0, 10);
@@ -2042,10 +2204,34 @@ export default function App() {
         pagoProveedorAutoFetchDone.current = false;
         setDatasetSlot('pagos', 'error');
         console.error('[pagoproveedor] auto-fetch falló', err);
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
       }
     })();
   }, [requestedDatasets, storeHydrated, companies, pagoProveedorLoadedCias, pagoProveedorRecords.length, setDatasetSlot]);
 
+<<<<<<< HEAD
+    // Una sola escritura: reemplaza los registros de las cías recién
+    // pedidas (filter por `cia`) y concatena los nuevos. Mantiene el
+    // contrato anterior (refresh de una cía individual no duplica).
+    if (collected.length > 0) {
+      const updatedCias = new Set(collected.map(c => c.cia));
+      setCobranzaRecords(prev => {
+        const filtered = prev.filter(r => !updatedCias.has(r.cia));
+        const additions: CobranzaRecord[] = [];
+        for (const c of collected) additions.push(...c.records);
+        return [...filtered, ...additions];
+      });
+      setCobranzaLoadedCias(prev => ({ ...prev, ...loadedAt }));
+    }
+
+    if (errors.length > 0) {
+      setCobranzaError(`Errores en ${errors.length}/${activeCias.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
+    } else if (totalRecords === 0) {
+      setCobranzaError(`Todas las ${activeCias.length} cías respondieron VACÍO. Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
+    }
+    setCobranzaRefreshing(false);
+  }, [companies]);
+=======
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /JDEdwards/cobranza (productivo desde 2026-05-01).
   //
@@ -2078,6 +2264,7 @@ export default function App() {
       // eslint-disable-next-line no-console
       console.info(`[cobranza] sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (force=${force}, TTL ${Math.round(COBRANZA_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cobranzaRecords.length}`);
       if (ciasToFetch.length === 0) return;
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
 
       setCobranzaRefreshing(true);
       setCobranzaError(null);
@@ -2492,11 +2679,25 @@ export default function App() {
     includeRange: boolean = false,
   ) => {
     const today = new Date().toISOString().slice(0, 10);
+<<<<<<< HEAD
+    // Range: últimos 365 días (alineado con el rango de cobranza en
+    // refreshCobranza para que el motor de cruce tenga ABONOs disponibles
+    // donde haya facturas con fechaCobro). Antes era YTD (1-enero), lo que
+    // dejaba sin bank data los meses anteriores al año fiscal y producía
+    // calendario vacío + match rate falsamente bajo cuando una cobranza
+    // estaba pagada en (digamos) 2025-12 pero los movimientos bancarios
+    // de 2025-12 nunca se traían. Ver perfilado 2026-05-03 en
+    // COBRANZA-HANDOFF.md.
+    const yearAgo = new Date();
+    yearAgo.setUTCDate(yearAgo.getUTCDate() - 365);
+    const yearStart = yearAgo.toISOString().slice(0, 10);
+=======
     // 2 años hacia atrás para alimentar Holt-Winters seasonal (≥24m).
     // Antes era year-start (≤365d) → predictor caía a naive-mean (flat).
     const twoYearsAgo = new Date();
     twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
     const yearStart = twoYearsAgo.toISOString().slice(0, 10);
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
     const defaultFormat: BankStatementFormat = 'SWIFT';
 
     // Cache hit: skip unless forced.
@@ -3573,8 +3774,12 @@ function CompanySelector({
               {/* Actions */}
               <div className="flex gap-2 pt-1">
                 <button
+<<<<<<< HEAD
+                  className="flex-1 h-9 rounded-lg border border-[var(--gray-200)] text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+=======
                   onClick={() => setMode('select')}
                   className="flex-1 h-9 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
                 >
                   Cancelar
                 </button>

@@ -643,6 +643,27 @@ export async function fetchBankStatementsRange(
   options.onProgress?.(done, dates.length);
 
   let cursor = 0;
+<<<<<<< HEAD
+  let done = 0;
+
+  // Throttle del callback de progreso. Si el caller persiste estado de React
+  // en cada update (típico en App.tsx), 124 updates en ~30s producen 124
+  // re-renders del root y eso congela el main thread en apps grandes. Acotamos
+  // a ~5 updates/segundo + un emit final para garantizar que la UI termine
+  // mostrando done==total. Ver perfilado 2026-05-03 en COBRANZA-HANDOFF.md.
+  const PROGRESS_THROTTLE_MS = 200;
+  let lastProgressEmit = 0;
+  const emitProgress = (force = false) => {
+    if (!options.onProgress) return;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (force || done === dates.length || now - lastProgressEmit >= PROGRESS_THROTTLE_MS) {
+      lastProgressEmit = now;
+      options.onProgress(done, dates.length);
+    }
+  };
+
+=======
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   const MAX_ATTEMPTS = 3;
   const worker = async () => {
     while (true) {
@@ -677,12 +698,14 @@ export async function fetchBankStatementsRange(
         setDailyCached(cacheApiKey, dates[idx], dayResult);
       }
       done++;
-      options.onProgress?.(done, dates.length);
+      emitProgress();
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(concurrency, needsFetch.length || 1) }, worker),
   );
+  // Forzar el último emit para que el caller siempre vea done == total.
+  emitProgress(true);
 
   // Merge by (cia, cuenta, moneda).
   const merged = new Map<string, BankAccountStatement>();
@@ -977,8 +1000,8 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  * Retorna las facturas de cobranza (CXC) abiertas/históricas para la
  * compañía indicada en el rango de fechas dado.
  *
- * Body de ejemplo (compartido por el equipo JDE el 2026-05-01):
- *   { "cia": "00011,", "fechaInicial": null, "fechaFinal": "2026-04-29" }
+ * Body de ejemplo:
+ *   { "cia": "00011,", "fechaInicial": "2024-01-01", "fechaFinal": "2026-04-29" }
  *
  * IMPORTANTE — coma trailing en `cia`:
  *   El equipo JDE compartió el body con la cia terminando en coma. No es
@@ -986,12 +1009,27 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  *   reportó respuesta vacía cuando se enviaba "00011" sin coma. Por
  *   seguridad, si el caller manda la cia sin coma, se la agregamos aquí.
  *
+ * IMPORTANTE — `fechaInicial` no puede ser `null`:
+ *   Aunque el body de ejemplo que compartió el equipo JDE el 2026-05-01
+ *   incluía `"fechaInicial": null`, ese formato regresa SIEMPRE `data: []`
+ *   (validado contra api.gruposenda.com el 2026-05-03 sobre las 29 cías
+ *   del catálogo). Hay que mandar una fecha ISO `YYYY-MM-DD`. El caller
+ *   en App.tsx ya pasa `hoy - 365 días` y eso es lo que la app usa hoy.
+ *   Si en el futuro el equipo libera el modo "histórico completo", revisar
+ *   este comentario.
+ *
  * Notas:
  *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
  *     compañías llamar en serie y mergear.
+<<<<<<< HEAD
+ *   • El token productivo lo inyecta server-side la Vercel Function
+ *     (api/jde/[...path].ts) leyendo `JDE_TOKEN`. En dev local, usa
+ *     `VITE_JDE_TOKEN`.
+=======
  *   • `fechaInicial: null` trae todo el histórico hasta `fechaFinal`.
  *   • El browser llama a `/api/jde`; Atlas/backend o el proxy de Vite local
  *     inyectan el token server-side.
+>>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
  */
 export async function fetchCobranza(
   req: CobranzaRequest,

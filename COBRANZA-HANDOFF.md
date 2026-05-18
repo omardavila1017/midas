@@ -52,9 +52,11 @@ POST `https://api.gruposenda.com/JDEdwards/cobranza`
 
 **Body:**
 ```json
-{ "cia": "00011,", "fechaInicial": null, "fechaFinal": "2026-04-29" }
+{ "cia": "00011,", "fechaInicial": "2024-01-01", "fechaFinal": "2026-04-29" }
 ```
-La coma trailing en `cia` NO es typo. El cliente la pide así. `fechaInicial: null` trae todo el histórico hasta `fechaFinal`.
+La coma trailing en `cia` NO es typo. El cliente la pide así.
+
+**Ojo:** el body original que compartió el equipo JDE (2026-05-01) incluía `"fechaInicial": null` con la nota de "trae todo el histórico". **Eso es falso** — validado contra el productivo el 2026-05-03 sobre las 29 cías del catálogo: `null` regresa siempre `data: []`. Hay que mandar una fecha ISO `YYYY-MM-DD`. El caller en `App.tsx:607` ya pasa `hoy - 365 días`, así que la app funciona; no toques esa lógica salvo que el equipo libere oficialmente un modo "histórico completo".
 
 **Response (campos relevantes):**
 ```json
