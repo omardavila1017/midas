@@ -75,36 +75,37 @@ function dayFromKey(key: string): string | null {
 
 // ── IDB plumbing ────────────────────────────────────────────────────────
 
-function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
-  if (typeof indexedDB === 'undefined') {
-    dbPromise = Promise.resolve(null);
-    return dbPromise;
-  }
-  dbPromise = new Promise((resolve) => {
-    let resolved = false;
-    const finish = (db: IDBDatabase | null) => {
-      if (!resolved) {
-        resolved = true;
-        if (idbAvailable === null) idbAvailable = db !== null;
-        resolve(db);
-      }
+// Un lock de IDB por otra pestaña (o un `onblocked` mientras el otro tab
+// cierra su conexión por `onversionchange`) es TRANSITORIO. La versión
+// anterior degradaba la sesión entera a memory-only al primer timeout/blocked
+// (5s, un solo intento) → `isDailyCachePersistent()` falso → el boot recortaba
+// el histórico de bancos a 120 días ("histórico inestable"). Ahora reintentamos
+// las fallas transitorias con backoff antes de rendirnos; solo degradamos a
+// memory-only tras agotar los reintentos o ante un error duro (IDB ausente).
+const IDB_OPEN_TIMEOUT_MS = 2500;
+const IDB_OPEN_MAX_ATTEMPTS = 3;
+const IDB_RETRY_BACKOFF_MS = 600;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Un intento de abrir la DB.
+ *   - IDBDatabase → éxito.
+ *   - 'retry'     → falla transitoria (timeout o `onblocked`); reintentar.
+ *   - null        → falla dura (IDB ausente, onerror, excepción); no reintentar.
+ */
+function attemptOpenDb(): Promise<IDBDatabase | 'retry' | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (r: IDBDatabase | 'retry' | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
     };
-    // Safety net: si otra pestaña tiene la DB locked, `open` se cuelga
-    // indefinidamente. 5s suficiente para arranque normal; si vence, caemos
-    // a memory-only y la sesión sigue sin cache persistente.
-    const timeoutId = window.setTimeout(() => {
-      if (!resolved && !idbWarned) {
-        idbWarned = true;
-        // eslint-disable-next-line no-console
-        console.warn('[dailyApiCache] IDB open timeout — corriendo memory-only');
-      }
-      finish(null);
-    }, 5000);
-    const stamp = (db: IDBDatabase | null) => {
-      window.clearTimeout(timeoutId);
-      finish(db);
-    };
+    const timeoutId = window.setTimeout(() => done('retry'), IDB_OPEN_TIMEOUT_MS);
+    const clearTo = () => window.clearTimeout(timeoutId);
     try {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
@@ -115,30 +116,71 @@ function openDb(): Promise<IDBDatabase | null> {
       };
       req.onsuccess = () => {
         const db = req.result;
+        if (settled) {
+          // El intento ya venció (timeout → 'retry'). Esta conexión llegó
+          // tarde: ciérrala o quedaría colgada bloqueando los reintentos.
+          db.close();
+          return;
+        }
         // Si otra pestaña abre una versión nueva, cerramos para no provocar
-        // `onblocked` allá (que la degradaría a memory-only → refetch de 731
-        // días). El refresh natural de esa pestaña reabrirá la DB.
+        // `onblocked` allá. El refresh natural de esa pestaña reabrirá la DB.
         db.onversionchange = () => db.close();
-        stamp(db);
+        clearTo();
+        done(db);
       };
       req.onerror = () => {
+        clearTo();
         if (!idbWarned) {
           idbWarned = true;
           // eslint-disable-next-line no-console
           console.warn('[dailyApiCache] IDB open failed', req.error);
         }
-        stamp(null);
+        done(null);
       };
-      req.onblocked = () => stamp(null);
+      // `onblocked`: otra pestaña con conexión de versión menor aún no cierra.
+      // Es transitorio — su `onversionchange` (arriba) la cerrará. NO matamos
+      // la persistencia: dejamos que el timeout dispare un 'retry'.
+      req.onblocked = () => { /* transient — timeout drives retry */ };
     } catch (err) {
+      clearTo();
       if (!idbWarned) {
         idbWarned = true;
         // eslint-disable-next-line no-console
         console.warn('[dailyApiCache] IDB no disponible', err);
       }
-      stamp(null);
+      done(null);
     }
   });
+}
+
+function openDb(): Promise<IDBDatabase | null> {
+  if (dbPromise) return dbPromise;
+  if (typeof indexedDB === 'undefined') {
+    idbAvailable = false;
+    dbPromise = Promise.resolve(null);
+    return dbPromise;
+  }
+  dbPromise = (async () => {
+    for (let attempt = 0; attempt < IDB_OPEN_MAX_ATTEMPTS; attempt++) {
+      const r = await attemptOpenDb();
+      if (r && r !== 'retry') {
+        idbAvailable = true;
+        return r;
+      }
+      if (r === null) break; // falla dura — no reintentar
+      // 'retry': falla transitoria. Backoff lineal y reintentar.
+      if (attempt < IDB_OPEN_MAX_ATTEMPTS - 1) {
+        await sleep(IDB_RETRY_BACKOFF_MS * (attempt + 1));
+      }
+    }
+    if (!idbWarned) {
+      idbWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn('[dailyApiCache] IDB open agotó reintentos — corriendo memory-only');
+    }
+    idbAvailable = false;
+    return null;
+  })();
   return dbPromise;
 }
 

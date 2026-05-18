@@ -40,6 +40,7 @@ import type { AbonoEnrichment } from '../domain/realReconciliationEngine';
 import {
   attachImportedStatementsToKnownCompanies,
   bankStatementBalance,
+  canonicalBankAccountNumber,
   currentBankStatements,
   latestStatementDate,
   mergeBankStatements,
@@ -103,22 +104,6 @@ const formatSourceLabel = (format: string, hasUploadedSantander?: boolean): stri
   return format;
 };
 
-async function readSantanderFile(
-  file: File,
-  selectedCia: string,
-  existingStatements: BankAccountStatement[],
-): Promise<{ statements: BankAccountStatement[]; latestDate: string }> {
-  const text = await file.text();
-  const defaultCia = /^\d{5}$/.test(selectedCia) ? selectedCia : '';
-  const parsed = parseSantanderFile(text, { defaultCia });
-  const statements = attachImportedStatementsToKnownCompanies(parsed, existingStatements);
-  const latestDate = statements.reduce(
-    (max, statement) => statement.fechaEstadoCuenta > max ? statement.fechaEstadoCuenta : max,
-    statements[0]?.fechaEstadoCuenta ?? todayISO(),
-  );
-  return { statements, latestDate };
-}
-
 /* Formatters → unified imports from ../formatters */
 const fmtCurrency = (v: number, _moneda = 'MXN'): string => fmtCurrencyUnified(v);
 
@@ -128,8 +113,21 @@ const csvEscape = (v: string | number | undefined): string => {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-function accountCatalogEntry(acc: Pick<BankAccountStatement, 'cuenta' | 'cuentaBancos'>): BankAccountCatalogEntry | null {
-  return findBankAccount(acc.cuentaBancos ?? acc.cuenta);
+function accountDisplayNumber(
+  acc: Pick<BankAccountStatement, 'cuenta' | 'cuentaBancos' | 'nombreCuentaContable'>,
+): string {
+  // Defensivo: los statements ya persistidos en IDB traen la forma cruda
+  // ("BANAMEX 7014 4758151" o cuenta vacía + nombreCuentaContable). Canonizamos
+  // aquí también para no depender de un re-fetch.
+  return canonicalBankAccountNumber(
+    acc.cuenta || acc.cuentaBancos || acc.nombreCuentaContable,
+  );
+}
+
+function accountCatalogEntry(
+  acc: Pick<BankAccountStatement, 'cuenta' | 'cuentaBancos' | 'nombreCuentaContable'>,
+): BankAccountCatalogEntry | null {
+  return findBankAccount(accountDisplayNumber(acc));
 }
 
 function catalogFlowClass(flow: string | undefined): string {
@@ -138,10 +136,27 @@ function catalogFlowClass(flow: string | undefined): string {
   return 'bg-[var(--gray-100)] text-[var(--gray-500)]';
 }
 
-function BankAccountBadges({ entry }: { entry: BankAccountCatalogEntry | null }) {
+function BankAccountBadges({
+  entry,
+  acc,
+}: {
+  entry: BankAccountCatalogEntry | null;
+  acc?: Pick<BankAccountStatement, 'cuenta' | 'cuentaBancos'>;
+}) {
   if (!entry) {
+    // Tooltip de auditoría: revela la clave cruda con la que se intentó
+    // cruzar el catálogo. Pasar el mouse muestra qué mandó el API
+    // (ej. el formato real de Cuenta_Bancos de la BANORTE 7543).
+    const raw = acc?.cuentaBancos ?? acc?.cuenta ?? '';
+    const norm = raw.replace(/\D+/g, '');
+    const auditTitle = acc
+      ? `Sin cruce en catálogo · cuentaBancos="${acc.cuentaBancos ?? ''}" · cuenta="${acc.cuenta ?? ''}" · dígitos="${norm}" · sin-ceros="${norm.replace(/^0+/, '')}"`
+      : undefined;
     return (
-      <span className="inline-flex h-5 items-center rounded-full bg-[var(--warning-muted)] px-2 text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--warning)]">
+      <span
+        title={auditTitle}
+        className="inline-flex h-5 items-center rounded-full bg-[var(--warning-muted)] px-2 text-[10px] font-bold uppercase tracking-[0.05em] text-[var(--warning)]"
+      >
         Sin catálogo
       </span>
     );
@@ -355,11 +370,9 @@ const BancosDashboard = ({
   query,
   selectedCia,
   onReset,
-  onUploadFile,
   onRefresh,
   canRefresh,
   refreshing,
-  uploadingFile,
   refreshError,
   companies = [],
   abonoEnrichmentIndex,
@@ -369,17 +382,14 @@ const BancosDashboard = ({
   query: BankQueryState;
   selectedCia: string;
   onReset: () => void;
-  onUploadFile: (file: File) => Promise<void>;
   onRefresh: () => void;
   canRefresh: boolean;
   refreshing: boolean;
-  uploadingFile: boolean;
   refreshError: string | null;
   companies?: { cia: string; nombre: string }[];
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
   cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }) => {
-  const santanderInputRef = useRef<HTMLInputElement | null>(null);
   const refreshBlockedReason = 'Este dataset viene solo de archivo Santander. Para actualizarlo desde JDE, primero corre una consulta.';
   // Build a cia→nombre lookup map
   const ciaNameMap = useMemo(() => {
@@ -495,6 +505,34 @@ const BancosDashboard = ({
       });
     }
   }, [accountsByBank]);
+
+  // ── Auditoría dev-only: qué cuentas no cruzan con el catálogo y con qué
+  // clave se intentó. Sirve para capturar el formato real de Cuenta_Bancos
+  // que regresa /bancos (ej. la BANORTE 7543 que no cruza pese a estar
+  // catalogada). Solo en dev, una vez por dataset.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const norm = (s: string | null | undefined) => (s ?? '').replace(/\D+/g, '');
+    const unmatched = statements
+      .filter(acc => accountCatalogEntry(acc) === null)
+      .map(acc => ({
+        cia: acc.cia,
+        cuenta: acc.cuenta,
+        cuentaBancos: acc.cuentaBancos ?? '',
+        cuentaContable: acc.cuentaContable ?? '',
+        nombreCuentaContable: acc.nombreCuentaContable ?? '',
+        desc039: acc.desc039 ?? '',
+        saldoFinal: acc.saldoFinal,
+        normDigits: norm(acc.cuentaBancos ?? acc.cuenta),
+        strippedDigits: norm(acc.cuentaBancos ?? acc.cuenta).replace(/^0+/, ''),
+      }));
+    if (unmatched.length > 0) {
+      // eslint-disable-next-line no-console
+      console.table(unmatched);
+      // eslint-disable-next-line no-console
+      console.info(`[Bancos] ${unmatched.length} cuenta(s) SIN CATÁLOGO — clave de cruce arriba.`);
+    }
+  }, [statements]);
 
   const bancoOptions = useMemo(
     () => Array.from(new Set(statements.map(s => s.nombreBanco ?? s.banco).filter(Boolean))).sort(),
@@ -679,36 +717,16 @@ const BancosDashboard = ({
         )}
 
         <div className="ml-auto flex items-center gap-2">
-          <input
-            ref={santanderInputRef}
-            type="file"
-            accept=".csv,.txt,text/csv,text/plain"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              e.currentTarget.value = '';
-              if (!file) return;
-              await onUploadFile(file);
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => santanderInputRef.current?.click()}
-            disabled={uploadingFile}
-            className="h-8 rounded-full border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:border-[var(--primary)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {uploadingFile ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />} Subir archivo
-          </button>
           <button
             onClick={exportCsv}
-            disabled={totalMovs === 0 || uploadingFile}
+            disabled={totalMovs === 0}
             className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Download className="w-3 h-3" /> Exportar CSV
           </button>
           <button
             onClick={onRefresh}
-            disabled={refreshing || uploadingFile || !canRefresh}
+            disabled={refreshing || !canRefresh}
             title={canRefresh ? 'Actualizar desde JDE' : refreshBlockedReason}
             className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -716,7 +734,7 @@ const BancosDashboard = ({
               ? <Loader2 className="w-3 h-3 animate-spin" />
               : canRefresh ? <RotateCcw className="w-3 h-3" /> : <Upload className="w-3 h-3" />} {canRefresh ? 'Actualizar' : 'Archivo cargado'}
           </button>
-          <button onClick={onReset} disabled={uploadingFile} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed">
+          <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed">
             <X className="w-3 h-3" /> Nueva consulta
           </button>
         </div>
@@ -954,7 +972,7 @@ const BancosDashboard = ({
 
                               <div className="flex-1 min-w-0">
                                 <p className="text-[13px] font-medium text-[var(--gray-950)] truncate">
-                                  {acc.cuenta || 'Cuenta bancaria'}
+                                  {accountDisplayNumber(acc) || 'Cuenta bancaria'}
                                   {acc.desc039 && (
                                     <span className="ml-2 text-[11px] font-normal text-[var(--gray-500)]">· {acc.desc039}</span>
                                   )}
@@ -969,7 +987,7 @@ const BancosDashboard = ({
                                   <span className="text-[11px] text-[var(--gray-400)]">{acc.cia ? '· ' : ''}{acc.movimientos.length} mov.</span>
                                 </div>
                                 <div className="mt-1.5">
-                                  <BankAccountBadges entry={catalogEntry} />
+                                  <BankAccountBadges entry={catalogEntry} acc={acc} />
                                 </div>
                               </div>
 
@@ -1213,7 +1231,6 @@ const Bancos = ({
     statements.length > 0 && lastQuery ? 'dashboard' : 'form'
   );
   const [refreshing, setRefreshing] = useState(false);
-  const [uploadingFile, setUploadingFile] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const handleLoadedJde = useCallback(
     (result: BankAccountStatement[], q: BankQueryState) => {
@@ -1252,25 +1269,6 @@ const Bancos = ({
     setView('form');
   }, [onJdeStatementsChange, onLastQueryChange, onSupplementalStatementsChange]);
 
-  const handleUploadFile = useCallback(async (file: File) => {
-    setUploadingFile(true);
-    setRefreshError(null);
-    try {
-      const { statements: result, latestDate } = await readSantanderFile(file, selectedCia, statements);
-      const mergedSupplemental = mergeBankStatements(supplementalStatements, result);
-      onSupplementalStatementsChange(mergedSupplemental);
-      if (lastQuery && lastQuery.formatoElectronico !== SANTANDER_FILE_FORMAT) {
-        onLastQueryChange({ ...lastQuery, hasUploadedSantander: true });
-      } else {
-        onLastQueryChange({ fechaEstadoCuenta: latestDate, formatoElectronico: SANTANDER_FILE_FORMAT, hasUploadedSantander: true });
-      }
-      setView('dashboard');
-    } catch (e) {
-      setRefreshError(e instanceof Error ? e.message : 'Error al leer el archivo Santander');
-    } finally {
-      setUploadingFile(false);
-    }
-  }, [lastQuery, onLastQueryChange, onSupplementalStatementsChange, selectedCia, statements, supplementalStatements]);
 
   const handleRefresh = useCallback(async () => {
     if (lastQuery?.formatoElectronico === SANTANDER_FILE_FORMAT) {
@@ -1317,11 +1315,9 @@ const Bancos = ({
       query={lastQuery}
       selectedCia={selectedCia}
       onReset={handleReset}
-      onUploadFile={handleUploadFile}
       onRefresh={handleRefresh}
       canRefresh={lastQuery.formatoElectronico !== SANTANDER_FILE_FORMAT}
       refreshing={refreshing}
-      uploadingFile={uploadingFile}
       refreshError={refreshError}
       companies={companies}
       abonoEnrichmentIndex={abonoEnrichmentIndex}

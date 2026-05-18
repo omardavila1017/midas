@@ -70,12 +70,81 @@ function digitsOnly(s: string | null | undefined): string {
   return s.replace(/\D+/g, '');
 }
 
+function stripLeadingZeros(s: string): string {
+  return s.replace(/^0+/, '');
+}
+
 const byClabe = new Map<string, BankAccountCatalogEntry>();
 const byCuentaDigits = new Map<string, BankAccountCatalogEntry>();
+// Padding-tolerant fallback. JDE `/bancos` Cuenta_Bancos arrives with
+// bank-specific zero-padding (Banamex padded to 11, Banorte 10, Santander
+// as-is). When the API form doesn't match the catalog's `cuentaDigits`
+// byte-for-byte, the exact lookup misses and the movement silently falls to
+// "sin catálogo" (root cause of items 4 & 10). We index by the
+// leading-zero-stripped form too, but ONLY for keys that stay unique after
+// stripping — ambiguous keys are dropped so we never mis-attribute a movement
+// to the wrong account.
+const byCuentaDigitsStripped = new Map<string, BankAccountCatalogEntry>();
+const ambiguousStripped = new Set<string>();
+// El API de /bancos entrega la cuenta con su longitud natural (sin padding):
+// "BANAMEX - 7014 350840" → dígitos "7014350840". Varios `cuentaDigits` del
+// catálogo se rellenaron con ceros fantasma en v1.2 (teoría de padding fija,
+// falsa) y nunca cruzan. El campo de display `cuenta` SÍ trae la forma humana
+// real ("7014 350840"), cuyos dígitos == los del API. Indexamos también por
+// ahí (collision-safe) para cruzar sin reescribir cuentaDigits.
+const byCuentaDisplayDigits = new Map<string, BankAccountCatalogEntry>();
+const ambiguousDisplay = new Set<string>();
+// Cuentas centinela sin dígitos. BANBAJIO: el API manda un Cuenta_Bancos
+// distinto por línea (folio SPEI), así que mapBankLine colapsa todas las
+// líneas al centinela cuenta="BANBAJIO". No tiene forma numérica que cruzar,
+// se busca por el token textual.
+const bySentinel = new Map<string, BankAccountCatalogEntry>();
 
 for (const entry of catalog.accounts) {
   if (entry.clabe) byClabe.set(entry.clabe, entry);
-  if (entry.cuentaDigits) byCuentaDigits.set(entry.cuentaDigits, entry);
+  if (entry.cuentaDigits && /\d/.test(entry.cuentaDigits)) {
+    byCuentaDigits.set(entry.cuentaDigits, entry);
+    const stripped = stripLeadingZeros(entry.cuentaDigits);
+    if (stripped) {
+      const prior = byCuentaDigitsStripped.get(stripped);
+      if (prior && prior !== entry) {
+        ambiguousStripped.add(stripped);
+      } else {
+        byCuentaDigitsStripped.set(stripped, entry);
+      }
+    }
+  } else if (entry.cuentaDigits) {
+    bySentinel.set(entry.cuentaDigits.trim().toUpperCase(), entry);
+  }
+  const displayDigits = digitsOnly(entry.cuenta);
+  if (displayDigits) {
+    const prior = byCuentaDisplayDigits.get(displayDigits);
+    if (prior && prior !== entry) {
+      ambiguousDisplay.add(displayDigits);
+    } else {
+      byCuentaDisplayDigits.set(displayDigits, entry);
+    }
+  }
+}
+for (const key of ambiguousStripped) byCuentaDigitsStripped.delete(key);
+for (const key of ambiguousDisplay) byCuentaDisplayDigits.delete(key);
+
+/**
+ * Exact digits lookup → leading-zero-tolerant fallback → display-form digits
+ * fallback (catálogo `cuenta` sin padding). Todos collision-safe.
+ */
+function lookupByCuentaDigits(norm: string): BankAccountCatalogEntry | null {
+  const exact = byCuentaDigits.get(norm);
+  if (exact) return exact;
+  const display = byCuentaDisplayDigits.get(norm);
+  if (display) return display;
+  const stripped = stripLeadingZeros(norm);
+  if (!stripped) return null;
+  return (
+    byCuentaDigitsStripped.get(stripped) ??
+    byCuentaDisplayDigits.get(stripped) ??
+    null
+  );
 }
 
 export const BANK_ACCOUNTS: readonly BankAccountCatalogEntry[] = Object.freeze(catalog.accounts);
@@ -86,20 +155,26 @@ export function findBankAccountByClabe(clabe: string | null | undefined): BankAc
   return byClabe.get(norm) ?? null;
 }
 
+function lookupBySentinel(input: string | null | undefined): BankAccountCatalogEntry | null {
+  const token = (input ?? '').trim().toUpperCase();
+  if (!token) return null;
+  return bySentinel.get(token) ?? null;
+}
+
 export function findBankAccountByCuenta(cuenta: string | null | undefined): BankAccountCatalogEntry | null {
   const norm = digitsOnly(cuenta);
-  if (!norm) return null;
-  return byCuentaDigits.get(norm) ?? null;
+  if (!norm) return lookupBySentinel(cuenta);
+  return lookupByCuentaDigits(norm);
 }
 
 export function findBankAccount(input: string | null | undefined): BankAccountCatalogEntry | null {
   const norm = digitsOnly(input);
-  if (!norm) return null;
+  if (!norm) return lookupBySentinel(input);
   if (norm.length === 18) {
     const hit = byClabe.get(norm);
     if (hit) return hit;
   }
-  return byCuentaDigits.get(norm) ?? null;
+  return lookupByCuentaDigits(norm);
 }
 
 export function listBankAccountsByUnidadNegocio(un: string): BankAccountCatalogEntry[] {

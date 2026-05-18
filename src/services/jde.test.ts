@@ -143,6 +143,71 @@ describe('normalizeCobranzaPayments', () => {
     expect(statements[0].movimientos[0].noRecibo).toBe('12345678');
   });
 
+  it('descarta filas de saldo-snapshot (sin transacción) pero conserva la cuenta y su saldo', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      {
+        // Fila de saldo-snapshot: Cuenta_Bancos vacío, Importe 0, sin
+        // gsaid/referencia/concepto/recibo → NO es un movimiento.
+        cia: '56',
+        Cuenta_Bancos: '',
+        Nombre_cuenta_Contable: 'BANAMEX SENDA SERVICIOS FINANCIEROS',
+        Fecha_Estado_Cuenta: '2026-02-10',
+        Importe: '0',
+        Saldo_Inicial: '8583129.39',
+        Saldo_Final: '8583129.39',
+        DESC039: 'Concentradora',
+      },
+    ]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: '2026-02-10',
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0].cia).toBe('00056');
+    expect(statements[0].movimientos).toHaveLength(0);
+    expect(statements[0].saldoFinal).toBe(8583129.39);
+  });
+
+  it('conserva el movimiento real y omite la fila fantasma en la misma cuenta', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      {
+        cia: '11',
+        Cuenta_Contable: '11.1020.0011302',
+        Cuenta_Bancos: '000777',
+        Nombre_cuenta_Contable: 'BANAMEX CTA',
+        Fecha_Estado_Cuenta: '2026-02-10',
+        Importe: '1500.00',
+        Tipo_Movimiento: 'CREDITO',
+        Referencia_Cliente: 'SPEI',
+        No_Recibo: 'RI-7',
+        Saldo_Final: '5000.00',
+      },
+      {
+        cia: '11',
+        Cuenta_Contable: '11.1020.0011302',
+        Cuenta_Bancos: '000777',
+        Nombre_cuenta_Contable: 'BANAMEX CTA',
+        Fecha_Estado_Cuenta: '2026-02-10',
+        Importe: '0',
+        Saldo_Final: '5000.00',
+      },
+    ]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: '2026-02-10',
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0].movimientos).toHaveLength(1);
+    expect(statements[0].movimientos[0].importe).toBe(1500);
+    expect(statements[0].saldoFinal).toBe(5000);
+  });
+
   it('consulta cobranzaindicadores por el proxy JDE estándar por cía', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify([
       {
@@ -223,6 +288,54 @@ describe('normalizeCobranzaPayments', () => {
       }),
     }));
     expect(payments).toHaveLength(2);
+  });
+});
+
+describe('normalizeBankAccountNumber', () => {
+  const { normalizeBankAccountNumber } = __internal;
+
+  it('quita nombre de banco, paréntesis y separadores → solo dígitos', () => {
+    expect(normalizeBankAccountNumber('BANAMEX - 7014 4758151')).toBe('70144758151');
+    expect(normalizeBankAccountNumber('BANAMEX 7013 8411298')).toBe('70138411298');
+    expect(normalizeBankAccountNumber('BANAMEX 7013 8805164 (expresso escolar)')).toBe('70138805164');
+    expect(normalizeBankAccountNumber('BANAMEX - 7014 26369')).toBe('701426369');
+    expect(normalizeBankAccountNumber('0577 117543')).toBe('0577117543');
+  });
+
+  it('preserva el texto si no hay dígitos y vacío si vacío', () => {
+    expect(normalizeBankAccountNumber('SIN CUENTA')).toBe('SIN CUENTA');
+    expect(normalizeBankAccountNumber('')).toBe('');
+    expect(normalizeBankAccountNumber(null)).toBe('');
+  });
+});
+
+describe('fetchBankStatements — cuenta canónica', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('canoniza la cuenta a dígitos aunque venga etiquetada en Nombre_cuenta_Contable', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([
+      {
+        cia: '56',
+        Cuenta_Contable: '56.1020.0011302',
+        Cuenta_Bancos: '',
+        Nombre_cuenta_Contable: 'BANAMEX - 7014 4758151',
+        Fecha_Estado_Cuenta: '2026-02-10',
+        Importe: '100.00',
+        Tipo_Movimiento: 'CREDITO',
+        Referencia_Cliente: 'SPEI',
+        No_Recibo: 'RI-5',
+        Saldo_Final: '999.00',
+      },
+    ]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: '2026-02-10',
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0].cuenta).toBe('70144758151');
   });
 });
 

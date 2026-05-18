@@ -2,12 +2,30 @@ import { describe, expect, it } from 'vitest';
 import {
   attachImportedStatementsToKnownCompanies,
   bankStatementBalance,
+  canonicalBankAccountNumber,
   currentBankStatements,
   latestStatementDate,
   mergeBankStatements,
   sumBankStatementBalances,
 } from './bankStatements';
 import type { BankAccountStatement } from '../services/jdeTypes';
+
+describe('canonicalBankAccountNumber', () => {
+  it('canoniza la cuenta etiquetada del API a solo dígitos', () => {
+    expect(canonicalBankAccountNumber('BANAMEX 7014 4758151')).toBe('70144758151');
+    expect(canonicalBankAccountNumber('BANAMEX - 7013 8708851')).toBe('70138708851');
+    expect(canonicalBankAccountNumber('BANAMEX 7013 8805164 (expresso escolar)')).toBe('70138805164');
+    expect(canonicalBankAccountNumber('BANAMEX - 7014 26369')).toBe('701426369');
+    expect(canonicalBankAccountNumber('0577 117543')).toBe('0577117543');
+  });
+
+  it('preserva centinelas/sin-dígitos y vacío', () => {
+    expect(canonicalBankAccountNumber('BANBAJIO')).toBe('BANBAJIO');
+    expect(canonicalBankAccountNumber('SIN CUENTA')).toBe('SIN CUENTA');
+    expect(canonicalBankAccountNumber('')).toBe('');
+    expect(canonicalBankAccountNumber(null)).toBe('');
+  });
+});
 
 function makeStatement(partial: Partial<BankAccountStatement> & Pick<BankAccountStatement, 'cia' | 'banco' | 'cuenta' | 'moneda' | 'fechaEstadoCuenta' | 'movimientos'>): BankAccountStatement {
   return {

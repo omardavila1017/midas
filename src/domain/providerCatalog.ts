@@ -68,15 +68,63 @@ export interface EnrichmentInput {
   classification: string;
 }
 
+/**
+ * Provider payment aging derived from `lastPayment.ultimaFecha`:
+ *   - 'reciente' : ≤ 60 días desde el último pago
+ *   - 'media'    : ≤ 180 días
+ *   - 'aneja'    : > 180 días (candidato a revisión de la regla aplicada)
+ */
+export type Antiguedad = 'reciente' | 'media' | 'aneja';
+
 export interface EnrichmentResult {
   providerType: string | null;
   flexibility: Flexibility;
   criticidad: Criticidad | null;
   dtiArea: string | null;
   lastPayment: LastPaymentEntry | null;
+  /** Días desde `lastPayment.ultimaFecha` (null si no hay/parsea mal). */
+  lastPaymentAgeDays: number | null;
+  /** Bucket de antigüedad del último pago (null si no hay último pago). */
+  antiguedad: Antiguedad | null;
   creditLimit: number | null;
   creditDays: string | null;
   providerNo: string | null;
+}
+
+/** Parse `ultimaFecha` toleranting ISO (YYYY-MM-DD) and DD/MM/YYYY. */
+function parseUltimaFecha(raw: string | null | undefined): Date | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  // ISO o ISO con tiempo
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const d = new Date(s.length > 10 ? s : s + 'T00:00:00');
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  // DD/MM/YYYY o DD-MM-YYYY
+  const m = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(s);
+  if (m) {
+    const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const fallback = new Date(s);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+}
+
+function ageBucket(days: number): Antiguedad {
+  if (days <= 60) return 'reciente';
+  if (days <= 180) return 'media';
+  return 'aneja';
+}
+
+/** Días entre `ultimaFecha` y `now` (null si no parsea). Exportado para tests. */
+export function lastPaymentAgeInDays(
+  ultimaFecha: string | null | undefined,
+  now: Date = new Date(),
+): number | null {
+  const d = parseUltimaFecha(ultimaFecha);
+  if (!d) return null;
+  const ms = now.getTime() - d.getTime();
+  return Math.max(0, Math.floor(ms / 86_400_000));
 }
 
 /**
@@ -100,6 +148,8 @@ export function enrichFromCatalog(input: EnrichmentInput): EnrichmentResult {
 
   const dti = name ? catalog.dtiCatalog[name] ?? null : null;
   const last = name ? catalog.lastPayment[name] ?? null : null;
+  const lastPaymentAgeDays = last ? lastPaymentAgeInDays(last.ultimaFecha) : null;
+  const antiguedad = lastPaymentAgeDays == null ? null : ageBucket(lastPaymentAgeDays);
   const providerType = name ? catalog.providerTypeByName?.[name] ?? null : null;
   const creditLimit = name ? catalog.creditLimitByName?.[name] ?? null : null;
   const creditDays = name ? catalog.creditDaysByName?.[name] ?? null : null;
@@ -111,6 +161,8 @@ export function enrichFromCatalog(input: EnrichmentInput): EnrichmentResult {
     criticidad: dti?.criticidad ?? null,
     dtiArea: dti?.area ?? null,
     lastPayment: last,
+    lastPaymentAgeDays,
+    antiguedad,
     creditLimit,
     creditDays,
     providerNo,

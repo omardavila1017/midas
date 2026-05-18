@@ -20,6 +20,47 @@ export function excludeBajio<T extends Pick<BankAccountStatement, 'banco' | 'nom
   return stmts.filter(s => !isBajioStatement(s));
 }
 
+/**
+ * Fideicomiso Dina: CORNING deposita en la cuenta BanBajío de la operadora.
+ * Detecta el ABONO de Corning en una línea de estado de cuenta. Vive aquí
+ * (dominio) para que la UI (FideicomisoDashboard) y el motor de proyección
+ * (fideicomisoMovements) compartan exactamente la misma regla.
+ */
+export const CORNING_PATTERN = /CORNING/i;
+
+export function corningMovementHaystack(m: Pick<BankStatementLine, 'concepto' | 'referencia' | 'infAdi1' | 'infAdi2' | 'infAdi3'>): string {
+  return [m.concepto, m.referencia, m.infAdi1, m.infAdi2, m.infAdi3]
+    .filter(Boolean).join(' ');
+}
+
+export function isCorningAbono(m: Pick<BankStatementLine, 'tipoMovimiento' | 'concepto' | 'referencia' | 'infAdi1' | 'infAdi2' | 'infAdi3'>): boolean {
+  return m.tipoMovimiento === 'ABONO' && CORNING_PATTERN.test(corningMovementHaystack(m));
+}
+
+/**
+ * Canoniza el identificador de cuenta a dígitos. El API de /bancos entrega la
+ * cuenta etiquetada ("BANAMEX - 7014 4758151", a veces sólo en
+ * Nombre_cuenta_Contable) → dígitos "70144758151". Quita el nombre del banco
+ * inicial, texto entre paréntesis y separadores. Sin padding (la longitud
+ * natural del API es la verdad). Si no quedan dígitos regresa el texto
+ * recortado (preserva centinelas como "BANBAJIO" y "SIN CUENTA").
+ *
+ * Defensivo: se aplica tanto al mapear (jde.ts) como al consumir (Bancos.tsx)
+ * para que los statements legados ya persistidos en IDB también se corrijan
+ * sin re-fetch.
+ */
+export function canonicalBankAccountNumber(raw: string | null | undefined): string {
+  const s = (raw ?? '').trim();
+  if (!s) return '';
+  let work = s;
+  const m = work.match(/^([A-Za-zÁÉÍÓÚáéíóúÑñ]+(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ]+)*)/);
+  const bank = m ? m[1].trim() : '';
+  if (bank && bank.length < work.length) work = work.slice(bank.length);
+  work = work.replace(/\([^)]*\)?/g, ' ');
+  const digits = work.replace(/\D+/g, '');
+  return digits || s;
+}
+
 function accountKey(statement: Pick<BankAccountStatement, 'cia' | 'cuenta' | 'moneda'>): string {
   return `${statement.cia}::${statement.cuenta}::${statement.moneda}`;
 }

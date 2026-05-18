@@ -36,7 +36,7 @@ import {
 import { hex } from '../theme';
 import { fmtCompact, fmtCurrency } from '../formatters';
 import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
-import { enrichFromCatalog, flexibilityLabel } from '../domain/providerCatalog';
+import { enrichFromCatalog, flexibilityLabel, type Antiguedad } from '../domain/providerCatalog';
 import { projectYear } from '../domain/collectionEngine';
 import type { Budget } from '../domain/budget';
 import type { CxpPaymentCoverage } from '../domain/paymentReconciliationEngine';
@@ -117,6 +117,8 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerDtiCriticidad?: 'Alta' | 'Media' | 'Baja';
   providerLastPaymentDate?: string;
   providerLastPaymentAmount?: number;
+  providerLastPaymentAgeDays?: number | null;
+  providerAntiguedad?: Antiguedad | null;
   providerScore?: number;
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
@@ -375,6 +377,8 @@ function enrichCxpRecord(
     providerDtiCriticidad: provider?.dtiCriticidad ?? catalog.criticidad ?? undefined,
     providerLastPaymentDate: catalog.lastPayment?.ultimaFecha,
     providerLastPaymentAmount: catalog.lastPayment?.ultimoMonto,
+    providerLastPaymentAgeDays: catalog.lastPaymentAgeDays,
+    providerAntiguedad: catalog.antiguedad,
     providerScore: provider?.score,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
@@ -399,6 +403,22 @@ function priorityTone(priority: PaymentPriority): string {
     case 'negotiable': return 'bg-[var(--success-muted)] text-[var(--success)]';
     case 'highImpact': return 'bg-[var(--warning-muted)] text-[var(--warning)]';
     default: return 'bg-[var(--gray-100)] text-[var(--gray-500)]';
+  }
+}
+
+function antiguedadLabel(a: Antiguedad): string {
+  switch (a) {
+    case 'reciente': return 'Pago reciente';
+    case 'media': return 'Pago intermedio';
+    case 'aneja': return 'Pago añejo';
+  }
+}
+
+function antiguedadToneClass(a: Antiguedad): string {
+  switch (a) {
+    case 'reciente': return 'bg-[var(--success-muted)] text-[var(--success)]';
+    case 'media': return 'bg-[var(--warning-muted)] text-[var(--warning)]';
+    case 'aneja': return 'bg-[var(--danger-muted)] text-[var(--danger)]';
   }
 }
 
@@ -1870,6 +1890,23 @@ function InvoiceDetailPanel({
           </DetailSection>
 
           <DetailSection title="Proveedor">
+            {record.providerAntiguedad && (
+              <div className="mb-2">
+                <span
+                  className={`rounded-full px-2 py-1 text-[11px] font-medium ${antiguedadToneClass(record.providerAntiguedad)}`}
+                  title={
+                    record.providerLastPaymentAgeDays != null
+                      ? `${record.providerLastPaymentAgeDays} días desde el último pago al proveedor`
+                      : undefined
+                  }
+                >
+                  {antiguedadLabel(record.providerAntiguedad)}
+                  {record.providerLastPaymentAgeDays != null
+                    ? ` · ${record.providerLastPaymentAgeDays} d`
+                    : ''}
+                </span>
+              </div>
+            )}
             <DetailGrid rows={[
               ['Tipo', record.providerType],
               ['Riesgo', record.providerRisk],
@@ -1877,6 +1914,7 @@ function InvoiceDetailPanel({
               ['Flexibilidad', flexibilityLabel(record.providerFlexibility)],
               ['Fecha último pago proveedor', lastPaymentDate],
               ['Monto último pago proveedor', lastPaymentAmount],
+              ['Antigüedad último pago', record.providerLastPaymentAgeDays != null ? `${record.providerLastPaymentAgeDays} días` : 'Sin dato'],
               ['Límite crédito', record.providerCreditLimit ? fmtFull(record.providerCreditLimit) : 'No configurado'],
               ['Última actualización', record.providerDaysWithoutUpdate === null ? 'Sin dato' : `${record.providerDaysWithoutUpdate} días`],
               ['DTI', record.providerDtiCriticidad ? `${record.providerDtiCriticidad}${record.providerDtiArea ? ` · ${record.providerDtiArea}` : ''}` : 'No aplica'],

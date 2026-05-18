@@ -82,9 +82,11 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
+import { filterActiveCompanies, matchesExclusionIdentity } from './domain/companyExclusion';
 import {
   attachImportedStatementsToKnownCompanies,
   excludeBajio,
+  isBajioStatement,
   mergeBankStatements,
   type BankQueryState,
 } from './domain/bankStatements';
@@ -274,6 +276,7 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   clients: [],
 };
 
+
 type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
 
 /**
@@ -300,7 +303,6 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
     { id: 'financialPlanning',   label: 'Planeación Financiera', icon: ClipboardList },
     { id: 'taxes',               label: 'Impuestos',             icon: Landmark },
-    { id: 'payroll',             label: 'Nómina',                icon: Users },
   ],
   operacion: [
     { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
@@ -308,8 +310,9 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'concursoMercantil', label: 'Concurso Mercantil', icon: Scale },
     { id: 'compras',     label: 'Órdenes de Compras', icon: FolderOpen },
     { id: 'pagos',       label: 'Pagos',       icon: CreditCard },
+    { id: 'payroll',     label: 'Nómina',      icon: Users },
     { id: 'collections', label: 'Cobranza',    icon: HandCoins },
-    { id: 'fideicomiso', label: 'Fideicomiso', icon: ShieldCheck },
+    { id: 'fideicomiso', label: 'Fideicomiso Dina', icon: ShieldCheck },
   ],
   catalogos: [
     { id: 'clients',   label: 'Clientes',     icon: UserSquare },
@@ -321,10 +324,9 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
   netflow: 'operacion',
-  cxp: 'operacion', concursoMercantil: 'operacion', compras: 'operacion', pagos: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
+  cxp: 'operacion', concursoMercantil: 'operacion', compras: 'operacion', pagos: 'operacion', payroll: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
   dashboard: 'proyeccion',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
-  payroll: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -719,14 +721,28 @@ export default function App() {
       });
     });
   }, []);
+  // Drop globally-excluded accounts (empresa 33 / multicarga) here, not only at
+  // the JDE fetch layer: stale IDB/localStorage bank caches hydrated at boot
+  // (loadBankCaches), the daily-cache path and manual uploads all feed this
+  // memo without passing through fetchBankStatements. This is the single
+  // chokepoint every bank consumer reads from (same spot as excludeBajio).
   const bankStatements = useMemo(
-    () => mergeBankStatements(bankJdeStatements, bankSupplementalStatements),
+    () =>
+      mergeBankStatements(bankJdeStatements, bankSupplementalStatements).filter(
+        s => !matchesExclusionIdentity({ cia: s.cia }),
+      ),
     [bankJdeStatements, bankSupplementalStatements],
   );
   // BAJIO se exhibe en la pestaña Bancos pero no se contabiliza ni se proyecta:
   // el excedente cae siempre en Banamex, así que incluirlo duplica flujo.
   const accountableBankStatements = useMemo(
     () => excludeBajio(bankStatements),
+    [bankStatements],
+  );
+  // Bajío se separa aquí (no entra a accountable) pero el módulo de
+  // planeación lo necesita para re-inyectar el flujo del fideicomiso Dina.
+  const bajioStatements = useMemo(
+    () => bankStatements.filter(isBajioStatement),
     [bankStatements],
   );
   // PERF (2026-05-14): los heavy memos (paymentReconciliation, providersEnriched,
@@ -882,7 +898,7 @@ export default function App() {
     (cobranzaRecords.length > 0 || cobranzaPayments.length > 0) && RECONCILIATION_TABS.has(activeTab);
   const activeReconciliationCias = useMemo(() => {
     if (selectedCia === 'all') return undefined;
-    const allCias = companies.filter(c => c.activa !== false).map(c => c.cia);
+    const allCias = filterActiveCompanies(companies).map(c => c.cia);
     const resolved = resolveActiveCias(selectedCia, companyGroups, allCias);
     return resolved.length > 0 ? resolved : undefined;
   }, [selectedCia, companies, companyGroups]);
@@ -1249,6 +1265,26 @@ export default function App() {
   useEffect(() => {
     requestDatasets(TAB_DATASETS[activeTab] ?? []);
   }, [activeTab, requestDatasets]);
+
+  // Prefetch TODOS los datasets — no sólo los del tab activo. Antes el
+  // dashboard pedía `[]` y cada módulo disparaba su fetch JDE al abrirlo, así
+  // que el usuario esperaba en cada entrada. Ahora se piden todos, pero:
+  //   - DIFERIDO a idle tras hidratar (no compite con el primer paint ni con
+  //     el tab activo, que ya se pide en el efecto de arriba).
+  //   - ESCALONADO en dos tandas para no meter 6 heavies a estado React en el
+  //     mismo tick (eso disparaba un recompute sincrónico que congelaba el
+  //     hilo cuando todo resolvía a la vez).
+  // El semáforo global de jdeClient acota el paralelismo de red, los
+  // auto-fetch saltan cías frescas por TTL y los per-heavy savers persisten a
+  // IDB → el siguiente boot hidrata instantáneo.
+  useEffect(() => {
+    if (!storeHydrated) return;
+    const firstWave: DatasetKey[] = ['banks', 'cxp', 'cobranza'];
+    const secondWave: DatasetKey[] = ['compras', 'pagos', 'nomina', 'rol'];
+    const cancel1 = scheduleIdleTask(() => requestDatasets(firstWave), 1200);
+    const cancel2 = scheduleIdleTask(() => requestDatasets(secondWave), 3500);
+    return () => { cancel1?.(); cancel2?.(); };
+  }, [storeHydrated, requestDatasets]);
 
   useEffect(() => {
     if (bankCacheLoaded) setDatasetSlot('banks', 'ready');
@@ -1843,7 +1879,7 @@ export default function App() {
     if (!requestedDatasets.has('cxp')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
-    const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
+    const activeCias = filterActiveCompanies(companies).map(c => c.cia);
     if (activeCias.length === 0) {
       cxpAutoFetchDone.current = true;
       setBootSlot('cxp', 'done');
@@ -2062,7 +2098,7 @@ export default function App() {
         setCobranzaError('No hay compañías cargadas todavía. Espera a que /empresas responda.');
         return;
       }
-      const activeCias = companies.filter(c => c.activa !== false).map(c => c.cia);
+      const activeCias = filterActiveCompanies(companies).map(c => c.cia);
       if (activeCias.length === 0) {
         setCobranzaError('No hay compañías activas en el catálogo.');
         return;
@@ -2189,7 +2225,7 @@ export default function App() {
     if (!requestedDatasets.has('cobranza')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
-    const activeCias = companies.filter(c => c.activa !== false);
+    const activeCias = filterActiveCompanies(companies);
     if (activeCias.length === 0) {
       cobranzaAutoFetchDone.current = true;
       setBootSlot('cobranza', 'done');
@@ -2979,6 +3015,7 @@ export default function App() {
                 <FinancialPlanningDashboard
                   companyCode={selectedCia}
                   bankStatements={accountableBankStatements}
+                  bajioStatements={bajioStatements}
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
@@ -3119,17 +3156,13 @@ export default function App() {
               </Suspense>
             )}
             {activeTab === 'fideicomiso' && (
-              <Suspense fallback={<LazyTabFallback label="Fideicomiso" />}>
+              <Suspense fallback={<LazyTabFallback label="Fideicomiso Dina" />}>
                 <FideicomisoDashboard
                   bankStatements={bankStatements}
-                  cobranzaRecords={cobranzaRecords}
-                  cobranzaPayments={cobranzaPayments}
                   companies={companies}
                   selectedCia={selectedCia}
                   onRefreshBanks={() => refreshBankStatementsRange(true, true)}
-                  onRefreshCobranza={refreshCobranza}
                   bankFetchStatus={bankFetchStatus}
-                  cobranzaRefreshing={cobranzaRefreshing}
                 />
               </Suspense>
             )}
@@ -3481,8 +3514,7 @@ function CompanySelector({
               {companies.length === 0 && !loading && (
                 <p className="text-[12px] px-3 py-2" style={{ color: 'var(--gray-400)' }}>Sin compañías disponibles.</p>
               )}
-              {companies
-                .filter(c => c.activa !== false)
+              {filterActiveCompanies(companies)
                 .map(c => {
                   const isActive = selectedCia === c.cia;
                   return (
@@ -3547,7 +3579,7 @@ function CompanySelector({
                   Empresas ({groupCias.size} seleccionadas)
                 </label>
                 <div className="space-y-1 max-h-48 overflow-y-auto border border-[var(--gray-200)] rounded-[var(--radius-md)] p-1.5">
-                  {companies.filter(c => c.activa !== false).map(c => {
+                  {filterActiveCompanies(companies).map(c => {
                     const checked = groupCias.has(c.cia);
                     return (
                       <button

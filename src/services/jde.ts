@@ -22,6 +22,18 @@ import {
   primeDailyCache,
 } from './dailyApiCache';
 import { apiConfig } from '../config/api.config';
+import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
+import { canonicalBankAccountNumber } from '../domain/bankStatements';
+import { matchesExclusionIdentity } from '../domain/companyExclusion';
+
+/**
+ * Drop globally-excluded rows (empresa 33 / multicarga) at the JDE normalize
+ * layer. Blanket — no date boundary. Single source of truth lives in
+ * companyExclusion.ts; do NOT re-apply downstream (canonicalProjection).
+ */
+function dropExcludedByCia<T extends { cia: string }>(rows: T[]): T[] {
+  return rows.filter(r => !matchesExclusionIdentity({ cia: r.cia }));
+}
 import { JdeApiError } from './jdeTypes';
 import type {
   AgedBalanceRecord,
@@ -231,7 +243,7 @@ export async function fetchAgedBalances(
   config: JdeClientConfig = {},
 ): Promise<AgedBalanceRecord[]> {
   const raw = await jdeClient.post<unknown>('/antiguedadsaldos', req, config);
-  return unwrapList(raw).map(mapAgedBalance);
+  return dropExcludedByCia(unwrapList(raw).map(mapAgedBalance));
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -270,6 +282,15 @@ function extractBankName(raw: unknown): string {
   // Tomar solo la parte alfabética inicial (el nombre del banco)
   const match = s.match(/^([A-Za-zÁÉÍÓÚáéíóúÑñ]+(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ]+)*)/);
   return match ? match[1].trim() : s;
+}
+
+/**
+ * Forma canónica del identificador de cuenta (solo dígitos). Delega en el
+ * normalizador de dominio para que mapeo (aquí) y consumo (Bancos.tsx)
+ * compartan exactamente la misma lógica.
+ */
+function normalizeBankAccountNumber(raw: unknown): string {
+  return canonicalBankAccountNumber(toStr(raw));
 }
 
 /**
@@ -389,9 +410,13 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
     /BAJIO|BAJÍO/i.test(toStr(nombreCuentaContable)) ||
     /BAJIO|BAJÍO/i.test(toStr(nombreBancoRaw));
   const fallbackCuenta = toStr(pick(raw, ['cuenta', 'numeroCuenta', 'numero_cuenta', 'account']));
+  // El API entrega la cuenta etiquetada ("BANAMEX - 7014 4758151") y a veces
+  // sólo en Nombre_cuenta_Contable cuando Cuenta_Bancos viene vacío.
+  // Canonizamos a dígitos para que el display sea limpio y el cruce con el
+  // catálogo funcione.
   const cuenta = bankIsBajio
     ? 'BANBAJIO'
-    : toStr(cuentaBancos || fallbackCuenta);
+    : normalizeBankAccountNumber(cuentaBancos || fallbackCuenta || nombreCuentaContable);
 
   // ── Concepto (parsing inteligente de InF_ADI) ──
   const concepto = parseConcepto(
@@ -443,6 +468,23 @@ function mapBankLine(raw: RawRecord): BankStatementLine {
     infAdi2,
     infAdi3,
   };
+}
+
+/**
+ * Una fila de "saldo-snapshot": el API de /bancos a veces devuelve un registro
+ * con Saldo_Inicial/Saldo_Final pero sin transacción real (Importe 0, sin
+ * gsaid/referencia/concepto/recibo/código). NO es un movimiento — si se empuja
+ * a `movimientos` produce la fila fantasma de +$0.00 y el "1 mov." espurio.
+ */
+function isBalanceOnlyLine(l: BankStatementLine): boolean {
+  return (
+    l.importe === 0 &&
+    !l.gsaid &&
+    !l.referencia &&
+    !l.concepto &&
+    !l.noRecibo &&
+    !l.codigoTransaccionBanco
+  );
 }
 
 /**
@@ -508,7 +550,9 @@ function groupByAccount(
       };
       map.set(key, entry);
     }
-    entry.acc.movimientos.push(l);
+    // Las filas de saldo-snapshot crean/actualizan la cuenta (saldos abajo)
+    // pero NO se listan como movimiento.
+    if (!isBalanceOnlyLine(l)) entry.acc.movimientos.push(l);
 
     // Sumar saldos por sub-cuenta única: para Bajío esto suma 74 saldos
     // distintos en una sola "cuenta"; para Banamex (mismo Cuenta_Bancos en
@@ -550,8 +594,20 @@ export async function fetchBankStatements(
 
   // El API actual de JDE Desarrollo devuelve líneas planas con
   // Saldo_Inicial/Saldo_Final repetidos por cuenta → agrupar.
+  // Antes de agrupar, dropear líneas de compañías/unidades excluidas
+  // globalmente (empresa 33, multicarga) — blanket, sin corte de fecha:
+  // el histórico también se excluye (ver companyExclusion.ts).
   const lines = list.map(mapBankLine);
-  return groupByAccount(list, lines, req.fechaEstadoCuenta);
+  const keptRaw: RawRecord[] = [];
+  const keptLines: BankStatementLine[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    const unidadNegocio = findBankAccountByCuenta(ln.cuenta)?.unidadNegocio ?? null;
+    if (matchesExclusionIdentity({ cia: ln.cia, unidadNegocio })) continue;
+    keptRaw.push(list[i]);
+    keptLines.push(ln);
+  }
+  return groupByAccount(keptRaw, keptLines, req.fechaEstadoCuenta);
 }
 
 /**
@@ -1054,7 +1110,7 @@ export async function fetchCobranza(
     }
   }
 
-  return list.map(mapCobranza);
+  return dropExcludedByCia(list.map(mapCobranza));
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -1135,7 +1191,7 @@ export function normalizeCobranzaPayments(rows: Record<string, unknown>[], ciaFa
 
   return Array.from(groups.entries())
     .map(([idPago, group]) => mapCobranzaPaymentHeader(group, idPago, ciaFallback))
-    .filter(payment => payment.fechaCobro && payment.cuentaBancaria && payment.importeRecibo > 0)
+    .filter(payment => payment.fechaCobro && payment.cuentaBancaria && payment.importeRecibo > 0 && !matchesExclusionIdentity({ cia: payment.cia }))
     .sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro) || a.idPago.localeCompare(b.idPago));
 }
 
@@ -1239,7 +1295,7 @@ export async function fetchCompras(
   config: JdeClientConfig = {},
 ): Promise<ComprasRecord[]> {
   const raw = await jdeClient.post<unknown>('/compras', req, config);
-  return unwrapList(raw).map(mapCompras);
+  return dropExcludedByCia(unwrapList(raw).map(mapCompras));
 }
 
 /**
@@ -1562,7 +1618,7 @@ export async function fetchNomina(
   let records: PayrollCostRecord[] = [];
   for (let attempt = 0; attempt <= MAX_NOMINA_PARTIAL_RETRIES; attempt++) {
     const raw = await jdeClient.post<unknown>('/Nomina', req, merged);
-    records = unwrapList(raw).map(mapNominaRow);
+    records = dropExcludedByCia(unwrapList(raw).map(mapNominaRow));
     if (!isNominaResponseSuspect(records)) return records;
     if (attempt < MAX_NOMINA_PARTIAL_RETRIES) {
       console.warn(
@@ -1583,6 +1639,7 @@ export const __internal = {
   mapCobranza,
   mapNominaRow,
   inferCashTreatment,
+  normalizeBankAccountNumber,
 };
 
 // ───────────────────────────────────────────────────────────────
@@ -1639,7 +1696,7 @@ export async function fetchPagoProveedor(
   config: JdeClientConfig = {},
 ): Promise<PagoProveedorRecord[]> {
   const raw = await jdeClient.post<unknown>('/pagoproveedor', req, config);
-  return unwrapList(raw).map(mapPagoProveedor);
+  return dropExcludedByCia(unwrapList(raw).map(mapPagoProveedor));
 }
 
 /**
@@ -1822,7 +1879,7 @@ export async function fetchRol(
     }
   }
 
-  return list.map(mapRol);
+  return dropExcludedByCia(list.map(mapRol));
 }
 
 /** Parte [from..to] (YYYY-MM-DD, inclusive) en ventanas por mes calendario. */

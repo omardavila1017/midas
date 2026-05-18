@@ -64,6 +64,7 @@ import {
   TAX_STORE_KEY,
 } from '../../taxes/services/taxModuleService';
 import { buildConvenioPaymentMovements } from '../../concurso-mercantil/services/convenioMovements';
+import { buildFideicomisoMovements } from '../../fideicomiso/services/fideicomisoMovements';
 import {
   expandManualPlanningEntriesToMovements,
   loadManualPlanningEntries,
@@ -129,6 +130,12 @@ interface Props {
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
+  /**
+   * Estados de cuenta Bajío (fideicomiso Dina). Llegan SEPARADOS porque
+   * `bankStatements` ya viene sin Bajío (excludeBajio). Se usan para
+   * re-inyectar el flujo del fideicomiso en escenarios no-base.
+   */
+  bajioStatements?: BankAccountStatement[];
 }
 
 const USER = 'tesoreria@senda.local';
@@ -503,12 +510,17 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       taxStore.overdueBalance,
     ].join(':');
     const providerKey = fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? ''));
+    const bajioKey = fingerprintArray(
+      props.bajioStatements ?? [],
+      (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
+    );
     return [
       movementsKey,
       adjustmentsKey,
       manualKey,
       taxKey,
       providerKey,
+      bajioKey,
       yearStart,
       yearEnd,
       today,
@@ -523,6 +535,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     manualEntries,
     taxStore,
     props.providers,
+    props.bajioStatements,
     yearStart,
     yearEnd,
     today,
@@ -599,7 +612,18 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           endDate: yearEnd,
           asOfDate: today,
         });
-      const movementsWithTax = [...adjustedMovements, ...taxMovements, ...convenioMovements];
+      // Fideicomiso Dina: ingreso Corning real (Bajío) + egreso DINA mensual.
+      // Mismo invariante/patrón que convenio (solo no-base, ventana recortada).
+      const fideicomisoMovements = isBase
+        ? []
+        : buildFideicomisoMovements({
+          scenarioId,
+          startDate: yearStart,
+          endDate: yearEnd,
+          asOfDate: today,
+          bajioStatements: props.bajioStatements ?? [],
+        });
+      const movementsWithTax = [...adjustedMovements, ...taxMovements, ...convenioMovements, ...fideicomisoMovements];
       const supplierSchedule = scheduleSupplierPaymentsByScore({
         movements: movementsWithTax,
         providers: props.providers,
