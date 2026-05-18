@@ -514,39 +514,6 @@ function openIdb(): Promise<IDBDatabase | null> {
   });
 }
 
-async function idbPut(value: unknown): Promise<boolean> {
-  const db = await openIdb();
-  if (!db) return false;
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).put(value, IDB_KEY);
-      tx.oncomplete = () => { db.close(); resolve(true); };
-      tx.onerror = () => { db.close(); resolve(false); };
-      tx.onabort = () => { db.close(); resolve(false); };
-    } catch {
-      db.close();
-      resolve(false);
-    }
-  });
-}
-
-async function idbGet(): Promise<unknown> {
-  const db = await openIdb();
-  if (!db) return undefined;
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction(IDB_STORE, 'readonly');
-      const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
-      req.onsuccess = () => { db.close(); resolve(req.result); };
-      req.onerror = () => { db.close(); resolve(undefined); };
-    } catch {
-      db.close();
-      resolve(undefined);
-    }
-  });
-}
-
 async function idbDelete(): Promise<void> {
   const db = await openIdb();
   if (!db) return;
@@ -567,13 +534,6 @@ async function idbDelete(): Promise<void> {
 // ── API pública ──────────────────────────────────────────────────────────
 
 /**
-<<<<<<< HEAD
- * Persiste el store en localStorage (síncrono).
- *
- * Mantenido por compatibilidad: tests y el path de unload sincrónico siguen
- * usándolo. En runtime de la app preferimos `saveStoreAsync` que escribe en
- * IndexedDB y NO bloquea el main thread.
-=======
  * Extrae los campos heavy de un MidasStore para snapshotearlos por separado.
  * Los heavies viven en IDB (cuota dinámica en GB); el resto vive en
  * localStorage (cuota ~5MB pero suficiente para configs + timestamps).
@@ -605,7 +565,6 @@ function stripHeavy(store: MidasStore): MidasStore {
  *
  * El write a IDB es fire-and-forget (la promesa se descarta); el caller
  * debe coalescer las llamadas (debounce) para no saturarlo.
->>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
  */
 export function saveStore(store: MidasStore): void {
   saveLightStore(store);
@@ -632,63 +591,6 @@ export function saveLightStore(store: MidasStore): void {
 }
 
 /**
-<<<<<<< HEAD
- * Persiste el store en IndexedDB. Async-safe, sin cap de 5MB.
- *
- * Si IDB no está disponible (Node tests, modo incógnito en algunos browsers
- * viejos), cae a `saveStore` para que la app siga funcional.
- */
-export async function saveStoreAsync(store: MidasStore): Promise<void> {
-  const payload = { version: STORE_VERSION, data: store };
-  const ok = await idbPut(payload);
-  if (!ok) {
-    // Fallback sincrónico — peor pero al menos algo persiste.
-    saveStore(store);
-  } else {
-    // Si la escritura a IDB tuvo éxito, limpiamos la copia legacy en
-    // localStorage para no dejarlas desincronizadas. Después de la primera
-    // migración exitosa esto es no-op.
-    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
-  }
-}
-
-/**
- * Lee el store desde IndexedDB. Si IDB no tiene datos pero localStorage sí,
- * migra automáticamente y devuelve el store migrado. Esto cubre el primer
- * boot tras adoptar IDB sin perder datos del usuario.
- */
-export async function loadStoreAsync(): Promise<MidasStore | null> {
-  // 1. IDB primero — fuente de verdad post-migración.
-  try {
-    const raw = await idbGet();
-    if (raw && typeof raw === 'object') {
-      const payload = raw as { version?: number; data?: unknown };
-      if (payload.data !== undefined) {
-        return normalizeStore(payload.data);
-      }
-    }
-  } catch {
-    // fallthrough a localStorage
-  }
-
-  // 2. localStorage — fallback y origen para migración.
-  const fromLs = loadStore();
-  if (fromLs) {
-    // Migrar a IDB para que las próximas escrituras vayan ahí.
-    void saveStoreAsync(fromLs);
-    return fromLs;
-  }
-
-  return null;
-}
-
-/**
- * Carga sincrónica desde localStorage. Mantenida para tests y para el
- * unload-flush cuando no podemos esperar a IDB. Maneja todas las migraciones
- * de stores legacy (midas-v6/v5, flowsense-v5, flowsense-v1..v4).
- */
-export function loadStore(): MidasStore | null {
-=======
  * Carga el store completo. Async porque los heavies viven en IDB.
  *
  * Migración v11 → v12:
@@ -705,7 +607,6 @@ export async function loadStore(): Promise<MidasStore | null> {
   purgeOrphanKeys();
 
   // Path 1: v12 light-only en localStorage + heavies en IDB.
->>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {

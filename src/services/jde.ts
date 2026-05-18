@@ -640,17 +640,11 @@ export async function fetchBankStatementsRange(
     needsFetch.push(i);
   }
   let done = dates.length - needsFetch.length;
-  options.onProgress?.(done, dates.length);
 
   let cursor = 0;
-<<<<<<< HEAD
-  let done = 0;
 
   // Throttle del callback de progreso. Si el caller persiste estado de React
-  // en cada update (típico en App.tsx), 124 updates en ~30s producen 124
-  // re-renders del root y eso congela el main thread en apps grandes. Acotamos
-  // a ~5 updates/segundo + un emit final para garantizar que la UI termine
-  // mostrando done==total. Ver perfilado 2026-05-03 en COBRANZA-HANDOFF.md.
+  // en cada update, cientos de callbacks producen renders innecesarios.
   const PROGRESS_THROTTLE_MS = 200;
   let lastProgressEmit = 0;
   const emitProgress = (force = false) => {
@@ -661,9 +655,8 @@ export async function fetchBankStatementsRange(
       options.onProgress(done, dates.length);
     }
   };
+  emitProgress(true);
 
-=======
->>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
   const MAX_ATTEMPTS = 3;
   const worker = async () => {
     while (true) {
@@ -1021,15 +1014,8 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  * Notas:
  *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
  *     compañías llamar en serie y mergear.
-<<<<<<< HEAD
- *   • El token productivo lo inyecta server-side la Vercel Function
- *     (api/jde/[...path].ts) leyendo `JDE_TOKEN`. En dev local, usa
- *     `VITE_JDE_TOKEN`.
-=======
- *   • `fechaInicial: null` trae todo el histórico hasta `fechaFinal`.
  *   • El browser llama a `/api/jde`; Atlas/backend o el proxy de Vite local
  *     inyectan el token server-side.
->>>>>>> 2205a67214712de237d9f045ac8c392a1ebf1651
  */
 export async function fetchCobranza(
   req: CobranzaRequest,
