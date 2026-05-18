@@ -648,7 +648,7 @@ function accumulateCobranzaPaymentIva({
         ? originalIva * Math.min(1, amount / original)
         : 0;
       const taxRate = taxRateFromIndicator(app.tasaIva, amount, taxAmount);
-      if (taxRate !== 16 && taxRate !== 8) continue;
+      const resolved = taxRate === 16 || taxRate === 8 ? taxRate : undefined;
       const taxBase = Math.max(0, amount - taxAmount);
       const line: TaxSourceLine = {
         movementId: `cxc-payment:${payment.cia}:${payment.idPago}:${app.noFacturaNormalizada}`,
@@ -657,12 +657,23 @@ function accumulateCobranzaPaymentIva({
         counterpartyName: app.cliente || payment.cliente,
         amount,
         taxBase,
-        taxRate,
+        taxRate: resolved,
         taxAmount,
         sourceSystem: 'JDE',
         rateSource: 'JDE',
       };
-      addIvaCaused(ensure(date.slice(0, 7)), line, taxRate);
+      const row = ensure(date.slice(0, 7));
+      if (resolved) {
+        addIvaCaused(row, line, resolved);
+      } else if (taxAmount > 0) {
+        // Cobro CON IVA pero tasa no resoluble (indicador raro o ratio fuera de 8|16):
+        // no se descarta — va a no clasificado para auditoría, no se pierde del neto.
+        row.unclassifiedIncome += amount;
+        row.unclassifiedLines.push(line);
+      } else {
+        // Sin IVA (exento / tasa 0) → se ignora, como antes.
+        continue;
+      }
       periods.add(date.slice(0, 7));
     }
   }
@@ -1342,7 +1353,7 @@ function cxpTaxBreakdown(
   amount: number;
   taxBase: number;
   taxAmount: number;
-  taxRate?: 8 | 16;
+  taxRate?: 0 | 8 | 16;
   rateSource?: TaxSourceLine['rateSource'];
   estimated?: boolean;
 } {
@@ -1358,6 +1369,20 @@ function cxpTaxBreakdown(
       ...grossToIvaBreakdown(pending, overrideRate),
       rateSource: 'OVERRIDE',
       estimated: true,
+    };
+  }
+
+  // JDE mandó subtotal+bruto válidos pero impuesto explícitamente 0 → proveedor
+  // exento / tasa 0. NO fabricar 16% DEFAULT (inflaría el IVA acreditable). El
+  // monto completo va a no clasificado (taxRate 0 → caller suma a unclassified).
+  const rawTax = record.importeImpuestosPesos;
+  if (subtotal > 0 && gross > 0 && Number.isFinite(rawTax) && rawTax <= 0) {
+    return {
+      amount: pending,
+      taxBase: pending,
+      taxAmount: 0,
+      taxRate: 0,
+      rateSource: 'JDE',
     };
   }
 

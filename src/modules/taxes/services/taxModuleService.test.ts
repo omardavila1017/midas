@@ -68,11 +68,11 @@ describe('taxModuleService', () => {
           importePendientePesos: 580,
         }),
         cxpRecord({
-          noFactura: 'F-NOTAX',
+          noFactura: 'F-UNCLEAR',
           fechaProgramacionPago: '2026-05-08',
-          importeSubtotalPesos: 500,
+          importeSubtotalPesos: 0,
           importeImpuestosPesos: 0,
-          importeBrutoPesos: 500,
+          importeBrutoPesos: 0,
           importePendientePesos: 500,
         }),
       ],
@@ -87,7 +87,7 @@ describe('taxModuleService', () => {
     expect(may.iva.expenseBase16).toBeCloseTo(500 + 500 / 1.16);
     expect(may.iva.ivaCreditable).toBeCloseTo(80 + (500 - 500 / 1.16));
     expect(may.iva.unclassifiedExpense).toBe(0);
-    expect(may.iva.expenseLines.some((line) => line.concept.includes('F-NOTAX'))).toBe(true);
+    expect(may.iva.expenseLines.some((line) => line.concept.includes('F-UNCLEAR'))).toBe(true);
   });
 
   it('dates creditable CXP IVA on the real PagoProveedor date when coverage is paid', () => {
@@ -245,6 +245,30 @@ describe('taxModuleService', () => {
     const may = view.periods.find((period) => period.period === '2026-05')!;
     expect(may.iva.ivaCreditable).toBe(0);
     expect(may.iva.unclassifiedExpense).toBe(500);
+  });
+
+  it('treats CXP with explicit zero tax as exempt instead of fabricating DEFAULT 16%', () => {
+    const view = buildTaxDashboardView({
+      cxpRecords: [
+        cxpRecord({
+          noFactura: 'F-EXENTO',
+          fechaProgramacionPago: '2026-05-10',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 0,
+          importeBrutoPesos: 1000,
+          importePendientePesos: 1000,
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.ivaCreditable).toBe(0);
+    expect(may.iva.unclassifiedExpense).toBe(1000);
   });
 
   it('estimates budget OPEX as IVA creditable under regimen 601', () => {
@@ -458,6 +482,38 @@ describe('taxModuleService', () => {
     expect(may.iva.ivaCaused8).toBeCloseTo(80);
     expect(may.iva.ivaCaused).toBeCloseTo(240);
     expect(may.iva.incomeLines).toHaveLength(2);
+  });
+
+  it('routes collections with IVA but unresolvable rate to unclassified income instead of dropping them', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-ODD',
+          fechaCobro: '2026-05-12',
+          importeRecibo: 1120,
+          applications: [
+            {
+              noFactura: 'RI-ODD',
+              importeCobrado: 1120,
+              importeOriginalFactura: 1120,
+              importeIvaFacturaOriginal: 120,
+              tasaIva: 'IVA RES',
+            },
+          ],
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.ivaCaused).toBe(0);
+    expect(may.iva.unclassifiedIncome).toBe(1120);
+    expect(may.iva.incomeLines).toHaveLength(0);
+    expect(may.iva.unclassifiedLines).toHaveLength(1);
   });
 
   it('calculates ISN as 3% of payroll and supports manual override', () => {

@@ -10,8 +10,8 @@ describe('<Bancos /> bank catalog enrichment', () => {
         selectedCia="all"
         statements={[
           statement({
-            cuenta: '678 7361240',
-            movimientos: [movement({ cuenta: '678 7361240', tipoMovimiento: 'ABONO', importe: 10_000 })],
+            cuenta: '06787361240',
+            movimientos: [movement({ cuenta: '06787361240', tipoMovimiento: 'ABONO', importe: 10_000 })],
           }),
           statement({
             cuenta: '7013 8805172',

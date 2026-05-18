@@ -176,6 +176,21 @@ export function MovementDrillDownDrawer({
           <InvoiceDetailSection movement={movement} context={invoiceContext} />
         )}
 
+        {movement.sourceSystem === 'BANK' && (
+          <DetailBlock
+            title="Transferencia bancaria"
+            items={[
+              ['Empresa', movement.companyId ?? '—'],
+              ['Cuenta de banco', movement.bankAccountId ?? '—'],
+              ['No. transferencia / referencia', movement.sourceObjectId ?? '—'],
+              ['Concepto bancario', movement.concept || '—'],
+              ['Fecha operación', fmtSafeDate(movement.actualDate ?? movement.projectedDate)],
+              ['Importe', fmtCurrency(effectiveAmount(movement))],
+              ['Tipo', movement.type === 'INFLOW' ? 'Abono (entrada)' : 'Cargo (salida)'],
+            ]}
+          />
+        )}
+
         {(movement.sourceSystem === 'BANK' || bankAccount) && (
           <DetailBlock
             title="Clasificación bancaria"

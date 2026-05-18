@@ -1018,6 +1018,11 @@ function collectOutflowLines(
   // para que el scheduler decida si se paga hoy, se recorre o queda pendiente.
   filteredCxp.forEach((record, index) => {
     if (record.importePendientePesos <= 0) return;
+    // Factura intercompañía (empresa propia del grupo): traspaso, no egreso
+    // real. Espejo del filtro CXC (collectCxcInflowLines) para que un payable
+    // entre empresas del grupo no infle los egresos de Planeación. CXPRecord
+    // no trae RFC — se matchea por nombre/código de empresa propia.
+    if (isInternalCounterparty(undefined, record.nombre)) return;
     // Concurso Mercantil: facturas con `fechaFactura` ≤ 2022-12-31 son deuda
     // congelada que vive en su propio módulo. No se proyecta como egreso —
     // el flujo no se ve afectado por estos saldos.

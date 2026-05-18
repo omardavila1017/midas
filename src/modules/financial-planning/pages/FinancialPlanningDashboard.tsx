@@ -42,7 +42,7 @@ import { applyMerge, buildMergeDiff, type MergeDiffEntry } from '../services/sce
 import { FirstSimulationNudge } from '../components/FirstSimulationNudge';
 import { MovementPickerModal } from '../components/MovementPickerModal';
 import { AdjustmentEditorPopover } from '../components/AdjustmentEditorPopover';
-import { cachedRun, fingerprintArray } from '../../financial-projection/services/projectionCache';
+import { cachedRun, clearProjectionRunCache, fingerprintArray } from '../../financial-projection/services/projectionCache';
 import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
@@ -332,14 +332,35 @@ function PlanningWarmupShell() {
 function PlanningDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
   const goTo = useNavigateToTab();
-  // PERF (2026-05-14): window = año en curso (Ene 1 → Dic 31). Antes era
-  // -90 días → +364 días = 15 meses arrastrando movements de fin de año
-  // anterior. Reducir a año calendario baja N proporcionalmente y elimina
-  // el cálculo de buckets para meses irrelevantes. Si el usuario necesita
-  // 3 meses adicionales hacia atrás, agregar UI de "expandir histórico"
-  // (TODO: estado `extendBackMonths` controlado por botón en toolbar).
-  const yearStart = useMemo(() => `${today.slice(0, 4)}-01-01`, [today]);
-  const yearEnd = useMemo(() => `${today.slice(0, 4)}-12-31`, [today]);
+
+  // projectionRunCache is a module-level LRU — it survives this component's
+  // unmount. Free it when the user leaves Planning so the retained fat runs
+  // don't pin renderer memory for the whole SPA session (the slow-burn cause
+  // of the Chrome "Aw Snap" code 5 OOM after switching scenarios/tabs).
+  useEffect(() => () => clearProjectionRunCache(), []);
+
+  const [granularity, setGranularity] = useState<ProjectionGranularity>('monthly');
+  // Window depends on granularity. Monthly = año en curso (Ene 1 → Dic 31):
+  // Planeación debe arrancar en enero y son solo 12 buckets. Weekly/daily over
+  // a full year = up to 365 daily columns × N rows × synchronous per-scenario
+  // projection runs with no grid virtualization → renderer OOM (Chrome
+  // "Aw Snap" code 5). Bound the sub-month views to a near window instead.
+  const { yearStart, yearEnd } = useMemo(() => {
+    const y = today.slice(0, 4);
+    if (granularity === 'monthly') {
+      return { yearStart: `${y}-01-01`, yearEnd: `${y}-12-31` };
+    }
+    const base = new Date(`${today}T00:00:00.000Z`);
+    const shift = (days: number) => {
+      const d = new Date(base);
+      d.setUTCDate(d.getUTCDate() + days);
+      return d.toISOString().slice(0, 10);
+    };
+    // weekly ≈ 32 buckets, daily ≈ 90 buckets — both render/compute safely.
+    return granularity === 'weekly'
+      ? { yearStart: shift(-56), yearEnd: shift(168) }
+      : { yearStart: shift(-14), yearEnd: shift(76) };
+  }, [today, granularity]);
 
   const sourceBaseScenario = useMemo(
     () => source.scenarios.find((s) => s.kind === 'BASE') ?? source.scenarios[0],
@@ -409,7 +430,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const approvedScenario = scenarios.find((s) => s.id === APPROVED_SCENARIO_ID && s.kind === 'APPROVED')!;
 
   const [activeScenarioId, setActiveScenarioId] = useState<string>(() => APPROVED_SCENARIO_ID);
-  const [granularity, setGranularity] = useState<ProjectionGranularity>('monthly');
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [mergeOpen, setMergeOpen] = useState<string | null>(null);
   const [addRowFor, setAddRowFor] = useState<FinancialMovementType | null>(null);
@@ -1406,7 +1426,9 @@ function PlanningCellDetailPanel({
                       {movement.counterpartyName ?? movement.concept}
                     </div>
                     <div className="mt-0.5 truncate text-[10.5px] text-[var(--gray-500)]">
-                      {movement.sourceSystem} · {movement.category} · {movement.sourceObjectId ?? 'sin documento'}
+                      {movement.sourceSystem === 'BANK'
+                        ? `Cuenta ${movement.bankAccountId ?? '—'} · Transf. ${movement.sourceObjectId ?? 's/n'}`
+                        : `${movement.sourceSystem} · ${movement.category} · ${movement.sourceObjectId ?? 'sin documento'}`}
                     </div>
                   </div>
                   <div className="text-right text-[12px] font-semibold tabular-nums text-[var(--gray-950)]">

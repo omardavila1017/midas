@@ -5,10 +5,17 @@
  * inputs that actually influence a run (scenario id, granularity, content
  * fingerprints of overrides / adjustments / movements). The cache only lives
  * for the lifetime of the React tree — it's deliberately a module-level
- * Map so a remount of the dashboard rebuilds it from scratch.
+ * Map. NOTE: a module-level Map is NOT freed when the dashboard unmounts
+ * (the module stays loaded for the whole SPA session), so callers that
+ * unmount must call clearProjectionRunCache() to release the retained
+ * runs — otherwise MAX_ENTRIES fat PlanningScenarioRun objects (each
+ * holding the full post-pipeline movements array) stay pinned for the
+ * whole session and the renderer eventually OOMs (Chrome "Aw Snap"
+ * code 5). Capacity is intentionally small: the real access pattern is
+ * active/base/approved × at most a couple of granularities.
  */
 
-const MAX_ENTRIES = 24;
+const MAX_ENTRIES = 8;
 
 class LRU<K, V> {
   private map = new Map<K, V>();
@@ -32,9 +39,20 @@ class LRU<K, V> {
       if (oldest !== undefined) this.map.delete(oldest);
     }
   }
+
+  clear(): void {
+    this.map.clear();
+  }
 }
 
 export const projectionRunCache = new LRU<string, unknown>(MAX_ENTRIES);
+
+// Release every retained run. Call this when the owning React tree unmounts
+// (e.g. user navigates away from Planning) so the fat movements/buckets arrays
+// become GC-eligible instead of staying pinned for the whole SPA session.
+export function clearProjectionRunCache(): void {
+  projectionRunCache.clear();
+}
 
 export function cachedRun<T>(key: string, build: () => T): T {
   const cached = projectionRunCache.get(key) as T | undefined;

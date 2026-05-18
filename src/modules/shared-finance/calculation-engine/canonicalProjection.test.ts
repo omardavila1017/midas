@@ -385,7 +385,7 @@ describe('canonicalProjection IVA metadata', () => {
     const abono = bankMovement({
       cia: '00001',
       banco: 'BANAMEX',
-      cuenta: '678 7361240',
+      cuenta: '06787361240',
       tipoMovimiento: 'ABONO',
       importe: 25_000,
       fechaOperacion: '2026-04-16',
@@ -404,7 +404,7 @@ describe('canonicalProjection IVA metadata', () => {
         importeBruto: 25_000,
       }],
       cia: '00001',
-      cuenta: '678 7361240',
+      cuenta: '06787361240',
       fechaOperacion: '2026-04-16',
       importe: 25_000,
       concepto: 'Cobro cliente Sendex',
@@ -419,7 +419,7 @@ describe('canonicalProjection IVA metadata', () => {
         bankStatement({
           cia: '00001',
           banco: 'BANAMEX',
-          cuenta: '678 7361240',
+          cuenta: '06787361240',
           movimientos: [abono],
         }),
       ],
@@ -438,7 +438,7 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.subcategory).toBe('Multicarga');
     expect(movement?.category).toBe('AR_COLLECTION');
     expect(movement?.counterpartyName).toBe('Cliente Multicarga');
-    expect(movement?.bankAccountId).toBe('678 7361240');
+    expect(movement?.bankAccountId).toBe('06787361240');
   });
 
   it('excludes catalog-neutral bank accounts from real inflows and outflows', () => {
@@ -448,12 +448,12 @@ describe('canonicalProjection IVA metadata', () => {
         bankStatement({
           cia: '00001',
           banco: 'BANAMEX',
-          cuenta: '7014 1877834',
+          cuenta: '70144758151',
           movimientos: [
             bankMovement({
               cia: '00001',
               banco: 'BANAMEX',
-              cuenta: '7014 1877834',
+              cuenta: '70144758151',
               tipoMovimiento: 'ABONO',
               importe: 5_000,
               fechaOperacion: '2026-04-16',
