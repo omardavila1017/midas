@@ -15,7 +15,7 @@ export interface MergeDialogProps {
   draftDeficitDays: number;
   approvedDeficitDays: number;
   onClose: () => void;
-  onConfirm: (args: { selectedKeys: MergeDiffEntry[]; archiveDraft: boolean }) => void;
+  onConfirm: (args: { selectedChanges: MergeDiffEntry[]; archiveDraft: boolean }) => void;
 }
 
 export function MergeDialog(props: MergeDialogProps) {
@@ -37,7 +37,7 @@ export function MergeDialog(props: MergeDialogProps) {
   const [archiveDraft, setArchiveDraft] = useState(true);
 
   useEffect(() => {
-    setSelectedSet(new Set(diff.map((entry) => keyOf(entry))));
+    setSelectedSet(new Set(diff.filter((entry) => entry.selectedByDefault).map((entry) => keyOf(entry))));
   }, [diff]);
 
   useEffect(() => {
@@ -54,9 +54,10 @@ export function MergeDialog(props: MergeDialogProps) {
 
   const sortedDiff = useMemo(
     () => [...diff].sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'INFLOW' ? -1 : 1;
-      if (a.bucketKey !== b.bucketKey) return a.bucketKey.localeCompare(b.bucketKey);
-      return a.rowLabel.localeCompare(b.rowLabel, 'es-MX');
+      if (a.kind !== b.kind) return kindWeight(a.kind) - kindWeight(b.kind);
+      const bucketCompare = (a.bucketKey ?? '').localeCompare(b.bucketKey ?? '');
+      if (bucketCompare !== 0) return bucketCompare;
+      return a.label.localeCompare(b.label, 'es-MX');
     }),
     [diff],
   );
@@ -85,7 +86,7 @@ export function MergeDialog(props: MergeDialogProps) {
       style={{ background: 'var(--modal-overlay)' }}
       role="dialog"
       aria-modal="true"
-      aria-label="Mergear propuesta a Aprobado"
+      aria-label="Aplicar propuesta al Aprobado"
     >
       <div className="flex max-h-[88vh] w-[840px] flex-col overflow-hidden rounded-2xl border border-[var(--gray-200)] bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-[var(--gray-200)] px-5 py-4">
@@ -93,11 +94,11 @@ export function MergeDialog(props: MergeDialogProps) {
             <div className="flex items-center gap-2">
               <GitMerge className="h-4 w-4 text-[var(--primary)]" strokeWidth={2} />
               <h2 className="text-[15px] font-semibold tracking-tight text-[var(--gray-950)]">
-                Mergear "{draft.name}" → Aprobado
+                Aplicar "{draft.name}" al Aprobado
               </h2>
             </div>
             <p className="mt-1 text-[12px] text-[var(--gray-500)]">
-              Selecciona qué celdas del borrador quieres aplicar al Escenario Aprobado. Una vez mergeado se vuelve parte del plan vivo.
+              Selecciona qué cambios de la propuesta pasan al plan vivo. Los no seleccionados se quedan solo en la propuesta.
             </p>
           </div>
           <button
@@ -111,7 +112,7 @@ export function MergeDialog(props: MergeDialogProps) {
         </header>
 
         <div className="grid grid-cols-3 gap-3 border-b border-[var(--gray-200)] px-5 py-3">
-          <KpiPill label="Celdas a mergear" value={`${selected.length} / ${diff.length}`} />
+          <KpiPill label="Cambios a aplicar" value={`${selected.length} / ${diff.length}`} />
           <KpiPill
             label="Δ caja final"
             value={`${finalCashDelta >= 0 ? '+' : ''}${fmtCurrency(finalCashDelta)}`}
@@ -137,10 +138,10 @@ export function MergeDialog(props: MergeDialogProps) {
                       aria-label="Seleccionar todo"
                     />
                   </th>
-                  <th className="px-4 py-2.5">Fila</th>
-                  <th className="px-4 py-2.5">Periodo</th>
+                  <th className="px-4 py-2.5">Cambio</th>
+                  <th className="px-4 py-2.5">Impacto</th>
                   <th className="px-4 py-2.5 text-right">Aprobado</th>
-                  <th className="px-4 py-2.5 text-right">Borrador</th>
+                  <th className="px-4 py-2.5 text-right">Propuesta</th>
                   <th className="px-4 py-2.5 text-right">Δ</th>
                 </tr>
               </thead>
@@ -148,7 +149,7 @@ export function MergeDialog(props: MergeDialogProps) {
                 {sortedDiff.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-4 py-12 text-center text-[12px] text-[var(--gray-400)]">
-                      No hay cambios pendientes en este borrador.
+                      No hay cambios pendientes en esta propuesta.
                     </td>
                   </tr>
                 ) : (
@@ -167,22 +168,22 @@ export function MergeDialog(props: MergeDialogProps) {
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-1.5">
                             {entry.conflict && <AlertTriangle className="h-3 w-3 text-[var(--warning)]" strokeWidth={2} />}
-                            <span className="font-medium text-[var(--gray-950)]">{entry.rowLabel}</span>
+                            <span className="font-medium text-[var(--gray-950)]">{entry.label}</span>
                           </div>
-                          <span className="text-[10px] text-[var(--gray-400)]">{entry.granularity}</span>
+                          <span className="text-[10px] text-[var(--gray-400)]">{kindLabel(entry.kind)}</span>
                         </td>
-                        <td className="px-4 py-2.5 text-[var(--gray-700)]">{entry.bucketLabel}</td>
+                        <td className="px-4 py-2.5 text-[var(--gray-700)]">{entry.impactLabel}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-[var(--gray-700)]">
-                          {fmtCompact(entry.approvedValue)}
+                          {entry.approvedValue == null ? '—' : fmtCompact(entry.approvedValue)}
                         </td>
                         <td className="px-4 py-2.5 text-right tabular-nums font-medium text-[var(--gray-950)]">
-                          {fmtCompact(entry.draftValue)}
+                          {entry.draftValue == null ? '—' : fmtCompact(entry.draftValue)}
                         </td>
                         <td
                           className="px-4 py-2.5 text-right tabular-nums font-semibold"
-                          style={{ color: entry.delta > 0 ? 'var(--success)' : entry.delta < 0 ? 'var(--danger)' : 'var(--gray-400)' }}
+                          style={{ color: (entry.delta ?? 0) > 0 ? 'var(--success)' : (entry.delta ?? 0) < 0 ? 'var(--danger)' : 'var(--gray-400)' }}
                         >
-                          {entry.delta === 0 ? '—' : `${entry.delta > 0 ? '+' : ''}${fmtCompact(entry.delta)}`}
+                          {!entry.delta ? '—' : `${entry.delta > 0 ? '+' : ''}${fmtCompact(entry.delta)}`}
                         </td>
                       </tr>
                     );
@@ -194,7 +195,7 @@ export function MergeDialog(props: MergeDialogProps) {
 
           <div className="border-l border-[var(--gray-200)] bg-[var(--gray-50)]/40 overflow-auto p-3">
             <h4 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--gray-500)]">
-              Bitácora del borrador
+              Bitácora de la propuesta
             </h4>
             <ul className="mt-2 space-y-1.5">
               {changeLog.length === 0 ? (
@@ -217,7 +218,7 @@ export function MergeDialog(props: MergeDialogProps) {
               checked={archiveDraft}
               onChange={(event) => setArchiveDraft(event.target.checked)}
             />
-            Archivar borrador al mergear
+            Archivar propuesta al aplicar
           </label>
           <div className="flex items-center gap-2">
             <button
@@ -230,7 +231,7 @@ export function MergeDialog(props: MergeDialogProps) {
             <button
               type="button"
               disabled={selected.length === 0}
-              onClick={() => onConfirm({ selectedKeys: selected, archiveDraft })}
+              onClick={() => onConfirm({ selectedChanges: selected, archiveDraft })}
               className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[var(--primary)] px-3 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <GitMerge className="h-3.5 w-3.5" strokeWidth={2} />
@@ -264,5 +265,19 @@ function KpiPill({
 }
 
 function keyOf(entry: MergeDiffEntry): string {
-  return `${entry.conceptKey}::${entry.granularity}::${entry.bucketKey}`;
+  return `${entry.kind}:${entry.id}`;
+}
+
+function kindWeight(kind: MergeDiffEntry['kind']): number {
+  if (kind === 'CELL_OVERRIDE') return 0;
+  if (kind === 'CUSTOM_ROW') return 1;
+  if (kind === 'MOVEMENT_ADJUSTMENT') return 2;
+  return 3;
+}
+
+function kindLabel(kind: MergeDiffEntry['kind']): string {
+  if (kind === 'CELL_OVERRIDE') return 'Celda editada';
+  if (kind === 'CUSTOM_ROW') return 'Fila nueva';
+  if (kind === 'MOVEMENT_ADJUSTMENT') return 'Movimiento ajustado';
+  return 'Ingreso/egreso manual';
 }

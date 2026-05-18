@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
-import { AlertTriangle, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -721,6 +721,59 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     };
   }, [approvedRun, approvedOverrides, customRows, approvedScenario.id, granularity, today, initialCash, minimumCash]);
 
+  const runsWithOverridesByScenarioId = useMemo(() => {
+    const map = new Map<string, PlanningScenarioRun>();
+    for (const scenario of scenarios) {
+      if (scenario.archivedAt) continue;
+      const raw = scenario.id === activeScenario.id
+        ? activeRunRaw
+        : scenario.id === approvedScenario.id
+          ? approvedRun
+          : scenario.id === baseScenario.id
+            ? baseRun
+            : buildScenarioRun(scenario.id, true);
+      const scenarioOverrides = cellOverrides.filter((override) => override.scenarioId === scenario.id);
+      const scenarioCustomRows = customRows.filter((row) => row.scenarioId === scenario.id);
+      const scenarioRows = buildPlanningRows({
+        movements: raw.movements,
+        customRows: scenarioCustomRows,
+        overrides: scenarioOverrides,
+      });
+      const buckets = applyCellOverridesToBuckets({
+        buckets: raw.buckets,
+        overrides: scenarioOverrides,
+        movements: raw.movements,
+        rows: scenarioRows,
+        granularity,
+        conceptKeyForMovement,
+        asOfDate: today,
+        initialCash,
+      });
+      map.set(scenario.id, {
+        ...raw,
+        buckets,
+        summary: summarizeBucketsForScenario(buckets, raw.movements, minimumCash, granularity),
+      });
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    scenarios,
+    activeScenario.id,
+    activeRunRaw,
+    approvedScenario.id,
+    approvedRun,
+    baseScenario.id,
+    baseRun,
+    cellOverrides,
+    customRows,
+    granularity,
+    today,
+    initialCash,
+    minimumCash,
+    sharedRunInputsKey,
+  ]);
+
   // Pre-override per-row aggregates (for cell display when no override).
   const rowAggregateMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -1002,23 +1055,24 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   };
 
   const handleDiscardDraft = (scenarioId: string) => {
-    if (!confirm('¿Descartar este borrador? Esta acción no se puede deshacer.')) return;
+    if (!confirm('¿Descartar esta propuesta? Esta acción no se puede deshacer.')) return;
     const now = new Date().toISOString();
     setStoredScenarios((current) => current.map((s) => (s.id === scenarioId ? { ...s, archivedAt: now, updatedAt: now } : s)));
     setActiveScenarioId(approvedScenario.id);
-    setStatusMessage('Borrador descartado.');
+    setStatusMessage('Propuesta descartada.');
   };
 
   const draftEntries = changeLog.filter((entry) => entry.scenarioId === activeScenarioId);
 
   // ------- Merge flow ---------
-  const mergeDiff: MergeDiffEntry[] = useMemo(() => {
-    if (!mergeOpen) return [];
-    const draft = scenarios.find((s) => s.id === mergeOpen);
+  const buildPendingChangesForDraft = useCallback((draftId: string): MergeDiffEntry[] => {
+    const draft = scenarios.find((s) => s.id === draftId);
     if (!draft) return [];
     const draftOverrides = cellOverrides.filter((o) => o.scenarioId === draft.id);
     const draftCustomScoped = customRows.filter((r) => r.scenarioId === draft.id);
     const approvedCustomScoped = customRows.filter((r) => r.scenarioId === approvedScenario.id);
+    const draftAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(draft.id));
+    const approvedAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(approvedScenario.id));
     const allRows = buildPlanningRows({
       movements: approvedRun.movements,
       customRows: [...approvedCustomScoped, ...draftCustomScoped],
@@ -1042,6 +1096,9 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       draftOverrides,
       approvedCustomRows: approvedCustomScoped,
       draftCustomRows: draftCustomScoped,
+      approvedAdjustments,
+      draftAdjustments,
+      manualEntries,
       rowLabelLookup: (key) => labelByKey.get(key) ?? key,
       bucketLabelLookup: (key, gran) => engineBucketLabel(key, gran),
       approvedAggregateLookup: (key, bucketKey, gran) => {
@@ -1049,15 +1106,27 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         return approvedAggregateMap.get(aggKey) ?? 0;
       },
     });
-  }, [mergeOpen, scenarios, cellOverrides, customRows, approvedScenario, approvedOverrides, approvedRun, granularity]);
+  }, [scenarios, cellOverrides, customRows, storedAdjustments, manualEntries, approvedScenario, approvedOverrides, approvedRun, granularity]);
 
-  const handleConfirmMerge = (args: { selectedKeys: MergeDiffEntry[]; archiveDraft: boolean }) => {
+  const mergeDiff: MergeDiffEntry[] = useMemo(
+    () => (mergeOpen ? buildPendingChangesForDraft(mergeOpen) : []),
+    [buildPendingChangesForDraft, mergeOpen],
+  );
+
+  const activeDraftDiff: MergeDiffEntry[] = useMemo(
+    () => (activeScenario.kind === 'DRAFT' ? buildPendingChangesForDraft(activeScenario.id) : []),
+    [activeScenario.id, activeScenario.kind, buildPendingChangesForDraft],
+  );
+
+  const handleConfirmMerge = (args: { selectedChanges: MergeDiffEntry[]; archiveDraft: boolean }) => {
     if (!mergeOpen) return;
     const draft = scenarios.find((s) => s.id === mergeOpen);
     if (!draft) return;
     const draftOverrides = cellOverrides.filter((o) => o.scenarioId === draft.id);
     const draftCustomScoped = customRows.filter((r) => r.scenarioId === draft.id);
     const approvedCustomScoped = customRows.filter((r) => r.scenarioId === approvedScenario.id);
+    const draftAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(draft.id));
+    const approvedAdjustments = storedAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(approvedScenario.id));
     const result = applyMerge({
       approved: approvedScenario,
       draft,
@@ -1065,21 +1134,21 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       approvedOverrides,
       draftOverrides,
       allOverrides: cellOverrides,
+      approvedAdjustments,
+      draftAdjustments,
+      allAdjustments: storedAdjustments,
       approvedCustomRows: approvedCustomScoped,
       draftCustomRows: draftCustomScoped,
       allCustomRows: customRows,
       manualEntries,
       changeLog,
-      selectedKeys: args.selectedKeys.map((entry) => ({
-        conceptKey: entry.conceptKey,
-        bucketKey: entry.bucketKey,
-        granularity: entry.granularity,
-      })),
+      selectedChanges: args.selectedChanges.map((entry) => ({ kind: entry.kind, id: entry.id })),
       archiveDraft: args.archiveDraft,
       user: USER,
     });
     setStoredScenarios(result.scenarios);
     setCellOverrides(result.cellOverrides);
+    setStoredAdjustments(result.adjustments);
     setCustomRows(result.customRows);
     setManualEntries(result.manualEntries);
     setChangeLog(result.changeLog);
@@ -1089,7 +1158,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     }
     setMergeOpen(null);
     setActiveScenarioId(approvedScenario.id);
-    setStatusMessage(`Merge aplicado: ${args.selectedKeys.length} cambio${args.selectedKeys.length === 1 ? '' : 's'}.`);
+    setStatusMessage(`Cambios aplicados al Aprobado: ${args.selectedChanges.length}.`);
   };
 
   // ------- KPIs ---------
@@ -1098,11 +1167,11 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const isDraft = activeScenario.kind === 'DRAFT';
 
   const finalCashFor = (scenarioId: string): number => {
-    if (scenarioId === activeScenario.id) return activeRun.summary.finalCash;
-    if (scenarioId === approvedScenario.id) return approvedRunWithOverrides.summary.finalCash;
-    if (scenarioId === baseScenario.id) return baseRun.summary.finalCash;
-    return 0;
+    return runsWithOverridesByScenarioId.get(scenarioId)?.summary.finalCash ?? 0;
   };
+
+  const pendingChangeCount = activeDraftDiff.length;
+  const mergeRun = mergeOpen ? runsWithOverridesByScenarioId.get(mergeOpen) : null;
 
   if (!source.hasData) {
     return (
@@ -1157,6 +1226,17 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onDiscardDraft={handleDiscardDraft}
       />
 
+      {isDraft && (
+        <ProposalActionBar
+          scenarioName={activeScenario.name}
+          pendingCount={pendingChangeCount}
+          onReview={() => setMergeOpen(activeScenario.id)}
+          onApply={() => setMergeOpen(activeScenario.id)}
+          onDuplicate={() => handleDuplicateDraft(activeScenario.id)}
+          onDiscard={() => handleDiscardDraft(activeScenario.id)}
+        />
+      )}
+
       {scenarios.filter((s) => s.kind === 'DRAFT' && !s.archivedAt).length === 0 && (
         <FirstSimulationNudge onCreateDraft={handleCreateDraft} />
       )}
@@ -1185,7 +1265,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           value={`${finalCashDelta === 0 ? '±0' : (finalCashDelta > 0 ? '+' : '') + fmtCompact(finalCashDelta)}`}
           icon={<TrendingUp className="w-4 h-4" />}
           color={toneByDelta(finalCashDelta)}
-          sublabel={isDraft ? 'Borrador activo' : 'Misma referencia'}
+          sublabel={isDraft ? 'Propuesta activa' : 'Misma referencia'}
         />
       </div>
 
@@ -1209,7 +1289,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onClearCell={handleClearCell}
         onAddRow={handleAddRow}
         onClickRow={(conceptKey) => setSelectedCell({ conceptKey, bucketKey: columns.find((column) => column.isCurrent)?.key ?? columns[0]?.key ?? yearStart })}
-        onInspectCell={(conceptKey, bucketKey) => setSelectedCell({ conceptKey, bucketKey })}
+        onInspectCell={(conceptKey, bucketKey) => setInspectedCell({ conceptKey, bucketKey })}
         onReadOnlyAttempt={() => setStatusMessage('Solo lectura. Crea una propuesta para editar.')}
       />
 
@@ -1247,9 +1327,9 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         approved={approvedScenario}
         diff={mergeDiff}
         changeLog={changeLog.filter((entry) => entry.scenarioId === mergeOpen)}
-        draftFinalCash={mergeOpen ? finalCashFor(mergeOpen) : 0}
+        draftFinalCash={mergeRun?.summary.finalCash ?? 0}
         approvedFinalCash={approvedRunWithOverrides.summary.finalCash}
-        draftDeficitDays={mergeOpen ? activeRun.summary.deficitDays : 0}
+        draftDeficitDays={mergeRun?.summary.deficitDays ?? 0}
         approvedDeficitDays={approvedRunWithOverrides.summary.deficitDays}
         onClose={() => setMergeOpen(null)}
         onConfirm={handleConfirmMerge}
@@ -1367,6 +1447,75 @@ function SegmentedFilter<T extends string>({
         );
       })}
     </div>
+  );
+}
+
+function ProposalActionBar({
+  scenarioName,
+  pendingCount,
+  onReview,
+  onApply,
+  onDuplicate,
+  onDiscard,
+}: {
+  scenarioName: string;
+  pendingCount: number;
+  onReview: () => void;
+  onApply: () => void;
+  onDuplicate: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <section className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
+          Propuesta activa
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-2">
+          <span className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{scenarioName}</span>
+          <span className="rounded-full bg-[var(--gray-100)] px-2 py-0.5 text-[10px] font-bold text-[var(--gray-600)]">
+            {pendingCount} cambio{pendingCount === 1 ? '' : 's'}
+          </span>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onReview}
+          className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+        >
+          <Eye className="h-3.5 w-3.5" strokeWidth={1.5} />
+          Revisar cambios
+        </button>
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={pendingCount === 0}
+          className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--primary)] px-3 text-[12px] font-semibold text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+          Aplicar al Aprobado
+        </button>
+        <button
+          type="button"
+          onClick={onDuplicate}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white text-[var(--gray-500)] hover:bg-[var(--gray-50)] hover:text-[var(--gray-800)]"
+          aria-label="Duplicar propuesta"
+          title="Duplicar propuesta"
+        >
+          <Copy className="h-3.5 w-3.5" strokeWidth={1.5} />
+        </button>
+        <button
+          type="button"
+          onClick={onDiscard}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white text-[var(--danger)] hover:bg-[var(--danger)]/8"
+          aria-label="Descartar propuesta"
+          title="Descartar propuesta"
+        >
+          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+        </button>
+      </div>
+    </section>
   );
 }
 

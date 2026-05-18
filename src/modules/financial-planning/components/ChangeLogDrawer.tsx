@@ -21,7 +21,7 @@ export function ChangeLogDrawer({ open, scenarioName, entries }: ChangeLogDrawer
     <aside
       className="flex flex-col rounded-2xl border border-[var(--gray-200)] bg-white"
       style={{ width: 320 }}
-      aria-label="Historial de cambios del borrador"
+      aria-label="Historial de cambios de la propuesta"
     >
       <header className="border-b border-[var(--gray-200)] px-4 py-3">
         <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Cambios</h3>

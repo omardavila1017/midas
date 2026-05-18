@@ -123,7 +123,7 @@ export function ensureCoreScenarios(input: BootstrapInput): BootstrapResult {
       isBase: false,
       status: 'APPROVED',
       name: 'Escenario Aprobado',
-      description: 'Plan vivo de operación. Cambia mediante merge de propuestas.',
+      description: 'Plan vivo de operación. Cambia al aplicar propuestas.',
       adjustmentIds: [],
       parentScenarioId: undefined,
       promotedFromScenarioId: undefined,

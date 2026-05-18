@@ -177,7 +177,7 @@ function expandEntry(
     lockState: entry.category === 'TAX_PAYMENT' ? 'RESTRICTED' : 'UNLOCKED',
     comments: [
       entry.description,
-      `Escenario manual: ${entry.status === 'APPROVED' ? 'aprobado' : 'borrador'}`,
+      `Escenario manual: ${entry.status === 'APPROVED' ? 'aprobado' : 'propuesta'}`,
     ].filter((value): value is string => Boolean(value)),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,

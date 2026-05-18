@@ -116,7 +116,7 @@ function CoreTab({
       : 'currentColor';
   const tooltip = tone === 'base'
     ? 'Solo lectura · proyección original'
-    : 'Solo lectura · cambia mediante merge de un draft';
+    : 'Solo lectura · cambia al aplicar una propuesta';
   return (
     <button
       type="button"
@@ -241,7 +241,7 @@ function DraftTab({
       <button
         type="button"
         onClick={() => setMenuOpen((open) => !open)}
-        aria-label="Acciones del borrador"
+        aria-label="Acciones de la propuesta"
         className="inline-flex h-9 w-7 items-center justify-center rounded-r-[var(--radius)] border-r border-y transition-colors"
         style={{
           background: active ? 'var(--primary)' : 'var(--skeuo-paper)',
