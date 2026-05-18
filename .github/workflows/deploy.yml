@@ -1,0 +1,38 @@
+name: Deploy Midas a IIS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Compilar
+        run: npm run build
+        env:
+          VITE_JDE_BASE_URL: ${{ secrets.VITE_JDE_BASE_URL }}
+          VITE_JDE_TOKEN: ${{ secrets.VITE_JDE_TOKEN }}
+          VITE_JDE_ENVIRONMENT: ${{ secrets.VITE_JDE_ENVIRONMENT }}
+          VITE_ADMIN_PASSWORD: ${{ secrets.VITE_ADMIN_PASSWORD }}
+          VITE_PAOLO_PASSWORD: ${{ secrets.VITE_PAOLO_PASSWORD }}
+
+      - name: Copiar a IIS
+        run: |
+          xcopy /E /Y /I dist\* C:\desarrollo\sitios\midas\
+          xcopy /Y public\clientes-db.json C:\desarrollo\sitios\midas\
+          xcopy /E /Y /I public\logos\* C:\desarrollo\sitios\midas\logos\
+          xcopy /E /Y /I public\fonts\* C:\desarrollo\sitios\midas\fonts\
