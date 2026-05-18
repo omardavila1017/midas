@@ -9,15 +9,11 @@ import type { CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
 import {
-  applyAdjustmentsToMovements,
-  applyCellOverridesToBuckets,
   bucketKeyForDate,
   bucketLabel as engineBucketLabel,
   buildBucketDates,
-  calculateBaseProjection,
   effectiveAmount,
   effectiveMovementDate,
-  summarizeBucketsForScenario,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
   CellOverride,
@@ -26,7 +22,6 @@ import type {
   FinancialMovementCategory,
   FinancialMovementType,
   FinancialScenario,
-  ForecastRun,
   ManualPlanningEntry,
   PayrollCostRecord,
   PlanningCustomRow,
@@ -54,18 +49,8 @@ import {
   tryGetCachedFinancialProjectionSourceData,
   type FinancialProjectionSourceData,
 } from '../../financial-projection/services/financialProjectionService';
+import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
 import {
-  buildAutomaticTaxReserveMovements,
-  buildApprovedTaxPaymentMovements,
-  buildTaxDashboardView,
-  defaultTaxStore,
-  loadTaxStore,
-  TAX_STORE_CHANGED_EVENT,
-  TAX_STORE_KEY,
-} from '../../taxes/services/taxModuleService';
-import { buildConvenioPaymentMovements } from '../../concurso-mercantil/services/convenioMovements';
-import {
-  expandManualPlanningEntriesToMovements,
   loadManualPlanningEntries,
   saveManualPlanningEntries,
 } from '../services/manualPlanningEntries';
@@ -90,10 +75,7 @@ import {
 import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../services/scenarioBootstrap';
 import { conceptKeyForMovement, buildPlanningRows } from '../services/planningRowTaxonomy';
 import { createNewDraft, duplicateDraft } from '../services/scenarioDuplicate';
-import {
-  scheduleSupplierPaymentsByScore,
-  type SupplierPaymentPlan,
-} from '../services/supplierPaymentSchedule';
+import { buildScenarioForecastRun, type ScenarioForecastRun } from '../services/scenarioForecastRun';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
@@ -132,25 +114,8 @@ interface Props {
 }
 
 const USER = 'tesoreria@senda.local';
-type PlanningScenarioRun = ForecastRun & { supplierPlan: SupplierPaymentPlan };
+type PlanningScenarioRun = ScenarioForecastRun;
 type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
-
-/**
- * Base scenario invariant: Base proyecta SÓLO datos reales de las APIs de
- * corto plazo. En el dominio Senda eso es cobranza real de JDE (facturas CXC
- * de viajes ya ejecutados — lo que el negocio llama "rol"), órdenes de compra
- * de JDE (`compras`) y nómina real de TRESS. NO debe incluir forecast por
- * regla (`client:` projectClientMonth), CXP, proveedores recurrentes, relleno
- * presupuestal ni el sintético de balanceo canónico. Filtramos por prefijo de
- * `id` porque el motor canónico es compartido (Dashboard/Proyección lo usan
- * completo) y no debe alterarse — el recorte vive sólo en la corrida de Base.
- */
-const isRealShortTermApiMovement = (m: FinancialMovement): boolean => {
-  if (m.id.startsWith('cxc:')) return true;
-  if (m.id.startsWith('purchase:') || m.id.startsWith('po:')) return true;
-  if (m.id.startsWith('payroll:')) return !m.id.includes(':forecast:');
-  return false;
-};
 
 /**
  * Outer entry — gates the heavy planning pipeline behind a paint.
@@ -170,11 +135,9 @@ export default function FinancialPlanningDashboard(props: Props) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const cacheProbeInput = useMemo(
-    // PERF (2026-05-14): Planning NO usa `predictive` (Holt-Winters tiered).
-    // Pasamos enablePredictive=false para que canonical no entrene el modelo
-    // — ahorra varios cientos de ms en cold mounts y elimina extractHistorical
-    // Series sobre 100k+ movimientos bancarios.
-    () => ({ ...props, asOfDate: today, enablePredictive: false }),
+    // Planeación consume la misma fuente predictiva que el Dashboard; las reglas
+    // de tesorería se aplican después en el pipeline compartido de escenarios.
+    () => ({ ...props, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -533,29 +496,23 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   ]);
 
   const buildScenarioRun = (scenarioId: string, includeManualEntries: boolean): PlanningScenarioRun => {
-    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}`;
+    const scenarioCustomRows = customRows.filter((row) => row.scenarioId === scenarioId);
+    const scenarioOverrides = cellOverrides.filter((override) => override.scenarioId === scenarioId);
+    const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
+    const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
+    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
     return cachedRun<PlanningScenarioRun>(cacheKey, () => {
       const t0 = performance.now();
-      const result = (() => {
-      const isBase = scenarioId === BASE_SCENARIO_ID;
-      const manualMovements = !isBase && includeManualEntries
-        ? expandManualPlanningEntriesToMovements(manualEntries, {
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        })
-        : [];
-      const movementsBeforeAdjust = isBase
-        ? source.movements.filter(isRealShortTermApiMovement)
-        : [...source.movements, ...manualMovements];
-      // applyAdjustmentsToMovements es determinístico sobre input idéntico —
-      // calculamos una sola vez y lo reusamos como seed fiscal y como base
-      // del schedule. La versión anterior corría el motor dos veces (preTax +
-      // adjustedMovements) sobre exactamente los mismos inputs, duplicando CPU
-      // en cada eval de escenario.
-      const adjustedMovements = applyAdjustmentsToMovements(movementsBeforeAdjust, storedAdjustments, scenarioId);
-      const taxSeedView = isBase ? null : buildTaxDashboardView({
+      const scenario = scenarios.find((s) => s.id === scenarioId);
+      const result = buildScenarioForecastRun({
+        scenarioId,
+        scenarioName: scenario?.name ?? scenarioId,
+        scenarioKind: scenario?.kind ?? 'DRAFT',
+        sourceMovements: source.movements,
+        adjustments: storedAdjustments,
+        manualEntries,
+        customRows: scenarioCustomRows,
+        overrides: scenarioOverrides,
         clients: props.clients,
         providers: props.providers,
         assumptions: props.assumptions,
@@ -564,62 +521,16 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         payrollCosts: props.payrollCosts,
         budget: props.budget,
         companyCode: props.companyCode,
+        taxStore,
         startDate: yearStart,
         endDate: yearEnd,
-        movements: adjustedMovements,
-        store: taxStore,
         today,
-      });
-      const taxMovements = taxSeedView
-        ? [
-          ...buildApprovedTaxPaymentMovements({
-            obligations: taxSeedView.obligations,
-            scenarioId,
-            startDate: yearStart,
-            endDate: yearEnd,
-            asOfDate: today,
-          }),
-          ...buildAutomaticTaxReserveMovements({
-            obligations: taxSeedView.obligations,
-            scenarioId,
-            startDate: yearStart,
-            endDate: yearEnd,
-            asOfDate: today,
-          }),
-        ]
-        : [];
-      // Convenio concursal: pagos futuros del convenio inyectados como
-      // egresos DEBT bloqueados (mismo patrón e invariante que impuestos:
-      // solo escenarios no-base, recortado a la ventana de proyección).
-      const convenioMovements = isBase
-        ? []
-        : buildConvenioPaymentMovements({
-          scenarioId,
-          startDate: yearStart,
-          endDate: yearEnd,
-          asOfDate: today,
-        });
-      const movementsWithTax = [...adjustedMovements, ...taxMovements, ...convenioMovements];
-      const supplierSchedule = scheduleSupplierPaymentsByScore({
-        movements: movementsWithTax,
-        providers: props.providers,
-        startDate: today,
-        endDate: yearEnd,
-        initialCash: supplierInitialCash,
-        minimumCash,
-        scenarioId,
-      });
-      const projection = calculateBaseProjection(supplierSchedule.movements, {
-        startDate: yearStart,
-        endDate: yearEnd,
         initialCash,
+        supplierInitialCash,
         minimumCash,
         granularity,
-        scenarioId,
-        name: scenarios.find((s) => s.id === scenarioId)?.name ?? scenarioId,
+        includeManualEntries,
       });
-      return { ...projection, supplierPlan: supplierSchedule.plan };
-      })();
       // eslint-disable-next-line no-console
       console.info(`[planning.scenarioRun] scenarioId=${scenarioId} ${(performance.now() - t0).toFixed(0)}ms · movements=${result.movements.length}`);
       return result;
@@ -630,13 +541,13 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, sharedRunInputsKey],
+    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, sharedRunInputsKey],
+    [baseScenario.id, sharedRunInputsKey, cellOverrides, customRows],
   );
 
   // Reuse approved/base when the active scenario is one of them — the cache
@@ -649,45 +560,15 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       return buildScenarioRun(activeScenario.id, true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey],
+    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows],
   );
 
   const activeOverrides = useMemo(
     () => cellOverrides.filter((override) => override.scenarioId === activeScenarioId),
     [cellOverrides, activeScenarioId],
   );
-  const activeCustomRows = useMemo(
-    () => customRows.filter((row) => row.scenarioId === activeScenarioId),
-    [customRows, activeScenarioId],
-  );
-
-  const rows = useMemo(
-    () => buildPlanningRows({
-      movements: activeRunRaw.movements,
-      customRows: activeCustomRows,
-      overrides: activeOverrides,
-    }),
-    [activeRunRaw.movements, activeCustomRows, activeOverrides],
-  );
-
-  const activeRun = useMemo(() => {
-    const buckets = applyCellOverridesToBuckets({
-      buckets: activeRunRaw.buckets,
-      overrides: activeOverrides,
-      movements: activeRunRaw.movements,
-      rows,
-      granularity,
-      conceptKeyForMovement,
-      asOfDate: today,
-      initialCash,
-    });
-    return {
-      ...activeRunRaw,
-      buckets,
-      summary: summarizeBucketsForScenario(buckets, activeRunRaw.movements, minimumCash, granularity),
-      supplierPlan: activeRunRaw.supplierPlan,
-    };
-  }, [activeRunRaw, activeOverrides, rows, granularity, today, initialCash, minimumCash]);
+  const rows = activeRunRaw.rows;
+  const activeRun = activeRunRaw;
   const probabilistic = useProbabilisticForecast(activeRun, activeRun.summary.minimumCashRequired);
 
   // Approved overrides for the diff and merge logic
@@ -696,30 +577,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     [cellOverrides, approvedScenario.id],
   );
 
-  const approvedRunWithOverrides = useMemo(() => {
-    const approvedCustomRowsScoped = customRows.filter((row) => row.scenarioId === approvedScenario.id);
-    const approvedRows = buildPlanningRows({
-      movements: approvedRun.movements,
-      customRows: approvedCustomRowsScoped,
-      overrides: approvedOverrides,
-    });
-    const buckets = applyCellOverridesToBuckets({
-      buckets: approvedRun.buckets,
-      overrides: approvedOverrides,
-      movements: approvedRun.movements,
-      rows: approvedRows,
-      granularity,
-      conceptKeyForMovement,
-      asOfDate: today,
-      initialCash,
-    });
-    return {
-      ...approvedRun,
-      buckets,
-      summary: summarizeBucketsForScenario(buckets, approvedRun.movements, minimumCash, granularity),
-      supplierPlan: approvedRun.supplierPlan,
-    };
-  }, [approvedRun, approvedOverrides, customRows, approvedScenario.id, granularity, today, initialCash, minimumCash]);
+  const approvedRunWithOverrides = approvedRun;
 
   const runsWithOverridesByScenarioId = useMemo(() => {
     const map = new Map<string, PlanningScenarioRun>();
@@ -732,28 +590,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           : scenario.id === baseScenario.id
             ? baseRun
             : buildScenarioRun(scenario.id, true);
-      const scenarioOverrides = cellOverrides.filter((override) => override.scenarioId === scenario.id);
-      const scenarioCustomRows = customRows.filter((row) => row.scenarioId === scenario.id);
-      const scenarioRows = buildPlanningRows({
-        movements: raw.movements,
-        customRows: scenarioCustomRows,
-        overrides: scenarioOverrides,
-      });
-      const buckets = applyCellOverridesToBuckets({
-        buckets: raw.buckets,
-        overrides: scenarioOverrides,
-        movements: raw.movements,
-        rows: scenarioRows,
-        granularity,
-        conceptKeyForMovement,
-        asOfDate: today,
-        initialCash,
-      });
-      map.set(scenario.id, {
-        ...raw,
-        buckets,
-        summary: summarizeBucketsForScenario(buckets, raw.movements, minimumCash, granularity),
-      });
+      map.set(scenario.id, raw);
     }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps

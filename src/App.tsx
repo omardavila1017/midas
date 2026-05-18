@@ -2940,6 +2940,11 @@ export default function App() {
                   clients={clients}
                   providers={providers}
                   cxpRecords={cxpRecords}
+                  cobranzaRecords={cobranzaRecords}
+                  paidCxpKeys={paidCxpKeys}
+                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
+                  purchaseReceipts={purchaseReceiptsFromCompras}
+                  payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
                   onOpenFlow={() => setActiveTab('financialPlanning')}

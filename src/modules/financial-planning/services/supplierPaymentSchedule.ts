@@ -233,7 +233,7 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
       supplierNamesPaid: uniqueLabels(paidToday.map((payment) => supplierNameForItem(payment.item))),
       supplierNamesPending: uniqueLabels(supplierNamesPending),
       net: expectedInflows - executedOutflows,
-      closingCash: Math.max(0, cash),
+      closingCash: cash,
       deficit: Math.max(0, args.minimumCash - cash),
     });
   }
@@ -309,7 +309,7 @@ function buildDailyRows(args: {
       supplierNamesPaid: [],
       supplierNamesPending: [],
       net: expectedInflows - executedOutflows,
-      closingCash: Math.max(0, cash),
+      closingCash: cash,
       deficit: Math.max(0, args.minimumCash - cash),
     };
   });
