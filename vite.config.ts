@@ -130,7 +130,7 @@ export default defineConfig(({ mode }) => {
           ]
         : []),
     ],
-    base: '/midas/',
+    base: '/midas/', 
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
