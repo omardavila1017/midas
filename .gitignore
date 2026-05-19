@@ -50,3 +50,4 @@ _rebuild_backup/
 # Regenerable from skills-lock.json, no need to vendor the SKILL.md files.
 .agents/
 .claude/
+".vs/" 
