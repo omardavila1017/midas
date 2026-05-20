@@ -125,7 +125,7 @@ export default defineConfig(({ mode }) => {
               filename: 'dist/stats.html',
               template: 'treemap',
               gzipSize: true,
-              brotliSize: true,
+              brotliSize: true, 
             }),
           ]
         : []),
