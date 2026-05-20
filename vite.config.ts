@@ -138,7 +138,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
-      strictPort: false,
+      strictPort: false, 
       proxy: {
         '/api/jde': {
           target: jdeUp.origin,
