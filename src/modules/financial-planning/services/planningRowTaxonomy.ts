@@ -6,7 +6,6 @@ import type {
   PlanningCustomRow,
   PlanningRow,
 } from '../../shared-finance/types';
-import { bankAccountBusinessUnitLabel } from '../../../domain/bankAccountsCatalog';
 import { slug } from './customRowsStorage';
 import { macroBucketForSupplier } from './providerCategoryGeneralization';
 
@@ -35,9 +34,10 @@ const INCOME_BUCKETS = new Set([
 
 function inflowBucketFor(movement: FinancialMovement): string {
   if (movement.type !== 'INFLOW') return '';
-  if (movement.businessUnitId) {
-    return bankAccountBusinessUnitLabel(movement.businessUnitId);
-  }
+  // El bucket de ingreso lo decide `subcategory` (ya resuelto en el motor
+  // canónico con la regla del catálogo de clientes: Federal sólo para
+  // Betterez/Busbud/Via, resto Citi). NO re-derivar desde businessUnitId del
+  // banco — la cuenta es metadato contable, no clasifica al cliente.
   const sub = movement.subcategory;
   if (sub && INCOME_BUCKETS.has(sub)) return sub;
   return 'Otros ingresos';

@@ -6,6 +6,25 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 `README.md` covers the deploy / env / business surface. This file covers the code layout, the data flow, and the rules that bite if you ignore them.
 
+## Branch: `no-long-term-projection` (2026-05-20)
+
+This branch removes long-term cash-flow projection. **Planeación Financiera y Proyección Financiera ahora muestran solo:**
+
+1. **Histórico real** — bank statements + cobranza histórica JDE + payroll TRESS real + CXP real.
+2. **Corto plazo real (ingresos)**: ROL CITI (viajes ejecutados, fecha de cobro por regla de catálogo del cliente) + CXC abierto (facturas JDE pendientes de cobro). Cobranza valida el cobro al cruzar contra ABONOs bancarios.
+3. **Corto plazo real (egresos)**: OC compras (`F_Recepcion + D_Credito`) + CXP abierto. Pago se valida vía `pagoProveedor` y el cargo bancario.
+4. **Obligaciones contractuales conocidas (mantienen)**: convenio concursal (deuda firmada, locked DEBT) + impuestos (reservas semanales de IVA + pagos aprobados).
+
+**Eliminado del motor canónico** (`src/modules/shared-finance/calculation-engine/canonicalProjection.ts`):
+- `client:` — proyección genérica de cobranza por regla de catálogo (sin ROL detrás)
+- `recurring-provider:` / `recurring-operating:` — patrones recurrentes bancarios
+- `budget-opex-gap:` — reserva presupuestal de opex
+- `federal-forecast:` — modelo estacional de ingreso Federal
+- `canonical-outflow:` / `canonical-inflow:` — balancer sintético que escalaba líneas al total mensual del Dashboard
+- `payroll:forecast:` — replicación del último mes TRESS hacia adelante (`buildPayrollCostMovements` ya no proyecta; ignora `projectThroughYearMonth`)
+
+Los tests obsoletos en `canonicalProjection.test.ts` están marcados `it.skip` con la razón. UI de Escenarios/Propuestas/Adjustments se mantiene intacta — solo cambia la fuente de movimientos.
+
 ## Stack
 
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)

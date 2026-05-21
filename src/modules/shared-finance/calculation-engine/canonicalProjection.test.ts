@@ -21,7 +21,8 @@ const assumptions: CashFlowAssumptions = {
 };
 
 describe('canonicalProjection IVA metadata', () => {
-  it('projects client IVA from net invoice base and defaults missing client rate to 16%', () => {
+  // Branch no-long-term-projection: `client:` rule-based projection removed.
+  it.skip('projects client IVA from net invoice base and defaults missing client rate to 16%', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [],
@@ -145,7 +146,8 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.subcategory).toBe('TECNOLOGIA Y SOPORTE');
   });
 
-  it('adds future AP_PAYMENT rows from recurring bank/provider patterns when there is no future CXP', () => {
+  // Branch no-long-term-projection: recurring-provider:/recurring-operating: removed.
+  it.skip('adds future AP_PAYMENT rows from recurring bank/provider patterns when there is no future CXP', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [
@@ -189,7 +191,8 @@ describe('canonicalProjection IVA metadata', () => {
     expect(nextMarch?.projectedDate).toBe('2027-03-05');
   });
 
-  it('adds only the recurring complement when CXP is lower than the provider pattern', () => {
+  // Branch no-long-term-projection: recurring-provider: complement removed.
+  it.skip('adds only the recurring complement when CXP is lower than the provider pattern', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [
@@ -234,7 +237,8 @@ describe('canonicalProjection IVA metadata', () => {
     expect(mayAp.reduce((sum, item) => sum + item.projectedAmount, 0)).toBe(25_000);
   });
 
-  it('proyecta egresos futuros desde la historia bancaria aunque no haya proveedor identificado', () => {
+  // Branch no-long-term-projection: bank-pattern outflow projection removed.
+  it.skip('proyecta egresos futuros desde la historia bancaria aunque no haya proveedor identificado', () => {
     // El motor predictivo (Holt-Winters tiered) aprende de TODO el histórico
     // bancario, incluyendo movimientos tipo TARJ.NO sin proveedor en el
     // catálogo. El user explícitamente pidió esto: "ingreso y egreso
@@ -269,7 +273,8 @@ describe('canonicalProjection IVA metadata', () => {
     expect(totalProjected).toBeGreaterThan(100_000);
   });
 
-  it('emits a synthetic OPEX remainder when the budget exceeds explicit operating expenses', () => {
+  // Branch no-long-term-projection: budget-opex-gap: reserve removed.
+  it.skip('emits a synthetic OPEX remainder when the budget exceeds explicit operating expenses', () => {
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [],
@@ -382,7 +387,11 @@ describe('canonicalProjection IVA metadata', () => {
     expect(sumOutflows).toBe(aprilDashboard?.expense ?? 0);
   });
 
-  it('classifies bank inflows by catalog business unit while preserving crossed client detail', () => {
+  // Branch no-long-term-projection: regla de negocio nueva — TODA cuenta de
+  // banco que no sea Federal (Betterez/Busbud/Via) clasifica su ingreso como
+  // Clientes Citi. El businessUnitId del catálogo se conserva como metadato
+  // pero ya no determina la subcategoría del ingreso.
+  it('classifies non-Federal bank inflows as Clientes Citi while preserving businessUnit metadata', () => {
     const abono = bankMovement({
       cia: '00001',
       banco: 'BANAMEX',
@@ -436,7 +445,7 @@ describe('canonicalProjection IVA metadata', () => {
 
     const movement = canonical.movements.find((m) => m.sourceObjectId === 'REF-MULTI');
     expect(movement?.businessUnitId).toBe('MULTICARGA');
-    expect(movement?.subcategory).toBe('Multicarga');
+    expect(movement?.subcategory).toBe('Clientes Citi');
     expect(movement?.category).toBe('AR_COLLECTION');
     expect(movement?.counterpartyName).toBe('Cliente Multicarga');
     expect(movement?.bankAccountId).toBe('06787361240');

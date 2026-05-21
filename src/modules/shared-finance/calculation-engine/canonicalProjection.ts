@@ -35,9 +35,7 @@ import { computeBaseCashFlow } from '../../../domain/dashboardEngine';
 import type { ComputeInputs } from '../../../domain/dashboardEngine';
 import type { BuildPredictiveResult } from '../../../domain/predictive';
 import { compareYearMonth, toYearMonth } from '../../../domain/cashFlowEngine';
-import { projectClientMonth } from '../../../domain/collectionEngine';
 import { isNonOperatingDay } from '../../../domain/bankHolidays';
-import type { ExpenseProjectionBreakdown } from '../../../domain/projectionEngine';
 import {
   buildClientLookup,
   clientRuleLabel,
@@ -66,7 +64,8 @@ import { isCorningAbono } from '../../../domain/bankStatements';
 import type { AbonoEnrichment, RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
-import { bankAccountBusinessUnitLabel, enrichMovementWithCatalog } from '../../../domain/bankAccountsCatalog';
+import { buildCargoProviderIndex, matchCargoToProvider } from '../../../domain/cargoProviderMatch';
+import { enrichMovementWithCatalog } from '../../../domain/bankAccountsCatalog';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
   FinancialMovement,
@@ -186,8 +185,7 @@ export function buildCanonicalProjection(
     cobranzaRecords: inputs.cobranzaRecords,
     enablePredictive: inputs.enablePredictive !== false,
   };
-  const { base, projection, predictive } = computeBaseCashFlow(computeInputs);
-  const projectionByYm = new Map(projection.months.map((month) => [month.yearMonth, month]));
+  const { base, predictive } = computeBaseCashFlow(computeInputs);
 
   const monthly: CanonicalMonthlyPoint[] = base.map((m) => ({
     yearMonth: m.yearMonth,
@@ -199,7 +197,7 @@ export function buildCanonicalProjection(
     actualExpense: m.actualExpense,
   }));
 
-  const movements = buildMovements({ monthly, inputs, projectionByYm });
+  const movements = buildMovements({ monthly, inputs });
 
   const initialCash = base.length > 0
     ? base[0].closingCash - base[0].income + base[0].expense
@@ -229,7 +227,6 @@ function loadCanonicalOverrides() {
 interface BuildArgs {
   monthly: CanonicalMonthlyPoint[];
   inputs: CanonicalProjectionInputs;
-  projectionByYm: Map<string, ReturnType<typeof computeBaseCashFlow>['projection']['months'][number]>;
 }
 
 // Cubos de ingreso en la tabla de Planeación. Reglas de negocio (confirmadas
@@ -238,25 +235,36 @@ interface BuildArgs {
 //     ROL es Senda Citi → bucket "Clientes Citi".
 //   • Federal = lo que el catálogo de bancos etiqueta unidadNegocio=FEDERAL
 //     (ingreso real) + el modelo predictivo histórico para meses futuros.
-//   • Viajes Especiales = clientes en el grupo comercial Viajes Especiales.
 //   • Otros ingresos = SOLO lo no reconocido.
-const INCOME_SUBCAT_VIAJES = 'Viajes Especiales';
 const INCOME_SUBCAT_FEDERAL = 'Federal';
 const INCOME_SUBCAT_CITI = 'Clientes Citi';
-const INCOME_SUBCAT_OTROS = 'Otros ingresos';
-const CLIENT_VIAJES_ESPECIALES_GROUP_ID = 'group-viajes-especiales';
 
 /**
  * Reglas de negocio para enrutar un cobro CXC/ROL al bucket de ingreso.
- * - Viajes Especiales (subgrupo de Citi) si `commercialGroupId` lo marca.
- * - Federal si el nombre del cliente matchea Busbud (cliente bidireccional
- *   cliente+proveedor del grupo Federal — hardcoded).
- * - Citi por default (todo lo demás de CXC/ROL es Senda Citi).
+ * - Federal: SOLO Betterez/Busbud/Via (mismo cliente, varios nombres del
+ *   grupo Federal — única excepción que el negocio define).
+ * - Clientes Citi: TODO lo demás del catálogo, incluyendo Corning, Viajes
+ *   Especiales y cualquier cliente sin match. Por petición del negocio,
+ *   Viajes Especiales ya no se separa como subgrupo aparte.
  */
-function rolCitiSubcategoryFor(client: { name?: string; commercialGroupId?: string } | null | undefined): string {
+const FEDERAL_NAME_RE = /\b(busbud|betterez|via)\b/i;
+
+/**
+ * Si el cliente pertenece a un grupo comercial, devuelve el GRUPO PADRE como
+ * counterparty. Esto colapsa las subsidiarias debajo de su padre en la tabla
+ * de Planeación. Si no hay grupo, se queda con el cliente individual.
+ */
+function clientDisplayCounterparty(client: { id: string; name?: string; commercialGroupId?: string; commercialGroupName?: string }): { id: string; name?: string } {
+  if (client.commercialGroupId && client.commercialGroupName) {
+    return { id: client.commercialGroupId, name: client.commercialGroupName };
+  }
+  return { id: client.id, name: client.name };
+}
+
+function rolCitiSubcategoryFor(client: { name?: string; commercialGroupId?: string; commercialGroupName?: string } | null | undefined): string {
   if (!client) return INCOME_SUBCAT_CITI;
-  if (client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID) return INCOME_SUBCAT_VIAJES;
-  if (client.name && /\bbusbud\b/i.test(client.name)) return INCOME_SUBCAT_FEDERAL;
+  const haystack = `${client.name ?? ''} ${client.commercialGroupName ?? ''}`;
+  if (FEDERAL_NAME_RE.test(haystack)) return INCOME_SUBCAT_FEDERAL;
   return INCOME_SUBCAT_CITI;
 }
 
@@ -266,45 +274,58 @@ function resolveInflowSubcategory(args: {
   bankFallbackLabel?: string;
   businessUnitId?: string;
   /** El ingreso proviene de un viaje ejecutado (cobranza/CXC JDE). Todo el
-   *  ROL es Senda Citi salvo que el cliente sea Viajes Especiales o el
-   *  catálogo de bancos diga otra cosa. */
+   *  ROL es Senda Citi salvo que el cliente sea Federal (Betterez/Busbud/Via). */
   isRolCollection?: boolean;
 }): string {
-  // 1) Catálogo de bancos manda (ingreso real con cuenta conocida):
-  //    FEDERAL → "Federal", CITI → "Clientes Citi", AC, Multicarga, etc.
-  if (args.businessUnitId) {
-    return bankAccountBusinessUnitLabel(args.businessUnitId);
-  }
-  // 2) Cliente del grupo comercial Viajes Especiales.
+  // 1) Cliente del catálogo manda: Federal SOLO si name/grupo match
+  //    Betterez/Busbud/Via; cualquier otro cliente del catálogo = Citi.
   if (args.counterpartyId) {
     const client = args.clientById.get(args.counterpartyId);
-    if (client?.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID) {
-      return INCOME_SUBCAT_VIAJES;
-    }
-    // 2b) Busbud — cliente Y proveedor de Federal por regla de negocio.
-    // Independiente de la cuenta bancaria por donde caiga, su ingreso es Federal.
-    if (client?.name && /\bbusbud\b/i.test(client.name)) {
-      return INCOME_SUBCAT_FEDERAL;
+    if (client) {
+      const haystack = `${client.name ?? ''} ${client.commercialGroupName ?? ''}`;
+      if (FEDERAL_NAME_RE.test(haystack)) return INCOME_SUBCAT_FEDERAL;
+      return INCOME_SUBCAT_CITI;
     }
   }
-  // 3) ABONO real sin match a factura que cayó en Santander = Federal.
-  if (args.bankFallbackLabel && args.bankFallbackLabel.toUpperCase().includes('FEDERAL')) {
+  // 2) Sin cliente identificado: el catálogo de cuentas de banco decide.
+  //    SOLO las cuentas marcadas `unidadNegocio = FEDERAL` (treasury-mantenido)
+  //    clasifican su ingreso como Federal. CITI / MULTICARGA / RESERVA y
+  //    cualquier cuenta sin catálogo caen a Clientes Citi (regla del negocio:
+  //    lo único que no es Citi es la línea Federal).
+  if (args.businessUnitId && String(args.businessUnitId).toUpperCase() === 'FEDERAL') {
     return INCOME_SUBCAT_FEDERAL;
   }
-  // 4) Cobranza/CXC (viaje ejecutado) sin otra señal = Clientes Citi.
-  if (args.isRolCollection) {
-    return INCOME_SUBCAT_CITI;
+  if (args.bankFallbackLabel && FEDERAL_NAME_RE.test(args.bankFallbackLabel)) {
+    return INCOME_SUBCAT_FEDERAL;
   }
-  // 5) No reconocido.
-  return INCOME_SUBCAT_OTROS;
+  // 3) Default: Clientes Citi (cobranza/CXC/ROL/ABONO de cuenta no-Federal).
+  return INCOME_SUBCAT_CITI;
 }
 
-function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): FinancialMovement[] {
+function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   const out: FinancialMovement[] = [];
   const todayYm = toYearMonth(inputs.asOfDate);
   const monthlyByYm = new Map(monthly.map((m) => [m.yearMonth, m]));
   const inflowContext = buildInflowContext(inputs);
-  const clientById = new Map(inputs.clients.map((c) => [c.id, c]));
+  // clientById debe resolver tanto por client.id (slug del catálogo) como
+  // por noCliente JDE (numérico). Los ABONOs de cobranza pasan `noCliente`
+  // crudo cuando el enriquecimiento no encontró el catalogClientId — sin
+  // este alias, resolveInflowSubcategory caía a businessUnitId del banco
+  // (Federal) en lugar de la regla del catálogo (Citi).
+  const clientById = new Map<string, Client>();
+  for (const c of inputs.clients) {
+    clientById.set(c.id, c);
+    for (const acc of c.jdeAccounts ?? []) {
+      const nc = (acc?.noCliente ?? '').trim();
+      if (nc && !clientById.has(nc)) clientById.set(nc, c);
+    }
+    // Indexar también por commercialGroupId. Cuando un movimiento se colapsa
+    // al grupo padre como counterparty, `resolveInflowSubcategory` debe poder
+    // resolver el grupo y aplicar las reglas (Federal vs Citi) del catálogo.
+    if (c.commercialGroupId && !clientById.has(c.commercialGroupId)) {
+      clientById.set(c.commercialGroupId, c);
+    }
+  }
 
   // Mismo contexto de clasificación que `buildHistoricalMonths` del
   // Dashboard. Sin esto los traspasos internos (TRASPASO REF, RFCs del
@@ -340,6 +361,12 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     abonoEnrichmentByKey.set(enrichment.movementKey, enrichment);
   }
   const cargoEnrichmentByKey = inputs.cargoEnrichments ?? new Map();
+  // Índice para identificar CARGOs sin cruce a PagoProveedor: nombre del
+  // proveedor en el concepto bancario + monto contra compras (OCs).
+  const cargoProviderIndex = buildCargoProviderIndex(
+    inputs.providers,
+    inputs.purchaseReceipts ?? [],
+  );
 
   // 1) Histórico bancario — los mismos números que sumó el Dashboard.
   for (const statement of inputs.bankStatements) {
@@ -418,18 +445,39 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
             infAdi3: line.infAdi3,
           })
         : undefined;
+      // CARGO sin cruce a PagoProveedor y sin patrón fiscal/bancario (cayó al
+      // genérico TRANSFER): intentar identificar al proveedor por nombre en
+      // el concepto o por monto contra compras (OCs). Cubre el caso "el pago
+      // no quedó registrado en JDE".
+      const cargoProviderHit = unmatchedCargoClassification?.category === 'TRANSFER'
+        ? matchCargoToProvider({
+            conceptHaystack: [line.concepto, line.infAdi1, line.infAdi2, line.infAdi3]
+              .filter((v): v is string => typeof v === 'string' && v.length > 0)
+              .join(' '),
+            amount: Math.abs(line.importe),
+            dateIso: line.fechaOperacion,
+            index: cargoProviderIndex,
+          })
+        : null;
+      // Si el ABONO se cruzó a una factura y el cliente está en catálogo con
+      // grupo comercial, colapsa al grupo padre en lugar de la subsidiaria
+      // individual. Mismo display para name e id.
+      const cobranzaClient = isCobranzaInflow && enrichment!.catalogClientId
+        ? clientById.get(enrichment!.catalogClientId) ?? clientById.get(firstFactura?.noCliente ?? '')
+        : undefined;
+      const cobranzaDisplay = cobranzaClient ? clientDisplayCounterparty(cobranzaClient) : undefined;
       const counterpartyName = isCobranzaInflow
-        ? (enrichment!.catalogClientName ?? firstFactura?.nombreCliente ?? undefined)
+        ? (cobranzaDisplay?.name ?? enrichment!.catalogClientName ?? firstFactura?.nombreCliente ?? undefined)
         : isMatchedAp
           ? matchedPayment!.nombreProveedor || undefined
           : isInflow
             ? bankFallbackName
-            : unmatchedCargoClassification!.counterpartyName;
+            : (cargoProviderHit?.counterpartyName ?? unmatchedCargoClassification!.counterpartyName);
       const counterpartyId = isCobranzaInflow
-        ? (enrichment!.catalogClientId ?? firstFactura?.noCliente ?? undefined)
+        ? (cobranzaDisplay?.id ?? enrichment!.catalogClientId ?? firstFactura?.noCliente ?? undefined)
         : isMatchedAp
           ? (matchedPayment!.claveProveedor || undefined)
-          : undefined;
+          : (cargoProviderHit?.counterpartyId ?? undefined);
       // Corning es ingreso Senda Citi que cae en una cuenta no catalogada
       // como CITI (depósito de la operadora). Sin este override el ABONO no
       // cruza factura ni catálogo y cae a "Otros ingresos". Misma regla
@@ -445,14 +493,19 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
                 isRolCollection: isCobranzaInflow,
               }))
         : undefined;
-      const cargoCategory = unmatchedCargoClassification?.category ?? 'TRANSFER';
+      // Si se identificó proveedor, el CARGO es un pago a proveedor (AP_PAYMENT),
+      // ya no un egreso genérico sin clasificar.
+      const cargoCategory: FinancialMovementCategory = cargoProviderHit
+        ? 'AP_PAYMENT'
+        : unmatchedCargoClassification?.category ?? 'TRANSFER';
       // Si el clasificador de concepto bancario no produce subcategoría,
       // pero la cuenta vive en el catálogo, usamos el subRole/role del
       // catálogo (`nomina_operadores`, `dotacion_efectivo`, `dolares`,
       // `proveedores_nomina`, …). Esto evita cientos de CARGOs etiquetados
       // como genérico "Otros Egresos" cuando el banco solo manda folios
       // numéricos pero el destino de la cuenta es claro.
-      const cargoSubcategory = unmatchedCargoClassification?.subcategory
+      const cargoSubcategory = cargoProviderHit?.providerType
+        ?? unmatchedCargoClassification?.subcategory
         ?? (catalogEnrich && !isInflow
           ? catalogEnrich.entry.subRole ?? catalogEnrich.entry.role
           : undefined);
@@ -469,6 +522,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
               ? 'TRANSFER'
               : cargoCategory,
         subcategory: isInflow ? inflowSubcategory : cargoSubcategory,
+        providerCategory: !isInflow ? (cargoProviderHit?.providerType ?? undefined) : undefined,
         companyId: statement.cia,
         businessUnitId: catalogEnrich?.entry.unidadNegocio,
         bankAccountId: statement.cuenta,
@@ -476,7 +530,7 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
         counterpartyName,
         counterpartyType: isCobranzaInflow
           ? 'CUSTOMER'
-          : isMatchedAp
+          : (isMatchedAp || cargoProviderHit)
             ? 'SUPPLIER'
             : 'BANK',
         concept: line.concepto || 'Movimiento bancario',
@@ -489,7 +543,11 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
         confidenceScore: 100,
         confidenceBand: calculateConfidenceBand(100),
         forecastMethod: 'RULE',
-        ruleApplied: 'Estado de cuenta bancario',
+        ruleApplied: cargoProviderHit
+          ? (cargoProviderHit.matchSource === 'concept-name'
+              ? 'Proveedor identificado por concepto bancario'
+              : 'Proveedor identificado por monto vs compras')
+          : 'Estado de cuenta bancario',
         status: 'REAL',
         lockState: 'LOCKED',
         comments: ['Dato real del banco. No editable desde Planeación.'],
@@ -563,17 +621,15 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     });
   }
 
-  // 2) Para cada mes futuro: distribuimos los totales canónicos sobre
-  //    catálogos reales (`projectClientMonth` para inflows, CXP/JDE,
-  //    compras, nómina y proveedores recurrentes para outflows). El escalamiento garantiza que la
-  //    suma de `projectedAmount` empate con el total canónico.
+  // 2) Meses futuros: SOLO datos reales de corto plazo.
+  //    Inflows: CXC abierto (cobranza JDE pendiente) + ROL CITI (viajes
+  //    ejecutados aún no facturados, fechados por catálogo).
+  //    Outflows: CXP abierto + compras (OC con F_Recepcion+D_Credito) +
+  //    nómina TRESS real (sin replicar). Sin balanceo a totales canónicos,
+  //    sin proyecciones rule-based (`client:`), sin recurrentes, sin
+  //    reserva de presupuesto, sin sintéticos de balance.
   const futureMonths = monthly.filter((m) => !m.isHistorical);
   const horizonYm = monthly[monthly.length - 1]?.yearMonth;
-  // Hoist purchase-receipt build OUT of the per-month loop. It does
-  // O(receipts × cxp) dedup work and is identical for every month. Running
-  // it 12+ times per render was the main thread hog that hung the
-  // Planeación / Proyección tabs once PROJECTED OCs multiplied the
-  // receipt count (~5000+).
   const purchaseMovementsByYm = groupMovementsByYearMonth(buildPurchaseReceiptMovements({
     purchaseReceipts: inputs.purchaseReceipts ?? [],
     cxpRecords: inputs.cxpRecords,
@@ -584,224 +640,27 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
   }));
   for (const month of futureMonths) {
     const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
-    // CXC (cobranza JDE) o ROL (viajes ejecutados): ingreso real con monto
-    // propio que NO debe escalarse al total del Dashboard. Mismo trato.
-    const hasRealInflow = inflowLines.some(
-      (line) => line.id.startsWith('cxc:') || line.id.startsWith('rol:'),
-    );
-    out.push(...(hasRealInflow
-      ? emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate)
-      : balanceInflowMonth({
-        lines: inflowLines,
-        target: month.income,
-        ym: month.yearMonth,
-        asOfDate: inputs.asOfDate,
-        fallbackCategory: 'AR_COLLECTION',
-        fallbackConcept: `Cobranza proyectada ${month.yearMonth}`,
-        fallbackRule: 'Total proyectado mensual (Dashboard)',
-      })));
+    out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
 
-    const outflowLines = collectOutflowLines(month, inputs, todayYm, projectionByYm.get(month.yearMonth)?.expense, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? [], concursoProviderIds);
-    out.push(...balanceOutflowMonth({
-      lines: outflowLines,
-      target: month.expense,
-      ym: month.yearMonth,
-      asOfDate: inputs.asOfDate,
-      fallbackCategory: 'OPEX',
-      fallbackConcept: `Egresos recurrentes operativos ${month.yearMonth}`,
-      fallbackRule: 'Total proyectado mensual (Dashboard)',
-    }));
+    const outflowLines = collectOutflowLines(month, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? [], concursoProviderIds);
+    out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
   }
 
-  // 3) Mes en curso (histórico parcial). Días pasados ya están como
-  //    REAL desde el banco. El resto del mes se rellena hasta la proyección
-  //    operativa de mes completo menos lo ya real (ver target abajo).
+  // 3) Mes en curso (parcial). Días pasados ya están como REAL desde el
+  //    banco. Para los días que faltan: SOLO líneas reales (CXC/ROL/CXP/
+  //    compras/payroll TRESS), sin rellenar al target operativo.
   const currentYm = todayYm;
   const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
   if (currentHistorical) {
-    // Target del mes en curso = proyección operativa de mes COMPLETO menos
-    // lo ya cobrado/pagado real. NO usar `currentHistorical.income`: ese
-    // valor es `max(real_acumulado, proy_mes, predictivo)` (dashboardEngine),
-    // ya contiene el real acumulado, así que restarle el real colapsa el
-    // restante a 0 a mitad de mes y trunca la cobranza esperada de los días
-    // que faltan (bug dependiente de fecha: peor entre más avanza el mes).
-    // Se usa la proyección operativa de mes completo (incluye piso baseline
-    // 6m dentro de projectionEngine) como target independiente del real ya
-    // recibido; sólo si no hay proyección (sin catálogo) caemos al valor del
-    // punto. El fallback `?? currentHistorical.income` también era erróneo:
-    // con actual indefinido daba income−income=0; debe ser 0 (nada cobrado
-    // todavía → proyectar mes completo).
-    //
-    // Piso estacional histórico: el baseline dentro de projectionEngine es
-    // media móvil PLANA de 6 meses (sin estacionalidad). Para un negocio
-    // escolar, un mes fuerte de temporada queda subestimado si los 6 meses
-    // previos incluyen temporada baja. Se aplica como piso el promedio del
-    // MISMO mes calendario de años previos (mismo patrón que el modelo
-    // Federal, ver buildFederalForecastMovements) sobre el ingreso real de
-    // meses históricos cerrados. Es un piso (Math.max): nunca reduce una
-    // proyección de catálogo/budget ya buena; sólo rescata subestimación.
-    const projectedFullIncome = projectionByYm.get(currentYm)?.income.total ?? 0;
-    const projectedFullExpense = projectionByYm.get(currentYm)?.expense.total ?? 0;
-    const seasonalIncomeFloorValue = seasonalHistoricalIncomeFloor(monthly, currentYm);
-    const incomeTarget = Math.max(
-      projectedFullIncome > 0 ? projectedFullIncome : currentHistorical.income,
-      seasonalIncomeFloorValue,
-    );
-    const expenseTarget = projectedFullExpense > 0 ? projectedFullExpense : currentHistorical.expense;
-    const remainingIncome = Math.max(0, incomeTarget - (currentHistorical.actualIncome ?? 0));
-    const remainingExpense = Math.max(0, expenseTarget - (currentHistorical.actualExpense ?? 0));
-
     const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
       .filter((line) => line.date >= inputs.asOfDate);
-    if (remainingIncome > 0) {
-      out.push(...balanceInflowMonth({
-        lines: inflowLines,
-        target: remainingIncome,
-        ym: currentYm,
-        asOfDate: inputs.asOfDate,
-        fallbackCategory: 'AR_COLLECTION',
-        fallbackConcept: `Cobranza proyectada ${currentYm} (resto del mes)`,
-        fallbackRule: 'Proyección operativa del mes en curso menos cobranza real',
-      }));
-    } else {
-      out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
-    }
+    out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
 
-    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, projectionByYm.get(currentYm)?.expense, horizonYm, purchaseMovementsByYm.get(currentYm) ?? [])
+    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(currentYm) ?? [], concursoProviderIds)
       .filter((line) => line.date >= inputs.asOfDate);
-    if (remainingExpense > 0) {
-      out.push(...balanceMonth({
-        lines: outflowLines,
-        target: remainingExpense,
-        ym: currentYm,
-        type: 'OUTFLOW',
-        asOfDate: inputs.asOfDate,
-        fallbackCategory: 'OPEX',
-        fallbackConcept: `Egresos proyectados ${currentYm} (resto del mes)`,
-        fallbackRule: 'Proyección operativa del mes en curso menos egresos reales',
-      }));
-    } else {
-      out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
-    }
+    out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
   }
 
-  // 4) Modelo predictivo de ingreso Federal. ROL/CXC sólo proyecta Citi
-  //    (viajes ejecutados); Federal es un flujo aparte que el catálogo de
-  //    bancos etiqueta unidadNegocio=FEDERAL en los ABONOs reales. Sin esto
-  //    el ingreso Federal desaparece de los meses futuros. Se proyecta con
-  //    el histórico real ya emitido (paso 1) usando promedio estacional por
-  //    mes calendario, con respaldo a media móvil. Id `federal-forecast:` →
-  //    excluido de Base (no es dato real de API de corto plazo).
-  out.push(...buildFederalForecastMovements({ monthly, existing: out, asOfDate: inputs.asOfDate, todayYm }));
-
-  return out;
-}
-
-/**
- * Piso estacional de ingreso para el mes en curso a partir del ingreso
- * real de meses históricos CERRADOS (estrictamente antes del mes en curso;
- * el mes parcial no entra para no sesgar con días faltantes). Algoritmo
- * espejo de buildFederalForecastMovements: si hay ≥12 meses cerrados, usa
- * el promedio del mismo mes calendario en años previos (captura
- * estacionalidad escolar); si no, media móvil de los últimos 6 meses.
- * Devuelve 0 si no hay historia suficiente (no aplica piso).
- */
-function seasonalHistoricalIncomeFloor(
-  monthly: CanonicalMonthlyPoint[],
-  currentYm: string,
-): number {
-  const closed = monthly
-    .filter((m) => m.isHistorical && m.yearMonth < currentYm)
-    .sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
-  if (closed.length === 0) return 0;
-  const trailing = closed.slice(-6);
-  const trailingMean = trailing.reduce((s, m) => s + m.income, 0) / trailing.length;
-  if (closed.length < 12) return Number.isFinite(trailingMean) ? Math.max(0, trailingMean) : 0;
-  const mm = currentYm.slice(5, 7);
-  const sameMonth = closed.filter((m) => m.yearMonth.slice(5, 7) === mm);
-  if (sameMonth.length === 0) return Number.isFinite(trailingMean) ? Math.max(0, trailingMean) : 0;
-  const seasonalMean = sameMonth.reduce((s, m) => s + m.income, 0) / sameMonth.length;
-  return Number.isFinite(seasonalMean) ? Math.max(0, seasonalMean) : 0;
-}
-
-/**
- * Proyecta ingreso Federal a futuro a partir del Federal real histórico
- * (ABONOs en cuentas catalogadas unidadNegocio=FEDERAL, ya emitidos en el
- * paso 1). Algoritmo: promedio del mismo mes calendario en años previos
- * cuando hay ≥12 meses de historia (captura estacionalidad escolar);
- * si no, media de los últimos 6 meses históricos completos. Sólo meses
- * históricos COMPLETOS (estrictamente antes del mes en curso) entran al
- * cálculo para no sesgar con un mes parcial.
- */
-function buildFederalForecastMovements(args: {
-  monthly: CanonicalMonthlyPoint[];
-  existing: FinancialMovement[];
-  asOfDate: string;
-  todayYm: string;
-}): FinancialMovement[] {
-  const { monthly, existing, asOfDate, todayYm } = args;
-
-  const historicalByYm = new Map<string, number>();
-  for (const m of existing) {
-    if (m.type !== 'INFLOW') continue;
-    if (m.subcategory !== INCOME_SUBCAT_FEDERAL) continue;
-    const ym = m.projectedDate.slice(0, 7);
-    if (ym >= todayYm) continue; // sólo meses completos cerrados
-    historicalByYm.set(ym, (historicalByYm.get(ym) ?? 0) + (m.projectedAmount ?? 0));
-  }
-  if (historicalByYm.size === 0) return [];
-
-  const sortedYms = Array.from(historicalByYm.keys()).sort();
-  const trailing = sortedYms.slice(-6).map((ym) => historicalByYm.get(ym)!);
-  const trailingMean = trailing.reduce((s, v) => s + v, 0) / trailing.length;
-
-  const byCalendarMonth = new Map<string, number[]>();
-  for (const ym of sortedYms) {
-    const mm = ym.slice(5, 7);
-    const arr = byCalendarMonth.get(mm) ?? [];
-    arr.push(historicalByYm.get(ym)!);
-    byCalendarMonth.set(mm, arr);
-  }
-  const hasSeasonalHistory = historicalByYm.size >= 12;
-
-  const out: FinancialMovement[] = [];
-  for (const month of monthly) {
-    if (month.isHistorical) continue;
-    const mm = month.yearMonth.slice(5, 7);
-    const seasonal = byCalendarMonth.get(mm);
-    const amount = hasSeasonalHistory && seasonal && seasonal.length > 0
-      ? seasonal.reduce((s, v) => s + v, 0) / seasonal.length
-      : trailingMean;
-    if (!Number.isFinite(amount) || amount <= 0) continue;
-    out.push({
-      id: `federal-forecast:${month.yearMonth}`,
-      sourceSystem: 'FORECAST',
-      type: 'INFLOW',
-      category: 'AR_COLLECTION',
-      subcategory: INCOME_SUBCAT_FEDERAL,
-      concept: `Ingreso Federal proyectado ${month.yearMonth}`,
-      currency: 'MXN',
-      originalAmount: Math.round(amount),
-      baseAmount: Math.round(amount),
-      projectedAmount: Math.round(amount),
-      projectedDate: midMonthDate(month.yearMonth),
-      confidenceScore: 60,
-      confidenceBand: calculateConfidenceBand(60),
-      forecastMethod: 'DRIVER',
-      ruleApplied: hasSeasonalHistory
-        ? 'Promedio estacional Federal (mismo mes, años previos)'
-        : 'Media móvil Federal (últimos 6 meses)',
-      taxTreatment: 'IVA_CAUSED',
-      taxRate: 16,
-      taxBaseAmount: Math.round(amount),
-      taxAmount: Math.round(amount * 0.16),
-      status: 'PROJECTED_BASE',
-      lockState: 'RESTRICTED',
-      comments: ['Modelo predictivo de ingreso Federal basado en histórico real del catálogo de bancos. No editable desde Planeación.'],
-      createdAt: `${asOfDate}T00:00:00.000Z`,
-      updatedAt: `${asOfDate}T00:00:00.000Z`,
-    });
-  }
   return out;
 }
 
@@ -975,19 +834,19 @@ function collectInflowLines(
   _todayYm: string,
   context: InflowContext,
 ): RawLine[] {
-  const [year, mNum] = month.yearMonth.split('-').map(Number);
-  const targetMonthIdx = mNum - 1;
   const lines: RawLine[] = collectCxcInflowLines(month, inputs, context);
 
   // ROL: viajes ejecutados aún no facturados. Monto real ejecutado, fechado
   // por la regla de pago del catálogo (overlay /cobranza). `amountLocked` →
-  // no se escala al total del Dashboard (mismo trato que `cxc:`). Excluido
-  // de Base: el id `rol:` no es real short-term y la fecha es futura.
+  // no se escala al total del Dashboard (mismo trato que `cxc:`).
   for (const inflow of context.rolInflowsByYm.get(month.yearMonth) ?? []) {
     const rolSubcat = rolCitiSubcategoryFor({
       name: inflow.clientName,
       commercialGroupId: inflow.commercialGroupId,
     });
+    // Si el cliente ROL tiene grupo comercial, agrupa el ROL al grupo padre.
+    const rolClient = inputs.clients.find((c) => c.id === inflow.clientId);
+    const rolDisplay = rolClient ? clientDisplayCounterparty(rolClient) : { id: inflow.clientId, name: inflow.clientName };
     lines.push({
       id: `rol:${inflow.clientId}:${inflow.date}`,
       amount: inflow.grossAmount,
@@ -995,8 +854,8 @@ function collectInflowLines(
       concept: `Viajes ejecutados ${inflow.clientName} (${inflow.tripCount} viaje${inflow.tripCount === 1 ? '' : 's'})`,
       category: 'AR_COLLECTION',
       subcategory: rolSubcat,
-      counterpartyId: inflow.clientId,
-      counterpartyName: inflow.clientName,
+      counterpartyId: rolDisplay.id,
+      counterpartyName: rolDisplay.name,
       counterpartyType: 'CUSTOMER',
       ruleApplied: `ROL CITI · ${inflow.ruleReason}`,
       sourceSystem: 'FORECAST',
@@ -1013,67 +872,8 @@ function collectInflowLines(
     });
   }
 
-  // Necesitamos buscar un poco hacia atrás: facturas emitidas el mes
-  // anterior pueden cobrarse en el mes objetivo (créditos cortos).
-  // Iteramos el mes objetivo y los 2 meses previos.
-  const monthsToScan: Array<{ year: number; monthIdx: number }> = [
-    { year, monthIdx: targetMonthIdx - 2 },
-    { year, monthIdx: targetMonthIdx - 1 },
-    { year, monthIdx: targetMonthIdx },
-  ].map(({ year: y, monthIdx }) => {
-    if (monthIdx < 0) return { year: y - 1, monthIdx: monthIdx + 12 };
-    if (monthIdx > 11) return { year: y + 1, monthIdx: monthIdx - 12 };
-    return { year: y, monthIdx };
-  });
-
-  for (const client of inputs.clients) {
-    if (isInternalCounterparty(client.rfc, client.name)) continue;
-    // ROL ya provee el cobro REAL de este cliente para este mes de cobro:
-    // suprimir la proyección genérica `client:` evita doble conteo
-    // ROL↔client (ROL es la versión real del mismo dinero).
-    if (context.rolCoverageByClientMonth.get(client.id)?.has(month.yearMonth)) continue;
-    const coveredMonths = context.cxcCoverageByClientMonth.get(client.id);
-    let evIdx = 0;
-    for (const scan of monthsToScan) {
-      const invoiceYm = `${scan.year}-${String(scan.monthIdx + 1).padStart(2, '0')}`;
-      if (coveredMonths?.has(invoiceYm)) continue;
-      const events = projectClientMonth(client, scan.year, scan.monthIdx, {
-        ...inputs.assumptions,
-        year: scan.year,
-      });
-      const clientInflowSubcat = rolCitiSubcategoryFor(client);
-      for (const event of events) {
-        const ym = event.realDate.slice(0, 7);
-        if (ym !== month.yearMonth) continue;
-        if (event.amount <= 0) continue;
-        const compliance = client.complianceRate ?? inputs.assumptions.globalCompliance ?? 1;
-        const score = Math.round(55 + Math.min(40, compliance * 40));
-        const taxRate = client.ivaRate ?? 16;
-        lines.push({
-          id: `client:${client.id}:${event.realDate}:${evIdx++}`,
-          amount: event.amount,
-          date: event.realDate,
-          concept: `Cobranza ${client.name}`,
-          category: 'AR_COLLECTION',
-          subcategory: clientInflowSubcat,
-          counterpartyId: client.id,
-          counterpartyName: client.name,
-          counterpartyType: 'CUSTOMER',
-          ruleApplied: paymentPatternLabel(client),
-          sourceSystem: 'FORECAST',
-          sourceObjectId: client.id,
-          forecastMethod: 'RULE',
-          confidenceScore: score,
-          lockState: 'UNLOCKED',
-          taxTreatment: 'IVA_CAUSED',
-          taxRate,
-          taxBaseAmount: event.amount,
-          taxAmount: event.amount * (taxRate / 100),
-          comment: `Evento proyectado por collectionEngine. Lag teórico ${event.lagDays} días.`,
-        });
-      }
-    }
-  }
+  // Proyección genérica `client:` por regla de catálogo eliminada en esta
+  // branch — solo aparecen ingresos reales (CXC abierto + ROL ejecutado).
 
   return lines;
 }
@@ -1133,8 +933,10 @@ function collectCxcInflowLines(
       category: 'AR_COLLECTION',
       subcategory: cxcSubcat,
       companyId: record.cia,
-      counterpartyId: clientMatch?.client.id ?? record.noCliente,
-      counterpartyName: record.nombreCliente || clientMatch?.client.name,
+      counterpartyId: clientMatch ? clientDisplayCounterparty(clientMatch.client).id : record.noCliente,
+      counterpartyName: clientMatch
+        ? clientDisplayCounterparty(clientMatch.client).name
+        : (record.nombreCliente || undefined),
       counterpartyType: 'CUSTOMER',
       ruleApplied: clientMatch
         ? clientRuleLabel(clientMatch.client)
@@ -1165,41 +967,32 @@ function collectCxcInflowLines(
 }
 
 /**
- * Outflows: combina CXP (con fechas reales de programación de pago),
- * compras, nómina y proveedores recurrentes. Cuando no hay ninguna fuente,
- * `balanceMonth` cae al sintético.
+ * Outflows: SOLO datos reales de corto plazo — CXP abierto (JDE), compras
+ * (OC con F_Recepcion+D_Credito) y nómina TRESS real. Sin proyecciones
+ * por patrón ni reserva presupuestal.
  */
 function collectOutflowLines(
   month: CanonicalMonthlyPoint,
   inputs: CanonicalProjectionInputs,
   todayYm: string,
-  expenseProjection?: ExpenseProjectionBreakdown,
-  projectThroughYearMonth?: string,
+  _unused?: unknown,
+  _projectThrough?: string,
   /**
    * Movimientos de compras (PurchaseReceipt) ya filtrados para `month.yearMonth`.
-   * Se inyectan desde `buildMovements` para evitar recomputar el dedup CXP
-   * por cada mes (era O(receipts × cxp × meses) → ahora una sola vez).
    */
   purchaseMovementsForMonth: FinancialMovement[] = [],
   /**
    * Set de `noProveedor` (trim + upper) de proveedores en Concurso Mercantil.
-   * Esos proveedores tienen al menos una factura ≤ CONCURSO_MERCANTIL_CUTOFF
-   * y se excluyen de TODAS las proyecciones futuras (CXP nueva, recurrentes,
-   * compras). Sus pagos pertenecen al módulo Concurso.
+   * Sus pagos viven en el módulo Concurso.
    */
   concursoProviderIds: Set<string> = new Set(),
 ): RawLine[] {
   const lines: RawLine[] = [];
   const providerByName = new Map(inputs.providers.map((p) => [supplierLookupKey(p.name), p]));
   const providerByJde = new Map<string, Provider>();
-  // Lookup catalog provider id → noProveedor (trim + upper) para validar
-  // recurring providers contra el set de concurso, que indexa por noProveedor.
-  const providerJdeByCatalogId = new Map<string, string>();
   for (const provider of inputs.providers) {
     const jdeKey = providerJdeKey(provider.numProveedorJDE);
     if (jdeKey) providerByJde.set(jdeKey, provider);
-    const noProv = normalizeProviderId(provider.numProveedorJDE);
-    if (noProv) providerJdeByCatalogId.set(provider.id, noProv);
   }
   const filteredCxp = inputs.companyCode === 'all' || !inputs.companyCode
     ? inputs.cxpRecords
@@ -1319,15 +1112,11 @@ function collectOutflowLines(
     });
   }
 
-  // 3) Nómina TRESS. No genera IVA; sí alimenta ISN/IMSS en el módulo fiscal.
-  // Si TRESS solo tiene el mes en curso, replicamos la pauta hacia adelante
-  // hasta el horizonte de proyección para que Dashboard / Planeación / Proyección
-  // vean nómina proyectada y no caja "inflada" por ausencia del egreso.
+  // 3) Nómina TRESS REAL solamente (sin replicación a futuro en esta branch).
   for (const movement of buildPayrollCostMovements({
     payrollCosts: inputs.payrollCosts ?? [],
     companyCode: inputs.companyCode,
     asOfDate: inputs.asOfDate,
-    projectThroughYearMonth,
     targetYearMonth: month.yearMonth,
   })) {
     if (movement.projectedDate.slice(0, 7) !== month.yearMonth) continue;
@@ -1358,253 +1147,11 @@ function collectOutflowLines(
     });
   }
 
-  if (expenseProjection) {
-    for (const providerLine of expenseProjection.providerLines) {
-      const recurringAmount = positiveNumber(providerLine.parts.recurring);
-      if (recurringAmount <= 0) continue;
-      // Concurso Mercantil: omitir recurrentes de proveedores con deuda
-      // congelada. Sus pagos viven en el módulo Concurso.
-      const noProvRecurring = providerJdeByCatalogId.get(providerLine.providerId);
-      if (noProvRecurring && concursoProviderIds.has(noProvRecurring)) continue;
-      const taxMeta = providerLine.ivaRate ? grossToIvaTaxMeta(recurringAmount, providerLine.ivaRate) : undefined;
-      lines.push({
-        id: `recurring-provider:${month.yearMonth}:${providerLine.providerId}`,
-        amount: recurringAmount,
-        date: dateForDayOfMonth(month.yearMonth, providerLine.typicalPayDay ?? 15),
-        concept: `Pago recurrente ${providerLine.providerName}`,
-        category: 'AP_PAYMENT',
-        subcategory: providerLine.providerCategory ?? 'Recurrente',
-        providerCategory: providerLine.providerCategory,
-        counterpartyId: providerLine.providerId.startsWith('__un::') ? undefined : providerLine.providerId,
-        counterpartyName: providerLine.providerName,
-        counterpartyType: 'SUPPLIER',
-        ruleApplied: providerLine.source === 'mixed'
-          ? 'Complemento recurrente sobre CXP'
-          : 'Patrón recurrente bancario por proveedor',
-        sourceSystem: 'FORECAST',
-        sourceObjectId: `${month.yearMonth}:${providerLine.providerId}`,
-        companyId: inputs.companyCode !== 'all' ? inputs.companyCode : undefined,
-        forecastMethod: 'DRIVER',
-        confidenceScore: providerLine.score != null ? Math.max(60, Math.min(90, Math.round(providerLine.score))) : 72,
-        lockState: providerLine.flexibility === 'inamovible' ? 'RESTRICTED' : 'UNLOCKED',
-        taxTreatment: taxMeta ? 'IVA_CREDITABLE' : 'UNCLASSIFIED',
-        taxRate: taxMeta?.taxRate,
-        taxBaseAmount: taxMeta?.taxBaseAmount,
-        taxAmount: taxMeta?.taxAmount,
-        comment: providerLine.source === 'mixed'
-          ? `CXP cubre ${providerLine.parts.scheduled}; se agrega recurrente histórico por ${recurringAmount}.`
-          : 'Gasto recurrente detectado en bancos y asociado al proveedor.',
-      });
-    }
-
-    if (expenseProjection.providerLines.length === 0 && expenseProjection.recurring > 0) {
-      lines.push({
-        id: `recurring-operating:${month.yearMonth}`,
-        amount: expenseProjection.recurring,
-        date: midMonthDate(month.yearMonth),
-        concept: 'Egresos recurrentes operativos',
-        category: 'OPEX',
-        subcategory: 'Recurrente',
-        ruleApplied: 'Patrón recurrente bancario agrupado',
-        sourceSystem: 'FORECAST',
-        sourceObjectId: month.yearMonth,
-        companyId: inputs.companyCode !== 'all' ? inputs.companyCode : undefined,
-        forecastMethod: 'DRIVER',
-        confidenceScore: 58,
-        lockState: 'RESTRICTED',
-        taxTreatment: 'UNCLASSIFIED',
-        comment: 'Gasto recurrente detectado sin proveedor identificado; se agrupa para evitar conceptos bancarios crudos.',
-      });
-    }
-
-    const emittedTotal = lines.reduce((sum, line) => sum + line.amount, 0);
-    const budgetGap = Math.max(0, expenseProjection.total - emittedTotal);
-    if (expenseProjection.fromBudget > 0 && budgetGap > 0) {
-      lines.push({
-        id: `budget-opex-gap:${month.yearMonth}`,
-        amount: budgetGap,
-        date: midMonthDate(month.yearMonth),
-        concept: `Reserva presupuestal de gasto operativo ${month.yearMonth}`,
-        category: 'OPEX',
-        subcategory: 'Presupuesto',
-        ruleApplied: 'Presupuesto mayor al gasto operativo explícito',
-        sourceSystem: 'FORECAST',
-        sourceObjectId: month.yearMonth,
-        companyId: inputs.companyCode !== 'all' ? inputs.companyCode : undefined,
-        forecastMethod: 'DRIVER',
-        confidenceScore: 64,
-        lockState: 'RESTRICTED',
-        taxTreatment: 'UNCLASSIFIED',
-        comment: 'Relleno presupuestal para conservar el total mensual sin inflar compromisos operativos explícitos.',
-      });
-    }
-  }
+  // Recurrentes / `recurring-provider:` / `recurring-operating:` /
+  // `budget-opex-gap:` eliminados en esta branch — sin proyección a largo
+  // plazo, solo egresos reales de corto plazo (CXP, OC compras, payroll TRESS).
 
   return lines;
-}
-
-interface BalanceArgs {
-  lines: RawLine[];
-  target: number;
-  ym: string;
-  type: FinancialMovement['type'];
-  asOfDate: string;
-  fallbackCategory: FinancialMovementCategory;
-  fallbackConcept: string;
-  fallbackRule: string;
-}
-
-function balanceInflowMonth({
-  lines,
-  target,
-  ym,
-  asOfDate,
-  fallbackCategory,
-  fallbackConcept,
-  fallbackRule,
-}: Omit<BalanceArgs, 'type'>): FinancialMovement[] {
-  const locked = lines.filter((line) => line.amountLocked);
-  const flexible = lines.filter((line) => !line.amountLocked);
-  const lockedSum = locked.reduce((sum, line) => sum + line.amount, 0);
-  const out = emitRawLines(locked, 'INFLOW', asOfDate);
-  const remainingTarget = Math.max(0, target - lockedSum);
-
-  out.push(...balanceMonth({
-    lines: flexible,
-    target: remainingTarget,
-    ym,
-    type: 'INFLOW',
-    asOfDate,
-    fallbackCategory,
-    fallbackConcept,
-    fallbackRule,
-  }));
-  return out;
-}
-
-function balanceOutflowMonth({
-  lines,
-  target,
-  ym,
-  asOfDate,
-  fallbackCategory,
-  fallbackConcept,
-  fallbackRule,
-}: Omit<BalanceArgs, 'type'>): FinancialMovement[] {
-  const locked = lines.filter((line) => line.amountLocked);
-  const flexible = lines.filter((line) => !line.amountLocked);
-  const lockedSum = locked.reduce((sum, line) => sum + line.amount, 0);
-  const out = emitRawLines(locked, 'OUTFLOW', asOfDate);
-  const remainingTarget = Math.max(0, target - lockedSum);
-
-  out.push(...balanceMonth({
-    lines: flexible,
-    target: remainingTarget,
-    ym,
-    type: 'OUTFLOW',
-    asOfDate,
-    fallbackCategory,
-    fallbackConcept,
-    fallbackRule,
-  }));
-  return out;
-}
-
-function balanceMonth({
-  lines,
-  target,
-  ym,
-  type,
-  asOfDate,
-  fallbackCategory,
-  fallbackConcept,
-  fallbackRule,
-}: BalanceArgs): FinancialMovement[] {
-  if (target <= 0) return [];
-  if (lines.length === 0) {
-    const fallbackTaxMeta = fallbackCategory === 'OPEX' || fallbackCategory === 'CAPEX' || fallbackCategory === 'AP_PAYMENT'
-      ? grossToIvaTaxMeta(target, 16)
-      : undefined;
-    return [{
-      id: `canonical-${type.toLowerCase()}:${ym}`,
-      sourceSystem: 'FORECAST',
-      type,
-      category: fallbackCategory,
-      concept: fallbackConcept,
-      currency: 'MXN',
-      originalAmount: target,
-      baseAmount: target,
-      projectedAmount: target,
-      projectedDate: midMonthDate(ym),
-      confidenceScore: 65,
-      confidenceBand: calculateConfidenceBand(65),
-      forecastMethod: 'DRIVER',
-      ruleApplied: fallbackRule,
-      taxTreatment: fallbackTaxMeta
-        ? 'IVA_CREDITABLE'
-        : fallbackCategory === 'AR_COLLECTION'
-          ? 'UNCLASSIFIED'
-          : fallbackCategory === 'PAYROLL' || fallbackCategory === 'TAX' || fallbackCategory === 'DEBT'
-            ? 'IVA_EXEMPT'
-            : 'UNCLASSIFIED',
-      taxRate: fallbackTaxMeta?.taxRate,
-      taxBaseAmount: fallbackTaxMeta?.taxBaseAmount,
-      taxAmount: fallbackTaxMeta?.taxAmount,
-      status: 'PROJECTED_BASE',
-      lockState: 'RESTRICTED',
-      comments: ['Sin desglose por catálogo en este mes; se usa el total del Dashboard.'],
-      createdAt: `${asOfDate}T00:00:00.000Z`,
-      updatedAt: `${asOfDate}T00:00:00.000Z`,
-    }];
-  }
-
-  const sum = lines.reduce((s, l) => s + l.amount, 0);
-  if (sum === 0) return [];
-
-  const scale = target / sum;
-  let runningTotal = 0;
-  const out: FinancialMovement[] = [];
-  lines.forEach((line, idx) => {
-    const isLast = idx === lines.length - 1;
-    const scaled = isLast
-      ? Math.max(0, target - runningTotal)
-      : Math.round(line.amount * scale);
-    runningTotal += scaled;
-    out.push({
-      id: line.id,
-      sourceSystem: line.sourceSystem,
-      sourceObjectId: line.sourceObjectId,
-      type,
-      category: line.category,
-      subcategory: line.subcategory,
-      companyId: line.companyId,
-      counterpartyId: line.counterpartyId,
-      counterpartyName: line.counterpartyName,
-      counterpartyType: line.counterpartyType,
-      providerCategory: line.providerCategory,
-      concept: line.concept,
-      currency: 'MXN',
-      originalAmount: line.amount,
-      baseAmount: line.amount,
-      projectedAmount: scaled,
-      issueDate: line.issueDate,
-      dueDate: line.dueDate,
-      projectedDate: line.date,
-      confidenceScore: line.confidenceScore,
-      confidenceBand: calculateConfidenceBand(line.confidenceScore),
-      forecastMethod: line.forecastMethod,
-      ruleApplied: line.ruleApplied,
-      taxTreatment: line.taxTreatment,
-      taxRate: line.taxRate,
-      ...scaleTaxMeta(line, scaled),
-      status: 'PROJECTED_BASE',
-      lockState: line.lockState,
-      comments: [line.comment],
-      createdAt: `${asOfDate}T00:00:00.000Z`,
-      updatedAt: `${asOfDate}T00:00:00.000Z`,
-    });
-  });
-  return out;
 }
 
 export function hasSufficientCanonicalData(inputs: CanonicalProjectionInputs): boolean {
@@ -1633,17 +1180,6 @@ export function hasSufficientCanonicalData(inputs: CanonicalProjectionInputs): b
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-function midMonthDate(yearMonth: string): string {
-  return `${yearMonth}-15`;
-}
-
-function dateForDayOfMonth(yearMonth: string, day: number): string {
-  const [year, month] = yearMonth.split('-').map(Number);
-  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const safeDay = Math.min(Math.max(1, Math.round(day || 15)), lastDay);
-  return `${yearMonth}-${String(safeDay).padStart(2, '0')}`;
-}
 
 function cleanDate(value?: string): string | undefined {
   if (!value) return undefined;
@@ -1801,13 +1337,3 @@ function positiveNumber(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function paymentPatternLabel(client: Client): string {
-  if (client.paymentDayRaw) return client.paymentDayRaw;
-  if (client.paymentDay.kind === 'ANY') return 'Sin patrón específico';
-  if (client.paymentDay.kind === 'DOW') return `Días ${client.paymentDay.days.join(', ')}`;
-  if (client.paymentDay.kind === 'DOM') return `Día ${client.paymentDay.day}`;
-  if (client.paymentDay.kind === 'NTH_DOW') return `${client.paymentDay.nth} día ${client.paymentDay.day}`;
-  if (client.paymentDay.kind === 'DOM_LIST') return `Días ${client.paymentDay.days.join(', ')}`;
-  if (client.paymentDay.kind === 'WOM') return `Semanas ${client.paymentDay.weeks.join(', ')}`;
-  return `Día ${client.paymentDay.day}`;
-}

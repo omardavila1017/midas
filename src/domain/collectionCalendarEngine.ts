@@ -446,8 +446,16 @@ export function buildClientLookup(clients: Client[]): CollectionCalendarClientLo
   const byToken = new Map<string, Client[]>();
   for (const client of clients) {
     byId.set(client.id, client);
-    const digits = onlyDigits(client.id);
-    if (digits) addClientLookup(byDigits, digits, client);
+    const idDigits = onlyDigits(client.id);
+    if (idDigits) addClientLookup(byDigits, idDigits, client);
+    // Index también por noCliente JDE de cada cuenta enlazada. Cliente catálogo
+    // usa id-slug (`catalog-0-foo`), pero ROL/Cobranza vienen por noCliente
+    // numérico — sin este indexado, claveJDE/noCliente no matcheaba ningún
+    // cliente, dejando ROL sin proyección.
+    for (const acc of client.jdeAccounts ?? []) {
+      const accDigits = onlyDigits(acc?.noCliente ?? '');
+      if (accDigits) addClientLookup(byDigits, accDigits, client);
+    }
     for (const value of [client.name, client.legalName, client.commercialGroupName]) {
       for (const token of significantTokens(normalizeClientText(value ?? ''))) {
         addClientLookup(byToken, token, client);

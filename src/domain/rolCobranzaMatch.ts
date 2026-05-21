@@ -47,18 +47,26 @@ function trim(value: string | undefined): string {
 /**
  * Normaliza la cadena de factura para comparación. JDE devuelve formatos
  * tipo "RI-305405" y el ROL idéntico — comparación case-insensitive con trim.
+ * ROL CITI usa "-" (o "0", "N/A") como placeholder cuando el viaje aún
+ * no se factura — esos placeholders cuentan como "sin factura" para que
+ * el cruce los marque como `predicted` (viaje no facturado → proyección).
  */
 function normFactura(value: string | undefined): string {
-  return trim(value).toUpperCase();
+  const t = trim(value).toUpperCase();
+  if (t === '-' || t === '0' || t === 'N/A' || t === 'NA') return '';
+  return t;
 }
 
 /**
  * Normaliza UUID fiscal (SAT). Formato esperado:
  *   "85A17FEE-C11C-4F3A-8EC4-3896F8468AE3"
- * El API a veces lo padding con espacios; trimeamos y upcase.
+ * El API a veces lo padding con espacios; trimeamos y upcase. Placeholders
+ * "-"/"0"/"N/A" se tratan como ausentes (mismo criterio que normFactura).
  */
 function normUuid(value: string | undefined): string {
-  return trim(value).toUpperCase();
+  const t = trim(value).toUpperCase();
+  if (t === '-' || t === '0' || t === 'N/A' || t === 'NA') return '';
+  return t;
 }
 
 /**

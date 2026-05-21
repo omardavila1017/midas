@@ -257,128 +257,29 @@ export function buildPayrollCostMovements(input: {
   asOfDate: string;
   endDate?: string;
   /**
-   * Si se proporciona, replica la pauta del último mes completo de TRESS hacia
-   * adelante hasta `projectThroughYearMonth` (YYYY-MM), generando movimientos
-   * sintéticos para meses futuros sin data TRESS. Permite que Dashboard /
-   * Proyección / Planeación vean nómina proyectada cuando el backend solo
-   * tiene el mes en curso.
+   * Branch sin proyección a largo plazo: el parámetro se mantiene en la
+   * firma para evitar churn en callers, pero se ignora — solo se emiten
+   * movimientos de nómina REAL ya reportada por TRESS.
    */
   projectThroughYearMonth?: string;
-  /**
-   * Filtro opcional: si se setea, solo se generan movimientos sintéticos para
-   * este mes (formato YYYY-MM). Crítico para evitar O(meses²) cuando el
-   * caller invoca buildPayrollCostMovements una vez por mes.
-   */
+  /** Filtro opcional por mes (YYYY-MM). */
   targetYearMonth?: string;
 }): FinancialMovement[] {
   const filteredRecords = input.payrollCosts
     .filter((record) => input.companyCode === 'all' || !input.companyCode || normalizeCia(record.cia) === normalizeCia(input.companyCode))
-    .filter((record) => record.amount > 0 && shouldEmitPayrollMovement(record));
+    .filter((record) => record.amount > 0 && shouldEmitPayrollMovement(record))
+    // Drop payroll ya pagada (paymentDate < asOf) — el cargo ya está en el banco
+    // como movimiento REAL. Sin este filtro, `payrollCostToMovement` recolocaba
+    // todos los records vencidos a asOfDate y formaba un pile gigante.
+    .filter((record) => {
+      const pay = cleanIsoDate(record.paymentDate);
+      return !pay || pay >= input.asOfDate;
+    });
 
-  const realMovements = filteredRecords
+  return filteredRecords
     .map((record, index) => payrollCostToMovement(record, input.asOfDate, index))
     .filter((movement) => !input.endDate || movement.projectedDate <= input.endDate)
     .filter((movement) => !input.targetYearMonth || movement.projectedDate.slice(0, 7) === input.targetYearMonth);
-
-  if (!input.projectThroughYearMonth) return realMovements;
-
-  const monthsWithReal = new Set(
-    filteredRecords
-      .map((r) => `${r.year}-${String(r.month).padStart(2, '0')}`)
-      .filter((ym) => /^\d{4}-\d{2}$/.test(ym)),
-  );
-  const baselineMonth = findBaselineMonth(filteredRecords, monthsWithReal);
-  if (!baselineMonth) return realMovements;
-  if (input.targetYearMonth && input.targetYearMonth <= baselineMonth) return realMovements;
-  if (input.targetYearMonth && monthsWithReal.has(input.targetYearMonth)) return realMovements;
-
-  const baselineRecords = filteredRecords.filter((r) => `${r.year}-${String(r.month).padStart(2, '0')}` === baselineMonth);
-
-  const horizon = input.projectThroughYearMonth;
-  const synthetic: FinancialMovement[] = [];
-  const monthsToFill: string[] = [];
-  if (input.targetYearMonth) {
-    monthsToFill.push(input.targetYearMonth);
-  } else {
-    let cursor = nextYearMonth(baselineMonth);
-    let guard = 0;
-    while (cursor <= horizon && guard < 60) {
-      if (!monthsWithReal.has(cursor)) monthsToFill.push(cursor);
-      cursor = nextYearMonth(cursor);
-      guard += 1;
-    }
-  }
-
-  for (const ym of monthsToFill) {
-    baselineRecords.forEach((record, idx) => {
-      const shifted = shiftPayrollRecordToMonth(record, ym);
-      if (!shifted) return;
-      const movement = payrollCostToMovement(shifted, input.asOfDate, idx);
-      if (input.endDate && movement.projectedDate > input.endDate) return;
-      synthetic.push({
-        ...movement,
-        id: `${movement.id}:forecast:${ym}`,
-        forecastMethod: 'RULE',
-        ruleApplied: `${movement.ruleApplied ?? 'TRESS'} · proyectado desde ${baselineMonth}`,
-        confidenceScore: 65,
-        confidenceBand: calculateConfidenceBand(65),
-        comments: [`Nómina proyectada replicando ${baselineMonth} (último mes TRESS).`],
-      });
-    });
-  }
-  return [...realMovements, ...synthetic];
-}
-
-function findBaselineMonth(records: PayrollCostRecord[], monthsWithMovements: Set<string>): string | undefined {
-  if (records.length === 0) return undefined;
-  const monthlyCounts = new Map<string, number>();
-  for (const r of records) {
-    if (!r.year || !r.month) continue;
-    const ym = `${r.year}-${String(r.month).padStart(2, '0')}`;
-    if (!monthsWithMovements.has(ym)) continue;
-    monthlyCounts.set(ym, (monthlyCounts.get(ym) ?? 0) + 1);
-  }
-  if (monthlyCounts.size === 0) return undefined;
-  let best = '';
-  let bestCount = 0;
-  for (const [ym, count] of monthlyCounts) {
-    if (count >= bestCount * 0.5 && ym > best) {
-      best = ym;
-      bestCount = Math.max(bestCount, count);
-    }
-  }
-  return best || undefined;
-}
-
-function shiftPayrollRecordToMonth(record: PayrollCostRecord, targetYm: string): PayrollCostRecord | undefined {
-  const baseDate = cleanIsoDate(record.paymentDate);
-  if (!baseDate) return undefined;
-  const targetYear = Number(targetYm.slice(0, 4));
-  const targetMonth = Number(targetYm.slice(5, 7));
-  if (!targetYear || !targetMonth) return undefined;
-  const baseParts = baseDate.split('-');
-  const baseDay = Number(baseParts[2]);
-  const daysInTarget = new Date(targetYear, targetMonth, 0).getDate();
-  const clampedDay = Math.min(baseDay, daysInTarget);
-  const shiftedPay = `${targetYm}-${String(clampedDay).padStart(2, '0')}`;
-  const shiftDays = (new Date(`${shiftedPay}T00:00:00.000Z`).getTime() - new Date(`${baseDate}T00:00:00.000Z`).getTime()) / DAY_MS;
-  const shiftedStart = record.periodStartDate ? addDays(record.periodStartDate, shiftDays) : undefined;
-  const shiftedEnd = record.periodEndDate ? addDays(record.periodEndDate, shiftDays) : undefined;
-  return {
-    ...record,
-    year: targetYear,
-    month: targetMonth,
-    paymentDate: shiftedPay,
-    periodStartDate: shiftedStart,
-    periodEndDate: shiftedEnd,
-  };
-}
-
-function nextYearMonth(ym: string): string {
-  const year = Number(ym.slice(0, 4));
-  const month = Number(ym.slice(5, 7));
-  const next = month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`;
-  return next;
 }
 
 function payrollCostToMovement(record: PayrollCostRecord, asOfDate: string, index: number): FinancialMovement {
