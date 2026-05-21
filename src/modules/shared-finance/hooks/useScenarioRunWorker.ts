@@ -20,6 +20,50 @@ import type {
 // fresh as real results land. Survives unmount on purpose (cheap: one ref).
 let universalPlaceholder: ScenarioForecastRun | null = null;
 
+// ─────────────────────────────────────────────────────────────────────────
+// Shared singleton worker (2026-05-20).
+//
+// Before: each hook instance spawned its own Worker, so when Planning and
+// Projection were both KeepAlive-mounted (the default in App.tsx) we had TWO
+// scenarioForecastRun.worker.ts instances running simultaneously, each
+// caching its own heavy bundle (~88k payroll records + cobranza + compras).
+// Heap snapshots confirmed ~190MB × 2 = ~400MB wasted in duplicated worker
+// memory. Promote worker + heavy-version state to module-level so the second
+// hook reuses the first one. Each hook still owns its own pendingKeys /
+// stale map / persist callbacks; the shared listener fan-outs by jobId.
+let sharedWorker: Worker | null = null;
+let sharedWorkerHeavyVersion = -1;
+let sharedHeavyVersion = 0;
+let sharedPrevHeavy: HeavySourceBundle | null = null;
+let sharedJobSeq = 0;
+const sharedMessageListeners = new Set<(data: ScenarioForecastRunWorkerResponse) => void>();
+
+function getSharedWorker(): Worker | null {
+  if (typeof Worker === 'undefined') return null;
+  if (sharedWorker) return sharedWorker;
+  try {
+    const worker = new Worker(
+      new URL('../../../workers/scenarioForecastRun.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+    sharedWorkerHeavyVersion = -1;
+    worker.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerResponse>) => {
+      for (const listener of sharedMessageListeners) listener(event.data);
+    };
+    worker.onerror = (event) => {
+      // eslint-disable-next-line no-console
+      console.warn('[scenarioRun] worker exception', event.message);
+      sharedWorkerHeavyVersion = -1;
+    };
+    sharedWorker = worker;
+    return worker;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[scenarioRun] worker spawn failed', err);
+    return null;
+  }
+}
+
 /** Seed the universal placeholder from the warmup (worker-built BASE run). */
 export function setScenarioRunPlaceholder(run: ScenarioForecastRun): void {
   universalPlaceholder = run;
@@ -43,6 +87,13 @@ export interface ScenarioRunController {
     scenarioId: string,
     makeArgs: () => BuildScenarioForecastRunArgs,
     persist?: (key: string, result: ScenarioForecastRun) => void,
+    /**
+     * Gran-independent cache key. When two requests share the same pipelineKey
+     * (same scenario+inputs, different granularity), the worker reuses the
+     * cached pipeline output and only re-runs the cheap aggregator. Defaults
+     * to `cacheKey` (no pipeline reuse) for back-compat.
+     */
+    pipelineKey?: string,
   ) => T;
 }
 
@@ -93,26 +144,21 @@ function heavyChanged(p: HeavySourceBundle, n: HeavySourceBundle): boolean {
  */
 export function useScenarioRunWorker(): ScenarioRunController {
   const [runVersion, setRunVersion] = useState(0);
-  const workerRef = useRef<Worker | null>(null);
-  const jobSeq = useRef(0);
   /** cacheKey -> latest jobId posted (dedupe + stale-result guard). */
   const pendingKeys = useRef<Map<string, number>>(new Map());
   /** scenarioId -> last good run (stale-while-recompute source). */
   const lastResultByScenario = useRef<Map<string, ScenarioForecastRun>>(new Map());
   /** cacheKey -> persist callback to invoke when the worker result lands. */
   const persistByKey = useRef<Map<string, (k: string, r: ScenarioForecastRun) => void>>(new Map());
-  /** Heavy-bundle version (bumps when the source/catalogs change identity). */
-  const heavyVersion = useRef(0);
-  const prevHeavy = useRef<HeavySourceBundle | null>(null);
-  /** Heavy version the live worker is known to hold (-1 = none / fresh worker). */
-  const workerHeavyVersion = useRef(-1);
 
   // Bound the stale-while-recompute map: each entry is a fat ScenarioForecastRun
-  // (full movements). Unbounded by scenario count it accumulated retained
-  // memory across a session (a contributor to the real-data "idle OOM"). Keep
-  // only the most-recently-used few (LRU); a dropped scenario just computes
-  // once synchronously next time instead of showing stale — acceptable.
-  const STALE_CAP = 4;
+  // (full movements INCLUDING expanded payroll ~88k records, big driver of
+  // boot heap). Lowered 4 → 2 (2026-05-20) after the nominaRecords retainer
+  // chain in heap snapshots showed STALE_CAP × projectionRunCache × source
+  // cache compounding into multi-GB at first paint. 2 retains the active +
+  // approved pair (the only ones the comparison surfaces need synchronously);
+  // a dropped scenario falls back to one sync compute, which is acceptable.
+  const STALE_CAP = 2;
   const rememberStale = useCallback((scenarioId: string, result: ScenarioForecastRun) => {
     universalPlaceholder = result; // keep the cross-scenario fallback fresh
     const m = lastResultByScenario.current;
@@ -125,90 +171,67 @@ export function useScenarioRunWorker(): ScenarioRunController {
     }
   }, []);
 
+  // Mounted flag: prevents setState on an unmounted hook (the shared worker
+  // is module-level so a stale message could land after this hook unmounted,
+  // and React 18 throws an "Should have a queue" internal error if the
+  // dispatch hits a hook whose fiber has already been torn down).
+  const mountedRef = useRef(true);
   useEffect(() => {
+    mountedRef.current = true;
+    // Subscribe to the shared worker's onmessage. Each hook instance filters
+    // by its own pendingKeys so it only reacts to its own posts. We don't
+    // terminate the shared worker on unmount — other hook instances may
+    // still need it, and re-spawning costs the heavy-bundle resend.
+    const listener = (data: ScenarioForecastRunWorkerResponse): void => {
+      if (!mountedRef.current) return;
+      const { jobId, cacheKey, scenarioId, result, error, needsHeavy } = data;
+      const pendingJob = pendingKeys.current.get(cacheKey);
+      // Filter: this hook didn't post this job (or it was already superseded
+      // by a newer job from this hook for the same key).
+      if (pendingJob === undefined) return;
+      if (pendingJob !== jobId) return;
+      pendingKeys.current.delete(cacheKey);
+      if (needsHeavy) {
+        // Worker lost the heavy bundle for this version (worker respawned or
+        // version drifted). Force resend on next post.
+        sharedWorkerHeavyVersion = -1;
+        persistByKey.current.delete(cacheKey);
+        setRunVersion((v) => v + 1);
+        return;
+      }
+      if (error || !result) {
+        // eslint-disable-next-line no-console
+        console.warn(`[scenarioRun] worker error key=${cacheKey}`, error);
+        persistByKey.current.delete(cacheKey);
+        return; // keep showing stale; an identical later request retries
+      }
+      projectionRunCache.set(cacheKey, result as unknown);
+      rememberStale(scenarioId, result);
+      const persist = persistByKey.current.get(cacheKey);
+      if (persist) {
+        persistByKey.current.delete(cacheKey);
+        try { persist(cacheKey, result); } catch { /* ignore */ }
+      }
+      setRunVersion((v) => v + 1);
+    };
+    sharedMessageListeners.add(listener);
     return () => {
-      // Terminating the worker + clearing pendingKeys already prevents any
-      // post-unmount setState (no message can land, and the jobId guard
-      // rejects stragglers), so no mounted flag is needed.
-      workerRef.current?.terminate();
-      workerRef.current = null;
+      mountedRef.current = false;
+      sharedMessageListeners.delete(listener);
       pendingKeys.current.clear();
       lastResultByScenario.current.clear();
       persistByKey.current.clear();
-      workerHeavyVersion.current = -1;
     };
-  }, []);
-
-  const ensureWorker = useCallback((): Worker | null => {
-    if (typeof Worker === 'undefined') return null;
-    if (workerRef.current) return workerRef.current;
-    try {
-      const worker = new Worker(
-        new URL('../../../workers/scenarioForecastRun.worker.ts', import.meta.url),
-        { type: 'module' },
-      );
-      // Fresh worker holds no heavy bundle — the next post must include it.
-      workerHeavyVersion.current = -1;
-      worker.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerResponse>) => {
-        const { jobId, cacheKey, scenarioId, result, error, needsHeavy } = event.data;
-        // Stale guard refinado: un resultado "obsoleto" porque el cacheKey ya
-        // cambió (boot tardío que sigue empujando movements → sharedInputsKey
-        // rota) sigue siendo válido como stale per-scenario — lo que el
-        // dashboard usa para salir del placeholder universal (BASE warmup) y
-        // mostrar al menos una proyección del scenario activo. Solo
-        // descartamos si hay un job MÁS NUEVO para EL MISMO cacheKey.
-        const pendingJob = pendingKeys.current.get(cacheKey);
-        const supersededByNewerJobForSameKey = pendingJob !== undefined && pendingJob !== jobId;
-        if (supersededByNewerJobForSameKey) return;
-        const isCurrentJobForKey = pendingJob === jobId;
-        if (isCurrentJobForKey) pendingKeys.current.delete(cacheKey);
-        if (needsHeavy) {
-          // Worker lacks the heavy bundle for this version. Force the next
-          // post to include it and let the re-render re-issue the job.
-          workerHeavyVersion.current = -1;
-          persistByKey.current.delete(cacheKey);
-          setRunVersion((v) => v + 1);
-          return;
-        }
-        if (error || !result) {
-          // eslint-disable-next-line no-console
-          console.warn(`[scenarioRun] worker error key=${cacheKey}`, error);
-          persistByKey.current.delete(cacheKey);
-          return; // keep showing stale; an identical later request retries
-        }
-        projectionRunCache.set(cacheKey, result as unknown);
-        rememberStale(scenarioId, result);
-        if (isCurrentJobForKey) {
-          const persist = persistByKey.current.get(cacheKey);
-          if (persist) {
-            persistByKey.current.delete(cacheKey);
-            try { persist(cacheKey, result); } catch { /* ignore */ }
-          }
-        }
-        setRunVersion((v) => v + 1);
-      };
-      worker.onerror = (event) => {
-        // eslint-disable-next-line no-console
-        console.warn('[scenarioRun] worker exception', event.message);
-        // Future requests fall back to sync compute / fresh heavy.
-        pendingKeys.current.clear();
-        persistByKey.current.clear();
-        workerHeavyVersion.current = -1;
-      };
-      workerRef.current = worker;
-      return worker;
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[scenarioRun] worker spawn failed', err);
-      return null;
-    }
   }, [rememberStale]);
+
+  const ensureWorker = useCallback((): Worker | null => getSharedWorker(), []);
 
   const runCached = useCallback(<T,>(
     cacheKey: string,
     scenarioId: string,
     makeArgs: () => BuildScenarioForecastRunArgs,
     persist?: (key: string, result: ScenarioForecastRun) => void,
+    pipelineKey?: string,
   ): T => {
     const cached = projectionRunCache.get(cacheKey) as T | undefined;
     if (cached !== undefined) return cached;
@@ -233,29 +256,32 @@ export function useScenarioRunWorker(): ScenarioRunController {
     }
     // Post once per key (dedupe); show the previous run meanwhile.
     if (!pendingKeys.current.has(cacheKey)) {
-      const jobId = ++jobSeq.current;
+      const jobId = ++sharedJobSeq;
       pendingKeys.current.set(cacheKey, jobId);
       if (persist) persistByKey.current.set(cacheKey, persist);
       try {
         const { heavy, light } = splitArgs(makeArgs());
-        if (!prevHeavy.current || heavyChanged(prevHeavy.current, heavy)) {
-          heavyVersion.current += 1;
-          prevHeavy.current = heavy;
+        if (!sharedPrevHeavy || heavyChanged(sharedPrevHeavy, heavy)) {
+          sharedHeavyVersion += 1;
+          sharedPrevHeavy = heavy;
         }
-        const version = heavyVersion.current;
-        const sendHeavy = workerHeavyVersion.current !== version;
+        const version = sharedHeavyVersion;
+        const sendHeavy = sharedWorkerHeavyVersion !== version;
         const req: ScenarioForecastRunWorkerRequest = {
           jobId,
           cacheKey,
           scenarioId,
           sourceVersion: version,
+          // Default pipelineKey to the full cacheKey when caller doesn't
+          // provide one — back-compat: behaves like no pipeline reuse.
+          pipelineKey: pipelineKey ?? cacheKey,
           heavy: sendHeavy ? heavy : undefined,
           light,
         };
         worker.postMessage(req);
         // Optimistic: worker caches `heavy` on receipt (messages are FIFO, so
         // a later light-only post for the same version arrives after this).
-        if (sendHeavy) workerHeavyVersion.current = version;
+        if (sendHeavy) sharedWorkerHeavyVersion = version;
       } catch (err) {
         pendingKeys.current.delete(cacheKey);
         persistByKey.current.delete(cacheKey);

@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import {
+  nextSourceJobId,
+  postToSharedSourceWorker,
+  subscribeSharedSourceWorker,
+} from '../../shared-finance/services/sharedSourceWorker';
 import { AlertTriangle, CheckCircle2, Copy, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
@@ -15,7 +19,6 @@ import {
   effectiveAmount,
   effectiveMovementDate,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
-import { CashDeficitBanner } from '../../shared-finance/components/CashDeficitBanner';
 import type {
   CellOverride,
   FinancialAdjustment,
@@ -119,7 +122,7 @@ interface Props {
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
-  startingBalance: number;
+  startingBalance?: number;
   /**
    * Estados de cuenta Bajío (fideicomiso Dina). Llegan SEPARADOS porque
    * `bankStatements` ya viene sin Bajío (excludeBajio). Se usan para
@@ -186,16 +189,19 @@ export default function FinancialPlanningDashboard(props: Props) {
   // unresponsive" y crash del renderer. Ahora vive en Web Worker; UI muestra
   // PlanningWarmupShell mientras el worker computa. Fallback sync si Worker
   // no está disponible o falla.
-  const sourceWorkerRef = useRef<Worker | null>(null);
   const sourceJobRef = useRef(0);
+  // Per-job input map so the shared-worker listener uses the input that
+  // produced THIS jobId (not whatever cacheProbeInput is current at result time).
+  const sourceInputByJobId = useRef<Map<number, typeof cacheProbeInput>>(new Map());
   useEffect(() => {
     if (cachedSource) {
       setSource(cachedSource);
       return;
     }
     let cancelled = false;
-    const jobId = ++sourceJobRef.current;
-    const tStart = performance.now();
+    const jobId = nextSourceJobId();
+    sourceJobRef.current = jobId;
+    sourceInputByJobId.current.set(jobId, cacheProbeInput);
 
     const runSyncFallback = () => {
       const t0 = performance.now();
@@ -220,39 +226,9 @@ export default function FinancialPlanningDashboard(props: Props) {
         runSyncFallback();
         return;
       }
-
-      try {
-        if (!sourceWorkerRef.current) {
-          sourceWorkerRef.current = new Worker(
-            new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
-            { type: 'module' },
-          );
-        }
-        const worker = sourceWorkerRef.current;
-        worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
-          if (cancelled || event.data.jobId !== sourceJobRef.current) return;
-          const totalElapsed = performance.now() - tStart;
-          if (event.data.result) {
-            // eslint-disable-next-line no-console
-            console.info(`[planning.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms (incluye spawn + cómputo + transferencia)`);
-            rememberFinancialProjectionSourceData(cacheProbeInput, event.data.result);
-            saveProjectionSourceToPersistentCache(cacheProbeInput, event.data.result);
-            setSource(event.data.result);
-          } else if (event.data.error) {
-            console.warn(`[planning.source] worker error jobId=${jobId} total=${totalElapsed.toFixed(0)}ms, fallback`, event.data.error);
-            runSyncFallback();
-          }
-        };
-        worker.onerror = (event) => {
-          if (cancelled) return;
-          console.warn('[planning.source] worker exception, fallback', event.message);
-          runSyncFallback();
-        };
-        worker.postMessage({ jobId, input: cacheProbeInput });
-      } catch (err) {
-        console.warn('[planning.source] worker spawn failed, fallback', err);
-        runSyncFallback();
-      }
+      // Singleton worker shared with Projection + useFinancialProjectionSource.
+      const ok = postToSharedSourceWorker({ jobId, input: cacheProbeInput });
+      if (!ok) runSyncFallback();
     };
 
     void (async () => {
@@ -271,10 +247,27 @@ export default function FinancialPlanningDashboard(props: Props) {
     return () => { cancelled = true; };
   }, [cachedSource, cacheProbeInput]);
 
+  // Subscribe to shared source worker; filter by per-job input map.
   useEffect(() => {
+    const unsub = subscribeSharedSourceWorker((data) => {
+      const myInput = sourceInputByJobId.current.get(data.jobId);
+      if (!myInput) return;
+      sourceInputByJobId.current.delete(data.jobId);
+      if (data.jobId !== sourceJobRef.current) return;
+      if (data.result) {
+        // eslint-disable-next-line no-console
+        console.info(`[planning.source] worker result jobId=${data.jobId}`);
+        rememberFinancialProjectionSourceData(myInput, data.result);
+        saveProjectionSourceToPersistentCache(myInput, data.result);
+        setSource(data.result);
+      } else if (data.error) {
+        // eslint-disable-next-line no-console
+        console.warn(`[planning.source] worker error`, data.error);
+      }
+    });
     return () => {
-      sourceWorkerRef.current?.terminate();
-      sourceWorkerRef.current = null;
+      unsub();
+      sourceInputByJobId.current.clear();
     };
   }, []);
 
@@ -685,7 +678,9 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     const scenarioOverrides = cellOverrides.filter((override) => override.scenarioId === scenarioId);
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
-    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
+    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|g=${granularity}`;
+    // pipelineKey omits granularity so flips reuse the worker's pipeline cache.
+    const pipelineKey = `planning-pipeline:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
     const scenario = scenarios.find((s) => s.id === scenarioId);
     const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)
       ? (key: string, run: PlanningScenarioRun) => saveScenarioRunToPersistentCache(key, run)
@@ -722,6 +717,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         includeManualEntries,
       }),
       persistRun,
+      pipelineKey,
     );
   };
 
@@ -1241,7 +1237,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         activeScenarioId={activeScenarioId}
         approvedFinalCash={approvedRunWithOverrides.summary.finalCash}
         finalCashFor={finalCashFor}
-        onSelect={setActiveScenarioId}
+        onSelect={(id) => startTransition(() => setActiveScenarioId(id))}
         onCreateDraft={handleCreateDraft}
         onDuplicateDraft={handleDuplicateDraft}
         onRenameDraft={handleRenameDraft}
@@ -1290,12 +1286,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           sublabel={isDraft ? 'Propuesta activa' : 'Misma referencia'}
         />
       </div>
-
-      <CashDeficitBanner
-        run={activeRun}
-        scenarioName={activeScenario.name}
-        onClickDetail={() => goTo({ tab: 'financialProjection', focus: 'deficit' })}
-      />
 
       <SpreadsheetGrid
         rows={rows}

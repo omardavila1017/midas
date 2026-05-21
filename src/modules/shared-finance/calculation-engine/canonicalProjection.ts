@@ -122,7 +122,11 @@ export interface CanonicalProjectionInputs {
   cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ claveProveedor?: string; nombreProveedor: string; importe: number }> }>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
-  startingBalance: number;
+  /**
+   * Override manual de caja inicial. `undefined` → se calcula como
+   * Σ saldoInicial de los bankStatements provistos (calculateInitialCash).
+   */
+  startingBalance?: number;
   asOfDate: string;
   /**
    * Si false, salta el motor predictivo (Holt-Winters tiered + extracción de
@@ -199,7 +203,7 @@ export function buildCanonicalProjection(
 
   const initialCash = base.length > 0
     ? base[0].closingCash - base[0].income + base[0].expense
-    : inputs.startingBalance;
+    : (inputs.startingBalance ?? 0);
 
   return {
     monthly,
@@ -603,15 +607,9 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
       target: month.expense,
       ym: month.yearMonth,
       asOfDate: inputs.asOfDate,
-      // TRANSFER (no OPEX): el residuo del balanceo es "egresos no
-      // identificados" — el banco histórico clasifica los cargos sin patrón
-      // canónico como TRANSFER → fila "Otros Egresos" (ver
-      // bankConceptClassifier.ts). Mantener la misma categoría en proyección
-      // evita la inversión visual histórico→futuro y deja al scheduler
-      // diferir el residuo (vía isSchedulableExpense, supplierPaymentSchedule).
-      fallbackCategory: 'TRANSFER',
-      fallbackConcept: `Egresos no identificados ${month.yearMonth}`,
-      fallbackRule: 'Total proyectado mensual (Dashboard) sin desglose por catálogo',
+      fallbackCategory: 'OPEX',
+      fallbackConcept: `Egresos recurrentes operativos ${month.yearMonth}`,
+      fallbackRule: 'Total proyectado mensual (Dashboard)',
     }));
   }
 
@@ -678,8 +676,8 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
         ym: currentYm,
         type: 'OUTFLOW',
         asOfDate: inputs.asOfDate,
-        fallbackCategory: 'TRANSFER',
-        fallbackConcept: `Egresos no identificados ${currentYm} (resto del mes)`,
+        fallbackCategory: 'OPEX',
+        fallbackConcept: `Egresos proyectados ${currentYm} (resto del mes)`,
         fallbackRule: 'Proyección operativa del mes en curso menos egresos reales',
       }));
     } else {

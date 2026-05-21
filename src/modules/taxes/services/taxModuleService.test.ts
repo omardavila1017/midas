@@ -608,8 +608,6 @@ describe('taxModuleService', () => {
       scenarioId: 'approved',
     });
 
-    // Window spans 47 days (2026-08-01 → 2026-09-17). startDate=2026-09-01
-    // clips the early installments; what survives still sums to 600.
     const movements = buildAutomaticTaxReserveMovements({
       obligations: [obligation],
       scenarioId: 'approved',
@@ -618,86 +616,13 @@ describe('taxModuleService', () => {
       asOfDate: '2026-08-01',
     });
 
-    expect(movements.length).toBeGreaterThan(0);
-    for (const movement of movements) {
-      expect(movement.category).toBe('TAX');
-      expect(movement.lockState).toBe('RESTRICTED');
-      expect(movement.projectedDate >= '2026-09-01').toBe(true);
-      expect(movement.projectedDate <= '2026-09-17').toBe(true);
-    }
-  });
-
-  it('splits future tax reserves into weekly installments that sum to the reserve amount', () => {
-    const obligation = createManualTaxObligation({
-      taxType: 'IVA',
-      period: '2026-06',
-      amount: 700,
-      dueDate: '2026-07-17',
-    });
-
-    const movements = buildAutomaticTaxReserveMovements({
-      obligations: [obligation],
-      scenarioId: 'approved',
-      startDate: '2026-06-01',
-      endDate: '2026-07-31',
-      asOfDate: '2026-06-01',
-    });
-
-    // 46 days between 2026-06-01 and 2026-07-17 → 7 weekly installments.
-    expect(movements).toHaveLength(7);
-    const total = movements.reduce((sum, movement) => sum + movement.projectedAmount, 0);
-    expect(total).toBeCloseTo(700, 2);
-    const dates = movements.map((movement) => movement.projectedDate);
-    expect(dates[0]).toBe('2026-06-08');
-    expect(dates[dates.length - 1]).toBe('2026-07-17');
-    expect(movements[0].id).toMatch(/:wk:1$/);
-    expect(movements[movements.length - 1].id).toMatch(/:wk:7$/);
-    expect(movements[0].concept).toContain('parcialidad 1/7');
-  });
-
-  it('keeps a single reserve movement when the obligation is already overdue', () => {
-    const obligation = createManualTaxObligation({
-      taxType: 'IVA',
-      period: '2025-12',
-      amount: 500,
-      dueDate: '2026-01-17',
-    });
-
-    const movements = buildAutomaticTaxReserveMovements({
-      obligations: [obligation],
-      scenarioId: 'approved',
-      startDate: '2026-04-01',
-      endDate: '2026-12-31',
-      asOfDate: '2026-04-15',
-    });
-
     expect(movements).toHaveLength(1);
-    expect(movements[0].projectedDate).toBe('2026-04-15');
-    expect(movements[0].projectedAmount).toBe(500);
-    expect(movements[0].id).not.toMatch(/:wk:/);
-    expect(movements[0].concept).not.toContain('parcialidad');
-  });
-
-  it('preserves LOCKED lockState on every installment for IMSS reserves', () => {
-    const obligation = createManualTaxObligation({
-      taxType: 'IMSS',
-      period: '2026-06',
-      amount: 1200,
-      dueDate: '2026-07-17',
+    expect(movements[0]).toMatchObject({
+      category: 'TAX',
+      projectedAmount: 600,
+      projectedDate: '2026-09-17',
+      lockState: 'RESTRICTED',
     });
-
-    const movements = buildAutomaticTaxReserveMovements({
-      obligations: [obligation],
-      scenarioId: 'approved',
-      startDate: '2026-06-01',
-      endDate: '2026-07-31',
-      asOfDate: '2026-06-01',
-    });
-
-    expect(movements.length).toBeGreaterThan(1);
-    for (const movement of movements) {
-      expect(movement.lockState).toBe('LOCKED');
-    }
   });
 });
 

@@ -795,11 +795,8 @@ describe('canonicalProjection ROL projection (modelo corregido)', () => {
     expect(rol?.taxAmount).toBeCloseTo(160);
     expect(rol!.projectedDate.slice(0, 7)).toBe('2026-06');
     expect(rol!.projectedDate > '2026-04-22').toBe(true);
-    // Invariante Base: `rol:` ES real short-term — viaje ejecutado, sólo el
-    // cobro está en el futuro. Pasa el filtro de Base aunque su fecha lo
-    // ponga después de today (el corte futuro de buildScenarioForecastRun
-    // exime explícitamente a `rol:`).
-    expect(isRealShortTermApiMovement(rol!)).toBe(true);
+    // Invariante Base: `rol:` predicho NO es real short-term → fuera de Base.
+    expect(isRealShortTermApiMovement(rol!)).toBe(false);
   });
 
   it('NO proyecta `rol:` para un viaje ya facturado (predicted ⊥ invoiced; sin doble conteo con cxc:)', () => {

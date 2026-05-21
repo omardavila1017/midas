@@ -1,6 +1,8 @@
 import {
-  buildScenarioForecastRun,
+  aggregateScenarioForecastRun,
+  buildScenarioPipeline,
   type BuildScenarioForecastRunArgs,
+  type ScenarioPipelineResult,
 } from '../modules/financial-planning/services/scenarioForecastRun';
 import type {
   HeavySourceBundle,
@@ -20,12 +22,20 @@ import type {
 let cachedHeavy: HeavySourceBundle | null = null;
 let cachedHeavyVersion = -1;
 
+// Pipeline cache: keyed by `pipelineKey` (everything that affects the gran-
+// independent pipeline, sent from main thread). Two requests differing only
+// in granularity share the same pipeline → cache hit → skip the heavy
+// pipeline work (~1300ms savings on grain flip).
+let cachedPipeline: { key: string; result: ScenarioPipelineResult } | null = null;
+
 self.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerRequest>) => {
-  const { jobId, cacheKey, scenarioId, sourceVersion, heavy, light } = event.data;
+  const { jobId, cacheKey, scenarioId, sourceVersion, pipelineKey, heavy, light } = event.data;
 
   if (heavy) {
     cachedHeavy = heavy;
     cachedHeavyVersion = sourceVersion;
+    // Heavy bundle changed → pipeline cache stale (movements/clients/etc differ).
+    cachedPipeline = null;
   }
 
   if (!cachedHeavy || cachedHeavyVersion !== sourceVersion) {
@@ -45,10 +55,19 @@ self.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerRequest>) => {
   const t0 = performance.now();
   try {
     const args = { ...cachedHeavy, ...light } as BuildScenarioForecastRunArgs;
-    const result = buildScenarioForecastRun(args);
+    let pipeline: ScenarioPipelineResult;
+    let pipelineHit = false;
+    if (cachedPipeline && cachedPipeline.key === pipelineKey) {
+      pipeline = cachedPipeline.result;
+      pipelineHit = true;
+    } else {
+      pipeline = buildScenarioPipeline(args);
+      cachedPipeline = { key: pipelineKey, result: pipeline };
+    }
+    const result = aggregateScenarioForecastRun(pipeline, args);
     const elapsed = performance.now() - t0;
     // eslint-disable-next-line no-console
-    console.info(`[scenarioRun.worker] done jobId=${jobId} scenario=${scenarioId} ${elapsed.toFixed(0)}ms · movements=${result.movements.length}`);
+    console.info(`[scenarioRun.worker] done jobId=${jobId} scenario=${scenarioId} ${elapsed.toFixed(0)}ms · pipelineHit=${pipelineHit} · movements=${result.movements.length}`);
     const response: ScenarioForecastRunWorkerResponse = { jobId, cacheKey, scenarioId, result };
     self.postMessage(response);
   } catch (error) {

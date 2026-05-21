@@ -38,6 +38,12 @@ interface Props {
   /** Llaves de cache ya cargadas (`${id}:${tipo}:${año}:${mes}` → ISO). */
   nominaLoadedKeys: Record<string, string>;
   /**
+   * Cuántos meses esperados ya bajaron del backfill (24 meses = fast-path YTD
+   * + histórico). Mientras `loaded < total` la UI muestra un banner para que
+   * el usuario no asuma que los KPIs (4 meses YTD) son definitivos.
+   */
+  backfillProgress?: { loaded: number; total: number };
+  /**
    * Callback al merge exitoso — App.tsx persiste en MidasStore.
    * `cacheKeys` puede contener varias entradas cuando el refresh jala un
    * histórico (mes actual + meses anteriores), una por cada (anio, mes)
@@ -84,6 +90,7 @@ export default function PayrollDashboard({
   companyCode,
   nominaRecords,
   nominaLoadedKeys,
+  backfillProgress,
   onNominaFetched,
 }: Props) {
   const now = new Date();
@@ -180,8 +187,28 @@ export default function PayrollDashboard({
     return [current - 1, current, current + 1];
   }, [now]);
 
+  const backfillInProgress = backfillProgress && backfillProgress.loaded < backfillProgress.total;
+
   return (
     <div className="space-y-6">
+      {backfillInProgress && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+          style={{
+            borderColor: 'var(--warning, #d97706)',
+            background: 'rgba(217, 119, 6, 0.08)',
+            color: 'var(--warning, #d97706)',
+          }}
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>
+            Cargando histórico TRESS · {backfillProgress!.loaded} de {backfillProgress!.total} meses
+            sincronizados. Los KPIs se actualizan conforme bajan los datos.
+          </span>
+        </div>
+      )}
       <PageHeader
         title="Nómina"
         meta={

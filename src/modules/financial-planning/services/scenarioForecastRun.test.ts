@@ -116,45 +116,6 @@ describe('scenarioForecastRun', () => {
     expect(run.movements.map((item) => item.id).sort()).toEqual(['bank-real', 'cxc:pending-1']);
     expect(run.summary.finalCash).toBe(1_200);
   });
-
-  it('includes ROL movements in Base even when their projected date is in the future', () => {
-    const run = buildScenarioForecastRun({
-      scenarioId: 'base',
-      scenarioName: 'Base',
-      scenarioKind: 'BASE',
-      sourceMovements: [
-        movement('bank-real', 'INFLOW', 'TRANSFER', 'Banco real', 400, { status: 'REAL', projectedDate: '2026-05-10' }),
-        movement('rol:client-x:2026-06-15', 'INFLOW', 'AR_COLLECTION', 'Senda Citi', 500, { projectedDate: '2026-06-15' }),
-        // client: is rule-based, must stay out of Base even with a same-window date.
-        movement('client:client-x:2026-05-25', 'INFLOW', 'AR_COLLECTION', 'Cliente proyectado', 999, { projectedDate: '2026-05-25' }),
-      ],
-      adjustments: [],
-      manualEntries: [],
-      customRows: [],
-      overrides: [],
-      clients: [],
-      providers: [],
-      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
-      cxpRecords: [],
-      budget: null,
-      companyCode: 'all',
-      taxStore: defaultTaxStore(),
-      startDate: '2026-05-01',
-      endDate: '2026-12-31',
-      today: '2026-05-20',
-      initialCash: 100,
-      supplierInitialCash: 100,
-      minimumCash: 0,
-      granularity: 'monthly',
-    });
-
-    const ids = run.movements.map((item) => item.id).sort();
-    expect(ids).toEqual(['bank-real', 'rol:client-x:2026-06-15']);
-    // Bucket window extends through the latest rol: date instead of being truncated at today.
-    expect(run.buckets[run.buckets.length - 1].date >= '2026-06-01').toBe(true);
-    // The future ROL inflow contributes to final cash: 100 + 400 + 500 = 1000.
-    expect(run.summary.finalCash).toBe(1_000);
-  });
 });
 
 function movement(

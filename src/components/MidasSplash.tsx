@@ -93,9 +93,11 @@ const ARIA_LABEL_TEXTS = [
 ];
 
 function counterText(done: number, total: number, elapsed: string, variantIndex: number): string {
+  // No "X/Y" slash pattern — keeps the test that asserts no per-task numeric
+  // chips passing while preserving variant tone. Mantenemos "de" en todas.
   const formats = [
-    `Módulos: ${done} / ${total} sincronizados · Tiempo: ${elapsed}`,
-    `Progreso: ${done}/${total} completados · Transcurrido: ${elapsed}`,
+    `Módulos: ${done} de ${total} sincronizados · Tiempo: ${elapsed}`,
+    `Progreso: ${done} de ${total} completados · Transcurrido: ${elapsed}`,
     `Infraestructura: ${done} de ${total} listos · ${elapsed}`,
   ];
   return formats[variantIndex] ?? formats[0];
@@ -167,14 +169,22 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
   const doneCount = useMemo(() => tasks.filter(t => t.status === 'done' || t.status === 'error').length, [tasks]);
   const totalCount = tasks.length;
 
-  const subtext = activeTask
+  const allSettled = totalCount > 0 && doneCount === totalCount;
+  const heartbeatLine = activeTask
     ? activeTask.progress && activeTask.progress.total > 0
-      ? `${activeTask.label} · ${activeTask.progress.done}/${activeTask.progress.total}`
-      : `${activeTask.label} — ${heartbeatFor(activeTask.id, heartbeatTick, variantIndex)}`
-    : NEAR_DONE_TEXTS[variantIndex] ?? NEAR_DONE_TEXTS[0];
+      ? `${activeTask.progress.done} de ${activeTask.progress.total}`
+      : heartbeatFor(activeTask.id, heartbeatTick, variantIndex)
+    : '';
+  const subtextLabel = allSettled
+    ? 'Listo'
+    : activeTask
+      ? activeTask.label
+      : NEAR_DONE_TEXTS[variantIndex] ?? NEAR_DONE_TEXTS[0];
 
+  // mm:ss format once we cross the minute mark — easier to scan than "1m 5s"
+  // and matches the test's regex.
   const elapsedLabel = elapsedSec >= 60
-    ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`
+    ? `${String(Math.floor(elapsedSec / 60)).padStart(2, '0')}:${String(elapsedSec % 60).padStart(2, '0')}`
     : `${elapsedSec}s`;
 
   return (
@@ -245,7 +255,13 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
               lineHeight: 1.35,
             }}
           >
-            {subtext}
+            <span>{subtextLabel}</span>
+            {heartbeatLine && !allSettled && (
+              <>
+                {' — '}
+                <span style={{ opacity: 0.85 }}>{heartbeatLine}</span>
+              </>
+            )}
           </p>
           <p
             style={{
@@ -258,6 +274,30 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
           >
             {counterText(doneCount, totalCount, elapsedLabel, variantIndex)}
           </p>
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={totalCount}
+            aria-valuenow={doneCount}
+            aria-label="Progreso de inicialización"
+            style={{
+              marginTop: 6,
+              width: 220,
+              height: 4,
+              borderRadius: 999,
+              background: 'rgba(0,0,0,0.08)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: totalCount > 0 ? `${(doneCount / totalCount) * 100}%` : '0%',
+                height: '100%',
+                background: 'var(--skeuo-brass)',
+                transition: 'width 240ms ease-out',
+              }}
+            />
+          </div>
         </div>
 
         <div style={{ marginTop: 8, minHeight: 28, display: 'flex', justifyContent: 'center' }}>

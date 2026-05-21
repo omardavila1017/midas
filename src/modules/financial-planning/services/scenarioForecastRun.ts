@@ -41,6 +41,18 @@ export type ScenarioForecastRun = ForecastRun & {
   supplierPlan: SupplierPaymentPlan;
 };
 
+/**
+ * Gran-independent pipeline output. Caching this and reusing across grain
+ * flips avoids re-running adjust + tax + supplier-schedule (the heavy part)
+ * when the user just toggles mes→sem→día.
+ */
+export interface ScenarioPipelineResult {
+  movements: FinancialMovement[];
+  supplierPlan: SupplierPaymentPlan;
+  isBase: boolean;
+  projectionEndDate: string;
+}
+
 export interface BuildScenarioForecastRunArgs {
   scenarioId: string;
   scenarioName: string;
@@ -73,12 +85,12 @@ export interface BuildScenarioForecastRunArgs {
 }
 
 /**
- * Shared official forecast pipeline for Dashboard, Proyección and Planeación.
- * Forecast inputs may come from the predictive canonical source, but treasury
- * rules always run after that: scenario adjustments, tax, convenio, supplier
- * scheduling by score, and scenario-scoped cell overrides.
+ * Gran-independent pipeline: scenario adjustments + tax + convenio +
+ * fideicomiso + supplier schedule. Returns post-pipeline movements plus the
+ * supplier plan. Caching this and re-running just the aggregator on grain
+ * flip cuts a typical flip from ~1500ms to ~50-200ms.
  */
-export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): ScenarioForecastRun {
+export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): ScenarioPipelineResult {
   const isBase = args.scenarioKind === 'BASE';
   const manualMovements = !isBase && args.includeManualEntries !== false
     ? expandManualPlanningEntriesToMovements(args.manualEntries, {
@@ -93,11 +105,7 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
     ? args.sourceMovements.filter(
       (movement) =>
         isRealShortTermApiMovement(movement) &&
-        // ROL = viaje ya ejecutado, fechado por la regla de pago del catálogo
-        // del API de cobranza. Aunque su fecha de cobro sea futura, es dinero
-        // tan real como una factura CXC abierta — pasa el corte de futuro.
-        (effectiveMovementDate(movement) <= args.today
-          || movement.id.startsWith('rol:')),
+        effectiveMovementDate(movement) <= args.today,
     )
     : [...args.sourceMovements, ...manualMovements];
 
@@ -182,22 +190,32 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
     scenarioId: args.scenarioId,
   });
 
-  // Base = pasado/hoy SALVO ROL. ROL es ejecución real con cobro futuro
-  // fechado por catálogo, así que el bucket se extiende hasta la última fecha
-  // rol: para que no se recorten esos ingresos. El resto del futuro
-  // (client:/cxp:/recurring/forecast) ya fue filtrado arriba.
-  const lastRolDate = isBase
-    ? movementsBeforeAdjust.reduce((max, movement) => {
-      if (!movement.id.startsWith('rol:')) return max;
-      const date = effectiveMovementDate(movement);
-      return date > max ? date : max;
-    }, args.today)
-    : args.endDate;
-  const projectionEndDate = isBase ? lastRolDate : args.endDate;
+  // Base = past/today only. Truncate bucket window at today so empty future
+  // buckets don't render (the movement filter already drops > today, but
+  // buildBucketDates spans the full window regardless).
+  const projectionEndDate = isBase ? args.today : args.endDate;
 
-  const rawProjection = calculateBaseProjection(supplierSchedule.movements, {
+  return {
+    movements: supplierSchedule.movements,
+    supplierPlan: supplierSchedule.plan,
+    isBase,
+    projectionEndDate,
+  };
+}
+
+/**
+ * Gran-dependent aggregator. Takes pipeline output + the gran-specific args
+ * and produces the final ScenarioForecastRun. Fast (~50-200ms even at daily
+ * granularity) so calling it on the main thread for grain flips beats a
+ * worker round-trip.
+ */
+export function aggregateScenarioForecastRun(
+  pipeline: ScenarioPipelineResult,
+  args: BuildScenarioForecastRunArgs,
+): ScenarioForecastRun {
+  const rawProjection = calculateBaseProjection(pipeline.movements, {
     startDate: args.startDate,
-    endDate: projectionEndDate,
+    endDate: pipeline.projectionEndDate,
     initialCash: args.initialCash,
     minimumCash: args.minimumCash,
     granularity: args.granularity,
@@ -227,22 +245,30 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
     summary: summarizeBucketsForScenario(buckets, rawProjection.movements, args.minimumCash, args.granularity),
     rows,
     overrides: args.overrides,
-    supplierPlan: supplierSchedule.plan,
+    supplierPlan: pipeline.supplierPlan,
   };
 }
 
 /**
+ * Shared official forecast pipeline for Dashboard, Proyección and Planeación.
+ * Convenience wrapper: pipeline + aggregator. Use the split functions when
+ * caching the pipeline output across grain flips.
+ */
+export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): ScenarioForecastRun {
+  const pipeline = buildScenarioPipeline(args);
+  return aggregateScenarioForecastRun(pipeline, args);
+}
+
+/**
  * Base remains a narrow operational baseline: real short-term API records only.
- * Real = cobranza JDE (`cxc:`), órdenes de compra (`purchase:`/`po:`), nómina
- * TRESS real (`payroll:` sin `:forecast:`) y ROL CITI (`rol:` — viajes ya
- * ejecutados con cobro futuro fechado por el catálogo del API). Las
- * proyecciones rule-based (client:/cxp:/recurring/budget gap) y los sintéticos
- * (`canonical-*`) NO entran al Base — esos viven en Aprobado/propuestas.
+ * The Base run additionally cuts any movement whose effective date is in the
+ * future (see buildScenarioForecastRun) — Base shows past/today only; future
+ * dates belong to Approved/proposals, which use the full predictive canonical
+ * source plus treasury rules.
  */
 export const isRealShortTermApiMovement = (movement: FinancialMovement): boolean => {
   if (movement.status === 'REAL') return true;
   if (movement.id.startsWith('cxc:')) return true;
-  if (movement.id.startsWith('rol:')) return true;
   if (movement.id.startsWith('purchase:') || movement.id.startsWith('po:')) return true;
   if (movement.id.startsWith('payroll:')) return !movement.id.includes(':forecast:');
   return false;

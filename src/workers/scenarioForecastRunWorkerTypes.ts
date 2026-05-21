@@ -33,6 +33,15 @@ export interface ScenarioForecastRunWorkerRequest {
   scenarioId: string;
   /** Version of the heavy bundle the `light` args expect. */
   sourceVersion: number;
+  /**
+   * Pipeline cache key — covers everything that influences the gran-independent
+   * pipeline output (adjustments, manualEntries, taxStore, customRows, overrides,
+   * scenario meta, window, scalars). When two requests share the same pipelineKey
+   * but differ only in granularity, the worker reuses the cached pipeline and
+   * only re-runs the cheap aggregator — turns a grain flip into ~50-200ms vs
+   * 500ms-2s for the full pipeline.
+   */
+  pipelineKey: string;
   /** Present only when the heavy bundle changed (or the worker lacks it). */
   heavy?: HeavySourceBundle;
   light: LightRunArgs;

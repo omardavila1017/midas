@@ -77,7 +77,11 @@ export interface FinancialProjectionSourceInput {
   cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
-  startingBalance: number;
+  /**
+   * Override manual. `undefined` → calculateInitialCash suma saldoInicial
+   * real de los bankStatements provistos.
+   */
+  startingBalance?: number;
   asOfDate?: string;
   /**
    * Si false, el canonical no entrena el motor predictivo. Planning no usa
@@ -122,13 +126,13 @@ type CacheKey = string;
 const SOURCE_CACHE = new Map<CacheKey, FinancialProjectionSourceData>();
 // Cada FinancialProjectionSourceData es ENORME (cobranza ~46k + compras
 // ~334k + payroll + movimientos canónicos ~100k+ → cientos de MB). El límite
-// previo de 20 era un techo de varios GB: en el cold boot el source se
-// reconstruye varias veces (cache MISS por jobId) y cada resultado fresco se
-// acumulaba aquí mientras la data cruda de JDE seguía residente → el heap
-// cruzaba 4GB y el renderer reventaba ("Aw Snap"). Sólo se renderiza el
-// source ACTUAL; con uno previo basta para un compare instantáneo. Evictar
-// no recomputa: el persistent cache (IDB) rehidrata. 2 = pico acotado.
-const SOURCE_CACHE_LIMIT = 2;
+// previo de 20 era un techo de varios GB; bajado a 2 (cold boot) y ahora a
+// 1 (2026-05-20) tras heap snapshot que mostró {id, sourceSystem} reteniendo
+// 517MB (56% del heap) — cada source pesa ~250MB con la cobranza/compras
+// reales, y mantener uno previo "por si acaso" sale a media RAM. La UI solo
+// renderiza el source CURRENT; el persistent cache (IDB) rehidrata si el
+// usuario navega y vuelve.
+const SOURCE_CACHE_LIMIT = 1;
 
 function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string): CacheKey {
   // We mix array references via WeakRef-like identity sentinels: each

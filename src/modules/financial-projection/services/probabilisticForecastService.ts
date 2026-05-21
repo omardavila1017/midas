@@ -15,7 +15,14 @@ import {
 } from './financialProjectionPersistentCache';
 
 const FORECAST_CACHE = new Map<string, ProbabilisticForecastRun>();
-const FORECAST_CACHE_LIMIT = 18;
+// Lowered 18 → 2 (2026-05-20). Each ProbabilisticForecastRun holds 1200
+// Monte-Carlo simulations × 365 horizon days × multiple metrics — heap
+// snapshot showed probabilisticForecast.worker.ts ballooning to ~753MB
+// during cold boot because the result cache + the worker's own retained
+// outputs piled up. The persistent IDB cache (saveProbabilisticForecast…)
+// rehydrates the previous run on revisit, so the memory cache only needs
+// to cover the active scenario + one alt.
+const FORECAST_CACHE_LIMIT = 2;
 const DEFAULT_SIMULATIONS = 1200;
 const DEFAULT_HORIZON_DAYS = 365;
 

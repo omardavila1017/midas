@@ -15,13 +15,13 @@
  * active/base/approved × at most a couple of granularities.
  */
 
-// Lowered 8 → 4 (2026-05-19): each entry is a fat PlanningScenarioRun holding
-// the full post-pipeline movements array. With real 2-year multi-company
-// volume, 8 retained runs × scenarios × granularities was a primary "idle
-// OOM" accumulator (background data waves rebuild → fat runs pile up). 4
-// covers the real access pattern (active/base/approved + one alt) and halves
-// peak retained memory; the extra recompute on a cold switch is now cheap
-// (worker-offloaded + gran-bounded window).
+// History: 8 → 4 → 2 (cold-boot OOM) → 3 (grain-flip thrash) → 4 (2026-05-20,
+// base recompute on each flip). User flips mes→sem→día rapidly and also
+// renders the base comparison line. cacheKey includes granularity AND
+// scenarioId, so active × 3 grans + base@current-grain = 4 unique keys hot
+// at any moment. With LIMIT=3 the base recomputed on every flip; with =4 the
+// base@current also fits. 4 × ~70MB = ~280MB cache budget, well under the
+// post-fix 1.5GB steady-state heap.
 const MAX_ENTRIES = 4;
 
 class LRU<K, V> {

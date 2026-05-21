@@ -5,7 +5,11 @@ import {
   type FinancialProjectionSourceData,
   type FinancialProjectionSourceInput,
 } from '../../financial-projection/services/financialProjectionService';
-import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
+import {
+  nextSourceJobId,
+  postToSharedSourceWorker,
+  subscribeSharedSourceWorker,
+} from '../services/sharedSourceWorker';
 
 /**
  * Offloads `buildFinancialProjectionSourceData` (the 142k-record canonical
@@ -31,8 +35,8 @@ export function useFinancialProjectionSource(
 
   const [source, setSource] = useState<FinancialProjectionSourceData | null>(cachedSource);
 
-  const workerRef = useRef<Worker | null>(null);
-  const jobRef = useRef(0);
+  // Per-hook jobIds posted to the shared singleton worker. Listener filters.
+  const myJobIds = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     if (cachedSource) {
@@ -40,12 +44,13 @@ export function useFinancialProjectionSource(
       return;
     }
     let cancelled = false;
-    const jobId = ++jobRef.current;
+    const jobId = nextSourceJobId();
+    myJobIds.current.add(jobId);
 
     const runSyncFallback = () => {
       try {
         const built = buildFinancialProjectionSourceData(cacheProbeInput);
-        if (!cancelled && jobRef.current === jobId) setSource(built);
+        if (!cancelled) setSource(built);
       } catch (err) {
         console.warn('[taxes.source] sync fallback failed', err);
       }
@@ -53,46 +58,42 @@ export function useFinancialProjectionSource(
 
     if (typeof Worker === 'undefined') {
       runSyncFallback();
-      return () => { cancelled = true; };
+      return () => { cancelled = true; myJobIds.current.delete(jobId); };
     }
 
-    try {
-      if (!workerRef.current) {
-        workerRef.current = new Worker(
-          new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
-          { type: 'module' },
-        );
-      }
-      const worker = workerRef.current;
-      worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
-        if (cancelled || event.data.jobId !== jobRef.current) return;
-        if (event.data.result) {
-          setSource(event.data.result);
-        } else if (event.data.error) {
-          console.warn('[taxes.source] worker error, fallback', event.data.error);
-          runSyncFallback();
-        }
-      };
-      worker.onerror = (event) => {
-        if (cancelled) return;
-        console.warn('[taxes.source] worker exception, fallback', event.message);
-        runSyncFallback();
-      };
-      worker.postMessage({ jobId, input: cacheProbeInput });
-    } catch (err) {
-      console.warn('[taxes.source] worker spawn failed, fallback', err);
-      runSyncFallback();
-    }
+    const ok = postToSharedSourceWorker({ jobId, input: cacheProbeInput });
+    if (!ok) runSyncFallback();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      myJobIds.current.delete(jobId);
+    };
   }, [cachedSource, cacheProbeInput]);
 
   useEffect(() => {
+    // Subscribe once per hook instance; filter messages by jobIds we posted.
+    const unsubscribe = subscribeSharedSourceWorker((data) => {
+      if (!myJobIds.current.has(data.jobId)) return;
+      myJobIds.current.delete(data.jobId);
+      if (data.result) {
+        setSource(data.result);
+      } else if (data.error) {
+        console.warn('[taxes.source] worker error, fallback', data.error);
+        try {
+          const built = buildFinancialProjectionSourceData(cacheProbeInput);
+          setSource(built);
+        } catch (err) {
+          console.warn('[taxes.source] sync fallback failed', err);
+        }
+      }
+    });
     return () => {
-      workerRef.current?.terminate();
-      workerRef.current = null;
+      unsubscribe();
+      myJobIds.current.clear();
     };
-  }, []);
+    // We deliberately depend on cacheProbeInput so fallback rebuild uses the
+    // current input; subscription re-binds idempotently.
+  }, [cacheProbeInput]);
 
   return source;
 }

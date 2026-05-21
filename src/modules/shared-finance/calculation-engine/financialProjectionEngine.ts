@@ -600,12 +600,34 @@ function splitDate(adjustment: FinancialAdjustment, baseDate: string, index: num
   return addDays(baseDate, step * index);
 }
 
+// Pure function with small input domain (typically <10 distinct keys per
+// session: yearStart/yearEnd × {monthly, weekly, daily}). Hot-called from the
+// `columns` useMemo on every granularity flip + every scenario switch render.
+// A module-level cache avoids the bucket iteration (~365 string allocations
+// for daily) when the user toggles between granularities they have already
+// seen. Bounded so it can't grow unbounded across long sessions.
+const BUCKET_DATES_CACHE = new Map<string, string[]>();
+const BUCKET_DATES_CACHE_MAX = 32;
+
 export function buildBucketDates(startDate: string, endDate: string, granularity: ProjectionGranularity): string[] {
+  const key = `${startDate}|${endDate}|${granularity}`;
+  const cached = BUCKET_DATES_CACHE.get(key);
+  if (cached) {
+    // Refresh LRU position.
+    BUCKET_DATES_CACHE.delete(key);
+    BUCKET_DATES_CACHE.set(key, cached);
+    return cached;
+  }
   const out: string[] = [];
   let cursor = bucketKeyForDate(startDate, granularity);
   while (cursor <= endDate) {
     out.push(cursor);
     cursor = addBucket(cursor, granularity);
+  }
+  BUCKET_DATES_CACHE.set(key, out);
+  if (BUCKET_DATES_CACHE.size > BUCKET_DATES_CACHE_MAX) {
+    const oldest = BUCKET_DATES_CACHE.keys().next().value;
+    if (oldest !== undefined) BUCKET_DATES_CACHE.delete(oldest);
   }
   return out;
 }

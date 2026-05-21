@@ -88,6 +88,24 @@ function buildSupplierLines(movements: FinancialMovement[]): SupplierLine[] {
     .sort((a, b) => b.amount - a.amount);
 }
 
+const MONTH_LABELS_SHORT_ES = [
+  'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+  'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+];
+
+// Tooltip header for the projection chart. Granularity-aware so the
+// monthly view shows "ene 2026" instead of the raw bucket start date
+// "2026-01-01" (Recharts pasaba el ISO crudo y se leía como "1 de enero").
+function formatBucketHeader(rawDate: string, granularity: ForecastRun['granularity']): string {
+  if (!rawDate) return '';
+  const [y, m, d] = rawDate.split('-').map(Number);
+  if (!y || !m) return rawDate;
+  const monthName = MONTH_LABELS_SHORT_ES[(m - 1) % 12];
+  if (granularity === 'monthly') return `${monthName} ${y}`;
+  if (granularity === 'weekly') return `Sem ${d ?? 1} ${monthName} ${y}`;
+  return `${d ?? 1} ${monthName} ${y}`;
+}
+
 // KeepAlivePanel (App.tsx) keeps inactive modules mounted with `display:none`.
 // A still-mounted Recharts ResponsiveContainer then measures 0×0 every
 // hide/show and floods the console. Gate the chart on the container actually
@@ -138,21 +156,39 @@ function CashFlowChartImpl({
   // avoid the misleading affordance and to skip the hover/click state work
   // Recharts performs per-bar.
   const interactiveBars = projection.buckets.length <= 56;
+  // High-bucket-count guard (2026-05-20): at daily granularity Recharts was
+  // rendering ~95 bars × 8 series (~760 SVG nodes), which combined with
+  // grain-flip churn caused "Aw Snap" OOM after 3-4 flips. Skip optional
+  // overlay series (base/comparison closing-cash, probabilistic risk band)
+  // when buckets exceed the threshold — the user can still compare via the
+  // ScenarioComparisonBar above; the chart focuses on the active line. KPIs
+  // and tooltips read from `data` (which keeps the values), so only the
+  // visual overlay is gated.
+  const renderOverlaySeries = projection.buckets.length <= 56;
+
+  // movementById is gran-independent — only rebuilds when projection.movements
+  // ref changes (new scenario run). Splitting it out of `data` skips an 88k
+  // Map.set loop on every grain flip when only buckets changed.
+  const movementById = useMemo(() => {
+    const m = new Map<string, FinancialMovement>();
+    for (const x of projection.movements) m.set(x.id, x);
+    return m;
+  }, [projection.movements]);
 
   const data = useMemo(() => {
     // Build O(1) lookups for the optional series so the main loop stays a
-    // single pass over the active buckets.
-    const baseByDate = baseProjection?.buckets.length
+    // single pass over the active buckets. Skip them entirely when overlay
+    // series won't render (daily+ granularity) — the Maps over a 365-bucket
+    // baseProjection are wasteful if no Line consumes them.
+    const baseByDate = renderOverlaySeries && baseProjection?.buckets.length
       ? new Map(baseProjection.buckets.map((bucket) => [bucket.date, bucket.closingCash]))
       : null;
-    const comparisonByDate = comparisonProjection?.buckets.length
+    const comparisonByDate = renderOverlaySeries && comparisonProjection?.buckets.length
       ? new Map(comparisonProjection.buckets.map((bucket) => [bucket.date, bucket.closingCash]))
       : null;
-    const probabilisticByDate = probabilisticProjection?.buckets.length
+    const probabilisticByDate = renderOverlaySeries && probabilisticProjection?.buckets.length
       ? new Map(probabilisticProjection.buckets.map((bucket) => [bucket.date, bucket]))
       : null;
-    const movementById = new Map<string, FinancialMovement>();
-    for (const m of projection.movements) movementById.set(m.id, m);
     const activeBuckets = projection.buckets;
     const out = new Array(activeBuckets.length);
     for (let i = 0; i < activeBuckets.length; i++) {
@@ -200,12 +236,13 @@ function CashFlowChartImpl({
     return out;
   }, [
     projection.buckets,
-    projection.movements,
+    movementById,
     baseProjection?.buckets,
     comparisonProjection?.buckets,
     probabilisticProjection?.buckets,
     showFloor,
     operatingFloor,
+    renderOverlaySeries,
   ]);
 
   // Reset the open breakdown when the underlying buckets change shape (e.g.
@@ -279,6 +316,12 @@ function CashFlowChartImpl({
               dataKey="date"
               tick={{ fontSize: 11, fill: 'var(--gray-400)' }}
               minTickGap={18}
+              tickFormatter={(v: string) => {
+                if (projection.granularity !== 'monthly') return v;
+                const [yy, mm] = v.split('-').map(Number);
+                if (!yy || !mm) return v;
+                return `${MONTH_LABELS_SHORT_ES[(mm - 1) % 12]} ${String(yy).slice(2)}`;
+              }}
             />
             {/* Un solo eje: el doble eje (flujo izq / saldo der) mostraba dos
                 escalas distintas sobre la misma rejilla, así que la línea no
@@ -296,7 +339,7 @@ function CashFlowChartImpl({
                 if (Array.isArray(value)) return [`${fmtCurrency(value[0])} a ${fmtCurrency(value[1])}`, name];
                 return [fmtCurrency(value), name];
               }}
-              labelFormatter={(_, payload) => payload?.[0]?.payload?.rawDate ?? ''}
+              labelFormatter={(_, payload) => formatBucketHeader(payload?.[0]?.payload?.rawDate ?? '', projection.granularity)}
               isAnimationActive={false}
               contentStyle={{
                 border: '1px solid var(--gray-200)',
@@ -370,7 +413,7 @@ function CashFlowChartImpl({
                 connectNulls
               />
             )}
-            {comparisonProjection && (
+            {comparisonProjection && renderOverlaySeries && (
               <Line
                 type="monotone"
                 dataKey="comparison"

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   AlertTriangle,
   CalendarClock,
@@ -41,7 +41,7 @@ import { MovementDrillDownDrawer } from '../components/MovementDrillDownDrawer';
 import { ScenarioComparisonBar } from '../components/ScenarioComparisonBar';
 import { DeferredMount } from '../components/DeferredMount';
 import { ChartSkeleton } from '../components/SectionSkeletons';
-import { fingerprintArray, primeProjectionRunCache } from '../services/projectionCache';
+import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../services/projectionCache';
 import { projectionWindowFor } from '../services/projectionWindow';
 import { signalProjectionFirstPaint } from '../services/projectionBootSignal';
 import { setScenarioRunPlaceholder } from '../../shared-finance/hooks/useScenarioRunWorker';
@@ -66,7 +66,11 @@ import {
   saveScenarioRunToPersistentCache,
 } from '../services/financialProjectionPersistentCache';
 import { yieldToMain } from '../services/yieldToMain';
-import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
+import {
+  nextSourceJobId,
+  postToSharedSourceWorker,
+  subscribeSharedSourceWorker,
+} from '../../shared-finance/services/sharedSourceWorker';
 import {
   loadManualPlanningEntries,
   saveManualPlanningEntries,
@@ -90,7 +94,6 @@ import {
 import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
-import { CashDeficitBanner } from '../../shared-finance/components/CashDeficitBanner';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
 import EmptyState from '../../shared-finance/components/EmptyState';
 import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
@@ -130,7 +133,7 @@ interface Props {
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
-  startingBalance: number;
+  startingBalance?: number;
   onNavigateToTax?: () => void;
   /** Modelo seleccionado para forecast de futuras OCs. */
   forecastModelId?: ForecastModelId;
@@ -229,8 +232,11 @@ export default function FinancialProjectionDashboard(props: Props) {
   // PERF (2026-05-14): mismo patrón que Planning — el build ahora vive en
   // Web Worker para no pinear el thread varios segundos. Fallback sync si
   // Worker falla. Logs en `[projection.source]` para diagnóstico.
-  const sourceWorkerRef = useRef<Worker | null>(null);
   const sourceJobRef = useRef(0);
+  // Map jobId → input that produced it, so the singleton-worker listener
+  // remembers/caches against the right input (not whatever is current at
+  // result time). Per-dashboard so Planning's jobs don't leak in.
+  const sourceInputByJobId = useRef<Map<number, typeof cacheProbeInput>>(new Map());
   // Debounce source rebuilds. Boot data waves (compras / pagoproveedor /
   // banks FULL fetches) change cacheProbeInput seconds apart; without this
   // the 227k-movement canonical rebuilt 3× back-to-back and posted three
@@ -246,8 +252,9 @@ export default function FinancialProjectionDashboard(props: Props) {
     }
     let cancelled = false;
     let debounce: ReturnType<typeof setTimeout> | null = null;
-    const jobId = ++sourceJobRef.current;
-    const tStart = performance.now();
+    const jobId = nextSourceJobId();
+    sourceJobRef.current = jobId;
+    sourceInputByJobId.current.set(jobId, cacheProbeInput);
 
     const runSyncFallback = async () => {
       await yieldToMain();
@@ -275,38 +282,12 @@ export default function FinancialProjectionDashboard(props: Props) {
         return;
       }
 
-      try {
-        if (!sourceWorkerRef.current) {
-          sourceWorkerRef.current = new Worker(
-            new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
-            { type: 'module' },
-          );
-        }
-        const worker = sourceWorkerRef.current;
-        worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
-          if (cancelled || event.data.jobId !== sourceJobRef.current) return;
-          const totalElapsed = performance.now() - tStart;
-          if (event.data.result) {
-            // eslint-disable-next-line no-console
-            console.info(`[projection.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms`);
-            rememberFinancialProjectionSourceData(cacheProbeInput, event.data.result);
-            saveProjectionSourceToPersistentCache(cacheProbeInput, event.data.result);
-            setSource(event.data.result);
-          } else if (event.data.error) {
-            console.warn(`[projection.source] worker error, fallback`, event.data.error);
-            void runSyncFallback();
-          }
-        };
-        worker.onerror = (event) => {
-          if (cancelled) return;
-          console.warn('[projection.source] worker exception, fallback', event.message);
-          void runSyncFallback();
-        };
-        worker.postMessage({ jobId, input: cacheProbeInput });
-      } catch (err) {
-        console.warn('[projection.source] worker spawn failed, fallback', err);
-        void runSyncFallback();
-      }
+      // Singleton worker shared with Planning + useFinancialProjectionSource —
+      // before, each dashboard spawned its own ~200MB compute worker; both
+      // KeepAlive-mounted dashboards = duplicate. Now one worker handles all
+      // callsites; per-call subscription filters by jobId.
+      const ok = postToSharedSourceWorker({ jobId, input: cacheProbeInput });
+      if (!ok) void runSyncFallback();
     };
 
     void (async () => {
@@ -347,20 +328,35 @@ export default function FinancialProjectionDashboard(props: Props) {
     return () => {
       cancelled = true;
       if (debounce) clearTimeout(debounce);
-      // A source build can take 20-70s with real data. If inputs change while
-      // it is running (boot waves, module switches, cache hit after miss), the
-      // result is obsolete but the worker would keep CPU busy until completion.
-      // Terminate it here; the next effect creates a fresh worker only if it
-      // still needs to build.
-      sourceWorkerRef.current?.terminate();
-      sourceWorkerRef.current = null;
+      // With shared worker we no longer terminate — that would kill jobs
+      // from Planning and useFinancialProjectionSource too. The `cancelled`
+      // flag + jobId-filtered listener guarantee stale results no-op.
     };
   }, [cachedSource, cacheProbeInput, props.isActive]);
 
+  // Subscribe to shared source worker once; filter by the per-job input map
+  // so we only react to jobs this dashboard posted.
   useEffect(() => {
+    const unsub = subscribeSharedSourceWorker((data) => {
+      const myInput = sourceInputByJobId.current.get(data.jobId);
+      if (!myInput) return; // not ours
+      sourceInputByJobId.current.delete(data.jobId);
+      // Stale-job guard: only commit if no newer job was posted after this one.
+      if (data.jobId !== sourceJobRef.current) return;
+      if (data.result) {
+        // eslint-disable-next-line no-console
+        console.info(`[projection.source] worker result jobId=${data.jobId}`);
+        rememberFinancialProjectionSourceData(myInput, data.result);
+        saveProjectionSourceToPersistentCache(myInput, data.result);
+        setSource(data.result);
+      } else if (data.error) {
+        // eslint-disable-next-line no-console
+        console.warn(`[projection.source] worker error`, data.error);
+      }
+    });
     return () => {
-      sourceWorkerRef.current?.terminate();
-      sourceWorkerRef.current = null;
+      unsub();
+      sourceInputByJobId.current.clear();
     };
   }, []);
 
@@ -400,11 +396,15 @@ export default function FinancialProjectionDashboard(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
-  // req 6: primer paint real (source resuelto + cache de runs lista) → avisa
-  // a App para soltar el splash. Idempotente (señal latched).
-  useEffect(() => {
-    if (source && scenarioRunCacheReady) signalProjectionFirstPaint();
-  }, [source, scenarioRunCacheReady]);
+  // req 6: el primer paint REAL ocurre cuando el Inner monta con un activeRun
+  // que ya NO es el placeholder universal (es decir, el worker terminó el
+  // primer per-scenario run). Antes señalábamos en cuanto `source` resolvía,
+  // pero el dashboard seguía mostrando "Cargando proyección de Escenario
+  // Aprobado…" durante 500ms-2s mientras el worker computaba. El usuario
+  // veía el splash desaparecer y la app aparentemente sin data. La señal
+  // ahora vive dentro de `ProjectionDashboardInner` (ver el effect que
+  // dispara cuando `activeRunIsPlaceholder` cae a false). El cap duro de
+  // App garantiza que el splash nunca se cuelga si el run falla.
 
   if (!source || !scenarioRunCacheReady) {
     return <ProjectionWarmupShell />;
@@ -591,6 +591,7 @@ async function runPreloadProjectionScenarioRuns(input: {
           cacheKey: 'warmup:base',
           scenarioId: baseScenario.id,
           sourceVersion: 0,
+          pipelineKey: 'warmup:base:pipeline',
           heavy: heavy as ScenarioForecastRunWorkerRequest['heavy'],
           light: light as ScenarioForecastRunWorkerRequest['light'],
         };
@@ -630,6 +631,11 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   // Off-main-thread scenario pipeline (see useScenarioRunWorker). Cache hit =
   // sync (unchanged); miss = worker + stale-while-recompute, no main-thread freeze.
   const { runCached, runVersion } = useScenarioRunWorker();
+  // projectionRunCache is module-level — survives this component's unmount.
+  // Without this cleanup, MAX_ENTRIES fat ScenarioForecastRun objects (full
+  // post-pipeline movements arrays) stay pinned for the whole SPA session if
+  // the user never enters Planning. Mirror FinancialPlanningDashboard.tsx:455.
+  useEffect(() => () => clearProjectionRunCache(), []);
   // Projection window is granularity-aware — defined just below, after
   // `deferredGranularity`. Monthly keeps the natural-year span (merged
   // Dashboard history + 12mo forward); weekly/daily are bounded to a near
@@ -888,6 +894,14 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         customKey,
         overrideKey,
       ].join('||');
+      // pipelineKey omits granularity so two requests differing only in gran
+      // share the worker's pipeline cache → grain flip = aggregator only.
+      const pipelineKey = [
+        sharedInputsKey,
+        scenarioId,
+        customKey,
+        overrideKey,
+      ].join('||');
 
       const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)
         ? (key: string, run: ScenarioRun) => saveScenarioRunToPersistentCache(key, run)
@@ -923,6 +937,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
           granularity: gran,
         }),
         persistRun,
+        pipelineKey,
       );
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -965,6 +980,12 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   // while the real scenario compute is in-flight. Detect it so we render a
   // loading state instead of showing Base data labeled as Approved/Draft.
   const activeRunIsPlaceholder = activeRun.scenarioId !== activeScenarioId;
+  // Signal the splash gate now that we have a REAL per-scenario run (not the
+  // cross-scenario placeholder). Latched + idempotent: only the first
+  // non-placeholder paint fires; subsequent renders no-op.
+  useEffect(() => {
+    if (!activeRunIsPlaceholder) signalProjectionFirstPaint();
+  }, [activeRunIsPlaceholder]);
   const comparisonRun = useMemo(() => {
     if (!comparisonScenarioId) return null;
     if (comparisonScenarioId === baseScenario.id) return baseRun;
@@ -1160,7 +1181,7 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         comparisonFinalCash={comparisonRun?.summary.finalCash ?? null}
         baseName={baseRun.name}
         baseFinalCash={baseRun.summary.finalCash}
-        onChangeComparison={setComparisonScenarioId}
+        onChangeComparison={(id) => startTransition(() => setComparisonScenarioId(id))}
       />
 
       {activeRunIsPlaceholder && (
@@ -1173,12 +1194,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
       )}
 
 {!activeRunIsPlaceholder && <>
-      <CashDeficitBanner
-        run={activeRun}
-        scenarioName={scenarios.find((s) => s.id === activeScenarioId)?.name ?? activeRun.name}
-        onClickDetail={() => goTo({ tab: 'financialPlanning', focus: 'deficit' })}
-      />
-
       {/* Daily-scan KPIs rescatados del Dashboard: YTD del año en curso +
           piso operativo. Mismo scenario-run que el chart. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

@@ -78,7 +78,7 @@ interface Props {
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
-  startingBalance: number;
+  startingBalance?: number;
 }
 
 type RangePreset = '90d' | 'eoy';

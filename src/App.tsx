@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from 'react';
+import { startTransition, useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from 'react';
 import { TabId, CashFlowOverrides } from './types';
 import { todayISO } from './formatters';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
@@ -45,7 +45,6 @@ import {
   type RolRecord,
 } from './services/jde';
 
-const FIXED_STARTING_BALANCE = 76_300_000;
 // Lazy-loaded so the projection module's Recharts + canonical engine is
 // not in the initial App bundle. This is the single largest chunk in the
 // build — keeping it out of first paint cuts the dashboard's first
@@ -1122,8 +1121,11 @@ export default function App() {
   >(null);
   const [bankCoverageLoading, setBankCoverageLoading] = useState(false);
 
-  // Caja inicial fija — decisión de negocio, no editable por el usuario.
-  const effectiveStartingBalance = FIXED_STARTING_BALANCE;
+  // Caja inicial = Σ saldoInicial bancario real (incluye Bajío). Antes había un
+  // ancla hardcoded de 76.3M para "principio de año"; obsoleto desde que toda
+  // la información bancaria está cargada. `calculateInitialCash` con
+  // `startingBalance=undefined` cae a sumar saldoInicial de los estados de
+  // cuenta provistos.
 
   // OCs (Compras) traducidas a PurchaseReceiptRecord para alimentar el motor
   // canónico de proyección. Emite DOS tipos:
@@ -2468,13 +2470,12 @@ export default function App() {
 
       const errors: string[] = [];
       let totalRecords = 0;
-      const fetchedRecords: CobranzaRecord[] = [];
-      const fetchedCias: string[] = [];
-      const fetchedTimestamps: Record<string, string> = {};
-      const fetchedPayments: CobranzaPayment[] = [];
-      const fetchedPaymentCias: string[] = [];
-      const fetchedPaymentTimestamps: Record<string, string> = {};
-
+      // Cold-boot OOM hardening (2026-05-20): commit per-cia inside the worker
+      // instead of accumulating ALL 30 cias × 2 years in transient arrays
+      // before the final setState. Cold boot was OOMing at ~2GB Main because
+      // the closure held the entire pre-commit dataset + the per-call response
+      // arrays simultaneously. Per-cia commit lets the response array go
+      // GC-eligible as soon as it lands in React state.
       let completed = 0;
       let cursor = 0;
       const concurrency = Math.min(10, ciasToFetch.length);
@@ -2489,18 +2490,28 @@ export default function App() {
           ]);
           if (recordsResult.status === 'fulfilled') {
             const stamped = recordsResult.value.map(r => ({ ...r, cia: r.cia || cia }));
-            fetchedRecords.push(...stamped);
-            fetchedCias.push(cia);
-            fetchedTimestamps[cia] = new Date().toISOString();
             totalRecords += stamped.length;
+            const ts = new Date().toISOString();
+            // Commit this cia's records immediately; React 18 batches the
+            // setState calls across the concurrency pool, so 30 calls don't
+            // turn into 30 renders.
+            setCobranzaRecords(prev => [
+              ...prev.filter(r => r.cia !== cia),
+              ...stamped,
+            ]);
+            setCobranzaLoadedCias(prev => ({ ...prev, [cia]: ts }));
           } else {
             const msg = recordsResult.reason instanceof Error ? recordsResult.reason.message : String(recordsResult.reason);
             errors.push(`${cia}: ${msg}`);
           }
           if (paymentsResult.status === 'fulfilled') {
-            fetchedPayments.push(...paymentsResult.value);
-            fetchedPaymentCias.push(cia);
-            fetchedPaymentTimestamps[cia] = new Date().toISOString();
+            const payments = paymentsResult.value;
+            const ts = new Date().toISOString();
+            setCobranzaPayments(prev => [
+              ...prev.filter(p => p.cia !== cia),
+              ...payments,
+            ]);
+            setCobranzaPaymentsLoadedCias(prev => ({ ...prev, [cia]: ts }));
           } else {
             const msg = paymentsResult.reason instanceof Error ? paymentsResult.reason.message : String(paymentsResult.reason);
             errors.push(`indicadores ${cia}: ${msg}`);
@@ -2514,27 +2525,6 @@ export default function App() {
 
       try {
         await Promise.all(Array.from({ length: concurrency }, worker));
-
-        if (fetchedPaymentCias.length > 0) {
-          const fetchedSet = new Set(fetchedPaymentCias);
-          setCobranzaPayments(prev => [
-            ...prev.filter(p => !fetchedSet.has(p.cia)),
-            ...fetchedPayments,
-          ]);
-          setCobranzaPaymentsLoadedCias(prev => ({
-            ...prev,
-            ...fetchedPaymentTimestamps,
-          }));
-        }
-
-        if (fetchedCias.length > 0) {
-          const fetchedSet = new Set(fetchedCias);
-          setCobranzaRecords(prev => [
-            ...prev.filter(r => !fetchedSet.has(r.cia)),
-            ...fetchedRecords,
-          ]);
-          setCobranzaLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
-        }
 
         if (errors.length > 0) {
           setCobranzaError(`Errores en ${errors.length}/${ciasToFetch.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
@@ -3352,7 +3342,7 @@ export default function App() {
   const navigateToTax = useCallback(() => setActiveTab('taxes'), []);
   const projectionProps = useMemo(() => ({
     companyCode: selectedCia,
-    bankStatements: accountableBankStatements,
+    bankStatements,
     clients,
     providers,
     cxpRecords,
@@ -3366,7 +3356,7 @@ export default function App() {
     payrollCosts: nominaRecords,
     assumptions,
     budget: null,
-    startingBalance: effectiveStartingBalance,
+    startingBalance: undefined,
     onNavigateToTax: navigateToTax,
     forecastModelId,
     onForecastModelChange: setForecastModelId,
@@ -3374,7 +3364,7 @@ export default function App() {
     payrollMonthlyActualJDE,
   }), [
     selectedCia,
-    accountableBankStatements,
+    bankStatements,
     clients,
     providers,
     cxpRecords,
@@ -3387,7 +3377,6 @@ export default function App() {
     purchaseReceiptsFromCompras,
     nominaRecords,
     assumptions,
-    effectiveStartingBalance,
     navigateToTax,
     forecastModelId,
     setForecastModelId,
@@ -3396,7 +3385,7 @@ export default function App() {
   ]);
   const planningProps = useMemo(() => ({
     companyCode: selectedCia,
-    bankStatements: accountableBankStatements,
+    bankStatements,
     bajioStatements,
     clients,
     providers,
@@ -3410,10 +3399,10 @@ export default function App() {
     payrollCosts: nominaRecords,
     assumptions,
     budget: null,
-    startingBalance: effectiveStartingBalance,
+    startingBalance: undefined,
   }), [
     selectedCia,
-    accountableBankStatements,
+    bankStatements,
     bajioStatements,
     clients,
     providers,
@@ -3426,7 +3415,6 @@ export default function App() {
     purchaseReceiptsFromCompras,
     nominaRecords,
     assumptions,
-    effectiveStartingBalance,
   ]);
   const frozenProjectionProps = useFrozenWhenInactive(projectionProps, projectionActive);
   const frozenPlanningProps = useFrozenWhenInactive(planningProps, planningActive);
@@ -3757,7 +3745,7 @@ export default function App() {
                   payrollCosts={nominaRecords}
                   assumptions={assumptions}
                   budget={null}
-                  startingBalance={effectiveStartingBalance}
+                  startingBalance={undefined}
                 />
               </Suspense>
             )}
@@ -3767,6 +3755,17 @@ export default function App() {
                   companyCode={selectedCia}
                   nominaRecords={nominaRecords}
                   nominaLoadedKeys={nominaLoadedKeys}
+                  // Backfill progress hint: how many of the expected 24 months
+                  // (fast-path YTD + historical) have landed in localStorage.
+                  // Boot's setBootSlot('nomina', 'done') fires after the
+                  // fast-path (4 months) so the splash dismisses, but the
+                  // historical backfill keeps merging records for several
+                  // minutes after. UI uses this to show a "loading historic"
+                  // banner so users don't think the partial KPIs are final.
+                  backfillProgress={{
+                    loaded: Object.keys(nominaLoadedKeys).length,
+                    total: 24,
+                  }}
                   onNominaFetched={(merged, freshKeys) => {
                     setNominaRecords(merged);
                     setNominaLoadedKeys(prev => ({ ...prev, ...freshKeys }));
@@ -3970,7 +3969,7 @@ export default function App() {
                   bankFetchStatus={bankFetchStatus}
                   bankFetchProgress={bankFetchProgress}
                   onRefreshBanks={() => refreshBankStatementsRange(true, true)}
-                  startingBalance={effectiveStartingBalance}
+                  startingBalance={undefined}
                 />
               </Suspense>
             )}
@@ -4047,7 +4046,10 @@ function GlobalScenarioSelector() {
         key={s.id}
         role="option"
         aria-selected={isActive}
-        onClick={() => { setActiveScenarioId(s.id); setOpen(false); }}
+        onClick={() => {
+          setOpen(false);
+          startTransition(() => setActiveScenarioId(s.id));
+        }}
         className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] text-[13px] text-left transition"
         style={{
           background: isActive ? 'var(--primary-muted)' : undefined,

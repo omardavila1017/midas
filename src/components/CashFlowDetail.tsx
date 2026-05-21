@@ -22,6 +22,7 @@ import type { LucideIcon } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { fmtCompact, fmtCurrency } from '../formatters';
 import PageHeader from './ui/PageHeader';
+import { calculateInitialCash } from '../modules/financial-projection/services/financialProjectionService';
 
 /**
  * Flujo de efectivo detallado — vista BANK-ONLY.
@@ -48,7 +49,7 @@ interface Props {
    * Saldo inicial — valor fijo por decisión de negocio, mismo que "Caja
    * inicial" en Dashboard. Se muestra pero no es editable.
    */
-  startingBalance: number;
+  startingBalance?: number;
   /**
    * Legacy / compatibility props — ya no se usan en el cómputo del flujo
    * (la vista es bank-only), pero se aceptan para no romper call sites
@@ -98,9 +99,13 @@ export default function CashFlowDetail({
   // Transferencias internas (TRASPASO/TRANSFERENCIA REF, RFCs propios,
   // beneficiarios propios, cuenta destino propia) se filtran antes de sumar.
   // ──────────────────────────────────────────────────────────────
+  const initialCash = useMemo(
+    () => calculateInitialCash(bankStatements, startingBalance),
+    [bankStatements, startingBalance],
+  );
   const { daily, abonosByDate, cargosByDate, internalAbonosByDate, internalCargosByDate } = useMemo(
-    () => computeBankOnlyCashFlow(bankStatements, assumptions.year, startingBalance),
-    [bankStatements, assumptions.year, startingBalance],
+    () => computeBankOnlyCashFlow(bankStatements, assumptions.year, initialCash),
+    [bankStatements, assumptions.year, initialCash],
   );
 
   const weekly = useMemo(() => aggregateWeekly(daily), [daily]);
@@ -133,7 +138,7 @@ export default function CashFlowDetail({
     );
   }, [monthly, sortOrder]);
 
-  const minBalance = daily.reduce((m, d) => Math.min(m, d.cumulative), startingBalance);
+  const minBalance = daily.reduce((m, d) => Math.min(m, d.cumulative), initialCash);
   const minBalanceDate = daily.find(d => d.cumulative === minBalance)?.date;
 
   // ── Empty state — sin datos bancarios todavía ──
@@ -178,11 +183,11 @@ export default function CashFlowDetail({
         <div className="flex items-center gap-3">
           <div
             className={`flex items-center gap-2 h-9 px-3 rounded-[var(--radius-md)] border ${T.border} bg-white text-sm ${T.textMuted}`}
-            title="Saldo inicial fijo por decisión de negocio."
+            title="Saldo inicial real del año (Σ saldoInicial bancario)."
           >
             <span>Saldo inicial</span>
             <span className={`tabular-nums font-medium ${T.text}`}>
-              {fmtCurrency(startingBalance)}
+              {fmtCurrency(initialCash)}
             </span>
           </div>
           <select
