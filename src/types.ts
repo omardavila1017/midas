@@ -23,7 +23,8 @@ export type TabId =
   | 'compras'
   | 'pagos'
   | 'bancos'
-  | 'netflow';
+  | 'netflow'
+  | 'conciliacion';
 
 export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 

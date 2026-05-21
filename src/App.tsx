@@ -68,6 +68,7 @@ const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planni
 const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
 const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
+const ConciliacionDashboard = lazy(() => import('./components/ConciliacionDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
 import { subscribeProjectionFirstPaint } from './modules/financial-projection/services/projectionBootSignal';
@@ -88,7 +89,7 @@ import {
   HandCoins, ChevronRight, BookUser, TrendingUp,
   Receipt, Wallet, FolderOpen,
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
-  Snowflake, AlertTriangle,
+  Snowflake, AlertTriangle, GitCompareArrows,
   type LucideIcon,
 } from 'lucide-react';
 import { clearAllMidasStorage } from './domain/storageRegistry';
@@ -301,7 +302,7 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
 const KEEP_ALIVE_TABS = new Set<TabId>(['financialProjection', 'financialPlanning']);
 
 
-type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion';
+type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'conciliacion';
 
 /**
  * Section + tab order is the canonical sidebar ordering, grouped by money flow.
@@ -320,6 +321,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: s
   { id: 'porPagar',   label: 'Por Pagar',           icon: CreditCard, description: 'CXP, órdenes, pagos, nómina e impuestos' },
   { id: 'cobranza',   label: 'Cobranza',            icon: HandCoins,  description: 'Flujo neto, cobranza y compromisos' },
   { id: 'catalogos',  label: 'Catálogos',           icon: BookUser,   description: 'Clientes, proveedores y bancos' },
+  { id: 'conciliacion', label: 'Conciliación',      icon: GitCompareArrows, description: 'KPIs de cruce banco ↔ cobranza y pagos' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
@@ -345,6 +347,9 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'providers', label: 'Proveedores',  icon: Users },
     { id: 'bancos',    label: 'Bancos',       icon: Landmark },
   ],
+  conciliacion: [
+    { id: 'conciliacion', label: 'Conciliación', icon: GitCompareArrows },
+  ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
@@ -352,6 +357,7 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   cxp: 'porPagar', compras: 'porPagar', pagos: 'porPagar', payroll: 'porPagar', taxes: 'porPagar',
   netflow: 'cobranza', collections: 'cobranza', concursoMercantil: 'cobranza', fideicomiso: 'cobranza',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
+  conciliacion: 'conciliacion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -359,6 +365,7 @@ const DEFAULT_TAB: Record<SectionId, TabId> = {
   porPagar: 'cxp',
   cobranza: 'netflow',
   proyeccion: 'financialProjection',
+  conciliacion: 'conciliacion',
 };
 
 /**
@@ -3936,6 +3943,14 @@ export default function App() {
                   selectedCia={selectedCia}
                   onEnsureBankCoverage={ensureBankCoverageForCollections}
                   bankCoverageLoading={bankCoverageLoading}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'conciliacion' && (
+              <Suspense fallback={<LazyTabFallback label="Conciliación" />}>
+                <ConciliacionDashboard
+                  cobranzaReconciliation={cobranzaReconciliation}
+                  paymentReconciliation={paymentReconciliation}
                 />
               </Suspense>
             )}
