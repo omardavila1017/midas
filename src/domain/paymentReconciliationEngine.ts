@@ -389,7 +389,11 @@ interface IndexedCargo {
   cia: string;
   cuenta: string;
   fechaOperacion: string;
+  /** `fechaOperacion` pre-parsed to epoch ms once — avoids `new Date()` per compare. NaN if absent. */
+  fechaOpEpoch: number;
   key: string;
+  /** Per-account insertion order — tiebreaker so sorting by importe keeps original match selection. */
+  seq: number;
 }
 
 function collectCargoMovements(statements: BankAccountStatement[]): { real: IndexedCargo[]; internal: IndexedCargo[] } {
@@ -410,12 +414,15 @@ function collectCargoMovements(statements: BankAccountStatement[]): { real: Inde
         cuenta: m.cuenta || stmt.cuenta,
         moneda: m.moneda || stmt.moneda,
       };
+      const fechaOp = cleanIsoDate(line.fechaOperacion) ?? '';
       const entry: IndexedCargo = {
         movement: line,
         cia: stmt.cia,
         cuenta: stmt.cuenta,
-        fechaOperacion: cleanIsoDate(line.fechaOperacion) ?? '',
+        fechaOperacion: fechaOp,
+        fechaOpEpoch: parseDateEpoch(fechaOp),
         key: bankMovementKey(line),
+        seq: 0,
       };
       const classification = classifyMovement(line, classificationContext, stmt.cia, stmt.cuenta);
       if (classification.kind === 'internal') internal.push(entry);
@@ -432,6 +439,14 @@ function indexCargosByAccount(cargos: IndexedCargo[]): Map<string, IndexedCargo[
     const arr = map.get(key);
     if (arr) arr.push(c);
     else map.set(key, [c]);
+  }
+  // Stamp insertion order, then sort each account ascending by importe so
+  // `findCargoMatch` can binary-search the amount-tolerance window instead of
+  // scanning every cargo. `seq` preserves the original iteration order as a
+  // tiebreaker → identical match selection, just faster.
+  for (const arr of map.values()) {
+    for (let i = 0; i < arr.length; i++) arr[i].seq = i;
+    arr.sort((a, b) => a.movement.importe - b.movement.importe);
   }
   return map;
 }
@@ -459,6 +474,18 @@ function resolvePaymentAccountKey(payment: PagoProveedorRecord): string {
   return longest.replace(/^0+/, '');
 }
 
+/** First index in `cargos` (sorted asc by importe) whose importe >= target. */
+function lowerBoundByImporte(cargos: IndexedCargo[], target: number): number {
+  let lo = 0;
+  let hi = cargos.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (cargos[mid].movement.importe < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 function findCargoMatch(
   payment: PagoProveedorRecord,
   cargosByAccount: Map<string, IndexedCargo[]>,
@@ -466,27 +493,46 @@ function findCargoMatch(
 ): (IndexedCargo & { tier: Exclude<CargoMatchTier, 'unmatched'> }) | undefined {
   const accountKey = resolvePaymentAccountKey(payment);
   const accountCargos = cargosByAccount.get(accountKey) ?? [];
+  if (accountCargos.length === 0) return undefined;
+
+  const payAmt = payment.importePesos;
+  const payEpoch = parseDateEpoch(payment.fechaPago);
+  // `cargoMatchTier` only matches an amount within ±0.5% (or ±$1). The cargos
+  // are sorted by importe, so we binary-search a generous superset of that
+  // band — 4× the tolerance + $1 slack — and scan only that slice. The real
+  // match gate stays inside `cargoMatchTier`; widening here just guarantees no
+  // in-band cargo is skipped. O(payments × cargos) → O(payments × log + slice).
+  const amountWindow = Math.max(AMOUNT_TOLERANCE_MIN_ABS, payAmt * AMOUNT_TOLERANCE_PCT) * 4 + 1;
+  const hiBound = payAmt + amountWindow;
+
   // Recolecta TODOS los matches dentro de la ventana y devuelve el mejor por
   // (tier exact > tolerance) y, dentro de cada tier, el más cercano en fecha.
   // Con la ventana abierta a ±15d, "primer match" se vuelve no determinístico
   // y permite que un cargo lejano robe el slot a uno cercano del siguiente
-  // pago; ranking lo evita.
+  // pago; ranking lo evita. Empate de tier+días → menor `seq` (orden original).
   let best: (IndexedCargo & { tier: Exclude<CargoMatchTier, 'unmatched'>; days: number }) | undefined;
-  for (const cargo of accountCargos) {
+  for (let i = lowerBoundByImporte(accountCargos, payAmt - amountWindow); i < accountCargos.length; i++) {
+    const cargo = accountCargos[i];
+    if (cargo.movement.importe > hiBound) break;
     if (claimedCargo.has(cargo.key)) continue;
-    const tier = cargoMatchTier(payment, cargo.movement, cargo.fechaOperacion);
+    const rawDays = (cargo.fechaOpEpoch - payEpoch) / DAY_MS;
+    const tier = cargoMatchTier(payAmt, cargo.movement.importe, rawDays);
     if (tier === 'unmatched') continue;
-    const days = Math.abs(daysBetween(payment.fechaPago, cargo.fechaOperacion));
+    const days = Math.abs(rawDays);
     if (!best) {
       best = { ...cargo, tier, days };
       continue;
     }
-    // exact siempre gana sobre tolerance; con mismo tier, gana menor días.
+    // exact siempre gana sobre tolerance; con mismo tier, gana menor días, y
+    // a igualdad de días gana el de menor `seq` (= primero en orden original).
+    let better = false;
     if (tier === 'exact' && best.tier !== 'exact') {
-      best = { ...cargo, tier, days };
-    } else if (tier === best.tier && days < best.days) {
-      best = { ...cargo, tier, days };
+      better = true;
+    } else if (tier === best.tier) {
+      if (days < best.days) better = true;
+      else if (days === best.days && cargo.seq < best.seq) better = true;
     }
+    if (better) best = { ...cargo, tier, days };
   }
   if (!best) return undefined;
   const { days: _days, ...rest } = best;
@@ -541,14 +587,13 @@ function findSubsetMatch(cxps: CXPRecord[], payment: PagoProveedorRecord): CXPRe
   return search(0, paid, []) ?? [];
 }
 
-function cargoMatchTier(payment: PagoProveedorRecord, movement: BankStatementLine, fechaOpIso: string): CargoMatchTier {
-  if (!fechaOpIso || !payment.fechaPago) return 'unmatched';
-  const days = Math.abs(daysBetween(payment.fechaPago, fechaOpIso));
-  const exactDate = days < 0.5;
-  const closeDate = days <= BANK_DATE_WINDOW_DAYS;
-  if (!closeDate) return 'unmatched';
-  if (exactDate && Math.abs(movement.importe - payment.importePesos) < 0.01) return 'exact';
-  if (amountsClose(movement.importe, payment.importePesos, AMOUNT_TOLERANCE_PCT)) return 'tolerance';
+// `rawDays` = signed day delta cargo − pago (NaN if either date missing/bad).
+function cargoMatchTier(payAmt: number, movementImporte: number, rawDays: number): CargoMatchTier {
+  if (!Number.isFinite(rawDays)) return 'unmatched';
+  const days = Math.abs(rawDays);
+  if (days > BANK_DATE_WINDOW_DAYS) return 'unmatched';
+  if (days < 0.5 && Math.abs(movementImporte - payAmt) < 0.01) return 'exact';
+  if (amountsClose(movementImporte, payAmt, AMOUNT_TOLERANCE_PCT)) return 'tolerance';
   return 'unmatched';
 }
 
@@ -668,8 +713,10 @@ function cleanIsoDate(value?: string): string | undefined {
   return /^\d{4}-\d{2}-\d{2}/.test(trimmed) ? trimmed.slice(0, 10) : undefined;
 }
 
+function parseDateEpoch(value: string): number {
+  return new Date(`${value}T00:00:00.000Z`).getTime();
+}
+
 function daysBetween(a: string, b: string): number {
-  const t1 = new Date(`${a}T00:00:00.000Z`).getTime();
-  const t2 = new Date(`${b}T00:00:00.000Z`).getTime();
-  return (t2 - t1) / DAY_MS;
+  return (parseDateEpoch(b) - parseDateEpoch(a)) / DAY_MS;
 }

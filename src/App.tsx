@@ -2953,33 +2953,39 @@ export default function App() {
           }
         };
 
-        // FAST PATH: TODO el año-a-la-fecha (enero→mes actual), mínimo 4 meses
-        // para continuidad sobre el cambio de año / piso 3m. Refetch SIEMPRE,
-        // SIN `shouldSkip` — igual que el botón "Refrescar TRESS".
+        // FAST PATH: refetch SOLO del mes en curso + el mes recién cerrado.
+        // El resto del YTD (y meses históricos) se sirven desde IDB si están
+        // presentes, con llave y NO marcados sospechosos — vía `shouldSkip`.
         //
-        // Causa raíz (corregida en bloque, dejó de ser parche-por-parche): el
-        // boot sólo refetcheaba 4 meses; meses YTD anteriores (típico: enero)
-        // caían al backfill histórico guardado por `shouldSkip`, que los
-        // saltaba si su copia poisoned/parcial de IDB tenía llave + estaba
-        // "presente" y `findSuspectMonths` (heurística estrecha) no la
-        // detectaba. Esos meses se re-persistían poisoned cada boot → la
-        // pantalla mostraba YTD incorrecto hasta un refresh manual. La regla
-        // ahora es estructural, no heurística: NO confiamos en IDB para la
-        // ventana que el usuario debe ver correcta (YTD). `mergeNominaBatch`
-        // reemplaza por (year|month|cia|payrollType) → el fetch correcto
-        // sobrescribe cualquier poison YTD. Meses cerrados anteriores a
-        // enero-de-este-año conservan el guard de cache (no refetch de 24
-        // meses cada boot — perf, ver CLAUDE.md).
+        // Histórico: antes el boot refetcheaba TODO el YTD cada arranque para
+        // sortear payloads truncados por AWS API Gateway (>1MB → meses
+        // parciales que se re-persistían poisoned). Esa causa raíz hoy está
+        // cubierta upstream: `fetchNomina` trocea por empresa (cada response
+        // <1MB) y reintenta ante firmas de truncamiento, y `findSuspectMonths`
+        // purga al boot cualquier mes parcial que sí haya quedado en IDB (su
+        // llave se borra arriba → cae a refetch por `shouldSkip`). Por eso ya
+        // es seguro confiar en IDB para meses cerrados. Se siguen refetcheando
+        // 2 meses: el actual (abierto) y el recién cerrado (puede recibir
+        // ajustes TRESS tardíos). `mergeNominaBatch` reemplaza por
+        // (year|month|cia|payrollType) → el fetch sobrescribe lo persistido.
         const monthsYtd = today.getMonth() + 1;
         const recent = plan(Math.max(4, monthsYtd));
+        // Meses que SIEMPRE se refetchean, ignorando `shouldSkip`: mes actual
+        // + mes inmediato anterior.
+        const FORCE_REFETCH_MONTHS = 2;
+        const forceRefetchKeys = new Set(
+          plan(FORCE_REFETCH_MONTHS).map(p => p.cacheKey),
+        );
         const recentPresentMonths = buildPresentMonths();
         for (const p of recent) {
           // eslint-disable-next-line no-console
           console.info(
-            `[nomina-diag] recent ${p.anio}-${String(p.mes).padStart(2, '0')} · loadedKey=${!!workingLoadedKeys[p.cacheKey]} · presentInRecords=${recentPresentMonths.has(`${p.anio}|${p.mes}`)} · suspect=${suspectKeys.has(p.cacheKey)} · wouldSkip=${shouldSkip(p)}`,
+            `[nomina-diag] recent ${p.anio}-${String(p.mes).padStart(2, '0')} · loadedKey=${!!workingLoadedKeys[p.cacheKey]} · presentInRecords=${recentPresentMonths.has(`${p.anio}|${p.mes}`)} · suspect=${suspectKeys.has(p.cacheKey)} · forced=${forceRefetchKeys.has(p.cacheKey)} · wouldSkip=${shouldSkip(p)}`,
           );
         }
-        const recentToFetch = recent;
+        const recentToFetch = recent.filter(
+          p => forceRefetchKeys.has(p.cacheKey) || !shouldSkip(p),
+        );
         if (recentToFetch.length > 0) {
           // Fast path: commit inmediato (UX — los 4 meses recientes pintan ya).
           const { keys: recentKeys } = await fetchAndMerge(recentToFetch);
