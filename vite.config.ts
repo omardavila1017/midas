@@ -128,6 +128,7 @@ export default defineConfig(({ mode }) => {
           ]
         : []),
     ],
+    base: '/midas/',
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
@@ -176,6 +177,9 @@ export default defineConfig(({ mode }) => {
       // arrastrar react-dom dentro de `vendor-charts` (~133KB de react-dom
       // viajaban en el chunk de charts). Aquí evaluamos react/react-dom
       // PRIMERO para garantizar que terminen en `vendor-react`.
+      worker: {
+        format: 'es',
+      },
       rollupOptions: {
         output: {
           manualChunks(id) {
