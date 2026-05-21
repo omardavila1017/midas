@@ -61,6 +61,16 @@ const NTH_MAP: Record<string, 1 | 2 | 3 | 4 | -1> = {
 };
 
 const ORDINAL_KEYS = Object.keys(NTH_MAP).sort((a, b) => b.length - a.length);
+const DOW_MATCHERS = Object.entries(DOW_MAP).map(([word, day]) => ({
+  matcher: new RegExp(`\\b${word}\\b`),
+  day,
+}));
+const ORDINAL_MATCHERS = ORDINAL_KEYS.map((word) => ({
+  matcher: new RegExp(`\\b${escapeRegExp(word)}\\b`),
+  nth: NTH_MAP[word],
+}));
+const DECORATOR_RE = /\b(?:factoraje|al vencimiento|quincenal|mensual|semanal)\b/g;
+const WHITESPACE_RE = /\s+/g;
 
 function normalize(s: string): string {
   return s
@@ -137,25 +147,23 @@ function isAnyDayPattern(s: string): boolean {
 
 function stripDecorators(s: string): string {
   return s
-    .replace(/\bfactoraje\b/g, ' ')
-    .replace(/\bal vencimiento\b/g, ' ')
-    .replace(/\b(?:quincenal|mensual|semanal)\b/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(DECORATOR_RE, ' ')
+    .replace(WHITESPACE_RE, ' ')
     .trim();
 }
 
 function extractWeekdays(s: string): DayOfWeek[] {
   return uniqueNumbers(
-    Object.keys(DOW_MAP)
-      .filter(k => new RegExp(`\\b${k}\\b`).test(s))
-      .map(w => DOW_MAP[w]),
+    DOW_MATCHERS
+      .filter(({ matcher }) => matcher.test(s))
+      .map(({ day }) => day),
   ) as DayOfWeek[];
 }
 
 function extractOrdinals(s: string): NthOfMonth[] {
-  const hits = ORDINAL_KEYS
-    .filter(word => new RegExp(`\\b${escapeRegExp(word)}\\b`).test(s))
-    .map(word => NTH_MAP[word]);
+  const hits = ORDINAL_MATCHERS
+    .filter(({ matcher }) => matcher.test(s))
+    .map(({ nth }) => nth);
   return uniquePatternNumbers(hits) as NthOfMonth[];
 }
 

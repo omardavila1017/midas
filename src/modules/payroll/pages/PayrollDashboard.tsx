@@ -10,7 +10,7 @@
  * agregados para revisión operativa.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Banknote, Calendar, Coins, Download, Loader2, RefreshCcw, Users } from 'lucide-react';
 import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
 import PageHeader from '../../../components/ui/PageHeader';
@@ -21,6 +21,7 @@ import { fetchNomina, JdeApiError } from '../../../services/jde';
 import {
   computeKpis,
   filterRecords,
+  findSuspectMonths,
   lastNMonths,
   mergeNominaBatch,
   nominaCacheKey,
@@ -43,6 +44,7 @@ interface Props {
    * el usuario no asuma que los KPIs (4 meses YTD) son definitivos.
    */
   backfillProgress?: { loaded: number; total: number };
+  syncStatus?: 'idle' | 'loading' | 'ready' | 'stale' | 'error';
   /**
    * Callback al merge exitoso — App.tsx persiste en MidasStore.
    * `cacheKeys` puede contener varias entradas cuando el refresh jala un
@@ -91,6 +93,7 @@ export default function PayrollDashboard({
   nominaRecords,
   nominaLoadedKeys,
   backfillProgress,
+  syncStatus = 'idle',
   onNominaFetched,
 }: Props) {
   const now = new Date();
@@ -100,6 +103,7 @@ export default function PayrollDashboard({
   const [mes, setMes] = useState<number>(now.getMonth() + 1);
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const autoRefreshAttemptsRef = useRef<Set<string>>(new Set());
 
   const cacheKey = nominaCacheKey({ idEmpresa, tipoNomina, anio, mes });
   const lastLoadedAt = nominaLoadedKeys[cacheKey];
@@ -182,15 +186,58 @@ export default function PayrollDashboard({
   }, [idEmpresa, tipoNomina, anio, mes, nominaRecords, onNominaFetched]);
 
   const hasData = filtered.length > 0;
+  const visibleMonthIsPartial = useMemo(
+    () => findSuspectMonths(filtered).some((item) => item.year === anio && item.month === mes),
+    [filtered, anio, mes],
+  );
   const yearOptions = useMemo(() => {
     const current = now.getFullYear();
     return [current - 1, current, current + 1];
   }, [now]);
 
+  useEffect(() => {
+    if (!visibleMonthIsPartial || loading) return;
+    const key = `${idEmpresa}:${tipoNomina}:${anio}:${mes}`;
+    if (autoRefreshAttemptsRef.current.has(key)) return;
+    autoRefreshAttemptsRef.current.add(key);
+    void refresh();
+  }, [visibleMonthIsPartial, loading, idEmpresa, tipoNomina, anio, mes, refresh]);
+
   const backfillInProgress = backfillProgress && backfillProgress.loaded < backfillProgress.total;
+  const autoSyncInProgress = syncStatus === 'loading' || syncStatus === 'stale';
 
   return (
     <div className="space-y-6">
+      {autoSyncInProgress && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+          style={{
+            borderColor: 'var(--accent-blue)',
+            background: 'color-mix(in oklab, var(--accent-blue) 10%, transparent)',
+            color: 'var(--gray-700)',
+          }}
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Actualizando TRESS automáticamente. Los pagos pueden ajustarse al terminar la sincronización.</span>
+        </div>
+      )}
+      {visibleMonthIsPartial && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+          style={{
+            borderColor: 'var(--warning, #d97706)',
+            background: 'rgba(217, 119, 6, 0.08)',
+            color: 'var(--gray-700)',
+          }}
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Detecté nómina parcial para este mes. Refrescando TRESS automáticamente.</span>
+        </div>
+      )}
       {backfillInProgress && (
         <div
           role="status"

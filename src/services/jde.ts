@@ -72,6 +72,26 @@ type RawRecord = Record<string, unknown>;
 
 const LONG_RUNNING_TIMEOUT_MS = 240_000;
 const LONG_RUNNING_RETRIES = 1;
+const inFlightJdeCalls = new Map<string, Promise<unknown>>();
+
+function stableStringify(value: unknown): string {
+  if (value === undefined) return '';
+  try {
+    return JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort());
+  } catch {
+    return String(value);
+  }
+}
+
+function singleFlight<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const existing = inFlightJdeCalls.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const promise = run().finally(() => {
+    if (inFlightJdeCalls.get(key) === promise) inFlightJdeCalls.delete(key);
+  });
+  inFlightJdeCalls.set(key, promise);
+  return promise;
+}
 
 function withLongRunningDefaults(config: JdeClientConfig = {}): JdeClientConfig {
   return {
@@ -591,6 +611,9 @@ export async function fetchBankStatements(
   req: BankStatementRequest,
   config: JdeClientConfig = {},
 ): Promise<BankAccountStatement[]> {
+  return singleFlight(
+    `bancos:${stableStringify(req)}:${stableStringify(config)}`,
+    async () => {
   const raw = await jdeClient.post<unknown>('/bancos', req, config);
   const list = unwrapList(raw);
   if (list.length === 0) return [];
@@ -611,6 +634,8 @@ export async function fetchBankStatements(
     keptLines.push(ln);
   }
   return groupByAccount(keptRaw, keptLines, req.fechaEstadoCuenta);
+    },
+  );
 }
 
 /**
@@ -882,8 +907,10 @@ function mapCompany(raw: RawRecord): Company {
  * Retorna el catálogo de compañías disponible para el usuario autenticado.
  */
 export async function fetchCompanies(config: JdeClientConfig = {}): Promise<Company[]> {
+  return singleFlight(`empresas:${stableStringify(config)}`, async () => {
   const raw = await jdeClient.get<unknown>('/empresas', config);
   return unwrapList(raw).map(mapCompany).filter(c => c.cia);
+  });
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -1699,6 +1726,9 @@ export async function fetchNomina(
   req: NominaRequest,
   config: JdeClientConfig = {},
 ): Promise<PayrollCostRecord[]> {
+  return singleFlight(
+    `nomina:${stableStringify(req)}:${stableStringify(config)}`,
+    async () => {
   const merged: JdeClientConfig = {
     baseUrl: apiConfig.tress.baseUrl,
     ...config,
@@ -1758,6 +1788,8 @@ export async function fetchNomina(
     return fetchWithRetry(req);
   }
   return fanout;
+    },
+  );
 }
 
 // Exporta helpers internos para que los unit tests puedan ejercitarlos sin

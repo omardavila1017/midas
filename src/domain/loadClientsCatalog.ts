@@ -87,6 +87,54 @@ function rawToClient(raw: RawClient, index: number): Client {
   };
 }
 
+// Cache key (registrada en storageRegistry.ts).
+// El parse del catálogo entero corre regex × N clientes (~52ms de RegExp
+// reportados en el perf trace). El JSON es estático en /public/, así que
+// cacheamos el Client[] ya parseado y lo reusamos cuando el hash del raw
+// text coincide. Primer boot paga el parse; siguientes leen directo.
+const CLIENTS_CATALOG_CACHE_KEY = 'midas.clientsCatalog.cache.v1';
+
+interface ClientsCatalogCacheEntry {
+  hash: string;
+  parsedAt: string;
+  clients: Client[];
+}
+
+/** Hash rápido del raw text (FNV-1a, suficiente como invalidador). */
+function fastHash(value: string): string {
+  let hash = 2_166_136_261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(36) + ':' + value.length;
+}
+
+function readClientsCatalogCache(hash: string): Client[] | null {
+  try {
+    const raw = localStorage.getItem(CLIENTS_CATALOG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ClientsCatalogCacheEntry;
+    if (parsed.hash !== hash || !Array.isArray(parsed.clients)) return null;
+    return parsed.clients;
+  } catch {
+    return null;
+  }
+}
+
+function writeClientsCatalogCache(hash: string, clients: Client[]): void {
+  try {
+    const entry: ClientsCatalogCacheEntry = {
+      hash,
+      parsedAt: new Date().toISOString(),
+      clients,
+    };
+    localStorage.setItem(CLIENTS_CATALOG_CACHE_KEY, JSON.stringify(entry));
+  } catch {
+    // Best-effort. Quota / storage disabled → seguimos sin cache.
+  }
+}
+
 /**
  * Fetch and parse clientes-db.json from /public/.
  * Returns empty array on failure (network error, missing file, bad JSON).
@@ -95,11 +143,19 @@ export async function loadClientsCatalog(): Promise<Client[]> {
   try {
     const res = await fetch('/clientes-db.json');
     if (!res.ok) return [];
-    const data: CatalogJSON = await res.json();
+    // Lee como texto primero para poder hashear antes del JSON.parse —
+    // permite saltarse parse + regex × N si el cache tiene el mismo hash.
+    const rawText = await res.text();
+    const hash = fastHash(rawText);
+    const cached = readClientsCatalogCache(hash);
+    if (cached) return cached;
+    const data = JSON.parse(rawText) as CatalogJSON;
     if (!Array.isArray(data.clientes)) return [];
-    return data.clientes
+    const clients = data.clientes
       .filter(c => c.active !== false)
       .map((c, i) => rawToClient(c, i));
+    writeClientsCatalogCache(hash, clients);
+    return clients;
   } catch {
     return [];
   }

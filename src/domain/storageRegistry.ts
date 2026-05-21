@@ -79,6 +79,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas.budget.v1', scope: 'localStorage', owner: 'domain/budgetPersistence.ts', description: 'Budget (presupuesto OPEX).' },
   { key: 'midas.companyGroups', scope: 'localStorage', owner: 'domain/companyGroups.ts', description: 'Agrupación de compañías.' },
   { key: 'midas.cashFlowSummary.v1', scope: 'localStorage', owner: 'domain/cashFlowSummaryCache.ts', description: 'Cache del resumen de flujo de caja.' },
+  { key: 'midas.clientsCatalog.cache.v1', scope: 'localStorage', owner: 'domain/loadClientsCatalog.ts', description: 'Cache del Client[] parseado desde /clientes-db.json. Hash del raw text como invalidador.' },
   { key: 'midas/reconciliation-confirmations/v1', scope: 'localStorage', owner: 'domain/reconciliationConfirmations.ts', description: 'Set de cruces banco↔cobranza confirmados manualmente.' },
   { key: 'flujo-senda::minimum-expense-overrides', scope: 'localStorage', owner: 'domain/minimumOperatingExpense.ts', description: 'Overrides del gasto operativo mínimo.' },
 

@@ -28,8 +28,10 @@ import type { PayrollCostRecord } from '../modules/shared-finance/types';
 import type { CXPRecord } from '../domain/persistence';
 
 const DB_NAME = 'midas-heavy-store';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'records';
+const CHUNK_STORE_NAME = 'recordChunks';
+const CHUNK_SIZE = 1_000;
 
 export const HEAVY_KEYS = [
   'cxpRecords',
@@ -66,12 +68,48 @@ export function emptyHeavyStore(): HeavyStore {
 }
 
 interface IdbEntry {
-  key: HeavyKey;
+  key: string;
+  records: unknown[];
+}
+
+interface ChunkedEntry {
+  key: string;
+  chunked: true;
+  chunkCount: number;
+  total: number;
+}
+
+interface ChunkEntry {
+  key: string;
   records: unknown[];
 }
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let idbWarned = false;
+const saveQueues = new Map<string, Promise<void>>();
+
+function chunkKey(key: string, index: number): string {
+  return `${key}::${index}`;
+}
+
+function isChunkedEntry(value: unknown): value is ChunkedEntry {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as ChunkedEntry).chunked === true &&
+    typeof (value as ChunkedEntry).chunkCount === 'number',
+  );
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve();
+      return;
+    }
+    window.setTimeout(resolve, 0);
+  });
+}
 
 function openDb(): Promise<IDBDatabase | null> {
   if (dbPromise) return dbPromise;
@@ -108,6 +146,9 @@ function openDb(): Promise<IDBDatabase | null> {
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME, { keyPath: 'key' });
         }
+        if (!db.objectStoreNames.contains(CHUNK_STORE_NAME)) {
+          db.createObjectStore(CHUNK_STORE_NAME, { keyPath: 'key' });
+        }
       };
       req.onsuccess = () => stamp(req.result);
       req.onerror = () => {
@@ -133,82 +174,112 @@ function openDb(): Promise<IDBDatabase | null> {
 
 export async function loadHeavyStore(): Promise<HeavyStore> {
   const out = emptyHeavyStore();
-  const db = await openDb();
-  if (!db) {
-    // eslint-disable-next-line no-console
-    console.warn('[heavyStoreIDB] loadHeavyStore: DB no disponible — boot cold start');
-    return out;
+  for (const key of HEAVY_KEYS) {
+    out[key] = await loadHeavyRecords(key) as never;
   }
-  // `getAll()` dispara UNA sola callback en main thread con todos los entries
-  // en lugar de N callbacks (una por entry) que disparaba `openCursor()`. El
-  // patrón es idéntico al que ya está en `dailyApiCache.ts:ensureMemoryReady`
-  // (CLAUDE.md sección "Performance architecture" lo marca como no-revertir).
-  // El payload nunca pasa los ~7 entries de HEAVY_KEYS, así que el costo de
-  // heap del bulk read es trivial.
-  await new Promise<void>((resolve) => {
-    try {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.getAll();
-      req.onsuccess = () => {
-        const entries = (req.result as IdbEntry[] | undefined) ?? [];
-        for (const val of entries) {
-          if (val && val.key && Array.isArray(val.records) && HEAVY_KEYS.includes(val.key)) {
-            // Cast guiado por la HEAVY_KEYS check — schemas validados river-río
-            // arriba en normalizeStore (heavies migrados pasan por ahí).
-            (out as Record<HeavyKey, unknown[]>)[val.key] = val.records;
-          }
-        }
-        resolve();
-      };
-      req.onerror = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
-    } catch {
-      resolve();
-    }
-  });
   // eslint-disable-next-line no-console
   console.info(`[heavyStoreIDB] loadHeavyStore · ${HEAVY_KEYS.map(k => `${k}=${out[k].length}`).join(' · ')}`);
   return out;
 }
 
-export async function loadHeavyRecords<K extends HeavyKey>(key: K): Promise<HeavyStore[K]> {
+async function readRecords(key: string): Promise<unknown[]> {
   const db = await openDb();
-  if (!db) {
-    // eslint-disable-next-line no-console
-    console.warn(`[heavyStoreIDB] loadHeavyRecords(${key}): DB no disponible`);
-    return emptyHeavyStore()[key];
-  }
-  const records = await new Promise<unknown[]>((resolve) => {
+  if (!db) return [];
+  const entry = await new Promise<IdbEntry | ChunkedEntry | undefined>((resolve) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const store = tx.objectStore(STORE_NAME);
       const req = store.get(key);
-      req.onsuccess = () => {
-        const value = req.result as IdbEntry | undefined;
-        resolve(value && Array.isArray(value.records) ? value.records : []);
-      };
-      req.onerror = () => resolve([]);
-      tx.onerror = () => resolve([]);
-      tx.onabort = () => resolve([]);
+      req.onsuccess = () => resolve(req.result as IdbEntry | ChunkedEntry | undefined);
+      req.onerror = () => resolve(undefined);
+      tx.onerror = () => resolve(undefined);
+      tx.onabort = () => resolve(undefined);
     } catch {
-      resolve([]);
+      resolve(undefined);
     }
   });
+  if (!entry) return [];
+  if (!isChunkedEntry(entry)) {
+    return Array.isArray((entry as IdbEntry).records) ? (entry as IdbEntry).records : [];
+  }
+  const records: unknown[] = [];
+  for (let i = 0; i < entry.chunkCount; i++) {
+    const chunk = await new Promise<unknown[]>((resolve) => {
+      try {
+        const tx = db.transaction(CHUNK_STORE_NAME, 'readonly');
+        const store = tx.objectStore(CHUNK_STORE_NAME);
+        const req = store.get(chunkKey(key, i));
+        req.onsuccess = () => {
+          const value = req.result as ChunkEntry | undefined;
+          resolve(value && Array.isArray(value.records) ? value.records : []);
+        };
+        req.onerror = () => resolve([]);
+        tx.onerror = () => resolve([]);
+        tx.onabort = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
+    });
+    for (const record of chunk) {
+      records.push(record);
+    }
+    await yieldToMain();
+  }
+  return records;
+}
+
+export async function loadHeavyRecords<K extends HeavyKey>(key: K): Promise<HeavyStore[K]> {
+  const records = await readRecords(key);
+  if (records.length === 0 && !(await openDb())) {
+    // eslint-disable-next-line no-console
+    console.warn(`[heavyStoreIDB] loadHeavyRecords(${key}): DB no disponible`);
+  }
   // eslint-disable-next-line no-console
   console.info(`[heavyStoreIDB] loadHeavyRecords(${key}) · ${records.length}`);
   return records as HeavyStore[K];
 }
 
-export async function saveHeavyRecords(key: HeavyKey, records: unknown[]): Promise<void> {
+async function saveChunkedRecords(key: string, records: unknown[]): Promise<void> {
   const db = await openDb();
   if (!db) return;
+  const previous = await new Promise<ChunkedEntry | undefined>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(key);
+      req.onsuccess = () => {
+        const value = req.result;
+        resolve(isChunkedEntry(value) ? value : undefined);
+      };
+      req.onerror = () => resolve(undefined);
+      tx.onerror = () => resolve(undefined);
+      tx.onabort = () => resolve(undefined);
+    } catch {
+      resolve(undefined);
+    }
+  });
+  const chunkCount = Math.ceil(records.length / CHUNK_SIZE);
+  for (let i = 0; i < chunkCount; i++) {
+    const chunk = records.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(CHUNK_STORE_NAME, 'readwrite');
+        const store = tx.objectStore(CHUNK_STORE_NAME);
+        store.put({ key: chunkKey(key, i), records: chunk });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+    await yieldToMain();
+  }
   await new Promise<void>((resolve) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      store.put({ key, records });
+      store.put({ key, chunked: true, chunkCount, total: records.length });
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
       tx.onabort = () => resolve();
@@ -216,6 +287,35 @@ export async function saveHeavyRecords(key: HeavyKey, records: unknown[]): Promi
       resolve();
     }
   });
+  const oldChunkCount = previous?.chunkCount ?? 0;
+  if (oldChunkCount > chunkCount) {
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(CHUNK_STORE_NAME, 'readwrite');
+        const store = tx.objectStore(CHUNK_STORE_NAME);
+        for (let i = chunkCount; i < oldChunkCount; i++) {
+          store.delete(chunkKey(key, i));
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  }
+}
+
+export async function saveHeavyRecords(key: HeavyKey, records: unknown[]): Promise<void> {
+  const previous = saveQueues.get(key) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => saveChunkedRecords(key, records))
+    .finally(() => {
+      if (saveQueues.get(key) === next) saveQueues.delete(key);
+    });
+  saveQueues.set(key, next);
+  await next;
 }
 
 export async function saveHeavyStore(store: HeavyStore): Promise<void> {
@@ -237,36 +337,26 @@ export async function saveHeavyStore(store: HeavyStore): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     try {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const os = tx.objectStore(STORE_NAME);
       const written: HeavyKey[] = [];
-      for (const key of HEAVY_KEYS) {
-        const records = store[key];
-        // Per-key anti-wipe: never overwrite a persisted collection with an
-        // empty array. The heavy state hydrates incrementally during boot,
-        // so a flush (beforeunload / visibilitychange) can call this while
-        // some collections are still empty — writing those zeros would wipe
-        // data that simply hasn't loaded from IDB yet. Intentional clears
-        // must go through clearHeavyStore().
-        if (!records || records.length === 0) continue;
-        os.put({ key, records });
-        written.push(key);
-      }
-      tx.oncomplete = () => {
+      const writeAll = async () => {
+        for (const key of HEAVY_KEYS) {
+          const records = store[key];
+          // Per-key anti-wipe: never overwrite a persisted collection with an
+          // empty array. The heavy state hydrates incrementally during boot,
+          // so a flush (beforeunload / visibilitychange) can call this while
+          // some collections are still empty — writing those zeros would wipe
+          // data that simply hasn't loaded from IDB yet. Intentional clears
+          // must go through clearHeavyStore().
+          if (!records || records.length === 0) continue;
+          await saveHeavyRecords(key, records);
+          written.push(key);
+        }
+      };
+      writeAll().then(() => {
         // eslint-disable-next-line no-console
         console.info(`[heavyStoreIDB] saveHeavyStore ok · ${written.map(k => `${k}=${store[k]?.length ?? 0}`).join(' · ') || '(nada — todo vacío, skip)'}`);
         resolve();
-      };
-      tx.onerror = () => {
-        // eslint-disable-next-line no-console
-        console.warn('[heavyStoreIDB] saveHeavyStore tx error:', tx.error);
-        reject(tx.error);
-      };
-      tx.onabort = () => {
-        // eslint-disable-next-line no-console
-        console.warn('[heavyStoreIDB] saveHeavyStore tx aborted:', tx.error);
-        reject(tx.error);
-      };
+      }).catch(reject);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn('[heavyStoreIDB] saveHeavyStore throw:', err);
@@ -291,72 +381,37 @@ export interface BankStatementsCache {
 }
 
 export async function loadBankStatementsFromIDB(): Promise<BankStatementsCache> {
-  const out: BankStatementsCache = { jde: [], supplemental: [] };
-  const db = await openDb();
-  if (!db) {
+  const [jde, supplemental] = await Promise.all([
+    readRecords(BANK_JDE_IDB_KEY),
+    readRecords(BANK_SUPPLEMENTAL_IDB_KEY),
+  ]);
+  const out: BankStatementsCache = { jde, supplemental };
+  if (jde.length === 0 && supplemental.length === 0 && !(await openDb())) {
     // eslint-disable-next-line no-console
     console.warn('[heavyStoreIDB] loadBankStatementsFromIDB: DB no disponible');
-    return out;
   }
-  await new Promise<void>((resolve) => {
-    try {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const os = tx.objectStore(STORE_NAME);
-      const jdeReq = os.get(BANK_JDE_IDB_KEY);
-      const supReq = os.get(BANK_SUPPLEMENTAL_IDB_KEY);
-      jdeReq.onsuccess = () => {
-        const v = jdeReq.result as { key: string; records: unknown[] } | undefined;
-        if (v && Array.isArray(v.records)) out.jde = v.records;
-      };
-      supReq.onsuccess = () => {
-        const v = supReq.result as { key: string; records: unknown[] } | undefined;
-        if (v && Array.isArray(v.records)) out.supplemental = v.records;
-      };
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
-    } catch {
-      resolve();
-    }
-  });
   // eslint-disable-next-line no-console
   console.info(`[heavyStoreIDB] loadBankStatementsFromIDB · jde=${out.jde.length} · supplemental=${out.supplemental.length}`);
   return out;
 }
 
 async function saveBankKey(key: string, records: unknown[]): Promise<void> {
-  const db = await openDb();
-  if (!db) {
+  if (!(await openDb())) {
     // eslint-disable-next-line no-console
     console.warn(`[heavyStoreIDB] saveBankKey(${key}): DB no disponible`);
     return;
   }
-  await new Promise<void>((resolve) => {
-    try {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const os = tx.objectStore(STORE_NAME);
-      os.put({ key, records });
-      tx.oncomplete = () => {
-        // eslint-disable-next-line no-console
-        console.info(`[heavyStoreIDB] saveBankKey(${key}) ok · count=${records.length}`);
-        resolve();
-      };
-      tx.onerror = () => {
-        // eslint-disable-next-line no-console
-        console.warn(`[heavyStoreIDB] saveBankKey(${key}) tx error:`, tx.error);
-        resolve();
-      };
-      tx.onabort = () => {
-        // eslint-disable-next-line no-console
-        console.warn(`[heavyStoreIDB] saveBankKey(${key}) tx aborted:`, tx.error);
-        resolve();
-      };
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(`[heavyStoreIDB] saveBankKey(${key}) throw:`, err);
-      resolve();
-    }
-  });
+  const previous = saveQueues.get(key) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => saveChunkedRecords(key, records))
+    .finally(() => {
+      if (saveQueues.get(key) === next) saveQueues.delete(key);
+    });
+  saveQueues.set(key, next);
+  await next;
+  // eslint-disable-next-line no-console
+  console.info(`[heavyStoreIDB] saveBankKey(${key}) ok · count=${records.length}`);
 }
 
 export async function saveBankJdeStatementsToIDB(records: unknown[]): Promise<void> {
@@ -380,9 +435,9 @@ export async function clearHeavyStore(): Promise<void> {
   if (!db) return;
   await new Promise<void>((resolve) => {
     try {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const os = tx.objectStore(STORE_NAME);
-      os.clear();
+      const tx = db.transaction([STORE_NAME, CHUNK_STORE_NAME], 'readwrite');
+      tx.objectStore(STORE_NAME).clear();
+      tx.objectStore(CHUNK_STORE_NAME).clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
       tx.onabort = () => resolve();

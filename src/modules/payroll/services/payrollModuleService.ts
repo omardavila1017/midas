@@ -282,7 +282,7 @@ export function findSuspectMonths(
       gross: 0,
     };
     if (r.cashTreatment === 'DEDUCTION') { entry.hasDed = true; entry.dedCount += 1; }
-    if (r.cashTreatment === 'WITHHOLDING_PAYABLE') entry.dedCount += 1;
+    if (r.cashTreatment === 'WITHHOLDING_PAYABLE') { entry.hasDed = true; entry.dedCount += 1; }
     if (r.cashTreatment === 'EMPLOYER_TAX') entry.hasTax = true;
     if (r.cashTreatment === 'CASH_OUT') { entry.cashCount += 1; entry.gross += r.amount; }
     byMonth.set(key, entry);

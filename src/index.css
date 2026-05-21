@@ -80,9 +80,9 @@
   --gray-950: oklch(20% 0.018 248);
   --gray-900: oklch(26% 0.020 248);
   --gray-700: oklch(38% 0.018 248);
-  --gray-500: oklch(52% 0.016 248);
-  --gray-400: oklch(60% 0.014 248);
-  --gray-300: oklch(72% 0.012 248);
+  --gray-500: oklch(50% 0.016 248);
+  --gray-400: oklch(54% 0.014 248);
+  --gray-300: oklch(56% 0.012 248);
   --gray-200: oklch(89% 0.010 248);
   --gray-100: oklch(95% 0.008 248);
   --gray-50:  oklch(98% 0.006 248);
@@ -425,6 +425,12 @@ kbd {
 @keyframes progressFill {
   from { transform: scaleX(0); }
   to   { transform: scaleX(1); }
+}
+
+@keyframes midas-loading {
+  0% { transform: translateX(-125%); }
+  55% { transform: translateX(125%); }
+  100% { transform: translateX(125%); }
 }
 
 @keyframes splashLogoEnter {

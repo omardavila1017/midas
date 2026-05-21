@@ -73,6 +73,7 @@ export const KpiCard: React.FC<KpiCardProps> = ({
   onClick,
   navHint,
 }) => {
+  const navHintId = React.useId();
   const surfaceStyles = {
     ...TONE_SURFACE[tone],
     backgroundImage: tone === 'neutral' ? 'var(--skeuo-linen)' : undefined,
@@ -163,12 +164,20 @@ export const KpiCard: React.FC<KpiCardProps> = ({
       <button
         type="button"
         onClick={onClick}
-        aria-label={navHint ? `${label} — ${navHint}` : `Abrir ${label}`}
+        aria-describedby={navHint ? navHintId : undefined}
         title={navHint}
         className={`${baseClasses} ${interactiveClasses}`}
         style={surfaceStyles}
       >
         {body}
+        {navHint && (
+          <span
+            id={navHintId}
+            className="sr-only"
+          >
+            {navHint}
+          </span>
+        )}
       </button>
     );
   }

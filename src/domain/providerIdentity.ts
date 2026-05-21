@@ -48,16 +48,35 @@ export function normalizeJdeKey(value: string | number | undefined | null): stri
   return text.toUpperCase();
 }
 
+// Memo cache: la función se llama por provider × varias rutas (catalog
+// overlay, deriveProvidersFromJde, buildProviderIndex, reportUnmatched...)
+// con los mismos strings repetidos miles de veces durante boot. Las regex
+// (3 passes + normalize NFKD) son puras → cachear por input ahorra repeat
+// work sin riesgo. Cap el cache a un tamaño razonable por si entra un
+// torrente de nombres únicos (poco probable, pero seguro).
+const PROVIDER_NAME_CACHE = new Map<string, string>();
+const PROVIDER_NAME_CACHE_LIMIT = 20_000;
+
 /** Normaliza un nombre para hacer match cuando no hay código JDE. */
 export function normalizeProviderName(name: string | undefined | null): string {
   if (!name) return '';
-  return name
+  const hit = PROVIDER_NAME_CACHE.get(name);
+  if (hit !== undefined) return hit;
+  const normalized = name
     .toUpperCase()
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^A-Z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (PROVIDER_NAME_CACHE.size >= PROVIDER_NAME_CACHE_LIMIT) {
+    // Cap defensivo: si el cache crece sin límite hay un input no esperado.
+    // Tirar el cache entero es más simple que mantener LRU y suficiente
+    // para el caso patológico (re-llenamos al siguiente paso del catálogo).
+    PROVIDER_NAME_CACHE.clear();
+  }
+  PROVIDER_NAME_CACHE.set(name, normalized);
+  return normalized;
 }
 
 /** Index a catalog list by JDE key and name for O(1) lookup. */

@@ -4,6 +4,7 @@ import {
   buildNominaMonthPlan,
   computeKpis,
   deriveNominaLoadedKeysFromRecords,
+  findSuspectMonths,
   filterStaleNominaPlan,
   filterRecords,
   isCacheFresh,
@@ -247,6 +248,45 @@ describe('refineBatch', () => {
     const refined = refineBatch(input);
     expect(input[0].cashTreatment).toBe('DEDUCTION');
     expect(refined[0].cashTreatment).toBe('WITHHOLDING_PAYABLE');
+  });
+});
+
+describe('findSuspectMonths', () => {
+  it('detecta un mes truncado que solo trae percepciones', () => {
+    const records = [
+      rec({ year: 2026, month: 5, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 100_000 }),
+      rec({ year: 2026, month: 5, conceptName: 'BONO', cashTreatment: 'CASH_OUT', amount: 10_000 }),
+    ];
+
+    expect(findSuspectMonths(records)).toEqual([{ year: 2026, month: 5 }]);
+  });
+
+  it('no marca como sospechoso un mes con percepciones y retenciones', () => {
+    const records = [
+      rec({ year: 2026, month: 5, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 100_000 }),
+      rec({ year: 2026, month: 5, conceptName: 'ISR', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 15_000 }),
+      rec({ year: 2026, month: 5, conceptName: 'IMSS PATRONAL', cashTreatment: 'EMPLOYER_TAX', amount: 18_000 }),
+    ];
+
+    expect(findSuspectMonths(records)).toEqual([]);
+  });
+
+  it('detecta quincena suelta por ratio bajo y gross bajo frente a un mes completo', () => {
+    const completeMonth = [
+      rec({ year: 2026, month: 4, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 100_000 }),
+      rec({ year: 2026, month: 4, conceptName: 'BONO', cashTreatment: 'CASH_OUT', amount: 10_000 }),
+      rec({ year: 2026, month: 4, conceptName: 'ISR', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 15_000 }),
+      rec({ year: 2026, month: 4, conceptName: 'IMSS', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 4_000 }),
+    ];
+    const partialMonth = [
+      rec({ year: 2026, month: 3, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 10_000 }),
+      rec({ year: 2026, month: 3, conceptName: 'BONO', cashTreatment: 'CASH_OUT', amount: 2_000 }),
+      rec({ year: 2026, month: 3, conceptName: 'DESPENSA', cashTreatment: 'CASH_OUT', amount: 1_000 }),
+      rec({ year: 2026, month: 3, conceptName: 'PRIMA', cashTreatment: 'CASH_OUT', amount: 1_000 }),
+      rec({ year: 2026, month: 3, conceptName: 'ISR', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 1_000 }),
+    ];
+
+    expect(findSuspectMonths([...completeMonth, ...partialMonth])).toEqual([{ year: 2026, month: 3 }]);
   });
 });
 
