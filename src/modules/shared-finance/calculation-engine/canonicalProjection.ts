@@ -433,6 +433,14 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       const bankFallbackName = bankLabel === 'SANTANDER'
         ? 'Federal — Santander'
         : (statement.nombreBanco || statement.banco || 'Banco');
+      // CARGOs sin identificar (concepto sin patrón fiscal/proveedor) se
+      // etiquetan por cuenta de banco origen. Sin esto, miles de cargos sin
+      // cruce colapsan en una sola fila "Sin identificar" de varios miles de
+      // millones — imposible de auditar. Por cuenta, la fila gigante se parte
+      // en una por cuenta y el usuario ve de dónde sale el dinero.
+      const unidentifiedOutflowName = `Sin identificar · ${
+        (statement.nombreBanco || statement.banco || 'Banco')
+      } ${statement.cuenta}`.trim();
       // CARGOs sin match a PagoProveedor: clasificar por concepto crudo
       // (`IVA`, `ISR`, `IMSS`, `COMISION`, etc.) para que miles de folios
       // únicos colapsen en pocas filas legibles. Detalle crudo permanece en
@@ -472,7 +480,10 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
           ? matchedPayment!.nombreProveedor || undefined
           : isInflow
             ? bankFallbackName
-            : (cargoProviderHit?.counterpartyName ?? unmatchedCargoClassification!.counterpartyName);
+            : (cargoProviderHit?.counterpartyName
+                ?? (unmatchedCargoClassification!.category === 'TRANSFER'
+                  ? unidentifiedOutflowName
+                  : unmatchedCargoClassification!.counterpartyName));
       const counterpartyId = isCobranzaInflow
         ? (cobranzaDisplay?.id ?? enrichment!.catalogClientId ?? firstFactura?.noCliente ?? undefined)
         : isMatchedAp

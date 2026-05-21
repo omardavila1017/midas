@@ -387,6 +387,54 @@ describe('canonicalProjection IVA metadata', () => {
     expect(sumOutflows).toBe(aprilDashboard?.expense ?? 0);
   });
 
+  it('labels unidentified bank CARGOs per origin account instead of one collapsed row', () => {
+    // Dos CARGOs sin cruce a pago/proveedor ni patrón fiscal, en dos cuentas
+    // distintas. Antes ambos caían a un counterpartyName constante
+    // ('Sin identificar') → un solo conceptKey → una fila gigante imposible
+    // de auditar. Ahora se etiquetan por cuenta de banco origen.
+    const bankStatements: BankAccountStatement[] = [
+      bankStatement({
+        cia: '00001',
+        cuenta: 'CTA-A',
+        movimientos: [
+          bankMovement({ cia: '00001', cuenta: 'CTA-A', tipoMovimiento: 'CARGO', importe: 90_000, fechaOperacion: '2026-04-10', concepto: 'Disposicion folio 88001' }),
+        ],
+      }),
+      bankStatement({
+        cia: '00001',
+        cuenta: 'CTA-B',
+        movimientos: [
+          bankMovement({ cia: '00001', cuenta: 'CTA-B', tipoMovimiento: 'CARGO', importe: 90_000, fechaOperacion: '2026-04-11', concepto: 'Disposicion folio 88001' }),
+        ],
+      }),
+    ];
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements,
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-04-22',
+    });
+
+    const unidentified = canonical.movements.filter(
+      (m) => m.type === 'OUTFLOW' && m.category === 'TRANSFER' && m.status === 'REAL',
+    );
+    expect(unidentified).toHaveLength(2);
+    for (const m of unidentified) {
+      expect(m.counterpartyName).toMatch(/^Sin identificar · /);
+    }
+    const names = new Set(unidentified.map((m) => m.counterpartyName));
+    // Mismo concepto + monto, distinta cuenta → distinto label → no colapsan.
+    expect(names.size).toBe(2);
+    expect(unidentified.some((m) => m.counterpartyName?.includes('CTA-A'))).toBe(true);
+    expect(unidentified.some((m) => m.counterpartyName?.includes('CTA-B'))).toBe(true);
+  });
+
   // Branch no-long-term-projection: regla de negocio nueva — TODA cuenta de
   // banco que no sea Federal (Betterez/Busbud/Via) clasifica su ingreso como
   // Clientes Citi. El businessUnitId del catálogo se conserva como metadato
