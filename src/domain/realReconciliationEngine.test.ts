@@ -997,3 +997,58 @@ describe('reconcileRealCollections — performance indexada', () => {
     expect(result.bankCoverage.totalAbonos).toBe(300);
   });
 });
+
+describe('reconcileRealCollections — exclusión Federal', () => {
+  // 70138237069 = "CONCENTRADORA VENTA FEDERAL" en el catálogo de bancos
+  // (unidadNegocio = FEDERAL). 12345 no está en el catálogo → cuenta normal.
+  const FEDERAL_CUENTA = '70138237069';
+
+  it('aparta los ABONOs de cuentas Federal del pool de cruce', () => {
+    const federalAbono = makeAbono({
+      cia: '00011',
+      cuenta: FEDERAL_CUENTA,
+      fechaOperacion: '2026-02-02',
+      importe: 5000,
+      concepto: 'VENTA TPV',
+    });
+    const normalAbono = makeAbono({
+      cia: '00011',
+      cuenta: '12345',
+      fechaOperacion: '2026-02-02',
+      importe: 3000,
+      concepto: 'TRANSFERENCIA CLIENTE',
+    });
+    const result = reconcileRealCollections(
+      [],
+      [
+        makeAccount({ cia: '00011', cuenta: FEDERAL_CUENTA, movimientos: [federalAbono] }),
+        makeAccount({ cia: '00011', cuenta: '12345', movimientos: [normalAbono] }),
+      ],
+    );
+    expect(result.summary.abonosFederal).toBe(1);
+    expect(result.summary.montoFederal).toBe(5000);
+    // totalAbonos = pool cruzable — NO incluye el ABONO Federal.
+    expect(result.summary.totalAbonos).toBe(1);
+    expect(result.summary.totalAbonoMonto).toBe(3000);
+    const federalEnrichment = result.abonoEnrichments.find(e => e.status === 'federal');
+    expect(federalEnrichment).toBeDefined();
+    expect(federalEnrichment?.importe).toBe(5000);
+  });
+
+  it('un ABONO Federal no cuenta como "sin factura" aunque no haya factura', () => {
+    const federalAbono = makeAbono({
+      cia: '00011',
+      cuenta: FEDERAL_CUENTA,
+      fechaOperacion: '2026-02-02',
+      importe: 8000,
+    });
+    const result = reconcileRealCollections(
+      [],
+      [makeAccount({ cia: '00011', cuenta: FEDERAL_CUENTA, movimientos: [federalAbono] })],
+    );
+    expect(result.summary.abonosSinFactura).toBe(0);
+    expect(result.summary.abonosFederal).toBe(1);
+    // Sin ABONOs cruzables el % es 0/0 → 0, no penaliza.
+    expect(result.summary.pctAbonosCruzados).toBe(0);
+  });
+});

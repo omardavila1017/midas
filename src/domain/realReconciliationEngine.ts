@@ -27,6 +27,11 @@
  *   - ABONOs marcados como `isInternalTransfer` (traspasos entre cuentas
  *     propias) NUNCA entran al pool. El detector vive en
  *     `netCashFlowEngine.ts` y ya ignora RFCs y nombres del grupo.
+ *   - ABONOs en cuentas Federal (catálogo de bancos `unidadNegocio=FEDERAL`:
+ *     TPV, taquillas, OXXO, cajeros, Betterez/Busbud/Via) tampoco entran al
+ *     pool. La venta Federal cae directo al banco y no tiene factura en
+ *     cobranza JDE — contarla como "sin factura" hundiría el % de cruce.
+ *     Se reportan aparte (`abonosFederal` / `montoFederal`).
  *   - Solo se intentan cruces dentro de la MISMA `cia`. Si una factura es
  *     de cia 00011 y el ABONO de cia 00038, no se mezclan — aunque sea
  *     el mismo número de cliente.
@@ -41,6 +46,7 @@
 
 import type { BankAccountStatement, BankStatementLine, CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
 import { bankMovementKey } from './bankMovementKey';
+import { findBankAccount } from './bankAccountsCatalog';
 import {
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
@@ -63,6 +69,19 @@ const COBRO_WINDOW_DAYS = 5;
 
 const DAY_MS = 86_400_000;
 
+/**
+ * Una cuenta es "Federal" cuando el catálogo de bancos la etiqueta
+ * `unidadNegocio = FEDERAL`. La venta Federal (TPV, taquillas, OXXO, cajeros,
+ * Betterez/Busbud/Via) entra directo a esas cuentas concentradoras y NUNCA
+ * tiene una factura en cobranza JDE detrás — no es un ingreso "registrado".
+ * Sus ABONOs jamás van a cruzar contra una factura, así que se apartan del
+ * pool de cruce para no contaminar el % de conciliación.
+ */
+function isFederalAccount(cuenta: string | null | undefined): boolean {
+  const entry = findBankAccount(cuenta);
+  return !!entry && String(entry.unidadNegocio).toUpperCase() === 'FEDERAL';
+}
+
 // ── Tipos públicos ─────────────────────────────────────────────────────────
 
 export type MatchTier =
@@ -77,7 +96,7 @@ export type MatchTier =
   | 'subset'
   | 'multi-abono';
 export type FacturaStatus = 'cobrada-banco' | 'cobrada-jde-sin-banco' | 'pendiente';
-export type AbonoStatus = 'factura-cobrada' | 'cobranza-sin-factura' | 'no-cobranza';
+export type AbonoStatus = 'factura-cobrada' | 'cobranza-sin-factura' | 'no-cobranza' | 'federal';
 export type ReviewStatus = 'auto' | 'review' | 'unmatched';
 export type PaymentReconciliationStatus = 'CONFIRMED_REF' | 'AUTO_UNIQUE' | 'AMBIGUOUS' | 'UNMATCHED';
 
@@ -280,6 +299,9 @@ export interface RealReconciliationSummary {
   abonosFacturaCobrada: number;
   abonosSinFactura: number;
   abonosTraspasoInterno: number;
+  /** ABONOs en cuentas Federal — venta directa a banco, sin factura. No cruzan. */
+  abonosFederal: number;
+  montoFederal: number;
   totalPagosIndicadores?: number;
   pagosConciliadosBanco?: number;
   pagosSinBanco?: number;
@@ -1077,9 +1099,12 @@ export function reconcileRealCollections(
   const detector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
   const pairedKeys = buildPairMatchedKeys(bankStatements);
   const abonos: BankStatementLine[] = [];
+  // ABONOs Federal — apartados del pool de cruce: nunca tienen factura JDE.
+  const federalAbonos: BankStatementLine[] = [];
   let abonosTraspasoInterno = 0;
   for (const account of bankStatements) {
     if (ciaFilter && !ciaFilter.has(account.cia)) continue;
+    const accountIsFederal = isFederalAccount(account.cuenta);
     for (const mov of account.movimientos) {
       const line: BankStatementLine = {
         ...mov,
@@ -1098,6 +1123,11 @@ export function reconcileRealCollections(
       );
       if (classification.kind === 'internal') {
         abonosTraspasoInterno++;
+        continue;
+      }
+      // Cuenta Federal: venta directa a banco sin factura — no cruza.
+      if (accountIsFederal || isFederalAccount(line.cuenta)) {
+        federalAbonos.push(line);
         continue;
       }
       abonos.push(line);
@@ -1707,6 +1737,24 @@ export function reconcileRealCollections(
     });
   }
 
+  // ── 5b. Enriquecer ABONOs Federal (apartados, no cruzan) ──
+  // Quedan visibles para la pestaña Bancos con badge propio, pero fuera del
+  // denominador de cruce — son venta directa a banco, no hay factura que
+  // empatar.
+  for (const abono of federalAbonos) {
+    enrichments.push({
+      movementKey: bankMovementKey(abono),
+      status: 'federal',
+      cia: abono.cia,
+      cuenta: abono.cuenta,
+      fechaOperacion: abono.fechaOperacion,
+      importe: abono.importe,
+      concepto: abono.concepto,
+      referencia: abono.referencia,
+      matchReason: 'Cuenta Federal — venta directa a banco, sin factura en cobranza.',
+    });
+  }
+
   // ── 6. Construir summary ──
   const matches = Array.from(facturaState.values());
   const cobradas = matches.filter(m => m.status === 'cobrada-banco');
@@ -1719,6 +1767,7 @@ export function reconcileRealCollections(
   const totalAbonoMonto = abonos.reduce((s, m) => s + m.importe, 0);
   const abonosFacturaCobrada = enrichments.filter(e => e.status === 'factura-cobrada').length;
   const abonosSinFactura = enrichments.filter(e => e.status === 'cobranza-sin-factura').length;
+  const montoFederal = federalAbonos.reduce((s, m) => s + m.importe, 0);
   const paymentReconciliations = scopedPayments
     .map(payment => paymentReconciliationView(payment, paymentMatchMeta.get(payment.idPago), facturaState, facturaKeyByNormalized))
     .sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro) || a.idPago.localeCompare(b.idPago));
@@ -1774,6 +1823,8 @@ export function reconcileRealCollections(
     abonosFacturaCobrada,
     abonosSinFactura,
     abonosTraspasoInterno,
+    abonosFederal: federalAbonos.length,
+    montoFederal,
     totalPagosIndicadores: scopedPayments.length,
     pagosConciliadosBanco: pagosConciliadosBanco.length,
     pagosSinBanco: pagosSinBanco.length,

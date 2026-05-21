@@ -45,7 +45,7 @@ import PageHeader from './ui/PageHeader';
 import ProviderBadge from './ProviderBadge';
 import { buildProviderIndex } from '../domain/providerIdentity';
 import type { Provider } from '../domain/types';
-import type { PaymentMatch, PaymentStatus, CxpMatchTier } from '../domain/paymentReconciliationEngine';
+import type { PaymentMatch, PaymentStatus, CxpMatchTier, CargoMatchTier } from '../domain/paymentReconciliationEngine';
 import type { CXPRecord } from '../domain/persistence';
 import { isInternalCounterparty } from '../domain/netCashFlowEngine';
 
@@ -125,6 +125,14 @@ const TIER_LABEL: Record<CxpMatchTier, string> = {
   'invoice-amount': 'monto exacto',
   'amount-tolerance': 'monto ±0.5%',
   'subset-sum': 'subset-sum',
+  unmatched: 'sin cruce',
+};
+
+const CARGO_TIER_LABEL: Record<CargoMatchTier, string> = {
+  exact: 'exacto',
+  tolerance: 'tolerancia',
+  'cross-account': 'otra cuenta',
+  subset: 'pago partido',
   unmatched: 'sin cruce',
 };
 
@@ -1162,8 +1170,13 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
                   }}
                   title={`Confianza ${(match.cargoMatch.confidence * 100).toFixed(0)}%`}
                 >
-                  {match.cargoMatch.tier === 'exact' ? 'exacto' : 'tolerancia'}
+                  {CARGO_TIER_LABEL[match.cargoMatch.tier]}
                 </span>
+                {match.cargoMatch.extraMovements && match.cargoMatch.extraMovements.length > 0 && (
+                  <span className="text-[10px] text-[var(--gray-500)]">
+                    +{match.cargoMatch.extraMovements.length} cargo(s)
+                  </span>
+                )}
               </div>
               {match.cargoMatch.movement.concepto && (
                 <div className="text-[11px] text-[var(--gray-500)] font-mono mt-1 truncate" title={match.cargoMatch.movement.concepto}>

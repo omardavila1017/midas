@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ArrowDownCircle, ArrowUpCircle, Banknote, FileWarning } from 'lucide-react';
 import PageHeader from './ui/PageHeader';
 import { KpiCard, type KpiCardProps } from './ui/KpiCard';
 import { fmtInt, fmtKpi, fmtPctInt } from '../formatters';
 import type { RealReconciliationResult } from '../domain/realReconciliationEngine';
 import type { PaymentReconciliationResult } from '../domain/paymentReconciliationEngine';
+import ConciliacionPagosDrilldown from './ConciliacionPagosDrilldown';
 
 /**
  * Conciliación — superficie de SOLO KPIs de conciliación.
@@ -35,6 +36,8 @@ export default function ConciliacionDashboard({
   cobranzaReconciliation,
   paymentReconciliation,
 }: Props) {
+  const [showPagosDrilldown, setShowPagosDrilldown] = useState(false);
+
   const cobros = useMemo(() => {
     const s = cobranzaReconciliation.summary;
     const pagosInd = s.totalPagosIndicadores ?? 0;
@@ -46,6 +49,8 @@ export default function ConciliacionDashboard({
       abonosConFactura: s.abonosFacturaCobrada,
       abonosSinFactura: s.abonosSinFactura,
       abonosInternos: s.abonosTraspasoInterno,
+      abonosFederal: s.abonosFederal ?? 0,
+      montoFederal: s.montoFederal ?? 0,
       pctFacturas: s.pctFacturasCruzadas,
       totalFacturas: s.totalFacturas,
       facturasBanco: s.facturasCobradasBanco,
@@ -118,11 +123,12 @@ export default function ConciliacionDashboard({
             value={fmtPctInt(cobros.pctAbonos)}
             tone={toneForPct(cobros.pctAbonos)}
             icon={<Banknote className="h-4 w-4" />}
-            sublabel={`${fmtInt(cobros.abonosConFactura)} de ${fmtInt(cobros.totalAbonos)} ABONOs`}
+            sublabel={`${fmtInt(cobros.abonosConFactura)} de ${fmtInt(cobros.totalAbonos)} ABONOs cruzables`}
             breakdown={[
               { label: 'Con factura', value: fmtInt(cobros.abonosConFactura), valueColor: 'var(--success)' },
               { label: 'Sin factura', value: fmtInt(cobros.abonosSinFactura), valueColor: 'var(--danger)' },
               { label: 'Traspaso interno', value: fmtInt(cobros.abonosInternos) },
+              { label: 'Federal (no cruza)', value: fmtInt(cobros.abonosFederal) },
             ]}
           />
           <KpiCard
@@ -150,6 +156,22 @@ export default function ConciliacionDashboard({
             ]}
           />
         </div>
+        {cobros.abonosFederal > 0 && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCard
+              label="Federal — no requiere cruce"
+              value={fmtInt(cobros.abonosFederal)}
+              tone="neutral"
+              icon={<Banknote className="h-4 w-4" />}
+              sublabel={`${fmtKpi(cobros.montoFederal)} · venta directa a banco`}
+              breakdown={[
+                { label: 'Venta TPV / taquilla / OXXO', value: fmtInt(cobros.abonosFederal) },
+                { label: 'Sin factura en cobranza JDE', value: '—' },
+              ]}
+            />
+          </div>
+        )}
+
         {cobros.pagosInd > 0 && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiCard
@@ -232,6 +254,8 @@ export default function ConciliacionDashboard({
             tone={pagos.unmatched > 0 ? 'danger' : 'success'}
             icon={<FileWarning className="h-4 w-4" />}
             sublabel={`${fmtKpi(pagos.totalUnmatchedPesos)} sin identificar`}
+            onClick={pagos.unmatched > 0 ? () => setShowPagosDrilldown((v) => !v) : undefined}
+            navHint="Ver diagnóstico trazable"
           />
           <KpiCard
             label="Monto pagado validado"
@@ -245,6 +269,14 @@ export default function ConciliacionDashboard({
             sublabel={`${fmtKpi(pagos.totalInternalPesos)} traspasos entre cuentas propias`}
           />
         </div>
+
+        {showPagosDrilldown && (
+          <ConciliacionPagosDrilldown
+            paymentMatches={paymentReconciliation.paymentMatches}
+            internalPaymentKeys={paymentReconciliation.internalPaymentKeys}
+            onClose={() => setShowPagosDrilldown(false)}
+          />
+        )}
       </section>
     </div>
   );

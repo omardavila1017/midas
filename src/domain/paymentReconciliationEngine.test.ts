@@ -176,13 +176,41 @@ describe('reconcilePayments — CARGO matching', () => {
     expect(result.paymentMatches[0].cargoMatch?.tier).toBe('tolerance');
   });
 
-  it('does not match CARGO from different account', () => {
+  it('matches CARGO from a different account via cross-account tier', () => {
+    // El registro de pago nombra una cuenta, pero el CARGO salió de otra
+    // (patrón de cuentas concentradoras). 2a pasada lo caza.
     const result = reconcilePayments({
       payments: [pago({ cuentaBanco: '111111111' })],
       cxpRecords: [],
-      bankStatements: [statement([cargo({ cuenta: '999999999' })])],
+      bankStatements: [statement([cargo()], { cuenta: '70138708851' })],
+    });
+    expect(result.paymentMatches[0].cargoMatch?.tier).toBe('cross-account');
+    expect(result.paymentMatches[0].status).toBe('MATCHED_BANK_ONLY');
+  });
+
+  it('cross-account does NOT match when dates are far apart', () => {
+    const result = reconcilePayments({
+      payments: [pago({ cuentaBanco: '111111111', fechaPago: '2026-05-04' })],
+      cxpRecords: [],
+      bankStatements: [statement([cargo({ fechaOperacion: '2026-03-01' })], { cuenta: '70138708851' })],
     });
     expect(result.paymentMatches[0].cargoMatch).toBeUndefined();
+  });
+
+  it('matches a split payment via cargo subset (tier subset)', () => {
+    // Un pago dispersado en 2 CARGOs de la misma cuenta que suman el importe.
+    const result = reconcilePayments({
+      payments: [pago({ importePesos: 10000, cuentaBanco: '70138708851' })],
+      cxpRecords: [],
+      bankStatements: [statement([
+        cargo({ importe: 6000, fechaOperacion: '2026-05-04', referencia: 'SPLIT-A' }),
+        cargo({ importe: 4000, fechaOperacion: '2026-05-05', referencia: 'SPLIT-B' }),
+      ])],
+    });
+    const cm = result.paymentMatches[0].cargoMatch;
+    expect(cm?.tier).toBe('subset');
+    expect(cm?.extraMovements?.length).toBe(1);
+    expect(result.paymentMatches[0].status).toBe('MATCHED_BANK_ONLY');
   });
 
   it('marks unclaimed CARGOs as ORPHAN', () => {

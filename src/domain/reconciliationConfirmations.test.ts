@@ -84,6 +84,8 @@ function buildResult(): RealReconciliationResult {
       abonosFacturaCobrada: 0,
       abonosSinFactura: 1,
       abonosTraspasoInterno: 0,
+      abonosFederal: 0,
+      montoFederal: 0,
       pctAbonosCruzados: 0,
       pctFacturasCruzadas: 0,
       ciaBreakdown: [],

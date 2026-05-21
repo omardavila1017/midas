@@ -57,8 +57,25 @@ const CXP_DATE_WINDOW_AFTER_DAYS = 60;
 // fecha dentro del rango — así una ventana ancha no roba matches a otros
 // pagos: el más cercano gana siempre.
 const BANK_DATE_WINDOW_DAYS = 120;
+// Ventana de la 2a pasada (cross-account + subset CARGO). Más estrecha que la
+// de mismo-cuenta: estos cruces son de menor confianza, así que exigimos
+// cercanía temporal para no robar un CARGO a un pago legítimo de otra cuenta.
+const SECONDARY_DATE_WINDOW_DAYS = 7;
 const SUBSET_MAX_INVOICES = 4;
+// Máx CARGOs que puede sumar un pago partido (`tier === 'subset'`).
+const SUBSET_MAX_CARGOS = 4;
+// Ventana para el CARGO-candidato del diagnóstico de pagos UNMATCHED. Más
+// ancha que la del cruce real: aquí no confirmamos nada, solo mostramos la
+// pista más cercana en el drill-down.
+const UNMATCHED_CANDIDATE_WINDOW_DAYS = 45;
 const DAY_MS = 86_400_000;
+
+const CARGO_TIER_CONFIDENCE: Record<Exclude<CargoMatchTier, 'unmatched'>, number> = {
+  exact: 0.95,
+  tolerance: 0.75,
+  'cross-account': 0.55,
+  subset: 0.5,
+};
 
 // ── Tipos públicos ────────────────────────────────────────────────────────
 
@@ -69,9 +86,19 @@ export type CxpMatchTier =
   | 'subset-sum'
   | 'unmatched';
 
+/**
+ * Tier del cruce PAGO ↔ CARGO bancario:
+ *   - exact / tolerance: CARGO en la MISMA cuenta del registro de pago.
+ *   - cross-account: el CARGO salió de OTRA cuenta (tesorería paga desde
+ *     cuentas concentradoras; JDE registra la cuenta nominal de la cía).
+ *   - subset: el pago se dispersó en 2-4 CARGOs de la misma cuenta.
+ * cross-account y subset son cruces de menor confianza — "revisar".
+ */
 export type CargoMatchTier =
   | 'exact'
   | 'tolerance'
+  | 'cross-account'
+  | 'subset'
   | 'unmatched';
 
 /**
@@ -104,10 +131,34 @@ export interface PaymentMatch {
     cuenta: string;
     tier: CargoMatchTier;
     confidence: number;
+    /**
+     * CARGOs adicionales cuando `tier === 'subset'` (el pago se dispersó en
+     * varios cargos). `movement` es el primero; aquí van el resto. La suma de
+     * `movement` + `extraMovements` ≈ `payment.importePesos`.
+     */
+    extraMovements?: BankStatementLine[];
   };
 
   /** Comentario explicativo del cruce (para tooltip/auditoría). */
   reason: string;
+
+  /**
+   * Solo para `status === 'UNMATCHED'` (no interno): el CARGO bancario más
+   * parecido que el motor halló pero NO pudo confirmar como cruce — fuera de
+   * la ventana de fecha de la 2a pasada, o ya reclamado por otro pago. Es la
+   * pista de "rastreo" para el drill-down de conciliación. `undefined` cuando
+   * no existe ningún CARGO de importe parecido en el rango.
+   */
+  unmatchedCandidate?: {
+    movement: BankStatementLine;
+    cuenta: string;
+    /** |fecha del CARGO − fecha del pago| en días. */
+    daysOff: number;
+    /** El CARGO está en la misma cuenta que nombra el registro de pago. */
+    sameAccount: boolean;
+    /** El CARGO ya quedó cruzado a otro pago (no estaba libre). */
+    claimed: boolean;
+  };
 }
 
 /** Estado de cobertura de una CXP — alimenta UI CXP y forecast exclusion. */
@@ -197,6 +248,12 @@ export function reconcilePayments(input: {
   const { real: cargoMovements, internal: internalCargoMovements } = collectCargoMovements(bankStatements);
   const cargoByAccount = indexCargosByAccount(cargoMovements);
   const internalCargoByAccount = indexCargosByAccount(internalCargoMovements);
+  // Índice global por importe (asc) para el cruce cross-account de la 2a
+  // pasada — se construye DESPUÉS de `indexCargosByAccount` porque ése estampa
+  // `seq` (tiebreaker). `lowerBoundByImporte` binbusca la banda de importe.
+  const cargosByImporte = [...cargoMovements].sort(
+    (a, b) => a.movement.importe - b.movement.importe,
+  );
 
   // Tracking ─────────────────────────────────────────────────────────────
   const claimedCxp = new Set<string>();         // CXPs ya asignadas a un pago
@@ -209,7 +266,7 @@ export function reconcilePayments(input: {
   const paymentMatches: PaymentMatch[] = [];
 
   for (const payment of payments) {
-    const isEmployee = payment.tipoBusqueda.trim().toLowerCase().startsWith('employee');
+    const isEmployee = isEmployeePayment(payment);
     const internalCargoMatch = findCargoMatch(payment, internalCargoByAccount, claimedInternalCargo);
     const isInternalPayment = !!internalCargoMatch;
     if (internalCargoMatch) {
@@ -268,7 +325,7 @@ export function reconcilePayments(input: {
           cia: cargo.cia,
           cuenta: cargo.cuenta,
           tier: cargo.tier,
-          confidence: cargo.tier === 'exact' ? 0.95 : 0.75,
+          confidence: CARGO_TIER_CONFIDENCE[cargo.tier],
         };
         claimedCargo.add(cargo.key);
       }
@@ -336,10 +393,76 @@ export function reconcilePayments(input: {
     }
   }
 
+  // ── 2a pasada CARGO: cross-account + subset ──────────────────────────────
+  // Corre DESPUÉS del loop principal a propósito: el cruce de misma-cuenta
+  // (exact/tolerance) reclama primero TODOS sus CARGOs, así un cruce débil
+  // nunca le roba un movimiento a un pago de alta confianza.
+  for (const pm of paymentMatches) {
+    if (pm.cargoMatch) continue;
+    if (internalPaymentKeys.has(paymentKey(pm.payment))) continue;
+
+    let resolved: PaymentMatch['cargoMatch'] | undefined;
+    const cross = findCrossAccountCargo(pm.payment, cargosByImporte, claimedCargo);
+    if (cross) {
+      claimedCargo.add(cross.key);
+      resolved = {
+        movement: cross.movement,
+        cia: cross.cia,
+        cuenta: cross.cuenta,
+        tier: 'cross-account',
+        confidence: CARGO_TIER_CONFIDENCE['cross-account'],
+      };
+    } else {
+      const subset = findCargoSubset(pm.payment, cargoByAccount, claimedCargo);
+      if (subset.length >= 2) {
+        for (const c of subset) claimedCargo.add(c.key);
+        resolved = {
+          movement: subset[0].movement,
+          cia: subset[0].cia,
+          cuenta: subset[0].cuenta,
+          tier: 'subset',
+          confidence: CARGO_TIER_CONFIDENCE.subset,
+          extraMovements: subset.slice(1).map((c) => c.movement),
+        };
+      }
+    }
+    if (!resolved) continue;
+
+    pm.cargoMatch = resolved;
+    pm.status = pm.cxpMatches.length > 0 ? 'MATCHED_FULL' : 'MATCHED_BANK_ONLY';
+    pm.reason = buildReason(pm.status, pm.cxpMatches, resolved, isEmployeePayment(pm.payment));
+
+    for (const mv of [resolved.movement, ...(resolved.extraMovements ?? [])]) {
+      const key = bankMovementKey(mv);
+      cargoEnrichments.set(key, {
+        movementKey: key,
+        status: 'MATCHED',
+        payments: [{
+          noPago: pm.payment.noPago,
+          claveProveedor: pm.payment.claveProveedor,
+          nombreProveedor: pm.payment.nombreProveedor,
+          importe: pm.payment.importePesos,
+          tier: resolved.tier,
+        }],
+      });
+    }
+  }
+
   // ── Marcar CARGOs huérfanos (no asignados a ningún pago) ──
   for (const c of cargoMovements) {
     if (cargoEnrichments.has(c.key)) continue;
     cargoEnrichments.set(c.key, { movementKey: c.key, status: 'ORPHAN' });
+  }
+
+  // ── Diagnóstico de pagos UNMATCHED: rastrea el CARGO más parecido ─────────
+  // No confirma cruce — solo deja una pista para el drill-down. `claimedCargo`
+  // ya es final, así que `claimed` distingue "CARGO libre pero lejos en fecha"
+  // de "CARGO ya tomado por otro pago".
+  for (const pm of paymentMatches) {
+    if (pm.status !== 'UNMATCHED') continue;
+    if (internalPaymentKeys.has(paymentKey(pm.payment))) continue;
+    const candidate = findUnmatchedCandidate(pm.payment, cargosByImporte, claimedCargo);
+    if (candidate) pm.unmatchedCandidate = candidate;
   }
 
   // ── Totals ──
@@ -366,6 +489,11 @@ export function reconcilePayments(input: {
 
 function paymentKey(payment: PagoProveedorRecord): string {
   return `${payment.cia}::${payment.noPago}`;
+}
+
+/** Pago de nómina/empleado — no se cruza con CXP (no pasa por el módulo). */
+function isEmployeePayment(payment: PagoProveedorRecord): boolean {
+  return payment.tipoBusqueda.trim().toLowerCase().startsWith('employee');
 }
 
 function cxpKey(cxp: CXPRecord): string {
@@ -540,6 +668,119 @@ function findCargoMatch(
   return rest;
 }
 
+/**
+ * 2a pasada — cross-account: busca el CARGO en CUALQUIER cuenta, no solo la
+ * del registro de pago. Cubre el patrón de cuentas concentradoras: tesorería
+ * dispersa desde una cuenta maestra y JDE registra la cuenta nominal de la
+ * cía. Importe ±0.5%, fecha dentro de ±SECONDARY_DATE_WINDOW_DAYS, gana el
+ * más cercano en fecha (empate → menor `seq`).
+ */
+function findCrossAccountCargo(
+  payment: PagoProveedorRecord,
+  cargosByImporte: IndexedCargo[],
+  claimedCargo: Set<string>,
+): IndexedCargo | undefined {
+  const payAmt = payment.importePesos;
+  const payEpoch = parseDateEpoch(payment.fechaPago);
+  if (!Number.isFinite(payEpoch) || payAmt <= 0) return undefined;
+  const amountWindow = Math.max(AMOUNT_TOLERANCE_MIN_ABS, payAmt * AMOUNT_TOLERANCE_PCT);
+  const hiBound = payAmt + amountWindow;
+  let best: { cargo: IndexedCargo; days: number } | undefined;
+  for (let i = lowerBoundByImporte(cargosByImporte, payAmt - amountWindow); i < cargosByImporte.length; i++) {
+    const cargo = cargosByImporte[i];
+    if (cargo.movement.importe > hiBound) break;
+    if (claimedCargo.has(cargo.key)) continue;
+    if (!amountsClose(cargo.movement.importe, payAmt, AMOUNT_TOLERANCE_PCT)) continue;
+    const days = Math.abs((cargo.fechaOpEpoch - payEpoch) / DAY_MS);
+    if (!Number.isFinite(days) || days > SECONDARY_DATE_WINDOW_DAYS) continue;
+    if (!best || days < best.days || (days === best.days && cargo.seq < best.cargo.seq)) {
+      best = { cargo, days };
+    }
+  }
+  return best?.cargo;
+}
+
+/**
+ * 2a pasada — subset: el pago se dispersó en 2-SUBSET_MAX_CARGOS CARGOs de la
+ * MISMA cuenta (tranches). Suma cargos no reclamados dentro de la ventana de
+ * fecha cuyo total ≈ importe del pago (±0.5%). Un cargo que por sí solo cuadra
+ * ya lo habría cazado `findCargoMatch`, así que se excluye de los candidatos.
+ */
+function findCargoSubset(
+  payment: PagoProveedorRecord,
+  cargosByAccount: Map<string, IndexedCargo[]>,
+  claimedCargo: Set<string>,
+): IndexedCargo[] {
+  const payAmt = payment.importePesos;
+  const payEpoch = parseDateEpoch(payment.fechaPago);
+  if (!Number.isFinite(payEpoch) || payAmt <= 0) return [];
+  const accountCargos = cargosByAccount.get(resolvePaymentAccountKey(payment)) ?? [];
+  const tol = Math.max(AMOUNT_TOLERANCE_MIN_ABS, payAmt * AMOUNT_TOLERANCE_PCT);
+  const candidates = accountCargos
+    .filter((c) =>
+      !claimedCargo.has(c.key) &&
+      Number.isFinite(c.fechaOpEpoch) &&
+      // Cada tranche debe ser material: un cargo ≤ la tolerancia no altera si
+      // la suma cuadra — incluirlo solo mete ruido (comisiones SPEI, etc.) y
+      // arma subsets espurios. Exigir > tol fuerza tranches reales.
+      c.movement.importe > tol &&
+      Math.abs((c.fechaOpEpoch - payEpoch) / DAY_MS) <= SECONDARY_DATE_WINDOW_DAYS &&
+      !amountsClose(c.movement.importe, payAmt, AMOUNT_TOLERANCE_PCT))
+    .slice(0, 30); // cap combinatorial space
+
+  if (candidates.length < 2) return [];
+
+  // Backtrack acotado a SUBSET_MAX_CARGOS. `candidates` viene ordenado asc por
+  // importe → `remaining < -tol` poda ramas que ya se pasaron.
+  function search(start: number, remaining: number, picks: IndexedCargo[]): IndexedCargo[] | null {
+    if (Math.abs(remaining) <= tol && picks.length >= 2) return picks;
+    if (picks.length >= SUBSET_MAX_CARGOS) return null;
+    if (remaining < -tol) return null;
+    for (let i = start; i < candidates.length; i++) {
+      const found = search(i + 1, remaining - candidates[i].movement.importe, [...picks, candidates[i]]);
+      if (found) return found;
+    }
+    return null;
+  }
+  return search(0, payAmt, []) ?? [];
+}
+
+/**
+ * Diagnóstico (no es cruce): el CARGO de importe parecido (±0.5%) más cercano
+ * en fecha a un pago UNMATCHED, dentro de ±UNMATCHED_CANDIDATE_WINDOW_DAYS.
+ * A diferencia de `findCrossAccountCargo` NO descarta los CARGOs reclamados —
+ * los devuelve con `claimed: true` para que el drill-down explique el caso.
+ */
+function findUnmatchedCandidate(
+  payment: PagoProveedorRecord,
+  cargosByImporte: IndexedCargo[],
+  claimedCargo: Set<string>,
+): PaymentMatch['unmatchedCandidate'] {
+  const payAmt = payment.importePesos;
+  const payEpoch = parseDateEpoch(payment.fechaPago);
+  if (!Number.isFinite(payEpoch) || payAmt <= 0) return undefined;
+  const amountWindow = Math.max(AMOUNT_TOLERANCE_MIN_ABS, payAmt * AMOUNT_TOLERANCE_PCT);
+  const hiBound = payAmt + amountWindow;
+  const acctKey = resolvePaymentAccountKey(payment);
+  let best: { cargo: IndexedCargo; days: number } | undefined;
+  for (let i = lowerBoundByImporte(cargosByImporte, payAmt - amountWindow); i < cargosByImporte.length; i++) {
+    const cargo = cargosByImporte[i];
+    if (cargo.movement.importe > hiBound) break;
+    if (!amountsClose(cargo.movement.importe, payAmt, AMOUNT_TOLERANCE_PCT)) continue;
+    const days = Math.abs((cargo.fechaOpEpoch - payEpoch) / DAY_MS);
+    if (!Number.isFinite(days) || days > UNMATCHED_CANDIDATE_WINDOW_DAYS) continue;
+    if (!best || days < best.days) best = { cargo, days };
+  }
+  if (!best) return undefined;
+  return {
+    movement: best.cargo.movement,
+    cuenta: best.cargo.cuenta,
+    daysOff: Math.round(best.days),
+    sameAccount: normalizeAccountKey(best.cargo.cuenta) === acctKey,
+    claimed: claimedCargo.has(best.cargo.key),
+  };
+}
+
 function findFolioMatch(cxps: CXPRecord[], comentario: string): CXPRecord | undefined {
   const haystack = normalizeInvoice(comentario);
   if (!haystack) return undefined;
@@ -647,8 +888,15 @@ function buildReason(
     parts.push('CXP no encontrada en el rango cargado.');
   }
   if (cargo) {
-    const lab = cargo.tier === 'exact' ? 'exacto' : 'tolerancia';
-    parts.push(`CARGO bancario ${lab} (cuenta ${cargo.cuenta}).`);
+    if (cargo.tier === 'subset') {
+      const n = 1 + (cargo.extraMovements?.length ?? 0);
+      parts.push(`Pago partido en ${n} CARGOs bancarios (cuenta ${cargo.cuenta}).`);
+    } else {
+      const lab = cargo.tier === 'exact' ? 'exacto'
+        : cargo.tier === 'tolerance' ? 'tolerancia'
+        : 'desde otra cuenta (concentradora)';
+      parts.push(`CARGO bancario ${lab} (cuenta ${cargo.cuenta}).`);
+    }
   } else {
     parts.push('Sin CARGO bancario asociado en el rango.');
   }

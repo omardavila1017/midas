@@ -1248,6 +1248,8 @@ function reconciliationResult(matches: RealReconciliationMatch[]): RealReconcili
       abonosFacturaCobrada: 0,
       abonosSinFactura: 0,
       abonosTraspasoInterno: 0,
+      abonosFederal: 0,
+      montoFederal: 0,
       pctAbonosCruzados: 0,
       pctFacturasCruzadas: 0,
       ciaBreakdown: [],
