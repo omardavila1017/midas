@@ -9,6 +9,11 @@ import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
 import { selectComprasForProjection } from './modules/financial-projection/services/comprasProjectionFilter';
 import { buildProviderSpendIndex, enrichProvidersWithRecentSpend } from './domain/providerRecentSpend';
 import { deriveProvidersFromJde } from './domain/providerDerivation';
+import {
+  nextProviderDerivationJobId,
+  postToProviderDerivationWorker,
+  subscribeProviderDerivationWorker,
+} from './workers/sharedProviderDerivationWorker';
 import { loadProviderScoreOverlay } from './domain/loadProvidersCatalog';
 import { setProviderCatalogForCategoryLookup } from './modules/financial-planning/services/providerCategoryGeneralization';
 import {
@@ -842,12 +847,38 @@ export default function App() {
   // a idle para no bloquear LCP — el splash cubre la UI hasta que el boot de
   // bancos termina. Signal `bankCacheLoaded` para que el step 2 del backfill
   // sepa cuándo arrancar.
+  // PERF: prefetch de bundles después del boot. Los módulos están bajo
+  // `lazy()` (líneas 52-65) — sin prefetch, el primer click en cada tab
+  // descarga + parsea + evalúa el chunk en el camino crítico de navegación.
+  // Disparamos `import()` para los 4 más usados en idle post-boot. El cache
+  // del navegador y el módulo de Vite reusan el chunk en el render real, así
+  // que el click final sólo paga el costo del montaje React, no la red.
+  useEffect(() => {
+    if (!isBooted) return;
+    return scheduleIdleTask(() => {
+      void import('./modules/financial-projection/pages/FinancialProjectionDashboard');
+      void import('./modules/financial-planning/pages/FinancialPlanningDashboard');
+      void import('./components/CXP');
+      void import('./components/Bancos');
+      void import('./components/CollectionProjection');
+    }, 5000);
+  }, [isBooted]);
+
   useEffect(() => {
     return scheduleIdleTask(() => {
       void loadBankCaches().then((caches) => {
-        if (caches.bankJdeStatements.length) setBankJdeStatements(caches.bankJdeStatements);
-        if (caches.bankSupplementalStatements.length) setBankSupplementalStatements(caches.bankSupplementalStatements);
-        if (caches.bankLastQuery) setBankLastQuery(caches.bankLastQuery);
+        // PERF: wrap los set-state en startTransition. Los arrays bancarios
+        // hidratados desde IDB son grandes (multi-MB) y disparan re-render +
+        // merge + N memos downstream — todo en una sola tarea sync. Sin
+        // startTransition esa cascada competía con el LCP cuando el idle
+        // callback corría temprano. Con la transición React procesa el set
+        // como work interrumpible y deja pintar primero. `bankCacheLoaded`
+        // sigue urgente (gates de UI dependen de él).
+        startTransition(() => {
+          if (caches.bankJdeStatements.length) setBankJdeStatements(caches.bankJdeStatements);
+          if (caches.bankSupplementalStatements.length) setBankSupplementalStatements(caches.bankSupplementalStatements);
+          if (caches.bankLastQuery) setBankLastQuery(caches.bankLastQuery);
+        });
         setBankCacheLoaded(true);
       });
     });
@@ -857,12 +888,21 @@ export default function App() {
   // (loadBankCaches), the daily-cache path and manual uploads all feed this
   // memo without passing through fetchBankStatements. This is the single
   // chokepoint every bank consumer reads from (same spot as excludeBajio).
+  //
+  // PERF: defer the raw arrays BEFORE the merge. `mergeBankStatements` sorts +
+  // dedupes potentially years of movements × N accounts and was running inside
+  // the LCP-blocking task at boot. Deferring the inputs reagenda el merge
+  // como work de baja prioridad — el LCP pinta primero, el merge se computa
+  // mientras el thread está libre. Mismo patrón que ya usa cxpRecordsDeferred /
+  // pagoProveedorRecordsDeferred más abajo.
+  const bankJdeStatementsDeferred = useDeferredValue(bankJdeStatements);
+  const bankSupplementalStatementsDeferred = useDeferredValue(bankSupplementalStatements);
   const bankStatements = useMemo(
     () =>
-      mergeBankStatements(bankJdeStatements, bankSupplementalStatements).filter(
+      mergeBankStatements(bankJdeStatementsDeferred, bankSupplementalStatementsDeferred).filter(
         s => !matchesExclusionIdentity({ cia: s.cia }),
       ),
-    [bankJdeStatements, bankSupplementalStatements],
+    [bankJdeStatementsDeferred, bankSupplementalStatementsDeferred],
   );
   // BAJIO se exhibe en la pestaña Bancos pero no se contabiliza ni se proyecta:
   // el excedente cae siempre en Banamex, así que incluirlo duplica flujo.
@@ -1855,19 +1895,54 @@ export default function App() {
     // CXP). Correrlo síncrono en el effect bloqueaba main durante boot storm
     // (cada hidratación de records re-disparaba el efecto). idle + debounce
     // de 800ms colapsa la cascada en una sola recomputación post-boot.
-    const cancelIdle = scheduleIdleTask(() => {
-      const derived = deriveProvidersFromJde({
-        agedBalanceRecords: cxpRecords,
-        comprasRecords,
-        pagoProveedorRecords,
-        scoreOverlay,
-      });
+    //
+    // PERF (worker): la derivación itera CXP + compras + pagos para inferir
+    // categoría / score / volumen — varios cientos de ms en main thread post
+    // boot. Lo movimos al worker compartido (sharedProviderDerivationWorker).
+    // Si el worker no está disponible (jsdom / spawn falla) caemos a la
+    // versión sync inline, así los tests y SSR siguen funcionando.
+    let cancelled = false;
+    const jobId = nextProviderDerivationJobId();
+    const applyResult = (derived: ReturnType<typeof deriveProvidersFromJde>) => {
+      if (cancelled) return;
       setProviders(derived);
       // Empuja al módulo de Planeación para que `bucketForMovement` resuelva
       // categoría sin tener que recibir providers por argumento en cada render.
       setProviderCatalogForCategoryLookup(derived);
+    };
+    const cancelIdle = scheduleIdleTask(() => {
+      const inputs = {
+        agedBalanceRecords: cxpRecords,
+        comprasRecords,
+        pagoProveedorRecords,
+        scoreOverlay,
+      };
+      const posted = postToProviderDerivationWorker({ jobId, ...inputs });
+      if (!posted) {
+        // No worker → sync fallback (jsdom / Worker spawn fail).
+        applyResult(deriveProvidersFromJde(inputs));
+      }
     }, 800);
-    return cancelIdle;
+    const unsubscribe = subscribeProviderDerivationWorker((data) => {
+      if (data.jobId !== jobId) return;
+      if (data.result) {
+        applyResult(data.result);
+      } else if (data.error) {
+        // eslint-disable-next-line no-console
+        console.warn('[providerDerivation] worker failed, sync fallback', data.error);
+        applyResult(deriveProvidersFromJde({
+          agedBalanceRecords: cxpRecords,
+          comprasRecords,
+          pagoProveedorRecords,
+          scoreOverlay,
+        }));
+      }
+    });
+    return () => {
+      cancelled = true;
+      cancelIdle();
+      unsubscribe();
+    };
   }, [isBooted, cxpRecords, comprasRecords, pagoProveedorRecords, scoreOverlay]);
 
   // Save state changes — strategy v2 (post Page-Unresponsive fix):

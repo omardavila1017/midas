@@ -288,16 +288,29 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
   // Keep the selected cell visible when navigating by keyboard while the grid
   // is virtualized. Uniform geometry => exact target coordinates.
+  //
+  // Anti-forced-reflow: leemos TODAS las props de layout primero (scrollLeft,
+  // scrollTop, clientWidth, clientHeight), calculamos los targets, y SOLO al
+  // final aplicamos los writes. La versión previa intercalaba un read de
+  // scrollTop después de un write a scrollLeft — eso forzaba al navegador a
+  // recalcular layout entre los dos bloques (Layout event de ~1.2s en perf
+  // traces). Además guard de equality antes del write para evitar
+  // re-disparar scroll listeners cuando no cambia el valor.
   useEffect(() => {
     if (!measured || !selection) return;
     const el = containerRef.current;
     if (!el) return;
+    const scrollLeft = el.scrollLeft;
+    const scrollTop = el.scrollTop;
+    const clientWidth = el.clientWidth;
+    const clientHeight = el.clientHeight;
     const targetLeft = LABEL_COL_WIDTH + selection.colIndex * colWidth;
     const targetRight = targetLeft + colWidth;
-    if (targetLeft < el.scrollLeft + LABEL_COL_WIDTH) {
-      el.scrollLeft = Math.max(0, targetLeft - LABEL_COL_WIDTH);
-    } else if (targetRight > el.scrollLeft + el.clientWidth) {
-      el.scrollLeft = targetRight - el.clientWidth;
+    let nextScrollLeft = scrollLeft;
+    if (targetLeft < scrollLeft + LABEL_COL_WIDTH) {
+      nextScrollLeft = Math.max(0, targetLeft - LABEL_COL_WIDTH);
+    } else if (targetRight > scrollLeft + clientWidth) {
+      nextScrollLeft = targetRight - clientWidth;
     }
     const inflowLen = visibleInflowDisplayRows.length;
     const localTop = selection.rowIndex < inflowLen
@@ -305,11 +318,14 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       : outflowTopRef.current + (selection.rowIndex - inflowLen) * ROW_HEIGHT;
     const targetTop = localTop;
     const targetBottom = localTop + ROW_HEIGHT;
-    if (targetTop < el.scrollTop) {
-      el.scrollTop = targetTop;
-    } else if (targetBottom > el.scrollTop + el.clientHeight - FOOTER_RESERVE) {
-      el.scrollTop = targetBottom - el.clientHeight + FOOTER_RESERVE;
+    let nextScrollTop = scrollTop;
+    if (targetTop < scrollTop) {
+      nextScrollTop = targetTop;
+    } else if (targetBottom > scrollTop + clientHeight - FOOTER_RESERVE) {
+      nextScrollTop = targetBottom - clientHeight + FOOTER_RESERVE;
     }
+    if (nextScrollLeft !== scrollLeft) el.scrollLeft = nextScrollLeft;
+    if (nextScrollTop !== scrollTop) el.scrollTop = nextScrollTop;
   }, [selection, measured, colWidth, visibleInflowDisplayRows.length]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {

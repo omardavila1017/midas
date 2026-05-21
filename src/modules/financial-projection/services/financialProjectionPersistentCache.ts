@@ -132,8 +132,15 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     // without touching `lastUpdatedAt`, so they must be fingerprinted directly.
     // `paymentPeriod` and `clasificacionAlberto` drive payment scheduling.
     `providers=${fingerprintArray(input.providers, (item) => fields(item, ['id', 'name', 'type', 'risk', 'flexibility', 'paymentPeriod', 'score', 'clasificacionAlberto', 'montoPromedioPago', 'gastoMinimoMensual', 'lastUpdatedAt']))}`,
-    `cxp=${fingerprintArray(input.cxpRecords, (item) => fields(item, ['cia', 'noFactura', 'noProveedor', 'nombreProveedor', 'importePendientePesos', 'fechaProgramacionPago', 'fechaVencimiento', 'status', 'updatedAt']))}`,
-    `cobranza=${fingerprintArray(input.cobranzaRecords ?? [], (item) => fields(item, ['cia', 'noCliente', 'nombreCliente', 'noFactura', 'importeBrutoPesos', 'fechaFactura', 'fechaVence', 'fechaCobro', 'updatedAt']))}`,
+    // `cxp` y `cobranza` son ledger-posted desde JDE — no se editan in-place,
+    // sólo entran/salen records vía upsert por (cia, noFactura). Como Rol, la
+    // longitud es señal estructural suficiente: cualquier mutación real cambia
+    // el conteo. El fingerprint completo iteraba ~65k filas (cobranza) en cada
+    // cómputo de clave, bloqueando 100-300ms el main thread. `updatedAt` no
+    // existe en CobranzaRecord ni CXPRecord (verificado en jdeTypes.ts y
+    // persistence.ts), así que el walk full no aportaba señal extra.
+    `cxp=len:${input.cxpRecords.length}`,
+    `cobranza=len:${(input.cobranzaRecords ?? []).length}`,
     // Fingerprint barato: longitud nada más. Iterar campos de 65k records
     // bloqueaba ~100-300ms el main thread en CADA cómputo de clave (boot +
     // cada cambio de cacheProbeInput). `refreshRol` ya usa upsert por
@@ -367,11 +374,21 @@ function fingerprintArray<T>(items: readonly T[], pick: (item: T) => string): st
 }
 
 function bankStatementFingerprint(statement: FinancialProjectionSourceInput['bankStatements'][number]): string {
-  const movementHash = fingerprintArray(statement.movimientos ?? [], (line) =>
-    fields(line, ['fechaOperacion', 'tipoMovimiento', 'importe', 'referencia', 'concepto', 'cuentaBancos']),
-  );
+  // Movimientos bancarios son ledger-posted desde JDE / supplemental upload —
+  // no se editan in-place, sólo entran nuevos al final. Longitud + máxima
+  // `fechaOperacion` carga señal estructural suficiente sin iterar 6 campos
+  // × N movimientos × M cuentas (era el hot path dominante en el perf trace
+  // después de P2: `foldHash` + `fingerprintArray` calientes). Para 2 años
+  // de movimientos × ~10 cuentas, el walk completo era ~50k iteraciones por
+  // cómputo de clave.
+  const movs = statement.movimientos ?? [];
+  let maxFecha = '';
+  for (const m of movs) {
+    const f = (m as { fechaOperacion?: string }).fechaOperacion ?? '';
+    if (f > maxFecha) maxFecha = f;
+  }
   return fields(statement, ['cia', 'banco', 'nombreBanco', 'cuenta', 'moneda', 'fechaEstadoCuenta', 'saldoInicial', 'saldoFinal'])
-    + `:mov=${movementHash}`;
+    + `:mov=len:${movs.length}:max:${maxFecha}`;
 }
 
 function fields(value: unknown, keys: string[]): string {

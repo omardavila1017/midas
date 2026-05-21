@@ -139,24 +139,27 @@ export async function loadHeavyStore(): Promise<HeavyStore> {
     console.warn('[heavyStoreIDB] loadHeavyStore: DB no disponible — boot cold start');
     return out;
   }
+  // `getAll()` dispara UNA sola callback en main thread con todos los entries
+  // en lugar de N callbacks (una por entry) que disparaba `openCursor()`. El
+  // patrón es idéntico al que ya está en `dailyApiCache.ts:ensureMemoryReady`
+  // (CLAUDE.md sección "Performance architecture" lo marca como no-revertir).
+  // El payload nunca pasa los ~7 entries de HEAVY_KEYS, así que el costo de
+  // heap del bulk read es trivial.
   await new Promise<void>((resolve) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const store = tx.objectStore(STORE_NAME);
-      const req = store.openCursor();
+      const req = store.getAll();
       req.onsuccess = () => {
-        const cursor = req.result;
-        if (cursor) {
-          const val = cursor.value as IdbEntry;
+        const entries = (req.result as IdbEntry[] | undefined) ?? [];
+        for (const val of entries) {
           if (val && val.key && Array.isArray(val.records) && HEAVY_KEYS.includes(val.key)) {
             // Cast guiado por la HEAVY_KEYS check — schemas validados river-río
             // arriba en normalizeStore (heavies migrados pasan por ahí).
             (out as Record<HeavyKey, unknown[]>)[val.key] = val.records;
           }
-          cursor.continue();
-        } else {
-          resolve();
         }
+        resolve();
       };
       req.onerror = () => resolve();
       tx.onerror = () => resolve();
