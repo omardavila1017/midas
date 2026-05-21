@@ -104,6 +104,23 @@ export function fmtISO(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * "Today" as YYYY-MM-DD in America/Mexico_City (the only locale this app
+ * serves). Replaces `new Date().toISOString().slice(0, 10)` which returns
+ * the UTC date — that crosses midnight 6h early for users in CST, so any
+ * boundary check ("is this in the past?", asOfDate, daily cache keys)
+ * drifts a day after 6pm local.
+ */
+const TODAY_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Mexico_City',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+export function todayISO(): string {
+  return TODAY_FORMATTER.format(new Date());
+}
+
 /** "YYYY-MM" → "Ago 26" (para ejes compactos de mes-año). */
 export function fmtYearMonthShort(yearMonth: string): string {
   const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];

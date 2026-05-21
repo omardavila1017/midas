@@ -1,18 +1,23 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from 'react';
 import { TabId, CashFlowOverrides } from './types';
+import { todayISO } from './formatters';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadLightStore, saveStore, saveLightStore, CXPRecord } from './domain/persistence';
 import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
+import { selectComprasForProjection } from './modules/financial-projection/services/comprasProjectionFilter';
 import { buildProviderSpendIndex, enrichProvidersWithRecentSpend } from './domain/providerRecentSpend';
+import { deriveProvidersFromJde } from './domain/providerDerivation';
+import { loadProviderScoreOverlay } from './domain/loadProvidersCatalog';
+import { setProviderCatalogForCategoryLookup } from './modules/financial-planning/services/providerCategoryGeneralization';
 import {
   forecastFutureCompras,
   DEFAULT_FORECAST_MODEL,
   type ForecastModelId,
 } from './domain/comprasForecastModels';
 import { clearAuth } from './components/Login';
-import { fetchClientCatalog, fetchProviderCatalog } from './services/catalog.service';
+import { fetchClientCatalog } from './services/catalog.service';
 import { primeDailyCache, getMaxCachedDay, nextIsoDay, isDailyCachePersistent } from './services/dailyApiCache';
 import {
   loadBankStatementsFromIDB,
@@ -47,7 +52,6 @@ const FIXED_STARTING_BALANCE = 76_300_000;
 // interaction-time noticeably on cold loads.
 const Providers = lazy(() => import('./components/Providers'));
 const Clients = lazy(() => import('./components/Clients'));
-const Dashboard = lazy(() => import('./components/Dashboard'));
 const CashFlowDetail = lazy(() => import('./components/CashFlowDetail'));
 const CXP = lazy(() => import('./components/CXP'));
 const Compras = lazy(() => import('./components/Compras'));
@@ -61,27 +65,29 @@ const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
 const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
-import MidasSplash, { type BootTask, type BootTaskStatus } from './components/MidasSplash';
+import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
+import { subscribeProjectionFirstPaint } from './modules/financial-projection/services/projectionBootSignal';
 import DarkModeToggle from './components/ui/DarkModeToggle';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
 import CommandPalette, { type CommandPaletteAction } from './components/CommandPalette';
-import { loadPlanningScenarios, loadPlanningAdjustments } from './modules/financial-planning/services/financialPlanningStorage';
+import { loadPlanningScenarios, loadPlanningAdjustments, listHeaderScenarios } from './modules/financial-planning/services/financialPlanningStorage';
 import { NavigationProvider, type AppTabId, type NavTarget } from './modules/shared-finance/components/NavigationContext';
+import { ScenarioSelectionProvider, useScenarioSelection } from './modules/shared-finance/components/ScenarioSelectionContext';
 import DashboardLoadingShell from './modules/shared-finance/components/DashboardLoadingShell';
-import type { PayrollCostRecord } from './modules/shared-finance/types';
-import { findSuspectMonths, mergeNominaBatch, nominaCacheKey, refineBatch } from './modules/payroll/services/payrollModuleService';
+import type { PayrollCostRecord, FinancialScenario } from './modules/shared-finance/types';
+import { deriveNominaLoadedKeysFromRecords, findSuspectMonths, mergeNominaBatch, nominaCacheKey, refineBatch } from './modules/payroll/services/payrollModuleService';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
-  LayoutDashboard,
   Users, UserSquare,
-  Building2, Loader2, ChevronDown, AlertCircle, Landmark, Check,
-  HandCoins, ChevronRight, BookUser, Activity, TrendingUp,
-  Receipt, Wallet, FolderPlus, Pencil, Trash2, X, FolderOpen,
+  ChevronDown, Landmark, Check, GitBranch, Lock,
+  HandCoins, ChevronRight, BookUser, TrendingUp,
+  Receipt, Wallet, FolderOpen,
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
+  Snowflake, AlertTriangle,
   type LucideIcon,
 } from 'lucide-react';
-import { CompanyGroup, loadCompanyGroups, saveCompanyGroups, newGroupId, GROUP_COLORS, resolveActiveCias } from './domain/companyGroups';
+import { clearAllMidasStorage } from './domain/storageRegistry';
 import { filterActiveCompanies, matchesExclusionIdentity } from './domain/companyExclusion';
 import {
   attachImportedStatementsToKnownCompanies,
@@ -112,6 +118,12 @@ import {
   type MatcherOutput,
   type OrphanNoCliente,
 } from './domain/clientCobranzaMatcher';
+import { useToast } from './components/Toast';
+import {
+  consumePurgeNotice,
+  markBootComplete,
+  purgeReasonMessage,
+} from './services/storageHealthGuard';
 
 // Umbral más laxo que AUTO_ACCEPT_THRESHOLD (0.85) — todo lo que cae aquí se
 // adjunta solo a la cuenta del catálogo, sin pasar por wizard.
@@ -142,12 +154,6 @@ function normalizeCompanyName(s: string | undefined | null): string {
     .replace(/\b(SA|SAB|SAPI|SC|AC|RL|DE|CV|S\s*EN\s*C)\b/g, '')
     .replace(/[^A-Z0-9]/g, '')
     .trim();
-}
-
-function addMonthsIso(date: Date, months: number): string {
-  const next = new Date(date);
-  next.setUTCMonth(next.getUTCMonth() + months);
-  return next.toISOString().slice(0, 10);
 }
 
 // Marcadores típicos de razón social mexicana — si aparece alguno en el
@@ -231,15 +237,29 @@ const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
-// Boot auto-fetch lookback. Con chunks de 1 día (requisito del usuario para
-// alimentar el cache diario), 730 días históricos dan base suficiente al
-// motor predictivo Holt-Winters (≥24 meses). Compras agrega además 3 meses
-// futuros para OCs ya capturadas; PagoProveedor se queda histórico porque son
-// pagos ejecutados. El cache IDB persistente sirve días pasados sin tocar JDE
-// en boot subsecuentes — solo el primer arranque pega duro.
-const COMPRAS_LOOKBACK_DAYS = 730;
+// Boot auto-fetch lookback para Compras/Pagos. NO alimenta Holt-Winters (ese
+// entrena con cobranza/nómina; compras sólo aporta un overlay de OCs futuras).
+// Antes era 180d: suficiente para proyección (sólo OCs cuya fecha de pago
+// sigue abierta, y el crédito MX ≤ 6m). Pero la auditoría Pago↔CXP↔OC en
+// Pagos necesita OCs históricas — un pago de Mar-2026 puede cubrir CXPs
+// emitidas en Oct/Nov-2025, y sus OCs caen fuera de 180d. 365d cubre el año
+// fiscal completo de compras sin explotar el cold-boot (~2x vs 180; el cache
+// IDB diario absorbe el delta). Lo vencido-no-pagado lo cubren CXP +
+// conciliación pagoProveedor, no 2 años de compras. El filtro
+// `selectComprasForProjection` (drop fechaPago < hoy) sigue recortando para
+// proyección. Futuro: +3 meses vía COMPRAS_FUTURE_LOOKAHEAD_MONTHS.
+const COMPRAS_LOOKBACK_DAYS = 365;
 const COMPRAS_FUTURE_LOOKAHEAD_MONTHS = 3;
 const COMPRAS_CACHE_KEY = '__all__';
+// Whitelist explícito de cías que SÍ generan órdenes de compra relevantes.
+// El resto del catálogo JDE (subsidiarias dormidas, holdings, etc.) devuelve
+// OCs vacías o irrelevantes — pedirlas era ~17 cías × 13 meses ≈ 220 requests
+// inútiles por boot. 00033 (Multicarga) queda fuera por exclusión global —
+// ver src/domain/companyExclusion.ts.
+const COMPRAS_ALLOWED_CIAS = new Set<string>([
+  '00001', '00011', '00029', '00030', '00036',
+  '00038', '00042', '00043', '00046', '00057',
+]);
 // Tabs que dependen del cruce JDE↔banco para mostrar números correctos.
 // Proyección / Planeación / Impuestos consumen `cobranzaReconciliation`
 // vía `buildFinancialProjectionSourceData` para no doblar facturas
@@ -247,7 +267,6 @@ const COMPRAS_CACHE_KEY = '__all__';
 // render de la proyección queda con cobranza inflada hasta que el
 // usuario regresa a Cobranza/Bancos/Dashboard.
 const RECONCILIATION_TABS = new Set<TabId>([
-  'dashboard',
   'collections',
   'bancos',
   'financialProjection',
@@ -259,12 +278,11 @@ type DatasetKey = 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 
 type DatasetStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'error';
 
 const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
-  dashboard: [],
   netflow: ['banks'],
   bancos: ['banks'],
   cxp: ['cxp', 'pagos'],
   concursoMercantil: ['cxp'],
-  collections: ['cobranza', 'banks'],
+  collections: ['cobranza', 'banks', 'rol'],
   fideicomiso: ['cobranza', 'banks'],
   compras: ['compras'],
   pagos: ['pagos'],
@@ -276,43 +294,47 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   clients: [],
 };
 
+const KEEP_ALIVE_TABS = new Set<TabId>(['financialProjection', 'financialPlanning']);
 
-type SectionId = 'catalogos' | 'operacion' | 'proyeccion';
+
+type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion';
 
 /**
- * Section + tab order is the canonical sidebar/keyboard ordering.
+ * Section + tab order is the canonical sidebar ordering, grouped by money flow.
  *
- * Mental model: treasury opens the Dashboard daily, drills into Operación
- * (Flujo Neto → CXP → Cobranza) when the numbers move, and only touches
- * Catálogos when onboarding new entities. So:
- *   - Proyección (daily workspace) first → numeric shortcuts 1-4
- *   - Operación (drilldowns) middle    → shortcuts 5-8
- *   - Catálogos (maintenance) last     → shortcuts 9-11
- * `TAB_IDS` is derived from SUB_TABS so the keyboard order can never drift
- * from the visible sidebar order again.
+ * Mental model:
+ *   - Proyección (forecast/escenarios) — landing diario, foco
+ *   - Por Pagar (egresos: CXP, OC, pagos, nómina, impuestos)
+ *   - Cobranza (ingreso + flujo neto + compromisos de deuda)
+ *   - Catálogos (datos maestros)
+ * Domain is egreso-heavy (only Cobranza is pure inflow); Concurso/Fideicomiso
+ * live under Cobranza as structured commitments to avoid recreating
+ * the old 8-tab "Operación" junk drawer.
  */
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: string }[] = [
-  { id: 'proyeccion', label: 'Proyección',  icon: TrendingUp,      description: 'Dashboard, pronóstico y escenarios' },
-  { id: 'operacion',  label: 'Operación',   icon: Activity,        description: 'Flujo neto, CXP y cobranza' },
-  { id: 'catalogos',  label: 'Catálogos',   icon: BookUser,        description: 'Clientes, proveedores y bancos' },
+  { id: 'proyeccion', label: 'Proyección',          icon: TrendingUp, description: 'Pronóstico y escenarios' },
+  { id: 'porPagar',   label: 'Por Pagar',           icon: CreditCard, description: 'CXP, órdenes, pagos, nómina e impuestos' },
+  { id: 'cobranza',   label: 'Cobranza',            icon: HandCoins,  description: 'Flujo neto, cobranza y compromisos' },
+  { id: 'catalogos',  label: 'Catálogos',           icon: BookUser,   description: 'Clientes, proveedores y bancos' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
   proyeccion: [
-    { id: 'dashboard',           label: 'Dashboard',             icon: LayoutDashboard },
     { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
     { id: 'financialPlanning',   label: 'Planeación Financiera', icon: ClipboardList },
-    { id: 'taxes',               label: 'Impuestos',             icon: Landmark },
   ],
-  operacion: [
-    { id: 'netflow',     label: 'Flujo Neto',  icon: Wallet },
-    { id: 'cxp',         label: 'CXP',         icon: Receipt },
+  porPagar: [
+    { id: 'cxp',     label: 'Antigüedad de Saldo', icon: Receipt },
+    { id: 'compras', label: 'Órdenes de Compras',  icon: FolderOpen },
+    { id: 'pagos',   label: 'Pagos',               icon: CreditCard },
+    { id: 'payroll', label: 'Nómina',              icon: Users },
+    { id: 'taxes',   label: 'Impuestos',           icon: Landmark },
+  ],
+  cobranza: [
+    { id: 'netflow',           label: 'Flujo Neto',        icon: Wallet },
+    { id: 'collections',       label: 'Cobranza',          icon: HandCoins },
     { id: 'concursoMercantil', label: 'Concurso Mercantil', icon: Scale },
-    { id: 'compras',     label: 'Órdenes de Compras', icon: FolderOpen },
-    { id: 'pagos',       label: 'Pagos',       icon: CreditCard },
-    { id: 'payroll',     label: 'Nómina',      icon: Users },
-    { id: 'collections', label: 'Cobranza',    icon: HandCoins },
-    { id: 'fideicomiso', label: 'Fideicomiso Dina', icon: ShieldCheck },
+    { id: 'fideicomiso',       label: 'Fideicomiso Dina',  icon: ShieldCheck },
   ],
   catalogos: [
     { id: 'clients',   label: 'Clientes',     icon: UserSquare },
@@ -323,16 +345,16 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
-  netflow: 'operacion',
-  cxp: 'operacion', concursoMercantil: 'operacion', compras: 'operacion', pagos: 'operacion', payroll: 'operacion', collections: 'operacion', fideicomiso: 'operacion',
-  dashboard: 'proyeccion',
-  financialProjection: 'proyeccion', financialPlanning: 'proyeccion', taxes: 'proyeccion',
+  cxp: 'porPagar', compras: 'porPagar', pagos: 'porPagar', payroll: 'porPagar', taxes: 'porPagar',
+  netflow: 'cobranza', collections: 'cobranza', concursoMercantil: 'cobranza', fideicomiso: 'cobranza',
+  financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
   catalogos: 'clients',
-  operacion: 'netflow',
-  proyeccion: 'dashboard',
+  porPagar: 'cxp',
+  cobranza: 'netflow',
+  proyeccion: 'financialProjection',
 };
 
 /**
@@ -491,6 +513,84 @@ function isFreshTimestamp(value: string | undefined, ttlMs: number): boolean {
   return Date.now() - ts < ttlMs;
 }
 
+type LoadedCiasSetter = (updater: (prev: Record<string, string>) => Record<string, string>) => void;
+
+function validLoadedAt(value: string | undefined): string {
+  if (value && Number.isFinite(new Date(value).getTime())) return value;
+  return new Date().toISOString();
+}
+
+function patchLoadedCiasFromRecords<T extends { cia?: string }>(
+  setter: LoadedCiasSetter,
+  records: T[],
+  loadedAt?: string,
+): void {
+  const cias = new Set(records.map(r => r.cia).filter((cia): cia is string => !!cia));
+  if (cias.size === 0) return;
+  const stamp = validLoadedAt(loadedAt);
+  setter(prev => {
+    let changed = false;
+    const next = { ...prev };
+    for (const cia of cias) {
+      if (!next[cia]) {
+        next[cia] = stamp;
+        changed = true;
+      }
+    }
+    return changed ? next : prev;
+  });
+}
+
+function patchLoadedCiasForKeys(
+  setter: LoadedCiasSetter,
+  cias: string[],
+  loadedAt?: string,
+): void {
+  if (cias.length === 0) return;
+  const stamp = validLoadedAt(loadedAt);
+  setter(prev => {
+    let changed = false;
+    const next = { ...prev };
+    for (const cia of cias) {
+      if (!next[cia]) {
+        next[cia] = stamp;
+        changed = true;
+      }
+    }
+    return changed ? next : prev;
+  });
+}
+
+function patchRolLoadedKeysFromRecords(
+  setter: LoadedCiasSetter,
+  records: RolRecord[],
+  loadedAt?: string,
+): void {
+  const currentYear = new Date().getUTCFullYear();
+  if (!records.some(record => record.anio === currentYear)) return;
+  const key = `${currentYear}:full`;
+  const stamp = validLoadedAt(loadedAt);
+  setter(prev => (prev[key] ? prev : { ...prev, [key]: stamp }));
+}
+
+function useFrozenWhenInactive<T>(value: T, active: boolean): T {
+  const ref = useRef(value);
+  if (active) ref.current = value;
+  return active ? value : ref.current;
+}
+
+function KeepAlivePanel({ active, children }: { active: boolean; children: ReactNode }) {
+  return (
+    <div
+      hidden={!active}
+      aria-hidden={!active}
+      style={{ display: active ? undefined : 'none' }}
+    >
+      {children}
+    </div>
+  );
+}
+
 type IdleWindow = Window & {
   requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number;
   cancelIdleCallback?: (id: number) => void;
@@ -528,6 +628,19 @@ function scheduleIdleTask(callback: () => void, timeout = 2000): () => void {
 }
 
 export default function App() {
+  // StorageHealthGuard wiring (ver services/storageHealthGuard.ts).
+  // El guard ya corrió síncrono en main.tsx antes de montar React; aquí solo
+  // (a) leemos el flag si purgó este boot para informar al usuario, y (b)
+  // marcamos boot complete cuando isBooted se vuelve true para que el
+  // watchdog de la próxima sesión sepa que la app cerró bien.
+  const toast = useToast();
+  useEffect(() => {
+    const notice = consumePurgeNotice();
+    if (notice) {
+      toast.info(purgeReasonMessage(notice.reason), { duration: 7000 });
+    }
+  }, [toast]);
+
   const [providers, setProviders] = useState<Provider[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [assumptions, setAssumptions] = useState<CashFlowAssumptions>({
@@ -556,9 +669,10 @@ export default function App() {
   const [cobranzaPaymentsLoadedCias, setCobranzaPaymentsLoadedCias] = useState<Record<string, string>>({});
   // Compras (Órdenes de Compra) — endpoint /JDEdwards/compras,
   // liberado a producción 2026-05-08. Restricción del API: 30 días por
-  // request → fetchComprasRange parte el rango en chunks. Cargamos 2 años
-  // hacia atrás para entrenar predictor y 3 meses hacia adelante para ver
-  // OCs futuras ya capturadas en JDE.
+  // request → fetchComprasRange parte el rango en chunks. Cargamos
+  // COMPRAS_LOOKBACK_DAYS (180) hacia atrás — cota por el crédito máximo de
+  // proveedor para no perder OCs aún abiertas, ver su definición — y 3 meses
+  // hacia adelante para ver OCs futuras ya capturadas en JDE.
   const [comprasRecords, setComprasRecords] = useState<ComprasRecord[]>([]);
   const [comprasLoadedCias, setComprasLoadedCias] = useState<Record<string, string>>({});
   // PagoProveedor — endpoint /JDEdwards/pagoproveedor, liberado a
@@ -572,6 +686,7 @@ export default function App() {
   // refreshes posteriores los dispara el módulo de Nómina.
   const [nominaRecords, setNominaRecords] = useState<PayrollCostRecord[]>([]);
   const [nominaLoadedKeys, setNominaLoadedKeys] = useState<Record<string, string>>({});
+  const [nominaHeavyHydrated, setNominaHeavyHydrated] = useState(false);
   // ROL CITI — viajes ejecutados (Senda Citi). Endpoint
   // http://srv-desarrollo:92/CITI/RolDiario liberado 2026-05-14. Auto-fetch
   // al boot desde 1° de enero del año en curso hasta hoy; alimenta
@@ -586,20 +701,17 @@ export default function App() {
   const [cobranzaError, setCobranzaError] = useState<string | null>(null);
   const [cobranzaRefreshing, setCobranzaRefreshing] = useState(false);
   const [cashFlowOverrides, setCashFlowOverrides] = useState<CashFlowOverrides>({});
-  // Dashboard is the daily landing surface for treasury — opens to the same
-  // numbers that match keyboard `1`. Previously defaulted to 'netflow' which
-  // dropped users into a raw movements table on every boot.
-  const [activeTab, setActiveTab] = useState<TabId>('dashboard');
+  // Proyección Financiera is the daily landing surface for treasury (the old
+  // Dashboard tab was merged into it). Opens to the same numbers that match
+  // keyboard `1`.
+  const [activeTab, setActiveTab] = useState<TabId>('financialProjection');
   /**
    * Stable navigation handler.
    *
    * The previous inline arrow recreated `goTo` every parent render, which
    * churned the `NavigationProvider` context value on every keystroke /
-   * background poll. Combined with the `<div key={pageKey}>` remount, that
-   * caused descendants to receive a fresh context, re-Suspend, and (under
-   * heavy compute on FinancialProjectionDashboard) eventually lock the
-   * main thread. `useCallback` here + hoisting the provider above the
-   * remount wrapper is the fix.
+   * background poll. `useCallback` here keeps the navigation context stable
+   * while heavy dashboards warm in workers.
    */
   const goTo = useCallback((target: AppTabId | NavTarget) => {
     const next = typeof target === 'string' ? target : target.tab;
@@ -632,22 +744,30 @@ export default function App() {
     banks: BootTaskStatus;
     cxp: BootTaskStatus;
     cobranza: BootTaskStatus;
+    compras: BootTaskStatus;
+    pagos: BootTaskStatus;
     nomina: BootTaskStatus;
     rol: BootTaskStatus;
+    projection: BootTaskStatus;
   }>({
     catalog: 'loading',
     companies: 'loading',
     banks: 'loading',
     cxp: 'pending',
     cobranza: 'pending',
+    compras: 'pending',
+    pagos: 'pending',
     nomina: 'pending',
     rol: 'pending',
+    // req 6: el splash espera al primer run real de Proyección, no sólo a
+    // catálogo+empresas. Flip a 'done' vía señal del dashboard.
+    projection: 'loading',
   });
   const [, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setRolBootProgress] = useState<{ done: number; total: number } | null>(null);
   const setBootSlot = useCallback(
-    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'nomina' | 'rol', status: BootTaskStatus) => {
+    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'projection', status: BootTaskStatus) => {
       setBootStatus(prev => (prev[slot] === status ? prev : { ...prev, [slot]: status }));
     },
     [],
@@ -681,6 +801,16 @@ export default function App() {
   const setDatasetSlot = useCallback((key: DatasetKey, status: DatasetStatus) => {
     setDatasetStatus(prev => (prev[key] === status ? prev : { ...prev, [key]: status }));
   }, []);
+  // Datasets cuya hidratación desde IDB ya terminó. Los auto-fetch de boot
+  // (cxp/cobranza/compras/pagos/rol) DEBEN esperar este flag antes de decidir si
+  // refetchear: si corren antes, ven los records en 0 y disparan un fetch JDE
+  // completo aunque IDB tuviera la cache. Ver hydrateDataset() + boot effects.
+  const [idbHydratedDatasets, setIdbHydratedDatasets] = useState<Set<DatasetKey>>(() => new Set());
+  // Timestamp del light store cargado desde localStorage. Sirve para reparar
+  // mapas de TTL faltantes cuando el heavy sí existe en IDB pero el light quedó
+  // incompleto/stale por un cierre durante boot. No actualiza timestamps viejos:
+  // sólo rellena huecos para evitar refetch perpetuo de caches válidos.
+  const lightStoreLastSavedRef = useRef<string | undefined>(undefined);
 
   // ── JDE integration state ──
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -689,15 +819,17 @@ export default function App() {
   // loadCompanies() saber que no debe bloquear el splash con 'loading' aunque
   // se haya disparado antes de que React aplique el set del cache.
   const companiesHydratedFromCacheRef = useRef(false);
-  const [companyGroups, setCompanyGroups] = useState<CompanyGroup[]>(() => loadCompanyGroups());
-  const [selectedCia, setSelectedCia] = useState<string>(
-    () => localStorage.getItem('midas.selectedCia') ?? 'all'
-  );
-
-  // Persist company groups
-  useEffect(() => { saveCompanyGroups(companyGroups); }, [companyGroups]);
-  const [companiesLoading, setCompaniesLoading] = useState(false);
-  const [companiesError, setCompaniesError] = useState<string | null>(null);
+  // Company filtering was removed app-wide (replaced by the global scenario
+  // selector in the header). `selectedCia` is pinned to 'all' so the ~39
+  // downstream consumers (`companyCode={selectedCia}` / `selectedCia=…`) keep
+  // working unchanged — every module just shows all companies now. The
+  // company *catalog* (`companies`) is still loaded; boot per-cia fetch loops
+  // need it. Only the user-facing filter UI + company groups are gone.
+  const selectedCia = 'all';
+  // Getters unused since the company selector was removed; setters still
+  // fire from loadCompanies()/boot so the catalog fetch keeps its state.
+  const [, setCompaniesLoading] = useState(false);
+  const [, setCompaniesError] = useState<string | null>(null);
   // Bank-statement caches start empty and hydrate from localStorage on idle
   // (see `bankCacheHydrationEffect` below). The splash screen masks any
   // first-paint where the data is still empty, so the lift moves the
@@ -754,7 +886,13 @@ export default function App() {
   // detrás. El valor diferido converge al actual cuando el thread está libre.
   const cxpRecordsDeferred = useDeferredValue(cxpRecords);
   const pagoProveedorRecordsDeferred = useDeferredValue(pagoProveedorRecords);
-  const accountableBankStatementsDeferred = useDeferredValue(accountableBankStatements);
+  // Recon de pagos SÍ ve Bajío: las amortizaciones AFP del fideicomiso DINA
+  // salen por la cuenta BanBajio 33850201 y sin estos statements los pagos
+  // quedan huérfanos. El engine matchea por banco-sentinel "BANBAJIO" cuando
+  // detecta cuenta no-numérica. No afecta proyección ni Bancos UI — esos
+  // siguen usando `accountableBankStatements`.
+  const reconBankStatements = useMemo(() => bankStatements, [bankStatements]);
+  const reconBankStatementsDeferred = useDeferredValue(reconBankStatements);
   const nominaRecordsDeferred = useDeferredValue(nominaRecords);
   const comprasRecordsDeferred = useDeferredValue(comprasRecords);
   // ── Cruce pagos ↔ CXP ↔ banco (motor de PagoProveedor) ────────────────
@@ -778,7 +916,7 @@ export default function App() {
     if (
       pagoProveedorRecordsDeferred.length === 0 ||
       cxpRecordsDeferred.length === 0 ||
-      accountableBankStatementsDeferred.length === 0
+      reconBankStatementsDeferred.length === 0
     ) {
       setPaymentReconciliation(emptyPaymentReconciliationResult());
       return;
@@ -793,7 +931,7 @@ export default function App() {
         const result = reconcilePayments({
           payments: pagoProveedorRecordsDeferred,
           cxpRecords: cxpRecordsDeferred,
-          bankStatements: accountableBankStatementsDeferred,
+          bankStatements: reconBankStatementsDeferred,
         });
         if (!cancelled && paymentReconJobRef.current === jobId) {
           setPaymentReconciliation(result);
@@ -839,7 +977,7 @@ export default function App() {
           jobId,
           payments: pagoProveedorRecordsDeferred,
           cxpRecords: cxpRecordsDeferred,
-          bankStatements: accountableBankStatementsDeferred,
+          bankStatements: reconBankStatementsDeferred,
         });
       } catch (err) {
         console.warn('[paymentRecon] worker spawn failed, fallback', err);
@@ -851,7 +989,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isBooted, pagoProveedorRecordsDeferred, cxpRecordsDeferred, accountableBankStatementsDeferred]);
+  }, [isBooted, pagoProveedorRecordsDeferred, cxpRecordsDeferred, reconBankStatementsDeferred]);
 
   useEffect(() => {
     return () => {
@@ -896,13 +1034,9 @@ export default function App() {
   );
   const shouldComputeCobranzaReconciliation =
     (cobranzaRecords.length > 0 || cobranzaPayments.length > 0) && RECONCILIATION_TABS.has(activeTab);
-  const activeReconciliationCias = useMemo(() => {
-    if (selectedCia === 'all') return undefined;
-    const allCias = filterActiveCompanies(companies).map(c => c.cia);
-    const resolved = resolveActiveCias(selectedCia, companyGroups, allCias);
-    return resolved.length > 0 ? resolved : undefined;
-  }, [selectedCia, companies, companyGroups]);
-  const activeReconciliationCiaKey = activeReconciliationCias?.join('|') ?? 'all';
+  // Company filter removed → reconciliation always runs over all cias.
+  const activeReconciliationCias: string[] | undefined = undefined;
+  const activeReconciliationCiaKey = 'all';
   const reconciliationWorkerRef = useRef<Worker | null>(null);
   const reconciliationJobRef = useRef(0);
   useEffect(() => {
@@ -920,7 +1054,7 @@ export default function App() {
           .then(({ reconcileRealCollections }) => {
             if (cancelled || reconciliationJobRef.current !== jobId) return;
             const result = reconcileRealCollections(cobranzaRecords, accountableBankStatements, {
-              ciaFilter: activeReconciliationCias?.length ? new Set(activeReconciliationCias) : undefined,
+              ciaFilter: undefined,
               cobranzaPayments,
             });
             if (!cancelled && reconciliationJobRef.current === jobId) setCobranzaReconciliation(result);
@@ -1004,11 +1138,38 @@ export default function App() {
   // real. Antes de isBooted devolvemos [] vacío para que el splash no se pegue
   // con esta cascada; planning espera a isBooted para montarse, así que el
   // gate no afecta UX. Después de boot, corre con deferred values (low prio).
+  // OOM ROOT CAUSE (data real: 332,586 comprasRecords / 2 años). The two
+  // heavy consumers below iterate ALL compras on the main thread + build
+  // lead-time stats + credit overlay over the full set → renderer OOM
+  // ("Aw Snap code 5") while idle once the heavy store hydrates. A forward
+  // cash projection cannot use OCs whose payment is long past (they're
+  // dropped downstream as dueDate < asOfDate anyway) and recent lead-time /
+  // cadence is more representative than 2-year-old history. Window to the
+  // last ~270 days + everything forward-dated. State stays full (Compras /
+  // taxes views untouched) — only the projection path sees the slice.
+  // Business rule (user): an OC whose PROJECTED PAYMENT date (fechaPagoProyectada,
+  // API COMPRAS) is before today must NOT appear — a forward cash projection
+  // never shows already-past projected payments. This is also the structural
+  // volume fix: with 332k historical OCs, dropping every past-pay one cuts the
+  // canonical from ~210k movements to a fraction → every rebuild/clone cheap,
+  // ends the OOM across all triggers. OCs without fechaPagoProyectada are
+  // not-yet-received PROJECTED orders (payment is future by construction) — kept.
+  // State stays full (Compras / taxes views untouched); only the projection slice.
+  const comprasForProjection = useMemo(() => {
+    if (!isBooted) return comprasRecordsDeferred;
+    const today = todayISO();
+    const src = comprasRecordsDeferred;
+    const out = selectComprasForProjection(src, today);
+    // eslint-disable-next-line no-console
+    console.info(`[compras] projection: ${out.length}/${src.length} (drop fechaPagoProyectada < ${today})`);
+    return out;
+  }, [isBooted, comprasRecordsDeferred]);
+
   const purchaseReceiptsFromCompras = useMemo(
     () => {
       if (!isBooted) return [];
-      return comprasToPurchaseReceipts(comprasRecordsDeferred, {
-        asOfDate: new Date().toISOString().slice(0, 10),
+      return comprasToPurchaseReceipts(comprasForProjection, {
+        asOfDate: todayISO(),
         includeProjected: true,
         excludePastUnexecuted: true,
         futureOrderLookaheadMonths: COMPRAS_FUTURE_LOOKAHEAD_MONTHS,
@@ -1016,7 +1177,7 @@ export default function App() {
         pagoProveedorRecords: nonInternalPagoProveedorRecords,
       });
     },
-    [isBooted, comprasRecordsDeferred, cxpRecordsDeferred, nonInternalPagoProveedorRecords],
+    [isBooted, comprasForProjection, cxpRecordsDeferred, nonInternalPagoProveedorRecords],
   );
 
   // Promedio de gasto por proveedor en los últimos 3 meses calendario,
@@ -1064,11 +1225,11 @@ export default function App() {
     () => {
       if (!isBooted) return { modelId: forecastModelId, receipts: [], perProvider: [] };
       return forecastFutureCompras(
-        { comprasRecords: comprasRecordsDeferred, providers: providersEnriched, horizonMonths: 6, topProvidersByVolume: 80 },
+        { comprasRecords: comprasForProjection, providers: providersEnriched, horizonMonths: 6, topProvidersByVolume: 80 },
         forecastModelId,
       );
     },
-    [isBooted, comprasRecordsDeferred, providersEnriched, forecastModelId],
+    [isBooted, comprasForProjection, providersEnriched, forecastModelId],
   );
   // NOTE: forecastedReceipts.receipts NO se concatena a `purchaseReceipts`
   // pasado a Proyección por ahora — feed pesado disparaba recompute del
@@ -1091,9 +1252,8 @@ export default function App() {
   const payrollMonthlyActualJDE = useMemo(() => {
     if (!isBooted) return undefined;
     if (nominaRecordsDeferred.length === 0) return undefined;
-    const ciaFilter = selectedCia && selectedCia !== 'all'
-      ? selectedCia.replace(/\D/g, '').padStart(5, '0')
-      : '';
+    // Company filter removed → never scope payroll by cia (all companies).
+    const ciaFilter = '';
     const grossByMonth = new Map<string, number>();
     const cashCountByMonth = new Map<string, number>();
     const reducCountByMonth = new Map<string, number>();
@@ -1138,6 +1298,8 @@ export default function App() {
   // ── New UI features state ──
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
+  const [coldBootOpen, setColdBootOpen] = useState(false);
+  const [coldBootRunning, setColdBootRunning] = useState(false);
 
   // Planning scenarios + adjustments for Cmd+K — refreshed on every palette open.
   const [paletteScenarios, setPaletteScenarios] = useState<{ id: string; name: string }[]>([]);
@@ -1174,20 +1336,6 @@ export default function App() {
     },
   ], []);
 
-  // Derived from SUB_TABS in section order so keyboard shortcuts (1-N) always
-  // match the sidebar order. Previously hardcoded — bancos at #4 was a
-  // catálogos tab leaking into the operación block; fideicomiso/taxes were
-  // unreachable by number entirely.
-  // Atajos 1-N cambian sub-tabs DENTRO de la sección activa
-  // (Proyección / Operación / Catálogos). Sección se deriva de activeTab.
-  const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
-    onTabSwitch: (n) => {
-      const section = SECTION_FOR_TAB[activeTab] ?? 'proyeccion';
-      const tabs = SUB_TABS[section];
-      if (n >= 1 && n <= tabs.length) setActiveTab(tabs[n - 1].id);
-    },
-  });
-
   // Load from persistence on mount. Async desde v12: heavies
   // (cobranza/cxp/compras/pagoproveedor/nómina/payments) viven en IDB porque
   // localStorage tenía cuota ~5MB que se rompía y dejaba el store sin
@@ -1217,6 +1365,7 @@ export default function App() {
       .then((stored) => {
         if (cancelled) return;
         if (stored) {
+          lightStoreLastSavedRef.current = stored.lastSaved;
           if (stored.providers.length) safeSet(setProviders, stored.providers, 'providers');
           if (stored.clients.length) safeSet(setClients, stored.clients, 'clients');
           if (stored.confirmedPayments.length) safeSet(setConfirmedPayments, stored.confirmedPayments, 'confirmedPayments');
@@ -1303,14 +1452,23 @@ export default function App() {
       try {
         if (dataset === 'cxp') {
           const records = await loadHeavyRecords('cxpRecords');
-          if (records.length > 0) setCxpRecords(records);
+          if (records.length > 0) {
+            setCxpRecords(records);
+            patchLoadedCiasFromRecords(setCxpLoadedCias, records, lightStoreLastSavedRef.current);
+          }
         } else if (dataset === 'cobranza') {
           const [records, payments] = await Promise.all([
             loadHeavyRecords('cobranzaRecords'),
             loadHeavyRecords('cobranzaPayments'),
           ]);
-          if (records.length > 0) setCobranzaRecords(records);
-          if (payments.length > 0) setCobranzaPayments(payments);
+          if (records.length > 0) {
+            setCobranzaRecords(records);
+            patchLoadedCiasFromRecords(setCobranzaLoadedCias, records, lightStoreLastSavedRef.current);
+          }
+          if (payments.length > 0) {
+            setCobranzaPayments(payments);
+            patchLoadedCiasFromRecords(setCobranzaPaymentsLoadedCias, payments, lightStoreLastSavedRef.current);
+          }
         } else if (dataset === 'compras') {
           const records = await loadHeavyRecords('comprasRecords');
           if (records.length > 0) setComprasRecords(records);
@@ -1319,10 +1477,16 @@ export default function App() {
           if (records.length > 0) setPagoProveedorRecords(records);
         } else if (dataset === 'nomina') {
           const records = await loadHeavyRecords('nominaRecords');
-          if (records.length > 0) setNominaRecords(records);
+          if (records.length > 0) {
+            setNominaRecords(records);
+            setNominaLoadedKeys(prev => deriveNominaLoadedKeysFromRecords(records, prev));
+          }
         } else if (dataset === 'rol') {
           const records = await loadHeavyRecords('rolRecords');
-          if (records.length > 0) setRolRecords(records);
+          if (records.length > 0) {
+            setRolRecords(records);
+            patchRolLoadedKeysFromRecords(setRolLoadedKeys, records, lightStoreLastSavedRef.current);
+          }
         }
         hydratedDatasetsRef.current.add(dataset);
         setDatasetSlot(dataset, 'ready');
@@ -1330,6 +1494,10 @@ export default function App() {
         console.warn(`[dataset:${dataset}] hydrate failed`, err);
         setDatasetSlot(dataset, 'error');
       } finally {
+        if (dataset === 'nomina') setNominaHeavyHydrated(true);
+        // Desbloquea los auto-fetch de boot — incluso si la hidratación falló,
+        // para que puedan caer al fetch JDE en vez de quedarse atorados.
+        setIdbHydratedDatasets(prev => (prev.has(dataset) ? prev : new Set(prev).add(dataset)));
         delete hydrationPromisesRef.current[dataset];
       }
     })();
@@ -1338,10 +1506,55 @@ export default function App() {
   }, [setDatasetSlot]);
 
   useEffect(() => {
-    for (const dataset of requestedDatasets) {
-      void hydrateDataset(dataset);
+    if (!storeHydrated) return;
+    const priority: DatasetKey[] = ['cxp', 'pagos', 'cobranza', 'rol', 'nomina', 'compras'];
+    const requested = Array.from(requestedDatasets)
+      .filter((dataset) => dataset !== 'banks')
+      .sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
+    const cancelers = requested.map((dataset, index) => {
+      let cancelIdle: (() => void) | null = null;
+      const timer = window.setTimeout(() => {
+        cancelIdle = scheduleIdleTask(() => {
+          void hydrateDataset(dataset);
+        }, 2500);
+      }, index * 450);
+      return () => {
+        window.clearTimeout(timer);
+        cancelIdle?.();
+      };
+    });
+    return () => {
+      for (const cancel of cancelers) cancel();
+    };
+  }, [requestedDatasets, hydrateDataset, storeHydrated]);
+
+  // Repair para caches pesados con respuestas vacías: una cía puede haber sido
+  // consultada exitosamente y devolver 0 registros, por lo que no aparece en
+  // `records` y no se puede reconstruir su timestamp desde IDB. Si el light
+  // store es fresco y el snapshot heavy ya existe, rellenamos las cías activas
+  // faltantes para no reconsultar vacíos en cada boot.
+  useEffect(() => {
+    if (!storeHydrated || companies.length === 0) return;
+    const loadedAt = lightStoreLastSavedRef.current;
+    if (!isFreshTimestamp(loadedAt, COBRANZA_AUTO_REFRESH_TTL_MS)) return;
+    const activeCias = filterActiveCompanies(companies).map(c => c.cia);
+    if (activeCias.length === 0) return;
+
+    if (idbHydratedDatasets.has('cxp') && cxpRecords.length > 0) {
+      patchLoadedCiasForKeys(setCxpLoadedCias, activeCias, loadedAt);
     }
-  }, [requestedDatasets, hydrateDataset]);
+    if (idbHydratedDatasets.has('cobranza') && (cobranzaRecords.length > 0 || cobranzaPayments.length > 0)) {
+      patchLoadedCiasForKeys(setCobranzaLoadedCias, activeCias, loadedAt);
+      patchLoadedCiasForKeys(setCobranzaPaymentsLoadedCias, activeCias, loadedAt);
+    }
+  }, [
+    storeHydrated,
+    companies,
+    idbHydratedDatasets,
+    cxpRecords.length,
+    cobranzaRecords.length,
+    cobranzaPayments.length,
+  ]);
 
   // ── Auto-resolución total matcher cliente↔cobranza ──────────────────────
   // Regla de negocio (Santiago, 2026-05-12):
@@ -1587,14 +1800,14 @@ export default function App() {
   const [clientsCatalogDone, setClientsCatalogDone] = useState(false);
   const [clientsCatalogError, setClientsCatalogError] = useState(false);
   const [providersCatalogDone, setProvidersCatalogDone] = useState(false);
-  const [providersCatalogError, setProvidersCatalogError] = useState(false);
   useEffect(() => {
     if (clientsCatalogDone && providersCatalogDone) {
       setCatalogLoaded(true);
-      const bothFailed = clientsCatalogError && providersCatalogError;
-      setBootSlot('catalog', bothFailed ? 'error' : 'done');
+      // Providers no tiene path de error: el overlay carga sync desde bundle.
+      // Si clients falló, ese es el único motivo de fallback.
+      setBootSlot('catalog', clientsCatalogError ? 'error' : 'done');
     }
-  }, [clientsCatalogDone, providersCatalogDone, clientsCatalogError, providersCatalogError, setBootSlot]);
+  }, [clientsCatalogDone, providersCatalogDone, clientsCatalogError, setBootSlot]);
 
   // Load clients from catalog if no clients exist yet
   useEffect(() => {
@@ -1613,81 +1826,47 @@ export default function App() {
       .finally(() => setClientsCatalogDone(true));
   }, [catalogLoaded, clients.length]);
 
-  // Load/merge providers from the bundled catalog. The local catalog includes
-  // Romo's provider type classification plus flexibility/DTI metadata.
-  const providerCatalogMerged = useRef(false);
+  // Providers — catálogo derivado en tiempo real desde las fuentes JDE
+  // (antigüedad de saldos, compras, pagoProveedor). NO hay registros manuales.
+  // El JSON de Alberto sobrevive sólo como overlay de `score` para juzgar
+  // negociabilidad; proveedores sin match en el overlay quedan SIN SCORE.
+  //
+  // El overlay se construye una sola vez (sync desde bundle). El catálogo se
+  // recompone cuando cambian los records JDE — same pattern que
+  // `recomputeClientCreditDaysFromCobranza` para clientes.
+  const scoreOverlay = useMemo(() => loadProviderScoreOverlay(), []);
   useEffect(() => {
-    if (providerCatalogMerged.current) return;
-    providerCatalogMerged.current = true;
-    fetchProviderCatalog()
-      .then((loaded) => {
-      if (loaded.length === 0) return;
-      setProviders((current) => {
-        if (current.length === 0) return loaded;
-
-        const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toUpperCase();
-
-        // Remove catalog-sourced providers that no longer exist in the updated
-        // catalog (e.g. unclassified providers that were purged from the catalog).
-        const catalogNames = new Set(loaded.map(p => normalize(p.name)));
-        const filtered = current.filter(
-          p => !p.id.startsWith('catalog-prov-') || catalogNames.has(normalize(p.name))
-        );
-
-        const filteredByName = new Map(filtered.map((provider, index) => [normalize(provider.name), { provider, index }]));
-        const merged = [...filtered];
-        let changed = filtered.length !== current.length;
-
-        for (const catalogProvider of loaded) {
-          const existing = filteredByName.get(normalize(catalogProvider.name));
-          if (!existing) {
-            merged.push(catalogProvider);
-            changed = true;
-            continue;
-          }
-
-          const currentType = existing.provider.type?.trim();
-          const catalogType = catalogProvider.type?.trim();
-          const isCatalogManaged = existing.provider.id.startsWith('catalog-prov-');
-          const nextProvider = {
-            ...existing.provider,
-            type: (isCatalogManaged || !currentType || currentType === 'Otro' || currentType === 'Sin clasificar') && catalogType
-              ? catalogType
-              : existing.provider.type,
-            risk: catalogProvider.risk,
-            riskComment: catalogProvider.riskComment,
-            paymentPeriod: catalogProvider.paymentPeriod,
-            flexibility: catalogProvider.flexibility,
-            flexibilityComment: catalogProvider.flexibilityComment,
-            creditLimit: catalogProvider.creditLimit ?? existing.provider.creditLimit,
-            lastUpdatedAt: catalogProvider.lastUpdatedAt,
-            dtiArea: catalogProvider.dtiArea ?? existing.provider.dtiArea,
-            dtiCriticidad: catalogProvider.dtiCriticidad ?? existing.provider.dtiCriticidad,
-            clasificacionAlberto: catalogProvider.clasificacionAlberto,
-            clasificacionAlbertoRaw: catalogProvider.clasificacionAlbertoRaw,
-            clasificacionAutomatica: catalogProvider.clasificacionAutomatica,
-            score: catalogProvider.score,
-            scoreCriterios: catalogProvider.scoreCriterios,
-            numProveedorJDE: catalogProvider.numProveedorJDE ?? existing.provider.numProveedorJDE,
-            frecuenciaHistorica: catalogProvider.frecuenciaHistorica,
-            montoPromedioPago: catalogProvider.montoPromedioPago,
-            numPagos2025: catalogProvider.numPagos2025,
-            montoTotal2025: catalogProvider.montoTotal2025,
-            gastoMinimoMensual: catalogProvider.gastoMinimoMensual,
-          };
-
-          if (JSON.stringify(nextProvider) !== JSON.stringify(existing.provider)) {
-            merged[existing.index] = nextProvider;
-            changed = true;
-          }
-        }
-
-        return changed ? merged : current;
-      });
-    })
-      .catch(() => { setProvidersCatalogError(true); })
-      .finally(() => setProvidersCatalogDone(true));
+    // Provider catalog gate: el overlay ya está listo (sync), así que la
+    // splash puede continuar incluso antes de que carguen los records JDE.
+    setProvidersCatalogDone(true);
   }, []);
+  useEffect(() => {
+    // No tocar providers hasta que termine boot mínimo (catalogos + companies).
+    // De lo contrario el primer setProviders pisa el restore del store local.
+    if (!isBooted) return;
+    // Si no hay ningún record JDE todavía, deja providers vacío en lugar de
+    // pisar con un set sintético — facilita debug y evita falsos positivos.
+    const hasAnyData =
+      cxpRecords.length > 0 || comprasRecords.length > 0 || pagoProveedorRecords.length > 0;
+    if (!hasAnyData) return;
+    // Derivación en idle: O(N) sobre todos los records es no-trivial (~334k
+    // CXP). Correrlo síncrono en el effect bloqueaba main durante boot storm
+    // (cada hidratación de records re-disparaba el efecto). idle + debounce
+    // de 800ms colapsa la cascada en una sola recomputación post-boot.
+    const cancelIdle = scheduleIdleTask(() => {
+      const derived = deriveProvidersFromJde({
+        agedBalanceRecords: cxpRecords,
+        comprasRecords,
+        pagoProveedorRecords,
+        scoreOverlay,
+      });
+      setProviders(derived);
+      // Empuja al módulo de Planeación para que `bucketForMovement` resuelva
+      // categoría sin tener que recibir providers por argumento en cada render.
+      setProviderCatalogForCategoryLookup(derived);
+    }, 800);
+    return cancelIdle;
+  }, [isBooted, cxpRecords, comprasRecords, pagoProveedorRecords, scoreOverlay]);
 
   // Save state changes — strategy v2 (post Page-Unresponsive fix):
   //
@@ -1828,30 +2007,77 @@ export default function App() {
   // cobranza) has settled (done or error). All five run in parallel; per-cía
   // fetches (CXP, cobranza) use bounded concurrency to respect JDE rate limits
   // without serializing every request.
+  // Splash gates on EVERY boot fetch — usuario pidió "splash hasta que ya no
+  // haya ningún fetch". Antes sólo gateaba catalog+companies+projection y los
+  // demás (banks, CXP, cobranza, compras, pagos, nómina, rol) corrían en
+  // background, soltando el splash con APIs aún en vuelo. Ahora todas las
+  // fuentes JDE/TRESS/CITI quedan en el gate. El hard timeout (abajo) sigue
+  // siendo el escape contra cuelgues indefinidos.
   const bootTasks = useMemo<BootTask[]>(
     () => [
       { id: 'catalog', label: 'Catálogos · clientes y proveedores', status: bootStatus.catalog },
       { id: 'companies', label: 'JDE · empresas', status: bootStatus.companies },
-      { id: 'banks', label: 'Bancos · estado reciente', status: bootStatus.banks, progress: bankFetchProgress },
+      { id: 'banks', label: 'Bancos · estados de cuenta', status: bootStatus.banks },
+      { id: 'cxp', label: 'CXP · antigüedad de saldos', status: bootStatus.cxp },
+      { id: 'cobranza', label: 'Cobranza · CXC', status: bootStatus.cobranza },
+      { id: 'compras', label: 'Compras · órdenes de compra', status: bootStatus.compras },
+      { id: 'pagos', label: 'Pagos a proveedores', status: bootStatus.pagos },
+      { id: 'nomina', label: 'TRESS · nómina', status: bootStatus.nomina },
+      { id: 'rol', label: 'CITI · rol de viajes', status: bootStatus.rol },
+      { id: 'projection', label: 'Proyección · primer cálculo', status: bootStatus.projection },
     ],
-    [bootStatus.catalog, bootStatus.companies, bootStatus.banks, bankFetchProgress],
+    [
+      bootStatus.catalog,
+      bootStatus.companies,
+      bootStatus.banks,
+      bootStatus.cxp,
+      bootStatus.cobranza,
+      bootStatus.compras,
+      bootStatus.pagos,
+      bootStatus.nomina,
+      bootStatus.rol,
+      bootStatus.projection,
+    ],
   );
+  // El dashboard de Proyección (vista de aterrizaje, montada bajo el splash a
+  // opacity 0) emite la señal cuando tiene su primer run real. Eso cierra el
+  // slot 'projection' → el splash recién entonces se suelta. El churn de
+  // cold-boot que reventaba está acotado por el debounce de 12s del source
+  // (coalesce en ~1 build) + SOURCE_CACHE=2 → gatear es seguro.
+  useEffect(() => {
+    const unsub = subscribeProjectionFirstPaint(() => setBootSlot('projection', 'done'));
+    return unsub;
+  }, [setBootSlot]);
   useEffect(() => {
     if (isBooted) return;
     const allSettled = bootTasks.every(t => t.status === 'done' || t.status === 'error');
     if (allSettled) {
-      const t = setTimeout(() => setIsBooted(true), 240);
+      const t = setTimeout(() => {
+        setIsBooted(true);
+        // Boot terminó sin matar la pestaña: limpia el watchdog para que
+        // un F5 normal no se interprete como crash en el próximo arranque.
+        markBootComplete();
+      }, 240);
       return () => clearTimeout(t);
     }
   }, [bootTasks, isBooted]);
 
-  // Hard timeout — never trap the user behind the splash si JDE cuelga. 4 min
-  // basta para CXP + Cobranza paralelas; pasado eso, asumimos que algo está
-  // mal aguas arriba y renderizamos con lo que tengamos.
+  // Hard timeout — never trap the user behind the splash. El splash gatea
+  // sobre TODOS los fetches de boot (catalog/companies/banks/CXP/cobranza/
+  // compras/pagos/nómina/rol/projection). Cold boot real con datasets
+  // completos tarda hasta ~30 min (10 cías × varios endpoints, hidratación
+  // IDB, primer build de source). 1800s = techo máximo: si algún fetch se
+  // cuelga indefinidamente, el splash se suelta y la app abre degradada.
+  // Warm boot (cache hidratada) sigue siendo 1-3s; el timeout sólo se activa
+  // en el peor caso patológico.
   useEffect(() => {
-    const t = setTimeout(() => setIsBooted(true), 240000);
+    if (isBooted) return;
+    const t = setTimeout(() => {
+      setIsBooted(true);
+      markBootComplete();
+    }, 1800000);
     return () => clearTimeout(t);
-  }, []);
+  }, [isBooted]);
 
   // Unmount splash after fade-out.
   useEffect(() => {
@@ -1879,6 +2105,9 @@ export default function App() {
     if (!requestedDatasets.has('cxp')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
+    // Esperar la hidratación IDB: sin esto cxpRecords está vacío y el sync
+    // concluye "28/28 necesitan refresh" aunque la cache exista.
+    if (!idbHydratedDatasets.has('cxp')) return;
     const activeCias = filterActiveCompanies(companies).map(c => c.cia);
     if (activeCias.length === 0) {
       cxpAutoFetchDone.current = true;
@@ -1886,10 +2115,17 @@ export default function App() {
       setDatasetSlot('cxp', 'ready');
       return;
     }
-    const ciasWithRecords = new Set(cxpRecords.map((record) => record.cia));
-    const ciasToFetch = activeCias.filter(cia =>
-      !ciasWithRecords.has(cia) || !isFreshTimestamp(cxpLoadedCias[cia], CXP_AUTO_REFRESH_TTL_MS)
-    );
+    // Desync guard (mismo hardening que cobranza/nómina): si el heavy store
+    // (IDB) hidrató VACÍO pero `cxpLoadedCias` (light, localStorage) sigue
+    // "fresco", el delta-sync skippea toda cía → CXP queda vacío y "no carga
+    // histórico" hasta refresh manual. Sin records hidratados → refetch full.
+    const cxpHeavyHydrated = cxpRecords.length > 0;
+    const cxpSnapshotLoadedAt = cxpHeavyHydrated ? lightStoreLastSavedRef.current : undefined;
+    const ciasToFetch = cxpHeavyHydrated
+      ? activeCias.filter(cia =>
+          !isFreshTimestamp(cxpLoadedCias[cia] ?? cxpSnapshotLoadedAt, CXP_AUTO_REFRESH_TTL_MS)
+        )
+      : activeCias;
     // eslint-disable-next-line no-console
     console.info(`[cxp] boot sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (TTL ${Math.round(CXP_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cxpRecords.length}`);
     if (ciasToFetch.length === 0) {
@@ -1910,22 +2146,57 @@ export default function App() {
       const fetchedCias: string[] = [];
       const fetchedTimestamps: Record<string, string> = {};
       let errors = 0;
+      let succeeded = 0;
       let completed = 0;
       let cursor = 0;
-      const concurrency = Math.min(3, ciasToFetch.length);
+      // AgedBalanceRequest (jdeTypes): N paralelos por cía → 500 por
+      // contención (validado prod 2026-04-20). 10 paralelos es agresivo
+      // contra JDE pero el retry por-cía con backoff cubre los 500
+      // transitorios. Revisar si vuelven a aparecer fallos silenciosos.
+      const concurrency = Math.min(10, ciasToFetch.length);
+      const failedCias: string[] = [];
+      const fetchCiaWithRetry = async (cia: string): Promise<CXPRecord[]> => {
+        const MAX_ATTEMPTS = 3;
+        let lastErr: unknown;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+          try {
+            return (await fetchAgedBalances({ cia })) as CXPRecord[];
+          } catch (err) {
+            lastErr = err;
+            if (attempt === MAX_ATTEMPTS) break;
+            await new Promise(r => setTimeout(r, 800 * 2 ** (attempt - 1)));
+          }
+        }
+        throw lastErr;
+      };
+      // Coalescer setCxpRecords a 2 commits: uno tras la 1ª cía (el skeleton
+      // se va rápido + paint) y el final tras Promise.all. Cada setState de
+      // un heavy-record muta `cacheProbeInput` → rebuild del source +
+      // re-spawn de los workers (mismo motivo por el que el backfill de
+      // nómina coalesce a 1 commit). El commit por-cía (~28) reventaba en
+      // parpadeo y miles de re-fetch de scripts de worker.
+      const commitEarly = (cia: string, recs: CXPRecord[], ts: string) => {
+        setCxpRecords(prev => [...prev.filter(r => r.cia !== cia), ...recs]);
+        setCxpLoadedCias(prev => ({ ...prev, [cia]: ts }));
+        setDatasetSlot('cxp', 'ready');
+      };
       const worker = async () => {
         while (true) {
           const idx = cursor++;
           if (idx >= ciasToFetch.length) return;
           const cia = ciasToFetch[idx];
           try {
-            const data = await fetchAgedBalances({ cia });
-            const stamped = (data as CXPRecord[]).map(r => ({ ...r, cia }));
+            const data = await fetchCiaWithRetry(cia);
+            const stamped = data.map(r => ({ ...r, cia }));
+            const ts = new Date().toISOString();
             fetchedRecords.push(...stamped);
             fetchedCias.push(cia);
-            fetchedTimestamps[cia] = new Date().toISOString();
+            fetchedTimestamps[cia] = ts;
+            succeeded += 1;
+            if (succeeded === 1) commitEarly(cia, stamped, ts);
           } catch {
             errors += 1;
+            failedCias.push(cia);
           } finally {
             completed += 1;
             setCxpBootProgress({ done: completed, total: ciasToFetch.length });
@@ -1938,105 +2209,161 @@ export default function App() {
         setCxpRecords(prev => [...prev.filter(r => !fetchedSet.has(r.cia)), ...fetchedRecords]);
         setCxpLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
       }
-      const status = errors === ciasToFetch.length ? 'error' : 'done';
-      setBootSlot('cxp', status);
-      setDatasetSlot('cxp', status === 'error' ? 'error' : 'ready');
+      if (failedCias.length > 0) {
+        console.error(
+          `[cxp] ${failedCias.length}/${ciasToFetch.length} cías fallaron tras retries: ${failedCias.join(', ')}`,
+        );
+      }
+      const allFailed = errors === ciasToFetch.length;
+      setBootSlot('cxp', allFailed ? 'error' : 'done');
+      setDatasetSlot('cxp', allFailed ? 'error' : 'ready');
     })();
-  }, [requestedDatasets, storeHydrated, companies, cxpRecords, cxpLoadedCias, setBootSlot, setDatasetSlot]);
+  }, [requestedDatasets, storeHydrated, companies, cxpRecords, cxpLoadedCias, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
 
   // ── Auto-load Compras (Órdenes de Compra) durante el boot ──
-  // Endpoint global (no por cia, no listado en /empresas). Cargamos los últimos
-  // COMPRAS_LOOKBACK_DAYS hacia atrás + 3 meses a futuro vía fetchComprasRange. No
-  // bloquea el splash — corre en segundo plano una vez que companies cargó
-  // (para reusar el mismo signal de "boot avanzado").
+  // Cambio JDE (dev 2026-05-19): /compras ahora exige `cia` en el body — UNA
+  // compañía por request (antes era global). Recorremos las cías activas con
+  // un pool de concurrencia acotado (espejo del loader de Cobranza). Cada cía
+  // hace su propio delta-sync contra el cache diario por cía y guarda su
+  // timestamp en comprasLoadedCias[cia]; además dejamos un agregado bajo
+  // COMPRAS_CACHE_KEY ('__all__') para la pestaña Compras que muestra "última
+  // carga". No bloquea el splash — corre en segundo plano una vez que
+  // companies cargó.
   const comprasAutoFetchDone = useRef(false);
   useEffect(() => {
     if (comprasAutoFetchDone.current) return;
     if (!requestedDatasets.has('compras')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
-    if (comprasRecords.length > 0 && isFreshTimestamp(comprasLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
+    // Esperar la hidratación IDB: sin esto comprasRecords está vacío y el sync
+    // hace un backfill FULL aunque la cache exista.
+    if (!idbHydratedDatasets.has('compras')) return;
+    // Doble filtro: exclusión global (filterActiveCompanies tira 33 y
+    // cualquier multicarga) + whitelist explícito de cías con OCs reales.
+    const activeCias = filterActiveCompanies(companies)
+      .map(c => c.cia)
+      .filter(cia => COMPRAS_ALLOWED_CIAS.has(cia));
+    if (activeCias.length === 0) {
       comprasAutoFetchDone.current = true;
+      setBootSlot('compras', 'done');
+      setDatasetSlot('compras', 'ready');
+      return;
+    }
+    const hasHydratedRecords = comprasRecords.length > 0;
+    const ciasToFetch = hasHydratedRecords
+      ? activeCias.filter(cia => !isFreshTimestamp(comprasLoadedCias[cia], COMPRAS_AUTO_REFRESH_TTL_MS))
+      : activeCias;
+    if (ciasToFetch.length === 0) {
+      comprasAutoFetchDone.current = true;
+      setBootSlot('compras', 'done');
       setDatasetSlot('compras', 'ready');
       return;
     }
     comprasAutoFetchDone.current = true;
+    setBootSlot('compras', 'loading');
     setDatasetSlot('compras', 'loading');
     const today = new Date();
-    const fechaFinal = addMonthsIso(today, COMPRAS_FUTURE_LOOKAHEAD_MONTHS);
+    // Tope superior = hoy. NO pedimos días futuros — el API solo indexa OCs
+    // ya emitidas/recibidas, así que cualquier `fechaFinal > today` devuelve
+    // `data: []`. La proyección de pagos futuros se hace client-side desde
+    // las OCs históricas vía `forecastFutureCompras` (controlado por
+    // COMPRAS_FUTURE_LOOKAHEAD_MONTHS, independiente del fetch).
+    const fechaFinal = today.toISOString().slice(0, 10);
     const lookback = new Date(today);
     lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
     const lookbackStart = lookback.toISOString().slice(0, 10);
     (async () => {
       try {
-        // Delta sync: primero revisamos qué tenemos en IDB. Si el último día
-        // cacheado es reciente y el store ya hidrató registros, sólo pedimos
-        // a JDE desde (maxCached+1) hasta hoy. Sin cache o store vacío → full
-        // backfill (lookback completo). El cache diario por día sirve días
-        // pasados sin tocar la red en cualquier caso, pero el delta también
-        // evita iterar 730 días para confirmar cache hits.
+        // El cache mensual (M:compras.{cia}.{YYYY-MM}) hace el delta-sync
+        // implícito: meses pasados ya cacheados se sirven sin red, mes en
+        // curso se re-fetch. Por eso pasamos siempre [lookbackStart, today];
+        // el helper decide qué meses pedir.
         await primeDailyCache();
-        const maxCached = getMaxCachedDay('compras');
-        const hasHydratedRecords = comprasRecords.length > 0;
-        const candidateFrom = maxCached ? nextIsoDay(maxCached) : lookbackStart;
-        const fechaInicial = (hasHydratedRecords && maxCached && candidateFrom >= lookbackStart)
-          ? candidateFrom
-          : lookbackStart;
+        const fetchedTimestamps: Record<string, string> = {};
+        const fetchedByCia = new Map<string, ComprasRecord[]>();
+        const errors: string[] = [];
+
+        let cursor = 0;
+        const concurrency = Math.min(10, ciasToFetch.length);
+        const worker = async () => {
+          while (true) {
+            const idx = cursor++;
+            if (idx >= ciasToFetch.length) return;
+            const cia = ciasToFetch[idx];
+            try {
+              const fetched = await fetchComprasRange(cia, lookbackStart, fechaFinal, { concurrency: 4 });
+              fetchedByCia.set(cia, fetched);
+              fetchedTimestamps[cia] = new Date().toISOString();
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              errors.push(`${cia}: ${msg}`);
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: concurrency }, worker));
+
+        const fetchedAll: ComprasRecord[] = [];
+        for (const recs of fetchedByCia.values()) fetchedAll.push(...recs);
         // eslint-disable-next-line no-console
-        console.info(`[compras] boot sync · maxCachedIDB=${maxCached ?? 'none'} · hydratedState=${comprasRecords.length} · fetch ${fechaInicial}→${fechaFinal} (${fechaInicial === lookbackStart ? 'FULL' : 'DELTA'})`);
-
-        if (fechaInicial > fechaFinal) {
-          // Nada que sincronizar: el cache ya cubre hasta hoy.
-          // eslint-disable-next-line no-console
-          console.info('[compras] boot sync · nada nuevo, cache cubre hasta hoy');
-          setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
-          setDatasetSlot('compras', 'ready');
-          return;
-        }
-
-        const fetched = await fetchComprasRange(fechaInicial, fechaFinal, { concurrency: 2 });
-        if (fetched.length > 0) {
-          // Siempre merge — nunca reemplazar. Si loadStore.then() hidrató
-          // registros viejos (fuera de la ventana de lookback actual) durante
-          // el fetch, no los queremos perder. La ventana solo determina QUÉ
-          // se pide a JDE, no qué se conserva en state.
+        console.info(`[compras] boot sync · ${ciasToFetch.length} cías · ${fetchedAll.length} OCs nuevas · ${errors.length} errores`);
+        if (fetchedAll.length > 0) {
+          // Siempre merge — nunca reemplazar. El delta sólo pide días nuevos;
+          // los históricos hidratados desde el store deben preservarse. La
+          // llave incluye cia, así que no hay colisión entre compañías.
           setComprasRecords(prev => {
             const map = new Map<string, ComprasRecord>();
             for (const r of prev) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
-            for (const r of fetched) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
+            for (const r of fetchedAll) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
             return Array.from(map.values());
           });
         }
-        setComprasLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
-        setDatasetSlot('compras', 'ready');
+        if (Object.keys(fetchedTimestamps).length > 0) {
+          const aggregate = new Date().toISOString();
+          setComprasLoadedCias(prev => ({ ...prev, ...fetchedTimestamps, [COMPRAS_CACHE_KEY]: aggregate }));
+        }
+        if (errors.length > 0 && fetchedAll.length === 0) {
+          comprasAutoFetchDone.current = false;
+          setBootSlot('compras', 'error');
+          setDatasetSlot('compras', 'error');
+          console.error('[compras] auto-fetch falló en todas las cías', errors.slice(0, 3).join('; '));
+        } else {
+          setBootSlot('compras', 'done');
+          setDatasetSlot('compras', 'ready');
+        }
       } catch (err) {
         // Reset the guard so el usuario puede reintentar manualmente desde la
         // pestaña Compras sin reload. Loggeamos para que la falla no quede
         // muda — el silencio anterior dejaba "no muestra nada" sin pista.
         comprasAutoFetchDone.current = false;
+        setBootSlot('compras', 'error');
         setDatasetSlot('compras', 'error');
         console.error('[compras] auto-fetch falló', err);
       }
     })();
-  }, [requestedDatasets, storeHydrated, companies, comprasLoadedCias, comprasRecords.length, setDatasetSlot]);
+  }, [requestedDatasets, storeHydrated, companies, comprasLoadedCias, comprasRecords.length, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
 
   // ── Auto-load PagoProveedor durante el boot ──
-  // Endpoint global (no filtra por cia, igual que /compras). Cargamos los
-  // últimos 2 años — mismo lookback histórico que compras, para que la ventana de
-  // conciliación pagos↔CXP↔banco sea coherente. Reusa COMPRAS_* constants:
-  // el endpoint tiene la misma forma de cache + TTL.
+  // Endpoint global (no filtra por cia, igual que /compras). Mismo lookback
+  // que compras (COMPRAS_LOOKBACK_DAYS=180) para que la ventana de
+  // conciliación pagos↔CXP↔banco sea coherente con las OCs aún abiertas.
+  // Reusa COMPRAS_* constants: misma forma de cache + TTL.
   const pagoProveedorAutoFetchDone = useRef(false);
   useEffect(() => {
     if (pagoProveedorAutoFetchDone.current) return;
     if (!requestedDatasets.has('pagos')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
+    // Esperar la hidratación IDB: sin esto pagoProveedorRecords está vacío y el
+    // sync hace un backfill FULL aunque la cache exista.
+    if (!idbHydratedDatasets.has('pagos')) return;
     if (pagoProveedorRecords.length > 0 && isFreshTimestamp(pagoProveedorLoadedCias[COMPRAS_CACHE_KEY], COMPRAS_AUTO_REFRESH_TTL_MS)) {
       pagoProveedorAutoFetchDone.current = true;
+      setBootSlot('pagos', 'done');
       setDatasetSlot('pagos', 'ready');
       return;
     }
     pagoProveedorAutoFetchDone.current = true;
+    setBootSlot('pagos', 'loading');
     setDatasetSlot('pagos', 'loading');
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
@@ -2060,11 +2387,12 @@ export default function App() {
           // eslint-disable-next-line no-console
           console.info('[pagoproveedor] boot sync · nada nuevo, cache cubre hasta hoy');
           setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+          setBootSlot('pagos', 'done');
           setDatasetSlot('pagos', 'ready');
           return;
         }
 
-        const fetched = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 2 });
+        const fetched = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 10 });
         if (fetched.length > 0) {
           // Siempre merge para preservar historia hidratada desde el store.
           setPagoProveedorRecords(prev => {
@@ -2075,14 +2403,16 @@ export default function App() {
           });
         }
         setPagoProveedorLoadedCias({ [COMPRAS_CACHE_KEY]: new Date().toISOString() });
+        setBootSlot('pagos', 'done');
         setDatasetSlot('pagos', 'ready');
       } catch (err) {
         pagoProveedorAutoFetchDone.current = false;
+        setBootSlot('pagos', 'error');
         setDatasetSlot('pagos', 'error');
         console.error('[pagoproveedor] auto-fetch falló', err);
       }
     })();
-  }, [requestedDatasets, storeHydrated, companies, pagoProveedorLoadedCias, pagoProveedorRecords.length, setDatasetSlot]);
+  }, [requestedDatasets, storeHydrated, companies, pagoProveedorLoadedCias, pagoProveedorRecords.length, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
 
   // ── Cargador unificado de Cobranza (CXC) ───────────────────────────────
   // Endpoint: POST /JDEdwards/cobranza (productivo desde 2026-05-01).
@@ -2103,15 +2433,21 @@ export default function App() {
         setCobranzaError('No hay compañías activas en el catálogo.');
         return;
       }
-      const cobranzaRecordCias = new Set(cobranzaRecords.map(record => record.cia));
-      const cobranzaPaymentCias = new Set(cobranzaPayments.map(payment => payment.cia));
-      const ciasToFetch = force
+      const heavyHydrated = cobranzaRecords.length > 0 || cobranzaPayments.length > 0;
+      const snapshotLoadedAt = heavyHydrated ? lightStoreLastSavedRef.current : undefined;
+      // Desync guard (mismo hardening que nómina `shouldSkip`): si el heavy
+      // store (IDB, 2 años de historia) hidrató VACÍO — open-timeout de 5s,
+      // sesión previa muerta a mitad del backfill antes del save debounced, o
+      // evicción — los timestamps light de localStorage (`cobranzaLoadedCias`)
+      // siguen "frescos" y el delta-sync skippea toda cía → cobranza queda
+      // vacía para siempre y "no carga histórico" hasta un refresh manual.
+      // Si no hay records hidratados, NO confíes en los timestamps: refetch
+      // completo (2 años, todas las cías) en vez de quedarte en vacío.
+      const ciasToFetch = force || !heavyHydrated
         ? activeCias
         : activeCias.filter(cia =>
-          !cobranzaRecordCias.has(cia)
-          || !cobranzaPaymentCias.has(cia)
-          || !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
-          || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
+          !isFreshTimestamp(cobranzaLoadedCias[cia] ?? snapshotLoadedAt, COBRANZA_AUTO_REFRESH_TTL_MS)
+          || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia] ?? snapshotLoadedAt, COBRANZA_AUTO_REFRESH_TTL_MS)
         );
       // eslint-disable-next-line no-console
       console.info(`[cobranza] sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (force=${force}, TTL ${Math.round(COBRANZA_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cobranzaRecords.length}`);
@@ -2141,15 +2477,15 @@ export default function App() {
 
       let completed = 0;
       let cursor = 0;
-      const concurrency = Math.min(3, ciasToFetch.length);
+      const concurrency = Math.min(10, ciasToFetch.length);
       const worker = async () => {
         while (true) {
           const idx = cursor++;
           if (idx >= ciasToFetch.length) return;
           const cia = ciasToFetch[idx];
           const [recordsResult, paymentsResult] = await Promise.allSettled([
-            fetchCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 4 }),
-            fetchIndicadoresCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 4 }),
+            fetchCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 10 }),
+            fetchIndicadoresCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 10 }),
           ]);
           if (recordsResult.status === 'fulfilled') {
             const stamped = recordsResult.value.map(r => ({ ...r, cia: r.cia || cia }));
@@ -2225,6 +2561,9 @@ export default function App() {
     if (!requestedDatasets.has('cobranza')) return;
     if (!storeHydrated) return;
     if (companies.length === 0) return;
+    // Esperar la hidratación IDB: sin esto cobranzaRecords está vacío y el sync
+    // concluye "28/28 necesitan refresh" aunque la cache exista.
+    if (!idbHydratedDatasets.has('cobranza')) return;
     const activeCias = filterActiveCompanies(companies);
     if (activeCias.length === 0) {
       cobranzaAutoFetchDone.current = true;
@@ -2251,7 +2590,7 @@ export default function App() {
         setDatasetSlot('cobranza', 'error');
       }
     })();
-  }, [requestedDatasets, storeHydrated, companies, refreshCobranza, setBootSlot, setDatasetSlot]);
+  }, [requestedDatasets, storeHydrated, companies, refreshCobranza, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
 
   // ── ROL CITI: viajes ejecutados ─────────────────────────────────────────
   // Fetcheamos desde el 1° de enero del año en curso hasta hoy. El service
@@ -2279,10 +2618,37 @@ export default function App() {
             ? (done, total) => setRolBootProgress({ done, total })
             : undefined,
         });
-        setRolRecords(records);
-        setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
+        // Upsert — NUNCA encoger la historia hidratada. El API /roldiario
+        // responde vacío/parcial con frecuencia (permisos, ventana sin
+        // viajes); un `setRolRecords(records)` ciego borraba los ~65k
+        // registros de IDB y la proyección ROL quedaba en 0. Misma regla que
+        // cobranza/compras: merge por llave, el fresco gana (un viaje que
+        // adquiere `factura` actualiza → predicted→invoiced → cierra ciclo).
+        const rolKey = (r: RolRecord) =>
+          `${r.cia}::${r.kCliente}::${r.anio}::${r.semana}::${r.ruta}::${r.tipoViaje}`;
+        setRolRecords(prev => {
+          if (records.length === 0) return prev;
+          if (prev.length === 0) return records;
+          // Skip si el fetch no trae llaves nuevas (mismas viajes ya
+          // cacheados). Devolver `prev` con misma ref evita re-render →
+          // evita planningProps recompute → evita source cache miss →
+          // evita worker rebuild de cientos de MB. Updates in-place a un
+          // viaje existente (p.ej. factura llenada) se acumulan hasta que
+          // otra señal invalide el cache; aceptable porque el flujo ROL no
+          // es real-time.
+          const prevKeys = new Set(prev.map(rolKey));
+          const hasNewKey = records.some(r => !prevKeys.has(rolKey(r)));
+          if (!hasNewKey) return prev;
+          const byKey = new Map<string, RolRecord>();
+          for (const r of prev) byKey.set(rolKey(r), r);
+          for (const r of records) byKey.set(rolKey(r), r);
+          return Array.from(byKey.values());
+        });
+        if (records.length > 0) {
+          setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
+        }
         // eslint-disable-next-line no-console
-        console.info(`[rol] sync · ${records.length} viajes ${fechaInicial}..${fechaFinal}`);
+        console.info(`[rol] sync · fetched=${records.length} viajes ${fechaInicial}..${fechaFinal} (upsert, no shrink)`);
         return { totalRecords: records.length, totalCias: 1, failedCias: 0 };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2303,6 +2669,9 @@ export default function App() {
     if (rolAutoFetchDone.current) return;
     if (!requestedDatasets.has('rol')) return;
     if (!storeHydrated) return;
+    // Esperar la hidratación IDB: sin esto rolRecords está vacío y se fetchea
+    // día por día desde enero aunque el heavy cache ya exista.
+    if (!idbHydratedDatasets.has('rol')) return;
     rolAutoFetchDone.current = true;
     setBootSlot('rol', 'loading');
     setDatasetSlot('rol', 'loading');
@@ -2317,17 +2686,19 @@ export default function App() {
         setDatasetSlot('rol', 'error');
       }
     })();
-  }, [requestedDatasets, storeHydrated, refreshRol, setBootSlot, setDatasetSlot]);
+  }, [requestedDatasets, storeHydrated, refreshRol, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
 
-  // Si JDE no devuelve compañías (companies en error), CXP y cobranza nunca
-  // se dispararon — marcamos los slots como error para destrabar el boot.
-  // ROL no depende de companies (es global CITI) → no se marca aquí.
+  // Si JDE no devuelve compañías (companies en error), CXP/cobranza/compras/
+  // pagos/nómina nunca se dispararon — marcamos los slots como error para
+  // destrabar el boot. ROL no depende de companies (es global CITI).
   useEffect(() => {
     if (bootStatus.companies !== 'error') return;
     if (bootStatus.cxp === 'pending') setBootSlot('cxp', 'error');
     if (bootStatus.cobranza === 'pending') setBootSlot('cobranza', 'error');
+    if (bootStatus.compras === 'pending') setBootSlot('compras', 'error');
+    if (bootStatus.pagos === 'pending') setBootSlot('pagos', 'error');
     if (bootStatus.nomina === 'pending') setBootSlot('nomina', 'error');
-  }, [bootStatus.companies, bootStatus.cxp, bootStatus.cobranza, bootStatus.nomina, setBootSlot]);
+  }, [bootStatus.companies, bootStatus.cxp, bootStatus.cobranza, bootStatus.compras, bootStatus.pagos, bootStatus.nomina, setBootSlot]);
 
   // ── Nómina (TRESS): boot fetch del mes en curso ──
   // 1 request con `idEmpresa=99, tipoNomina=99` cubre todas las cías y ambos
@@ -2345,6 +2716,7 @@ export default function App() {
     if (nominaBootDone.current) return;
     if (!requestedDatasets.has('nomina')) return;
     if (!storeHydrated) return;
+    if (!nominaHeavyHydrated) return;
     if (companies.length === 0) return;
     nominaBootDone.current = true;
     // Fetch últimos 24 meses de nómina TRESS para alimentar predictor
@@ -2360,31 +2732,83 @@ export default function App() {
       try {
         // Re-refine pass sobre records persistidos. La tabla de clasificación
         // de `cashTreatment` evolucionó; refinar ahora actualiza sin refetch.
-        if (nominaRecords.length > 0) {
-          setNominaRecords(prev => refineBatch(prev));
-        }
+        let workingRecords = refineBatch(nominaRecords);
+        let workingLoadedKeys = deriveNominaLoadedKeysFromRecords(workingRecords, nominaLoadedKeys);
+        if (workingRecords.length > 0) setNominaRecords(workingRecords);
+        if (workingLoadedKeys !== nominaLoadedKeys) setNominaLoadedKeys(workingLoadedKeys);
+
         // Purga registros parciales persistidos (firma: records>0 sin
         // Deducciones ni Aportaciones — truncamiento upstream AWS API Gateway).
-        const refinedSnapshot = refineBatch(nominaRecords);
-        const suspectMonths = findSuspectMonths(refinedSnapshot);
+        // DIAG: qué hidrató IDB al arrancar el boot effect (antes de fetch).
+        {
+          const byM = new Map<string, { recs: number; cashOut: number; apor: number }>();
+          for (const r of workingRecords) {
+            if (!r.year || !r.month) continue;
+            const k = `${r.year}-${String(r.month).padStart(2, '0')}`;
+            const e = byM.get(k) ?? { recs: 0, cashOut: 0, apor: 0 };
+            e.recs += 1;
+            if (r.cashTreatment === 'CASH_OUT') e.cashOut += r.amount;
+            if (r.cashTreatment === 'EMPLOYER_TAX') e.apor += r.amount;
+            byM.set(k, e);
+          }
+          // eslint-disable-next-line no-console
+          console.info(
+            `[nomina-diag] boot-effect IDB snapshot · total=${workingRecords.length} · ${
+              Array.from(byM.entries())
+                .sort()
+                .map(([k, v]) => `${k}:recs=${v.recs},cashOut=${Math.round(v.cashOut)},apor=${Math.round(v.apor)}`)
+                .join(' · ') || '(vacío)'
+            }`,
+          );
+        }
+        const suspectMonths = findSuspectMonths(workingRecords);
         if (suspectMonths.length > 0) {
           console.warn(
             `[nomina] purgando ${suspectMonths.length} mes(es) con firma parcial:`,
             suspectMonths.map(m => `${m.year}-${String(m.month).padStart(2, '0')}`).join(', '),
           );
           const suspectFps = new Set(suspectMonths.map(m => `${m.year}|${m.month}`));
-          setNominaRecords(prev =>
-            prev.filter(r => !suspectFps.has(`${r.year}|${r.month}`)),
-          );
-          setNominaLoadedKeys(prev => {
-            const next = { ...prev };
-            for (const { year, month } of suspectMonths) {
-              const key = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio: year, mes: month });
-              delete next[key];
-            }
-            return next;
-          });
+          workingRecords = workingRecords.filter(r => !suspectFps.has(`${r.year}|${r.month}`));
+          const nextLoadedKeys = { ...workingLoadedKeys };
+          for (const { year, month } of suspectMonths) {
+            const key = nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio: year, mes: month });
+            delete nextLoadedKeys[key];
+          }
+          workingLoadedKeys = nextLoadedKeys;
+          setNominaRecords(workingRecords);
+          setNominaLoadedKeys(workingLoadedKeys);
         }
+        // Llaves de meses con firma parcial — el purge de arriba borra su key
+        // vía setState (async, no visible en este closure). Las recolectamos
+        // localmente para forzar su refetch aunque `nominaLoadedKeys` (closure
+        // pre-purge) todavía las muestre como cargadas.
+        const suspectKeys = new Set(
+          suspectMonths.map(m =>
+            nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio: m.year, mes: m.month }),
+          ),
+        );
+
+        // Meses realmente presentes en `nominaRecords` (snapshot del closure).
+        // `nominaLoadedKeys` (localStorage, light) y `nominaRecords` (IDB,
+        // heavy) se DESYNCEAN: el flush de unload escribe localStorage síncrono
+        // pero IDB async (se pierde si la pestaña muere antes del commit). Tras
+        // ese desync las llaves dicen "cargado" pero los records están vacíos.
+        // Guardar solo por llave hacía que el boot SKIPPEARA el fetch y no
+        // cargara nada. Skip solo si la llave está Y el mes está de verdad en
+        // records Y no es sospechoso. Si records no está (desync / aún no
+        // hidratado), refetch — correcto sobre la optimización de skip.
+        const buildPresentMonths = (): Set<string> => {
+          const presentMonths = new Set<string>();
+          for (const r of workingRecords) {
+            if (r.year && r.month) presentMonths.add(`${r.year}|${r.month}`);
+          }
+          return presentMonths;
+        };
+        const shouldSkip = (p: { anio: number; mes: number; cacheKey: string }): boolean => {
+          if (suspectKeys.has(p.cacheKey)) return false;
+          if (!workingLoadedKeys[p.cacheKey]) return false;
+          return buildPresentMonths().has(`${p.anio}|${p.mes}`);
+        };
 
         // Construye plan: últimos 4 meses (fast path, igual que el botón
         // manual) + meses históricos hasta 24 atrás (background).
@@ -2399,39 +2823,99 @@ export default function App() {
           return out;
         };
 
+        // `commit=false` fetchea+mergea SIN tocar React state (devuelve los
+        // records). El backfill histórico (10+ chunks) lo usa para acumular y
+        // hacer UN solo setNominaRecords al final: cada setNominaRecords muta
+        // `cacheProbeInput` → re-dispara el build del source. 10 chunks = 10
+        // rebuilds + 10 re-merges de arrays crecientes durante el boot = el
+        // pico de RAM que crasheaba máquinas con poca memoria (jobId 3→6→18).
         const fetchAndMerge = async (
           targets: Array<{ anio: number; mes: number; cacheKey: string }>,
-        ): Promise<Record<string, string>> => {
+          commit = true,
+        ): Promise<{ keys: Record<string, string>; merged: PayrollCostRecord[] }> => {
           const results = await Promise.allSettled(
             targets.map(({ anio, mes }) =>
               fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio, mes }),
             ),
           );
           const ts = new Date().toISOString();
-          let merged: PayrollCostRecord[] = [];
+          let mergedBatch: PayrollCostRecord[] = [];
           const keys: Record<string, string> = {};
           results.forEach((res, idx) => {
             const { cacheKey, anio, mes } = targets[idx];
             if (res.status === 'fulfilled') {
-              merged = mergeNominaBatch(merged, res.value);
+              const recs = res.value;
+              let cashOut = 0;
+              let apor = 0;
+              for (const r of recs) {
+                if (r.cashTreatment === 'CASH_OUT') cashOut += r.amount;
+                if (r.cashTreatment === 'EMPLOYER_TAX') apor += r.amount;
+              }
+              // eslint-disable-next-line no-console
+              console.info(
+                `[nomina-diag] fetch ${anio}-${String(mes).padStart(2, '0')} OK · recs=${recs.length} · cashOut=${Math.round(cashOut)} · apor=${Math.round(apor)}${apor === 0 && recs.length > 0 ? ' ⚠️TRUNCADO(apor=0)' : ''}`,
+              );
+              mergedBatch = mergeNominaBatch(mergedBatch, res.value);
               keys[cacheKey] = ts;
             } else {
               console.error(`[nomina] auto-fetch ${anio}-${String(mes).padStart(2, '0')} falló`, res.reason);
             }
           });
-          if (merged.length > 0) {
-            setNominaRecords(prev => mergeNominaBatch(prev, merged));
+          if (commit && mergedBatch.length > 0) {
+            workingRecords = mergeNominaBatch(workingRecords, mergedBatch);
+            setNominaRecords(workingRecords);
           }
-          return keys;
+          return { keys, merged: mergedBatch };
         };
 
-        // FAST PATH: últimos 4 meses en paralelo. Mismo patrón que el botón
-        // "Refrescar TRESS (4 meses)" del módulo de Nómina — un único batch
-        // paralelo, no chunked. Se carga en ~1s contra TRESS sano.
-        const recent = plan(4);
-        const recentKeys = await fetchAndMerge(recent);
-        if (Object.keys(recentKeys).length > 0) {
-          setNominaLoadedKeys(prev => ({ ...prev, ...recentKeys }));
+        // El saver reactivo (`useHeavySaver`) se resetea con CADA
+        // setNominaRecords; el backfill histórico dispara decenas a lo largo
+        // de minutos, así que el debounce casi nunca cierra durante el boot, y
+        // el flush de unload escribe IDB async (se pierde si la pestaña muere
+        // antes del commit) → localStorage guarda nominaLoadedKeys pero IDB se
+        // queda sin nominaRecords. Un await explícito tras el fast path y tras
+        // el histórico garantiza IDB aunque el usuario recargue a mitad.
+        const persistNomina = async (): Promise<void> => {
+          if (workingRecords.length > 0) {
+            await saveHeavyRecords('nominaRecords', workingRecords);
+          }
+        };
+
+        // FAST PATH: TODO el año-a-la-fecha (enero→mes actual), mínimo 4 meses
+        // para continuidad sobre el cambio de año / piso 3m. Refetch SIEMPRE,
+        // SIN `shouldSkip` — igual que el botón "Refrescar TRESS".
+        //
+        // Causa raíz (corregida en bloque, dejó de ser parche-por-parche): el
+        // boot sólo refetcheaba 4 meses; meses YTD anteriores (típico: enero)
+        // caían al backfill histórico guardado por `shouldSkip`, que los
+        // saltaba si su copia poisoned/parcial de IDB tenía llave + estaba
+        // "presente" y `findSuspectMonths` (heurística estrecha) no la
+        // detectaba. Esos meses se re-persistían poisoned cada boot → la
+        // pantalla mostraba YTD incorrecto hasta un refresh manual. La regla
+        // ahora es estructural, no heurística: NO confiamos en IDB para la
+        // ventana que el usuario debe ver correcta (YTD). `mergeNominaBatch`
+        // reemplaza por (year|month|cia|payrollType) → el fetch correcto
+        // sobrescribe cualquier poison YTD. Meses cerrados anteriores a
+        // enero-de-este-año conservan el guard de cache (no refetch de 24
+        // meses cada boot — perf, ver CLAUDE.md).
+        const monthsYtd = today.getMonth() + 1;
+        const recent = plan(Math.max(4, monthsYtd));
+        const recentPresentMonths = buildPresentMonths();
+        for (const p of recent) {
+          // eslint-disable-next-line no-console
+          console.info(
+            `[nomina-diag] recent ${p.anio}-${String(p.mes).padStart(2, '0')} · loadedKey=${!!workingLoadedKeys[p.cacheKey]} · presentInRecords=${recentPresentMonths.has(`${p.anio}|${p.mes}`)} · suspect=${suspectKeys.has(p.cacheKey)} · wouldSkip=${shouldSkip(p)}`,
+          );
+        }
+        const recentToFetch = recent;
+        if (recentToFetch.length > 0) {
+          // Fast path: commit inmediato (UX — los 4 meses recientes pintan ya).
+          const { keys: recentKeys } = await fetchAndMerge(recentToFetch);
+          if (Object.keys(recentKeys).length > 0) {
+            workingLoadedKeys = { ...workingLoadedKeys, ...recentKeys };
+            setNominaLoadedKeys(workingLoadedKeys);
+          }
+          await persistNomina();
         }
         setBootSlot('nomina', 'done');
         setDatasetSlot('nomina', 'ready');
@@ -2442,36 +2926,56 @@ export default function App() {
         const recentKeysSet = new Set(recent.map(r => r.cacheKey));
         const historical = plan(24).filter(p => {
           if (recentKeysSet.has(p.cacheKey)) return false;
-          return !nominaLoadedKeys[p.cacheKey];
+          return !shouldSkip(p);
         });
         if (historical.length === 0) return;
         const CONCURRENCY = 2;
+        // Acumular SIN setState por chunk (commit=false). Antes cada chunk
+        // hacía setNominaRecords → 10+ rebuilds del source + 10 re-merges de
+        // arrays crecientes durante el boot = pico de RAM que crasheaba
+        // máquinas con poca memoria. Las llaves (light, localStorage, NO en
+        // cacheProbeInput) sí se setean por chunk para no perder progreso si
+        // la pestaña muere; sólo el heavy nominaRecords se coalesce a 1 commit.
+        let histAccum: PayrollCostRecord[] = [];
         for (let i = 0; i < historical.length; i += CONCURRENCY) {
           const chunk = historical.slice(i, i + CONCURRENCY);
-          const keys = await fetchAndMerge(chunk);
+          const { keys, merged } = await fetchAndMerge(chunk, false);
+          if (merged.length > 0) {
+            histAccum = mergeNominaBatch(histAccum, merged);
+            // Persist a IDB per-chunk SIN setState. Antes IDB se escribía solo
+            // al final del backfill (await persistNomina abajo) mientras
+            // nominaLoadedKeys (localStorage) sí avanzaba per-chunk. Si el
+            // usuario recargaba mid-backfill (común, el loop tarda ~5-10 min),
+            // localStorage decía "2024-12 cargado" pero IDB no tenía esos
+            // records → shouldSkip ve key+no record → refetch en cada boot
+            // → loop infinito. Con esta save sincrónica, IDB y localStorage
+            // quedan en sync después de cada chunk. setState sigue coalescido
+            // al final (preserva la optimización de RAM, ver comment arriba).
+            await saveHeavyRecords(
+              'nominaRecords',
+              mergeNominaBatch(workingRecords, histAccum),
+            );
+          }
           if (Object.keys(keys).length > 0) {
-            setNominaLoadedKeys(prev => ({ ...prev, ...keys }));
+            workingLoadedKeys = { ...workingLoadedKeys, ...keys };
+            setNominaLoadedKeys(workingLoadedKeys);
           }
         }
+        if (histAccum.length > 0) {
+          workingRecords = mergeNominaBatch(workingRecords, histAccum);
+          setNominaRecords(workingRecords);
+        }
+        // Persist final tras el backfill — inmune al starvation del debounce
+        // y a la pérdida del flush async de unload.
+        await persistNomina();
       } catch {
         setBootSlot('nomina', 'error');
         setDatasetSlot('nomina', 'error');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedDatasets, storeHydrated, companies.length, setDatasetSlot]);
+  }, [requestedDatasets, storeHydrated, nominaHeavyHydrated, companies.length, setDatasetSlot]);
 
-  // Persist selected cia (clear to 'all' if it disappears from the catalog)
-  useEffect(() => {
-    localStorage.setItem('midas.selectedCia', selectedCia);
-  }, [selectedCia]);
-  useEffect(() => {
-    if (companies.length > 0 && selectedCia !== 'all'
-        && !companies.some(c => c.cia === selectedCia)
-        && !companyGroups.some(g => g.id === selectedCia)) {
-      setSelectedCia('all');
-    }
-  }, [companies, selectedCia, companyGroups]);
 
   // Persist bank statements (JDE + supplemental) → IDB heavy-store.
   // Antes vivían en localStorage `midas.bankStatements.v2` y
@@ -2528,7 +3032,7 @@ export default function App() {
     force: boolean = false,
     includeRange: boolean = false,
   ) => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO();
     // 2 años hacia atrás para alimentar Holt-Winters seasonal (≥24m).
     // Antes era year-start (≤365d) → predictor caía a naive-mean (flat).
     const twoYearsAgo = new Date();
@@ -2536,8 +3040,18 @@ export default function App() {
     const yearStart = twoYearsAgo.toISOString().slice(0, 10);
     const defaultFormat: BankStatementFormat = 'SWIFT';
 
-    // Cache hit: skip unless forced.
-    if (!force) {
+    // Cache hit: skip unless forced. SOLO aplica al prime-only path
+    // (includeRange=false, la revalidación de fondo). Si includeRange=true
+    // (backfill estacional 2-años, o refresh manual con rango) NUNCA hacemos
+    // este corto: `distinctDates.size >= 30` se cumple con un solo prime
+    // reciente (un estado de cuenta de "hoy" ya trae >30 fechaOperacion
+    // distintas del último mes), así que el heurístico confundía "tengo el
+    // prime" con "tengo el histórico completo" y se saltaba TODO el backfill
+    // año-a-la-fecha aunque el rango estuviera barato en el daily-cache IDB.
+    // Resultado: histórico guardado en IDB pero nunca cargado a estado →
+    // Flujo Neto sólo la semana en curso, Planeación sin ingresos pasados.
+    // El Step 2 es idempotente (merge dedup) y barato si el cache persiste.
+    if (!force && !includeRange) {
       const distinctDates = new Set<string>();
       for (const acc of bankJdeStatements) {
         for (const mov of acc.movimientos) distinctDates.add(mov.fechaOperacion);
@@ -2547,7 +3061,7 @@ export default function App() {
         bankLastQuery?.fechaEstadoCuenta === today &&
         distinctDates.size >= 30;
       if (cacheIsFresh) {
-        return { primed: true, ranged: includeRange };
+        return { primed: true, ranged: false };
       }
     }
 
@@ -2635,7 +3149,7 @@ export default function App() {
         today,
         defaultFormat,
         {
-          concurrency: 6,
+          concurrency: 10,
           onProgress: (done, total) => {
             lastTotal = total;
             const now = performance.now();
@@ -2684,7 +3198,7 @@ export default function App() {
     const defaultFormat: BankStatementFormat = 'SWIFT';
     try {
       const fetched = await fetchBankStatementsRange(from, to, defaultFormat, {
-        concurrency: 6,
+        concurrency: 10,
       });
       const scoped = ciaFilter?.length
         ? fetched.filter(statement => ciaFilter.includes(statement.cia))
@@ -2708,21 +3222,30 @@ export default function App() {
     if (!storeHydrated) return;
     if (!bankCacheLoaded) return;
     banksBootDone.current = true;
-    (async () => {
-      // SOLO prime (días recientes). includeRange=false → NO esperamos el
-      // backfill de 2 años aquí: el splash no debe quedar atrás de 730 días.
-      // Apenas hay foto reciente marcamos 'done' y la app abre. El backfill
-      // seasonal corre después, en background (efecto de abajo).
-      // Gateado en storeHydrated + bankCacheLoaded para que bankJdeStatements
-      // ya esté hidratado desde localStorage antes de evaluar la rama delta.
-      setBootSlot('banks', 'loading');
-      try {
-        await refreshBankStatementsRange(false, false);
-        setBootSlot('banks', 'done');
-      } catch {
-        setBootSlot('banks', 'error');
-      }
-    })();
+    // Cache-first boot (stale-while-revalidate, like every fast SPA): bank
+    // statements are persisted in IDB/localStorage and already hydrated here
+    // (effect gated on bankCacheLoaded). If we have ANY cached statements,
+    // open the app INSTANTLY with them and revalidate JDE in the background —
+    // never block the splash on a live JDE prime. A cold/slow JDE prime used
+    // to hang the splash 100-240s ("2/3 listos") even though usable cached
+    // bank data was sitting right there. Only a true cold start (zero cached
+    // statements) waits for the first prime so the user doesn't land on an
+    // empty treasury. The seasonal range backfill already runs in background.
+    if (bankJdeStatements.length > 0) {
+      setBootSlot('banks', 'done');
+      // Background revalidate; errors stay silent (cached data is on screen).
+      void refreshBankStatementsRange(false, false).catch(() => { /* keep cached */ });
+    } else {
+      (async () => {
+        setBootSlot('banks', 'loading');
+        try {
+          await refreshBankStatementsRange(false, false);
+          setBootSlot('banks', 'done');
+        } catch {
+          setBootSlot('banks', 'error');
+        }
+      })();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeHydrated, bankCacheLoaded]);
 
@@ -2738,13 +3261,6 @@ export default function App() {
     bankRangeBackfillDone.current = true;
     void refreshBankStatementsRange(false, true);
   }, [bootStatus.banks, refreshBankStatementsRange]);
-
-  /* ── Animated page key for re-mount on tab change ── */
-  const [pageKey, setPageKey] = useState(0);
-  const prevTab = useRef(activeTab);
-  useEffect(() => {
-    if (prevTab.current !== activeTab) { setPageKey(k => k + 1); prevTab.current = activeTab; }
-  }, [activeTab]);
 
   // Los handlers de propuestas/escenarios ahora viven dentro de CashFlowView;
   // App sólo expone los setters directos al componente.
@@ -2772,8 +3288,23 @@ export default function App() {
   const updateClient = (c: Client) => setClients(prev => prev.map(x => x.id === c.id ? c : x));
   const deleteClient = (id: string) => setClients(prev => prev.filter(x => x.id !== id));
 
-  const activeSection = SECTION_FOR_TAB[activeTab] ?? 'operacion';
+  const activeSection = SECTION_FOR_TAB[activeTab] ?? 'proyeccion';
   const subTabs = SUB_TABS[activeSection];
+
+  // Atajos 1-N cambian sub-tabs DENTRO de la sección activa
+  // (Proyección / Operación / Catálogos). Sección se deriva de activeTab.
+  const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
+    onTabSwitch: (n) => {
+      const section = SECTION_FOR_TAB[activeTab] ?? 'proyeccion';
+      const tabs = SUB_TABS[section];
+      if (n >= 1 && n <= tabs.length) setActiveTab(tabs[n - 1].id);
+    },
+  });
+
+  // Seed for the global header scenario selector — cheap localStorage read,
+  // no projection compute. Proyección modules register the fully-bootstrapped
+  // list once they mount, which supersedes this.
+  const initialHeaderScenarios = useMemo(() => listHeaderScenarios(), []);
   const activeTabDatasets = TAB_DATASETS[activeTab] ?? [];
   const datasetHasRecords: Record<DatasetKey, boolean> = {
     banks: bankStatements.length > 0,
@@ -2788,6 +3319,117 @@ export default function App() {
     const status = datasetStatus[dataset];
     return status !== 'ready' && status !== 'error' && !datasetHasRecords[dataset];
   });
+  const projectionActive = activeTab === 'financialProjection';
+  const planningActive = activeTab === 'financialPlanning';
+  const [keepAliveVisited, setKeepAliveVisited] = useState<Set<TabId>>(
+    () => (KEEP_ALIVE_TABS.has(activeTab) ? new Set([activeTab]) : new Set()),
+  );
+  // Retén SOLO el último heavy tab activo (no acumular). Antes el set crecía
+  // y dejaba Proyección Y Planeación montados para siempre (uno display:none);
+  // con comprasRecords ~334k + ambos árboles vivos = OOM del renderer al
+  // navegar módulos. Cap a uno: el inactivo se desmonta. El remount es barato
+  // — useFinancialProjectionSource (LRU por fingerprint) y useScenarioRunWorker
+  // (worker cachea inputs pesados por versión, stale-while-recompute) sirven
+  // el warm path sin recomputar. NO es el remount de NavigationProvider que
+  // CLAUDE.md prohíbe (eso reinicia TODOS los workers); aquí solo un panel.
+  //
+  // El fijado NO espera a `!tabDataPending`: si lo hacía, entrar a un heavy
+  // tab en boot dejaba el render colgado de `projectionActive && !pending`,
+  // y como `tabDataPending` oscila mientras commitean datasets el panel
+  // montaba/desmontaba en bucle → respawn de workers (miles de re-fetch de
+  // scripts) + parpadeo. Fijar al volverse activo monta el panel UNA vez y
+  // se queda; el dashboard tolera datos parciales (CLAUDE.md) y rellena al
+  // llegar, sin desmontar.
+  useEffect(() => {
+    if (!KEEP_ALIVE_TABS.has(activeTab)) return;
+    setKeepAliveVisited(prev =>
+      prev.size === 1 && prev.has(activeTab) ? prev : new Set([activeTab]),
+    );
+  }, [activeTab]);
+  const renderProjectionKeepAlive = keepAliveVisited.has('financialProjection') || (projectionActive && !tabDataPending);
+  const renderPlanningKeepAlive = keepAliveVisited.has('financialPlanning') || (planningActive && !tabDataPending);
+  const activeKeepAliveRendered = (projectionActive && renderProjectionKeepAlive) || (planningActive && renderPlanningKeepAlive);
+  const navigateToTax = useCallback(() => setActiveTab('taxes'), []);
+  const projectionProps = useMemo(() => ({
+    companyCode: selectedCia,
+    bankStatements: accountableBankStatements,
+    clients,
+    providers,
+    cxpRecords,
+    cobranzaRecords,
+    cobranzaPayments,
+    cobranzaReconciliation,
+    rolRecords,
+    paidCxpKeys,
+    cargoEnrichments: paymentReconciliation.cargoEnrichments,
+    purchaseReceipts: purchaseReceiptsFromCompras,
+    payrollCosts: nominaRecords,
+    assumptions,
+    budget: null,
+    startingBalance: effectiveStartingBalance,
+    onNavigateToTax: navigateToTax,
+    forecastModelId,
+    onForecastModelChange: setForecastModelId,
+    forecastSummary: forecastedReceipts,
+    payrollMonthlyActualJDE,
+  }), [
+    selectedCia,
+    accountableBankStatements,
+    clients,
+    providers,
+    cxpRecords,
+    cobranzaRecords,
+    cobranzaPayments,
+    cobranzaReconciliation,
+    rolRecords,
+    paidCxpKeys,
+    paymentReconciliation.cargoEnrichments,
+    purchaseReceiptsFromCompras,
+    nominaRecords,
+    assumptions,
+    effectiveStartingBalance,
+    navigateToTax,
+    forecastModelId,
+    setForecastModelId,
+    forecastedReceipts,
+    payrollMonthlyActualJDE,
+  ]);
+  const planningProps = useMemo(() => ({
+    companyCode: selectedCia,
+    bankStatements: accountableBankStatements,
+    bajioStatements,
+    clients,
+    providers,
+    cxpRecords,
+    cobranzaRecords,
+    cobranzaReconciliation,
+    rolRecords,
+    paidCxpKeys,
+    cargoEnrichments: paymentReconciliation.cargoEnrichments,
+    purchaseReceipts: purchaseReceiptsFromCompras,
+    payrollCosts: nominaRecords,
+    assumptions,
+    budget: null,
+    startingBalance: effectiveStartingBalance,
+  }), [
+    selectedCia,
+    accountableBankStatements,
+    bajioStatements,
+    clients,
+    providers,
+    cxpRecords,
+    cobranzaRecords,
+    cobranzaReconciliation,
+    rolRecords,
+    paidCxpKeys,
+    paymentReconciliation.cargoEnrichments,
+    purchaseReceiptsFromCompras,
+    nominaRecords,
+    assumptions,
+    effectiveStartingBalance,
+  ]);
+  const frozenProjectionProps = useFrozenWhenInactive(projectionProps, projectionActive);
+  const frozenPlanningProps = useFrozenWhenInactive(planningProps, planningActive);
 
   const switchSection = (s: SectionId) => {
     if (s === activeSection) return;
@@ -2795,6 +3437,7 @@ export default function App() {
   };
 
   return (
+    <ScenarioSelectionProvider initialScenarios={initialHeaderScenarios}>
     <div className="min-h-screen" style={{ background: 'var(--background)' }}>
       {splashMounted && (
         <MidasSplash
@@ -2833,6 +3476,10 @@ export default function App() {
             <img
               src="/logos/senda-corporativo.svg"
               alt="Senda"
+              width={108}
+              height={22}
+              decoding="async"
+              fetchpriority="high"
               className="senda-mark-inverted"
               style={{ height: 22, width: 'auto', display: 'block' }}
             />
@@ -2889,16 +3536,15 @@ export default function App() {
           {/* Actions */}
           <div className="flex items-center gap-1.5">
             <DarkModeToggle />
-            <CompanySelector
-              companies={companies}
-              selectedCia={selectedCia}
-              loading={companiesLoading}
-              error={companiesError}
-              onSelect={setSelectedCia}
-              onRetry={loadCompanies}
-              groups={companyGroups}
-              onGroupsChange={setCompanyGroups}
-            />
+            {activeSection === 'proyeccion' && <GlobalScenarioSelector />}
+            <button
+              onClick={() => setColdBootOpen(true)}
+              title={COLD_BOOT_STRINGS.triggerButton}
+              aria-label={COLD_BOOT_STRINGS.triggerButton}
+              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
+            >
+              <Snowflake className="w-4 h-4" strokeWidth={1.5} />
+            </button>
             <button
               onClick={() => {
                 clearAuth();
@@ -2913,6 +3559,113 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {coldBootOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cold-boot-title"
+          onClick={() => { if (!coldBootRunning) setColdBootOpen(false); }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--card)',
+              color: 'var(--foreground)',
+              borderRadius: 'var(--radius-lg, 12px)',
+              border: '1px solid var(--gray-200)',
+              maxWidth: 460,
+              width: '100%',
+              padding: 24,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 9999,
+                  background: 'rgba(217, 119, 6, 0.12)',
+                  color: '#d97706',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <AlertTriangle className="w-5 h-5" strokeWidth={1.75} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h2 id="cold-boot-title" style={{ fontSize: 17, fontWeight: 600, margin: 0, lineHeight: 1.3 }}>
+                  {COLD_BOOT_STRINGS.confirmationTitle}
+                </h2>
+                <p style={{ fontSize: 13, lineHeight: 1.55, marginTop: 10, color: 'var(--shell-text-muted, var(--gray-600))' }}>
+                  {COLD_BOOT_STRINGS.confirmationBody}
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+              <button
+                onClick={() => setColdBootOpen(false)}
+                disabled={coldBootRunning}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  border: '1px solid var(--gray-200)',
+                  background: 'transparent',
+                  color: 'var(--foreground)',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: coldBootRunning ? 'not-allowed' : 'pointer',
+                  opacity: coldBootRunning ? 0.6 : 1,
+                }}
+              >
+                {COLD_BOOT_STRINGS.btnCancel}
+              </button>
+              <button
+                onClick={() => {
+                  setColdBootRunning(true);
+                  try {
+                    clearAllMidasStorage();
+                    clearAuth();
+                  } finally {
+                    window.location.reload();
+                  }
+                }}
+                disabled={coldBootRunning}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #b45309',
+                  background: '#d97706',
+                  color: '#fff',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: coldBootRunning ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <Snowflake className="w-3.5 h-3.5" strokeWidth={2} />
+                {coldBootRunning ? COLD_BOOT_STRINGS.btnExecuting : COLD_BOOT_STRINGS.btnConfirm}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── SUB-TABS with context breadcrumb (light shell) ─── */}
       {subTabs.length > 0 && (
@@ -2949,93 +3702,43 @@ export default function App() {
       )}
 
       {/* ─── MAIN CONTENT ───
-         NavigationProvider is hoisted ABOVE the `key={pageKey}` remount
-         wrapper so cross-module navigation does not lose its context value
-         every time the user switches tabs. The previous nesting plus an
-         inline `goTo` arrow caused a re-render loop and ~minute-long crash
-         under heavy projection compute. */}
+         NavigationProvider stays stable across module switches. Avoid using
+         a dynamic key here: forcing a remount discards dashboard state and
+         restarts expensive workers/calculations on every tab change. */}
       <main id="main-content" role="main" className="max-w-[1400px] mx-auto px-8 py-4">
         <NavigationProvider goTo={goTo}>
-          <div key={pageKey} className="animate-page-in">
-          <ErrorBoundary fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}>
-            {tabDataPending ? (
+          <div className="animate-page-in">
+          <ErrorBoundary
+            fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}
+            resetKeys={[activeTab]}
+          >
+            {renderProjectionKeepAlive && (
+              <KeepAlivePanel active={projectionActive}>
+                <Suspense fallback={<LazyTabFallback label="Proyección Financiera" />}>
+                  <FinancialProjectionDashboard
+                    {...frozenProjectionProps}
+                    isActive={projectionActive}
+                  />
+                </Suspense>
+              </KeepAlivePanel>
+            )}
+            {renderPlanningKeepAlive && (
+              <KeepAlivePanel active={planningActive}>
+                <Suspense fallback={<LazyTabFallback label="Planeación Financiera" />}>
+                  <FinancialPlanningDashboard {...frozenPlanningProps} />
+                </Suspense>
+              </KeepAlivePanel>
+            )}
+            {tabDataPending && !activeKeepAliveRendered ? (
               <DashboardLoadingShell
                 label={`Cargando ${subTabs.find(t => t.id === activeTab)?.label ?? activeTab}`}
                 kpis={4}
                 showFilterBar={false}
                 showChart={activeSection === 'proyeccion'}
-                tableRows={activeSection === 'operacion' ? 5 : 0}
+                tableRows={activeSection === 'porPagar' || activeSection === 'cobranza' ? 5 : 0}
               />
             ) : (
               <>
-            {activeTab === 'dashboard' && (
-              <Suspense fallback={<LazyTabFallback label="Dashboard" />}>
-                <Dashboard
-                  companyCode={selectedCia}
-                  bankStatements={accountableBankStatements}
-                  clients={clients}
-                  providers={providers}
-                  cxpRecords={cxpRecords}
-                  cobranzaRecords={cobranzaRecords}
-                  paidCxpKeys={paidCxpKeys}
-                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
-                  purchaseReceipts={purchaseReceiptsFromCompras}
-                  payrollCosts={nominaRecords}
-                  assumptions={assumptions}
-                  budget={null}
-                  onOpenFlow={() => setActiveTab('financialPlanning')}
-                  startingBalance={effectiveStartingBalance}
-                  cobranzaReconciliation={cobranzaReconciliation}
-                  payrollMonthlyActualJDE={payrollMonthlyActualJDE}
-                />
-              </Suspense>
-            )}
-            {activeTab === 'financialProjection' && (
-              <Suspense fallback={<LazyTabFallback label="Proyección Financiera" />}>
-                <FinancialProjectionDashboard
-                  companyCode={selectedCia}
-                  bankStatements={accountableBankStatements}
-                  clients={clients}
-                  providers={providers}
-                  cxpRecords={cxpRecords}
-                  cobranzaRecords={cobranzaRecords}
-                  cobranzaPayments={cobranzaPayments}
-                  cobranzaReconciliation={cobranzaReconciliation}
-                  paidCxpKeys={paidCxpKeys}
-                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
-                  purchaseReceipts={purchaseReceiptsFromCompras}
-                  payrollCosts={nominaRecords}
-                  assumptions={assumptions}
-                  budget={null}
-                  startingBalance={effectiveStartingBalance}
-                  onNavigateToTax={() => setActiveTab('taxes')}
-                  forecastModelId={forecastModelId}
-                  onForecastModelChange={setForecastModelId}
-                  forecastSummary={forecastedReceipts}
-                />
-              </Suspense>
-            )}
-            {activeTab === 'financialPlanning' && (
-              <Suspense fallback={<LazyTabFallback label="Planeación Financiera" />}>
-                <FinancialPlanningDashboard
-                  companyCode={selectedCia}
-                  bankStatements={accountableBankStatements}
-                  bajioStatements={bajioStatements}
-                  clients={clients}
-                  providers={providers}
-                  cxpRecords={cxpRecords}
-                  cobranzaRecords={cobranzaRecords}
-                  cobranzaReconciliation={cobranzaReconciliation}
-                  paidCxpKeys={paidCxpKeys}
-                  cargoEnrichments={paymentReconciliation.cargoEnrichments}
-                  purchaseReceipts={purchaseReceiptsFromCompras}
-                  payrollCosts={nominaRecords}
-                  assumptions={assumptions}
-                  budget={null}
-                  startingBalance={effectiveStartingBalance}
-                />
-              </Suspense>
-            )}
             {activeTab === 'taxes' && (
               <Suspense fallback={<LazyTabFallback label="Impuestos" />}>
                 <TaxDashboard
@@ -3067,6 +3770,7 @@ export default function App() {
                   onNominaFetched={(merged, freshKeys) => {
                     setNominaRecords(merged);
                     setNominaLoadedKeys(prev => ({ ...prev, ...freshKeys }));
+                    void saveHeavyRecords('nominaRecords', merged);
                   }}
                 />
               </Suspense>
@@ -3148,6 +3852,7 @@ export default function App() {
                   companies={companies}
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
+                  rolRecords={rolRecords}
                   cobranzaLoadedCias={cobranzaLoadedCias}
                   cobranzaReconciliation={cobranzaReconciliation}
                   cobranzaFacturaIndex={cobranzaFacturaIndex}
@@ -3231,6 +3936,9 @@ export default function App() {
                   selectedCia={selectedCia}
                   providers={providers}
                   internalPaymentKeys={paymentReconciliation.internalPaymentKeys}
+                  paymentMatches={paymentReconciliation.paymentMatches}
+                  comprasRecords={comprasRecords}
+                  cxpRecords={cxpRecords}
                 />
               </Suspense>
             )}
@@ -3296,34 +4004,19 @@ export default function App() {
       />
       </div>
     </div>
+    </ScenarioSelectionProvider>
   );
 }
 
-function CompanySelector({
-  companies,
-  selectedCia,
-  loading,
-  error,
-  onSelect,
-  onRetry,
-  groups,
-  onGroupsChange,
-}: {
-  companies: Company[];
-  selectedCia: string;
-  loading: boolean;
-  error: string | null;
-  onSelect: (cia: string) => void;
-  onRetry: () => void;
-  groups: CompanyGroup[];
-  onGroupsChange: (groups: CompanyGroup[]) => void;
-}) {
+/**
+ * Global scenario picker — replaces the old company filter in the header.
+ * Visible only in the Proyección section. Selecting here drives every
+ * Proyección tab (Dashboard, Proyección Financiera, Planeación, Impuestos)
+ * because they all read `activeScenarioId` from the same provider.
+ */
+function GlobalScenarioSelector() {
+  const ctx = useScenarioSelection();
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<'select' | 'create' | 'edit'>('select');
-  const [editGroupId, setEditGroupId] = useState<string | null>(null);
-  const [groupName, setGroupName] = useState('');
-  const [groupCias, setGroupCias] = useState<Set<string>>(new Set());
-  const [groupColor, setGroupColor] = useState<string>(GROUP_COLORS[0]);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -3335,298 +4028,99 @@ function CompanySelector({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) { setMode('select'); setEditGroupId(null); }
-  }, [open]);
+  if (!ctx) return null;
 
-  const activeGroup = groups.find(g => g.id === selectedCia);
-  const active = companies.find(c => c.cia === selectedCia);
-  const label = selectedCia === 'all'
-    ? 'Todas las compañías'
-    : activeGroup
-      ? `${activeGroup.name} (${activeGroup.cias.length})`
-      : active ? `${active.cia} — ${active.nombre}` : selectedCia;
+  const { scenarios, activeScenarioId, setActiveScenarioId } = ctx;
+  const visible = scenarios.filter((s) => !s.archivedAt);
+  const base = visible.find((s) => s.kind === 'BASE');
+  const approved = visible.find((s) => s.kind === 'APPROVED');
+  const drafts = visible.filter((s) => s.kind === 'DRAFT');
+  const active = visible.find((s) => s.id === activeScenarioId) ?? approved ?? base;
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') setOpen(false);
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o); }
-  };
+  const ActiveIcon =
+    active?.kind === 'BASE' ? Lock : active?.kind === 'DRAFT' ? GitBranch : ShieldCheck;
 
-  const startCreate = () => {
-    setMode('create');
-    setGroupName('');
-    setGroupCias(new Set());
-    setGroupColor(GROUP_COLORS[groups.length % GROUP_COLORS.length]);
-    setEditGroupId(null);
-  };
-
-  const startEdit = (g: CompanyGroup) => {
-    setMode('edit');
-    setGroupName(g.name);
-    setGroupCias(new Set(g.cias));
-    setGroupColor(g.color ?? GROUP_COLORS[0]);
-    setEditGroupId(g.id);
-  };
-
-  const saveGroup = () => {
-    if (!groupName.trim() || groupCias.size === 0) return;
-    if (mode === 'edit' && editGroupId) {
-      onGroupsChange(groups.map(g => g.id === editGroupId
-        ? { ...g, name: groupName.trim(), cias: Array.from(groupCias), color: groupColor }
-        : g
-      ));
-    } else {
-      const newGroup: CompanyGroup = {
-        id: newGroupId(),
-        name: groupName.trim(),
-        cias: Array.from(groupCias),
-        color: groupColor,
-        createdAt: new Date().toISOString(),
-      };
-      onGroupsChange([...groups, newGroup]);
-    }
-    setMode('select');
-    setEditGroupId(null);
-  };
-
-  const deleteGroup = (id: string) => {
-    onGroupsChange(groups.filter(g => g.id !== id));
-    if (selectedCia === id) onSelect('all');
-  };
-
-  const toggleCia = (cia: string) => {
-    const next = new Set(groupCias);
-    next.has(cia) ? next.delete(cia) : next.add(cia);
-    setGroupCias(next);
+  const renderOption = (s: FinancialScenario, Icon: LucideIcon, badge: string) => {
+    const isActive = s.id === activeScenarioId;
+    return (
+      <button
+        key={s.id}
+        role="option"
+        aria-selected={isActive}
+        onClick={() => { setActiveScenarioId(s.id); setOpen(false); }}
+        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] text-[13px] text-left transition"
+        style={{
+          background: isActive ? 'var(--primary-muted)' : undefined,
+          color: isActive ? 'var(--primary)' : 'var(--gray-950)',
+        }}
+      >
+        <Icon className="w-4 h-4 flex-shrink-0" strokeWidth={1.5} />
+        <span className="font-medium truncate flex-1">{s.name}</span>
+        <span
+          className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] flex-shrink-0"
+          style={{
+            background: isActive ? 'rgba(255,255,255,0.5)' : 'var(--gray-100)',
+            color: isActive ? 'var(--primary)' : 'var(--gray-500)',
+          }}
+        >
+          {badge}
+        </span>
+        {isActive && <Check className="w-3.5 h-3.5 flex-shrink-0" />}
+      </button>
+    );
   };
 
   return (
     <div className="relative" ref={ref}>
       <button
-        onClick={() => setOpen(o => !o)}
-        onKeyDown={handleKeyDown}
+        onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Compañía activa: ${label}. Filtra datos globalmente.`}
-        className="shell-picker-btn flex items-center gap-1.5 h-9 px-3 rounded-[var(--radius-md)] text-[13px] font-medium transition-colors duration-150 max-w-[300px]"
+        aria-label={`Escenario activo: ${active?.name ?? 'Aprobado'}. Aplica a toda la Proyección.`}
+        className="shell-picker-btn flex items-center gap-1.5 h-9 px-3 rounded-[var(--radius-md)] text-[13px] font-medium transition-colors duration-150 max-w-[280px]"
         style={{
-          background: activeGroup ? `${activeGroup.color}20` : 'rgba(255,255,255,0.08)',
+          background: 'rgba(255,255,255,0.08)',
           color: 'var(--shell-text)',
           border: '1px solid var(--shell-border)',
         }}
-        title="Compañía o grupo activo — filtra los datos de todas las pestañas"
+        title="Escenario activo — aplica a Dashboard, Proyección Financiera, Planeación e Impuestos"
       >
-        {activeGroup
-          ? <FolderOpen className="w-4 h-4 flex-shrink-0" strokeWidth={1.5} style={{ color: activeGroup.color ?? 'var(--shell-text)' }} />
-          : <Building2 className="w-4 h-4 flex-shrink-0" strokeWidth={1.5} style={{ color: 'var(--shell-text-muted)' }} />
-        }
-        <span className="truncate">{loading ? 'Cargando…' : label}</span>
-        {loading
-          ? <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" strokeWidth={1.5} style={{ color: 'var(--shell-text-muted)' }} />
-          : <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={1.5} style={{ color: 'var(--shell-text-muted)' }} />
-        }
+        <ActiveIcon
+          className="w-4 h-4 flex-shrink-0"
+          strokeWidth={1.5}
+          style={{ color: 'var(--shell-text-muted)' }}
+        />
+        <span className="truncate">{active?.name ?? 'Escenario Aprobado'}</span>
+        <ChevronDown
+          className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+          strokeWidth={1.5}
+          style={{ color: 'var(--shell-text-muted)' }}
+        />
       </button>
 
       {open && (
         <div
-          className="absolute right-0 top-11 w-[360px] rounded-[var(--radius-md)] border p-1.5 z-50 max-h-[520px] overflow-y-auto animate-slide-down"
+          className="absolute right-0 top-11 w-[320px] rounded-[var(--radius-md)] border p-1.5 z-50 max-h-[480px] overflow-y-auto animate-slide-down"
           style={{ background: 'var(--surface)', borderColor: 'var(--gray-200)', boxShadow: 'var(--shadow-md)' }}
         >
-          {error ? (
-            <div className="p-3">
-              <div className="flex items-start gap-2 mb-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: 'var(--danger)' }} />
-                <p className="text-[12px] leading-snug" style={{ color: 'var(--gray-500)' }}>{error}</p>
-              </div>
-              <button onClick={() => { onRetry(); }} className="text-[12px] font-medium" style={{ color: 'var(--primary)' }}>Reintentar</button>
-            </div>
-          ) : mode === 'select' ? (
+          <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)] px-3 pt-1.5 pb-1 font-medium">
+            Escenario activo
+          </div>
+          {base && renderOption(base, Lock, 'base')}
+          {approved && renderOption(approved, ShieldCheck, 'main')}
+          {drafts.length > 0 && (
             <>
-              {/* All companies */}
-              <button
-                role="option"
-                aria-selected={selectedCia === 'all'}
-                onClick={() => { onSelect('all'); setOpen(false); }}
-                className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-[var(--radius-md)] text-[13px] text-left transition"
-                style={{ background: selectedCia === 'all' ? 'var(--primary-muted)' : undefined, color: selectedCia === 'all' ? 'var(--primary)' : 'var(--gray-950)' }}
-              >
-                <span className="font-medium">Todas las compañías</span>
-                {selectedCia === 'all' && <Check className="w-3.5 h-3.5" />}
-              </button>
-
-              {/* Groups section */}
-              {groups.length > 0 && (
-                <div className="mt-2 mb-1">
-                  <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)] px-3 py-1 font-medium">Grupos</div>
-                  {groups.map(g => {
-                    const isActive = selectedCia === g.id;
-                    return (
-                      <div key={g.id} className="flex items-center group">
-                        <button
-                          onClick={() => { onSelect(g.id); setOpen(false); }}
-                          className="flex-1 flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[13px] text-left transition"
-                          style={{ background: isActive ? `${g.color}15` : undefined, color: isActive ? g.color : 'var(--gray-950)' }}
-                        >
-                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: g.color }} />
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium truncate">{g.name}</p>
-                            <p className="text-[11px] truncate" style={{ color: 'var(--gray-400)' }}>
-                              {g.cias.map(cia => {
-                                const c = companies.find(co => co.cia === cia);
-                                return c?.nombre ?? cia;
-                              }).join(', ')}
-                            </p>
-                          </div>
-                          {isActive && <Check className="w-3.5 h-3.5 flex-shrink-0" />}
-                        </button>
-                        <div className="flex gap-0.5 pr-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); startEdit(g); }}
-                            className="p-1 rounded hover:bg-[var(--gray-100)] text-[var(--gray-400)] hover:text-[var(--gray-700)]"
-                            title="Editar grupo"
-                          >
-                            <Pencil className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); deleteGroup(g.id); }}
-                            className="p-1 rounded hover:bg-[var(--danger)]/10 text-[var(--gray-400)] hover:text-[var(--danger)]"
-                            title="Eliminar grupo"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Create group button */}
-              <button
-                onClick={startCreate}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[13px] text-left transition hover:bg-[var(--gray-50)]"
-                style={{ color: 'var(--primary)' }}
-              >
-                <FolderPlus className="w-4 h-4" />
-                <span className="font-medium">Crear grupo de empresas</span>
-              </button>
-
-              {/* Divider */}
               <div className="h-px bg-[var(--gray-100)] my-1.5" />
-
-              {/* Individual companies */}
-              <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)] px-3 py-1 font-medium">Empresas individuales</div>
-              {companies.length === 0 && !loading && (
-                <p className="text-[12px] px-3 py-2" style={{ color: 'var(--gray-400)' }}>Sin compañías disponibles.</p>
-              )}
-              {filterActiveCompanies(companies)
-                .map(c => {
-                  const isActive = selectedCia === c.cia;
-                  return (
-                    <button
-                      key={c.cia}
-                      onClick={() => { onSelect(c.cia); setOpen(false); }}
-                      className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-[var(--radius-md)] text-[13px] text-left transition"
-                      style={{ background: isActive ? 'var(--primary-muted)' : undefined, color: isActive ? 'var(--primary)' : 'var(--gray-950)' }}
-                    >
-                      <div className="min-w-0">
-                        <p className="font-medium truncate">{c.cia} — {c.nombre}</p>
-                        {c.rfc && <p className="text-[11px] truncate" style={{ color: 'var(--gray-400)' }}>{c.rfc}</p>}
-                      </div>
-                      {isActive && <Check className="w-3.5 h-3.5 flex-shrink-0" />}
-                    </button>
-                  );
-                })}
+              <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)] px-3 py-1 font-medium">
+                Propuestas
+              </div>
+              {drafts.map((d) => renderOption(d, GitBranch, 'draft'))}
             </>
-          ) : (
-            /* ── Create / Edit Group form ── */
-            <div className="p-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-[14px] font-bold text-[var(--gray-950)]">
-                  {mode === 'edit' ? 'Editar grupo' : 'Nuevo grupo'}
-                </h3>
-                <button onClick={() => setMode('select')} className="p-1 rounded hover:bg-[var(--gray-100)] text-[var(--gray-400)]">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Name input */}
-              <div>
-                <label className="text-[11px] text-[var(--gray-400)] mb-1 block">Nombre del grupo</label>
-                <input
-                  type="text"
-                  value={groupName}
-                  onChange={e => setGroupName(e.target.value)}
-                  placeholder="Ej: Grupo Norte, Pasaje Lujo..."
-                  className="input w-full"
-                  autoFocus
-                />
-              </div>
-
-              {/* Color picker */}
-              <div>
-                <label className="text-[11px] text-[var(--gray-400)] mb-1 block">Color</label>
-                <div className="flex gap-1.5">
-                  {GROUP_COLORS.map(c => (
-                    <button
-                      key={c}
-                      onClick={() => setGroupColor(c)}
-                      className={`w-7 h-7 rounded-full transition-shadow ${groupColor === c ? 'ring-2 ring-offset-2 ring-[var(--gray-300)]' : 'hover:ring-2 hover:ring-offset-1 hover:ring-[var(--gray-200)]'}`}
-                      style={{ background: c }}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              {/* Company checkboxes */}
-              <div>
-                <label className="text-[11px] text-[var(--gray-400)] mb-1 block">
-                  Empresas ({groupCias.size} seleccionadas)
-                </label>
-                <div className="space-y-1 max-h-48 overflow-y-auto border border-[var(--gray-200)] rounded-[var(--radius-md)] p-1.5">
-                  {filterActiveCompanies(companies).map(c => {
-                    const checked = groupCias.has(c.cia);
-                    return (
-                      <button
-                        key={c.cia}
-                        onClick={() => toggleCia(c.cia)}
-                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-[var(--radius-md)] text-[12px] text-left transition ${
-                          checked ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
-                        }`}
-                      >
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition ${
-                          checked ? 'bg-[var(--primary)] border-[var(--primary)]' : 'border-[var(--gray-300)]'
-                        }`}>
-                          {checked && <Check className="w-3 h-3 text-white" strokeWidth={1.5} />}
-                        </div>
-                        <span className={checked ? 'text-[var(--primary)] font-medium' : 'text-[var(--gray-700)]'}>
-                          {c.cia} — {c.nombre}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex gap-2 pt-1">
-                <button
-                  onClick={() => setMode('select')}
-                  className="flex-1 h-9 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[13px] text-[var(--gray-500)] hover:bg-[var(--gray-50)]"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={saveGroup}
-                  disabled={!groupName.trim() || groupCias.size === 0}
-                  className="flex-1 h-9 rounded-[var(--radius-md)] text-white text-[13px] font-medium hover-press disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{ background: groupColor }}
-                >
-                  {mode === 'edit' ? 'Guardar cambios' : 'Crear grupo'}
-                </button>
-              </div>
-            </div>
           )}
+          <div className="h-px bg-[var(--gray-100)] my-1.5" />
+          <p className="text-[11px] leading-snug px-3 py-1.5" style={{ color: 'var(--gray-400)' }}>
+            Crea, edita o aprueba escenarios en <span className="font-medium text-[var(--gray-500)]">Planeación Financiera</span>.
+          </p>
         </div>
       )}
     </div>

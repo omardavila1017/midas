@@ -1,20 +1,22 @@
 /**
- * Vista de Pagos a Proveedor (PagoProveedor JDE).
+ * Vista de Pagos a Proveedor (PagoProveedor JDE) — modo auditoría por proveedor.
  *
- * Muestra los pagos EFECTIVAMENTE EJECUTADOS (cosas ya pagadas). Es el espejo
- * egreso de Cobranza: cierra el loop banco↔CXP↔OC con datos reales.
+ * Cierra el loop OC → CXP → Pago → Banco en una sola UI. Cada pago se cruza
+ * con el motor `paymentReconciliationEngine` (cxpMatches + cargoMatch), y los
+ * cxpMatches se enlazan a la OC origen vía `noFactura + noProveedor` contra
+ * `comprasRecords`.
  *
- * Lectura del registro:
- *   - `Comentario_Pago` suele referenciar el folio CXP (p.ej.
- *     "FL CXP-VALE21829") — el motor de conciliación lo usa para crucar
- *     con CXPRecord.noFactura.
- *   - `Tipo_busqueda === 'Employees'` distingue reembolsos/vales/nómina
- *     de proveedores comerciales; lo resaltamos con un chip aparte.
- *   - `Clasificacion_Proveedor_Financiera` viene como "220 - Por
- *     Clasificar" (semaforización del controller financiero).
+ *   - Modo "Por proveedor" (default): panel maestro con un row por proveedor
+ *     (clave + cía) → drawer con timeline cronológico de pagos. Cada pago
+ *     expande sus OCs facturadas y CXPs cubiertas.
+ *   - Modo "Lista plana": tabla clásica enriquecida con badge de cruce.
  *
- * Patrón UI espejo de Compras.tsx: misma toolbar/filtros/refresh, mismas
- * constantes de cache (`COMPRAS_CACHE_KEY` = '__all__' para indicar global).
+ * Reglas:
+ *   - Pagos `tipoBusqueda === 'Employees'` (nómina/vales/reembolsos) NO tienen
+ *     OC ni CXP; se muestran con su propio chip y no rompen el cruce.
+ *   - Pagos internos (`internalPaymentKeys`) se filtran antes de KPIs.
+ *   - Bridge OC: `${cia}::${noProveedor}::${normalize(noFactura)}` →
+ *     `ComprasRecord[]` (una factura puede cubrir varias líneas de OC).
  */
 
 import { useMemo, useState, type ReactNode } from 'react';
@@ -27,13 +29,25 @@ import {
   CheckCircle2,
   Users,
   Building2,
+  AlertTriangle,
+  Link2,
+  Receipt,
+  Banknote,
+  FileText,
+  ChevronRight,
+  LayoutGrid,
+  List,
+  ShieldAlert,
 } from 'lucide-react';
-import { type PagoProveedorRecord } from '../services/jde';
+import { type PagoProveedorRecord, type ComprasRecord } from '../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import ProviderBadge from './ProviderBadge';
 import { buildProviderIndex } from '../domain/providerIdentity';
 import type { Provider } from '../domain/types';
+import type { PaymentMatch, PaymentStatus, CxpMatchTier } from '../domain/paymentReconciliationEngine';
+import type { CXPRecord } from '../domain/persistence';
+import { isInternalCounterparty } from '../domain/netCashFlowEngine';
 
 interface PagosProps {
   pagoProveedorRecords: PagoProveedorRecord[];
@@ -41,21 +55,20 @@ interface PagosProps {
   selectedCia: string;
   providers: Provider[];
   internalPaymentKeys?: Set<string>;
+  paymentMatches: PaymentMatch[];
+  comprasRecords: ComprasRecord[];
+  cxpRecords: CXPRecord[];
 }
 
+type ViewMode = 'byProvider' | 'flatList';
 type TipoBusquedaFilter = 'all' | 'employees' | 'suppliers';
-type BancoFilter = string;
-type PagoSortKey = 'fechaPago' | 'importePesos' | 'nombreProveedor' | 'banco' | 'noPago';
+type StatusFilter = 'all' | 'matched' | 'cxp-only' | 'bank-only' | 'orphan';
+type ProviderSortKey = 'totalPagado' | 'conciliacionPct' | 'pagosCount' | 'orphanCount' | 'ultimoPago' | 'nombre';
+type FlatSortKey = 'fechaPago' | 'importePesos' | 'nombreProveedor' | 'banco' | 'noPago';
 type SortDirection = 'asc' | 'desc';
-
-interface PagoSort {
-  key: PagoSortKey;
-  direction: SortDirection;
-}
 
 const PAGOS_CACHE_KEY = '__all__';
 const ROW_CAP = 500;
-const DEFAULT_SORT: PagoSort = { key: 'fechaPago', direction: 'desc' };
 
 interface ChipStyle {
   bg: string;
@@ -68,23 +81,226 @@ const CHIP_EMPLOYEE: ChipStyle = {
   border: 'var(--gray-200)',
   text: 'var(--info)',
 };
-const CHIP_SUPPLIER: ChipStyle = {
-  bg: 'var(--success-muted)',
-  border: 'oklch(88% 0.08 145)',
-  text: 'var(--success)',
+
+/**
+ * `MATCHED_BANK_ONLY` no es ruido: el banco YA confirmó que el dinero salió.
+ * La CXP desaparece de `/antiguedadsaldos` cuando JDE la cierra (importe
+ * pendiente = 0), o cuando la OC quedó fuera de la ventana de compras de 180d.
+ * Pintarlo como warning generaba falsa alarma sobre cientos de pagos ya
+ * conciliados. Lo tratamos como variante de "Pagado" — tono success suave y
+ * etiqueta explícita "CXP cerrada".
+ */
+const STATUS_LABEL: Record<PaymentStatus, string> = {
+  MATCHED_FULL: 'Conciliado',
+  MATCHED_CXP_ONLY: 'CXP ✓ · Banco pendiente',
+  MATCHED_BANK_ONLY: 'Pagado · CXP cerrada',
+  UNMATCHED: 'Huérfano',
+};
+
+const STATUS_STYLE: Record<PaymentStatus, ChipStyle> = {
+  MATCHED_FULL: {
+    bg: 'var(--success-muted)',
+    border: 'oklch(88% 0.08 145)',
+    text: 'var(--success)',
+  },
+  MATCHED_CXP_ONLY: {
+    bg: 'var(--info-muted)',
+    border: 'var(--gray-200)',
+    text: 'var(--info)',
+  },
+  MATCHED_BANK_ONLY: {
+    bg: 'color-mix(in oklch, var(--success-muted) 70%, transparent)',
+    border: 'oklch(90% 0.05 145)',
+    text: 'oklch(48% 0.1 145)',
+  },
+  UNMATCHED: {
+    bg: 'oklch(95% 0.05 30)',
+    border: 'oklch(85% 0.1 30)',
+    text: 'var(--danger)',
+  },
+};
+
+const TIER_LABEL: Record<CxpMatchTier, string> = {
+  'folio-exact': 'folio exacto',
+  'invoice-amount': 'monto exacto',
+  'amount-tolerance': 'monto ±0.5%',
+  'subset-sum': 'subset-sum',
+  unmatched: 'sin cruce',
 };
 
 function isEmployeePayment(r: PagoProveedorRecord): boolean {
   return r.tipoBusqueda.trim().toLowerCase().startsWith('employee');
 }
 
-/** Extrae solo el banco (parte legible) de Cuenta_Bancaria — p.ej. "BANAMEX". */
+/**
+ * Un pago se considera interno y se oculta de Pagos cuando:
+ *   1. El motor de conciliación ya lo marcó (matchea un CARGO interno por
+ *      banco-banco propio o por patrón de concepto/referencia), o
+ *   2. El proveedor en sí es una entidad del grupo (RFC o nombre en las
+ *      listas curadas de `isInternalCounterparty`). Esto ataja los pagos
+ *      intercompañía donde el banco aún no exhibe el patrón pero el
+ *      destinatario YA es una empresa Senda.
+ *   3. El comentario del pago coincide con el patrón de traspaso o intercía
+ *      (TRASPASO REF / TRASLADO / INTERCIAS / ENTRE EMPRESAS …) — la misma
+ *      heurística que `isInternalTransfer` aplica al texto bancario.
+ */
+const INTERNAL_COMMENT_PATTERN = /\b(?:TRA(?:N?S(?:P(?:ASO)?|F(?:ER(?:ENCIA)?)?)?)?[\s._/\-]*REF|TRASLADO|INTERCIAS?|ENTRE\s+(?:CIAS|EMPRESAS|COMPA(?:N|Ñ)IAS))\b/i;
+
+function isInternalPaymentRecord(
+  r: PagoProveedorRecord,
+  engineInternalKeys: Set<string> | undefined,
+): boolean {
+  if (engineInternalKeys && engineInternalKeys.has(paymentKey(r))) return true;
+  if (isInternalCounterparty(r.rfcProveedor, r.nombreProveedor)) return true;
+  if (r.comentarioPago && INTERNAL_COMMENT_PATTERN.test(r.comentarioPago)) return true;
+  return false;
+}
+
 function bancoLabel(cuentaBancaria: string): string {
-  // Formato típico: "38.1020.0010405 - BANAMEX - 7013 8708851"
   const parts = cuentaBancaria.split(' - ');
   if (parts.length >= 2) return parts[1].trim();
   return cuentaBancaria.trim();
 }
+
+function paymentKey(r: PagoProveedorRecord): string {
+  return `${r.cia}::${r.noPago}`;
+}
+
+function normFactura(s: string): string {
+  return s.trim().toUpperCase();
+}
+
+function normProv(s: string): string {
+  return s.trim().toUpperCase();
+}
+
+function providerRollupKey(cia: string, clave: string): string {
+  return `${cia}::${normProv(clave)}`;
+}
+
+/* ───────── Bridge OC ↔ CXP ↔ Pago ───────── */
+
+interface ComprasBridge {
+  /** Map de `${cia}::${noProveedor}::${normFactura}` → OCs de esa factura. */
+  byFactura: Map<string, ComprasRecord[]>;
+}
+
+function buildComprasBridge(records: ComprasRecord[]): ComprasBridge {
+  const byFactura = new Map<string, ComprasRecord[]>();
+  for (const r of records) {
+    if (!r.noFactura) continue;
+    const k = `${r.cia}::${normProv(r.noProveedor)}::${normFactura(r.noFactura)}`;
+    const list = byFactura.get(k);
+    if (list) list.push(r);
+    else byFactura.set(k, [r]);
+  }
+  return byFactura
+    ? { byFactura }
+    : { byFactura: new Map() };
+}
+
+function findOCsForCxp(cxp: CXPRecord, bridge: ComprasBridge): ComprasRecord[] {
+  const k = `${cxp.cia}::${normProv(cxp.noProveedor)}::${normFactura(cxp.noFactura)}`;
+  return bridge.byFactura.get(k) ?? [];
+}
+
+/** Agrupa OCs por noOrden (una factura puede tener N líneas de la misma OC). */
+function groupOCsByOrden(records: ComprasRecord[]): Array<{
+  noOrden: string;
+  total: number;
+  fechaRecepcion: string;
+  fechaPagoProyectada: string;
+  lineas: ComprasRecord[];
+}> {
+  const map = new Map<string, ComprasRecord[]>();
+  for (const r of records) {
+    const arr = map.get(r.noOrden) ?? [];
+    arr.push(r);
+    map.set(r.noOrden, arr);
+  }
+  return Array.from(map.entries()).map(([noOrden, lineas]) => ({
+    noOrden,
+    total: lineas.reduce((sum, l) => sum + l.importeTotal, 0),
+    fechaRecepcion: lineas.find((l) => l.fechaRecepcion)?.fechaRecepcion ?? '',
+    fechaPagoProyectada: lineas.find((l) => l.fechaPagoProyectada)?.fechaPagoProyectada ?? '',
+    lineas,
+  }));
+}
+
+/* ───────── Provider rollup ───────── */
+
+interface ProviderRollup {
+  key: string;
+  cia: string;
+  claveProveedor: string;
+  nombreProveedor: string;
+  rfcProveedor: string;
+  isEmployee: boolean;
+  clasificacion: string;
+  matches: PaymentMatch[];
+  totalPagado: number;
+  ocsCubiertas: Set<string>;
+  cxpsCubiertas: number;
+  pagosFull: number;
+  pagosCxpOnly: number;
+  pagosBankOnly: number;
+  pagosOrphan: number;
+  ultimoPago: string;
+  conciliacionPct: number;
+}
+
+function buildProviderRollups(matches: PaymentMatch[], bridge: ComprasBridge): ProviderRollup[] {
+  const map = new Map<string, ProviderRollup>();
+  for (const m of matches) {
+    const p = m.payment;
+    const key = providerRollupKey(p.cia, p.claveProveedor);
+    let r = map.get(key);
+    if (!r) {
+      r = {
+        key,
+        cia: p.cia,
+        claveProveedor: p.claveProveedor,
+        nombreProveedor: p.nombreProveedor,
+        rfcProveedor: p.rfcProveedor,
+        isEmployee: isEmployeePayment(p),
+        clasificacion: p.clasificacionProveedorFinanciera || p.clasificacionProveedor,
+        matches: [],
+        totalPagado: 0,
+        ocsCubiertas: new Set(),
+        cxpsCubiertas: 0,
+        pagosFull: 0,
+        pagosCxpOnly: 0,
+        pagosBankOnly: 0,
+        pagosOrphan: 0,
+        ultimoPago: '',
+        conciliacionPct: 0,
+      };
+      map.set(key, r);
+    }
+    r.matches.push(m);
+    r.totalPagado += p.importePesos;
+    if (p.fechaPago && p.fechaPago > r.ultimoPago) r.ultimoPago = p.fechaPago;
+    switch (m.status) {
+      case 'MATCHED_FULL': r.pagosFull += 1; break;
+      case 'MATCHED_CXP_ONLY': r.pagosCxpOnly += 1; break;
+      case 'MATCHED_BANK_ONLY': r.pagosBankOnly += 1; break;
+      case 'UNMATCHED': r.pagosOrphan += 1; break;
+    }
+    for (const hit of m.cxpMatches) {
+      r.cxpsCubiertas += 1;
+      const ocs = findOCsForCxp(hit.cxp, bridge);
+      for (const oc of ocs) r.ocsCubiertas.add(oc.noOrden);
+    }
+  }
+  for (const r of map.values()) {
+    const denom = r.matches.length;
+    r.conciliacionPct = denom > 0 ? ((r.pagosFull + r.pagosCxpOnly) / denom) * 100 : 0;
+    r.matches.sort((a, b) => (b.payment.fechaPago || '').localeCompare(a.payment.fechaPago || ''));
+  }
+  return Array.from(map.values());
+}
+
+/* ───────── Component ───────── */
 
 export default function Pagos({
   pagoProveedorRecords,
@@ -92,83 +308,76 @@ export default function Pagos({
   selectedCia,
   providers,
   internalPaymentKeys,
+  paymentMatches,
+  comprasRecords,
+  cxpRecords: _cxpRecords,
 }: PagosProps) {
+  void _cxpRecords;
+  const [viewMode, setViewMode] = useState<ViewMode>('byProvider');
   const [search, setSearch] = useState('');
   const [tipoFilter, setTipoFilter] = useState<TipoBusquedaFilter>('all');
-  const [bancoFilter, setBancoFilter] = useState<BancoFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [bancoFilter, setBancoFilter] = useState<string>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [amountMin, setAmountMin] = useState('');
   const [amountMax, setAmountMax] = useState('');
-  const [monedaFilter, setMonedaFilter] = useState('all');
-  const [clasificacionFilter, setClasificacionFilter] = useState('all');
-  const [sort, setSort] = useState<PagoSort>(DEFAULT_SORT);
+  const [providerSort, setProviderSort] = useState<{ key: ProviderSortKey; dir: SortDirection }>({
+    key: 'totalPagado',
+    dir: 'desc',
+  });
+  const [flatSort, setFlatSort] = useState<{ key: FlatSortKey; dir: SortDirection }>({
+    key: 'fechaPago',
+    dir: 'desc',
+  });
+  const [selectedProviderKey, setSelectedProviderKey] = useState<string | null>(null);
 
   const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
+
+  /* Visible matches: drop internal payments — engine flag + counterparty
+     heuristic + comment pattern. Coverage redundante por diseño: tres señales
+     independientes para no dejar pasar intercía. */
+  const visibleMatches = useMemo(() => {
+    return paymentMatches.filter((m) => !isInternalPaymentRecord(m.payment, internalPaymentKeys));
+  }, [paymentMatches, internalPaymentKeys]);
+
+  const bridge = useMemo(() => buildComprasBridge(comprasRecords), [comprasRecords]);
+
+  /* Index by payment key for the flat view to look up its match in O(1). */
+  const matchByPaymentKey = useMemo(() => {
+    const map = new Map<string, PaymentMatch>();
+    for (const m of visibleMatches) map.set(paymentKey(m.payment), m);
+    return map;
+  }, [visibleMatches]);
+
   const visiblePagoProveedorRecords = useMemo(() => {
-    if (!internalPaymentKeys || internalPaymentKeys.size === 0) return pagoProveedorRecords;
-    return pagoProveedorRecords.filter((record) => !internalPaymentKeys.has(`${record.cia}::${record.noPago}`));
+    return pagoProveedorRecords.filter((r) => !isInternalPaymentRecord(r, internalPaymentKeys));
   }, [pagoProveedorRecords, internalPaymentKeys]);
 
   const lastLoadedAt = pagoProveedorLoadedCias[PAGOS_CACHE_KEY];
-  const filtersActive =
-    search.trim() !== ''
-    || tipoFilter !== 'all'
-    || bancoFilter !== 'all'
-    || dateFrom !== ''
-    || dateTo !== ''
-    || amountMin !== ''
-    || amountMax !== ''
-    || monedaFilter !== 'all'
-    || clasificacionFilter !== 'all'
-    || sort.key !== DEFAULT_SORT.key
-    || sort.direction !== DEFAULT_SORT.direction;
 
-  // Lista única de bancos para el filtro (extraída de los datos visibles).
-  const bancosDisponibles = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of visiblePagoProveedorRecords) {
-      const b = bancoLabel(r.cuentaBancaria);
-      if (b) set.add(b);
-    }
-    return Array.from(set).sort();
-  }, [visiblePagoProveedorRecords]);
-
-  const monedasDisponibles = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of visiblePagoProveedorRecords) {
-      if (r.moneda) set.add(r.moneda);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [visiblePagoProveedorRecords]);
-
-  const clasificacionesDisponibles = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of visiblePagoProveedorRecords) {
-      const classification = r.clasificacionProveedorFinanciera || r.clasificacionProveedor;
-      if (classification) set.add(classification);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [visiblePagoProveedorRecords]);
-
-  const filteredRecords = useMemo(() => {
+  /* Apply scalar filters (cía/tipo/banco/fecha/monto/búsqueda/status) at the
+     PaymentMatch level — single source of truth for both views. */
+  const filteredMatches = useMemo(() => {
     const q = search.trim().toUpperCase();
     const min = parseAmountInput(amountMin);
     const max = parseAmountInput(amountMax);
-    return visiblePagoProveedorRecords.filter((r) => {
+    return visibleMatches.filter((m) => {
+      const r = m.payment;
       if (selectedCia !== 'all' && r.cia !== selectedCia) return false;
       if (tipoFilter === 'employees' && !isEmployeePayment(r)) return false;
       if (tipoFilter === 'suppliers' && isEmployeePayment(r)) return false;
       if (bancoFilter !== 'all' && bancoLabel(r.cuentaBancaria) !== bancoFilter) return false;
-      if (monedaFilter !== 'all' && r.moneda !== monedaFilter) return false;
-      if (clasificacionFilter !== 'all') {
-        const classification = r.clasificacionProveedorFinanciera || r.clasificacionProveedor;
-        if (classification !== clasificacionFilter) return false;
-      }
       if (dateFrom && (!r.fechaPago || r.fechaPago < dateFrom)) return false;
       if (dateTo && (!r.fechaPago || r.fechaPago > dateTo)) return false;
       if (min !== undefined && r.importePesos < min) return false;
       if (max !== undefined && r.importePesos > max) return false;
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'matched' && m.status !== 'MATCHED_FULL') return false;
+        if (statusFilter === 'cxp-only' && m.status !== 'MATCHED_CXP_ONLY') return false;
+        if (statusFilter === 'bank-only' && m.status !== 'MATCHED_BANK_ONLY') return false;
+        if (statusFilter === 'orphan' && m.status !== 'UNMATCHED') return false;
+      }
       if (q) {
         const hay =
           r.nombreProveedor.toUpperCase().includes(q) ||
@@ -181,63 +390,114 @@ export default function Pagos({
         if (!hay) return false;
       }
       return true;
-    }).sort((a, b) => comparePagoRecords(a, b, sort));
+    });
   }, [
-    visiblePagoProveedorRecords,
+    visibleMatches,
     search,
     tipoFilter,
+    statusFilter,
     bancoFilter,
     dateFrom,
     dateTo,
     amountMin,
     amountMax,
-    monedaFilter,
-    clasificacionFilter,
     selectedCia,
-    sort,
   ]);
 
+  const bancosDisponibles = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of visibleMatches) {
+      const b = bancoLabel(m.payment.cuentaBancaria);
+      if (b) set.add(b);
+    }
+    return Array.from(set).sort();
+  }, [visibleMatches]);
+
   const kpis = useMemo(() => {
-    let totalAmount = 0;
+    let total = 0;
     let aProveedores = 0;
     let aEmpleados = 0;
-    let bancosUnicos = new Set<string>();
-    for (const r of filteredRecords) {
-      totalAmount += r.importePesos;
+    let conciliados = 0;
+    let conciliadosMonto = 0;
+    let huerfanos = 0;
+    let huerfanosMonto = 0;
+    const ocsCubiertas = new Set<string>();
+    for (const m of filteredMatches) {
+      const r = m.payment;
+      total += r.importePesos;
       if (isEmployeePayment(r)) aEmpleados += r.importePesos;
       else aProveedores += r.importePesos;
-      bancosUnicos.add(bancoLabel(r.cuentaBancaria));
+      if (m.status === 'MATCHED_FULL') {
+        conciliados += 1;
+        conciliadosMonto += r.importePesos;
+      }
+      if (m.status === 'UNMATCHED' && !isEmployeePayment(r)) {
+        huerfanos += 1;
+        huerfanosMonto += r.importePesos;
+      }
+      for (const hit of m.cxpMatches) {
+        for (const oc of findOCsForCxp(hit.cxp, bridge)) ocsCubiertas.add(`${oc.cia}::${oc.noOrden}`);
+      }
     }
+    const conciliacionPct = filteredMatches.length > 0 ? (conciliados / filteredMatches.length) * 100 : 0;
     return {
-      totalAmount,
+      total,
       aProveedores,
       aEmpleados,
-      bancosUnicos: bancosUnicos.size,
-      cuenta: filteredRecords.length,
+      conciliados,
+      conciliadosMonto,
+      conciliacionPct,
+      huerfanos,
+      huerfanosMonto,
+      ocsCubiertas: ocsCubiertas.size,
+      cuenta: filteredMatches.length,
     };
-  }, [filteredRecords]);
+  }, [filteredMatches, bridge]);
 
-  const byMonth = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const r of filteredRecords) {
-      if (!r.fechaPago) continue;
-      const ym = r.fechaPago.slice(0, 7);
-      map.set(ym, (map.get(ym) ?? 0) + r.importePesos);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [filteredRecords]);
+  const providerRollups = useMemo(() => buildProviderRollups(filteredMatches, bridge), [filteredMatches, bridge]);
+
+  const sortedProviderRollups = useMemo(() => {
+    const arr = [...providerRollups];
+    const dir = providerSort.dir === 'asc' ? 1 : -1;
+    arr.sort((a, b) => {
+      const k = providerSort.key;
+      if (k === 'nombre') return a.nombreProveedor.localeCompare(b.nombreProveedor, 'es-MX') * dir;
+      if (k === 'totalPagado') return (a.totalPagado - b.totalPagado) * dir;
+      if (k === 'conciliacionPct') return (a.conciliacionPct - b.conciliacionPct) * dir;
+      if (k === 'pagosCount') return (a.matches.length - b.matches.length) * dir;
+      if (k === 'orphanCount') return (a.pagosOrphan - b.pagosOrphan) * dir;
+      if (k === 'ultimoPago') return (a.ultimoPago || '').localeCompare(b.ultimoPago || '') * dir;
+      return 0;
+    });
+    return arr;
+  }, [providerRollups, providerSort]);
+
+  const selectedRollup = useMemo(() => {
+    if (!selectedProviderKey) return null;
+    return sortedProviderRollups.find((r) => r.key === selectedProviderKey)
+      ?? providerRollups.find((r) => r.key === selectedProviderKey)
+      ?? null;
+  }, [selectedProviderKey, sortedProviderRollups, providerRollups]);
+
+  const filtersActive =
+    search.trim() !== '' ||
+    tipoFilter !== 'all' ||
+    statusFilter !== 'all' ||
+    bancoFilter !== 'all' ||
+    dateFrom !== '' ||
+    dateTo !== '' ||
+    amountMin !== '' ||
+    amountMax !== '';
 
   const clearFilters = () => {
     setSearch('');
     setTipoFilter('all');
+    setStatusFilter('all');
     setBancoFilter('all');
     setDateFrom('');
     setDateTo('');
     setAmountMin('');
     setAmountMax('');
-    setMonedaFilter('all');
-    setClasificacionFilter('all');
-    setSort(DEFAULT_SORT);
   };
 
   return (
@@ -262,11 +522,11 @@ export default function Pagos({
       )}
 
       {/* KPI cards */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <section className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiCard
           icon={CreditCard}
           label="Total pagado"
-          value={fmtCurrency(kpis.totalAmount)}
+          value={fmtCurrency(kpis.total)}
           sub={`${kpis.cuenta.toLocaleString()} pagos`}
           tone="neutral"
         />
@@ -274,7 +534,7 @@ export default function Pagos({
           icon={Building2}
           label="A proveedores"
           value={fmtCurrency(kpis.aProveedores)}
-          sub="Comerciales / servicios"
+          sub="Comerciales · servicios"
           tone="success"
         />
         <KpiCard
@@ -285,35 +545,53 @@ export default function Pagos({
           tone="info"
         />
         <KpiCard
-          icon={CheckCircle2}
-          label="Bancos involucrados"
-          value={kpis.bancosUnicos.toString()}
-          sub="Cuentas que pagaron"
-          tone="neutral"
+          icon={Link2}
+          label="Conciliación OC"
+          value={`${kpis.conciliacionPct.toFixed(0)}%`}
+          sub={`${kpis.ocsCubiertas.toLocaleString()} OCs cubiertas · ${fmtCompact(kpis.conciliadosMonto)}`}
+          tone={kpis.conciliacionPct >= 75 ? 'success' : kpis.conciliacionPct >= 50 ? 'info' : 'warning'}
+        />
+        <KpiCard
+          icon={ShieldAlert}
+          label="Pagos huérfanos"
+          value={kpis.huerfanos.toLocaleString()}
+          sub={`Sin CXP ni banco · ${fmtCompact(kpis.huerfanosMonto)}`}
+          tone={kpis.huerfanos === 0 ? 'success' : 'warning'}
         />
       </section>
 
-      {/* Monthly outflow strip */}
-      {byMonth.length > 0 && (
-        <section className="animate-card-in">
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] mb-2 text-[var(--gray-500)]">
-            Egreso real por mes (ya ejecutado)
-          </h2>
-          <div className="flex gap-2 flex-wrap">
-            {byMonth.map(([ym, amount]) => (
-              <div
-                key={ym}
-                className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-md)] px-3 py-1.5"
-              >
-                <div className="font-mono text-[10px] text-[var(--gray-400)]">{ym}</div>
-                <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
-                  {fmtCompact(amount)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* View toggle */}
+      <section className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex bg-[var(--surface-alt)] border border-[var(--gray-200)] rounded-[var(--radius-md)] p-0.5">
+          <button
+            type="button"
+            onClick={() => setViewMode('byProvider')}
+            className={`inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-sm)] text-[12px] font-medium transition-colors ${
+              viewMode === 'byProvider'
+                ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                : 'text-[var(--gray-500)] hover:text-[var(--gray-950)]'
+            }`}
+          >
+            <LayoutGrid className="w-3.5 h-3.5" /> Por proveedor
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('flatList')}
+            className={`inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-sm)] text-[12px] font-medium transition-colors ${
+              viewMode === 'flatList'
+                ? 'bg-white text-[var(--gray-950)] shadow-sm'
+                : 'text-[var(--gray-500)] hover:text-[var(--gray-950)]'
+            }`}
+          >
+            <List className="w-3.5 h-3.5" /> Lista plana
+          </button>
+        </div>
+        <span className="text-[11px] text-[var(--gray-400)]">
+          {viewMode === 'byProvider'
+            ? 'Auditoría OC → CXP → Pago → Banco agrupada por proveedor.'
+            : 'Tabla cronológica con badge de cruce por pago.'}
+        </span>
+      </section>
 
       {/* Toolbar */}
       <section className="space-y-3">
@@ -339,6 +617,18 @@ export default function Pagos({
             <option value="employees">Empleados</option>
           </select>
           <select
+            className="input max-w-[180px]"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            title="Filtrar por estado de cruce"
+          >
+            <option value="all">Todos los cruces</option>
+            <option value="matched">Conciliado completo</option>
+            <option value="cxp-only">Sólo CXP</option>
+            <option value="bank-only">Sólo Banco</option>
+            <option value="orphan">Huérfano</option>
+          </select>
+          <select
             className="input max-w-[170px]"
             value={bancoFilter}
             onChange={(e) => setBancoFilter(e.target.value)}
@@ -347,28 +637,6 @@ export default function Pagos({
             <option value="all">Todos los bancos</option>
             {bancosDisponibles.map((b) => (
               <option key={b} value={b}>{b}</option>
-            ))}
-          </select>
-          <select
-            className="input max-w-[135px]"
-            value={monedaFilter}
-            onChange={(e) => setMonedaFilter(e.target.value)}
-            title="Filtrar por moneda"
-          >
-            <option value="all">Todas monedas</option>
-            {monedasDisponibles.map((moneda) => (
-              <option key={moneda} value={moneda}>{moneda}</option>
-            ))}
-          </select>
-          <select
-            className="input max-w-[190px]"
-            value={clasificacionFilter}
-            onChange={(e) => setClasificacionFilter(e.target.value)}
-            title="Filtrar por clasificación financiera"
-          >
-            <option value="all">Todas clasificaciones</option>
-            {clasificacionesDisponibles.map((classification) => (
-              <option key={classification} value={classification}>{classification}</option>
             ))}
           </select>
           <input
@@ -392,7 +660,6 @@ export default function Pagos({
             value={amountMin}
             onChange={(e) => setAmountMin(e.target.value)}
             min="0"
-            title="Importe mínimo"
           />
           <input
             type="number"
@@ -401,28 +668,7 @@ export default function Pagos({
             value={amountMax}
             onChange={(e) => setAmountMax(e.target.value)}
             min="0"
-            title="Importe máximo"
           />
-          <select
-            className="input max-w-[185px]"
-            value={`${sort.key}:${sort.direction}`}
-            onChange={(e) => {
-              const [key, direction] = e.target.value.split(':') as [PagoSortKey, SortDirection];
-              setSort({ key, direction });
-            }}
-            title="Ordenar registros"
-          >
-            <option value="fechaPago:desc">Fecha reciente primero</option>
-            <option value="fechaPago:asc">Fecha antigua primero</option>
-            <option value="importePesos:desc">Importe mayor primero</option>
-            <option value="importePesos:asc">Importe menor primero</option>
-            <option value="nombreProveedor:asc">Proveedor A-Z</option>
-            <option value="nombreProveedor:desc">Proveedor Z-A</option>
-            <option value="banco:asc">Banco A-Z</option>
-            <option value="banco:desc">Banco Z-A</option>
-            <option value="noPago:desc">No. pago mayor primero</option>
-            <option value="noPago:asc">No. pago menor primero</option>
-          </select>
           {filtersActive && (
             <button
               type="button"
@@ -433,162 +679,782 @@ export default function Pagos({
             </button>
           )}
           <div className="ml-auto text-[12px] text-[var(--gray-400)] tabular-nums">
-            {filteredRecords.length === visiblePagoProveedorRecords.length
-              ? `${visiblePagoProveedorRecords.length.toLocaleString()} total`
-              : `${filteredRecords.length.toLocaleString()} de ${visiblePagoProveedorRecords.length.toLocaleString()}`}
+            {filteredMatches.length === visibleMatches.length
+              ? `${visibleMatches.length.toLocaleString()} total`
+              : `${filteredMatches.length.toLocaleString()} de ${visibleMatches.length.toLocaleString()}`}
           </div>
         </div>
 
-        {/* Table */}
-        <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] overflow-hidden animate-card-in">
-          <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0 z-10">
-                <tr>
-                  <Th className="pl-5">Cía</Th>
-                  <Th>Fecha</Th>
-                  <Th>Beneficiario</Th>
-                  <Th>RFC</Th>
-                  <Th align="right">Importe</Th>
-                  <Th>Banco</Th>
-                  <Th>Pago</Th>
-                  <Th>Tipo</Th>
-                  <Th>Comentario</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRecords.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="text-center text-[var(--gray-400)] py-14">
-                      <div className="flex flex-col items-center gap-2">
-                        {visiblePagoProveedorRecords.length === 0 ? (
-                          <>
-                            <CreditCard className="w-5 h-5 text-[var(--gray-300)]" />
-                            <div className="text-[13px]">Sin pagos cargados.</div>
-                          </>
-                        ) : (
-                          <>
-                            <Filter className="w-5 h-5 text-[var(--gray-300)]" />
-                            <div className="text-[13px]">Sin coincidencias con los filtros.</div>
-                            {filtersActive && (
-                              <button
-                                onClick={clearFilters}
-                                className="text-[12px] text-[var(--primary)] hover:underline"
-                              >
-                                Limpiar filtros
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredRecords.slice(0, ROW_CAP).map((r, idx) => {
-                    const isEmployee = isEmployeePayment(r);
-                    return (
-                      <tr
-                        key={`${r.cia}-${r.noPago}`}
-                        className={`group border-t border-[var(--gray-200)]/40 hover-row hover:bg-[var(--primary-muted)]/30 ${
-                          idx % 2 === 1 ? 'bg-[var(--gray-50)]/40' : ''
-                        }`}
-                      >
-                        <Td className="pl-5">
-                          <span className="font-mono text-[11px] text-[var(--gray-500)]">{r.cia}</span>
-                        </Td>
-                        <Td>
-                          <span className="text-[12px] tabular-nums text-[var(--gray-700)]">
-                            {r.fechaPago || <span className="text-[var(--gray-300)]">—</span>}
-                          </span>
-                        </Td>
-                        <Td>
-                          <div
-                            className="font-medium text-[var(--gray-950)] truncate max-w-[220px]"
-                            title={r.nombreProveedor}
-                          >
-                            {r.nombreProveedor}
-                          </div>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                            {!isEmployee && (
-                              <ProviderBadge
-                                index={providerIndex}
-                                jdeCode={r.claveProveedor}
-                                name={r.nombreProveedor}
-                              />
-                            )}
-                            {r.clasificacionProveedor && (
-                              <span className="text-[10px] text-[var(--gray-400)] truncate" title={r.clasificacionProveedor}>
-                                {r.clasificacionProveedor}
-                              </span>
-                            )}
-                          </div>
-                        </Td>
-                        <Td>
-                          <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.rfcProveedor}</span>
-                        </Td>
-                        <Td align="right">
-                          <span className="tabular-nums font-medium text-[var(--gray-950)]">
-                            {fmtCurrency(r.importePesos)}
-                          </span>
-                          {r.moneda && r.moneda !== 'MXP' && r.moneda !== 'MXN' && (
-                            <span className="ml-1 text-[10px] text-[var(--gray-400)]">{r.moneda}</span>
-                          )}
-                        </Td>
-                        <Td>
-                          <span className="text-[12px] text-[var(--gray-700)]" title={r.cuentaBancaria}>
-                            {bancoLabel(r.cuentaBancaria)}
-                          </span>
-                          <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">
-                            {r.cuentaBanco || '—'}
-                          </div>
-                        </Td>
-                        <Td>
-                          <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noPago}</span>
-                          {r.batchPago && (
-                            <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">
-                              Batch {r.batchPago}
-                            </div>
-                          )}
-                        </Td>
-                        <Td>
-                          <Chip style={isEmployee ? CHIP_EMPLOYEE : CHIP_SUPPLIER} icon={isEmployee ? Users : Building2}>
-                            {isEmployee ? 'Empleado' : 'Proveedor'}
-                          </Chip>
-                        </Td>
-                        <Td>
-                          <span
-                            className="text-[11px] text-[var(--gray-600)] font-mono truncate inline-block max-w-[200px]"
-                            title={r.comentarioPago}
-                          >
-                            {r.comentarioPago || <span className="text-[var(--gray-300)]">—</span>}
-                          </span>
-                        </Td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-          {filteredRecords.length > ROW_CAP && (
-            <div className="px-4 py-2 text-[11px] text-[var(--gray-500)] bg-[var(--surface-alt)] border-t border-[var(--gray-200)]">
-              Mostrando <span className="tabular-nums font-medium text-[var(--gray-950)]">{ROW_CAP}</span>{' '}
-              de{' '}
-              <span className="tabular-nums font-medium text-[var(--gray-950)]">
-                {filteredRecords.length.toLocaleString()}
-              </span>{' '}
-              registros. Refina los filtros para ver más.
-            </div>
-          )}
-        </div>
+        {viewMode === 'byProvider' ? (
+          <ProviderAuditView
+            rollups={sortedProviderRollups}
+            sort={providerSort}
+            onSortChange={setProviderSort}
+            selectedKey={selectedProviderKey}
+            onSelect={setSelectedProviderKey}
+            providerIndex={providerIndex}
+            bridge={bridge}
+            selectedRollup={selectedRollup}
+            visibleTotal={visibleMatches.length}
+            filtersActive={filtersActive}
+            onClearFilters={clearFilters}
+          />
+        ) : (
+          <FlatPaymentList
+            matches={filteredMatches}
+            visibleTotal={visibleMatches.length}
+            sort={flatSort}
+            onSortChange={setFlatSort}
+            providerIndex={providerIndex}
+            filtersActive={filtersActive}
+            onClearFilters={clearFilters}
+            matchByPaymentKey={matchByPaymentKey}
+          />
+        )}
       </section>
     </div>
   );
 }
 
 /* ──────────────────────────────────────────────────────────────────────── */
-/*  Helpers                                                                  */
+/*  Provider audit view                                                      */
 /* ──────────────────────────────────────────────────────────────────────── */
+
+interface ProviderAuditViewProps {
+  rollups: ProviderRollup[];
+  sort: { key: ProviderSortKey; dir: SortDirection };
+  onSortChange: (s: { key: ProviderSortKey; dir: SortDirection }) => void;
+  selectedKey: string | null;
+  onSelect: (key: string | null) => void;
+  providerIndex: ReturnType<typeof buildProviderIndex>;
+  bridge: ComprasBridge;
+  selectedRollup: ProviderRollup | null;
+  visibleTotal: number;
+  filtersActive: boolean;
+  onClearFilters: () => void;
+}
+
+function ProviderAuditView({
+  rollups,
+  sort,
+  onSortChange,
+  selectedKey,
+  onSelect,
+  providerIndex,
+  bridge,
+  selectedRollup,
+  visibleTotal,
+  filtersActive,
+  onClearFilters,
+}: ProviderAuditViewProps) {
+  const cappedRollups = useMemo(() => rollups.slice(0, ROW_CAP), [rollups]);
+
+  if (visibleTotal === 0) {
+    return <EmptyState filtersActive={false} onClear={onClearFilters} />;
+  }
+  if (rollups.length === 0) {
+    return <EmptyState filtersActive={filtersActive} onClear={onClearFilters} />;
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-3">
+      {/* Master: provider list */}
+      <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] overflow-hidden animate-card-in">
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0 z-10">
+              <tr>
+                <SortableTh
+                  label="Proveedor"
+                  active={sort.key === 'nombre'}
+                  dir={sort.dir}
+                  onClick={() => onSortChange({ key: 'nombre', dir: sort.key === 'nombre' && sort.dir === 'asc' ? 'desc' : 'asc' })}
+                  className="pl-5"
+                />
+                <SortableTh
+                  label="Pagos"
+                  align="right"
+                  active={sort.key === 'pagosCount'}
+                  dir={sort.dir}
+                  onClick={() => onSortChange({ key: 'pagosCount', dir: sort.key === 'pagosCount' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+                />
+                <SortableTh
+                  label="Total"
+                  align="right"
+                  active={sort.key === 'totalPagado'}
+                  dir={sort.dir}
+                  onClick={() => onSortChange({ key: 'totalPagado', dir: sort.key === 'totalPagado' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+                />
+                <SortableTh
+                  label="Conciliación"
+                  align="right"
+                  active={sort.key === 'conciliacionPct'}
+                  dir={sort.dir}
+                  onClick={() => onSortChange({ key: 'conciliacionPct', dir: sort.key === 'conciliacionPct' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+                />
+                <SortableTh
+                  label="Huérfanos"
+                  align="right"
+                  active={sort.key === 'orphanCount'}
+                  dir={sort.dir}
+                  onClick={() => onSortChange({ key: 'orphanCount', dir: sort.key === 'orphanCount' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+                />
+                <SortableTh
+                  label="Último"
+                  active={sort.key === 'ultimoPago'}
+                  dir={sort.dir}
+                  onClick={() => onSortChange({ key: 'ultimoPago', dir: sort.key === 'ultimoPago' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+                />
+              </tr>
+            </thead>
+            <tbody>
+              {cappedRollups.map((r) => {
+                const selected = r.key === selectedKey;
+                const tone =
+                  r.pagosOrphan > 0 ? 'warning' :
+                  r.conciliacionPct >= 75 ? 'success' : 'info';
+                return (
+                  <tr
+                    key={r.key}
+                    onClick={() => onSelect(r.key)}
+                    className={`group border-t border-[var(--gray-200)]/40 cursor-pointer hover-row hover:bg-[var(--primary-muted)]/30 ${
+                      selected ? 'bg-[var(--primary-muted)]/40' : ''
+                    }`}
+                  >
+                    <Td className="pl-5">
+                      <div className="flex items-center gap-1.5">
+                        <ChevronRight
+                          className={`w-3.5 h-3.5 text-[var(--gray-400)] transition-transform ${selected ? 'rotate-90 text-[var(--primary)]' : ''}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div
+                            className="font-medium text-[var(--gray-950)] truncate"
+                            title={r.nombreProveedor}
+                          >
+                            {r.nombreProveedor || '—'}
+                          </div>
+                          <div className="mt-0.5 flex items-center gap-x-2 gap-y-0.5 flex-wrap">
+                            {!r.isEmployee && (
+                              <ProviderBadge
+                                index={providerIndex}
+                                jdeCode={r.claveProveedor}
+                                name={r.nombreProveedor}
+                              />
+                            )}
+                            <span className="font-mono text-[10px] text-[var(--gray-400)]">
+                              {r.claveProveedor}
+                            </span>
+                            {r.isEmployee && (
+                              <Chip style={CHIP_EMPLOYEE} icon={Users}>Empleado</Chip>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </Td>
+                    <Td align="right">
+                      <span className="tabular-nums text-[12px] text-[var(--gray-700)]">
+                        {r.matches.length}
+                      </span>
+                    </Td>
+                    <Td align="right">
+                      <span className="tabular-nums font-medium text-[var(--gray-950)]">
+                        {fmtCurrency(r.totalPagado)}
+                      </span>
+                    </Td>
+                    <Td align="right">
+                      <ConciliationBar pct={r.conciliacionPct} tone={tone} ocs={r.ocsCubiertas.size} />
+                    </Td>
+                    <Td align="right">
+                      {r.pagosOrphan > 0 ? (
+                        <span className="inline-flex items-center gap-1 text-[12px] tabular-nums text-[var(--danger)] font-medium">
+                          <AlertTriangle className="w-3 h-3" />
+                          {r.pagosOrphan}
+                        </span>
+                      ) : (
+                        <span className="text-[12px] text-[var(--gray-300)]">—</span>
+                      )}
+                    </Td>
+                    <Td>
+                      <span className="text-[11px] tabular-nums text-[var(--gray-500)]">
+                        {r.ultimoPago || '—'}
+                      </span>
+                    </Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {rollups.length > ROW_CAP && (
+          <div className="px-4 py-2 text-[11px] text-[var(--gray-500)] bg-[var(--surface-alt)] border-t border-[var(--gray-200)]">
+            Mostrando <span className="tabular-nums font-medium text-[var(--gray-950)]">{ROW_CAP}</span>{' '}
+            de{' '}
+            <span className="tabular-nums font-medium text-[var(--gray-950)]">
+              {rollups.length.toLocaleString()}
+            </span>{' '}
+            proveedores. Refina los filtros para ver más.
+          </div>
+        )}
+      </div>
+
+      {/* Detail panel */}
+      <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] overflow-hidden animate-card-in min-h-[400px]">
+        {selectedRollup ? (
+          <ProviderAuditDetail rollup={selectedRollup} bridge={bridge} providerIndex={providerIndex} />
+        ) : (
+          <div className="h-full flex flex-col items-center justify-center text-center p-8 text-[var(--gray-400)]">
+            <Receipt className="w-7 h-7 text-[var(--gray-300)] mb-3" />
+            <p className="text-[13px] text-[var(--gray-500)]">
+              Selecciona un proveedor para auditar el cruce
+            </p>
+            <p className="text-[11px] mt-1">
+              OC facturada → CXP → Pago ejecutado → Cargo bancario
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  Provider detail — timeline                                               */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+function ProviderAuditDetail({
+  rollup,
+  bridge,
+  providerIndex,
+}: {
+  rollup: ProviderRollup;
+  bridge: ComprasBridge;
+  providerIndex: ReturnType<typeof buildProviderIndex>;
+}) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="border-b border-[var(--gray-200)] px-5 py-4 bg-[var(--surface-alt)]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-[15px] font-bold text-[var(--gray-950)] truncate" title={rollup.nombreProveedor}>
+              {rollup.nombreProveedor || '—'}
+            </h3>
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
+              {!rollup.isEmployee && (
+                <ProviderBadge
+                  index={providerIndex}
+                  jdeCode={rollup.claveProveedor}
+                  name={rollup.nombreProveedor}
+                />
+              )}
+              <span className="font-mono text-[11px] text-[var(--gray-500)]">
+                {rollup.claveProveedor}
+              </span>
+              {rollup.rfcProveedor && (
+                <span className="font-mono text-[11px] text-[var(--gray-500)]">
+                  {rollup.rfcProveedor}
+                </span>
+              )}
+              <span className="text-[11px] text-[var(--gray-400)]">Cía {rollup.cia}</span>
+              {rollup.clasificacion && (
+                <span className="text-[11px] text-[var(--gray-500)] truncate max-w-[260px]" title={rollup.clasificacion}>
+                  · {rollup.clasificacion}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <MiniStat label="Total" value={fmtCurrency(rollup.totalPagado)} />
+          <MiniStat label="Pagos" value={`${rollup.matches.length}`} />
+          <MiniStat label="OCs cubiertas" value={`${rollup.ocsCubiertas.size}`} accent="success" />
+          <MiniStat
+            label="Huérfanos"
+            value={`${rollup.pagosOrphan}`}
+            accent={rollup.pagosOrphan > 0 ? 'warning' : 'neutral'}
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+        {rollup.matches.map((m) => (
+          <PaymentAuditCard key={paymentKey(m.payment)} match={m} bridge={bridge} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  Payment audit card — single Pago with OC + CXP + Banco                   */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: ComprasBridge }) {
+  const [expanded, setExpanded] = useState(false);
+  const p = match.payment;
+  const isEmployee = isEmployeePayment(p);
+  const ocsByCxp = match.cxpMatches.map((hit) => ({
+    cxp: hit.cxp,
+    tier: hit.tier,
+    confidence: hit.confidence,
+    ocs: groupOCsByOrden(findOCsForCxp(hit.cxp, bridge)),
+  }));
+  const totalOCs = ocsByCxp.reduce((sum, x) => sum + x.ocs.length, 0);
+  const canExpand = !isEmployee && (match.cxpMatches.length > 0 || !!match.cargoMatch);
+
+  return (
+    <div className="border border-[var(--gray-200)] rounded-[var(--radius-md)] bg-white">
+      <button
+        type="button"
+        onClick={() => canExpand && setExpanded((v) => !v)}
+        className={`w-full flex items-center gap-3 px-4 py-3 text-left ${canExpand ? 'hover:bg-[var(--gray-50)] cursor-pointer' : 'cursor-default'}`}
+      >
+        <div className="w-9 h-9 rounded-full bg-[var(--surface-alt)] border border-[var(--gray-200)] flex items-center justify-center shrink-0">
+          {isEmployee ? (
+            <Users className="w-4 h-4 text-[var(--info)]" />
+          ) : (
+            <Banknote className="w-4 h-4 text-[var(--gray-500)]" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-[11px] text-[var(--gray-700)]">{p.fechaPago || '—'}</span>
+            <span className="text-[14px] tabular-nums font-bold text-[var(--gray-950)]">
+              {fmtCurrency(p.importePesos)}
+            </span>
+            {p.moneda && p.moneda !== 'MXP' && p.moneda !== 'MXN' && (
+              <span className="text-[10px] text-[var(--gray-400)]">{p.moneda}</span>
+            )}
+            <Chip style={STATUS_STYLE[match.status]} icon={statusIcon(match.status)}>
+              {STATUS_LABEL[match.status]}
+            </Chip>
+            {totalOCs > 0 && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-[var(--gray-500)] font-medium">
+                <FileText className="w-3 h-3" /> {totalOCs} OC{totalOCs > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 flex items-center gap-2 flex-wrap text-[11px] text-[var(--gray-500)]">
+            <span className="font-mono">Pago {p.noPago}</span>
+            <span>·</span>
+            <span>{bancoLabel(p.cuentaBancaria)}</span>
+            {p.cuentaBanco && <span className="font-mono">·{p.cuentaBanco}</span>}
+            {p.comentarioPago && (
+              <>
+                <span>·</span>
+                <span className="font-mono truncate max-w-[280px]" title={p.comentarioPago}>
+                  {p.comentarioPago}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+        {canExpand && (
+          <ChevronRight
+            className={`w-4 h-4 text-[var(--gray-400)] transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`}
+          />
+        )}
+      </button>
+
+      {expanded && canExpand && (
+        <div className="border-t border-[var(--gray-200)] bg-[var(--gray-50)]/40 px-4 py-3 space-y-3">
+          {/* OC → CXP chain */}
+          {ocsByCxp.length > 0 ? (
+            ocsByCxp.map((entry) => (
+              <div
+                key={`${entry.cxp.cia}::${entry.cxp.noFactura}::${entry.cxp.noProveedor}`}
+                className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-sm)] p-3"
+              >
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <Receipt className="w-3.5 h-3.5 text-[var(--info)]" />
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-500)]">
+                    CXP
+                  </span>
+                  <span className="font-mono text-[12px] text-[var(--gray-950)]">{entry.cxp.noFactura}</span>
+                  <span className="text-[11px] tabular-nums text-[var(--gray-500)]">
+                    {fmtCurrency(entry.cxp.importeBrutoPesos)}
+                  </span>
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded-full border"
+                    style={{
+                      backgroundColor: 'var(--info-muted)',
+                      borderColor: 'var(--gray-200)',
+                      color: 'var(--info)',
+                    }}
+                    title={`Confianza ${(entry.confidence * 100).toFixed(0)}%`}
+                  >
+                    {TIER_LABEL[entry.tier]}
+                  </span>
+                  {entry.cxp.fechaFactura && (
+                    <span className="text-[11px] text-[var(--gray-500)]">
+                      · {entry.cxp.fechaFactura}
+                    </span>
+                  )}
+                </div>
+                {entry.ocs.length > 0 ? (
+                  <div className="space-y-1.5 pl-5 border-l-2 border-[var(--gray-200)]">
+                    {entry.ocs.map((oc) => (
+                      <div key={oc.noOrden} className="flex items-center gap-2 flex-wrap text-[12px]">
+                        <FileText className="w-3 h-3 text-[var(--success)]" />
+                        <span className="font-mono text-[var(--gray-950)] font-medium">OC {oc.noOrden}</span>
+                        <span className="tabular-nums text-[var(--gray-700)]">
+                          {fmtCurrency(oc.total)}
+                        </span>
+                        {oc.lineas.length > 1 && (
+                          <span className="text-[10px] text-[var(--gray-400)]">
+                            {oc.lineas.length} líneas
+                          </span>
+                        )}
+                        {oc.fechaRecepcion && (
+                          <span className="text-[11px] text-[var(--gray-500)]">
+                            recep {oc.fechaRecepcion}
+                          </span>
+                        )}
+                        {oc.fechaPagoProyectada && (
+                          <span className="text-[11px] text-[var(--gray-400)]">
+                            · pago proyectado {oc.fechaPagoProyectada}
+                          </span>
+                        )}
+                        {oc.lineas[0]?.descCategoria && (
+                          <span className="text-[10px] text-[var(--gray-400)] truncate max-w-[180px]" title={oc.lineas[0].descCategoria}>
+                            {oc.lineas[0].descCategoria}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-[var(--gray-400)] italic pl-5">
+                    Sin OC encontrada para esta factura (puede ser servicio sin OC o fuera del rango cargado).
+                  </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="text-[12px] text-[var(--gray-500)] bg-white border border-[var(--gray-200)] rounded-[var(--radius-sm)] p-3">
+              <AlertTriangle className="w-3.5 h-3.5 inline mr-1 text-[var(--warning)]" />
+              Pago sin CXP asociada. {match.reason}
+            </div>
+          )}
+
+          {/* Cargo bancario */}
+          {match.cargoMatch ? (
+            <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-sm)] p-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Banknote className="w-3.5 h-3.5 text-[var(--success)]" />
+                <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-500)]">
+                  Cargo bancario
+                </span>
+                <span className="font-mono text-[12px] text-[var(--gray-950)]">
+                  {match.cargoMatch.cuenta}
+                </span>
+                <span className="text-[11px] tabular-nums text-[var(--gray-700)]">
+                  {fmtCurrency(Math.abs(match.cargoMatch.movement.importe))}
+                </span>
+                <span className="text-[11px] text-[var(--gray-500)]">
+                  {match.cargoMatch.movement.fechaOperacion}
+                </span>
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded-full border"
+                  style={{
+                    backgroundColor: 'var(--success-muted)',
+                    borderColor: 'oklch(88% 0.08 145)',
+                    color: 'var(--success)',
+                  }}
+                  title={`Confianza ${(match.cargoMatch.confidence * 100).toFixed(0)}%`}
+                >
+                  {match.cargoMatch.tier === 'exact' ? 'exacto' : 'tolerancia'}
+                </span>
+              </div>
+              {match.cargoMatch.movement.concepto && (
+                <div className="text-[11px] text-[var(--gray-500)] font-mono mt-1 truncate" title={match.cargoMatch.movement.concepto}>
+                  {match.cargoMatch.movement.concepto}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-[11px] text-[var(--gray-400)] italic px-1">
+              Sin cargo bancario empatado todavía.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  Flat list view                                                           */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+interface FlatPaymentListProps {
+  matches: PaymentMatch[];
+  visibleTotal: number;
+  sort: { key: FlatSortKey; dir: SortDirection };
+  onSortChange: (s: { key: FlatSortKey; dir: SortDirection }) => void;
+  providerIndex: ReturnType<typeof buildProviderIndex>;
+  filtersActive: boolean;
+  onClearFilters: () => void;
+  matchByPaymentKey: Map<string, PaymentMatch>;
+}
+
+function FlatPaymentList({
+  matches,
+  visibleTotal,
+  sort,
+  onSortChange,
+  providerIndex,
+  filtersActive,
+  onClearFilters,
+  matchByPaymentKey: _matchByPaymentKey,
+}: FlatPaymentListProps) {
+  void _matchByPaymentKey;
+  const sorted = useMemo(() => {
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...matches].sort((a, b) => {
+      const ar = a.payment;
+      const br = b.payment;
+      if (sort.key === 'importePesos') return (ar.importePesos - br.importePesos) * dir;
+      if (sort.key === 'banco') return bancoLabel(ar.cuentaBancaria).localeCompare(bancoLabel(br.cuentaBancaria)) * dir;
+      const av = ar[sort.key] ?? '';
+      const bv = br[sort.key] ?? '';
+      return av.localeCompare(bv, 'es-MX', { numeric: true }) * dir;
+    });
+  }, [matches, sort]);
+
+  if (visibleTotal === 0) return <EmptyState filtersActive={false} onClear={onClearFilters} />;
+  if (sorted.length === 0) return <EmptyState filtersActive={filtersActive} onClear={onClearFilters} />;
+
+  return (
+    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] overflow-hidden animate-card-in">
+      <div className="overflow-x-auto">
+        <table className="w-full text-[13px]">
+          <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0 z-10">
+            <tr>
+              <Th className="pl-5">Cía</Th>
+              <SortableTh
+                label="Fecha"
+                active={sort.key === 'fechaPago'}
+                dir={sort.dir}
+                onClick={() => onSortChange({ key: 'fechaPago', dir: sort.key === 'fechaPago' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+              />
+              <SortableTh
+                label="Beneficiario"
+                active={sort.key === 'nombreProveedor'}
+                dir={sort.dir}
+                onClick={() => onSortChange({ key: 'nombreProveedor', dir: sort.key === 'nombreProveedor' && sort.dir === 'asc' ? 'desc' : 'asc' })}
+              />
+              <SortableTh
+                label="Importe"
+                align="right"
+                active={sort.key === 'importePesos'}
+                dir={sort.dir}
+                onClick={() => onSortChange({ key: 'importePesos', dir: sort.key === 'importePesos' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+              />
+              <SortableTh
+                label="Banco"
+                active={sort.key === 'banco'}
+                dir={sort.dir}
+                onClick={() => onSortChange({ key: 'banco', dir: sort.key === 'banco' && sort.dir === 'asc' ? 'desc' : 'asc' })}
+              />
+              <SortableTh
+                label="Pago"
+                active={sort.key === 'noPago'}
+                dir={sort.dir}
+                onClick={() => onSortChange({ key: 'noPago', dir: sort.key === 'noPago' && sort.dir === 'desc' ? 'asc' : 'desc' })}
+              />
+              <Th>Cruce</Th>
+              <Th>Comentario / OC</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.slice(0, ROW_CAP).map((m, idx) => {
+              const r = m.payment;
+              const employee = isEmployeePayment(r);
+              const ocCount = m.cxpMatches.length;
+              return (
+                <tr
+                  key={paymentKey(r)}
+                  className={`group border-t border-[var(--gray-200)]/40 hover-row hover:bg-[var(--primary-muted)]/30 ${
+                    idx % 2 === 1 ? 'bg-[var(--gray-50)]/40' : ''
+                  }`}
+                >
+                  <Td className="pl-5">
+                    <span className="font-mono text-[11px] text-[var(--gray-500)]">{r.cia}</span>
+                  </Td>
+                  <Td>
+                    <span className="text-[12px] tabular-nums text-[var(--gray-700)]">
+                      {r.fechaPago || <span className="text-[var(--gray-300)]">—</span>}
+                    </span>
+                  </Td>
+                  <Td>
+                    <div className="font-medium text-[var(--gray-950)] truncate max-w-[220px]" title={r.nombreProveedor}>
+                      {r.nombreProveedor}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-x-2 flex-wrap">
+                      {!employee && (
+                        <ProviderBadge
+                          index={providerIndex}
+                          jdeCode={r.claveProveedor}
+                          name={r.nombreProveedor}
+                        />
+                      )}
+                      <span className="font-mono text-[10px] text-[var(--gray-400)]">{r.claveProveedor}</span>
+                      {employee && <Chip style={CHIP_EMPLOYEE} icon={Users}>Empleado</Chip>}
+                    </div>
+                  </Td>
+                  <Td align="right">
+                    <span className="tabular-nums font-medium text-[var(--gray-950)]">
+                      {fmtCurrency(r.importePesos)}
+                    </span>
+                    {r.moneda && r.moneda !== 'MXP' && r.moneda !== 'MXN' && (
+                      <span className="ml-1 text-[10px] text-[var(--gray-400)]">{r.moneda}</span>
+                    )}
+                  </Td>
+                  <Td>
+                    <span className="text-[12px] text-[var(--gray-700)]" title={r.cuentaBancaria}>
+                      {bancoLabel(r.cuentaBancaria)}
+                    </span>
+                    <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">
+                      {r.cuentaBanco || '—'}
+                    </div>
+                  </Td>
+                  <Td>
+                    <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noPago}</span>
+                    {r.batchPago && (
+                      <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">
+                        Batch {r.batchPago}
+                      </div>
+                    )}
+                  </Td>
+                  <Td>
+                    <Chip style={STATUS_STYLE[m.status]} icon={statusIcon(m.status)}>
+                      {STATUS_LABEL[m.status]}
+                    </Chip>
+                  </Td>
+                  <Td>
+                    <span className="text-[11px] text-[var(--gray-600)] font-mono truncate inline-block max-w-[200px]" title={r.comentarioPago}>
+                      {r.comentarioPago || <span className="text-[var(--gray-300)]">—</span>}
+                    </span>
+                    {ocCount > 0 && (
+                      <div className="text-[10px] text-[var(--gray-500)] mt-0.5 inline-flex items-center gap-1">
+                        <FileText className="w-3 h-3" /> {ocCount} CXP cubierta{ocCount > 1 ? 's' : ''}
+                      </div>
+                    )}
+                  </Td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {sorted.length > ROW_CAP && (
+        <div className="px-4 py-2 text-[11px] text-[var(--gray-500)] bg-[var(--surface-alt)] border-t border-[var(--gray-200)]">
+          Mostrando <span className="tabular-nums font-medium text-[var(--gray-950)]">{ROW_CAP}</span>{' '}
+          de{' '}
+          <span className="tabular-nums font-medium text-[var(--gray-950)]">
+            {sorted.length.toLocaleString()}
+          </span>{' '}
+          registros. Refina los filtros para ver más.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  Helpers / atoms                                                          */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+function EmptyState({ filtersActive, onClear }: { filtersActive: boolean; onClear: () => void }) {
+  return (
+    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] py-14 text-center text-[var(--gray-400)] animate-card-in">
+      <div className="flex flex-col items-center gap-2">
+        {filtersActive ? (
+          <>
+            <Filter className="w-5 h-5 text-[var(--gray-300)]" />
+            <div className="text-[13px]">Sin coincidencias con los filtros.</div>
+            <button
+              onClick={onClear}
+              className="text-[12px] text-[var(--primary)] hover:underline"
+            >
+              Limpiar filtros
+            </button>
+          </>
+        ) : (
+          <>
+            <CreditCard className="w-5 h-5 text-[var(--gray-300)]" />
+            <div className="text-[13px]">Sin pagos cargados.</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  accent = 'neutral',
+}: {
+  label: string;
+  value: string;
+  accent?: 'neutral' | 'success' | 'warning';
+}) {
+  const color =
+    accent === 'success' ? 'var(--success)' :
+    accent === 'warning' ? 'var(--warning)' :
+    'var(--gray-950)';
+  return (
+    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-sm)] px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[var(--gray-400)]">
+        {label}
+      </div>
+      <div className="text-[14px] font-bold tabular-nums leading-tight" style={{ color }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ConciliationBar({
+  pct,
+  tone,
+  ocs,
+}: {
+  pct: number;
+  tone: 'success' | 'info' | 'warning';
+  ocs: number;
+}) {
+  const color =
+    tone === 'success' ? 'var(--success)' :
+    tone === 'warning' ? 'var(--warning)' :
+    'var(--info)';
+  return (
+    <div className="inline-flex flex-col items-end gap-0.5 min-w-[80px]">
+      <span className="text-[12px] tabular-nums font-medium" style={{ color }}>
+        {pct.toFixed(0)}%
+      </span>
+      <div className="w-16 h-1 rounded-full bg-[var(--gray-100)] overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${Math.min(100, Math.max(0, pct))}%`, backgroundColor: color }}
+        />
+      </div>
+      {ocs > 0 && (
+        <span className="text-[10px] text-[var(--gray-400)]">
+          {ocs} OC{ocs > 1 ? 's' : ''}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function statusIcon(status: PaymentStatus): typeof CheckCircle2 {
+  if (status === 'MATCHED_FULL') return CheckCircle2;
+  if (status === 'MATCHED_BANK_ONLY') return CheckCircle2;
+  if (status === 'UNMATCHED') return AlertTriangle;
+  return Link2;
+}
 
 interface KpiCardProps {
   icon: typeof CreditCard;
@@ -638,6 +1504,36 @@ function Th({
   return <th className={`px-2.5 py-2.5 font-medium ${alignCls} ${className}`}>{children}</th>;
 }
 
+function SortableTh({
+  label,
+  active,
+  dir,
+  onClick,
+  align = 'left',
+  className = '',
+}: {
+  label: string;
+  active: boolean;
+  dir: SortDirection;
+  onClick: () => void;
+  align?: 'left' | 'right' | 'center';
+  className?: string;
+}) {
+  const alignCls = align === 'right' ? 'text-right justify-end' : align === 'center' ? 'text-center justify-center' : 'text-left';
+  return (
+    <th className={`px-2.5 py-2.5 font-medium ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'} ${className}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={`inline-flex items-center gap-1 ${alignCls} ${active ? 'text-[var(--gray-950)]' : 'text-[var(--gray-400)] hover:text-[var(--gray-700)]'}`}
+      >
+        {label}
+        {active && <span className="text-[10px]">{dir === 'asc' ? '↑' : '↓'}</span>}
+      </button>
+    </th>
+  );
+}
+
 function Td({
   children,
   align = 'left',
@@ -653,29 +1549,6 @@ function Td({
       {children}
     </td>
   );
-}
-
-function parseAmountInput(value: string): number | undefined {
-  if (!value.trim()) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function comparePagoRecords(a: PagoProveedorRecord, b: PagoProveedorRecord, sort: PagoSort): number {
-  const direction = sort.direction === 'asc' ? 1 : -1;
-  if (sort.key === 'importePesos') return (a.importePesos - b.importePesos) * direction;
-  const av = pagoSortValue(a, sort.key);
-  const bv = pagoSortValue(b, sort.key);
-  if (!av && !bv) return 0;
-  if (!av) return 1;
-  if (!bv) return -1;
-  return av.localeCompare(bv, 'es-MX', { numeric: true }) * direction;
-}
-
-function pagoSortValue(record: PagoProveedorRecord, key: PagoSortKey): string {
-  if (key === 'banco') return bancoLabel(record.cuentaBancaria);
-  if (key === 'importePesos') return String(record.importePesos);
-  return record[key] ?? '';
 }
 
 function Chip({
@@ -696,4 +1569,10 @@ function Chip({
       {children}
     </span>
   );
+}
+
+function parseAmountInput(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

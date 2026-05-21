@@ -128,6 +128,16 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
         remainingAmount: amount,
         score: scoreFor(undefined, movement),
       });
+    } else if (isSchedulableSyntheticExpense(movement)) {
+      const amount = effectiveAmount(movement);
+      managed.push({
+        movement,
+        originalDate: originalSupplierDate(movement),
+        readyDate: eligibleSupplierDate(movement),
+        totalAmount: amount,
+        remainingAmount: amount,
+        score: scoreFor(undefined, movement),
+      });
     } else {
       if (isPayableMovement(movement) && isResolvedPayment(movement)) diagnostics.skippedResolvedPayables++;
       passthrough.push(movement);
@@ -333,6 +343,23 @@ function isSupplierPayment(movement: FinancialMovement): boolean {
 function isSchedulableTaxPayment(movement: FinancialMovement): boolean {
   return movement.type === 'OUTFLOW'
     && movement.category === 'TAX'
+    && movement.lockState !== 'LOCKED'
+    && !isResolvedPayment(movement);
+}
+
+/**
+ * Egreso sintético del motor canónico (`canonical-outflow:{ym}`) — el residuo
+ * del balanceo mensual contra el target del Dashboard cuando no hay desglose
+ * por catálogo. Sale con `category: 'TRANSFER'`, sin counterparty, RESTRICTED.
+ * El scheduler lo trata como diferible (igual que un supplier no-LOCKED) para
+ * que el bulto no tire la caja a negativo y se reparta cuando aprieta el flujo.
+ * No se reagendan TRANSFER reales (status='REAL' de banco) ni los LOCKED.
+ */
+function isSchedulableSyntheticExpense(movement: FinancialMovement): boolean {
+  return movement.type === 'OUTFLOW'
+    && movement.category === 'TRANSFER'
+    && movement.sourceSystem === 'FORECAST'
+    && movement.id.startsWith('canonical-outflow:')
     && movement.lockState !== 'LOCKED'
     && !isResolvedPayment(movement);
 }

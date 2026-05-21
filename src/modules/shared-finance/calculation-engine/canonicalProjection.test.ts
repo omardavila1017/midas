@@ -3,7 +3,8 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import { comprasToPurchaseReceipts } from '../../../domain/comprasToPurchaseReceipts';
-import type { BankAccountStatement, BankStatementLine, CobranzaRecord, ComprasRecord } from '../../../services/jdeTypes';
+import type { BankAccountStatement, BankStatementLine, CobranzaRecord, ComprasRecord, RolRecord } from '../../../services/jdeTypes';
+import { isRealShortTermApiMovement } from '../../financial-planning/services/scenarioForecastRun';
 import { buildHistoricalMonths } from '../../../domain/cashFlowEngine';
 import type {
   RealReconciliationMatch,
@@ -764,6 +765,116 @@ describe('canonicalProjection IVA metadata', () => {
   });
 });
 
+describe('canonicalProjection ROL projection (modelo corregido)', () => {
+  it('proyecta viaje ejecutado NO facturado como ingreso `rol:` fechado por la regla del catálogo', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [client({ id: 'client-1', creditDays: 30, paymentDay: { kind: 'ANY' } })],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [],
+      rolRecords: [
+        rolRecord({ claveJDE: '1', fechaViaje: '2026-05-04', subTotal: 1000, iva: 16, viajes: 5, efectuado: true }),
+      ],
+      assumptions,
+      budget: budget({ incomeMay: 0 }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const rol = canonical.movements.find((m) => m.id.startsWith('rol:'));
+    expect(rol).toBeTruthy();
+    expect(rol?.id).toMatch(/^rol:client-1:\d{4}-\d{2}-\d{2}$/);
+    expect(rol?.category).toBe('AR_COLLECTION');
+    expect(rol?.counterpartyId).toBe('client-1');
+    expect(rol?.counterpartyType).toBe('CUSTOMER');
+    // 1000 subtotal × 1.16 IVA = 1160 bruto a banco; trip + 30d crédito → junio.
+    expect(rol?.projectedAmount).toBeCloseTo(1160);
+    expect(rol?.taxBaseAmount).toBeCloseTo(1000);
+    expect(rol?.taxAmount).toBeCloseTo(160);
+    expect(rol!.projectedDate.slice(0, 7)).toBe('2026-06');
+    expect(rol!.projectedDate > '2026-04-22').toBe(true);
+    // Invariante Base: `rol:` ES real short-term — viaje ejecutado, sólo el
+    // cobro está en el futuro. Pasa el filtro de Base aunque su fecha lo
+    // ponga después de today (el corte futuro de buildScenarioForecastRun
+    // exime explícitamente a `rol:`).
+    expect(isRealShortTermApiMovement(rol!)).toBe(true);
+  });
+
+  it('NO proyecta `rol:` para un viaje ya facturado (predicted ⊥ invoiced; sin doble conteo con cxc:)', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [client({ id: 'client-1', creditDays: 30 })],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [
+        cobranzaRecord({ noCliente: '1', noFactura: 'RI-900', importePendientePesos: 1000, fechaFactura: '2026-05-01' }),
+      ],
+      rolRecords: [
+        rolRecord({ claveJDE: '1', factura: 'RI-900', fechaViaje: '2026-05-04', subTotal: 1000, efectuado: true }),
+      ],
+      assumptions,
+      budget: budget({ incomeMay: 0 }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    expect(canonical.movements.some((m) => m.id.startsWith('rol:'))).toBe(false);
+    // El viaje facturado vive como cxc: (cobranza JDE), no duplicado.
+    expect(canonical.movements.some((m) => m.id.startsWith('cxc:'))).toBe(true);
+  });
+
+  it('suprime la proyección genérica `client:` cuando ROL cubre ese cliente/mes de cobro (sin doble conteo ROL↔client)', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      // creditDays 0 + ANY → fecha de cobro ≈ fecha del viaje (mayo).
+      clients: [client({ id: 'client-1', creditDays: 0, paymentDay: { kind: 'ANY' } })],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [],
+      rolRecords: [
+        rolRecord({ claveJDE: '1', fechaViaje: '2026-05-20', subTotal: 2000, iva: 16, viajes: 3, efectuado: true }),
+      ],
+      assumptions,
+      budget: budget({ incomeMay: 0 }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const mayClient1Ar = canonical.movements.filter(
+      (m) => m.category === 'AR_COLLECTION'
+        && m.counterpartyId === 'client-1'
+        && m.projectedDate.slice(0, 7) === '2026-05',
+    );
+    expect(mayClient1Ar.length).toBeGreaterThan(0);
+    expect(mayClient1Ar.every((m) => m.id.startsWith('rol:'))).toBe(true);
+    expect(mayClient1Ar.some((m) => m.id.startsWith('client:'))).toBe(false);
+  });
+
+  it('no proyecta ROL sin cliente en catálogo (sin regla de pago confiable)', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [client({ id: 'client-1', creditDays: 30 })],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [],
+      rolRecords: [
+        rolRecord({ claveJDE: '999999', fechaViaje: '2026-05-04', subTotal: 5000, efectuado: true }),
+      ],
+      assumptions,
+      budget: budget({ incomeMay: 0 }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    expect(canonical.movements.some((m) => m.id.startsWith('rol:'))).toBe(false);
+  });
+});
+
 function client(patch: Partial<Client> = {}): Client {
   const monthlyBilling = Array.from({ length: 12 }, () => 0);
   monthlyBilling[4] = 1000;
@@ -964,6 +1075,33 @@ function cobranzaRecord(patch: Partial<CobranzaRecord>): CobranzaRecord {
     estatus: patch.estatus ?? 'PENDIENTE',
     tipoCambio: patch.tipoCambio ?? 1,
     raw: patch.raw,
+  };
+}
+
+function rolRecord(patch: Partial<RolRecord> = {}): RolRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    empresa: patch.empresa ?? 'SERVICIO INDUSTRIAL',
+    kCliente: patch.kCliente ?? 125,
+    cCliente: patch.cCliente ?? 'CLI',
+    dCliente: patch.dCliente ?? 'Cliente IVA',
+    rfc: patch.rfc ?? 'XAXX010101000',
+    claveJDE: patch.claveJDE ?? '1',
+    facturacionTipo: patch.facturacionTipo ?? 'MENSUAL',
+    iva: patch.iva ?? 16,
+    tipoViaje: patch.tipoViaje ?? 'SENCILL',
+    ruta: patch.ruta ?? 'RUTA TEST',
+    costoRuta: patch.costoRuta ?? 200,
+    viajes: patch.viajes ?? 5,
+    subTotal: patch.subTotal ?? 1000,
+    despachado: patch.despachado ?? true,
+    efectuado: patch.efectuado ?? true,
+    anio: patch.anio ?? 2026,
+    semana: patch.semana ?? 19,
+    fechaViaje: patch.fechaViaje ?? '2026-05-04',
+    factura: patch.factura,
+    uuidFiscal: patch.uuidFiscal,
+    plazaCiti: patch.plazaCiti,
   };
 }
 

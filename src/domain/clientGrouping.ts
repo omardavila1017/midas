@@ -6,6 +6,7 @@ import {
 } from './types';
 import { projectClientMonth, projectYear } from './collectionEngine';
 import type { CobranzaRecord } from '../services/jdeTypes';
+import { todayISO } from '../formatters';
 
 /**
  * Source de la agrupación. Ordenado por autoridad (mayor a menor):
@@ -464,7 +465,7 @@ export function buildClientHierarchy(
   clients: Client[],
   options: BuildClientHierarchyOptions = {},
 ): ClientGroupNode[] {
-  const today = options.today ?? new Date().toISOString().slice(0, 10);
+  const today = options.today ?? todayISO();
   const assumptions = options.assumptions ?? {
     year: Number(today.slice(0, 4)),
     globalCompliance: 1,

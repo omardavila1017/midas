@@ -15,9 +15,9 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
-import { fmtCompact, fmtCurrency } from '../../../formatters';
+import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import { effectiveAmount, effectiveMovementDate } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
   CellOverride,
@@ -31,19 +31,40 @@ import type {
   PurchaseReceiptRecord,
 } from '../../shared-finance/types';
 import { CashFlowChart } from '../components/CashFlowChart';
+import {
+  CobranzaKpiCard,
+  MinimumExpenseKpi,
+  computeRunYtd,
+} from '../components/MergedDashboardKpis';
+import { computeMinimumOperatingExpense } from '../../../domain/minimumOperatingExpense';
 import { MovementDrillDownDrawer } from '../components/MovementDrillDownDrawer';
-import { ScenarioReadOnlyTabs } from '../components/ScenarioReadOnlyTabs';
-import { ComparisonControl } from '../components/ComparisonControl';
+import { ScenarioComparisonBar } from '../components/ScenarioComparisonBar';
 import { DeferredMount } from '../components/DeferredMount';
 import { ChartSkeleton } from '../components/SectionSkeletons';
-import { cachedRun, fingerprintArray } from '../services/projectionCache';
+import { fingerprintArray, primeProjectionRunCache } from '../services/projectionCache';
+import { projectionWindowFor } from '../services/projectionWindow';
+import { signalProjectionFirstPaint } from '../services/projectionBootSignal';
+import { setScenarioRunPlaceholder } from '../../shared-finance/hooks/useScenarioRunWorker';
+import type { BuildScenarioForecastRunArgs } from '../../financial-planning/services/scenarioForecastRun';
+import type {
+  ScenarioForecastRunWorkerRequest,
+  ScenarioForecastRunWorkerResponse,
+} from '../../../workers/scenarioForecastRunWorkerTypes';
+import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunWorker';
 import {
   buildFinancialProjectionSourceData,
   calculateCurrentBankCash,
   calculateInitialCash,
+  rememberFinancialProjectionSourceData,
   tryGetCachedFinancialProjectionSourceData,
   type FinancialProjectionSourceData,
 } from '../services/financialProjectionService';
+import {
+  loadProjectionSourceFromPersistentCache,
+  loadScenarioRunFromPersistentCache,
+  saveProjectionSourceToPersistentCache,
+  saveScenarioRunToPersistentCache,
+} from '../services/financialProjectionPersistentCache';
 import { yieldToMain } from '../services/yieldToMain';
 import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
 import {
@@ -61,16 +82,19 @@ import { loadCustomRows, saveCustomRows } from '../../financial-planning/service
 import { createNewDraft, duplicateDraft } from '../../financial-planning/services/scenarioDuplicate';
 import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
 import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
-import { buildScenarioForecastRun, type ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
+import { type ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
+import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../../financial-planning/services/scenarioBootstrap';
 import {
   createQuickMovementAdjustment,
 } from '../services/projectionPredictionEngine';
 import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
+import { CashDeficitBanner } from '../../shared-finance/components/CashDeficitBanner';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
 import EmptyState from '../../shared-finance/components/EmptyState';
 import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
+import { useScenarioSelection } from '../../shared-finance/components/ScenarioSelectionContext';
 import {
   toneByFloor,
   toneByCount,
@@ -78,7 +102,6 @@ import {
 } from '../../shared-finance/components/tone';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
-import { ProbabilisticRiskStrip } from '../components/ProbabilisticRiskStrip';
 import { useProbabilisticForecast } from '../services/probabilisticForecastService';
 import {
   FORECAST_MODELS,
@@ -97,6 +120,8 @@ interface Props {
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
   cobranzaReconciliation?: RealReconciliationResult;
+  /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
+  rolRecords?: RolRecord[];
   /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
   paidCxpKeys?: Set<string>;
   /** CARGO bancarios matcheados a PagoProveedor — reclasifican como AP_PAYMENT. */
@@ -113,6 +138,14 @@ interface Props {
   onForecastModelChange?: (id: ForecastModelId) => void;
   /** Salida del modelo seleccionado: receipts + estadísticas por proveedor. */
   forecastSummary?: ForecastOutput;
+  /** Visible tab flag. Hidden keep-alive instances should not start new heavy builds. */
+  isActive?: boolean;
+  /**
+   * Costo real de nómina del mes en curso (TRESS). Cuando > 0, el piso
+   * operativo añade una sub-línea de referencia "Real TRESS". Rescatado
+   * del antiguo Dashboard al fusionarse en Proyección.
+   */
+  payrollMonthlyActualJDE?: number;
 }
 
 const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> = [
@@ -140,10 +173,21 @@ const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> =
  *   idle slot. Cache hits short-circuit the gating completely.
  */
 export default function FinancialProjectionDashboard(props: Props) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = useMemo(() => todayISO(), []);
 
+  // NOTE: function props (onNavigateToTax, onForecastModelChange) must NOT
+  // be part of this object — it is posted to a Web Worker and functions are
+  // not structured-cloneable (DataCloneError → worker dies → 38s sync fallback).
   const cacheProbeInput = useMemo(
-    () => ({ ...props, asOfDate: today }),
+    () => {
+      const {
+        onNavigateToTax: _onNavigateToTax,
+        onForecastModelChange: _onForecastModelChange,
+        isActive: _isActive,
+        ...data
+      } = props;
+      return { ...data, asOfDate: today };
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -154,6 +198,7 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.cobranzaRecords,
       props.cobranzaPayments,
       props.cobranzaReconciliation,
+      props.rolRecords,
       props.paidCxpKeys,
       props.cargoEnrichments,
       props.purchaseReceipts,
@@ -186,16 +231,23 @@ export default function FinancialProjectionDashboard(props: Props) {
   // Worker falla. Logs en `[projection.source]` para diagnóstico.
   const sourceWorkerRef = useRef<Worker | null>(null);
   const sourceJobRef = useRef(0);
+  // Debounce source rebuilds. Boot data waves (compras / pagoproveedor /
+  // banks FULL fetches) change cacheProbeInput seconds apart; without this
+  // the 227k-movement canonical rebuilt 3× back-to-back and posted three
+  // 227k results to the main thread in ~14s → renderer OOM exactly when the
+  // user switched to daily. In-memory + persistent caches stay immediate
+  // (fast path); only the expensive worker build waits for inputs to settle.
+  // Each cacheProbeInput change cancels the pending build via effect cleanup.
   useEffect(() => {
+    if (props.isActive === false && !cachedSource) return;
     if (cachedSource) {
       setSource(cachedSource);
       return;
     }
     let cancelled = false;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
     const jobId = ++sourceJobRef.current;
     const tStart = performance.now();
-    // eslint-disable-next-line no-console
-    console.info(`[projection.source] requesting jobId=${jobId} cxp=${cacheProbeInput.cxpRecords.length} cobranza=${cacheProbeInput.cobranzaRecords?.length ?? 0}`);
 
     const runSyncFallback = async () => {
       await yieldToMain();
@@ -203,7 +255,10 @@ export default function FinancialProjectionDashboard(props: Props) {
       const t0 = performance.now();
       try {
         const built = buildFinancialProjectionSourceData(cacheProbeInput);
-        if (!cancelled && sourceJobRef.current === jobId) setSource(built);
+        if (!cancelled && sourceJobRef.current === jobId) {
+          saveProjectionSourceToPersistentCache(cacheProbeInput, built);
+          setSource(built);
+        }
       } catch {
         /* swallow — empty-state shows */
       }
@@ -211,44 +266,96 @@ export default function FinancialProjectionDashboard(props: Props) {
       console.info(`[projection.source] sync fallback ${(performance.now() - t0).toFixed(0)}ms`);
     };
 
-    if (typeof Worker === 'undefined') {
-      void runSyncFallback();
-      return () => { cancelled = true; };
-    }
+    const startWorker = () => {
+      // eslint-disable-next-line no-console
+      console.info(`[projection.source] requesting jobId=${jobId} cxp=${cacheProbeInput.cxpRecords.length} cobranza=${cacheProbeInput.cobranzaRecords?.length ?? 0} rol=${cacheProbeInput.rolRecords?.length ?? 0}`);
 
-    try {
-      if (!sourceWorkerRef.current) {
-        sourceWorkerRef.current = new Worker(
-          new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
-          { type: 'module' },
-        );
-      }
-      const worker = sourceWorkerRef.current;
-      worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
-        if (cancelled || event.data.jobId !== sourceJobRef.current) return;
-        const totalElapsed = performance.now() - tStart;
-        if (event.data.result) {
-          // eslint-disable-next-line no-console
-          console.info(`[projection.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms`);
-          setSource(event.data.result);
-        } else if (event.data.error) {
-          console.warn(`[projection.source] worker error, fallback`, event.data.error);
-          void runSyncFallback();
-        }
-      };
-      worker.onerror = (event) => {
-        if (cancelled) return;
-        console.warn('[projection.source] worker exception, fallback', event.message);
+      if (typeof Worker === 'undefined') {
         void runSyncFallback();
-      };
-      worker.postMessage({ jobId, input: cacheProbeInput });
-    } catch (err) {
-      console.warn('[projection.source] worker spawn failed, fallback', err);
-      void runSyncFallback();
-    }
+        return;
+      }
 
-    return () => { cancelled = true; };
-  }, [cachedSource, cacheProbeInput]);
+      try {
+        if (!sourceWorkerRef.current) {
+          sourceWorkerRef.current = new Worker(
+            new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
+            { type: 'module' },
+          );
+        }
+        const worker = sourceWorkerRef.current;
+        worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
+          if (cancelled || event.data.jobId !== sourceJobRef.current) return;
+          const totalElapsed = performance.now() - tStart;
+          if (event.data.result) {
+            // eslint-disable-next-line no-console
+            console.info(`[projection.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms`);
+            rememberFinancialProjectionSourceData(cacheProbeInput, event.data.result);
+            saveProjectionSourceToPersistentCache(cacheProbeInput, event.data.result);
+            setSource(event.data.result);
+          } else if (event.data.error) {
+            console.warn(`[projection.source] worker error, fallback`, event.data.error);
+            void runSyncFallback();
+          }
+        };
+        worker.onerror = (event) => {
+          if (cancelled) return;
+          console.warn('[projection.source] worker exception, fallback', event.message);
+          void runSyncFallback();
+        };
+        worker.postMessage({ jobId, input: cacheProbeInput });
+      } catch (err) {
+        console.warn('[projection.source] worker spawn failed, fallback', err);
+        void runSyncFallback();
+      }
+    };
+
+    void (async () => {
+      const persisted = await loadProjectionSourceFromPersistentCache(cacheProbeInput);
+      if (cancelled || sourceJobRef.current !== jobId) return;
+      if (persisted) {
+        // eslint-disable-next-line no-console
+        console.info(`[projection.source] persistent cache hit jobId=${jobId}`);
+        rememberFinancialProjectionSourceData(cacheProbeInput, persisted);
+        setSource(persisted);
+        return;
+      }
+      // Settle inputs before paying the ~20s / 227k-movement build. Boot data
+      // waves (compras / pagoproveedor / banks / nomina FULL fetches) land
+      // SECONDS apart — cada cambio de cacheProbeInput cancela el timer
+      // pendiente y arranca otro (debounce trailing), así que sólo dispara
+      // cuando los inputs llevan QUIETOS la ventana completa.
+      //
+      // 12s (subido de 6s): en cold boot real las olas de JDE/nómina abarcan
+      // >60s con huecos individuales que excedían 6s → el timer disparaba a
+      // media settle y el source se reconstruía 5-6× (jobId 2→6), cada uno un
+      // objeto de cientos de MB; con la data cruda residente el pico cruzaba
+      // 4GB → OOM ("Aw Snap"). 12s cubre el hueco inter-ola típico y coalesce
+      // el burst en ~1 build → pico acotado (con SOURCE_CACHE=2) → no OOM, y
+      // habilita gatear el splash sin reventar (req 6). Los caminos rápidos
+      // (cachedSource L233, persistent-hit L303) NO pasan por aquí, así que
+      // warm boot sigue instantáneo; el retraso sólo afecta el cold MISS,
+      // que es justo donde queremos coalescer. jsdom/no-Worker inmediato.
+      if (typeof Worker === 'undefined') {
+        startWorker();
+      } else {
+        debounce = setTimeout(() => {
+          if (!cancelled) startWorker();
+        }, 12000);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (debounce) clearTimeout(debounce);
+      // A source build can take 20-70s with real data. If inputs change while
+      // it is running (boot waves, module switches, cache hit after miss), the
+      // result is obsolete but the worker would keep CPU busy until completion.
+      // Terminate it here; the next effect creates a fresh worker only if it
+      // still needs to build.
+      sourceWorkerRef.current?.terminate();
+      sourceWorkerRef.current = null;
+    };
+  }, [cachedSource, cacheProbeInput, props.isActive]);
 
   useEffect(() => {
     return () => {
@@ -257,11 +364,242 @@ export default function FinancialProjectionDashboard(props: Props) {
     };
   }, []);
 
-  if (!source) {
+  const [scenarioRunCacheReady, setScenarioRunCacheReady] = useState(false);
+  // Track which `source` identity we already preloaded. Boot data waves
+  // (cxp/cobranza/compras/payroll hidratan en secuencia ~60s) rebuilden
+  // `projectionProps` con identity nueva → este effect re-disparaba con
+  // `props` cambiado, blanqueaba `scenarioRunCacheReady` y desmontaba
+  // ProjectionDashboardInner. El remount perdía workerRef / lastResultByScenario
+  // y respawneaba workers que volvían a postear ~100MB heavy → renderer OOM
+  // (~1s después de entrar a Proyección, antes que termine la primera ola).
+  // Solo re-preload cuando `source` cambia de identidad; cambios de props
+  // los maneja Inner sin desmontar.
+  const preloadedSourceRef = useRef<FinancialProjectionSourceData | null>(null);
+  useEffect(() => {
+    if (!source) {
+      setScenarioRunCacheReady(false);
+      preloadedSourceRef.current = null;
+      return;
+    }
+    if (preloadedSourceRef.current === source) return;
+    let cancelled = false;
+    void (async () => {
+      await preloadProjectionScenarioRuns({
+        source,
+        props,
+        today,
+      });
+      if (!cancelled) {
+        preloadedSourceRef.current = source;
+        setScenarioRunCacheReady(true);
+      }
+    })();
+    return () => { cancelled = true; };
+    // props/today changes are handled by Inner without remounting; gating
+    // remount on `source` alone is intentional.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source]);
+
+  // req 6: primer paint real (source resuelto + cache de runs lista) → avisa
+  // a App para soltar el splash. Idempotente (señal latched).
+  useEffect(() => {
+    if (source && scenarioRunCacheReady) signalProjectionFirstPaint();
+  }, [source, scenarioRunCacheReady]);
+
+  if (!source || !scenarioRunCacheReady) {
     return <ProjectionWarmupShell />;
   }
 
   return <ProjectionDashboardInner {...props} today={today} source={source} />;
+}
+
+// Coalesce concurrent warmup calls. Boot waves (cxp/cobranza/compras/payroll
+// hidratan incrementalmente) re-disparan el effect con `props` ref nuevo,
+// pero el warmup en vuelo ya cubre la misma `source`. Sin esta guard cada
+// wave spawneaba un `new Worker(...)` adicional → 3-5 worker scripts en cola
+// de Vite dev → todos quedan pending → spinner infinito + OOM (Aw Snap 5).
+let warmupInflight: Promise<void> | null = null;
+let warmupInflightSource: FinancialProjectionSourceData | null = null;
+
+async function preloadProjectionScenarioRuns(input: {
+  source: FinancialProjectionSourceData;
+  props: Props;
+  today: string;
+}): Promise<void> {
+  // Misma `source` ya en vuelo → reusar promesa (no spawnear otro worker).
+  if (warmupInflight && warmupInflightSource === input.source) {
+    return warmupInflight;
+  }
+  // Diferente source pero hay uno en vuelo → esperar a que termine antes
+  // de spawnear el nuevo, para no apilar workers en la cola de Vite.
+  const prior = warmupInflight;
+  warmupInflightSource = input.source;
+  const promise = (async () => {
+    if (prior) {
+      try { await prior; } catch { /* prior failure shouldn't block us */ }
+    }
+    await runPreloadProjectionScenarioRuns(input);
+  })();
+  warmupInflight = promise;
+  try {
+    await promise;
+  } finally {
+    if (warmupInflight === promise) {
+      warmupInflight = null;
+      warmupInflightSource = null;
+    }
+  }
+}
+
+async function runPreloadProjectionScenarioRuns(input: {
+  source: FinancialProjectionSourceData;
+  props: Props;
+  today: string;
+}): Promise<void> {
+  const { source, props, today } = input;
+  const sourceBaseScenario = source.scenarios.find((scenario) => scenario.kind === 'BASE') ?? source.scenarios[0];
+  const bootstrap = ensureCoreScenarios({
+    storedScenarios: loadPlanningScenarios([]),
+    storedAdjustments: loadPlanningAdjustments([]),
+    manualEntries: loadManualPlanningEntries([]),
+    customRows: loadCustomRows([]),
+    cellOverrides: loadCellOverrides([]),
+    changeLog: loadChangeLog([]),
+    sourceBaseScenario,
+    user: 'tesoreria@senda.local',
+  });
+  if (bootstrap.changed) {
+    savePlanningScenarios(bootstrap.scenarios);
+    savePlanningAdjustments(bootstrap.adjustments);
+    saveManualPlanningEntries(bootstrap.manualEntries);
+    saveCustomRows(bootstrap.customRows);
+    saveCellOverrides(bootstrap.cellOverrides);
+    saveChangeLog(bootstrap.changeLog);
+  }
+  const baseScenario = bootstrap.scenarios.find((scenario) => scenario.id === BASE_SCENARIO_ID && scenario.kind === 'BASE') ?? sourceBaseScenario;
+  const approvedScenario = bootstrap.scenarios.find((scenario) => scenario.id === APPROVED_SCENARIO_ID && scenario.kind === 'APPROVED' && !scenario.archivedAt)
+    ?? bootstrap.scenarios.find((scenario) => scenario.kind === 'APPROVED' && !scenario.archivedAt)
+    ?? baseScenario;
+  // Ventana = año natural en curso (1-ene → hoy+12m). El tramo histórico
+  // (1-ene → hoy) hace que Proyección muestre los meses previos igual que
+  // el antiguo Dashboard; el forward de 364 días se conserva.
+  const yearStart = `${today.slice(0, 4)}-01-01`;
+  const yearEnd = addUtcDays(today, 364);
+  const taxStore = loadTaxStore(defaultTaxStore());
+  const initialCash = calculateInitialCash(props.bankStatements, props.startingBalance, { companyCode: props.companyCode });
+  const supplierInitialCash = calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash);
+  const minimumCash = minimumCashFor();
+  const sharedInputsKey = [
+    fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount)),
+    fingerprintArray(bootstrap.adjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt),
+    fingerprintArray(bootstrap.manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? '')),
+    [
+      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
+      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
+      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
+      taxStore.overdueBalance,
+    ].join(':'),
+    fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? '')),
+    yearStart,
+    yearEnd,
+    today,
+    initialCash,
+    supplierInitialCash,
+    minimumCash,
+  ].join('|');
+
+  let seededPlaceholder = false;
+  await Promise.all([baseScenario, approvedScenario].map(async (scenario) => {
+    const scenarioCustomRows = bootstrap.customRows.filter((row) => row.scenarioId === scenario.id);
+    const scenarioOverrides = bootstrap.cellOverrides.filter((override) => override.scenarioId === scenario.id);
+    const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
+    const overrideKey = fingerprintArray(scenarioOverrides, (override) => override.conceptKey + '@' + override.bucketKey + ':' + override.value);
+    const cacheKey = [sharedInputsKey, scenario.id, 'monthly', customKey, overrideKey].join('||');
+    const cached = await loadScenarioRunFromPersistentCache(cacheKey);
+    if (cached) {
+      primeProjectionRunCache(cacheKey, cached);
+      // Persisted run = a valid ScenarioForecastRun shape → use it as the
+      // universal placeholder so the first Inner render never has to run the
+      // ~225k pipeline synchronously on the main thread (the "no abrió" freeze).
+      setScenarioRunPlaceholder(cached);
+      seededPlaceholder = true;
+    }
+  }));
+
+  // Cold path (no persisted run for the current inputs — e.g. the compras
+  // window changed the cache key). Build the *light* BASE run in the scenario
+  // worker (off the main thread) and seed the placeholder, so the shell stays
+  // up for the few worker seconds instead of the tab freezing/OOM-ing.
+  if (!seededPlaceholder && typeof Worker !== 'undefined') {
+    try {
+      const baseArgs: BuildScenarioForecastRunArgs = {
+        scenarioId: baseScenario.id,
+        scenarioName: baseScenario.name ?? baseScenario.id,
+        scenarioKind: 'BASE',
+        sourceMovements: source.movements,
+        adjustments: [],
+        manualEntries: [],
+        customRows: [],
+        overrides: [],
+        clients: props.clients,
+        providers: props.providers,
+        assumptions: props.assumptions,
+        cxpRecords: props.cxpRecords,
+        purchaseReceipts: props.purchaseReceipts,
+        payrollCosts: props.payrollCosts,
+        cobranzaPayments: props.cobranzaPayments,
+        budget: props.budget,
+        companyCode: props.companyCode,
+        taxStore,
+        startDate: yearStart,
+        endDate: yearEnd,
+        today,
+        initialCash,
+        supplierInitialCash,
+        minimumCash,
+        granularity: 'monthly',
+        includeManualEntries: false,
+      };
+      const heavyKeys = [
+        'sourceMovements', 'clients', 'providers', 'cxpRecords',
+        'purchaseReceipts', 'payrollCosts', 'cobranzaPayments', 'bajioStatements',
+      ] as const;
+      const heavy: Record<string, unknown> = {};
+      const light: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(baseArgs)) {
+        if ((heavyKeys as readonly string[]).includes(k)) heavy[k] = v;
+        else light[k] = v;
+      }
+      const worker = new Worker(
+        new URL('../../../workers/scenarioForecastRun.worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+      await new Promise<void>((resolve) => {
+        const done = (() => {
+          let settled = false;
+          return () => { if (settled) return; settled = true; worker.terminate(); resolve(); };
+        })();
+        const timeout = setTimeout(done, 20_000);
+        worker.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerResponse>) => {
+          clearTimeout(timeout);
+          if (event.data.result) setScenarioRunPlaceholder(event.data.result);
+          done();
+        };
+        worker.onerror = () => { clearTimeout(timeout); done(); };
+        const req: ScenarioForecastRunWorkerRequest = {
+          jobId: 1,
+          cacheKey: 'warmup:base',
+          scenarioId: baseScenario.id,
+          sourceVersion: 0,
+          heavy: heavy as ScenarioForecastRunWorkerRequest['heavy'],
+          light: light as ScenarioForecastRunWorkerRequest['light'],
+        };
+        worker.postMessage(req);
+      });
+    } catch {
+      /* best-effort: if the warm build fails, runCached falls back as before */
+    }
+  }
 }
 
 /**
@@ -289,12 +627,18 @@ function ProjectionWarmupShell() {
 function ProjectionDashboardInner(props: Props & { today: string; source: FinancialProjectionSourceData }) {
   const { today, source } = props;
   const goTo = useNavigateToTab();
-  const yearStart = today;
-  const yearEnd = useMemo(() => addUtcDays(today, 364), [today]);
+  // Off-main-thread scenario pipeline (see useScenarioRunWorker). Cache hit =
+  // sync (unchanged); miss = worker + stale-while-recompute, no main-thread freeze.
+  const { runCached, runVersion } = useScenarioRunWorker();
+  // Projection window is granularity-aware — defined just below, after
+  // `deferredGranularity`. Monthly keeps the natural-year span (merged
+  // Dashboard history + 12mo forward); weekly/daily are bounded to a near
+  // window so the month→week→day flip can't blow up to ~365-730 buckets ×
+  // scenarios and OOM the renderer (Chrome "Aw Snap" code 5).
 
   const [storedScenarios, setStoredScenarios] = useState<FinancialScenario[]>(() => loadPlanningScenarios([]));
   const [storedAdjustments, setStoredAdjustments] = useState<FinancialAdjustment[]>(() => loadPlanningAdjustments([]));
-  const [manualEntries] = useState<ManualPlanningEntry[]>(() => loadManualPlanningEntries([]));
+  const [manualEntries, setManualEntries] = useState<ManualPlanningEntry[]>(() => loadManualPlanningEntries([]));
   const [cellOverrides, setCellOverrides] = useState<CellOverride[]>(() => loadCellOverrides([]));
   const [customRows, setCustomRows] = useState<PlanningCustomRow[]>(() => loadCustomRows([]));
   const [changeLog, setChangeLog] = useState(() => loadChangeLog([]));
@@ -350,20 +694,50 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   }, []);
 
   const sourceBaseScenario = source.scenarios.find((scenario) => scenario.kind === 'BASE') ?? source.scenarios[0];
-  const baseScenario = storedScenarios.find((scenario) => scenario.kind === 'BASE' && !scenario.archivedAt) ?? sourceBaseScenario;
-  const approvedScenario = storedScenarios.find((scenario) => scenario.kind === 'APPROVED' && !scenario.archivedAt)
-    ?? source.scenarios.find((scenario) => scenario.kind === 'APPROVED')
+  const bootstrap = useMemo(
+    () => ensureCoreScenarios({
+      storedScenarios,
+      storedAdjustments,
+      manualEntries,
+      customRows,
+      cellOverrides,
+      changeLog,
+      sourceBaseScenario,
+      user: 'tesoreria@senda.local',
+    }),
+    [storedScenarios, storedAdjustments, manualEntries, customRows, cellOverrides, changeLog, sourceBaseScenario],
+  );
+
+  useEffect(() => {
+    if (!bootstrap.changed) return;
+    setStoredScenarios(bootstrap.scenarios);
+    setStoredAdjustments(bootstrap.adjustments);
+    setManualEntries(bootstrap.manualEntries);
+    setCustomRows(bootstrap.customRows);
+    setCellOverrides(bootstrap.cellOverrides);
+    setChangeLog(bootstrap.changeLog);
+  }, [bootstrap]);
+
+  const baseScenario = bootstrap.scenarios.find((scenario) => scenario.id === BASE_SCENARIO_ID && scenario.kind === 'BASE')
+    ?? sourceBaseScenario;
+  const approvedScenario = bootstrap.scenarios.find((scenario) => scenario.id === APPROVED_SCENARIO_ID && scenario.kind === 'APPROVED' && !scenario.archivedAt)
+    ?? bootstrap.scenarios.find((scenario) => scenario.kind === 'APPROVED' && !scenario.archivedAt)
     ?? baseScenario;
   const drafts = useMemo(
-    () => storedScenarios.filter((scenario) => scenario.kind === 'DRAFT' && !scenario.archivedAt),
-    [storedScenarios],
+    () => bootstrap.scenarios.filter((scenario) => scenario.kind === 'DRAFT' && !scenario.archivedAt),
+    [bootstrap.scenarios],
   );
   const scenarios = useMemo(
     () => [baseScenario, approvedScenario, ...drafts],
     [baseScenario, approvedScenario, drafts],
   );
 
-  const [activeScenarioId, setActiveScenarioId] = useState<string>(approvedScenario.id);
+  // Active scenario comes from the global header selector (provider mounted
+  // in the app shell). Standalone falls back to local state.
+  const scenarioCtx = useScenarioSelection();
+  const [localScenarioId, setLocalScenarioId] = useState<string>(approvedScenario.id);
+  const activeScenarioId = scenarioCtx?.activeScenarioId ?? localScenarioId;
+  const setActiveScenarioId = scenarioCtx?.setActiveScenarioId ?? setLocalScenarioId;
   const [comparisonScenarioId, setComparisonScenarioId] = useState<string | null>(null);
   const [granularity, setGranularityState] = useState<ProjectionGranularity>('monthly');
   const [drillMovement, setDrillMovement] = useState<FinancialMovement | null>(null);
@@ -382,11 +756,30 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     startGranularityTransition(() => setGranularityState(next));
   }, [granularity]);
 
+  // Granularity-aware window (mirrors FinancialPlanningDashboard). Monthly =
+  // natural year (Jan 1 → today+364, ~24 monthly buckets — the default
+  // landing view, unchanged). Weekly/daily over that full span = up to
+  // ~365-730 buckets × scenarios × full pipeline → renderer OOM on the
+  // month→week→day flip. Bound the sub-month views to a near window: still
+  // useful, computes/renders safely. Uses deferredGranularity so the window
+  // tracks the same value the scenario runs key on (cache-key consistency).
+  const { yearStart, yearEnd } = useMemo(
+    () => projectionWindowFor(today, deferredGranularity),
+    [today, deferredGranularity],
+  );
+
   useEffect(() => {
     if (!scenarios.some((s) => s.id === activeScenarioId)) {
       setActiveScenarioId(approvedScenario.id);
     }
-  }, [scenarios, activeScenarioId, approvedScenario.id]);
+  }, [scenarios, activeScenarioId, approvedScenario.id, setActiveScenarioId]);
+
+  // Keep the global header selector list in sync (drafts created in
+  // Planeación show up here too).
+  const registerScenarios = scenarioCtx?.registerScenarios;
+  useEffect(() => {
+    registerScenarios?.(scenarios);
+  }, [registerScenarios, scenarios]);
 
   useEffect(() => {
     if (comparisonScenarioId === activeScenarioId) setComparisonScenarioId(null);
@@ -496,39 +889,49 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
         overrideKey,
       ].join('||');
 
-      return cachedRun<ScenarioRun>(cacheKey, () => buildScenarioForecastRun({
+      const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)
+        ? (key: string, run: ScenarioRun) => saveScenarioRunToPersistentCache(key, run)
+        : undefined;
+      return runCached<ScenarioRun>(
+        cacheKey,
         scenarioId,
-        scenarioName,
-        scenarioKind: scenario?.kind ?? 'DRAFT',
-        sourceMovements: source.movements,
-        adjustments: storedAdjustments,
-        manualEntries,
-        customRows: scenarioCustomRows,
-        overrides: scenarioOverrides,
-        clients: props.clients,
-        providers: props.providers,
-        assumptions: props.assumptions,
-        cxpRecords: props.cxpRecords,
-        purchaseReceipts: props.purchaseReceipts,
-        payrollCosts: props.payrollCosts,
-        cobranzaPayments: props.cobranzaPayments,
-        budget: props.budget,
-        companyCode: props.companyCode,
-        taxStore,
-        startDate: yearStart,
-        endDate: yearEnd,
-        today,
-        initialCash,
-        supplierInitialCash,
-        minimumCash,
-        granularity: gran,
-      }));
+        () => ({
+          scenarioId,
+          scenarioName,
+          scenarioKind: scenario?.kind ?? 'DRAFT',
+          sourceMovements: source.movements,
+          adjustments: storedAdjustments,
+          manualEntries,
+          customRows: scenarioCustomRows,
+          overrides: scenarioOverrides,
+          clients: props.clients,
+          providers: props.providers,
+          assumptions: props.assumptions,
+          cxpRecords: props.cxpRecords,
+          purchaseReceipts: props.purchaseReceipts,
+          payrollCosts: props.payrollCosts,
+          cobranzaPayments: props.cobranzaPayments,
+          budget: props.budget,
+          companyCode: props.companyCode,
+          taxStore,
+          startDate: yearStart,
+          endDate: yearEnd,
+          today,
+          initialCash,
+          supplierInitialCash,
+          minimumCash,
+          granularity: gran,
+        }),
+        persistRun,
+      );
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     sharedInputsKey,
     scenarioNameById,
     scenarios,
+    baseScenario.id,
+    approvedScenario.id,
     customRowsByScenario,
     cellOverridesByScenario,
     source.movements,
@@ -542,6 +945,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     initialCash,
     supplierInitialCash,
     minimumCash,
+    runVersion,
   ]);
 
   // Eager runs — only the ones the visible UI actually needs to paint:
@@ -557,6 +961,10 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     () => (activeScenarioId === baseScenario.id ? baseRun : buildRun(activeScenarioId, deferredGranularity)),
     [buildRun, activeScenarioId, baseScenario.id, baseRun, deferredGranularity],
   );
+  // runCached may serve a cross-scenario placeholder (warmup-seeded Base run)
+  // while the real scenario compute is in-flight. Detect it so we render a
+  // loading state instead of showing Base data labeled as Approved/Draft.
+  const activeRunIsPlaceholder = activeRun.scenarioId !== activeScenarioId;
   const comparisonRun = useMemo(() => {
     if (!comparisonScenarioId) return null;
     if (comparisonScenarioId === baseScenario.id) return baseRun;
@@ -564,46 +972,14 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     return buildRun(comparisonScenarioId, deferredGranularity);
   }, [buildRun, comparisonScenarioId, baseScenario.id, baseRun, activeScenarioId, activeRun, deferredGranularity]);
 
-  // Pre-warm the *other* two granularities for the active scenario in idle
-  // time. We hold off until the page has been visible long enough that
-  // initial compute + first interaction has settled — otherwise the
-  // pre-warm tasks fight the heavy first paint and cause exactly the kind
-  // of mid-load freeze that traps tab-switch clicks. 2.5 s + yields gives
-  // the user a real window to navigate away cheaply.
-  useEffect(() => {
-    const others: ProjectionGranularity[] = ['monthly', 'weekly', 'daily']
-      .filter((g): g is ProjectionGranularity => g !== deferredGranularity);
-    let cancelled = false;
-    const ric = (window as unknown as {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    });
-    const handles: Array<number | ReturnType<typeof setTimeout>> = [];
-    const scheduleRun = (gran: ProjectionGranularity, delay: number) => {
-      const fire = async () => {
-        if (cancelled) return;
-        await yieldToMain();
-        if (cancelled) return;
-        try { buildRun(activeScenarioId, gran); } catch { /* best-effort */ }
-      };
-      if (typeof ric.requestIdleCallback === 'function') {
-        handles.push(ric.requestIdleCallback(fire, { timeout: delay + 2000 }));
-      } else {
-        handles.push(setTimeout(fire, delay));
-      }
-    };
-    others.forEach((gran, i) => scheduleRun(gran, 2500 + i * 1500));
-    return () => {
-      cancelled = true;
-      handles.forEach((h) => {
-        if (typeof h === 'number' && typeof ric.cancelIdleCallback === 'function') {
-          ric.cancelIdleCallback(h);
-        } else if (typeof h !== 'number') {
-          clearTimeout(h);
-        }
-      });
-    };
-  }, [buildRun, activeScenarioId, deferredGranularity]);
+  // Granularity pre-warm REMOVED (was the crash users hit ~2.5s after
+  // Proyección mounts). It called buildRun(activeScenarioId, 'daily'|'weekly')
+  // while the projection window stays the MONTHLY one (Jan 1 → today+364), so
+  // it computed a *daily* projection over a ~365-730 day span → renderer OOM
+  // ("Aw Snap code 5"). The on-demand granularity switch is already
+  // non-freezing (worker offload + F1.8 gran-bounded window). Do NOT
+  // reintroduce a pre-warm unless it passes a gran-bounded window into
+  // buildRun — speculatively warming daily over the year is the bomb.
 
   // KPIs.
   const summary = activeRun.summary;
@@ -612,21 +988,17 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const comparisonLabel = comparisonRun ? comparisonRun.name : baseRun.name;
   const probabilistic = useProbabilisticForecast(activeRun, summary.minimumCashRequired);
 
-  // Tab strip needs final-cash deltas for *every* draft. We resolve those
-  // lazily through the same cache so unselected drafts only build when the
-  // tab strip actually paints them, and each lookup is O(1) afterwards.
-  const finalCashFor = useMemo(
-    () => (scenarioId: string): number => {
-      if (scenarioId === baseScenario.id) return baseRun.summary.finalCash;
-      if (scenarioId === activeScenarioId) return activeRun.summary.finalCash;
-      if (comparisonRun && scenarioId === comparisonRun.scenarioId) return comparisonRun.summary.finalCash;
-      try {
-        return buildRun(scenarioId, deferredGranularity).summary.finalCash;
-      } catch {
-        return 0;
-      }
-    },
-    [buildRun, baseScenario.id, baseRun, activeScenarioId, activeRun, comparisonRun, deferredGranularity],
+  // Rescatado del Dashboard: piso operativo + YTD del año en curso. El YTD
+  // sale del MISMO scenario-run que el chart → reconcilia exacto.
+  const currentYm = useMemo(() => today.slice(0, 7), [today]);
+  const currentYear = useMemo(() => Number(today.slice(0, 4)), [today]);
+  const minimumExpense = useMemo(
+    () => computeMinimumOperatingExpense(props.providers, null, props.payrollMonthlyActualJDE),
+    [props.providers, props.payrollMonthlyActualJDE],
+  );
+  const ytd = useMemo(
+    () => computeRunYtd(activeRun, currentYm, currentYear),
+    [activeRun, currentYm, currentYear],
   );
 
   const handleCloseDrawer = useMemo(
@@ -752,12 +1124,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
               onChange={setGranularity}
               pending={granularityPending}
             />
-            <ComparisonControl
-              scenarios={scenarios}
-              activeScenarioId={activeScenarioId}
-              comparisonScenarioId={comparisonScenarioId}
-              onChange={setComparisonScenarioId}
-            />
             <button
               type="button"
               onClick={() => handleCreateDraft()}
@@ -784,15 +1150,96 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         </div>
       )}
 
-      <ScenarioReadOnlyTabs
+      <ScenarioComparisonBar
         scenarios={scenarios}
         activeScenarioId={activeScenarioId}
-        approvedFinalCash={baseRun.summary.finalCash}
-        finalCashFor={finalCashFor}
-        onSelect={setActiveScenarioId}
+        activeName={scenarios.find((s) => s.id === activeScenarioId)?.name ?? activeRun.name}
+        activeFinalCash={activeRunIsPlaceholder ? 0 : summary.finalCash}
+        comparisonScenarioId={comparisonScenarioId}
+        comparisonName={comparisonRun?.name ?? null}
+        comparisonFinalCash={comparisonRun?.summary.finalCash ?? null}
+        baseName={baseRun.name}
+        baseFinalCash={baseRun.summary.finalCash}
+        onChangeComparison={setComparisonScenarioId}
       />
 
-<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {activeRunIsPlaceholder && (
+        <div className="rounded-xl border border-[var(--gray-200)] bg-white px-4 py-8 text-center text-[13px] text-[var(--gray-600)]">
+          <div className="inline-flex items-center gap-2">
+            <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-[var(--accent-blue)]" />
+            Cargando proyección de "{scenarios.find((s) => s.id === activeScenarioId)?.name ?? activeScenarioId}"…
+          </div>
+        </div>
+      )}
+
+{!activeRunIsPlaceholder && <>
+      <CashDeficitBanner
+        run={activeRun}
+        scenarioName={scenarios.find((s) => s.id === activeScenarioId)?.name ?? activeRun.name}
+        onClickDetail={() => goTo({ tab: 'financialPlanning', focus: 'deficit' })}
+      />
+
+      {/* Daily-scan KPIs rescatados del Dashboard: YTD del año en curso +
+          piso operativo. Mismo scenario-run que el chart. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiCard
+          label={`Ingresos YTD ${currentYear}`}
+          value={fmtCurrency(ytd.ingresosYtd)}
+          icon={<TrendingUp className="w-4 h-4" strokeWidth={1.5} />}
+          color="var(--tone-success, var(--success))"
+          sublabel={ytd.monthsElapsed > 0 ? `${fmtCompact(ytd.ingresosAvgMonth)} / mes promedio` : undefined}
+          breakdown={ytd.monthsElapsed > 0 ? [
+            { label: 'Meses transcurridos', value: String(ytd.monthsElapsed) },
+            { label: 'Margen neto', value: `${(ytd.margenYtd * 100).toFixed(1)}%`, valueColor: toneByDelta(ytd.margenYtd) },
+          ] : undefined}
+          onClick={() => goTo({ tab: 'collections', focus: 'ingresos-ytd' })}
+          navHint="Ver detalle de cobranza"
+        />
+        <KpiCard
+          label={`Egresos YTD ${currentYear}`}
+          value={fmtCurrency(ytd.egresosYtd)}
+          icon={<TrendingDown className="w-4 h-4" strokeWidth={1.5} />}
+          color="var(--tone-danger, var(--danger))"
+          sublabel={ytd.monthsElapsed > 0 ? `${fmtCompact(ytd.egresosAvgMonth)} / mes promedio` : undefined}
+          breakdown={ytd.monthsElapsed > 0 ? [
+            { label: 'Vs Ingresos', value: `${ytd.ingresosYtd > 0 ? ((ytd.egresosYtd / ytd.ingresosYtd) * 100).toFixed(1) : '—'}%` },
+            { label: 'Flujo neto YTD', value: fmtCompact(ytd.flujoNetoYtd), valueColor: toneByDelta(ytd.flujoNetoYtd) },
+          ] : undefined}
+          onClick={() => goTo({ tab: 'cxp', focus: 'egresos-ytd' })}
+          navHint="Ver Antigüedad de Saldo"
+        />
+        <KpiCard
+          label="Caja actual"
+          value={fmtCurrency(ytd.cajaActual)}
+          icon={<Wallet className="w-4 h-4" strokeWidth={1.5} />}
+          color={toneByFloor(ytd.cajaActual, minimumExpense.totalMonthly)}
+          sublabel={ytd.cajaInicial !== 0
+            ? `${ytd.cajaDelta >= 0 ? '+' : ''}${fmtCompact(ytd.cajaDelta)} vs inicial (${(ytd.cajaDeltaPct * 100).toFixed(1)}%)`
+            : undefined}
+          breakdown={[
+            { label: 'Caja inicial año', value: fmtCompact(ytd.cajaInicial) },
+            {
+              label: 'Runway aprox.',
+              value: minimumExpense.totalMonthly > 0
+                ? `${(ytd.cajaActual / minimumExpense.totalMonthly).toFixed(1)} meses`
+                : '—',
+              valueColor: toneByFloor(ytd.cajaActual / Math.max(1, minimumExpense.totalMonthly), 3),
+            },
+          ]}
+          onClick={() => goTo({ tab: 'financialPlanning', focus: 'caja-actual' })}
+          navHint="Abrir Planeación"
+        />
+        <MinimumExpenseKpi
+          monthly={minimumExpense.totalMonthly}
+          annual={minimumExpense.totalAnnual}
+          providersMonthly={minimumExpense.providersMonthly}
+          payrollMonthly={minimumExpense.payrollMonthly}
+          criticalCount={minimumExpense.criticalCount}
+        />
+      </div>
+
+      {/* KPIs forward propios de Proyección. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <KpiCard
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
@@ -820,11 +1267,10 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         />
       </div>
 
-      <ProbabilisticRiskStrip
-        run={probabilistic.run}
-        loading={probabilistic.loading}
-        error={probabilistic.error}
-      />
+      {/* Cobranza ↔ bancos: solo cuando hay datos JDE + abonos cargados. */}
+      {props.cobranzaReconciliation && props.cobranzaReconciliation.summary.totalAbonos > 0 && (
+        <CobranzaKpiCard reconciliation={props.cobranzaReconciliation} />
+      )}
 
       <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
         <CashFlowChart
@@ -833,8 +1279,10 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           comparisonProjection={comparisonRun ?? undefined}
           probabilisticProjection={probabilistic.run}
           onNavigateToTax={props.onNavigateToTax}
+          operatingFloor={deferredGranularity === 'monthly' ? minimumExpense.totalMonthly : undefined}
         />
       </DeferredMount>
+      </>}
 
       <MovementDrillDownDrawer
         movement={drillMovement}

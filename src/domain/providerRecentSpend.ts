@@ -16,6 +16,7 @@
 import type { PagoProveedorRecord } from '../services/jdeTypes';
 import type { Provider } from './types';
 import { normalizeJdeKey, normalizeProviderName } from './providerIdentity';
+import { todayISO } from '../formatters';
 
 export interface ProviderSpendStats {
   totalSpend: number;
@@ -49,7 +50,7 @@ interface BuildOptions {
 export function recentSpendWindow(asOfDate: string, months = 3): { start: string; end: string } {
   const safe = /^\d{4}-\d{2}-\d{2}/.test(asOfDate)
     ? asOfDate.slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
+    : todayISO();
   const [y, m] = safe.split('-').map(Number);
   // Fin: último día del mes anterior al mes en curso.
   const endDate = new Date(Date.UTC(y, m - 1, 0));
@@ -73,7 +74,7 @@ export function buildProviderSpendIndex(
   options: BuildOptions = {},
 ): ProviderSpendIndex {
   const months = options.months ?? 3;
-  const asOfDate = options.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const asOfDate = options.asOfDate ?? todayISO();
   const { start, end } = recentSpendWindow(asOfDate, months);
 
   interface Acc {

@@ -5,7 +5,6 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
  * by hand because we don't want shared-finance to import from App.
  */
 export type AppTabId =
-  | 'dashboard'
   | 'financialProjection'
   | 'financialPlanning'
   | 'taxes'

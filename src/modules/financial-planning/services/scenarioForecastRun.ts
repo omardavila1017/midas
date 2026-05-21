@@ -7,6 +7,7 @@ import {
   applyAdjustmentsToMovements,
   applyCellOverridesToBuckets,
   calculateBaseProjection,
+  effectiveMovementDate,
   summarizeBucketsForScenario,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
@@ -89,14 +90,24 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
     : [];
 
   const movementsBeforeAdjust = isBase
-    ? args.sourceMovements.filter(isRealShortTermApiMovement)
+    ? args.sourceMovements.filter(
+      (movement) =>
+        isRealShortTermApiMovement(movement) &&
+        // ROL = viaje ya ejecutado, fechado por la regla de pago del catálogo
+        // del API de cobranza. Aunque su fecha de cobro sea futura, es dinero
+        // tan real como una factura CXC abierta — pasa el corte de futuro.
+        (effectiveMovementDate(movement) <= args.today
+          || movement.id.startsWith('rol:')),
+    )
     : [...args.sourceMovements, ...manualMovements];
 
-  const adjustedMovements = applyAdjustmentsToMovements(
-    movementsBeforeAdjust,
-    args.adjustments,
-    args.scenarioId,
-  );
+  const adjustedMovements = isBase
+    ? movementsBeforeAdjust
+    : applyAdjustmentsToMovements(
+      movementsBeforeAdjust,
+      args.adjustments,
+      args.scenarioId,
+    );
 
   const taxSeedView = isBase ? null : buildTaxDashboardView({
     clients: args.clients,
@@ -171,9 +182,22 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
     scenarioId: args.scenarioId,
   });
 
+  // Base = pasado/hoy SALVO ROL. ROL es ejecución real con cobro futuro
+  // fechado por catálogo, así que el bucket se extiende hasta la última fecha
+  // rol: para que no se recorten esos ingresos. El resto del futuro
+  // (client:/cxp:/recurring/forecast) ya fue filtrado arriba.
+  const lastRolDate = isBase
+    ? movementsBeforeAdjust.reduce((max, movement) => {
+      if (!movement.id.startsWith('rol:')) return max;
+      const date = effectiveMovementDate(movement);
+      return date > max ? date : max;
+    }, args.today)
+    : args.endDate;
+  const projectionEndDate = isBase ? lastRolDate : args.endDate;
+
   const rawProjection = calculateBaseProjection(supplierSchedule.movements, {
     startDate: args.startDate,
-    endDate: args.endDate,
+    endDate: projectionEndDate,
     initialCash: args.initialCash,
     minimumCash: args.minimumCash,
     granularity: args.granularity,
@@ -209,10 +233,16 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
 
 /**
  * Base remains a narrow operational baseline: real short-term API records only.
- * Approved/proposals use the full predictive canonical source plus treasury rules.
+ * Real = cobranza JDE (`cxc:`), órdenes de compra (`purchase:`/`po:`), nómina
+ * TRESS real (`payroll:` sin `:forecast:`) y ROL CITI (`rol:` — viajes ya
+ * ejecutados con cobro futuro fechado por el catálogo del API). Las
+ * proyecciones rule-based (client:/cxp:/recurring/budget gap) y los sintéticos
+ * (`canonical-*`) NO entran al Base — esos viven en Aprobado/propuestas.
  */
 export const isRealShortTermApiMovement = (movement: FinancialMovement): boolean => {
+  if (movement.status === 'REAL') return true;
   if (movement.id.startsWith('cxc:')) return true;
+  if (movement.id.startsWith('rol:')) return true;
   if (movement.id.startsWith('purchase:') || movement.id.startsWith('po:')) return true;
   if (movement.id.startsWith('payroll:')) return !movement.id.includes(':forecast:');
   return false;

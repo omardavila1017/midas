@@ -22,7 +22,8 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
+import { todayISO } from '../../../formatters';
 import {
   currentBankStatements,
   latestStatementDate,
@@ -41,7 +42,6 @@ import type {
   PayrollCostRecord,
   PurchaseReceiptRecord,
   SupplierFinancialProfile,
-  TaxObligation,
 } from '../../shared-finance/types';
 
 export interface FinancialProjectionSourceInput {
@@ -51,6 +51,8 @@ export interface FinancialProjectionSourceInput {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  /** ROL CITI: viajes ejecutados. Forma parte del cache key. */
+  rolRecords?: RolRecord[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   /**
@@ -96,8 +98,6 @@ export interface FinancialProjectionSourceData {
   adjustments: FinancialAdjustment[];
   suppliers: SupplierFinancialProfile[];
   customers: CustomerCollectionProfile[];
-  /** Por ahora derivamos impuestos del CXP cuando aplica. Vacío si no. */
-  taxes: TaxObligation[];
   /** Resultado canónico subyacente (mensual + bridge). */
   canonical: CanonicalProjectionResult;
   /** True cuando hay banco o CXC JDE suficiente para proyectar flujo. */
@@ -120,7 +120,15 @@ export interface FinancialProjectionSourceData {
 
 type CacheKey = string;
 const SOURCE_CACHE = new Map<CacheKey, FinancialProjectionSourceData>();
-const SOURCE_CACHE_LIMIT = 20;
+// Cada FinancialProjectionSourceData es ENORME (cobranza ~46k + compras
+// ~334k + payroll + movimientos canónicos ~100k+ → cientos de MB). El límite
+// previo de 20 era un techo de varios GB: en el cold boot el source se
+// reconstruye varias veces (cache MISS por jobId) y cada resultado fresco se
+// acumulaba aquí mientras la data cruda de JDE seguía residente → el heap
+// cruzaba 4GB y el renderer reventaba ("Aw Snap"). Sólo se renderiza el
+// source ACTUAL; con uno previo basta para un compare instantáneo. Evictar
+// no recomputa: el persistent cache (IDB) rehidrata. 2 = pico acotado.
+const SOURCE_CACHE_LIMIT = 2;
 
 function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string): CacheKey {
   // We mix array references via WeakRef-like identity sentinels: each
@@ -132,6 +140,7 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.providers),
     refId(input.cxpRecords),
     refId(input.cobranzaRecords),
+    refId(input.rolRecords),
     refId(input.purchaseReceipts),
     refId(input.payrollCosts),
     refId(input.cobranzaReconciliation),
@@ -163,7 +172,7 @@ function refId(value: unknown): number | string {
 export function buildFinancialProjectionSourceData(
   input: FinancialProjectionSourceInput,
 ): FinancialProjectionSourceData {
-  const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const asOfDate = input.asOfDate ?? todayISO();
   const cacheKey = sourceCacheKey(input, asOfDate);
   const cached = SOURCE_CACHE.get(cacheKey);
   if (cached) {
@@ -180,6 +189,7 @@ export function buildFinancialProjectionSourceData(
     providers: input.providers,
     cxpRecords: input.cxpRecords,
     cobranzaRecords: input.cobranzaRecords ?? [],
+    rolRecords: input.rolRecords ?? [],
     purchaseReceipts: input.purchaseReceipts ?? [],
     payrollCosts: input.payrollCosts ?? [],
     cobranzaReconciliation: input.cobranzaReconciliation,
@@ -208,7 +218,6 @@ export function buildFinancialProjectionSourceData(
     adjustments: [],
     suppliers,
     customers,
-    taxes: [],
     canonical,
     hasData,
   };
@@ -228,8 +237,22 @@ export function buildFinancialProjectionSourceData(
 export function tryGetCachedFinancialProjectionSourceData(
   input: FinancialProjectionSourceInput,
 ): FinancialProjectionSourceData | null {
-  const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const asOfDate = input.asOfDate ?? todayISO();
   return SOURCE_CACHE.get(sourceCacheKey(input, asOfDate)) ?? null;
+}
+
+export function rememberFinancialProjectionSourceData(
+  input: FinancialProjectionSourceInput,
+  result: FinancialProjectionSourceData,
+): void {
+  const asOfDate = input.asOfDate ?? todayISO();
+  const cacheKey = sourceCacheKey(input, asOfDate);
+  if (SOURCE_CACHE.has(cacheKey)) SOURCE_CACHE.delete(cacheKey);
+  SOURCE_CACHE.set(cacheKey, result);
+  if (SOURCE_CACHE.size > SOURCE_CACHE_LIMIT) {
+    const oldest = SOURCE_CACHE.keys().next().value as CacheKey | undefined;
+    if (oldest !== undefined) SOURCE_CACHE.delete(oldest);
+  }
 }
 
 /**

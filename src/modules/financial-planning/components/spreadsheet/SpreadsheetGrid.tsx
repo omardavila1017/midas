@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Lock, Plus, Sparkles } from 'lucide-react';
 import { fmtCompact } from '../../../../formatters';
 import type {
@@ -46,6 +46,15 @@ type DisplayRow =
 function bucketId(type: FinancialMovementType, label: string): string {
   return `${type}:${label}`;
 }
+
+// Column overscan: extra columns rendered each side of the viewport so fast
+// horizontal scroll/keyboard nav never shows a blank edge.
+const COL_OVERSCAN = 3;
+// Row overscan: extra rows above/below the viewport per virtualized section.
+const ROW_OVERSCAN = 6;
+// Two sticky footer rows (Neto + Caja final) reserve space at the bottom so
+// keyboard scroll-into-view never parks the selected cell behind them.
+const FOOTER_RESERVE = ROW_HEIGHT * 2;
 
 export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const {
@@ -121,6 +130,71 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const [draftValue, setDraftValue] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ---- Virtualization scaffolding -----------------------------------------
+  // Column width and row height are uniform, so windowing is exact arithmetic
+  // (no measurement of individual cells). Until the container is measured
+  // (jsdom/tests/first layout) we render everything, preserving prior behavior.
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const [scroll, setScroll] = useState({ top: 0, left: 0 });
+  const measured = viewport.w > 0 && viewport.h > 0;
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => setViewport({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const scrollRaf = useRef<number | null>(null);
+  const handleScroll = useCallback(() => {
+    if (scrollRaf.current != null) return;
+    scrollRaf.current = requestAnimationFrame(() => {
+      scrollRaf.current = null;
+      const el = containerRef.current;
+      if (!el) return;
+      const top = el.scrollTop;
+      const left = el.scrollLeft;
+      // Skip the trailing no-op render when the gesture settled on the same
+      // position (a fresh {top,left} object would always re-render).
+      setScroll((p) => (p.top === top && p.left === left ? p : { top, left }));
+    });
+  }, []);
+  useEffect(() => () => {
+    if (scrollRaf.current != null) cancelAnimationFrame(scrollRaf.current);
+  }, []);
+
+  const colCount = columns.length;
+  let colStart = 0;
+  let colEnd = colCount;
+  if (measured && colCount > 0) {
+    const originLeft = scroll.left - LABEL_COL_WIDTH;
+    colStart = Math.max(0, Math.floor(originLeft / colWidth) - COL_OVERSCAN);
+    colEnd = Math.min(
+      colCount,
+      Math.ceil((scroll.left + viewport.w - LABEL_COL_WIDTH) / colWidth) + COL_OVERSCAN,
+    );
+    if (colEnd < colStart) colEnd = colStart;
+  }
+  const colLeftPad = colStart * colWidth;
+  const colRightPad = Math.max(0, (colCount - colEnd) * colWidth);
+  const visibleColumns = columns.slice(colStart, colEnd);
+
+  const leftSpacer = colLeftPad > 0
+    ? <div aria-hidden="true" style={{ width: colLeftPad, flex: `0 0 ${colLeftPad}px` }} />
+    : null;
+  const rightSpacer = colRightPad > 0
+    ? <div aria-hidden="true" style={{ width: colRightPad, flex: `0 0 ${colRightPad}px` }} />
+    : null;
+
+  // Section vertical offsets (reported by each virtualized list) so keyboard
+  // navigation can scroll an off-screen selected cell back into view.
+  const inflowTopRef = useRef(0);
+  const outflowTopRef = useRef(0);
 
   const moveSelection = useCallback((dr: number, dc: number) => {
     setSelection((current) => {
@@ -212,6 +286,32 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     node.select();
   }, [isEditing]);
 
+  // Keep the selected cell visible when navigating by keyboard while the grid
+  // is virtualized. Uniform geometry => exact target coordinates.
+  useEffect(() => {
+    if (!measured || !selection) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const targetLeft = LABEL_COL_WIDTH + selection.colIndex * colWidth;
+    const targetRight = targetLeft + colWidth;
+    if (targetLeft < el.scrollLeft + LABEL_COL_WIDTH) {
+      el.scrollLeft = Math.max(0, targetLeft - LABEL_COL_WIDTH);
+    } else if (targetRight > el.scrollLeft + el.clientWidth) {
+      el.scrollLeft = targetRight - el.clientWidth;
+    }
+    const inflowLen = visibleInflowDisplayRows.length;
+    const localTop = selection.rowIndex < inflowLen
+      ? inflowTopRef.current + selection.rowIndex * ROW_HEIGHT
+      : outflowTopRef.current + (selection.rowIndex - inflowLen) * ROW_HEIGHT;
+    const targetTop = localTop;
+    const targetBottom = localTop + ROW_HEIGHT;
+    if (targetTop < el.scrollTop) {
+      el.scrollTop = targetTop;
+    } else if (targetBottom > el.scrollTop + el.clientHeight - FOOTER_RESERVE) {
+      el.scrollTop = targetBottom - el.clientHeight + FOOTER_RESERVE;
+    }
+  }, [selection, measured, colWidth, visibleInflowDisplayRows.length]);
+
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (isEditing) {
       if (event.key === 'Enter') {
@@ -301,7 +401,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           <span className="truncate">{row.label}</span>
         </button>
       </StickyLeftCell>
-      {columns.map((column, colIndex) => {
+      {leftSpacer}
+      {visibleColumns.map((column, vi) => {
+        const colIndex = colStart + vi;
         const override = overrideFor(row.conceptKey, column.key);
         const baseValue = baseValueFor(row.conceptKey, column.key);
         const value = override ? override.value : baseValue;
@@ -365,6 +467,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           </div>
         );
       })}
+      {rightSpacer}
     </div>
   );
 
@@ -393,7 +496,9 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             </span>
           </button>
         </StickyLeftCell>
-        {columns.map((column, colIndex) => {
+        {leftSpacer}
+        {visibleColumns.map((column, vi) => {
+          const colIndex = colStart + vi;
           const value = group.rows.reduce((sum, child) => {
             const override = overrideFor(child.conceptKey, column.key);
             return sum + (override ? override.value : baseValueFor(child.conceptKey, column.key));
@@ -420,6 +525,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             </div>
           );
         })}
+        {rightSpacer}
       </div>
     );
   };
@@ -460,7 +566,8 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       >
         {label}
       </StickyLeftCell>
-      {columns.map((column) => {
+      {leftSpacer}
+      {visibleColumns.map((column) => {
         const value = totalsFor(kind, column.key);
         const color = tone === 'highlight'
           ? 'var(--gray-950)'
@@ -479,6 +586,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           </div>
         );
       })}
+      {rightSpacer}
     </div>
   );
 
@@ -496,7 +604,8 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       >
         {label}
       </StickyLeftCell>
-      {columns.map((column) => {
+      {leftSpacer}
+      {visibleColumns.map((column) => {
         const value = totalsFor(kind, column.key);
         return (
           <div
@@ -510,24 +619,21 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           </div>
         );
       })}
+      {rightSpacer}
     </div>
   );
 
-  const renderGroupedRows = (
-    list: DisplayRow[],
-    rowIndexOffset: number,
-  ) => list.map((displayRow, index) => {
-    const rowIndex = rowIndexOffset + index;
-    return displayRow.kind === 'data'
+  const renderDisplayRow = (displayRow: DisplayRow, rowIndex: number) =>
+    displayRow.kind === 'data'
       ? renderDataRow(displayRow.row, rowIndex, displayRow.depth)
       : renderBucketRow(displayRow, rowIndex);
-  });
 
   return (
     <div
       ref={containerRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      onScroll={handleScroll}
       role="grid"
       aria-readonly={isReadOnly}
       aria-rowcount={displayRows.length}
@@ -539,7 +645,8 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         <StickyLeftCell width={LABEL_COL_WIDTH} left={0} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header shadow>
           Concepto
         </StickyLeftCell>
-        {columns.map((column) => (
+        {leftSpacer}
+        {visibleColumns.map((column) => (
           <div
             key={column.key}
             className={`flex h-full items-center justify-end px-2 text-[10px] uppercase tracking-[0.08em] border-l border-[var(--gray-200)] ${
@@ -551,6 +658,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             {column.label}
           </div>
         ))}
+        {rightSpacer}
       </div>
 
       {/* Section: Ingresos */}
@@ -564,7 +672,15 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       {!collapsed.INFLOW && (inflowRows.length === 0 ? (
         <EmptyRow message="Sin ingresos en este escenario." />
       ) : (
-        renderGroupedRows(visibleInflowDisplayRows, 0)
+        <VirtualRowList
+          list={visibleInflowDisplayRows}
+          rowIndexOffset={0}
+          scrollTop={scroll.top}
+          viewportH={viewport.h}
+          measured={measured}
+          renderRow={renderDisplayRow}
+          onTop={(t) => { inflowTopRef.current = t; }}
+        />
       ))}
       {!collapsed.INFLOW && renderAddRow('INFLOW')}
 
@@ -582,7 +698,15 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       {!collapsed.OUTFLOW && (outflowRows.length === 0 ? (
         <EmptyRow message="Sin egresos en este escenario." />
       ) : (
-        renderGroupedRows(visibleOutflowDisplayRows, visibleInflowDisplayRows.length)
+        <VirtualRowList
+          list={visibleOutflowDisplayRows}
+          rowIndexOffset={visibleInflowDisplayRows.length}
+          scrollTop={scroll.top}
+          viewportH={viewport.h}
+          measured={measured}
+          renderRow={renderDisplayRow}
+          onTop={(t) => { outflowTopRef.current = t; }}
+        />
       ))}
       {!collapsed.OUTFLOW && renderAddRow('OUTFLOW')}
 
@@ -601,6 +725,62 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           </span>
         </div>
       )}
+    </div>
+  );
+}
+
+// Renders only the rows intersecting the scroll viewport. Row height is
+// uniform so a top/bottom spacer reproduces full scroll height exactly,
+// keeping every sibling (subtotals, footers, the other section) in place.
+// Until the grid is measured it renders the whole list (tests / first paint).
+function VirtualRowList({
+  list,
+  rowIndexOffset,
+  scrollTop,
+  viewportH,
+  measured,
+  renderRow,
+  onTop,
+}: {
+  list: DisplayRow[];
+  rowIndexOffset: number;
+  scrollTop: number;
+  viewportH: number;
+  measured: boolean;
+  renderRow: (displayRow: DisplayRow, rowIndex: number) => React.ReactNode;
+  onTop: (top: number) => void;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState(0);
+
+  useLayoutEffect(() => {
+    const node = wrapRef.current;
+    if (!node) return;
+    const offset = node.offsetTop;
+    // Only react when the section actually moved (sibling collapse shifts it).
+    // Unguarded, this fired setTop + a re-render on every render/scroll frame.
+    if (offset !== top) {
+      setTop(offset);
+      onTop(offset);
+    }
+  });
+
+  const n = list.length;
+  let start = 0;
+  let end = n;
+  if (measured && n > 0) {
+    start = Math.max(0, Math.floor((scrollTop - top) / ROW_HEIGHT) - ROW_OVERSCAN);
+    end = Math.min(n, Math.ceil((scrollTop + viewportH - top) / ROW_HEIGHT) + ROW_OVERSCAN);
+    if (end < start) end = start;
+  }
+  const padTop = start * ROW_HEIGHT;
+  const padBottom = Math.max(0, (n - end) * ROW_HEIGHT);
+
+  return (
+    <div ref={wrapRef}>
+      {padTop > 0 && <div aria-hidden="true" style={{ height: padTop }} />}
+      {list.slice(start, end).map((displayRow, i) => renderRow(displayRow, rowIndexOffset + start + i))}
+      {padBottom > 0 && <div aria-hidden="true" style={{ height: padBottom }} />}
     </div>
   );
 }

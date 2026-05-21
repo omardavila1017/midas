@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { PayrollCashTreatment, PayrollCostRecord } from '../../shared-finance/types';
 import {
+  buildNominaMonthPlan,
   computeKpis,
+  deriveNominaLoadedKeysFromRecords,
+  filterStaleNominaPlan,
   filterRecords,
   isCacheFresh,
   lastNMonths,
@@ -37,6 +40,64 @@ describe('nominaCacheKey', () => {
   it('genera la llave compuesta canónica', () => {
     expect(nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio: 2026, mes: 5 }))
       .toBe('99:99:2026:5');
+  });
+});
+
+describe('buildNominaMonthPlan', () => {
+  it('construye mes actual y anteriores con cacheKey global TRESS', () => {
+    expect(buildNominaMonthPlan({ anio: 2026, mes: 5 }, 4)).toEqual([
+      { anio: 2026, mes: 5, cacheKey: '99:99:2026:5' },
+      { anio: 2026, mes: 4, cacheKey: '99:99:2026:4' },
+      { anio: 2026, mes: 3, cacheKey: '99:99:2026:3' },
+      { anio: 2026, mes: 2, cacheKey: '99:99:2026:2' },
+    ]);
+  });
+
+  it('cruza año hacia atrás', () => {
+    expect(buildNominaMonthPlan({ anio: 2026, mes: 1 }, 3)).toEqual([
+      { anio: 2026, mes: 1, cacheKey: '99:99:2026:1' },
+      { anio: 2025, mes: 12, cacheKey: '99:99:2025:12' },
+      { anio: 2025, mes: 11, cacheKey: '99:99:2025:11' },
+    ]);
+  });
+});
+
+describe('deriveNominaLoadedKeysFromRecords', () => {
+  it('repara timestamps faltantes desde records persistidos', () => {
+    const repaired = deriveNominaLoadedKeysFromRecords(
+      [
+        rec({ year: 2026, month: 5 }),
+        rec({ year: 2026, month: 5, cia: '00011' }),
+        rec({ year: 2026, month: 4 }),
+      ],
+      { '99:99:2026:3': 'old' },
+      '2026-05-18T12:00:00.000Z',
+    );
+    expect(repaired).toEqual({
+      '99:99:2026:3': 'old',
+      '99:99:2026:5': '2026-05-18T12:00:00.000Z',
+      '99:99:2026:4': '2026-05-18T12:00:00.000Z',
+    });
+  });
+
+  it('devuelve la misma referencia si no hay nada que reparar', () => {
+    const existing = { '99:99:2026:5': 'old' };
+    expect(deriveNominaLoadedKeysFromRecords([rec({ year: 2026, month: 5 })], existing, 'new')).toBe(existing);
+  });
+});
+
+describe('filterStaleNominaPlan', () => {
+  it('omite meses frescos y deja los faltantes o vencidos', () => {
+    const now = Date.parse('2026-05-18T12:00:00Z');
+    const plan = buildNominaMonthPlan({ anio: 2026, mes: 5 }, 3);
+    const keys = {
+      '99:99:2026:5': new Date(now - 60 * 60 * 1000).toISOString(),
+      '99:99:2026:4': new Date(now - 26 * 60 * 60 * 1000).toISOString(),
+    };
+    expect(filterStaleNominaPlan(plan, keys, 24 * 60 * 60 * 1000, now)).toEqual([
+      { anio: 2026, mes: 4, cacheKey: '99:99:2026:4' },
+      { anio: 2026, mes: 3, cacheKey: '99:99:2026:3' },
+    ]);
   });
 });
 

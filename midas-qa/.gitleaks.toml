@@ -1,0 +1,8 @@
+title = "flujo-senda gitleaks config"
+
+[allowlist]
+description = "Allow documented placeholders only"
+regexes = [
+  '''<server-side-[a-z-]+>''',
+  '''<local-dev-[a-z-]+>''',
+]

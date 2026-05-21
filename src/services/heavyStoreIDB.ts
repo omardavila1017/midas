@@ -236,12 +236,22 @@ export async function saveHeavyStore(store: HeavyStore): Promise<void> {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const os = tx.objectStore(STORE_NAME);
+      const written: HeavyKey[] = [];
       for (const key of HEAVY_KEYS) {
-        os.put({ key, records: store[key] });
+        const records = store[key];
+        // Per-key anti-wipe: never overwrite a persisted collection with an
+        // empty array. The heavy state hydrates incrementally during boot,
+        // so a flush (beforeunload / visibilitychange) can call this while
+        // some collections are still empty — writing those zeros would wipe
+        // data that simply hasn't loaded from IDB yet. Intentional clears
+        // must go through clearHeavyStore().
+        if (!records || records.length === 0) continue;
+        os.put({ key, records });
+        written.push(key);
       }
       tx.oncomplete = () => {
         // eslint-disable-next-line no-console
-        console.info(`[heavyStoreIDB] saveHeavyStore ok · ${HEAVY_KEYS.map(k => `${k}=${store[k]?.length ?? 0}`).join(' · ')}`);
+        console.info(`[heavyStoreIDB] saveHeavyStore ok · ${written.map(k => `${k}=${store[k]?.length ?? 0}`).join(' · ') || '(nada — todo vacío, skip)'}`);
         resolve();
       };
       tx.onerror = () => {

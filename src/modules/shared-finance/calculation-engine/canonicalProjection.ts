@@ -58,8 +58,11 @@ import type { CXPRecord } from '../../../domain/persistence';
 import { getConcursoProviderIds, isConcursoMercantil, normalizeProviderId } from '../../../domain/concursoMercantil';
 import type { Client, Provider, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
+import { buildRolProjectedInflows, type RolProjectedInflow } from '../../../domain/rolProjectionEngine';
 import { bankMovementKey } from '../../../domain/bankMovementKey';
+import { todayISO } from '../../../formatters';
+import { isCorningAbono } from '../../../domain/bankStatements';
 import type { AbonoEnrichment, RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
@@ -86,6 +89,13 @@ export interface CanonicalProjectionInputs {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  /**
+   * ROL CITI: viajes ejecutados. Los predichos (ejecutados, aún no
+   * facturados) se proyectan como ingreso futuro fechado por la regla de
+   * pago del catálogo. Solo afecta escenarios Aprobado/propuesta — el id
+   * `rol:` y la fecha futura lo excluyen de Base por construcción.
+   */
+  rolRecords?: RolRecord[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   /**
@@ -109,7 +119,7 @@ export interface CanonicalProjectionInputs {
    * genérico "Otros Egresos". Mismo patrón que `abonoEnrichments` para
    * cobranza (ingresos).
    */
-  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ claveProveedor?: string; nombreProveedor: string; importe: number }> }>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance: number;
@@ -232,6 +242,20 @@ const INCOME_SUBCAT_CITI = 'Clientes Citi';
 const INCOME_SUBCAT_OTROS = 'Otros ingresos';
 const CLIENT_VIAJES_ESPECIALES_GROUP_ID = 'group-viajes-especiales';
 
+/**
+ * Reglas de negocio para enrutar un cobro CXC/ROL al bucket de ingreso.
+ * - Viajes Especiales (subgrupo de Citi) si `commercialGroupId` lo marca.
+ * - Federal si el nombre del cliente matchea Busbud (cliente bidireccional
+ *   cliente+proveedor del grupo Federal — hardcoded).
+ * - Citi por default (todo lo demás de CXC/ROL es Senda Citi).
+ */
+function rolCitiSubcategoryFor(client: { name?: string; commercialGroupId?: string } | null | undefined): string {
+  if (!client) return INCOME_SUBCAT_CITI;
+  if (client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID) return INCOME_SUBCAT_VIAJES;
+  if (client.name && /\bbusbud\b/i.test(client.name)) return INCOME_SUBCAT_FEDERAL;
+  return INCOME_SUBCAT_CITI;
+}
+
 function resolveInflowSubcategory(args: {
   counterpartyId?: string;
   clientById: Map<string, Client>;
@@ -252,6 +276,11 @@ function resolveInflowSubcategory(args: {
     const client = args.clientById.get(args.counterpartyId);
     if (client?.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID) {
       return INCOME_SUBCAT_VIAJES;
+    }
+    // 2b) Busbud — cliente Y proveedor de Federal por regla de negocio.
+    // Independiente de la cuenta bancaria por donde caiga, su ingreso es Federal.
+    if (client?.name && /\bbusbud\b/i.test(client.name)) {
+      return INCOME_SUBCAT_FEDERAL;
     }
   }
   // 3) ABONO real sin match a factura que cayó en Santander = Federal.
@@ -283,6 +312,13 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
   );
   const pairedKeys = buildPairMatchedKeys(inputs.bankStatements);
 
+  // Cobertura bancaria por (cia, ym): si hay AL MENOS un movimiento en el
+  // estado de cuenta de esa empresa en ese mes, el ABONO bancario ya es la
+  // verdad realizada del efectivo. El sintético `cobranza-historic:` (paso 1b)
+  // solo debe rellenar cía/meses SIN estado de cuenta; si no, el cobro se
+  // cuenta dos veces (ABONO real + sintético) e infla `realIncome` ~2×.
+  const bankCoverage = new Set<string>();
+
   // Proveedores en Concurso Mercantil: cualquier proveedor con AL MENOS una
   // factura ≤ CONCURSO_MERCANTIL_CUTOFF (deuda congelada). Sus pagos viven
   // en el módulo Concurso; aquí se excluyen del modelo predictivo para que
@@ -312,6 +348,12 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
       const ym = (line.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;
       if (!monthlyByYm.has(ym)) continue;
+      // Hay estado de cuenta para esta (cia, ym): el ABONO bancario es la
+      // verdad realizada; el sintético cobranza-historic de paso 1b se omite.
+      // Se marca antes de los filtros interno/neutro a propósito: la
+      // presencia del estado de cuenta no depende de la clasificación de una
+      // línea individual.
+      bankCoverage.add(`${statement.cia}::${ym}`);
       // Filtra traspasos internos antes de emitir el FinancialMovement —
       // mismo criterio que el Dashboard. Movimientos clasificados como
       // 'internal' nunca llegan a la tabla, gráfica ni drilldowns.
@@ -381,15 +423,23 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
             : unmatchedCargoClassification!.counterpartyName;
       const counterpartyId = isCobranzaInflow
         ? (enrichment!.catalogClientId ?? firstFactura?.noCliente ?? undefined)
-        : undefined;
+        : isMatchedAp
+          ? (matchedPayment!.claveProveedor || undefined)
+          : undefined;
+      // Corning es ingreso Senda Citi que cae en una cuenta no catalogada
+      // como CITI (depósito de la operadora). Sin este override el ABONO no
+      // cruza factura ni catálogo y cae a "Otros ingresos". Misma regla
+      // compartida que usa el sub-libro fideicomiso (isCorningAbono).
       const inflowSubcategory = isInflow
-        ? resolveInflowSubcategory({
-            counterpartyId,
-            clientById,
-            businessUnitId: catalogEnrich?.entry.unidadNegocio,
-            bankFallbackLabel: !isCobranzaInflow ? bankFallbackName : undefined,
-            isRolCollection: isCobranzaInflow,
-          })
+        ? (isCorningAbono(line)
+            ? INCOME_SUBCAT_CITI
+            : resolveInflowSubcategory({
+                counterpartyId,
+                clientById,
+                businessUnitId: catalogEnrich?.entry.unidadNegocio,
+                bankFallbackLabel: !isCobranzaInflow ? bankFallbackName : undefined,
+                isRolCollection: isCobranzaInflow,
+              }))
         : undefined;
       const cargoCategory = unmatchedCargoClassification?.category ?? 'TRANSFER';
       // Si el clasificador de concepto bancario no produce subcategoría,
@@ -465,6 +515,11 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
     const ym = cobroDate.slice(0, 7);
     const monthInfo = monthlyByYm.get(ym);
     if (!monthInfo || !monthInfo.isHistorical) continue;
+    // El banco ya cubre esta (cia, mes): el ABONO real es la verdad del
+    // efectivo. Emitir aquí el sintético duplicaría el cobro (doble conteo
+    // que inflaba `realIncome` ~2× en el chart del Dashboard). El sintético
+    // solo rellena cía/meses sin estado de cuenta cargado.
+    if (bankCoverage.has(`${record.cia}::${ym}`)) continue;
     const facturaKey = cxcFacturaKey(record);
     if (cobradaBancoKeysHistoric.has(facturaKey)) continue;
     const amount = Math.abs(record.importeBrutoPesos);
@@ -525,8 +580,12 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
   }));
   for (const month of futureMonths) {
     const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
-    const hasCxcFromJde = inflowLines.some((line) => line.id.startsWith('cxc:'));
-    out.push(...(hasCxcFromJde
+    // CXC (cobranza JDE) o ROL (viajes ejecutados): ingreso real con monto
+    // propio que NO debe escalarse al total del Dashboard. Mismo trato.
+    const hasRealInflow = inflowLines.some(
+      (line) => line.id.startsWith('cxc:') || line.id.startsWith('rol:'),
+    );
+    out.push(...(hasRealInflow
       ? emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate)
       : balanceInflowMonth({
         lines: inflowLines,
@@ -544,20 +603,55 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
       target: month.expense,
       ym: month.yearMonth,
       asOfDate: inputs.asOfDate,
-      fallbackCategory: 'OPEX',
-      fallbackConcept: `Egresos recurrentes operativos ${month.yearMonth}`,
-      fallbackRule: 'Total proyectado mensual (Dashboard)',
+      // TRANSFER (no OPEX): el residuo del balanceo es "egresos no
+      // identificados" — el banco histórico clasifica los cargos sin patrón
+      // canónico como TRANSFER → fila "Otros Egresos" (ver
+      // bankConceptClassifier.ts). Mantener la misma categoría en proyección
+      // evita la inversión visual histórico→futuro y deja al scheduler
+      // diferir el residuo (vía isSchedulableExpense, supplierPaymentSchedule).
+      fallbackCategory: 'TRANSFER',
+      fallbackConcept: `Egresos no identificados ${month.yearMonth}`,
+      fallbackRule: 'Total proyectado mensual (Dashboard) sin desglose por catálogo',
     }));
   }
 
   // 3) Mes en curso (histórico parcial). Días pasados ya están como
-  //    REAL desde el banco. El resto del mes no se rellena con plantillas;
-  //    sólo se conserva lo que venga de fuentes operativas explícitas.
+  //    REAL desde el banco. El resto del mes se rellena hasta la proyección
+  //    operativa de mes completo menos lo ya real (ver target abajo).
   const currentYm = todayYm;
   const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
   if (currentHistorical) {
-    const remainingIncome = Math.max(0, currentHistorical.income - (currentHistorical.actualIncome ?? currentHistorical.income));
-    const remainingExpense = Math.max(0, currentHistorical.expense - (currentHistorical.actualExpense ?? currentHistorical.expense));
+    // Target del mes en curso = proyección operativa de mes COMPLETO menos
+    // lo ya cobrado/pagado real. NO usar `currentHistorical.income`: ese
+    // valor es `max(real_acumulado, proy_mes, predictivo)` (dashboardEngine),
+    // ya contiene el real acumulado, así que restarle el real colapsa el
+    // restante a 0 a mitad de mes y trunca la cobranza esperada de los días
+    // que faltan (bug dependiente de fecha: peor entre más avanza el mes).
+    // Se usa la proyección operativa de mes completo (incluye piso baseline
+    // 6m dentro de projectionEngine) como target independiente del real ya
+    // recibido; sólo si no hay proyección (sin catálogo) caemos al valor del
+    // punto. El fallback `?? currentHistorical.income` también era erróneo:
+    // con actual indefinido daba income−income=0; debe ser 0 (nada cobrado
+    // todavía → proyectar mes completo).
+    //
+    // Piso estacional histórico: el baseline dentro de projectionEngine es
+    // media móvil PLANA de 6 meses (sin estacionalidad). Para un negocio
+    // escolar, un mes fuerte de temporada queda subestimado si los 6 meses
+    // previos incluyen temporada baja. Se aplica como piso el promedio del
+    // MISMO mes calendario de años previos (mismo patrón que el modelo
+    // Federal, ver buildFederalForecastMovements) sobre el ingreso real de
+    // meses históricos cerrados. Es un piso (Math.max): nunca reduce una
+    // proyección de catálogo/budget ya buena; sólo rescata subestimación.
+    const projectedFullIncome = projectionByYm.get(currentYm)?.income.total ?? 0;
+    const projectedFullExpense = projectionByYm.get(currentYm)?.expense.total ?? 0;
+    const seasonalIncomeFloorValue = seasonalHistoricalIncomeFloor(monthly, currentYm);
+    const incomeTarget = Math.max(
+      projectedFullIncome > 0 ? projectedFullIncome : currentHistorical.income,
+      seasonalIncomeFloorValue,
+    );
+    const expenseTarget = projectedFullExpense > 0 ? projectedFullExpense : currentHistorical.expense;
+    const remainingIncome = Math.max(0, incomeTarget - (currentHistorical.actualIncome ?? 0));
+    const remainingExpense = Math.max(0, expenseTarget - (currentHistorical.actualExpense ?? 0));
 
     const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
       .filter((line) => line.date >= inputs.asOfDate);
@@ -584,8 +678,8 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
         ym: currentYm,
         type: 'OUTFLOW',
         asOfDate: inputs.asOfDate,
-        fallbackCategory: 'OPEX',
-        fallbackConcept: `Egresos proyectados ${currentYm} (resto del mes)`,
+        fallbackCategory: 'TRANSFER',
+        fallbackConcept: `Egresos no identificados ${currentYm} (resto del mes)`,
         fallbackRule: 'Proyección operativa del mes en curso menos egresos reales',
       }));
     } else {
@@ -603,6 +697,33 @@ function buildMovements({ monthly, inputs, projectionByYm }: BuildArgs): Financi
   out.push(...buildFederalForecastMovements({ monthly, existing: out, asOfDate: inputs.asOfDate, todayYm }));
 
   return out;
+}
+
+/**
+ * Piso estacional de ingreso para el mes en curso a partir del ingreso
+ * real de meses históricos CERRADOS (estrictamente antes del mes en curso;
+ * el mes parcial no entra para no sesgar con días faltantes). Algoritmo
+ * espejo de buildFederalForecastMovements: si hay ≥12 meses cerrados, usa
+ * el promedio del mismo mes calendario en años previos (captura
+ * estacionalidad escolar); si no, media móvil de los últimos 6 meses.
+ * Devuelve 0 si no hay historia suficiente (no aplica piso).
+ */
+function seasonalHistoricalIncomeFloor(
+  monthly: CanonicalMonthlyPoint[],
+  currentYm: string,
+): number {
+  const closed = monthly
+    .filter((m) => m.isHistorical && m.yearMonth < currentYm)
+    .sort((a, b) => a.yearMonth.localeCompare(b.yearMonth));
+  if (closed.length === 0) return 0;
+  const trailing = closed.slice(-6);
+  const trailingMean = trailing.reduce((s, m) => s + m.income, 0) / trailing.length;
+  if (closed.length < 12) return Number.isFinite(trailingMean) ? Math.max(0, trailingMean) : 0;
+  const mm = currentYm.slice(5, 7);
+  const sameMonth = closed.filter((m) => m.yearMonth.slice(5, 7) === mm);
+  if (sameMonth.length === 0) return Number.isFinite(trailingMean) ? Math.max(0, trailingMean) : 0;
+  const seasonalMean = sameMonth.reduce((s, m) => s + m.income, 0) / sameMonth.length;
+  return Number.isFinite(seasonalMean) ? Math.max(0, seasonalMean) : 0;
 }
 
 /**
@@ -776,6 +897,10 @@ interface InflowContext {
   cxcRecords: CobranzaRecord[];
   cxcCoverageByClientMonth: Map<string, Set<string>>;
   clientMatchByFactura: Map<string, CollectionCalendarClientMatch | null>;
+  /** Líneas ROL proyectadas agrupadas por `yyyy-mm` de cobro. */
+  rolInflowsByYm: Map<string, RolProjectedInflow[]>;
+  /** clientId → set `yyyy-mm` de cobro cubierto por ROL (suprime `client:`). */
+  rolCoverageByClientMonth: Map<string, Set<string>>;
 }
 
 function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
@@ -792,10 +917,44 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
     }
   }
 
+  // ROL: viajes ejecutados aún no facturados → ingreso futuro real fechado
+  // por la regla del catálogo. Reusa el clientLookup ya armado. Solo cruza
+  // contra la cobranza de la misma empresa para no marcar como "predicho"
+  // un viaje ya facturado en otra cía del cruce.
+  const rol = buildRolProjectedInflows({
+    rolRecords: inputs.rolRecords ?? [],
+    cobranzaRecords: cxcRecords,
+    clients: inputs.clients,
+    assumptions: inputs.assumptions,
+    asOfDate: inputs.asOfDate,
+    clientLookup,
+  });
+  const rolInflowsByYm = new Map<string, RolProjectedInflow[]>();
+  for (const inflow of rol.inflows) {
+    const ym = inflow.date.slice(0, 7);
+    const arr = rolInflowsByYm.get(ym);
+    if (arr) arr.push(inflow);
+    else rolInflowsByYm.set(ym, [inflow]);
+  }
+  // TODO(rol-diag): instrumentación temporal — quitar tras confirmar mapeo ROL.
+  if (typeof console !== 'undefined') {
+    const dates = rol.inflows.map((i) => i.date).sort();
+    const gross = rol.inflows.reduce((s, i) => s + i.grossAmount, 0);
+    // eslint-disable-next-line no-console
+    console.info(
+      `[rol-diag] rolRecords=${(inputs.rolRecords ?? []).length} → líneas rol:=${rol.inflows.length} `
+      + `bruto=${Math.round(gross)} fechas ${dates[0] ?? '—'}..${dates[dates.length - 1] ?? '—'} `
+      + `· sin cliente catálogo: viajes=${rol.unmatchedTrips} monto=${Math.round(rol.unmatchedAmount)} `
+      + `· asOf=${inputs.asOfDate}`,
+    );
+  }
+
   return {
     cxcRecords,
     cxcCoverageByClientMonth,
     clientMatchByFactura,
+    rolInflowsByYm,
+    rolCoverageByClientMonth: rol.coverageByClientMonth,
   };
 }
 
@@ -822,6 +981,40 @@ function collectInflowLines(
   const targetMonthIdx = mNum - 1;
   const lines: RawLine[] = collectCxcInflowLines(month, inputs, context);
 
+  // ROL: viajes ejecutados aún no facturados. Monto real ejecutado, fechado
+  // por la regla de pago del catálogo (overlay /cobranza). `amountLocked` →
+  // no se escala al total del Dashboard (mismo trato que `cxc:`). Excluido
+  // de Base: el id `rol:` no es real short-term y la fecha es futura.
+  for (const inflow of context.rolInflowsByYm.get(month.yearMonth) ?? []) {
+    const rolSubcat = rolCitiSubcategoryFor({
+      name: inflow.clientName,
+      commercialGroupId: inflow.commercialGroupId,
+    });
+    lines.push({
+      id: `rol:${inflow.clientId}:${inflow.date}`,
+      amount: inflow.grossAmount,
+      date: inflow.date,
+      concept: `Viajes ejecutados ${inflow.clientName} (${inflow.tripCount} viaje${inflow.tripCount === 1 ? '' : 's'})`,
+      category: 'AR_COLLECTION',
+      subcategory: rolSubcat,
+      counterpartyId: inflow.clientId,
+      counterpartyName: inflow.clientName,
+      counterpartyType: 'CUSTOMER',
+      ruleApplied: `ROL CITI · ${inflow.ruleReason}`,
+      sourceSystem: 'FORECAST',
+      sourceObjectId: inflow.clientId,
+      forecastMethod: 'RULE',
+      confidenceScore: 70,
+      lockState: 'RESTRICTED',
+      taxTreatment: 'IVA_CAUSED',
+      taxRate: 16,
+      taxBaseAmount: inflow.subTotal,
+      taxAmount: inflow.grossAmount - inflow.subTotal,
+      comment: `Viajes ejecutados (ROL CITI) aún no facturados; ingreso proyectado por la regla de pago del catálogo. ${inflow.ruleReason}`,
+      amountLocked: true,
+    });
+  }
+
   // Necesitamos buscar un poco hacia atrás: facturas emitidas el mes
   // anterior pueden cobrarse en el mes objetivo (créditos cortos).
   // Iteramos el mes objetivo y los 2 meses previos.
@@ -837,6 +1030,10 @@ function collectInflowLines(
 
   for (const client of inputs.clients) {
     if (isInternalCounterparty(client.rfc, client.name)) continue;
+    // ROL ya provee el cobro REAL de este cliente para este mes de cobro:
+    // suprimir la proyección genérica `client:` evita doble conteo
+    // ROL↔client (ROL es la versión real del mismo dinero).
+    if (context.rolCoverageByClientMonth.get(client.id)?.has(month.yearMonth)) continue;
     const coveredMonths = context.cxcCoverageByClientMonth.get(client.id);
     let evIdx = 0;
     for (const scan of monthsToScan) {
@@ -846,9 +1043,7 @@ function collectInflowLines(
         ...inputs.assumptions,
         year: scan.year,
       });
-      const clientInflowSubcat = client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID
-        ? INCOME_SUBCAT_VIAJES
-        : INCOME_SUBCAT_CITI;
+      const clientInflowSubcat = rolCitiSubcategoryFor(client);
       for (const event of events) {
         const ym = event.realDate.slice(0, 7);
         if (ym !== month.yearMonth) continue;
@@ -931,9 +1126,7 @@ function collectCxcInflowLines(
         ? 'Sin regla confiable; se usa vencimiento JDE.'
         : 'Sin regla confiable; se usa fecha de factura JDE.';
 
-    const cxcSubcat = clientMatch?.client.commercialGroupId === CLIENT_VIAJES_ESPECIALES_GROUP_ID
-      ? INCOME_SUBCAT_VIAJES
-      : INCOME_SUBCAT_CITI;
+    const cxcSubcat = rolCitiSubcategoryFor(clientMatch?.client ?? null);
     lines.push({
       id: `cxc:${record.cia}:${record.noCliente}:${record.noFactura}`,
       amount: record.importePendientePesos,
@@ -1520,7 +1713,7 @@ function moveOpenPayableIntoProjection(
 }
 
 function parseIsoDate(value: string): Date {
-  const safe = cleanDate(value) ?? new Date().toISOString().slice(0, 10);
+  const safe = cleanDate(value) ?? todayISO();
   const [year, month, day] = safe.split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, day));
 }

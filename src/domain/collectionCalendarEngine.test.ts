@@ -5,6 +5,7 @@ import { reconcileRealCollections } from './realReconciliationEngine';
 import {
   buildCollectionCalendar,
   calendarEventMatchesSourceFilter,
+  recomputeClientCreditDaysFromCobranza,
 } from './collectionCalendarEngine';
 
 const ASSUMPTIONS: CashFlowAssumptions = {
@@ -302,5 +303,38 @@ describe('buildCollectionCalendar', () => {
     expect(bank && calendarEventMatchesSourceFilter(bank, 'jde')).toBe(false);
     expect(jde && calendarEventMatchesSourceFilter(jde, 'jde')).toBe(true);
     expect(projected && calendarEventMatchesSourceFilter(projected, 'projected')).toBe(true);
+  });
+});
+
+describe('recomputeClientCreditDaysFromCobranza · frecuencia de facturación', () => {
+  it('la frecuencia del API (CC17) sobre-escribe el catálogo y prende frequencyFromApi', () => {
+    const client = makeClient({ id: '9001', name: 'CLIENTE ALFA', frequency: 'Mensual' });
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-1',
+      noCliente: '9001',
+      nombreCliente: 'CLIENTE ALFA',
+      importeBrutoPesos: 1000,
+      frecuenciaFacturacionClave: '1',
+      frecuenciaFacturacionNombre: 'SEMANAL                       ',
+    });
+    const [patched] = recomputeClientCreditDaysFromCobranza([client], [factura]);
+    expect(patched.frequency).toBe('Semanal');
+    expect(patched.frequencyFromApi).toBe(true);
+  });
+
+  it('una frecuencia no clasificable NO pisa el catálogo (no cae a Mensual)', () => {
+    const client = makeClient({ id: '9001', name: 'CLIENTE ALFA', frequency: 'Quincenal' });
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-2',
+      noCliente: '9001',
+      nombreCliente: 'CLIENTE ALFA',
+      importeBrutoPesos: 1000,
+      frecuenciaFacturacionNombre: 'ESPECIAL CONVENIO',
+    });
+    const [patched] = recomputeClientCreditDaysFromCobranza([client], [factura]);
+    expect(patched.frequency).toBe('Quincenal');
+    expect(patched.frequencyFromApi).not.toBe(true);
   });
 });

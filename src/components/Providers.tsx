@@ -3,6 +3,7 @@ import {
   CLASIFICACION_LABELS,
   Provider,
 } from '../domain/types';
+import { SCORE_BUCKETS, SCORE_LABELS, type ScoreBucket } from '../domain/providerScore';
 import { fetchProviderCatalog } from '../services/catalog.service';
 import {
   AlertTriangle,
@@ -35,28 +36,24 @@ import { lookupRecentSpend, type ProviderSpendIndex } from '../domain/providerRe
  * regenera el JSON.
  */
 
-type ScoreBucket = 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO';
-
-const SCORE_BUCKETS: ScoreBucket[] = ['CRITICO', 'ALTO', 'MEDIO', 'BAJO'];
-
 interface ChipStyle { bg: string; text: string; border: string; dot: string; label: string; description: string }
 
 const SCORE_STYLES: Record<ScoreBucket, ChipStyle> = {
   CRITICO: {
     bg: 'var(--danger-muted)', text: 'var(--danger)', border: 'oklch(88% 0.08 25)', dot: 'var(--danger)',
-    label: 'Operativo', description: 'Score ≥ 80. Crítico para la operación: NO PAUSAR. Su gasto mínimo se suma al piso operativo.',
+    label: SCORE_LABELS.CRITICO, description: 'Score ≥ 80. Crítico para la operación: NO PAUSAR. Su gasto mínimo se suma al piso operativo.',
   },
   ALTO: {
     bg: '#FEF3C7', text: '#92400E', border: '#FCD34D', dot: '#F59E0B',
-    label: 'Prioritario', description: 'Score 60–79. Alta prioridad: pagar a tiempo siempre que la caja lo permita.',
+    label: SCORE_LABELS.ALTO, description: 'Score 60–79. Alta prioridad: pagar a tiempo siempre que la caja lo permita.',
   },
   MEDIO: {
     bg: '#FFEDD5', text: '#9A3412', border: '#FED7AA', dot: '#F97316',
-    label: 'Negociable', description: 'Score 40–59. Negociable: se puede mover fecha o monto si falta caja.',
+    label: SCORE_LABELS.MEDIO, description: 'Score 40–59. Negociable: se puede mover fecha o monto si falta caja.',
   },
   BAJO: {
     bg: 'var(--success-muted)', text: 'var(--success)', border: 'oklch(88% 0.08 145)', dot: 'var(--success)',
-    label: 'Flexible', description: 'Score < 40. Flexible: el último en cobrar prioridad cuando la caja escasea.',
+    label: SCORE_LABELS.BAJO, description: 'Score < 40. Flexible: el último en cobrar prioridad cuando la caja escasea.',
   },
 };
 
@@ -168,8 +165,11 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
     setSyncing(true);
     setSyncError(null);
     try {
+      // El catálogo se reconstruye en App.tsx desde los records JDE en cuanto
+      // se hidratan. Aquí ya no hay un seed manual; el botón queda como hook
+      // futuro pero no debe pisar el catálogo vivo con un array vacío.
       const next = await fetchProviderCatalog();
-      onReplace(next);
+      if (next.length > 0) onReplace(next);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'No se pudo sincronizar el catálogo.');
     } finally {

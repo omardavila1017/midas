@@ -57,4 +57,39 @@ describe('classifyBankConcept', () => {
   it('campos vacíos → Sin identificar', () => {
     expect(classifyBankConcept({}).counterpartyName).toBe('Sin identificar');
   });
+
+  it('clasifica cargos bancarios sin la palabra COMISION', () => {
+    for (const c of [
+      'MANEJO DE CUENTA',
+      'MANEJO CTA EMPRESARIAL',
+      'ANUALIDAD TARJETA EMPRESARIAL',
+      'CARGO POR SERVICIO',
+      'CARGO POR SERVICIOS BANCARIOS',
+      'CHEQUE DEVUELTO',
+      'REPOSICION DE TARJETA',
+      'MEMBRESIA ANUAL',
+      'COMIS SPEI',
+    ]) {
+      const r = classifyBankConcept({ concepto: c });
+      expect(r.category, c).toBe('OPEX');
+      expect(r.counterpartyName, c).toBe('Comisiones bancarias');
+    }
+  });
+
+  it('IVA sobre comisión → Comisiones bancarias, no SAT — IVA', () => {
+    const r = classifyBankConcept({ concepto: 'IVA COMISION SPEI' });
+    expect(r.category).toBe('OPEX');
+    expect(r.counterpartyName).toBe('Comisiones bancarias');
+    expect(classifyBankConcept({ concepto: 'IVA POR MANEJO DE CUENTA' }).counterpartyName)
+      .toBe('Comisiones bancarias');
+  });
+
+  it('IVA fiscal sin comisión sigue siendo SAT — IVA', () => {
+    expect(classifyBankConcept({ concepto: 'PAGO IVA MAYO' }).counterpartyName).toBe('SAT — IVA');
+  });
+
+  it('no confunde ANUALIDAD de seguro con comisión', () => {
+    expect(classifyBankConcept({ concepto: 'ANUALIDAD SEGURO FLOTILLA' }).counterpartyName)
+      .toBe('Sin identificar');
+  });
 });

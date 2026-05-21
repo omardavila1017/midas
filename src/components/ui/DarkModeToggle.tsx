@@ -13,8 +13,11 @@ function readInitialTheme(): Theme {
   } catch {
     /* noop */
   }
-  const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-  return prefersDark ? 'dark' : 'light';
+  // Default explícito a 'light' — antes seguíamos `prefers-color-scheme`,
+  // pero eso hacía que el cold boot (que limpia midas.theme) abriera en
+  // dark si el OS estaba en dark. La preferencia explícita del usuario en
+  // el toggle se respeta vía storage; sin storage, light gana.
+  return 'light';
 }
 
 function applyTheme(theme: Theme) {

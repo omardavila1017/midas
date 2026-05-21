@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import type { FinancialProjectionSourceWorkerResponse } from '../../../workers/financialProjectionSourceWorkerTypes';
 import { AlertTriangle, CheckCircle2, Copy, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
-import { fmtCompact, fmtCurrency } from '../../../formatters';
+import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import {
   bucketKeyForDate,
   bucketLabel as engineBucketLabel,
@@ -15,6 +15,7 @@ import {
   effectiveAmount,
   effectiveMovementDate,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
+import { CashDeficitBanner } from '../../shared-finance/components/CashDeficitBanner';
 import type {
   CellOverride,
   FinancialAdjustment,
@@ -37,7 +38,9 @@ import { applyMerge, buildMergeDiff, type MergeDiffEntry } from '../services/sce
 import { FirstSimulationNudge } from '../components/FirstSimulationNudge';
 import { MovementPickerModal } from '../components/MovementPickerModal';
 import { AdjustmentEditorPopover } from '../components/AdjustmentEditorPopover';
-import { cachedRun, clearProjectionRunCache, fingerprintArray } from '../../financial-projection/services/projectionCache';
+import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../../financial-projection/services/projectionCache';
+import { projectionWindowFor } from '../../financial-projection/services/projectionWindow';
+import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunWorker';
 import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
@@ -46,9 +49,16 @@ import {
   buildFinancialProjectionSourceData,
   calculateCurrentBankCash,
   calculateInitialCash,
+  rememberFinancialProjectionSourceData,
   tryGetCachedFinancialProjectionSourceData,
   type FinancialProjectionSourceData,
 } from '../../financial-projection/services/financialProjectionService';
+import {
+  loadProjectionSourceFromPersistentCache,
+  loadScenarioRunFromPersistentCache,
+  saveProjectionSourceToPersistentCache,
+  saveScenarioRunToPersistentCache,
+} from '../../financial-projection/services/financialProjectionPersistentCache';
 import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
 import {
   loadManualPlanningEntries,
@@ -56,10 +66,8 @@ import {
 } from '../services/manualPlanningEntries';
 import {
   loadPlanningAdjustments,
-  loadPlanningAudit,
   loadPlanningScenarios,
   savePlanningAdjustments,
-  savePlanningAudit,
   savePlanningScenarios,
 } from '../services/financialPlanningStorage';
 import { loadCellOverrides, saveCellOverrides } from '../services/cellOverridesStorage';
@@ -75,12 +83,13 @@ import {
 import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../services/scenarioBootstrap';
 import { conceptKeyForMovement, buildPlanningRows } from '../services/planningRowTaxonomy';
 import { createNewDraft, duplicateDraft } from '../services/scenarioDuplicate';
-import { buildScenarioForecastRun, type ScenarioForecastRun } from '../services/scenarioForecastRun';
+import { type ScenarioForecastRun } from '../services/scenarioForecastRun';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
 import EmptyState from '../../shared-finance/components/EmptyState';
 import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
+import { useScenarioSelection } from '../../shared-finance/components/ScenarioSelectionContext';
 import {
   toneByFloor,
   toneByCount,
@@ -88,8 +97,6 @@ import {
 } from '../../shared-finance/components/tone';
 import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
-import { ProbabilisticRiskStrip } from '../../financial-projection/components/ProbabilisticRiskStrip';
-import { useProbabilisticForecast } from '../../financial-projection/services/probabilisticForecastService';
 
 interface Props {
   companyCode: string;
@@ -99,6 +106,8 @@ interface Props {
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
   cobranzaReconciliation?: RealReconciliationResult;
+  /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
+  rolRecords?: RolRecord[];
   /**
    * CXPs ya pagadas según PagoProveedor. Se excluyen del egreso
    * proyectado para no doblar (el cargo bancario real ya las descontó).
@@ -138,7 +147,7 @@ type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
  * canonical build, then mount the inner once `source` is ready.
  */
 export default function FinancialPlanningDashboard(props: Props) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = useMemo(() => todayISO(), []);
 
   const cacheProbeInput = useMemo(
     // Planeación consume la misma fuente predictiva que el Dashboard; las reglas
@@ -153,6 +162,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.cxpRecords,
       props.cobranzaRecords,
       props.cobranzaReconciliation,
+      props.rolRecords,
       props.paidCxpKeys,
       props.cargoEnrichments,
       props.purchaseReceipts,
@@ -186,14 +196,15 @@ export default function FinancialPlanningDashboard(props: Props) {
     let cancelled = false;
     const jobId = ++sourceJobRef.current;
     const tStart = performance.now();
-    // eslint-disable-next-line no-console
-    console.info(`[planning.source] requesting jobId=${jobId} cxp=${cacheProbeInput.cxpRecords.length} cobranza=${cacheProbeInput.cobranzaRecords?.length ?? 0} payroll=${cacheProbeInput.payrollCosts?.length ?? 0}`);
 
     const runSyncFallback = () => {
       const t0 = performance.now();
       try {
         const built = buildFinancialProjectionSourceData(cacheProbeInput);
-        if (!cancelled && sourceJobRef.current === jobId) setSource(built);
+        if (!cancelled && sourceJobRef.current === jobId) {
+          saveProjectionSourceToPersistentCache(cacheProbeInput, built);
+          setSource(built);
+        }
       } catch (err) {
         console.warn('[planning.source] sync fallback failed', err);
       }
@@ -201,41 +212,61 @@ export default function FinancialPlanningDashboard(props: Props) {
       console.info(`[planning.source] sync fallback ${(performance.now() - t0).toFixed(0)}ms`);
     };
 
-    if (typeof Worker === 'undefined') {
-      runSyncFallback();
-      return () => { cancelled = true; };
-    }
+    const startWorker = () => {
+      // eslint-disable-next-line no-console
+      console.info(`[planning.source] requesting jobId=${jobId} cxp=${cacheProbeInput.cxpRecords.length} cobranza=${cacheProbeInput.cobranzaRecords?.length ?? 0} rol=${cacheProbeInput.rolRecords?.length ?? 0} payroll=${cacheProbeInput.payrollCosts?.length ?? 0}`);
 
-    try {
-      if (!sourceWorkerRef.current) {
-        sourceWorkerRef.current = new Worker(
-          new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
-          { type: 'module' },
-        );
-      }
-      const worker = sourceWorkerRef.current;
-      worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
-        if (cancelled || event.data.jobId !== sourceJobRef.current) return;
-        const totalElapsed = performance.now() - tStart;
-        if (event.data.result) {
-          // eslint-disable-next-line no-console
-          console.info(`[planning.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms (incluye spawn + cómputo + transferencia)`);
-          setSource(event.data.result);
-        } else if (event.data.error) {
-          console.warn(`[planning.source] worker error jobId=${jobId} total=${totalElapsed.toFixed(0)}ms, fallback`, event.data.error);
-          runSyncFallback();
-        }
-      };
-      worker.onerror = (event) => {
-        if (cancelled) return;
-        console.warn('[planning.source] worker exception, fallback', event.message);
+      if (typeof Worker === 'undefined') {
         runSyncFallback();
-      };
-      worker.postMessage({ jobId, input: cacheProbeInput });
-    } catch (err) {
-      console.warn('[planning.source] worker spawn failed, fallback', err);
-      runSyncFallback();
-    }
+        return;
+      }
+
+      try {
+        if (!sourceWorkerRef.current) {
+          sourceWorkerRef.current = new Worker(
+            new URL('../../../workers/financialProjectionSource.worker.ts', import.meta.url),
+            { type: 'module' },
+          );
+        }
+        const worker = sourceWorkerRef.current;
+        worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
+          if (cancelled || event.data.jobId !== sourceJobRef.current) return;
+          const totalElapsed = performance.now() - tStart;
+          if (event.data.result) {
+            // eslint-disable-next-line no-console
+            console.info(`[planning.source] worker result jobId=${jobId} total=${totalElapsed.toFixed(0)}ms (incluye spawn + cómputo + transferencia)`);
+            rememberFinancialProjectionSourceData(cacheProbeInput, event.data.result);
+            saveProjectionSourceToPersistentCache(cacheProbeInput, event.data.result);
+            setSource(event.data.result);
+          } else if (event.data.error) {
+            console.warn(`[planning.source] worker error jobId=${jobId} total=${totalElapsed.toFixed(0)}ms, fallback`, event.data.error);
+            runSyncFallback();
+          }
+        };
+        worker.onerror = (event) => {
+          if (cancelled) return;
+          console.warn('[planning.source] worker exception, fallback', event.message);
+          runSyncFallback();
+        };
+        worker.postMessage({ jobId, input: cacheProbeInput });
+      } catch (err) {
+        console.warn('[planning.source] worker spawn failed, fallback', err);
+        runSyncFallback();
+      }
+    };
+
+    void (async () => {
+      const persisted = await loadProjectionSourceFromPersistentCache(cacheProbeInput);
+      if (cancelled || sourceJobRef.current !== jobId) return;
+      if (persisted) {
+        // eslint-disable-next-line no-console
+        console.info(`[planning.source] persistent cache hit jobId=${jobId}`);
+        rememberFinancialProjectionSourceData(cacheProbeInput, persisted);
+        setSource(persisted);
+        return;
+      }
+      startWorker();
+    })();
 
     return () => { cancelled = true; };
   }, [cachedSource, cacheProbeInput]);
@@ -247,6 +278,45 @@ export default function FinancialPlanningDashboard(props: Props) {
     };
   }, []);
 
+  const [scenarioRunCacheReady, setScenarioRunCacheReady] = useState(false);
+  // `props` is a fresh object every parent (App) render — App re-renders
+  // often (bank-refresh pill, useDeferredValue settling, debounced autosave)
+  // even while the user is idle. Depending the preload effect on `props`
+  // re-ran the whole heavy preload (6× localStorage JSON.parse +
+  // ensureCoreScenarios + fingerprintArray over ~142k movements + IDB read)
+  // on every one of those renders → perpetual "Cargando" + GC pressure that
+  // OOMs the renderer after a few minutes (Chrome "Aw Snap" code 5). Read
+  // props through a ref and gate the effect on the stable, App-memoized
+  // fields the preload actually consumes.
+  const latestProps = useRef(props);
+  latestProps.current = props;
+  useEffect(() => {
+    if (!source) {
+      setScenarioRunCacheReady(false);
+      return;
+    }
+    let cancelled = false;
+    setScenarioRunCacheReady(false);
+    void (async () => {
+      await preloadPlanningScenarioRuns({
+        source,
+        props: latestProps.current,
+        today,
+      });
+      if (!cancelled) setScenarioRunCacheReady(true);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    source,
+    today,
+    props.bankStatements,
+    props.startingBalance,
+    props.companyCode,
+    props.providers,
+    props.bajioStatements,
+  ]);
+
   // Segundo paint gate: una vez `source` está listo, esperamos un frame
   // adicional antes de montar el inner. El inner corre 2-3 buildScenarioRun
   // SÍNCRONOS en su primer render (cada uno = applyAdjustments + taxView +
@@ -257,7 +327,7 @@ export default function FinancialPlanningDashboard(props: Props) {
   // y los siguientes paint los sirve el `projectionRunCache` (warm).
   const [innerReady, setInnerReady] = useState(false);
   useEffect(() => {
-    if (!source) return;
+    if (!source || !scenarioRunCacheReady) return;
     if (innerReady) return;
     let cancelled = false;
     const fire = () => { if (!cancelled) setInnerReady(true); };
@@ -277,13 +347,90 @@ export default function FinancialPlanningDashboard(props: Props) {
       cancelled = true;
       window.cancelAnimationFrame(raf);
     };
-  }, [source, innerReady]);
+  }, [source, scenarioRunCacheReady, innerReady]);
 
-  if (!source || !innerReady) {
+  if (!source || !scenarioRunCacheReady || !innerReady) {
     return <PlanningWarmupShell />;
   }
 
   return <PlanningDashboardInner {...props} today={today} source={source} />;
+}
+
+async function preloadPlanningScenarioRuns(input: {
+  source: FinancialProjectionSourceData;
+  props: Props;
+  today: string;
+}): Promise<void> {
+  const { source, props, today } = input;
+  const sourceBaseScenario = source.scenarios.find((scenario) => scenario.kind === 'BASE') ?? source.scenarios[0];
+  const storedScenarios = loadPlanningScenarios([]);
+  const storedAdjustments = loadPlanningAdjustments([]);
+  const manualEntries = loadManualPlanningEntries([]);
+  const customRows = loadCustomRows([]);
+  const cellOverrides = loadCellOverrides([]);
+  const changeLog = loadChangeLog([]);
+  const bootstrap = ensureCoreScenarios({
+    storedScenarios,
+    storedAdjustments,
+    manualEntries,
+    customRows,
+    cellOverrides,
+    changeLog,
+    sourceBaseScenario,
+    user: USER,
+  });
+  if (bootstrap.changed) {
+    savePlanningScenarios(bootstrap.scenarios);
+    savePlanningAdjustments(bootstrap.adjustments);
+    saveManualPlanningEntries(bootstrap.manualEntries);
+    saveCustomRows(bootstrap.customRows);
+    saveCellOverrides(bootstrap.cellOverrides);
+    saveChangeLog(bootstrap.changeLog);
+  }
+  const baseScenario = bootstrap.scenarios.find((scenario) => scenario.id === BASE_SCENARIO_ID && scenario.kind === 'BASE') ?? sourceBaseScenario;
+  const approvedScenario = bootstrap.scenarios.find((scenario) => scenario.id === APPROVED_SCENARIO_ID && scenario.kind === 'APPROVED' && !scenario.archivedAt)
+    ?? bootstrap.scenarios.find((scenario) => scenario.kind === 'APPROVED' && !scenario.archivedAt)
+    ?? baseScenario;
+  const y = today.slice(0, 4);
+  const yearStart = `${y}-01-01`;
+  const yearEnd = `${y}-12-31`;
+  const taxStore = loadTaxStore(defaultTaxStore());
+  const initialCash = calculateInitialCash(props.bankStatements, props.startingBalance, { companyCode: props.companyCode });
+  const supplierInitialCash = calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash);
+  const minimumCash = minimumCashFor();
+  const sharedRunInputsKey = [
+    fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount)),
+    fingerprintArray(bootstrap.adjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt),
+    fingerprintArray(bootstrap.manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? '')),
+    [
+      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
+      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
+      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
+      taxStore.overdueBalance,
+    ].join(':'),
+    fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? '')),
+    fingerprintArray(
+      props.bajioStatements ?? [],
+      (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
+    ),
+    yearStart,
+    yearEnd,
+    today,
+    initialCash,
+    supplierInitialCash,
+    minimumCash,
+    'monthly',
+  ].join('|');
+
+  await Promise.all([baseScenario, approvedScenario].map(async (scenario) => {
+    const scenarioCustomRows = bootstrap.customRows.filter((row) => row.scenarioId === scenario.id);
+    const scenarioOverrides = bootstrap.cellOverrides.filter((override) => override.scenarioId === scenario.id);
+    const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
+    const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
+    const cacheKey = `planning-run:${scenario.id}:m1|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
+    const cached = await loadScenarioRunFromPersistentCache(cacheKey);
+    if (cached) primeProjectionRunCache(cacheKey, cached);
+  }));
 }
 
 function PlanningWarmupShell() {
@@ -308,7 +455,26 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   // of the Chrome "Aw Snap" code 5 OOM after switching scenarios/tabs).
   useEffect(() => () => clearProjectionRunCache(), []);
 
-  const [granularity, setGranularity] = useState<ProjectionGranularity>('monthly');
+  // Off-main-thread scenario pipeline. Cache hit = sync (unchanged); miss =
+  // worker + stale-while-recompute so cell edits never freeze the tab.
+  const { runCached, runVersion } = useScenarioRunWorker();
+
+  // Granularidad vía useTransition: el cambio mes/sem/día dispara recómputos
+  // pesados (ventana + buckets + runs por escenario). Sin transición, clicks
+  // rápidos encolaban N recómputos síncronos seriales → se trababa la UI.
+  // Con transición React puede interrumpir/descartar renders intermedios y
+  // sólo commitea la última selección. UNA sola fuente de verdad
+  // (`granularity`) — no se parte en deferred/immediate para no arriesgar
+  // bucket keys desalineadas (números financieros silenciosamente mal).
+  const [granularity, setGranularityState] = useState<ProjectionGranularity>('monthly');
+  const [granularityPending, startGranularityTransition] = useTransition();
+  const setGranularity = useCallback(
+    (next: ProjectionGranularity) => {
+      if (next === granularity) return;
+      startGranularityTransition(() => setGranularityState(next));
+    },
+    [granularity],
+  );
   // Window depends on granularity. Monthly = año en curso (Ene 1 → Dic 31):
   // Planeación debe arrancar en enero y son solo 12 buckets. Weekly/daily over
   // a full year = up to 365 daily columns × N rows × synchronous per-scenario
@@ -317,18 +483,15 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const { yearStart, yearEnd } = useMemo(() => {
     const y = today.slice(0, 4);
     if (granularity === 'monthly') {
+      // Planeación monthly = año natural completo (Ene 1 → Dic 31, 12 buckets).
+      // Difiere a propósito del monthly de Proyección (today+364).
       return { yearStart: `${y}-01-01`, yearEnd: `${y}-12-31` };
     }
-    const base = new Date(`${today}T00:00:00.000Z`);
-    const shift = (days: number) => {
-      const d = new Date(base);
-      d.setUTCDate(d.getUTCDate() + days);
-      return d.toISOString().slice(0, 10);
-    };
-    // weekly ≈ 32 buckets, daily ≈ 90 buckets — both render/compute safely.
-    return granularity === 'weekly'
-      ? { yearStart: shift(-56), yearEnd: shift(168) }
-      : { yearStart: shift(-14), yearEnd: shift(76) };
+    // Sub-month: comparte la ventana acotada con Proyección
+    // (projectionWindowFor) para que AMBOS dashboards usen la misma vista —
+    // día = "lo que lleva el mes actual + 2 meses adelante". Mantiene los dos
+    // en sync (CLAUDE.md) y respeta el spec de producto en una sola fuente.
+    return projectionWindowFor(today, granularity);
   }, [today, granularity]);
 
   const sourceBaseScenario = useMemo(
@@ -388,17 +551,19 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     setCustomRows(bootstrap.customRows);
     setCellOverrides(bootstrap.cellOverrides);
     setChangeLog(bootstrap.changeLog);
-    if (bootstrap.auditEvents.length > 0) {
-      const previous = loadPlanningAudit([]);
-      savePlanningAudit([...bootstrap.auditEvents, ...previous]);
-    }
   }, [bootstrap]);
 
   const scenarios = bootstrap.scenarios;
   const baseScenario = scenarios.find((s) => s.id === BASE_SCENARIO_ID && s.kind === 'BASE')!;
   const approvedScenario = scenarios.find((s) => s.id === APPROVED_SCENARIO_ID && s.kind === 'APPROVED')!;
 
-  const [activeScenarioId, setActiveScenarioId] = useState<string>(() => APPROVED_SCENARIO_ID);
+  // Active scenario is driven by the global header selector when the
+  // provider is mounted (the app shell). Standalone (isolation tests) it
+  // falls back to local state so behavior is preserved.
+  const scenarioCtx = useScenarioSelection();
+  const [localScenarioId, setLocalScenarioId] = useState<string>(() => APPROVED_SCENARIO_ID);
+  const activeScenarioId = scenarioCtx?.activeScenarioId ?? localScenarioId;
+  const setActiveScenarioId = scenarioCtx?.setActiveScenarioId ?? setLocalScenarioId;
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [mergeOpen, setMergeOpen] = useState<string | null>(null);
   const [addRowFor, setAddRowFor] = useState<FinancialMovementType | null>(null);
@@ -414,7 +579,15 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     if (!scenarios.some((s) => s.id === activeScenarioId && !s.archivedAt)) {
       setActiveScenarioId(approvedScenario.id);
     }
-  }, [scenarios, activeScenarioId, approvedScenario.id]);
+  }, [scenarios, activeScenarioId, approvedScenario.id, setActiveScenarioId]);
+
+  // Publish the fully-bootstrapped scenario list (incl. drafts) up to the
+  // global header selector. Planeación is the editing surface, so it owns
+  // CRUD; the header just mirrors what lives here.
+  const registerScenarios = scenarioCtx?.registerScenarios;
+  useEffect(() => {
+    registerScenarios?.(scenarios);
+  }, [registerScenarios, scenarios]);
 
   // External commands from CommandPalette (Cmd+K).
   useEffect(() => {
@@ -513,10 +686,14 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
     const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
-    return cachedRun<PlanningScenarioRun>(cacheKey, () => {
-      const t0 = performance.now();
-      const scenario = scenarios.find((s) => s.id === scenarioId);
-      const result = buildScenarioForecastRun({
+    const scenario = scenarios.find((s) => s.id === scenarioId);
+    const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)
+      ? (key: string, run: PlanningScenarioRun) => saveScenarioRunToPersistentCache(key, run)
+      : undefined;
+    return runCached<PlanningScenarioRun>(
+      cacheKey,
+      scenarioId,
+      () => ({
         scenarioId,
         scenarioName: scenario?.name ?? scenarioId,
         scenarioKind: scenario?.kind ?? 'DRAFT',
@@ -543,24 +720,22 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         minimumCash,
         granularity,
         includeManualEntries,
-      });
-      // eslint-disable-next-line no-console
-      console.info(`[planning.scenarioRun] scenarioId=${scenarioId} ${(performance.now() - t0).toFixed(0)}ms · movements=${result.movements.length}`);
-      return result;
-    });
+      }),
+      persistRun,
+    );
   };
 
   // Approved baseline used for diff reference.
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows],
+    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows, runVersion],
   );
 
   const baseRun = useMemo(
     () => buildScenarioRun(baseScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [baseScenario.id, sharedRunInputsKey, cellOverrides, customRows],
+    [baseScenario.id, sharedRunInputsKey, cellOverrides, customRows, runVersion],
   );
 
   // Reuse approved/base when the active scenario is one of them — the cache
@@ -573,7 +748,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       return buildScenarioRun(activeScenario.id, true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows],
+    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows, runVersion],
   );
 
   const activeOverrides = useMemo(
@@ -582,7 +757,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   );
   const rows = activeRunRaw.rows;
   const activeRun = activeRunRaw;
-  const probabilistic = useProbabilisticForecast(activeRun, activeRun.summary.minimumCashRequired);
 
   // Approved overrides for the diff and merge logic
   const approvedOverrides = useMemo(
@@ -622,6 +796,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     initialCash,
     minimumCash,
     sharedRunInputsKey,
+    runVersion,
   ]);
 
   // Pre-override per-row aggregates (for cell display when no override).
@@ -1002,10 +1177,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     setCustomRows(result.customRows);
     setManualEntries(result.manualEntries);
     setChangeLog(result.changeLog);
-    if (result.auditEvents.length > 0) {
-      const previous = loadPlanningAudit([]);
-      savePlanningAudit([...result.auditEvents, ...previous]);
-    }
     setMergeOpen(null);
     setActiveScenarioId(approvedScenario.id);
     setStatusMessage(`Cambios aplicados al Aprobado: ${args.selectedChanges.length}.`);
@@ -1041,6 +1212,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
             <SegmentedFilter
               value={granularity}
               onChange={setGranularity}
+              busy={granularityPending}
               options={[
                 { value: 'monthly', label: 'Mes' },
                 { value: 'weekly', label: 'Sem' },
@@ -1119,10 +1291,10 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         />
       </div>
 
-      <ProbabilisticRiskStrip
-        run={probabilistic.run}
-        loading={probabilistic.loading}
-        error={probabilistic.error}
+      <CashDeficitBanner
+        run={activeRun}
+        scenarioName={activeScenario.name}
+        onClickDetail={() => goTo({ tab: 'financialProjection', focus: 'deficit' })}
       />
 
       <SpreadsheetGrid
@@ -1271,13 +1443,22 @@ function SegmentedFilter<T extends string>({
   value,
   onChange,
   options,
+  busy = false,
 }: {
   value: T;
   onChange: (next: T) => void;
   options: Array<{ value: T; label: string }>;
+  // Recómputo de la nueva granularidad en curso (useTransition). No bloquea
+  // clicks — el usuario puede recapacitar y la transición coalesce — sólo
+  // da feedback visual de "calculando".
+  busy?: boolean;
 }) {
   return (
-    <div className="inline-flex h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5">
+    <div
+      aria-busy={busy}
+      className="inline-flex h-10 rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] p-0.5 transition-opacity"
+      style={{ opacity: busy ? 0.6 : 1 }}
+    >
       {options.map((option) => {
         const active = option.value === value;
         return (

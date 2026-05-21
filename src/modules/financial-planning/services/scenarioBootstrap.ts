@@ -1,5 +1,4 @@
 import type {
-  AuditEvent,
   CellOverride,
   FinancialAdjustment,
   FinancialScenario,
@@ -8,7 +7,6 @@ import type {
   ScenarioChangeLogEntry,
 } from '../../shared-finance/types';
 import { LEGACY_SCENARIO_KINDS } from '../../shared-finance/types';
-import { createAuditEvent } from '../../shared-finance/audit/audit';
 
 export const BASE_SCENARIO_ID = 'base';
 export const APPROVED_SCENARIO_ID = 'approved';
@@ -31,33 +29,18 @@ export interface BootstrapResult {
   customRows: PlanningCustomRow[];
   cellOverrides: CellOverride[];
   changeLog: ScenarioChangeLogEntry[];
-  auditEvents: AuditEvent[];
   changed: boolean;
 }
 
 export function ensureCoreScenarios(input: BootstrapInput): BootstrapResult {
-  const user = input.user ?? 'system@senda.local';
   const now = new Date().toISOString();
   let changed = false;
-  const auditEvents: AuditEvent[] = [];
 
   const legacyKindSet = new Set<string>(LEGACY_SCENARIO_KINDS);
   const legacyScenarios = input.storedScenarios.filter((scenario) => legacyKindSet.has(scenario.kind as string));
   const legacyIds = new Set(legacyScenarios.map((scenario) => scenario.id));
 
   if (legacyScenarios.length > 0) changed = true;
-
-  for (const legacy of legacyScenarios) {
-    auditEvents.push(createAuditEvent({
-      entityType: 'SCENARIO',
-      entityId: legacy.id,
-      action: 'DELETE',
-      previousValue: { kind: legacy.kind, name: legacy.name },
-      newValue: null,
-      comment: 'Borrado por migración a modelo BASE/APPROVED/DRAFT.',
-      userId: user,
-    }));
-  }
 
   let survivingScenarios = input.storedScenarios.filter((scenario) => !legacyIds.has(scenario.id));
 
@@ -98,15 +81,6 @@ export function ensureCoreScenarios(input: BootstrapInput): BootstrapResult {
     };
     survivingScenarios = [baseScenario, ...survivingScenarios];
     changed = true;
-    auditEvents.push(createAuditEvent({
-      entityType: 'SCENARIO',
-      entityId: baseScenario.id,
-      action: 'CREATE',
-      previousValue: null,
-      newValue: { kind: 'BASE' },
-      comment: 'Escenario Base materializado en bootstrap.',
-      userId: user,
-    }));
   }
 
   // Ensure Approved.
@@ -134,32 +108,20 @@ export function ensureCoreScenarios(input: BootstrapInput): BootstrapResult {
     };
     survivingScenarios = [...survivingScenarios, approvedScenario];
     changed = true;
-    auditEvents.push(createAuditEvent({
-      entityType: 'SCENARIO',
-      entityId: approvedScenario.id,
-      action: 'CREATE',
-      previousValue: null,
-      newValue: { kind: 'APPROVED' },
-      comment: 'Escenario Aprobado materializado en bootstrap.',
-      userId: user,
-    }));
   } else if (approvedCandidates.length === 1) {
     approvedScenario = approvedCandidates[0];
   } else {
-    const sorted = [...approvedCandidates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    // Defensive: `isScenario` only checks `id`, so a malformed persisted
+    // scenario can land here without `updatedAt`. localeCompare on undefined
+    // throws; coalesce to '' so corrupted records sort to the bottom instead
+    // of breaking the bootstrap.
+    const sorted = [...approvedCandidates].sort(
+      (a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''),
+    );
     approvedScenario = sorted[0];
     const archivedAt = now;
     survivingScenarios = survivingScenarios.map((scenario) => {
       if (scenario.kind !== 'APPROVED' || scenario.id === approvedScenario.id) return scenario;
-      auditEvents.push(createAuditEvent({
-        entityType: 'SCENARIO',
-        entityId: scenario.id,
-        action: 'DELETE',
-        previousValue: { kind: scenario.kind },
-        newValue: { archivedAt },
-        comment: 'Múltiples Aprobados detectados; archivado el más antiguo.',
-        userId: user,
-      }));
       return { ...scenario, archivedAt };
     });
     changed = true;
@@ -190,7 +152,6 @@ export function ensureCoreScenarios(input: BootstrapInput): BootstrapResult {
     customRows,
     cellOverrides,
     changeLog,
-    auditEvents,
     changed,
   };
 }

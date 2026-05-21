@@ -15,7 +15,14 @@
  * active/base/approved × at most a couple of granularities.
  */
 
-const MAX_ENTRIES = 8;
+// Lowered 8 → 4 (2026-05-19): each entry is a fat PlanningScenarioRun holding
+// the full post-pipeline movements array. With real 2-year multi-company
+// volume, 8 retained runs × scenarios × granularities was a primary "idle
+// OOM" accumulator (background data waves rebuild → fat runs pile up). 4
+// covers the real access pattern (active/base/approved + one alt) and halves
+// peak retained memory; the extra recompute on a cold switch is now cheap
+// (worker-offloaded + gran-bounded window).
+const MAX_ENTRIES = 4;
 
 class LRU<K, V> {
   private map = new Map<K, V>();
@@ -52,6 +59,10 @@ export const projectionRunCache = new LRU<string, unknown>(MAX_ENTRIES);
 // become GC-eligible instead of staying pinned for the whole SPA session.
 export function clearProjectionRunCache(): void {
   projectionRunCache.clear();
+}
+
+export function primeProjectionRunCache<T>(key: string, value: T): void {
+  projectionRunCache.set(key, value as unknown);
 }
 
 export function cachedRun<T>(key: string, build: () => T): T {

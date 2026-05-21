@@ -1,5 +1,6 @@
-import type { CashFlowAssumptions, Client, CollectionEvent } from './types';
+import type { CashFlowAssumptions, Client, CollectionEvent, Frequency } from './types';
 import { eventKey } from './types';
+import { parseFrequencyStrict } from './loadClientsCatalog';
 import { projectYear } from './collectionEngine';
 import { resolveRealPaymentDate, toISODate } from './calendar';
 import { parseCc13PaymentDay } from './parsePaymentDay';
@@ -7,6 +8,7 @@ import { isNonOperatingDay } from './bankHolidays';
 import { isInternalCounterparty } from './netCashFlowEngine';
 import { normalizeClientText } from './clientGrouping';
 import type { CobranzaRecord } from '../services/jdeTypes';
+import { todayISO } from '../formatters';
 import type {
   AbonoEnrichment,
   MatchTier,
@@ -337,7 +339,7 @@ function eventFromJdeOpenProjected(
   const resolved = clientMatch
     ? resolveCobranzaRuleDate(record, clientMatch.client, assumptions)
     : resolveCobranzaApiPaymentDate(record);
-  const fallbackDate = record.fechaVence || record.fechaFactura || new Date().toISOString().slice(0, 10);
+  const fallbackDate = record.fechaVence || record.fechaFactura || todayISO();
   return {
     id: `jde-open:${record.cia}:${record.noFactura}`,
     source: 'JDE_OPEN_PROJECTED',
@@ -551,7 +553,7 @@ export function resolveCobranzaRuleDate(
   client: Client,
   assumptions: CashFlowAssumptions,
 ): { calendarDate: string; invoiceDate: string; theoreticalDate: string; reason: string } {
-  const invoiceDate = record.fechaFactura || record.fechaVence || new Date().toISOString().slice(0, 10);
+  const invoiceDate = record.fechaFactura || record.fechaVence || todayISO();
   const invoice = parseIsoDate(invoiceDate);
 
   // Días de crédito: `Dias_Credito` del API (por factura) es autoridad sobre
@@ -602,7 +604,7 @@ export function resolveCobranzaApiPaymentDate(
   const paymentDay = parseCc13PaymentDay(apiName);
   if (!paymentDay) return null;
 
-  const invoiceDate = record.fechaFactura || record.fechaVence || new Date().toISOString().slice(0, 10);
+  const invoiceDate = record.fechaFactura || record.fechaVence || todayISO();
   const invoice = parseIsoDate(invoiceDate);
   const creditDays = record.diasCredito && record.diasCredito > 0
     ? record.diasCredito
@@ -616,6 +618,48 @@ export function resolveCobranzaApiPaymentDate(
     invoiceDate: toISODate(invoice),
     theoreticalDate: toISODate(theoretical),
     reason: `Regla CC13 /cobranza: ${apiName || 'dia de pago'}.`,
+  };
+}
+
+/**
+ * Fecha de cobro esperada para un cliente a partir de una fecha base
+ * arbitraria (p.ej. la fecha del viaje ejecutado en ROL), aplicando SOLO la
+ * regla del catálogo: `creditDays` + día de pago + frecuencia + factoraje.
+ *
+ * Es el núcleo de regla compartido con `resolveCobranzaRuleDate` (que además
+ * antepone autoridad por-factura del API). El catálogo del cliente ya viene
+ * sincronizado del API /cobranza (`recomputeClientCreditDaysFromCobranza`),
+ * así que para ROL —donde no hay factura ni override por-factura— esta regla
+ * es la autoridad correcta. No double source: la lógica vive una sola vez.
+ */
+export function resolveClientCalendarDate(
+  client: Client,
+  baseDateISO: string,
+  assumptions: CashFlowAssumptions,
+): { calendarDate: string; theoreticalDate: string; reason: string } {
+  const invoice = parseIsoDate(baseDateISO);
+  const creditDays = client.creditDays;
+  const theoretical = addDays(invoice, creditDays);
+
+  let real: Date;
+  let reason: string;
+  if (client.factoraje) {
+    real = addDays(invoice, assumptions.factorajeDays);
+    while (isNonOperatingDay(real)) real = addDays(real, 1);
+    reason = `Factoraje: base + ${assumptions.factorajeDays} dias.`;
+  } else {
+    const catalogPattern = parseCc13PaymentDay(client.paymentDayName);
+    const pattern = catalogPattern ?? client.paymentDay;
+    real = resolveRealPaymentDate(theoretical, pattern, client.frequency);
+    const ruleSrc = catalogPattern
+      ? `dia pago API ${client.paymentDayName}`
+      : (client.paymentDayRaw || client.paymentDay.kind);
+    reason = `Regla cliente: ${creditDays} dias credito + ${ruleSrc}.`;
+  }
+  return {
+    calendarDate: toISODate(real),
+    theoreticalDate: toISODate(theoretical),
+    reason,
   };
 }
 
@@ -653,6 +697,10 @@ function isoDaysBetween(fromIso: string, toIso: string): number {
  *      API (autoridad JDE; lock UI). Excepto cuando el padre es el bucket
  *      genérico "Resto Clientes" (49080179) — ese se ignora.
  *   3. `paymentDayName` ← `Nombre_Dia_Pago_CC13` del API ("Viernes", etc.).
+ *   4. `frequency` ← `Nombre_Frecuencia_Facturacion_CC17` del API
+ *      ("MENSUAL"/"SEMANAL"/"QUINCENAL") si es clasificable; marca
+ *      `frequencyFromApi=true`. Si el API manda algo no reconocible, se
+ *      conserva la frecuencia del catálogo (no se pisa con un default).
  *
  * Match cliente↔cobranza pasa por `findClientForCobranza` (dig + tokens) que
  * funciona aunque el cliente no tenga jdeAccounts explícitos. Devuelve la
@@ -675,6 +723,7 @@ export function recomputeClientCreditDaysFromCobranza(
     noClientePadre?: string;
     nombreClientePadre?: string;
     diaPagoNombre?: string;
+    frecuenciaApi?: Frequency;
     lagSum: number;
     lagCount: number;
   }
@@ -697,6 +746,10 @@ export function recomputeClientCreditDaysFromCobranza(
       info.nombreClientePadre = record.nombreClientePadre;
     }
     if (record.diaPagoNombre && !info.diaPagoNombre) info.diaPagoNombre = record.diaPagoNombre;
+    if (record.frecuenciaFacturacionNombre && !info.frecuenciaApi) {
+      const f = parseFrequencyStrict(record.frecuenciaFacturacionNombre);
+      if (f) info.frecuenciaApi = f;
+    }
     // Sample de lag real (fallback cuando no hay diasCredito API).
     if (record.fechaCobro && record.fechaFactura && record.importePendientePesos === 0) {
       const lag = isoDaysBetween(record.fechaFactura, record.fechaCobro);
@@ -761,6 +814,18 @@ export function recomputeClientCreditDaysFromCobranza(
     if (info.diaPagoNombre && client.paymentDayName !== info.diaPagoNombre) {
       patch.paymentDayName = info.diaPagoNombre;
       dirty = true;
+    }
+
+    // 4. Frecuencia de facturación — autoridad JDE cuando es clasificable.
+    if (info.frecuenciaApi != null) {
+      if (client.frequency !== info.frecuenciaApi) {
+        patch.frequency = info.frecuenciaApi;
+        dirty = true;
+      }
+      if (client.frequencyFromApi !== true) {
+        patch.frequencyFromApi = true;
+        dirty = true;
+      }
     }
 
     if (!dirty) return client;

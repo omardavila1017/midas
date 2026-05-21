@@ -4,6 +4,7 @@ import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
+import { todayISO } from '../../../formatters';
 import type {
   FinancialMovement,
   PayrollCostRecord,
@@ -513,42 +514,113 @@ export function buildAutomaticTaxReserveMovements(params: {
         .reduce((sum, payment) => sum + payment.amount, 0);
       const reserveAmount = Math.max(0, obligation.totalAmount - committedAmount);
       if (reserveAmount <= 0) return [];
-      const projectedDate = obligation.dueDate < params.asOfDate ? params.asOfDate : obligation.dueDate;
-      if (projectedDate < params.startDate || projectedDate > params.endDate) return [];
-      const movement: FinancialMovement = {
-        id: `tax-reserve:${params.scenarioId}:${obligation.id}`,
-        sourceSystem: 'TAX' as const,
-        sourceObjectId: obligation.id,
-        type: 'OUTFLOW' as const,
-        category: 'TAX' as const,
-        counterpartyName: taxAuthorityName(obligation.taxType),
-        counterpartyType: 'TAX_AUTHORITY' as const,
-        concept: `Reserva ${obligation.taxType} ${obligation.period} · ${obligation.label}`,
-        currency: 'MXN',
-        originalAmount: reserveAmount,
-        baseAmount: reserveAmount,
-        projectedAmount: reserveAmount,
-        adjustedAmount: reserveAmount,
-        issueDate: `${obligation.period}-01`,
+      const installments = planReserveInstallments({
+        reserveAmount,
+        period: obligation.period,
         dueDate: obligation.dueDate,
-        projectedDate,
-        adjustedDate: projectedDate,
-        confidenceScore: obligation.source === 'CALCULATED' ? 74 : 84,
-        confidenceBand: calculateConfidenceBand(obligation.source === 'CALCULATED' ? 74 : 84),
-        forecastMethod: obligation.source === 'CALCULATED' ? 'RULE' as const : 'MANUAL' as const,
-        ruleApplied: 'Reserva fiscal automática',
-        taxTreatment: 'IVA_EXEMPT' as const,
-        status: obligation.status === 'PAID' ? 'EXECUTED' as const : 'PROJECTED_BASE' as const,
-        lockState: obligation.taxType === 'IMSS' || obligation.risk === 'LEGAL' ? 'LOCKED' as const : 'RESTRICTED' as const,
-        comments: [
-          `Saldo fiscal no cubierto por pagos aprobados/pagados: ${obligation.taxType} ${obligation.period}.`,
-          obligation.comment,
-        ].filter((value): value is string => Boolean(value)),
-        createdAt: `${params.asOfDate}T00:00:00.000Z`,
-        updatedAt: `${params.asOfDate}T00:00:00.000Z`,
-      };
-      return [movement];
+        asOfDate: params.asOfDate,
+      });
+      const confidenceScore = obligation.source === 'CALCULATED' ? 74 : 84;
+      const lockState = obligation.taxType === 'IMSS' || obligation.risk === 'LEGAL'
+        ? 'LOCKED' as const
+        : 'RESTRICTED' as const;
+      const status = obligation.status === 'PAID' ? 'EXECUTED' as const : 'PROJECTED_BASE' as const;
+      const total = installments.length;
+      return installments.flatMap((installment, index) => {
+        if (installment.date < params.startDate || installment.date > params.endDate) return [];
+        const conceptSuffix = total > 1 ? ` · parcialidad ${index + 1}/${total}` : '';
+        const idSuffix = total > 1 ? `:wk:${index + 1}` : '';
+        const movement: FinancialMovement = {
+          id: `tax-reserve:${params.scenarioId}:${obligation.id}${idSuffix}`,
+          sourceSystem: 'TAX' as const,
+          sourceObjectId: obligation.id,
+          type: 'OUTFLOW' as const,
+          category: 'TAX' as const,
+          counterpartyName: taxAuthorityName(obligation.taxType),
+          counterpartyType: 'TAX_AUTHORITY' as const,
+          concept: `Reserva ${obligation.taxType} ${obligation.period} · ${obligation.label}${conceptSuffix}`,
+          currency: 'MXN',
+          originalAmount: installment.amount,
+          baseAmount: installment.amount,
+          projectedAmount: installment.amount,
+          adjustedAmount: installment.amount,
+          issueDate: `${obligation.period}-01`,
+          dueDate: obligation.dueDate,
+          projectedDate: installment.date,
+          adjustedDate: installment.date,
+          confidenceScore,
+          confidenceBand: calculateConfidenceBand(confidenceScore),
+          forecastMethod: obligation.source === 'CALCULATED' ? 'RULE' as const : 'MANUAL' as const,
+          ruleApplied: 'Reserva fiscal automática',
+          taxTreatment: 'IVA_EXEMPT' as const,
+          status,
+          lockState,
+          comments: [
+            `Saldo fiscal no cubierto por pagos aprobados/pagados: ${obligation.taxType} ${obligation.period}.`,
+            obligation.comment,
+          ].filter((value): value is string => Boolean(value)),
+          createdAt: `${params.asOfDate}T00:00:00.000Z`,
+          updatedAt: `${params.asOfDate}T00:00:00.000Z`,
+        };
+        return [movement];
+      });
     });
+}
+
+/**
+ * Reparte el saldo fiscal no cubierto en parcialidades semanales entre
+ * max(asOfDate, primer día del período) y dueDate. Evita que el bulto entero
+ * caiga el día 17 y tire la caja a negativo.
+ *
+ * - Si la ventana abarca ≤ 1 semana (o dueDate ya venció), una sola
+ *   parcialidad en max(asOfDate, dueDate). Compatibilidad con el comportamiento
+ *   previo para deudas vencidas o periodos al borde del vencimiento.
+ * - La última parcialidad absorbe el redondeo para que la suma sea exacta.
+ */
+function planReserveInstallments(args: {
+  reserveAmount: number;
+  period: string;
+  dueDate: string;
+  asOfDate: string;
+}): Array<{ date: string; amount: number }> {
+  const windowEnd = args.dueDate;
+  if (windowEnd < args.asOfDate) {
+    return [{ date: args.asOfDate, amount: args.reserveAmount }];
+  }
+  const periodStart = `${args.period}-01`;
+  const windowStart = periodStart > args.asOfDate ? periodStart : args.asOfDate;
+  if (windowStart >= windowEnd) {
+    return [{ date: windowEnd, amount: args.reserveAmount }];
+  }
+  const dayMs = 86_400_000;
+  const startMs = Date.UTC(
+    Number(windowStart.slice(0, 4)),
+    Number(windowStart.slice(5, 7)) - 1,
+    Number(windowStart.slice(8, 10)),
+  );
+  const endMs = Date.UTC(
+    Number(windowEnd.slice(0, 4)),
+    Number(windowEnd.slice(5, 7)) - 1,
+    Number(windowEnd.slice(8, 10)),
+  );
+  const totalDays = Math.max(1, Math.round((endMs - startMs) / dayMs));
+  const weeks = Math.max(1, Math.ceil(totalDays / 7));
+  if (weeks <= 1) {
+    return [{ date: windowEnd, amount: args.reserveAmount }];
+  }
+  const perWeek = Math.round((args.reserveAmount / weeks) * 100) / 100;
+  const installments: Array<{ date: string; amount: number }> = [];
+  let allocated = 0;
+  for (let i = 0; i < weeks; i++) {
+    const offsetMs = (i + 1) * 7 * dayMs;
+    const clampedMs = startMs + offsetMs > endMs ? endMs : startMs + offsetMs;
+    const date = new Date(clampedMs).toISOString().slice(0, 10);
+    const isLast = i === weeks - 1;
+    const amount = isLast ? Math.max(0, args.reserveAmount - allocated) : perWeek;
+    allocated += amount;
+    installments.push({ date, amount });
+  }
+  return installments;
 }
 
 export function taxDueDate(period: string): string {
@@ -1754,7 +1826,7 @@ function normalizeLegacyOperatingDebt(value: unknown): TaxObligation | null {
     paymentPlan: plan,
     risk: taxType === 'IMSS' ? 'LEGAL' : taxType === 'IVA' ? 'HIGH' : 'MEDIUM',
     comment: typeof raw.comments === 'string' && raw.comments.trim() ? raw.comments.trim() : undefined,
-    status: statusFromPaymentPlan(amount, plan, new Date().toISOString().slice(0, 10), dueDate),
+    status: statusFromPaymentPlan(amount, plan, todayISO(), dueDate),
   };
 }
 
@@ -1833,7 +1905,7 @@ function normalizeObligation(value: unknown): TaxObligation | null {
       ? raw.risk
       : taxType === 'IMSS' ? 'LEGAL' : taxType === 'IVA' ? 'HIGH' : 'MEDIUM',
     comment: typeof raw.comment === 'string' && raw.comment.trim() ? raw.comment.trim() : undefined,
-    status: normalizeStatus(raw.status) ?? statusFromPaymentPlan(totalAmount, paymentPlan, new Date().toISOString().slice(0, 10), dueDate),
+    status: normalizeStatus(raw.status) ?? statusFromPaymentPlan(totalAmount, paymentPlan, todayISO(), dueDate),
   };
 }
 

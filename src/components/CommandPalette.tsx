@@ -9,7 +9,6 @@ import React, {
   useDeferredValue,
 } from 'react';
 import {
-  LayoutDashboard,
   Sliders,
   FlaskConical,
   LineChart,
@@ -28,7 +27,6 @@ import {
 } from 'lucide-react';
 
 type TabId =
-  | 'dashboard'
   | 'financialProjection'
   | 'financialPlanning'
   | 'kpis'
@@ -79,7 +77,6 @@ interface ResultItem {
 }
 
 const NAVIGATION_ITEMS: NavigationItem[] = [
-  { tabId: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
   { tabId: 'financialProjection', label: 'Proyección Financiera', icon: <BarChart3 size={18} /> },
   { tabId: 'financialPlanning', label: 'Planeación Financiera', icon: <ClipboardList size={18} /> },
   { tabId: 'kpis', label: 'KPIs', icon: <Sliders size={18} /> },
@@ -89,7 +86,7 @@ const NAVIGATION_ITEMS: NavigationItem[] = [
   { tabId: 'providers', label: 'Proveedores', icon: <Users size={18} /> },
   { tabId: 'collections', label: 'Cobros', icon: <HandCoins size={18} /> },
   { tabId: 'clients', label: 'Clientes', icon: <UserSquare size={18} /> },
-  { tabId: 'cxp', label: 'CxP', icon: <Receipt size={18} /> },
+  { tabId: 'cxp', label: 'Antigüedad de Saldo', icon: <Receipt size={18} /> },
   { tabId: 'bancos', label: 'Bancos', icon: <Landmark size={18} /> },
   { tabId: 'netflow', label: 'Flujo Neto', icon: <Wallet size={18} /> },
 ];

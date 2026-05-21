@@ -1,21 +1,17 @@
-import { useState, useCallback, useRef, useMemo, useEffect, type ReactNode } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, Fragment, type ReactNode } from 'react';
 import {
-  Upload as UploadIcon,
   FileSpreadsheet,
   Loader2,
   AlertCircle,
   Search,
   Building2,
   Clock,
-  AlertTriangle,
-  TrendingUp,
   ChevronDown,
   ChevronRight,
   X,
   ArrowUpDown,
   Receipt,
   Filter,
-  RotateCcw,
   Database,
   RefreshCw,
   HelpCircle,
@@ -29,15 +25,14 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  PieChart,
-  Pie,
   Cell,
 } from 'recharts';
 import { hex } from '../theme';
+import PageHeader from './ui/PageHeader';
 import { fmtCompact, fmtCurrency } from '../formatters';
 import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
 import { enrichFromCatalog, flexibilityLabel, type Antiguedad } from '../domain/providerCatalog';
-import { projectYear } from '../domain/collectionEngine';
+import { scoreBucket, SCORE_LABELS, type ScoreBucket } from '../domain/providerScore';
 import type { Budget } from '../domain/budget';
 import type { CxpPaymentCoverage } from '../domain/paymentReconciliationEngine';
 import { excludeConcursoMercantil } from '../domain/concursoMercantil';
@@ -120,6 +115,7 @@ interface EnrichedCXPRecord extends CXPRecord {
   providerLastPaymentAgeDays?: number | null;
   providerAntiguedad?: Antiguedad | null;
   providerScore?: number;
+  providerClasificacion?: ScoreBucket;
   paymentPriority: PaymentPriority;
   referenceLinks: PaymentReference[];
   alerts: CxpAlert[];
@@ -140,8 +136,8 @@ interface SupplierSummary {
   count: number;
   maxDias: number;
   providerType: string;
-  providerRisk: ProviderRisk;
-  providerFlexibility: ProviderFlexibility;
+  providerScore?: number;
+  providerClasificacion?: ScoreBucket;
   creditLimit?: number;
   records: EnrichedCXPRecord[];
   bucketTotals: number[];
@@ -149,7 +145,7 @@ interface SupplierSummary {
   sortedRecords: EnrichedCXPRecord[];
 }
 
-type DashboardTab = 'resumen' | 'triage' | 'proveedores';
+type DashboardTab = 'resumen' | 'proveedores';
 type SortKey = 'nombre' | 'total' | 'count' | 'maxDias';
 type SortDir = 'asc' | 'desc';
 
@@ -157,7 +153,18 @@ type SortDir = 'asc' | 'desc';
    Constants
    ═══════════════════════════════════════════════════════════════════════ */
 
-const AGING_COLORS = [hex.success, hex.primary, hex.info, hex.warning, 'var(--chart-5)', hex.danger, 'var(--chart-4)', 'var(--chart-5)'];
+// Severity ramp: green (within term) → red (most overdue). Monotonic so the
+// color always communicates how bad the aging bucket is.
+const AGING_COLORS = [
+  'oklch(58% 0.14 152)', // Por Vencer — within term
+  'oklch(62% 0.15 120)', // 1-30
+  'oklch(70% 0.15 95)',  // 31-60
+  'oklch(68% 0.16 65)',  // 61-90
+  'oklch(63% 0.18 45)',  // 91-120
+  'oklch(60% 0.20 30)',  // 121-150
+  'oklch(55% 0.21 25)',  // 151-180
+  'oklch(45% 0.18 22)',  // 180+
+];
 const BUCKET_LABELS = ['Por Vencer','1-30','31-60','61-90','91-120','121-150','151-180','180+'];
 const BUCKET_KEYS: (keyof CXPRecord)[] = ['porVencer','v1_30','v31_60','v61_90','v91_120','v121_150','v151_180','mas180'];
 const PIE_COLORS = [hex.primary, hex.success, hex.warning, 'var(--chart-4)', hex.danger, hex.info, 'var(--chart-5)', 'var(--chart-5)', 'var(--chart-3)', 'var(--chart-5)'];
@@ -177,19 +184,12 @@ const ALERT_LABELS: Record<CxpAlertType, string> = {
   creditLimit: 'Límite comprometido',
   staleProvider: 'Proveedor sin actualizar',
 };
-const TRIAGE_ALERT_ORDER: CxpAlertType[] = [
-  'riskHigh',
-  'urgentPayment',
-  'operationalImpact',
-  'cashImpact',
-  'criticalProvider',
-  'overdue',
-  'blocked',
-  'incomplete',
-  'duplicate',
-  'creditLimit',
-  'staleProvider',
-];
+const BUCKET_CHIP: Record<ScoreBucket, string> = {
+  CRITICO: 'bg-[var(--danger-muted)] text-[var(--danger)]',
+  ALTO: 'bg-[var(--warning-muted)] text-[var(--warning)]',
+  MEDIO: 'bg-[var(--primary-muted)] text-[var(--primary)]',
+  BAJO: 'bg-[var(--success-muted)] text-[var(--success)]',
+};
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
    ═══════════════════════════════════════════════════════════════════════ */
@@ -380,6 +380,7 @@ function enrichCxpRecord(
     providerLastPaymentAgeDays: catalog.lastPaymentAgeDays,
     providerAntiguedad: catalog.antiguedad,
     providerScore: provider?.score,
+    providerClasificacion: provider?.clasificacionAutomatica,
     paymentPriority: 'normal',
     referenceLinks: inferReferences(record),
     alerts: [],
@@ -473,10 +474,6 @@ function findPossibleBankPayments(record: EnrichedCXPRecord, bankStatements: Ban
     })
     .sort((a, b) => b.fechaOperacion.localeCompare(a.fechaOperacion))
     .slice(0, 6);
-}
-
-function toggleListValue<T extends string>(values: T[], value: T): T[] {
-  return values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -581,9 +578,6 @@ const ChartTooltip = ({ active, payload }: any) => {
     <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] px-3 py-2 shadow-lg">
       <p className="text-[12px] font-bold text-[var(--gray-950)]">{item.name || payload[0].name}</p>
       <p className="text-[12px] font-mono text-[var(--gray-500)]">{fmtFull(payload[0].value)}</p>
-      {typeof item.percent === 'number' && (
-        <p className="text-[11px] text-[var(--gray-400)]">{(item.percent * 100).toFixed(1)}% del total</p>
-      )}
     </div>
   );
 };
@@ -594,11 +588,8 @@ const ChartTooltip = ({ active, payload }: any) => {
 
 const CXPDashboard = ({
   records,
-  onReset,
   companies: compCatalog,
   providers,
-  clients,
-  assumptions,
   bankStatements,
   paymentCoverage,
 }: {
@@ -628,44 +619,19 @@ const CXPDashboard = ({
   const [sortKey, setSortKey] = useState<SortKey>('total');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [provPage, setProvPage] = useState(0);
-  const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
-  const [priorityFilters, setPriorityFilters] = useState<PaymentPriority[]>([]);
-
-  // Drilldown state
-  const [activeBucket, setActiveBucket] = useState<string | null>(null);
-  const [activeKpi, setActiveKpi] = useState<string | null>(null);
-  const [activeTriageAlert, setActiveTriageAlert] = useState<CxpAlertType | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<EnrichedCXPRecord | null>(null);
 
-  const clearDrill = () => {
-    setActiveBucket(null);
-    setActiveKpi(null);
-    setActiveTriageAlert(null);
-    setProvPage(0);
-  };
   const clearAllFilters = () => {
     setSearchTerm('');
-    setCategoryFilters([]);
-    setPriorityFilters([]);
     setSelectedRecord(null);
-    clearDrill();
+    setProvPage(0);
   };
-  const hasDrill = Boolean(
-    searchTerm ||
-    activeBucket ||
-    activeKpi ||
-    activeTriageAlert ||
-    categoryFilters.length ||
-    priorityFilters.length
-  );
+  const hasDrill = Boolean(searchTerm);
 
   // Reset local filters when parent switches company (records no longer include the selected cia)
   useEffect(() => {
     if (selectedCia !== 'all' && !records.some(r => r.cia === selectedCia)) {
       setSelectedCia('all');
-      setActiveBucket(null);
-      setActiveKpi(null);
-      setActiveTriageAlert(null);
       setSelectedRecord(null);
       setExpandedSupplier(null);
       setProvPage(0);
@@ -712,26 +678,8 @@ const CXPDashboard = ({
         return haystack.includes(t);
       });
     }
-    if (activeBucket) {
-      const bi = BUCKET_LABELS.indexOf(activeBucket);
-      if (bi >= 0) { const k = BUCKET_KEYS[bi]; f = f.filter(r => (r[k] as number) > 0); }
-    }
-    if (categoryFilters.length) {
-      const selected = new Set(categoryFilters);
-      f = f.filter(r => selected.has(r.providerType));
-    }
-    if (activeKpi === 'porVencer') f = f.filter(r => r.porVencer > 0);
-    else if (activeKpi === 'vencido') f = f.filter(r => (r.v1_30 + r.v31_60 + r.v61_90 + r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
-    else if (activeKpi === 'mas90') f = f.filter(r => (r.v91_120 + r.v121_150 + r.v151_180 + r.mas180) > 0);
-    if (priorityFilters.length) {
-      const selected = new Set(priorityFilters);
-      f = f.filter(r => selected.has(r.paymentPriority));
-    }
-    if (activeTriageAlert) {
-      f = f.filter(r => r.alerts.some(alert => alert.type === activeTriageAlert));
-    }
     return f;
-  }, [enrichedRecords, selectedCia, searchTerm, activeBucket, categoryFilters, activeKpi, priorityFilters, activeTriageAlert]);
+  }, [enrichedRecords, selectedCia, searchTerm]);
 
   // ── Derived Data ──
   const companies = useMemo(() => Array.from(new Set(records.map(r => r.cia))).sort(), [records]);
@@ -756,63 +704,6 @@ const CXPDashboard = ({
   }, [filtered]);
 
   const totalPendiente = useMemo(() => filtered.reduce((s, r) => s + r.importePendientePesos, 0), [filtered]);
-  const totalVencido = useMemo(() => agingBuckets.slice(1).reduce((s, b) => s + b.total, 0), [agingBuckets]);
-  const totalPorVencer = agingBuckets[0]?.total || 0;
-  const totalMas90 = useMemo(() => agingBuckets.slice(4).reduce((s, b) => s + b.total, 0), [agingBuckets]);
-
-  const triageBuckets = useMemo(() => {
-    const buckets = {
-      critical: [] as EnrichedCXPRecord[],
-      negotiable: [] as EnrichedCXPRecord[],
-      highImpact: [] as EnrichedCXPRecord[],
-    };
-    filtered.forEach((record) => {
-      if (isCritical(record)) buckets.critical.push(record);
-      else if (isHighImpact(record)) buckets.highImpact.push(record);
-      else if (isNegotiable(record)) buckets.negotiable.push(record);
-    });
-    Object.values(buckets).forEach((bucket) => {
-      bucket.sort((a, b) => b.importePendientePesos - a.importePendientePesos || b.diasVencida - a.diasVencida);
-    });
-    return buckets;
-  }, [filtered]);
-
-  const paymentPlanningSummary = useMemo(() => ({
-    criticalCount: triageBuckets.critical.length,
-    criticalTotal: triageBuckets.critical.reduce((sum, record) => sum + record.importePendientePesos, 0),
-    negotiableCount: triageBuckets.negotiable.length,
-    negotiableTotal: triageBuckets.negotiable.reduce((sum, record) => sum + record.importePendientePesos, 0),
-    highImpactCount: triageBuckets.highImpact.length,
-    highImpactTotal: triageBuckets.highImpact.reduce((sum, record) => sum + record.importePendientePesos, 0),
-  }), [triageBuckets]);
-
-  const ivaMonth = useMemo(() => {
-    const today = new Date();
-    const targetMonth = today.getFullYear() === assumptions.year ? today.getMonth() : 0;
-    const ym = `${assumptions.year}-${String(targetMonth + 1).padStart(2, '0')}`;
-    const byClient = new Map(clients.map(client => [client.id, client]));
-    const cxcEvents = clients.length ? projectYear(clients, assumptions).filter(event => event.realDate.startsWith(ym)) : [];
-    const ivaCollected = cxcEvents.reduce((sum, event) => {
-      const rate = (byClient.get(event.clientId)?.ivaRate ?? 16) / 100;
-      return sum + (event.amount * rate) / (1 + rate);
-    }, 0);
-    let ivaPaid = 0;
-    let cxpCount = 0;
-    filtered.forEach((record) => {
-      const dueDate = dueDateForRecord(record);
-      if (!dueDate?.startsWith(ym)) return;
-      ivaPaid += record.importeImpuestosPesos;
-      cxpCount += 1;
-    });
-    return {
-      ym,
-      ivaCollected,
-      ivaPaid,
-      net: ivaCollected - ivaPaid,
-      cxcCount: cxcEvents.length,
-      cxpCount,
-    };
-  }, [assumptions, clients, filtered]);
 
   // Supplier aggregation
   const supplierData = useMemo(() => {
@@ -827,8 +718,8 @@ const CXPDashboard = ({
           count: 0,
           maxDias: 0,
           providerType: r.providerType,
-          providerRisk: r.providerRisk,
-          providerFlexibility: r.providerFlexibility,
+          providerScore: r.providerScore,
+          providerClasificacion: r.providerClasificacion,
           creditLimit: r.providerCreditLimit,
           records: [],
           bucketTotals: new Array(BUCKET_KEYS.length).fill(0),
@@ -859,37 +750,6 @@ const CXPDashboard = ({
     return arr;
   }, [filtered, sortKey, sortDir]);
 
-  // Provider type — top 7 + "Otros" with source categories preserved for filtering.
-  const classData = useMemo(() => {
-    const map = new Map<string, { name: string; value: number; count: number }>();
-    filtered.forEach(r => {
-      const k = r.providerType || 'Sin clasificar';
-      const item = map.get(k) ?? { name: k, value: 0, count: 0 };
-      item.value += r.importePendientePesos;
-      item.count += 1;
-      map.set(k, item);
-    });
-    const total = filtered.reduce((sum, record) => sum + record.importePendientePesos, 0);
-    const all = Array.from(map.values())
-      .map(item => ({ ...item, categories: [item.name], percent: total > 0 ? item.value / total : 0 }))
-      .sort((a, b) => b.value - a.value);
-    if (all.length <= 8) return all;
-    const top = all.slice(0, 7);
-    const other = all.slice(7);
-    const otrosVal = other.reduce((s, x) => s + x.value, 0);
-    const otrosCount = other.reduce((s, x) => s + x.count, 0);
-    return [
-      ...top,
-      {
-        name: `Otros (${other.length})`,
-        value: otrosVal,
-        count: otrosCount,
-        categories: other.flatMap(item => item.categories),
-        percent: total > 0 ? otrosVal / total : 0,
-      },
-    ];
-  }, [filtered]);
-
   // Company breakdown — show names instead of codes
   const ciaData = useMemo(() => {
     const map = new Map<string, number>();
@@ -911,56 +771,12 @@ const CXPDashboard = ({
 
   const tabs: { id: DashboardTab; label: string; count?: number }[] = [
     { id: 'resumen', label: 'Resumen' },
-    { id: 'triage', label: 'Triage', count: paymentPlanningSummary.criticalCount + paymentPlanningSummary.negotiableCount + paymentPlanningSummary.highImpactCount },
     { id: 'proveedores', label: 'Proveedores', count: supplierData.length },
   ];
 
   const activeFilterChips = [
     ...(searchTerm ? [{ key: 'search', label: `Busqueda: ${searchTerm}`, onRemove: () => setSearchTerm('') }] : []),
-    ...(activeBucket ? [{ key: 'bucket', label: `Antiguedad: ${activeBucket}`, onRemove: () => setActiveBucket(null) }] : []),
-    ...(activeTriageAlert ? [{
-      key: 'triage-alert',
-      label: `Triage: ${ALERT_LABELS[activeTriageAlert]}`,
-      onRemove: () => setActiveTriageAlert(null),
-    }] : []),
-    ...(activeKpi ? [{
-      key: 'kpi',
-      label: activeKpi === 'porVencer' ? 'Por vencer' : activeKpi === 'vencido' ? 'Total vencido' : 'Vencido > 90 dias',
-      onRemove: () => setActiveKpi(null),
-    }] : []),
-    ...categoryFilters.map(value => ({ key: `cat-${value}`, label: `Categoria: ${value}`, onRemove: () => setCategoryFilters(prev => prev.filter(item => item !== value)) })),
-    ...priorityFilters.map(value => ({ key: `priority-${value}`, label: `Prioridad: ${priorityLabel(value)}`, onRemove: () => setPriorityFilters(prev => prev.filter(item => item !== value)) })),
   ];
-
-  const toggleCategoryGroup = (categories: string[]) => {
-    setCategoryFilters(prev => {
-      const allSelected = categories.every(category => prev.includes(category));
-      if (allSelected) return prev.filter(category => !categories.includes(category));
-      return Array.from(new Set([...prev, ...categories]));
-    });
-    setProvPage(0);
-  };
-
-  const triageAlertBuckets = useMemo(() => (
-    TRIAGE_ALERT_ORDER
-      .map(type => {
-        const bucketRecords = filtered.filter(record => record.alerts.some(alert => alert.type === type));
-        return {
-          type,
-          label: ALERT_LABELS[type],
-          count: bucketRecords.length,
-          total: bucketRecords.reduce((sum, record) => sum + record.importePendientePesos, 0),
-        };
-      })
-      .filter(bucket => bucket.count > 0)
-  ), [filtered]);
-
-  const triageDetailRecords = useMemo(() => {
-    const base = activeTriageAlert
-      ? filtered.filter(record => record.alerts.some(alert => alert.type === activeTriageAlert))
-      : filtered.filter(record => record.alerts.length > 0 || record.paymentPriority !== 'normal');
-    return base.sort((a, b) => b.importePendientePesos - a.importePendientePesos || b.diasVencida - a.diasVencida);
-  }, [activeTriageAlert, filtered]);
 
   /* ── Render ── */
   return (
@@ -1013,10 +829,6 @@ const CXPDashboard = ({
               );
             })}
           </div>
-
-          <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition">
-            <RotateCcw className="w-3 h-3" /> Nuevo archivo
-          </button>
         </div>
       </div>
 
@@ -1044,101 +856,27 @@ const CXPDashboard = ({
         </div>
       )}
 
-      {/* ── KPI Cards ── */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        {[
-          { label: 'Saldo Total CXP', value: totalPendiente, sub: `${supplierData.length} proveedores · ${filtered.length.toLocaleString()} facturas`, icon: Building2, color: hex.primary, kpi: null as string | null },
-          { label: 'Por Vencer', value: totalPorVencer, sub: pct(totalPorVencer, totalPendiente) + ' del total', icon: Clock, color: hex.success, kpi: 'porVencer' },
-          { label: 'Total Vencido', value: totalVencido, sub: pct(totalVencido, totalPendiente) + ' del total', icon: AlertTriangle, color: hex.warning, kpi: 'vencido' },
-          { label: 'Vencido > 90 días', value: totalMas90, sub: pct(totalMas90, totalPendiente) + ' del total', icon: TrendingUp, color: hex.danger, kpi: 'mas90' },
-          { label: 'IVA neto del mes', value: ivaMonth.net, sub: `${fmt(ivaMonth.ivaCollected)} cobrado - ${fmt(ivaMonth.ivaPaid)} pagado`, icon: Receipt, color: ivaMonth.net >= 0 ? hex.warning : hex.success, kpi: null as string | null },
-        ].map((kpi, i) => {
-          const Icon = kpi.icon;
-          const active = activeKpi === kpi.kpi && kpi.kpi !== null;
-          return (
-            <div key={i}
-              onClick={() => {
-                if (!kpi.kpi) { clearDrill(); return; }
-                clearDrill();
-                setActiveKpi(activeKpi === kpi.kpi ? null : kpi.kpi);
-                setTab('proveedores');
-              }}
-              className={`animate-card-in stagger-${i + 1} bg-white rounded-[var(--radius-lg)] border p-4 shadow-sm hover-lift cursor-pointer ${
-                active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/20' : 'border-[var(--gray-200)]'
-              }`}>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-[11px] font-medium text-[var(--gray-400)] uppercase tracking-[0.08em]">{kpi.label}</p>
-                <div className="w-7 h-7 rounded-[var(--radius-md)] flex items-center justify-center" style={{ backgroundColor: kpi.color + '14' }}>
-                  <Icon className="w-3.5 h-3.5" style={{ color: kpi.color }} />
-                </div>
-              </div>
-              <p className="text-[22px] font-bold font-mono tracking-tight text-[var(--gray-950)]">
-                {fmt(kpi.value as number)}
-              </p>
-              <p className="text-[11px] text-[var(--gray-400)] mt-0.5">{kpi.sub}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <PlanningCard
-          title="Pagos criticos"
-          amount={paymentPlanningSummary.criticalTotal}
-          count={paymentPlanningSummary.criticalCount}
-          detail="Riesgo alto, inamovibles o vencidos relevantes."
-          tone="danger"
-          active={priorityFilters.includes('critical')}
-          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'critical')); setTab('triage'); setProvPage(0); }}
-        />
-        <PlanningCard
-          title="Pagos negociables"
-          amount={paymentPlanningSummary.negotiableTotal}
-          count={paymentPlanningSummary.negotiableCount}
-          detail="Flexibles y sin atraso severo; candidatos a reprogramar."
-          tone="success"
-          active={priorityFilters.includes('negotiable')}
-          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'negotiable')); setTab('triage'); setProvPage(0); }}
-        />
-        <PlanningCard
-          title="Mayor impacto en flujo"
-          amount={paymentPlanningSummary.highImpactTotal}
-          count={paymentPlanningSummary.highImpactCount}
-          detail={`Facturas de ${fmt(HIGH_IMPACT_AMOUNT)} o mas.`}
-          tone="warning"
-          active={priorityFilters.includes('highImpact')}
-          onClick={() => { setPriorityFilters(prev => toggleListValue(prev, 'highImpact')); setTab('triage'); setProvPage(0); }}
-        />
-      </div>
-
       {/* ════════════════════════════════════════════════════════════════
          RESUMEN TAB
          ════════════════════════════════════════════════════════════════ */}
       {tab === 'resumen' && (
         <>
-          {/* Aging Bar Chart */}
+          {/* Aging distribution */}
           <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Distribución por Antigüedad</h2>
-              <p className="text-[12px] text-[var(--gray-400)]">Click en barra para filtrar</p>
-            </div>
+            <h2 className="text-[15px] font-bold text-[var(--gray-950)] mb-4">Distribución por Antigüedad</h2>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart layout="vertical" data={agingBuckets} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                <CartesianGrid stroke="var(--gray-100)" strokeDasharray="0" horizontal={false} />
+                <CartesianGrid className="recharts-cartesian-grid" strokeDasharray="0" horizontal={false} />
                 <XAxis type="number" tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={{ stroke: 'var(--gray-100)' }} tickLine={false} tickFormatter={v => fmt(v)} />
                 <YAxis type="category" dataKey="name" width={86} tick={{ fill: 'var(--gray-400)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="total" radius={[0, 6, 6, 0]} cursor="pointer"
-                  onClick={(data: any) => { clearDrill(); setActiveBucket(activeBucket === data.name ? null : data.name); setTab('proveedores'); }}>
+                <Tooltip content={<ChartTooltip />} cursor={{ fill: 'var(--gray-50)' }} />
+                <Bar dataKey="total" radius={[0, 6, 6, 0]} fill="var(--primary)">
                   {agingBuckets.map((b, i) => (
-                    <Cell key={i} fill={b.color}
-                      fillOpacity={activeBucket === b.name ? 1 : activeBucket ? 0.25 : 0.85}
-                      stroke={activeBucket === b.name ? b.color : 'none'} strokeWidth={1.5} />
+                    <Cell key={i} fill={b.color} fillOpacity={0.9} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-            {/* Bucket summary chips */}
             <div className="flex gap-2 mt-3 flex-wrap">
               {agingBuckets.filter(b => b.total > 0).map((b, i) => (
                 <div key={i} className="flex items-center gap-1.5 bg-[var(--gray-50)] rounded-full px-2.5 py-1 text-[11px]">
@@ -1148,105 +886,6 @@ const CXPDashboard = ({
                   <span className="text-[var(--gray-400)]">({b.count})</span>
                 </div>
               ))}
-            </div>
-          </div>
-
-          {/* Two columns: Tipo proveedor + Top Proveedores */}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 animate-card-in stagger-5">
-            {/* Provider Type Donut */}
-            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm overflow-hidden hover-lift">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Por tipo de proveedor</h2>
-                <p className="text-[12px] text-[var(--gray-400)]">Click para filtrar</p>
-              </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_1fr]">
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie
-                      data={classData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={58}
-                      outerRadius={92}
-                      paddingAngle={1}
-                      dataKey="value"
-                      cursor="pointer"
-                      onClick={(data: any) => {
-                        clearDrill();
-                        toggleCategoryGroup(data.categories ?? [data.name]);
-                        setTab('proveedores');
-                      }}
-                    >
-                      {classData.map((e, i) => {
-                        const active = e.categories.some(category => categoryFilters.includes(category));
-                        const anyActive = categoryFilters.length > 0;
-                        return (
-                          <Cell
-                            key={i}
-                            fill={PIE_COLORS[i % PIE_COLORS.length]}
-                            fillOpacity={active ? 1 : anyActive ? 0.25 : 0.9}
-                            stroke={active ? 'var(--gray-950)' : 'var(--card)'}
-                            strokeWidth={active ? 1.5 : 1}
-                          />
-                        );
-                      })}
-                    </Pie>
-                    <Tooltip content={<ChartTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="space-y-1.5 self-center">
-                  {classData.map((e, i) => {
-                    const active = e.categories.some(category => categoryFilters.includes(category));
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          clearDrill();
-                          toggleCategoryGroup(e.categories);
-                          setTab('proveedores');
-                        }}
-                        className={`grid w-full grid-cols-[10px_1fr_auto] items-center gap-2 rounded-[var(--radius-md)] px-2 py-1.5 text-left transition ${
-                          active ? 'bg-[var(--primary-muted)]' : 'hover:bg-[var(--gray-50)]'
-                        }`}
-                        title={`${e.name}: ${fmtFull(e.value)} (${pct(e.value, totalPendiente)})`}
-                      >
-                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                        <span className="min-w-0 truncate text-[12px] font-medium text-[var(--gray-700)]">{e.name}</span>
-                        <span className="text-right text-[11px] font-mono text-[var(--gray-500)]">
-                          {pct(e.value, totalPendiente)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Top 10 Proveedores */}
-            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm hover-lift">
-              <h2 className="text-[15px] font-bold text-[var(--gray-950)] mb-3">Top 10 Proveedores</h2>
-              <div className="space-y-1.5">
-                {supplierData.slice(0, 10).map((s, i) => {
-                  const barPct = supplierData[0]?.total > 0 ? (s.total / supplierData[0].total) : 0;
-                  return (
-                    <div key={i}
-                      className="flex items-center gap-2.5 py-1.5 px-2 -mx-2 cursor-pointer hover:bg-[var(--gray-50)] rounded-[var(--radius-md)] transition-colors duration-150"
-                      onClick={() => { clearDrill(); setSearchTerm(s.nombre.slice(0, 20)); setTab('proveedores'); setExpandedSupplier(s.nombre); setProvPage(0); }}>
-                      <span className="text-[11px] font-mono text-[var(--gray-400)] w-4 text-right">{i + 1}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[12px] font-medium text-[var(--primary)] truncate">{s.nombre}</p>
-                        <div className="bg-[var(--gray-100)] rounded-full h-1.5 mt-1 overflow-hidden">
-                          <div className="h-full rounded-full bg-[var(--primary)]/60" style={{ width: `${barPct * 100}%` }} />
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[12px] font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</p>
-                        <p className="text-[10px] text-[var(--gray-400)]">{s.count} fact.</p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </div>
           </div>
 
@@ -1329,13 +968,17 @@ const CXPDashboard = ({
                         )}
                         <span className="text-[11px] text-[var(--gray-400)]">{s.count} factura{s.count !== 1 ? 's' : ''}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--gray-100)] text-[var(--gray-500)]">{s.providerType}</span>
-                        <span
-                          className={`text-[10px] px-1.5 py-0.5 rounded-full ${s.providerRisk === 'Alto' ? 'bg-[var(--danger-muted)] text-[var(--danger)]' : s.providerRisk === 'Medio' ? 'bg-[var(--warning-muted)] text-[var(--warning)]' : 'bg-[var(--success-muted)] text-[var(--success)]'}`}
-                          title={`Riesgo ${s.providerRisk}`}
-                        >
-                          Riesgo {s.providerRisk}
-                        </span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-[var(--gray-200)] text-[var(--gray-500)]" title={`Flexibilidad ${flexibilityLabel(s.providerFlexibility)}`}>{flexibilityLabel(s.providerFlexibility)}</span>
+                        {(() => {
+                          const bucket = scoreBucket({ clasificacionAutomatica: s.providerClasificacion, score: s.providerScore });
+                          return (
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded-full ${BUCKET_CHIP[bucket]}`}
+                              title={`Catálogo de proveedores · ${SCORE_LABELS[bucket]}${s.providerScore != null ? ` · score ${s.providerScore}` : ''}`}
+                            >
+                              {SCORE_LABELS[bucket]}{s.providerScore != null ? ` · ${s.providerScore}` : ''}
+                            </span>
+                          );
+                        })()}
                         {s.maxDias > 0 && (
                           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-[var(--warning-muted)]" style={{ color: severity }} title={agingTooltip(s.maxDias)}>
                             máx {s.maxDias}d
@@ -1488,47 +1131,6 @@ const CXPDashboard = ({
         </div>
       )}
 
-      {/* ════════════════════════════════════════════════════════════════
-         TRIAGE TAB
-         ════════════════════════════════════════════════════════════════ */}
-      {tab === 'triage' && (
-        <div className="space-y-4">
-          <TriageAlertBoard
-            buckets={triageAlertBuckets}
-            active={activeTriageAlert}
-            onSelect={(type) => setActiveTriageAlert(prev => prev === type ? null : type)}
-          />
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-            <TriageColumn
-              title="Críticos"
-              detail="No conviene moverlos sin decisión ejecutiva."
-              tone="danger"
-              records={triageBuckets.critical}
-              onRecordSelect={setSelectedRecord}
-            />
-            <TriageColumn
-              title="Negociables"
-              detail="Candidatos a reprogramar o negociar plazo."
-              tone="success"
-              records={triageBuckets.negotiable}
-              onRecordSelect={setSelectedRecord}
-            />
-            <TriageColumn
-              title="Mayor impacto"
-              detail={`Montos de ${fmt(HIGH_IMPACT_AMOUNT)} o más.`}
-              tone="warning"
-              records={triageBuckets.highImpact}
-              onRecordSelect={setSelectedRecord}
-            />
-          </div>
-          <TriageDetailTable
-            title={activeTriageAlert ? ALERT_LABELS[activeTriageAlert] : 'Todo el triage'}
-            records={triageDetailRecords}
-            onRecordSelect={setSelectedRecord}
-          />
-        </div>
-      )}
-
       {selectedRecord && (
         <InvoiceDetailPanel
           record={selectedRecord}
@@ -1547,6 +1149,16 @@ function alertToneClass(tone: AlertTone): string {
   return 'bg-[var(--primary-muted)] text-[var(--primary)]';
 }
 
+interface AgingCategory {
+  name: string;
+  rows: SupplierSummary[];
+  total: number;
+  invoiceCount: number;
+  bucketTotals: number[];
+  avgScore: number;
+  hasScore: boolean;
+}
+
 function AgingMatrix({
   supplierData,
   agingBuckets,
@@ -1558,17 +1170,69 @@ function AgingMatrix({
   totalPendiente: number;
   filteredCount: number;
 }) {
+  const colSpan = 3 + BUCKET_LABELS.length;
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (name: string) =>
+    setExpanded((cur) => {
+      const next = new Set(cur);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+
+  // Group by provider category. Category-level aggregates are cheap; the
+  // per-provider rows are only rendered when a category is expanded.
+  const categories: AgingCategory[] = useMemo(() => {
+    const map = new Map<string, AgingCategory>();
+    for (const s of supplierData) {
+      const name = s.providerType || 'Sin clasificar';
+      let cat = map.get(name);
+      if (!cat) {
+        cat = {
+          name,
+          rows: [],
+          total: 0,
+          invoiceCount: 0,
+          bucketTotals: new Array(BUCKET_KEYS.length).fill(0),
+          avgScore: 0,
+          hasScore: false,
+        };
+        map.set(name, cat);
+      }
+      cat.rows.push(s);
+      cat.total += s.total;
+      cat.invoiceCount += s.count;
+      s.bucketTotals.forEach((v, i) => { cat!.bucketTotals[i] += v; });
+    }
+    for (const cat of map.values()) {
+      let sum = 0;
+      let n = 0;
+      for (const s of cat.rows) {
+        if (typeof s.providerScore === 'number' && Number.isFinite(s.providerScore)) {
+          sum += s.providerScore;
+          n += 1;
+        }
+      }
+      cat.hasScore = n > 0;
+      cat.avgScore = n > 0 ? sum / n : 0;
+      cat.rows.sort((a, b) => b.total - a.total);
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => b.avgScore - a.avgScore || b.total - a.total,
+    );
+  }, [supplierData]);
+
   return (
     <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] shadow-sm overflow-hidden animate-card-in stagger-8">
       <div className="p-4 border-b border-[var(--gray-100)] flex items-center justify-between">
         <h2 className="text-[15px] font-bold text-[var(--gray-950)]">Matriz de Antigüedad por Proveedor</h2>
-        <p className="text-[12px] text-[var(--gray-400)]">Top {Math.min(100, supplierData.length)} proveedores por monto</p>
+        <p className="text-[12px] text-[var(--gray-400)]">{categories.length} categorías · {supplierData.length} proveedores · ordenadas por score de catálogo · click para ver detalle</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-[11px]">
           <thead className="sticky top-0 bg-white z-10">
             <tr className="border-b-2 border-[var(--gray-200)]">
-              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-bold w-[200px] min-w-[200px]">Proveedor</th>
+              <th className="text-left py-2.5 px-3 text-[var(--gray-400)] font-bold w-[260px] min-w-[260px]">Categoría / Proveedor</th>
               <th className="text-right py-2.5 px-2 text-[var(--gray-400)] font-bold w-[90px]">Total</th>
               <th className="text-center py-2.5 px-1 text-[var(--gray-400)] font-bold w-[40px]">#</th>
               {BUCKET_LABELS.map((label, i) => (
@@ -1577,43 +1241,80 @@ function AgingMatrix({
             </tr>
           </thead>
           <tbody>
-            {supplierData.slice(0, 100).map((s, si) => {
-              const bucketVals = s.bucketTotals;
-              const maxBucket = Math.max(...bucketVals);
+            {categories.map((cat) => {
+              const isOpen = expanded.has(cat.name);
+              const bucket = scoreBucket({ score: Math.round(cat.avgScore) });
+              const maxCatBucket = Math.max(...cat.bucketTotals);
               return (
-                <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
-                  <td className="py-2 px-3 font-medium text-[var(--gray-950)] truncate max-w-[200px]" title={s.nombre}>{s.nombre}</td>
-                  <td className="py-2 px-2 text-right font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</td>
-                  <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
-                  {bucketVals.map((val, bi) => {
-                    const intensity = maxBucket > 0 ? Math.min(val / maxBucket, 1) : 0;
-                    return (
-                      <td key={bi} className="py-2 px-2 text-right font-mono">
-                        {val > 0 ? (
-                          <span
-                            className="inline-block px-1.5 py-0.5 rounded"
-                            style={{
-                              color: AGING_COLORS[bi],
-                              backgroundColor: bi === 0
-                                ? 'var(--success-muted)'
-                                : intensity > 0.5
-                                  ? 'var(--warning-muted)'
-                                  : 'var(--gray-50)',
-                              fontWeight: intensity > 0.5 ? 600 : 400,
-                            }}
-                            title={agingTooltip(BUCKET_LABELS[bi] === 'Por Vencer' ? 0 : Number(BUCKET_LABELS[bi].split('-')[0]) || 181)}
-                          >
-                            {fmt(val)}
-                          </span>
-                        ) : (
-                          <span className="text-[var(--gray-200)]">-</span>
-                        )}
+                <Fragment key={cat.name}>
+                  <tr
+                    className="border-b border-[var(--gray-100)] bg-[var(--gray-50)] hover:bg-[var(--gray-100)] transition cursor-pointer"
+                    onClick={() => toggle(cat.name)}
+                  >
+                    <td className="py-2.5 px-3 font-bold text-[var(--gray-950)]">
+                      <div className="flex items-center gap-2">
+                        {isOpen ? <ChevronDown className="w-4 h-4 text-[var(--gray-400)]" /> : <ChevronRight className="w-4 h-4 text-[var(--gray-400)]" />}
+                        <span className="truncate" title={cat.name}>{cat.name}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cat.hasScore ? BUCKET_CHIP[bucket] : 'bg-[var(--gray-100)] text-[var(--gray-500)]'}`}>
+                          {cat.hasScore ? `${SCORE_LABELS[bucket]} · ${Math.round(cat.avgScore)}` : 'sin score'}
+                        </span>
+                        <span className="text-[10px] font-normal text-[var(--gray-400)]">{cat.rows.length} prov.</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-2 text-right font-mono font-bold text-[var(--gray-950)]">{fmt(cat.total)}</td>
+                    <td className="py-2.5 px-1 text-center text-[var(--gray-400)]">{cat.invoiceCount}</td>
+                    {cat.bucketTotals.map((val, bi) => (
+                      <td key={bi} className="py-2.5 px-2 text-right font-mono font-bold" style={{ color: AGING_COLORS[bi] }}>
+                        {val > 0 ? fmt(val) : <span className="text-[var(--gray-200)]">-</span>}
                       </td>
+                    ))}
+                  </tr>
+                  {isOpen && cat.rows.map((s, si) => {
+                    const bucketVals = s.bucketTotals;
+                    return (
+                      <tr key={si} className="border-b border-[var(--gray-50)] hover:bg-[var(--gray-50)] transition">
+                        <td className="py-2 pl-9 pr-3 font-medium text-[var(--gray-700)] truncate max-w-[260px]" title={s.nombre}>{s.nombre}</td>
+                        <td className="py-2 px-2 text-right font-mono font-bold text-[var(--gray-950)]">{fmt(s.total)}</td>
+                        <td className="py-2 px-1 text-center text-[var(--gray-400)]">{s.count}</td>
+                        {bucketVals.map((val, bi) => {
+                          const intensity = maxCatBucket > 0 ? Math.min(val / maxCatBucket, 1) : 0;
+                          return (
+                            <td key={bi} className="py-2 px-2 text-right font-mono">
+                              {val > 0 ? (
+                                <span
+                                  className="inline-block px-1.5 py-0.5 rounded"
+                                  style={{
+                                    color: AGING_COLORS[bi],
+                                    backgroundColor: bi === 0
+                                      ? 'var(--success-muted)'
+                                      : intensity > 0.5
+                                        ? 'var(--warning-muted)'
+                                        : 'var(--gray-50)',
+                                    fontWeight: intensity > 0.5 ? 600 : 400,
+                                  }}
+                                  title={agingTooltip(BUCKET_LABELS[bi] === 'Por Vencer' ? 0 : Number(BUCKET_LABELS[bi].split('-')[0]) || 181)}
+                                >
+                                  {fmt(val)}
+                                </span>
+                              ) : (
+                                <span className="text-[var(--gray-200)]">-</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
                     );
                   })}
-                </tr>
+                </Fragment>
               );
             })}
+            {categories.length === 0 && (
+              <tr>
+                <td colSpan={colSpan} className="py-8 text-center text-[12px] text-[var(--gray-400)]">
+                  Sin proveedores con los filtros actuales.
+                </td>
+              </tr>
+            )}
             <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-bold sticky bottom-0">
               <td className="py-2.5 px-3 text-[var(--gray-950)]">TOTAL</td>
               <td className="py-2.5 px-2 text-right font-mono text-[var(--gray-950)]">{fmt(totalPendiente)}</td>
@@ -1626,209 +1327,6 @@ function AgingMatrix({
         </table>
       </div>
     </div>
-  );
-}
-
-function TriageAlertBoard({
-  buckets,
-  active,
-  onSelect,
-}: {
-  buckets: Array<{ type: CxpAlertType; label: string; count: number; total: number }>;
-  active: CxpAlertType | null;
-  onSelect: (type: CxpAlertType) => void;
-}) {
-  return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-[14px] font-bold text-[var(--gray-950)]">Clasificación de triage</h2>
-        <span className="text-[11px] text-[var(--gray-400)]">Click para ver facturas</span>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
-        {buckets.map(bucket => (
-          <button
-            key={bucket.type}
-            onClick={() => onSelect(bucket.type)}
-            className={`rounded-[var(--radius)] border px-3 py-2 text-left transition ${
-              active === bucket.type
-                ? 'border-[var(--primary)] bg-[var(--primary-muted)]'
-                : 'border-[var(--gray-200)] hover:border-[var(--primary)] hover:bg-[var(--gray-50)]'
-            }`}
-            title={`${bucket.label}: ${fmtFull(bucket.total)}`}
-          >
-            <p className="truncate text-[11px] text-[var(--gray-500)]">{bucket.label}</p>
-            <div className="mt-1 flex items-end justify-between gap-2">
-              <span className="font-mono text-[18px] font-bold text-[var(--gray-950)]">{bucket.count}</span>
-              <span className="font-mono text-[11px] text-[var(--gray-500)]">{fmt(bucket.total)}</span>
-            </div>
-          </button>
-        ))}
-        {buckets.length === 0 && (
-          <div className="col-span-full rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
-            No hay alertas con los filtros actuales.
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function TriageDetailTable({
-  title,
-  records,
-  onRecordSelect,
-}: {
-  title: string;
-  records: EnrichedCXPRecord[];
-  onRecordSelect: (record: EnrichedCXPRecord) => void;
-}) {
-  return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
-      <header className="flex items-center justify-between gap-3 border-b border-[var(--gray-100)] px-4 py-3">
-        <h2 className="text-[14px] font-bold text-[var(--gray-950)]">{title}</h2>
-        <span className="text-[11px] text-[var(--gray-400)]">{records.length} facturas</span>
-      </header>
-      <div className="overflow-x-auto">
-        <table className="w-full text-[12px]">
-          <thead className="bg-[var(--gray-50)] text-[var(--gray-400)]">
-            <tr>
-              <th className="px-4 py-2 text-left font-medium">Factura</th>
-              <th className="px-4 py-2 text-left font-medium">Proveedor</th>
-              <th className="px-4 py-2 text-left font-medium">Causa</th>
-              <th className="px-4 py-2 text-right font-medium">Días</th>
-              <th className="px-4 py-2 text-right font-medium">Score</th>
-              <th className="px-4 py-2 text-right font-medium">Monto</th>
-              <th className="px-4 py-2 text-left font-medium">Vence</th>
-              <th className="px-4 py-2 text-left font-medium">Fecha plan</th>
-            </tr>
-          </thead>
-          <tbody>
-            {records.slice(0, 150).map((record, index) => (
-              <tr
-                key={`${record.cia}-${record.noProveedor}-${record.noFactura}-${index}`}
-                onClick={() => onRecordSelect(record)}
-                className="cursor-pointer border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]"
-              >
-                <td className="px-4 py-2 font-mono text-[var(--gray-950)]">{record.noFactura || '-'}</td>
-                <td className="px-4 py-2 text-[var(--gray-950)]">
-                  <div>{record.nombre || '-'}</div>
-                  {record.noProveedor && (
-                    <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">JDE {record.noProveedor}</div>
-                  )}
-                </td>
-                <td className="px-4 py-2">
-                  <div className="flex max-w-[420px] flex-wrap gap-1">
-                    {record.alerts.slice(0, 3).map(alert => (
-                      <span key={`${record.noFactura}-${alert.type}`} className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${alertToneClass(alert.tone)}`} title={alert.detail}>
-                        {alert.label}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-                <td className="px-4 py-2 text-right font-mono text-[var(--gray-950)]">{record.diasVencida}</td>
-                <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{record.providerScore ?? '—'}</td>
-                <td className="px-4 py-2 text-right font-mono font-semibold text-[var(--gray-950)]">{fmtFull(record.importePendientePesos)}</td>
-                <td className="px-4 py-2 text-[var(--gray-500)]">{record.fechaVence || '-'}</td>
-                <td className="px-4 py-2 text-[var(--gray-500)]">{dueDateForRecord(record) ?? '-'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function TriageColumn({
-  title,
-  detail,
-  tone,
-  records,
-  onRecordSelect,
-}: {
-  title: string;
-  detail: string;
-  tone: 'danger' | 'success' | 'warning';
-  records: EnrichedCXPRecord[];
-  onRecordSelect: (record: EnrichedCXPRecord) => void;
-}) {
-  const total = records.reduce((sum, record) => sum + record.importePendientePesos, 0);
-  const toneClass =
-    tone === 'danger'
-      ? 'bg-[var(--danger-muted)] text-[var(--danger)]'
-      : tone === 'success'
-        ? 'bg-[var(--success-muted)] text-[var(--success)]'
-        : 'bg-[var(--warning-muted)] text-[var(--warning)]';
-
-  return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white shadow-sm overflow-hidden">
-      <header className="border-b border-[var(--gray-100)] p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-[15px] font-bold text-[var(--gray-950)]">{title}</h2>
-            <p className="mt-1 text-[11px] leading-4 text-[var(--gray-400)]">{detail}</p>
-          </div>
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
-            {records.length} fact.
-          </span>
-        </div>
-        <p className="mt-3 font-mono text-[20px] font-bold text-[var(--gray-950)]">{fmt(total)}</p>
-      </header>
-      <div className="max-h-[620px] space-y-2 overflow-y-auto bg-[var(--surface-alt)] p-3">
-        {records.length === 0 ? (
-          <div className="rounded-[var(--radius)] border border-dashed border-[var(--gray-200)] bg-white p-5 text-center text-[12px] text-[var(--gray-400)]">
-            Sin facturas en este balde.
-          </div>
-        ) : records.slice(0, 40).map((record) => (
-          <button
-            key={`${record.noProveedor}-${record.noFactura}-${record.fechaVence}`}
-            onClick={() => onRecordSelect(record)}
-            className="block w-full rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3 text-left shadow-sm transition hover:border-[var(--primary)] hover:bg-[var(--gray-50)]"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-[12px] font-bold text-[var(--gray-950)]" title={record.nombre}>{record.nombre}</p>
-                <p className="mt-0.5 text-[10px] text-[var(--gray-400)]">{record.providerType}</p>
-              </div>
-              <p className="shrink-0 font-mono text-[12px] font-bold text-[var(--gray-950)]">{fmt(record.importePendientePesos)}</p>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(record.paymentPriority)}`} title={priorityReason(record)}>
-                {priorityLabel(record.paymentPriority)}
-                <HelpCircle className="h-3 w-3" />
-              </span>
-              <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
-                {flexibilityLabel(record.providerFlexibility)}
-              </span>
-              {record.diasVencida > 0 ? (
-                <span
-                  className="skeuo-stamp"
-                  data-tone="danger"
-                  title={agingTooltip(record.diasVencida)}
-                >
-                  {`${record.diasVencida}d vencido`}
-                </span>
-              ) : (
-                <span
-                  className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]"
-                  title={agingTooltip(record.diasVencida)}
-                >
-                  por vencer
-                </span>
-              )}
-              <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[var(--gray-500)] border border-[var(--gray-100)]">
-                vence {dueDateForRecord(record) ?? 'sin fecha'}
-              </span>
-            </div>
-          </button>
-        ))}
-        {records.length > 40 && (
-          <p className="py-2 text-center text-[11px] text-[var(--gray-400)]">
-            {records.length - 40} facturas mas en este balde.
-          </p>
-        )}
-      </div>
-    </section>
   );
 }
 
@@ -2002,51 +1500,6 @@ function DetailGrid({ rows }: { rows: Array<[string, string]> }) {
         </div>
       ))}
     </dl>
-  );
-}
-
-function PlanningCard({
-  title,
-  amount,
-  count,
-  detail,
-  tone,
-  active,
-  onClick,
-}: {
-  title: string;
-  amount: number;
-  count: number;
-  detail: string;
-  tone: 'danger' | 'success' | 'warning';
-  active: boolean;
-  onClick: () => void;
-}) {
-  const toneClass =
-    tone === 'danger'
-      ? 'text-[var(--danger)] bg-[var(--danger-muted)] border-[var(--danger-muted)]'
-      : tone === 'success'
-        ? 'text-[var(--success)] bg-[var(--success-muted)] border-[var(--success-muted)]'
-        : 'text-[var(--warning)] bg-[var(--warning-muted)] border-[var(--warning-muted)]';
-
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-[var(--radius-lg)] border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-        active ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/15' : 'border-[var(--gray-200)]'
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[12px] font-bold text-[var(--gray-950)]">{title}</p>
-          <p className="mt-2 text-[22px] font-bold font-mono text-[var(--gray-950)]">{fmt(amount)}</p>
-        </div>
-        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${toneClass}`}>
-          {count} fact.
-        </span>
-      </div>
-      <p className="mt-2 text-[11px] leading-5 text-[var(--gray-400)]">{detail}</p>
-    </button>
   );
 }
 
@@ -2254,7 +1707,7 @@ const CXP = ({
             <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--primary)] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[var(--primary)]/15">
               <Clock className="text-white" size={26} />
             </div>
-            <h1 className="text-[28px] font-bold text-white tracking-tight">Cuentas por Pagar</h1>
+            <h1 className="text-[28px] font-bold text-white tracking-tight">Antigüedad de Saldos</h1>
           </div>
 
           <div className="bg-white rounded-[var(--radius-lg)] shadow-sm border border-[var(--gray-200)] p-8">
@@ -2324,6 +1777,8 @@ const CXP = ({
   // ── Dashboard view ──
   return (
     <div className="space-y-4">
+      <PageHeader title="Antigüedad de Saldos" />
+
       {/* Scope + actions bar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
@@ -2355,24 +1810,6 @@ const CXP = ({
               : <RefreshCw className="w-3.5 h-3.5" />}
             Actualizar
           </button>
-          <button
-            onClick={() => csvInput.current?.click()}
-            className="flex items-center gap-1.5 text-[12px] text-[var(--gray-500)] hover:text-[var(--primary)] transition"
-          >
-            <UploadIcon className="w-3.5 h-3.5" />
-            Subir CSV
-          </button>
-          <button
-            onClick={onReset}
-            className="flex items-center gap-1.5 text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] transition"
-          >
-            <X className="w-3.5 h-3.5" />
-            Limpiar
-          </button>
-          <input
-            ref={csvInput} type="file" accept=".csv" className="hidden"
-            onChange={e => e.target.files?.[0] && handleCsvFile(e.target.files[0])}
-          />
         </div>
       </div>
 

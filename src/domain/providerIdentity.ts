@@ -16,13 +16,26 @@
  * exists on either side — useful for legacy bank statements.
  */
 
-import type { Provider } from './types';
+import { CLASIFICACION_LABELS, type Provider } from './types';
 
 export type ProviderMatchKind = 'jde' | 'name' | 'none';
 
 export interface ProviderMatch {
   provider: Provider | null;
   matchKind: ProviderMatchKind;
+}
+
+export type ProviderBusinessClassificationKey =
+  | 'OPERACION'
+  | 'PRIORITARIO'
+  | 'NEGOCIABLE'
+  | 'FLEXIBLE'
+  | 'PAUSA'
+  | 'SIN_CLASIFICAR';
+
+export interface ProviderBusinessClassification {
+  key: ProviderBusinessClassificationKey;
+  label: string;
 }
 
 /** Normaliza un número de proveedor JDE a un string canónico. */
@@ -101,25 +114,48 @@ export function lookupProvider(
   return findProviderByRef(index, ref).provider;
 }
 
+export function providerBusinessClassification(
+  provider: Provider | null | undefined,
+): ProviderBusinessClassification {
+  if (!provider) return { key: 'SIN_CLASIFICAR', label: CLASIFICACION_LABELS.SIN_CLASIFICAR };
+
+  switch (provider.clasificacionAlberto) {
+    case 'CRITICO':
+      return { key: 'OPERACION', label: CLASIFICACION_LABELS.CRITICO };
+    case 'FLEX_ALTO':
+      return { key: 'PRIORITARIO', label: CLASIFICACION_LABELS.FLEX_ALTO };
+    case 'FLEX_MEDIO':
+      return { key: 'NEGOCIABLE', label: CLASIFICACION_LABELS.FLEX_MEDIO };
+    case 'FLEX_BAJO':
+      return { key: 'FLEXIBLE', label: CLASIFICACION_LABELS.FLEX_BAJO };
+    case 'PAUSAR':
+      return { key: 'PAUSA', label: CLASIFICACION_LABELS.PAUSAR };
+    case 'SIN_CLASIFICAR':
+    case undefined:
+      break;
+  }
+
+  switch (provider.clasificacionAutomatica) {
+    case 'CRITICO':
+      return { key: 'OPERACION', label: CLASIFICACION_LABELS.CRITICO };
+    case 'ALTO':
+      return { key: 'PRIORITARIO', label: CLASIFICACION_LABELS.FLEX_ALTO };
+    case 'MEDIO':
+      return { key: 'NEGOCIABLE', label: CLASIFICACION_LABELS.FLEX_MEDIO };
+    case 'BAJO':
+      return { key: 'FLEXIBLE', label: CLASIFICACION_LABELS.FLEX_BAJO };
+  }
+
+  return { key: 'SIN_CLASIFICAR', label: CLASIFICACION_LABELS.SIN_CLASIFICAR };
+}
+
 /**
  * Etiqueta corta para badge en tablas. "CRITICO" / "FLEX. ALTO" / etc.
  * Devuelve null si no hay clasificación útil.
  */
 export function provierClassificationLabel(provider: Provider | null | undefined): string | null {
-  if (!provider) return null;
-  if (provider.clasificacionAlberto && provider.clasificacionAlberto !== 'SIN_CLASIFICAR') {
-    switch (provider.clasificacionAlberto) {
-      case 'CRITICO': return 'Crítico';
-      case 'FLEX_ALTO': return 'Flex. alto';
-      case 'FLEX_MEDIO': return 'Flex. medio';
-      case 'FLEX_BAJO': return 'Flex. bajo';
-      case 'PAUSAR': return 'Pausar';
-    }
-  }
-  if (provider.clasificacionAutomatica) {
-    return provider.clasificacionAutomatica.charAt(0) + provider.clasificacionAutomatica.slice(1).toLowerCase();
-  }
-  return null;
+  const classification = providerBusinessClassification(provider);
+  return classification.key === 'SIN_CLASIFICAR' ? null : classification.label;
 }
 
 /** Tone para chips. Usa tokens DS. */

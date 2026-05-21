@@ -31,13 +31,32 @@ interface CatalogJSON {
   clientes: RawClient[];
 }
 
-function normalizeFrequency(cycle: string): Frequency {
+export function normalizeFrequency(cycle: string): Frequency {
   const c = cycle.toLowerCase().trim();
   if (c.includes('semanal') && !c.includes('quincenal')) return 'Semanal';
   if (c.includes('quincenal')) return 'Quincenal';
   if (c.includes('mensual')) return 'Mensual';
-  if (c === 'contado') return 'Contado';
+  // Match parseFrequencyStrict — accept any cadena containing "contado"
+  // ("pago de contado", etc.), not only the exact word. Without this the
+  // catalog said 'Mensual' for the same string the API overlay called
+  // 'Contado', and the two layers disagreed on cadence.
+  if (c.includes('contado')) return 'Contado';
   return 'Mensual';
+}
+
+/**
+ * Como `normalizeFrequency` pero devuelve `null` cuando la cadena no contiene
+ * ninguna cadencia reconocible (en vez de caer al default 'Mensual'). Útil
+ * cuando la fuente es autoridad (API): no queremos pisar el catálogo con un
+ * 'Mensual' por defecto si el API mandó algo no clasificable.
+ */
+export function parseFrequencyStrict(cycle: string): Frequency | null {
+  const c = cycle.toLowerCase().trim();
+  if (c.includes('semanal') && !c.includes('quincenal')) return 'Semanal';
+  if (c.includes('quincenal')) return 'Quincenal';
+  if (c.includes('mensual')) return 'Mensual';
+  if (c === 'contado' || c.includes('contado')) return 'Contado';
+  return null;
 }
 
 function rawToClient(raw: RawClient, index: number): Client {

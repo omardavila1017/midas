@@ -552,16 +552,4 @@ export interface TaxObligation {
   status: TaxStatus;
 }
 
-export interface AuditEvent {
-  id: string;
-  entityType: 'MOVEMENT' | 'ADJUSTMENT' | 'SCENARIO' | 'PLAN' | 'RULE';
-  entityId: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'APPROVE' | 'REJECT' | 'PUBLISH' | 'EXECUTE';
-  previousValue?: unknown;
-  newValue?: unknown;
-  comment?: string;
-  userId: string;
-  createdAt: string;
-}
-
 export type FinanceRole = 'VIEWER' | 'ANALYST' | 'MANAGER' | 'ADMIN' | 'CFO';

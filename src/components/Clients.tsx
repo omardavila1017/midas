@@ -31,7 +31,7 @@ import {
   Info,
 } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
-import { fmtSmart } from '../formatters';
+import { fmtSmart, todayISO } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import ClientMatchWizard from './ClientMatchWizard';
 
@@ -92,7 +92,7 @@ export default function Clients({ clients, assumptions, confirmedPayments, cobra
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = useMemo(() => todayISO(), []);
 
   const hierarchy = useMemo(
     () => buildClientHierarchy(clients, { assumptions, confirmedPayments, today, cobranzaRecords }),
@@ -700,9 +700,7 @@ function GroupBillingRow({
   group: ClientGroupNode;
   billingMap: Map<string, ClientMonthlyBilling>;
 }) {
-  // Suma por mes sobre todas las cuentas del grupo. Histórico solo si TODAS
-  // las cuentas con datos coinciden en marcar ese mes como histórico (criterio
-  // estricto evita mezclar real + proyectado en un solo segmento).
+  // Solo histórico — la proyección no se muestra en el catálogo.
   const sum = new Array<number>(12).fill(0);
   const histMonth = new Array<boolean>(12).fill(false);
   let anyHist = false;
@@ -712,12 +710,16 @@ function GroupBillingRow({
     if (!b) continue;
     totalInvoices += b.invoiceCount;
     for (let i = 0; i < 12; i++) {
-      sum[i] += b.values[i] ?? 0;
-      if (b.isHistorical[i]) { histMonth[i] = true; anyHist = true; }
+      if (b.isHistorical[i]) {
+        sum[i] += b.values[i] ?? 0;
+        histMonth[i] = true;
+        anyHist = true;
+      }
     }
   }
   if (group.accounts.length <= 1) return null;
   const maxVal = Math.max(1, ...sum);
+  const annualHist = sum.reduce((s, v) => s + v, 0);
   return (
     <tr className="bg-[var(--surface-alt)] border-t border-[var(--gray-200)]/20">
       <td colSpan={9} className="px-4 py-2">
@@ -728,23 +730,22 @@ function GroupBillingRow({
           <div className="flex flex-1 items-end gap-0.5">
             {sum.map((v, i) => {
               const hist = histMonth[i];
-              const h = Math.max(2, Math.round((v / maxVal) * 100));
+              const h = hist ? Math.max(2, Math.round((v / maxVal) * 100)) : 0;
               return (
                 <div
                   key={i}
                   className="flex-1 rounded-sm"
                   style={{
-                    height: `${Math.max(4, h * 0.24)}px`,
-                    backgroundColor: hist ? 'var(--gray-950)' : 'var(--primary)',
-                    opacity: hist ? 1 : 0.55,
+                    height: hist ? `${Math.max(4, h * 0.24)}px` : '4px',
+                    backgroundColor: hist ? 'var(--gray-950)' : 'var(--gray-100)',
                   }}
-                  title={`${MONTHS[i]}: ${fmt(v)}${hist ? ' (histórico)' : ' (proyección)'}`}
+                  title={hist ? `${MONTHS[i]}: ${fmt(v)} (histórico)` : `${MONTHS[i]}: sin histórico`}
                 />
               );
             })}
           </div>
           <span className="text-[11px] tabular-nums text-[var(--gray-500)] whitespace-nowrap">
-            {anyHist ? `${totalInvoices} fac. · ${fmt(sum.reduce((s, v) => s + v, 0))} anual` : `${fmt(sum.reduce((s, v) => s + v, 0))} anual proyectada`}
+            {anyHist ? `${totalInvoices} fac. · ${fmt(annualHist)} anual` : 'Sin histórico'}
           </span>
         </div>
       </td>
@@ -786,8 +787,10 @@ function ClientEditor({
   const ivaRate = (client.ivaRate ?? 16) / 100;
 
   // Prefer derived billing for display; fall back to whatever's on the client.
-  const values = billing?.values ?? client.monthlyBilling;
+  // Solo histórico: la proyección no se muestra en el catálogo de clientes.
+  const rawValues = billing?.values ?? client.monthlyBilling;
   const isHistorical = billing?.isHistorical ?? new Array(12).fill(false);
+  const values = rawValues.map((v, i) => (isHistorical[i] ? v : 0));
   const total = values.reduce((s, v) => s + v, 0);
   const hasData = billing != null && billing.historicalMonths > 0;
   const maxVal = Math.max(1, ...values);
@@ -957,13 +960,6 @@ function ClientEditor({
               />
               Histórico
             </span>
-            <span className="inline-flex items-center gap-1">
-              <span
-                className="inline-block h-2 w-2 rounded-sm"
-                style={{ backgroundColor: 'var(--primary)', opacity: 0.6 }}
-              />
-              Proyección
-            </span>
           </div>
         </div>
 
@@ -1000,35 +996,36 @@ function ClientEditor({
 
         <div className="mt-3 grid grid-cols-12 gap-1">
           {MONTHS.map((m, i) => {
-            const v = values[i] ?? 0;
             const hist = isHistorical[i];
-            const heightPct = Math.max(2, Math.round((v / maxVal) * 100));
+            const v = hist ? (values[i] ?? 0) : 0;
+            const heightPct = hist ? Math.max(2, Math.round((v / maxVal) * 100)) : 0;
             return (
               <div key={m} className="flex flex-col items-center">
                 <div
                   className="relative h-14 w-full overflow-hidden rounded-sm"
                   style={{ backgroundColor: 'var(--gray-100, #f1f5f9)' }}
                 >
-                  <div
-                    className="absolute bottom-0 left-0 right-0"
-                    style={{
-                      height: `${heightPct}%`,
-                      backgroundColor: hist ? 'var(--gray-950)' : 'var(--primary)',
-                      opacity: hist ? 1 : 0.6,
-                    }}
-                    title={hist ? 'Histórico (cobranza)' : 'Proyección (regresión lineal)'}
-                  />
+                  {hist && (
+                    <div
+                      className="absolute bottom-0 left-0 right-0"
+                      style={{
+                        height: `${heightPct}%`,
+                        backgroundColor: 'var(--gray-950)',
+                      }}
+                      title="Histórico (cobranza)"
+                    />
+                  )}
                 </div>
                 <span className="mt-1 text-[10px] text-[var(--gray-400)]">{m}</span>
                 <span
                   className="tabular-nums text-[10.5px]"
                   style={{
-                    color: hist ? 'var(--gray-950)' : 'var(--primary)',
+                    color: hist ? 'var(--gray-950)' : 'var(--gray-300)',
                     fontWeight: hist ? 600 : 400,
                   }}
-                  title={hist ? 'Facturado histórico' : 'Proyectado por regresión'}
+                  title={hist ? 'Facturado histórico' : ''}
                 >
-                  {fmt(v)}
+                  {hist ? fmt(v) : '—'}
                 </span>
               </div>
             );
@@ -1053,8 +1050,7 @@ function ClientEditor({
         {hasData && (
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--gray-400)]">
             <TrendingUp className="h-3 w-3" />
-            {billing!.historicalMonths} mes{billing!.historicalMonths === 1 ? '' : 'es'} de histórico ·
-            tendencia {billing!.slope > 0 ? '+' : ''}{fmt(billing!.slope)}/mes
+            {billing!.historicalMonths} mes{billing!.historicalMonths === 1 ? '' : 'es'} de histórico
           </div>
         )}
       </section>

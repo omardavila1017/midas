@@ -48,12 +48,17 @@ const RETRY_STATUSES = new Set([408, 502, 503, 504]);
 // está aquí — solo MAX_CONCURRENT cruzan la red a la vez. El resto
 // espera en FIFO.
 //
-// Default 3 = balance entre throughput y no romper JDE. Sube si el
-// upstream demuestra que aguanta más, baja si sigue tronando.
+// Default 10 = ~3× sobre el techo prod-validado (3) del 2026-04-20.
+// Se probó 40 (burst denso → crash post-splash por recompute cascade) y
+// 16 (sigue causando pico de recompute). 10 espacia las llegadas lo
+// suficiente para que React absorba la hidratación sin colapsar el hilo,
+// y mantiene boot ~3× más rápido que el original. Kill switch sin
+// redeploy: VITE_JDE_MAX_CONCURRENT en .env.local. Si JDE responde 504
+// sostenido: 6 → 3.
 const MAX_CONCURRENT_JDE = (() => {
-  const raw = (import.meta.env?.VITE_JDE_MAX_CONCURRENT as string | undefined) ?? '3';
+  const raw = (import.meta.env?.VITE_JDE_MAX_CONCURRENT as string | undefined) ?? '10';
   const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 3;
+  return Number.isFinite(n) && n > 0 ? n : 10;
 })();
 
 let activeJdeRequests = 0;
@@ -152,6 +157,7 @@ async function request<T>(
       clearTimeout(timeout);
       releaseJdeSlot();
       const isAbort = e instanceof DOMException && e.name === 'AbortError';
+      const reason = isAbort ? 'cancelled/timeout' : 'network';
       lastErr = isAbort
         ? new JdeApiError(`Timeout llamando ${path}`, 408, path)
         : new JdeApiError(
@@ -160,9 +166,13 @@ async function request<T>(
             path,
           );
       if (attempt < maxRetries) {
+        // eslint-disable-next-line no-console
+        console.warn(`[jde-retry] ${path} · ${reason} · intento ${attempt + 1}/${maxRetries + 1} fallo, reintentando…`);
         await sleep(backoffDelay(attempt));
         continue;
       }
+      // eslint-disable-next-line no-console
+      console.error(`[jde-retry] ${path} · ${reason} · agotó ${maxRetries + 1} intentos, propagando error.`);
       throw lastErr;
     }
     clearTimeout(timeout);
@@ -179,6 +189,8 @@ async function request<T>(
       );
       if (RETRY_STATUSES.has(res.status) && attempt < maxRetries) {
         lastErr = err;
+        // eslint-disable-next-line no-console
+        console.warn(`[jde-retry] ${path} · HTTP ${res.status} · intento ${attempt + 1}/${maxRetries + 1} fallo, reintentando…`);
         await sleep(backoffDelay(attempt));
         continue;
       }

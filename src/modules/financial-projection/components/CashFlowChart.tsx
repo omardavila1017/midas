@@ -1,6 +1,5 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  Area,
   Bar,
   CartesianGrid,
   ComposedChart,
@@ -89,19 +88,48 @@ function buildSupplierLines(movements: FinancialMovement[]): SupplierLine[] {
     .sort((a, b) => b.amount - a.amount);
 }
 
+// KeepAlivePanel (App.tsx) keeps inactive modules mounted with `display:none`.
+// A still-mounted Recharts ResponsiveContainer then measures 0×0 every
+// hide/show and floods the console. Gate the chart on the container actually
+// having a box so it skips render (and Recharts work) while hidden.
+function useHasBox<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [hasBox, setHasBox] = useState(true);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => setHasBox(el.offsetWidth > 0 && el.offsetHeight > 0);
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, hasBox] as const;
+}
+
 function CashFlowChartImpl({
   projection,
   baseProjection,
   comparisonProjection,
   probabilisticProjection,
   onNavigateToTax,
+  operatingFloor,
 }: {
   projection: ForecastRun;
   baseProjection?: ForecastRun;
   comparisonProjection?: ForecastRun;
   probabilisticProjection?: ProbabilisticForecastRun | null;
   onNavigateToTax?: () => void;
+  /**
+   * Piso operativo mensual (proveedores Operación + nómina). Rescatado del
+   * Dashboard. Sólo tiene sentido como línea plana en granularidad mensual,
+   * así que el padre pasa `undefined` en semanal/diario.
+   */
+  operatingFloor?: number;
 }) {
+  const showFloor = typeof operatingFloor === 'number' && operatingFloor > 0;
+  const [chartBoxRef, chartHasBox] = useHasBox<HTMLDivElement>();
   const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null);
 
   // At daily resolution we render ~365 bars in a few hundred px — individual
@@ -166,7 +194,7 @@ function CashFlowChartImpl({
             probabilisticByDate.get(bucket.date)?.cash.p90 ?? bucket.closingCash,
           ]
           : undefined,
-        p50: probabilisticByDate?.get(bucket.date)?.cash.p50,
+        piso: showFloor ? operatingFloor : undefined,
       };
     }
     return out;
@@ -176,6 +204,8 @@ function CashFlowChartImpl({
     baseProjection?.buckets,
     comparisonProjection?.buckets,
     probabilisticProjection?.buckets,
+    showFloor,
+    operatingFloor,
   ]);
 
   // Reset the open breakdown when the underlying buckets change shape (e.g.
@@ -211,9 +241,9 @@ function CashFlowChartImpl({
             Caja proyectada
           </h2>
           <p className="mt-1 text-[12px] text-[var(--gray-400)]">
-            Barra sólida = real · Barra rayada = proyectado.
-            {baseProjection ? ' La línea punteada es el escenario base.' : ' Vista del escenario base.'}
-            {interactiveBars ? ' Haz clic en una barra para ver el desglose.' : ''}
+            La línea azul es el saldo de caja. Las barras son ingresos y egresos
+            del periodo: relleno sólido = real, rayado = proyectado.
+            {interactiveBars ? ' Clic en una barra para el desglose.' : ''}
           </p>
         </div>
         <div className="text-right text-[12px] text-[var(--gray-400)]">
@@ -235,24 +265,31 @@ function CashFlowChartImpl({
           </pattern>
         </defs>
       </svg>
-      <div className="mt-4" style={{ height: 340 }}>
+      <div ref={chartBoxRef} className="mt-4" style={{ height: 340 }}>
         {/* `debounce` rate-limits Recharts' resize storm during layout shifts
             (the page has many collapsibles), which used to thrash the chart
             on first mount. `isAnimationActive=false` on every series cuts
             Recharts' default 1500ms enter animation — silky immediate paint
             instead of a 1.5s cascade where each series re-tweens. */}
+        {chartHasBox && (
         <ResponsiveContainer width="100%" height="100%" debounce={120}>
-          <ComposedChart data={data} margin={{ top: 12, right: 18, bottom: 0, left: 4 }}>
+          <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 0, left: 4 }}>
             <CartesianGrid strokeDasharray="3 3" className="recharts-cartesian-grid" vertical={false} />
             <XAxis
               dataKey="date"
               tick={{ fontSize: 11, fill: 'var(--gray-400)' }}
               minTickGap={18}
             />
+            {/* Un solo eje: el doble eje (flujo izq / saldo der) mostraba dos
+                escalas distintas sobre la misma rejilla, así que la línea no
+                "matcheaba" con sus gridlines y confundía. El chart es "Caja
+                proyectada" → el saldo (línea) es el valor primario; las barras
+                comparten esa escala. El eje incluye negativos para que el
+                déficit se vea. */}
             <YAxis
               tickFormatter={fmtCompact}
               tick={{ fontSize: 11, fill: 'var(--gray-400)' }}
-              width={72}
+              width={60}
             />
             <Tooltip
               formatter={(value: number | [number, number], name: string) => {
@@ -268,23 +305,16 @@ function CashFlowChartImpl({
               }}
             />
             <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
-            {probabilisticProjection && (
-              <Area
-                type="monotone"
-                dataKey="riskBand"
-                name="Rango P10-P90"
-                fill="#dbeafe"
-                fillOpacity={0.8}
-                stroke="none"
-                isAnimationActive={false}
-                connectNulls={false}
-              />
-            )}
+            {/* Barras = contexto tenue. Bajamos opacidad para que la línea de
+                caja (protagonista) lea claramente por encima. Banda P10–P90,
+                Caja P50 y Caja base se quitaron: eran el ruido que hacía el
+                chart indigerible (el Δ vs base ya vive en los KPIs). */}
             <Bar
               dataKey="entradasReal"
               stackId="entradas"
               name="Ingresos (real)"
               fill="#059669"
+              fillOpacity={0.55}
               barSize={interactiveBars ? 12 : 4}
               radius={[0, 0, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}
@@ -296,8 +326,7 @@ function CashFlowChartImpl({
               stackId="entradas"
               name="Ingresos (proy.)"
               fill="url(#cfcHatchIncome)"
-              stroke="#10b981"
-              strokeWidth={1}
+              fillOpacity={0.55}
               barSize={interactiveBars ? 12 : 4}
               radius={[3, 3, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}
@@ -309,6 +338,7 @@ function CashFlowChartImpl({
               stackId="salidas"
               name="Egresos (real)"
               fill="#dc2626"
+              fillOpacity={0.55}
               barSize={interactiveBars ? 12 : 4}
               radius={[0, 0, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}
@@ -320,45 +350,24 @@ function CashFlowChartImpl({
               stackId="salidas"
               name="Egresos (proy.)"
               fill="url(#cfcHatchExpense)"
-              stroke="#ef4444"
-              strokeWidth={1}
+              fillOpacity={0.55}
               barSize={interactiveBars ? 12 : 4}
               radius={[3, 3, 0, 0]}
               cursor={interactiveBars ? 'pointer' : 'default'}
               isAnimationActive={false}
               onClick={handleBarClick}
             />
-            <Line
-              type="monotone"
-              dataKey="caja"
-              name="Caja final"
-              stroke="#1d4ed8"
-              strokeWidth={1.5}
-              dot={false}
-              isAnimationActive={false}
-            />
-            {probabilisticProjection && (
+            {showFloor && (
               <Line
                 type="monotone"
-                dataKey="p50"
-                name="Caja P50"
-                stroke="#7c3aed"
-                strokeWidth={1.5}
-                strokeDasharray="5 4"
+                dataKey="piso"
+                name="Piso operativo"
+                stroke="var(--color-floor, #d97706)"
+                strokeWidth={1.25}
+                strokeDasharray="6 3"
                 dot={false}
                 isAnimationActive={false}
-              />
-            )}
-            {baseProjection && (
-              <Line
-                type="monotone"
-                dataKey="base"
-                name="Caja base"
-                stroke="var(--gray-400)"
-                strokeWidth={1.5}
-                strokeDasharray="4 4"
-                dot={false}
-                isAnimationActive={false}
+                connectNulls
               />
             )}
             {comparisonProjection && (
@@ -373,8 +382,18 @@ function CashFlowChartImpl({
                 isAnimationActive={false}
               />
             )}
+            <Line
+              type="monotone"
+              dataKey="caja"
+              name="Caja final"
+              stroke="#1d4ed8"
+              strokeWidth={2.75}
+              dot={false}
+              isAnimationActive={false}
+            />
           </ComposedChart>
         </ResponsiveContainer>
+        )}
       </div>
 
       {selectedBucket && breakdown && (
@@ -400,7 +419,8 @@ export const CashFlowChart = memo(CashFlowChartImpl, (prev, next) =>
   && prev.baseProjection === next.baseProjection
   && prev.comparisonProjection === next.comparisonProjection
   && prev.probabilisticProjection === next.probabilisticProjection
-  && prev.onNavigateToTax === next.onNavigateToTax,
+  && prev.onNavigateToTax === next.onNavigateToTax
+  && prev.operatingFloor === next.operatingFloor,
 );
 
 function BreakdownPanel({

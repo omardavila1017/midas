@@ -25,7 +25,9 @@
       "Bash(gh pr *)",
       "Bash(/Applications/Conductor.app/Contents/Resources/bin/gh --version)",
       "Bash(git pull *)",
-      "Bash(git --version)"
+      "Bash(git --version)",
+      "Bash(npx vitest *)",
+      "Bash(grep -rn \"category.*OPEX\\\\|canonical-outflow\" /Users/paulo/Documents/GitHub/flujo-senda/src/modules/shared-finance/calculation-engine/canonicalProjection.ts | head -20)"
     ]
   }
 }

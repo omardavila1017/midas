@@ -31,6 +31,7 @@ import type {
   FinancialTaxTreatment,
 } from '../modules/shared-finance/types';
 import { normalizeJdeKey, normalizeProviderName } from './providerIdentity';
+import { todayISO } from '../formatters';
 
 export type ForecastModelId = 'moving-avg' | 'linear-trend' | 'historical-cadence';
 
@@ -92,7 +93,7 @@ export function forecastFutureCompras(
   input: ForecastInput,
   modelId: ForecastModelId,
 ): ForecastOutput {
-  const asOfDate = input.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const asOfDate = input.asOfDate ?? todayISO();
   const horizonMonths = input.horizonMonths ?? 6;
   const historyMonths = input.historyMonths ?? (modelId === 'linear-trend' ? 6 : 3);
   const topProviders = input.topProvidersByVolume ?? 80;
@@ -170,7 +171,7 @@ interface ProviderBucket {
 function recentWindow(asOfDate: string, months: number): { start: string; end: string } {
   const safe = /^\d{4}-\d{2}-\d{2}/.test(asOfDate)
     ? asOfDate.slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
+    : todayISO();
   const [y, m] = safe.split('-').map(Number);
   const endDate = new Date(Date.UTC(y, m - 1, 0));
   const startMonth = endDate.getUTCMonth() - (months - 1);

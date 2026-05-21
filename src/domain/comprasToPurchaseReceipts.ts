@@ -36,6 +36,7 @@ import {
   type LeadTimeStats,
 } from './comprasLeadTime';
 import { normalizeJdeKey, normalizeProviderName } from './providerIdentity';
+import { todayISO } from '../formatters';
 
 /**
  * Estados workflow JDE (Edo_Sig) que indican OC cerrada o sin acción de pago
@@ -73,7 +74,7 @@ function taxTreatmentFor(rate: FinancialTaxRate | undefined): FinancialTaxTreatm
 }
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayISO();
 }
 
 function addDays(date: string, days: number): string {

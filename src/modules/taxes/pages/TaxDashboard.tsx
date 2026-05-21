@@ -17,7 +17,7 @@ import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
 import type { CargoPaymentEnrichment, CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
-import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
+import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import EmptyState from '../../shared-finance/components/EmptyState';
@@ -91,7 +91,7 @@ const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
 ];
 
 export default function TaxDashboard(props: Props) {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = useMemo(() => todayISO(), []);
   const fiscalYearStart = useMemo(() => `${Number(today.slice(0, 4))}-01-01`, [today]);
   const yearEnd = useMemo(() => `${Number(today.slice(0, 4))}-12-31`, [today]);
 

@@ -24,9 +24,69 @@ export interface NominaCacheKey {
   mes: number;
 }
 
+export const PAYROLL_AUTO_REFRESH_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** Llave canónica usada en `MidasStore.nominaLoadedKeys`. */
 export function nominaCacheKey(k: NominaCacheKey): string {
   return `${k.idEmpresa}:${k.tipoNomina}:${k.anio}:${k.mes}`;
+}
+
+export interface NominaMonthPlanItem {
+  anio: number;
+  mes: number;
+  cacheKey: string;
+}
+
+export function buildNominaMonthPlan(
+  anchor: { anio: number; mes: number },
+  count: number,
+  idEmpresa = 99,
+  tipoNomina = 99,
+): NominaMonthPlanItem[] {
+  const out: NominaMonthPlanItem[] = [];
+  for (let i = 0; i < count; i++) {
+    const d = new Date(anchor.anio, anchor.mes - 1 - i, 1);
+    const anio = d.getFullYear();
+    const mes = d.getMonth() + 1;
+    out.push({
+      anio,
+      mes,
+      cacheKey: nominaCacheKey({ idEmpresa, tipoNomina, anio, mes }),
+    });
+  }
+  return out;
+}
+
+export function deriveNominaLoadedKeysFromRecords(
+  records: PayrollCostRecord[],
+  existing: Record<string, string> = {},
+  loadedAtIso: string = new Date().toISOString(),
+): Record<string, string> {
+  if (records.length === 0) return existing;
+  let changed = false;
+  const next = { ...existing };
+  for (const record of records) {
+    if (!record.year || !record.month) continue;
+    const key = nominaCacheKey({
+      idEmpresa: 99,
+      tipoNomina: 99,
+      anio: record.year,
+      mes: record.month,
+    });
+    if (next[key]) continue;
+    next[key] = loadedAtIso;
+    changed = true;
+  }
+  return changed ? next : existing;
+}
+
+export function filterStaleNominaPlan(
+  plan: NominaMonthPlanItem[],
+  loadedKeys: Record<string, string>,
+  maxAgeMs = PAYROLL_AUTO_REFRESH_TTL_MS,
+  now: number = Date.now(),
+): NominaMonthPlanItem[] {
+  return plan.filter(item => !isCacheFresh(loadedKeys[item.cacheKey], maxAgeMs, now));
 }
 
 /**

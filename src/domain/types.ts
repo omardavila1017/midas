@@ -105,6 +105,13 @@ export interface Client {
    */
   paymentDayName?: string;
   frequency: Frequency;
+  /**
+   * `true` cuando `frequency` viene del API cobranza
+   * (Nombre_Frecuencia_Facturacion_CC17) y NO debe editarse manualmente.
+   * Por default `false` (catálogo estático histórico). Mismo patrón que
+   * `creditDaysFromApi`.
+   */
+  frequencyFromApi?: boolean;
   /** Days of credit granted from invoice date. */
   creditDays: number;
   /**

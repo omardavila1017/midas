@@ -17,13 +17,16 @@
 import { jdeClient, JdeClientConfig } from './jdeClient';
 import {
   fetchRangeWithDailyCache,
-  getDailyCached,
+  fetchRangeWithMonthlyCache,
+  hasDailyCached,
+  getDailyCachedAsync,
   setDailyCached,
   primeDailyCache,
 } from './dailyApiCache';
 import { apiConfig } from '../config/api.config';
 import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber } from '../domain/bankStatements';
+import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
 
 /**
@@ -682,18 +685,46 @@ export async function fetchBankStatementsRange(
   // Reintentamos hasta 2 veces con backoff antes de aceptar 0 movimientos.
   await primeDailyCache();
   const cacheApiKey = `banks.${formato}`;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const results: BankAccountStatement[][] = new Array(dates.length);
   const needsFetch: number[] = [];
+  // Membership es sync (keyIndex). El payload vive en IDB → leerlo es async;
+  // los hits se resuelven en paralelo (pool acotado) para no congelar el boot
+  // ni reintroducir la fuga de heap del antiguo memoryIndex de payloads.
+  const cachedIdx: number[] = [];
   for (let i = 0; i < dates.length; i++) {
-    if (dates[i] < today) {
-      const cached = getDailyCached<BankAccountStatement>(cacheApiKey, dates[i]);
-      if (cached !== null) {
-        results[i] = cached;
-        continue;
-      }
+    if (dates[i] < today && hasDailyCached(cacheApiKey, dates[i])) {
+      cachedIdx.push(i);
+    } else {
+      needsFetch.push(i);
     }
-    needsFetch.push(i);
+  }
+  {
+    let rc = 0;
+    const READ_CONCURRENCY = 8;
+    const reader = async () => {
+      while (true) {
+        const slot = rc++;
+        if (slot >= cachedIdx.length) return;
+        const idx = cachedIdx[slot];
+        const cached = await getDailyCachedAsync<BankAccountStatement>(
+          cacheApiKey,
+          dates[idx],
+        );
+        if (cached !== null) {
+          results[idx] = cached;
+        } else {
+          // Carrera con un prune/delete: re-fetch ese día.
+          needsFetch.push(idx);
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.max(1, Math.min(READ_CONCURRENCY, cachedIdx.length)) },
+        reader,
+      ),
+    );
   }
   let done = dates.length - needsFetch.length;
 
@@ -997,6 +1028,12 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
   const diaPagoClave = toStr(pick(raw, ['diaPagoClave', 'claveDiaPagoCc13', 'clave_dia_pago_cc13', 'Clave_Dia_Pago_CC13'])) || undefined;
   const diaPagoNombre = toStr(pick(raw, ['diaPagoNombre', 'nombreDiaPagoCc13', 'nombre_dia_pago_cc13', 'Nombre_Dia_Pago_CC13'])) || undefined;
 
+  // ── Frecuencia de facturación (CC17) ── (campo nuevo 2026-05-19)
+  // Cadencia con que el cliente factura (MENSUAL/SEMANAL/QUINCENAL). Autoridad
+  // JDE sobre Client.frequency del catálogo estático.
+  const frecuenciaFacturacionClave = toStr(pick(raw, ['frecuenciaFacturacionClave', 'claveFrecuenciaFacturacionCc17', 'clave_frecuencia_facturacion_cc17', 'Clave_Frecuencia_Facturacion_CC17'])) || undefined;
+  const frecuenciaFacturacionNombre = toStr(pick(raw, ['frecuenciaFacturacionNombre', 'nombreFrecuenciaFacturacionCc17', 'nombre_frecuencia_facturacion_cc17', 'Nombre_Frecuencia_Facturacion_CC17'])) || undefined;
+
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),
     noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'No_Cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
@@ -1034,6 +1071,8 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     diasCredito,
     diaPagoClave,
     diaPagoNombre,
+    frecuenciaFacturacionClave,
+    frecuenciaFacturacionNombre,
     // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
     // campos cada una, el JSON.stringify del store excedía el quota de
     // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se
@@ -1236,7 +1275,10 @@ function addDaysIso(iso: string, days: number): string {
 }
 
 function mapCompras(raw: RawRecord): ComprasRecord {
-  const fechaPedido = trimIsoDate(pick(raw, ['F_Pedido', 'f_pedido', 'fechaPedido']));
+  // El nuevo servicio (dev 2026-05-19) manda la fecha de pedido como
+  // `F_Orden`; el anterior usaba `F_Pedido`. Aceptamos ambos para no perder
+  // el dato en silencio durante la transición dev→prod.
+  const fechaPedido = trimIsoDate(pick(raw, ['F_Orden', 'F_Pedido', 'f_orden', 'f_pedido', 'fechaPedido']));
   const fechaRecepcionRaw = trimIsoDate(pick(raw, ['F_Recepcion', 'F_Recepción', 'f_recepcion', 'fechaRecepcion']));
   const fechaRecepcion = isSentinelJdeDate(fechaRecepcionRaw) ? '' : fechaRecepcionRaw;
   const fechaCanceladaRaw = trimIsoDate(pick(raw, ['F_Cancelada', 'f_cancelada', 'fechaCancelada']));
@@ -1299,22 +1341,30 @@ export async function fetchCompras(
 }
 
 /**
- * Fetch órdenes de compra en bloques de 1 día con cache por día en localStorage.
+ * Fetch órdenes de compra de UNA compañía pidiendo MES POR MES con cache por
+ * mes calendario.
  *
- * JDE limita /compras a rangos pequeños; usamos 1 día por request para poder
- * cachear cada día individualmente bajo `midas.daily.compras.__all__.{YYYY-MM-DD}`.
- * Días pasados se sirven del cache sin pegar al endpoint. "Hoy" siempre se
- * re-fetch (los datos del día cambian intradía).
+ * Antes pedíamos 1 día/request → en un backfill de 365 días ~80% devolvía
+ * `data: []` (fines de semana, festivos, baja densidad de OCs por día) y el
+ * boot quemaba miles de round-trips vacíos. Mensual recorta el tráfico ~30×
+ * y mantiene el cache estable (key = `M:compras.{cia}.{YYYY-MM}`).
+ *
+ * Reglas del helper:
+ *   • Meses pasados se sirven del cache (un request por mes la primera vez).
+ *   • El mes actual SIEMPRE re-fetch (datos siguen llegando).
+ *   • La API recibe ventanas de mes completo `[firstOfMonth, lastOfMonth]`,
+ *     o `[firstOfMonth, today]` para el mes en curso — nunca fechas futuras.
  *
  * Deduplica por `(cia, noOrden, lineaOrden)` para tolerar registros repetidos
- * entre días contiguos (raro, pero el chunker viejo de 30 días lo manejaba y
- * lo mantenemos por seguridad).
+ * entre meses contiguos o reentregas del API.
  *
- * @param from   YYYY-MM-DD inclusive.
- * @param to     YYYY-MM-DD inclusive.
- * @param options Concurrencia (default 3), callback de progreso, config JDE.
+ * @param cia    Código de compañía JDE (p.ej. "00011").
+ * @param from   YYYY-MM-DD inclusive (cualquier día del primer mes).
+ * @param to     YYYY-MM-DD inclusive (cualquier día del último mes).
+ * @param options Concurrencia (default 4), callback de progreso, config JDE.
  */
 export async function fetchComprasRange(
+  cia: string,
   from: string,
   to: string,
   options: {
@@ -1326,13 +1376,19 @@ export async function fetchComprasRange(
   const config = options.config ?? {};
 
   // JDE /compras devuelve 500 intermitente. Reintentar con backoff exponencial
-  // cubre el flakeo upstream sin perder días enteros.
+  // cubre el flakeo upstream sin perder meses enteros.
   const MAX_ATTEMPTS = 3;
-  const fetchDayWithRetry = async (day: string): Promise<ComprasRecord[]> => {
+  const fetchMonthWithRetry = async (
+    monthFrom: string,
+    monthTo: string,
+  ): Promise<ComprasRecord[]> => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        return await fetchCompras({ fechaInicial: day, fechaFinal: day }, config);
+        return await fetchCompras(
+          { cia, fechaInicial: monthFrom, fechaFinal: monthTo },
+          config,
+        );
       } catch (err) {
         lastErr = err;
         if (attempt === MAX_ATTEMPTS) break;
@@ -1343,12 +1399,13 @@ export async function fetchComprasRange(
     throw lastErr;
   };
 
-  const all = await fetchRangeWithDailyCache<ComprasRecord>('compras', {
+  const all = await fetchRangeWithMonthlyCache<ComprasRecord>('compras', {
     from,
     to,
-    fetchDay: fetchDayWithRetry,
+    cia,
+    fetchMonth: fetchMonthWithRetry,
     onProgress: options.onProgress,
-    concurrency: options.concurrency ?? 3,
+    concurrency: options.concurrency ?? 4,
   });
 
   const seen = new Set<string>();
@@ -1600,11 +1657,42 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
  */
 const MAX_NOMINA_PARTIAL_RETRIES = 2;
 
+// Fan-out fallback cuando el wildcard (idEmpresa=99) se trunca >1MB. El
+// contrato (jdeTypes NominaRequest) define idEmpresa como enum chico; 33
+// Multicarga la app la excluye en bloque (companyExclusion / dropExcludedByCia),
+// así que 99 menos 33 == unión de estas 4 — trocear aquí no pierde data y cada
+// pieza es ~1/4 del payload, debajo del cap del gateway.
+const NOMINA_FANOUT_EMPRESAS = [1, 11, 17, 42];
+// Segundo nivel de troceo si una sola empresa-mes aún rebasa 1MB (meses
+// bimodales gordos): 1 Semana/Operadores | 3 Quincena/Ejecutivos.
+const NOMINA_FANOUT_TIPOS = [1, 3];
+
 function isNominaResponseSuspect(records: PayrollCostRecord[]): boolean {
   if (records.length === 0) return false; // empty es legítimo
-  return !records.some(
-    r => r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'EMPLOYER_TAX',
-  );
+  // Firma 1: truncamiento total — la response solo trajo Percepciones (ningún
+  // DEDUCTION ni EMPLOYER_TAX).
+  if (
+    !records.some(
+      r => r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'EMPLOYER_TAX',
+    )
+  ) {
+    return true;
+  }
+  // Firma 2: quincena suelta — trae deducciones pero el ratio
+  // dedCount/cashCount es anormalmente bajo. Una nómina completa tiene ≥1
+  // DEDUCTION/WITHHOLDING por cada CASH_OUT (mínimo IMSS empleado + ISR), así
+  // que ratio < 0.3 casi nunca es legítimo y delata un mes truncado a media
+  // nómina. Sin baseline cross-mes aquí (fetch de un solo mes), el ratio es el
+  // único signal self-contained; mismo umbral que `findSuspectMonths`.
+  let cashCount = 0;
+  let dedCount = 0;
+  for (const r of records) {
+    if (r.cashTreatment === 'CASH_OUT') cashCount += 1;
+    else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
+      dedCount += 1;
+    }
+  }
+  return cashCount > 0 && dedCount / cashCount < 0.3;
 }
 
 export async function fetchNomina(
@@ -1615,22 +1703,61 @@ export async function fetchNomina(
     baseUrl: apiConfig.tress.baseUrl,
     ...config,
   };
-  let records: PayrollCostRecord[] = [];
-  for (let attempt = 0; attempt <= MAX_NOMINA_PARTIAL_RETRIES; attempt++) {
-    const raw = await jdeClient.post<unknown>('/Nomina', req, merged);
-    records = dropExcludedByCia(unwrapList(raw).map(mapNominaRow));
-    if (!isNominaResponseSuspect(records)) return records;
-    if (attempt < MAX_NOMINA_PARTIAL_RETRIES) {
-      console.warn(
-        `[fetchNomina] response sospechoso (${records.length} records, solo Percepciones — sin Deducciones ni Aportaciones) para ${JSON.stringify(req)} — retry ${attempt + 1}/${MAX_NOMINA_PARTIAL_RETRIES}`,
-      );
-      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+  const fetchOne = async (r: NominaRequest): Promise<PayrollCostRecord[]> => {
+    const raw = await jdeClient.post<unknown>('/Nomina', r, merged);
+    return dropExcludedByCia(unwrapList(raw).map(mapNominaRow));
+  };
+
+  const fetchWithRetry = async (r: NominaRequest): Promise<PayrollCostRecord[]> => {
+    let recs: PayrollCostRecord[] = [];
+    for (let attempt = 0; attempt <= MAX_NOMINA_PARTIAL_RETRIES; attempt++) {
+      recs = await fetchOne(r);
+      if (!isNominaResponseSuspect(recs)) return recs;
+      if (attempt < MAX_NOMINA_PARTIAL_RETRIES) {
+        console.warn(
+          `[fetchNomina] response sospechoso (${recs.length} records, solo Percepciones) para ${JSON.stringify(r)} — retry ${attempt + 1}/${MAX_NOMINA_PARTIAL_RETRIES}`,
+        );
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
     }
+    return recs; // best-effort tras retries
+  };
+
+  // Caller pidió UNA empresa específica (filtro UI): su payload es chico por
+  // definición → fetch único con retry, sin fan-out.
+  if (req.idEmpresa !== 99) return fetchWithRetry(req);
+
+  // Wildcard "Todas" (boot + filtro "Todas"): trocear PROACTIVAMENTE por
+  // empresa. El wildcard idEmpresa=99 trunca >1MB y deja empresas enteras
+  // (p.ej. SIR) solo con Percepciones; como el agregado igual trae
+  // deducciones de OTRAS empresas, un fan-out reactivo (mirando el agregado)
+  // nunca lo detectaba → SIR quedaba en $0. Pedir cada empresa por separado
+  // mantiene cada response <1MB. 99 == unión de [1,11,17,42] (33 Multicarga
+  // ya excluida por dropExcludedByCia) → sin pérdida. Particiones disjuntas
+  // por empresa/tipo → concat sin dedupe. Vive en la capa de red: el boot
+  // sigue haciendo UN solo setNominaRecords (coalescing intacto).
+  const fanout: PayrollCostRecord[] = [];
+  for (const idEmpresa of NOMINA_FANOUT_EMPRESAS) {
+    let empRecords = await fetchWithRetry({ ...req, idEmpresa });
+    if (isNominaResponseSuspect(empRecords) && req.tipoNomina === 99) {
+      // Empresa-mes aún >1MB → segundo troceo por tipoNómina.
+      const byTipo: PayrollCostRecord[] = [];
+      for (const tipoNomina of NOMINA_FANOUT_TIPOS) {
+        byTipo.push(...(await fetchWithRetry({ ...req, idEmpresa, tipoNomina })));
+      }
+      empRecords = byTipo;
+    }
+    fanout.push(...empRecords);
   }
-  console.error(
-    `[fetchNomina] response sigue sospechoso tras ${MAX_NOMINA_PARTIAL_RETRIES} retries para ${JSON.stringify(req)} (${records.length} records sin Deducciones/Aportaciones). Devolviendo best-effort.`,
-  );
-  return records;
+  // Red de seguridad: fan-out totalmente vacío (TRESS caído) → último intento
+  // wildcard antes de devolver vacío.
+  if (fanout.length === 0) {
+    console.error(
+      `[fetchNomina] fan-out vacío para ${JSON.stringify(req)} — último intento wildcard`,
+    );
+    return fetchWithRetry(req);
+  }
+  return fanout;
 }
 
 // Exporta helpers internos para que los unit tests puedan ejercitarlos sin
@@ -1743,7 +1870,7 @@ export async function fetchPagoProveedorRange(
     to,
     fetchDay: fetchDayWithRetry,
     onProgress: options.onProgress,
-    concurrency: options.concurrency ?? 3,
+    concurrency: options.concurrency ?? 10,
   });
 
   const seen = new Set<string>();

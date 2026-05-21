@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { computeBaseCashFlow } from './Dashboard';
+import { computeBaseCashFlow } from '../domain/dashboardEngine';
 import type { BankAccountStatement } from '../services/jde';
 import type { Budget } from '../domain/budget';
 import type { Provider } from '../domain/types';

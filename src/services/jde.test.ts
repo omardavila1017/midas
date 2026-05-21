@@ -444,7 +444,11 @@ describe('Nómina (TRESS) — mapNominaRow', () => {
   });
 
   it('rellena array vacío sin error si el API devuelve { data: [] }', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    // idEmpresa=99 dispara el fan-out (POST por empresa 1/11/17/42 + red de
+    // seguridad), así que el mock debe devolver un Response NUEVO por llamada:
+    // un solo Response compartido consume su body en la 1ª lectura y la 2ª
+    // revienta como "Respuesta no es JSON válido".
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       status: 200, success: true, message: 'OK', data: [],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);

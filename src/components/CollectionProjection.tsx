@@ -23,11 +23,13 @@ import {
 } from '../domain/collectionCalendarEngine';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jde';
+import type { RolRecord } from '../services/jdeTypes';
+import RolCobranzaPanel from './RolCobranzaPanel';
 import { MONTHS } from '../types';
 import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database } from 'lucide-react';
 import { toCSV, downloadFile } from '../utils/export';
 import { hex } from '../theme';
-import { fmtCurrency, fmtCompact } from '../formatters';
+import { fmtCurrency, fmtCompact, todayISO } from '../formatters';
 import AnimatedNumber from './ui/AnimatedNumber';
 import PageHeader from './ui/PageHeader';
 
@@ -60,6 +62,11 @@ interface Props {
   cobranzaRecords?: CobranzaRecord[];
   /** Pagos/recibos de CobranzaIndicadores, agrupados por Id Pago. */
   cobranzaPayments?: CobranzaPayment[];
+  /**
+   * Viajes ejecutados del ROL diario CITI. Alimentan el panel de cruce
+   * ROL ↔ Cobranza (facturado / predicho / huérfano).
+   */
+  rolRecords?: RolRecord[];
   /**
    * ISO timestamp por compañía del último fetch exitoso de /cobranza. Hoy
    * solo se usa para mostrar "Actualizado hace X" en la vista raw; en fases
@@ -120,7 +127,7 @@ function defaultActiveMonth(year: number): number {
   return now.getFullYear() === year ? now.getMonth() : 0;
 }
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaPayments = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaPayments = [], rolRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -207,23 +214,26 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
           motor de cruce contra bancos esté listo (Fase 2), aquí va el KPI
           de % cruzado y el aging por cliente. */}
       {sourceMode === 'real' ? (
-        <CobranzaRealView
-          clients={clients}
-          assumptions={assumptions}
-          records={cobranzaRecords}
-          payments={cobranzaPayments}
-          loadedCias={cobranzaLoadedCias}
-          companies={companies}
-          bankStatements={bankStatements}
-          reconciliation={cobranzaReconciliation}
-          facturaIndex={cobranzaFacturaIndex}
-          error={cobranzaError ?? null}
-          onRefresh={onRefreshCobranza}
-          refreshing={!!cobranzaRefreshing}
-          defaultCia={selectedCia}
-          onEnsureBankCoverage={onEnsureBankCoverage}
-          bankCoverageLoading={!!bankCoverageLoading}
-        />
+        <>
+          <CobranzaRealView
+            clients={clients}
+            assumptions={assumptions}
+            records={cobranzaRecords}
+            payments={cobranzaPayments}
+            loadedCias={cobranzaLoadedCias}
+            companies={companies}
+            bankStatements={bankStatements}
+            reconciliation={cobranzaReconciliation}
+            facturaIndex={cobranzaFacturaIndex}
+            error={cobranzaError ?? null}
+            onRefresh={onRefreshCobranza}
+            refreshing={!!cobranzaRefreshing}
+            defaultCia={selectedCia}
+            onEnsureBankCoverage={onEnsureBankCoverage}
+            bankCoverageLoading={!!bankCoverageLoading}
+          />
+          <RolCobranzaPanel rolRecords={rolRecords} cobranzaRecords={cobranzaRecords} />
+        </>
       ) : (
       <>
 
@@ -2115,7 +2125,7 @@ function CobranzaRealView({
                 SubsetID: m?.subsetGroupId ?? '',
               };
             });
-            const stamp = new Date().toISOString().slice(0, 10);
+            const stamp = todayISO();
             downloadFile(toCSV(rows), `cobranza-cruce-${stamp}.csv`);
           }}
           className="inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"

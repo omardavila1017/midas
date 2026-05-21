@@ -276,6 +276,19 @@ export interface CobranzaRecord {
   diaPagoClave?: string;
   /** Nombre del día de pago preferido, p.ej. "Viernes". Trim aplicado. */
   diaPagoNombre?: string;
+  /**
+   * Clave de la frecuencia de facturación (CC17 catálogo JDE), p.ej. "3".
+   * Campo agregado al endpoint el 2026-05-19.
+   */
+  frecuenciaFacturacionClave?: string;
+  /**
+   * Nombre de la frecuencia de facturación, p.ej. "MENSUAL" / "SEMANAL" /
+   * "QUINCENAL". Trim aplicado. Es la cadencia con que el cliente factura;
+   * cuando viene poblada es autoridad JDE sobre `Client.frequency` del
+   * catálogo estático (mismo patrón que `diasCredito` / `diaPagoNombre`).
+   * Campo agregado al endpoint el 2026-05-19.
+   */
+  frecuenciaFacturacionNombre?: string;
   /** Registro original devuelto por el API, útil para depurar campos nuevos. */
   raw?: Record<string, unknown>;
 }
@@ -339,6 +352,11 @@ export interface CobranzaPayment {
  * 30 días por request. Para periodos mayores, partir en bloques y mergear
  * (ver `fetchComprasRange` en jde.ts).
  *
+ * Cambio JDE 2026-05-19 (dev): el body ahora exige `cia` — hay que consultar
+ * UNA compañía por request (mismo patrón que /antiguedadsaldos y /cobranza).
+ * Antes el endpoint era global (todas las cías en una respuesta). El día que
+ * esto pase a producción, omitir `cia` deja al módulo sin datos.
+ *
  * El payload de respuesta trae ~40 campos por OC. Tras revisión del equipo
  * de tesorería (2026-05-12) consumimos todos los campos pero solo usamos
  * un subset para proyectar egreso a corto plazo:
@@ -347,6 +365,8 @@ export interface CobranzaPayment {
  *   - agrupación/UI: T_Moneda, Tipo_Cambio, Categoria/Familia, Centro_Costos
  */
 export interface ComprasRequest {
+  /** Código de compañía JDE (p.ej. "00011"). UNA compañía por request. */
+  cia: string;
   /** Fecha inicial inclusive (YYYY-MM-DD). */
   fechaInicial: string;
   /** Fecha final inclusive (YYYY-MM-DD). Máx 30 días respecto a fechaInicial. */

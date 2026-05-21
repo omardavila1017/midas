@@ -33,9 +33,11 @@ import {
 import { isNoisyBankExpenseConcept, projectExpenseByProvider, type ProviderMonthLine } from './expensePerProvider';
 import {
   isInternalTransfer,
+  isInternalCounterparty,
   buildOwnAccountsIndex,
   buildOwnAccountDetector,
 } from './netCashFlowEngine';
+import { enrichMovementWithCatalog } from './bankAccountsCatalog';
 import type { Budget } from './budget';
 
 // ── Income ───────────────────────────────────────────────────────────────
@@ -169,6 +171,10 @@ export function buildScheduledExpenseMap(
 ): Map<string, number> {
   const byMonth = new Map<string, number>();
   for (const r of aged) {
+    // Factura intercompañía (proveedor empresa propia del grupo): traspaso,
+    // no egreso real. Espejo del corte CXP de la proyección canónica
+    // (canonicalProjection.ts) para que no infle los egresos programados.
+    if (isInternalCounterparty(undefined, r.nombre)) continue;
     const ym = (r.fechaProgramacionPago ?? '').slice(0, 7);
     if (ym.length !== 7) continue;
     byMonth.set(ym, (byMonth.get(ym) ?? 0) + (r.importePendientePesos ?? 0));
@@ -209,6 +215,19 @@ export function detectRecurringExpenses(
     for (const mov of acc.movimientos) {
       if (mov.tipoMovimiento !== 'CARGO') continue;
       if (isInternalTransfer(mov, ownAccountDetector)) continue;
+      // Cuenta con rol neutro en el catálogo (reserva, ahorro, crédito,
+      // garantía, por_cancelar, saldo_retenido) = traspaso interno aunque no
+      // traiga leyenda. Mismo corte que la proyección canónica; sin esto un
+      // traspaso recurrente se re-proyecta como egreso futuro.
+      {
+        const catalogEnrich = enrichMovementWithCatalog({
+          cuenta: acc.cuenta,
+          cuentaBancos: mov.cuentaBancos ?? mov.cuenta,
+          tipoMovimiento: mov.tipoMovimiento,
+          importe: mov.importe,
+        });
+        if (catalogEnrich && catalogEnrich.entry.flow === 'neutro') continue;
+      }
       if (isNoisyBankExpenseConcept(mov.concepto ?? '')) continue;
       const ym = (mov.fechaOperacion ?? '').slice(0, 7);
       if (ym.length !== 7) continue;

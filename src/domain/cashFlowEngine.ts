@@ -28,6 +28,7 @@ import {
   classifyMovement,
   type ClassificationContext,
 } from './netCashFlowEngine';
+import { enrichMovementWithCatalog } from './bankAccountsCatalog';
 import { CashFlowMonth } from '../types';
 
 // ── Helpers de fecha ─────────────────────────────────────────────────────
@@ -107,6 +108,18 @@ export function buildHistoricalMonths(
       const ym = toYearMonth(mov.fechaOperacion);
       if (!ym) continue;
       if (classifyMovement(mov, ctx, acc.cia, acc.cuenta).kind === 'internal') continue;
+      // Cuentas con rol neutro en el catálogo (reserva, ahorro, crédito,
+      // garantía, por_cancelar, saldo_retenido) son traspasos internos por
+      // definición aunque no traigan leyenda/RFC. Mismo corte que aplica la
+      // proyección canónica (canonicalProjection.ts) — sin esto el chart del
+      // Dashboard sobrestima ingresos/egresos cuando cae al motor `base`.
+      const catalogEnrich = enrichMovementWithCatalog({
+        cuenta: acc.cuenta,
+        cuentaBancos: mov.cuentaBancos ?? mov.cuenta,
+        tipoMovimiento: mov.tipoMovimiento,
+        importe: mov.importe,
+      });
+      if (catalogEnrich && catalogEnrich.entry.flow === 'neutro') continue;
       const bucket = byMonth.get(ym) ?? { income: 0, expense: 0 };
       if (mov.tipoMovimiento === 'ABONO') bucket.income += mov.importe;
       else if (mov.tipoMovimiento === 'CARGO') bucket.expense += mov.importe;
@@ -303,7 +316,7 @@ export async function buildBaseCashFlow(
       historicalStart,
       today,
       'SWIFT',
-      { concurrency: 6 },
+      { concurrency: 10 },
     );
   }
 

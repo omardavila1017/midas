@@ -269,7 +269,7 @@ describe('<TaxDashboard />', () => {
       {
         movementKey: key,
         status: 'MATCHED',
-        payments: [{ noPago: 'P-1', nombreProveedor: 'Proveedor IVA', importe: 1160, tier: 'exact' }],
+        payments: [{ noPago: 'P-1', claveProveedor: '0', nombreProveedor: 'Proveedor IVA', importe: 1160, tier: 'exact' }],
       },
     ]]);
 

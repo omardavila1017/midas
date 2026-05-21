@@ -1,11 +1,53 @@
-import type { AuditEvent, FinancialAdjustment, FinancialScenario } from '../../shared-finance/types';
+import type { FinancialAdjustment, FinancialScenario } from '../../shared-finance/types';
 
 const SCENARIOS_KEY = 'midas.financialPlanning.scenarios.v1';
 const ADJUSTMENTS_KEY = 'midas.financialPlanning.adjustments.v1';
-const AUDIT_KEY = 'midas.financialPlanning.audit.v1';
+
+// Legacy: el log de auditoría write-only (`midas.financialPlanning.audit.v1`)
+// se retiró al unificar el historial en el ChangeLogDrawer. Lo purgamos al
+// cargar el módulo para no dejar basura en localStorage.
+try {
+  localStorage.removeItem('midas.financialPlanning.audit.v1');
+} catch {
+  /* ignore */
+}
 
 export function loadPlanningScenarios(fallback: FinancialScenario[]): FinancialScenario[] {
   return loadArray<FinancialScenario>(SCENARIOS_KEY, fallback, isScenario);
+}
+
+/**
+ * Cheap scenario list for the global header selector — no heavy projection
+ * compute. Returns Base + Approved (synthesized if not yet persisted) plus
+ * any stored, non-archived drafts. Once a Proyección module mounts it
+ * registers the fully-bootstrapped list, which supersedes this seed.
+ */
+export function listHeaderScenarios(): FinancialScenario[] {
+  const stored = loadPlanningScenarios([]);
+  const now = new Date().toISOString();
+  const synth = (
+    id: string,
+    kind: 'BASE' | 'APPROVED',
+    name: string,
+  ): FinancialScenario => ({
+    id,
+    name,
+    kind,
+    adjustmentIds: [],
+    status: 'APPROVED',
+    isBase: kind === 'BASE',
+    createdBy: 'system@senda.local',
+    createdAt: now,
+    updatedAt: now,
+  });
+  const base =
+    stored.find((s) => s.kind === 'BASE' && !s.archivedAt) ??
+    synth('base', 'BASE', 'Escenario Base');
+  const approved =
+    stored.find((s) => s.kind === 'APPROVED' && !s.archivedAt) ??
+    synth('approved', 'APPROVED', 'Escenario Aprobado');
+  const drafts = stored.filter((s) => s.kind === 'DRAFT' && !s.archivedAt);
+  return [base, approved, ...drafts];
 }
 
 export function savePlanningScenarios(scenarios: FinancialScenario[]): void {
@@ -18,14 +60,6 @@ export function loadPlanningAdjustments(fallback: FinancialAdjustment[]): Financ
 
 export function savePlanningAdjustments(adjustments: FinancialAdjustment[]): void {
   saveArray(ADJUSTMENTS_KEY, adjustments);
-}
-
-export function loadPlanningAudit(fallback: AuditEvent[] = []): AuditEvent[] {
-  return loadArray<AuditEvent>(AUDIT_KEY, fallback, isAuditEvent);
-}
-
-export function savePlanningAudit(events: AuditEvent[]): void {
-  saveArray(AUDIT_KEY, events.slice(0, 200));
 }
 
 function loadArray<T>(key: string, fallback: T[], guard: (value: unknown) => value is T): T[] {
@@ -55,8 +89,4 @@ function isScenario(value: unknown): value is FinancialScenario {
 
 function isAdjustment(value: unknown): value is FinancialAdjustment {
   return Boolean(value && typeof value === 'object' && typeof (value as FinancialAdjustment).id === 'string');
-}
-
-function isAuditEvent(value: unknown): value is AuditEvent {
-  return Boolean(value && typeof value === 'object' && typeof (value as AuditEvent).id === 'string');
 }

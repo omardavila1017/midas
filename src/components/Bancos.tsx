@@ -49,7 +49,7 @@ import {
 } from '../domain/bankStatements';
 import { parseSantanderFile, SANTANDER_FILE_FORMAT } from '../domain/santanderCsv';
 import { hex } from '../theme';
-import { fmtCurrency as fmtCurrencyUnified } from '../formatters';
+import { fmtCurrency as fmtCurrencyUnified, todayISO } from '../formatters';
 import {
   bankAccountBusinessUnitLabel,
   bankAccountFlowLabel,
@@ -97,7 +97,6 @@ const FORMATS: BankStatementFormat[] = ['SWIFT', 'BAI2', 'MT940'];
    Helpers
    ═══════════════════════════════════════════════════════════════════════ */
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
 const formatSourceLabel = (format: string, hasUploadedSantander?: boolean): string => {
   if (format === SANTANDER_FILE_FORMAT) return 'Archivo Santander';
   if (hasUploadedSantander) return `${format} + Archivo Santander`;

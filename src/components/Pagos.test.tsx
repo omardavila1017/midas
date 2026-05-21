@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import Pagos from './Pagos';
 import type { PagoProveedorRecord } from '../services/jde';
+import type { PaymentMatch } from '../domain/paymentReconciliationEngine';
 
 function pago(overrides: Partial<PagoProveedorRecord>): PagoProveedorRecord {
   return {
@@ -27,12 +28,28 @@ function pago(overrides: Partial<PagoProveedorRecord>): PagoProveedorRecord {
   };
 }
 
+/** Builds a PaymentMatch with UNMATCHED status so the engine input is consistent
+ *  with the visible payment list (no CXP/cargo cross). Tests focus on filter +
+ *  search + view-mode behavior, not on reconciliation. */
+function unmatchedMatch(record: PagoProveedorRecord): PaymentMatch {
+  return {
+    payment: record,
+    status: 'UNMATCHED',
+    cxpMatches: [],
+    reason: 'sin cxp ni cargo (test)',
+  };
+}
+
 function rows(container: HTMLElement): HTMLTableRowElement[] {
   return Array.from(container.querySelectorAll('tbody tr'));
 }
 
+function switchToFlatList() {
+  fireEvent.click(screen.getByRole('button', { name: /Lista plana/ }));
+}
+
 describe('<Pagos /> filters and sorting', () => {
-  it('hides payments marked as internal from the visible table and totals', () => {
+  it('hides payments marked as internal from the visible list and totals', () => {
     const records = [
       pago({
         noPago: '100',
@@ -45,6 +62,7 @@ describe('<Pagos /> filters and sorting', () => {
         importePesos: 9000,
       }),
     ];
+    const matches = records.map(unmatchedMatch);
 
     const { container } = render(
       <Pagos
@@ -53,8 +71,13 @@ describe('<Pagos /> filters and sorting', () => {
         selectedCia="all"
         providers={[]}
         internalPaymentKeys={new Set(['00001::200'])}
+        paymentMatches={matches}
+        comprasRecords={[]}
+        cxpRecords={[]}
       />,
     );
+
+    switchToFlatList();
 
     expect(rows(container)).toHaveLength(1);
     expect(screen.getByText('Proveedor Visible')).toBeTruthy();
@@ -62,7 +85,7 @@ describe('<Pagos /> filters and sorting', () => {
     expect(screen.getByText('1 total')).toBeTruthy();
   });
 
-  it('searches, filters by ranges, sorts, and clears back to the default order', () => {
+  it('searches and filters by date/amount in flat list view', () => {
     const records = [
       pago({
         noPago: '100',
@@ -82,19 +105,24 @@ describe('<Pagos /> filters and sorting', () => {
         clasificacionProveedorFinanciera: '100 - Critico',
       }),
     ];
+    const matches = records.map(unmatchedMatch);
+
     const { container } = render(
       <Pagos
         pagoProveedorRecords={records}
         pagoProveedorLoadedCias={{ __all__: '2026-06-02T00:00:00Z' }}
         selectedCia="all"
         providers={[]}
+        paymentMatches={matches}
+        comprasRecords={[]}
+        cxpRecords={[]}
       />,
     );
 
-    expect(rows(container)[0].textContent).toContain('Proveedor Dos');
+    switchToFlatList();
 
-    fireEvent.change(screen.getByTitle('Ordenar registros'), { target: { value: 'importePesos:asc' } });
-    expect(rows(container)[0].textContent).toContain('Proveedor Uno');
+    // Default flat-list sort is fechaPago desc → newest first.
+    expect(rows(container)[0].textContent).toContain('Proveedor Dos');
 
     fireEvent.change(screen.getByPlaceholderText('Buscar proveedor, RFC, no. pago, comentario…'), {
       target: { value: 'Proveedor Dos' },
@@ -104,7 +132,7 @@ describe('<Pagos /> filters and sorting', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Limpiar/ }));
     fireEvent.change(screen.getByTitle('Fecha pago desde'), { target: { value: '2026-05-15' } });
-    fireEvent.change(screen.getByTitle('Importe mínimo'), { target: { value: '2000' } });
+    fireEvent.change(screen.getByPlaceholderText('Importe mín.'), { target: { value: '2000' } });
     expect(rows(container)).toHaveLength(1);
     expect(rows(container)[0].textContent).toContain('Proveedor Dos');
 

@@ -9,6 +9,10 @@ import type {
   ProbabilisticForecastResponse,
   ProbabilisticForecastRun,
 } from '../../shared-finance/types';
+import {
+  loadProbabilisticForecastFromPersistentCache,
+  saveProbabilisticForecastToPersistentCache,
+} from './financialProjectionPersistentCache';
 
 const FORECAST_CACHE = new Map<string, ProbabilisticForecastRun>();
 const FORECAST_CACHE_LIMIT = 18;
@@ -67,9 +71,14 @@ export function useProbabilisticForecast(
       error: null,
     }));
 
-    const storeAndPublish = (run: ProbabilisticForecastRun) => {
+    const storeAndPublish = (run: ProbabilisticForecastRun, persist = true) => {
       if (cancelled || jobRef.current !== jobId) return;
       remember(cacheKey, run);
+      // Persistir: el forecast es caro y estable → "carga una vez y se
+      // guarda" para que boots futuros lo sirvan sin recomputar. En un hit
+      // del cache persistente NO re-guardamos (persist=false): evita un put
+      // de un objeto grande en IDB en cada boot.
+      if (persist) saveProbabilisticForecastToPersistentCache(cacheKey, run);
       setState({ run, loading: false, error: null });
     };
     const publishError = (message: string) => {
@@ -84,30 +93,50 @@ export function useProbabilisticForecast(
       }
     };
 
-    if (typeof Worker === 'undefined') {
-      runFallback();
-      return () => { cancelled = true; };
-    }
-
-    try {
-      if (!workerRef.current) {
-        workerRef.current = new Worker(
-          new URL('../../../workers/probabilisticForecast.worker.ts', import.meta.url),
-          { type: 'module' },
-        );
+    const compute = () => {
+      if (cancelled || jobRef.current !== jobId) return;
+      if (typeof Worker === 'undefined') {
+        runFallback();
+        return;
       }
-      const worker = workerRef.current;
-      worker.onmessage = (event: MessageEvent<ProbabilisticForecastResponse>) => {
-        if (cancelled || event.data.jobId !== jobId) return;
-        if (event.data.result) storeAndPublish(event.data.result);
-        else if (event.data.error) publishError(event.data.error);
-        else runFallback();
-      };
-      worker.onerror = () => runFallback();
-      worker.postMessage(requestWithJob);
-    } catch {
-      runFallback();
-    }
+      try {
+        if (!workerRef.current) {
+          workerRef.current = new Worker(
+            new URL('../../../workers/probabilisticForecast.worker.ts', import.meta.url),
+            { type: 'module' },
+          );
+        }
+        const worker = workerRef.current;
+        worker.onmessage = (event: MessageEvent<ProbabilisticForecastResponse>) => {
+          if (cancelled || event.data.jobId !== jobId) return;
+          if (event.data.result) storeAndPublish(event.data.result);
+          else if (event.data.error) publishError(event.data.error);
+          else runFallback();
+        };
+        worker.onerror = () => runFallback();
+        worker.postMessage(requestWithJob);
+      } catch {
+        runFallback();
+      }
+    };
+
+    // Antes de computar (caro: Monte Carlo + Holt-Winters en worker),
+    // intenta el cache persistente en IDB. Hit ⇒ publica sin recomputar
+    // ("carga una vez y se guarda"). Miss ⇒ computa y storeAndPublish lo
+    // persiste para el próximo boot.
+    void (async () => {
+      try {
+        const persisted = await loadProbabilisticForecastFromPersistentCache<ProbabilisticForecastRun>(cacheKey);
+        if (cancelled || jobRef.current !== jobId) return;
+        if (persisted) {
+          storeAndPublish(persisted, false);
+          return;
+        }
+      } catch {
+        /* cache best-effort — cae a compute */
+      }
+      compute();
+    })();
 
     return () => {
       cancelled = true;

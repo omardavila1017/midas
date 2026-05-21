@@ -1,5 +1,4 @@
 import type {
-  AuditEvent,
   CellOverride,
   FinancialAdjustment,
   FinancialScenario,
@@ -8,7 +7,6 @@ import type {
   ProjectionGranularity,
   ScenarioChangeLogEntry,
 } from '../../shared-finance/types';
-import { createAuditEvent } from '../../shared-finance/audit/audit';
 import { describeMergeToApproved, newChangeLogEntry } from './changeLogTemplates';
 
 export type MergeDiffKind = 'CELL_OVERRIDE' | 'CUSTOM_ROW' | 'MOVEMENT_ADJUSTMENT' | 'MANUAL_ENTRY';
@@ -175,7 +173,6 @@ export interface ApplyMergeResult {
   customRows: PlanningCustomRow[];
   manualEntries: ManualPlanningEntry[];
   changeLog: ScenarioChangeLogEntry[];
-  auditEvents: AuditEvent[];
 }
 
 export function applyMerge(args: ApplyMergeArgs): ApplyMergeResult {
@@ -344,36 +341,6 @@ export function applyMerge(args: ApplyMergeArgs): ApplyMergeResult {
   });
   const changeLog = [mergeEntry, ...args.changeLog];
 
-  const auditEvents: AuditEvent[] = [
-    createAuditEvent({
-      entityType: 'SCENARIO',
-      entityId: args.approved.id,
-      action: 'UPDATE',
-      previousValue: { overrideCount: args.approvedOverrides.length },
-      newValue: {
-        overrideCount: remainingApprovedOverrides.length + promotedOverrides.length,
-        promotedCells: promotedOverrides.length,
-        promotedCustomRows: promotedCustomRows.length,
-        promotedAdjustments: promotedAdjustments.length,
-        promotedManualEntries: promotedManualEntryIds.size,
-        sourceDraftId: args.draft.id,
-      },
-      comment: `Propuesta "${args.draft.name}" aplicada al Aprobado.`,
-      userId: user,
-    }),
-  ];
-  if (args.archiveDraft) {
-    auditEvents.push(createAuditEvent({
-      entityType: 'SCENARIO',
-      entityId: args.draft.id,
-      action: 'UPDATE',
-      previousValue: { archived: false },
-      newValue: { archived: true },
-      comment: 'Propuesta archivada tras aplicar cambios al Aprobado.',
-      userId: user,
-    }));
-  }
-
   return {
     scenarios,
     cellOverrides,
@@ -381,7 +348,6 @@ export function applyMerge(args: ApplyMergeArgs): ApplyMergeResult {
     customRows,
     manualEntries,
     changeLog,
-    auditEvents,
   };
 }
 

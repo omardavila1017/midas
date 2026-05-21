@@ -70,7 +70,6 @@ describe('ensureCoreScenarios', () => {
     expect(result.adjustments.length).toBe(0);
     expect(result.cellOverrides.length).toBe(0);
     expect(result.changeLog.length).toBe(0);
-    expect(result.auditEvents.some((e) => e.entityId === 'legacy-1' && e.action === 'DELETE')).toBe(true);
   });
 
   it('normalizes a leftover non-base, non-approved scenario as DRAFT pointing at Approved', () => {

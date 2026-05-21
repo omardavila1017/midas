@@ -11,7 +11,6 @@
  */
 const DEFAULT_JDE_BASE_URL = '/api/jde';
 const DEFAULT_TRESS_BASE_URL = '/api/tress';
-const DEFAULT_COGNOS_BASE_URL = '/api/cognos';
 const DEFAULT_OPENAI_BASE_URL = '/api/openai';
 const DEFAULT_CITI_BASE_URL = '/api/citi';
 
@@ -36,11 +35,6 @@ export const apiConfig = {
     baseUrl: import.meta.env.VITE_CITI_BASE_URL || DEFAULT_CITI_BASE_URL,
     authValue: '',
   },
-  cognos: {
-    baseUrl: import.meta.env.VITE_COGNOS_BASE_URL || DEFAULT_COGNOS_BASE_URL,
-    authValue: '',
-    namespace: import.meta.env.VITE_COGNOS_NAMESPACE ?? 'CognosEx',
-  },
   atlas: {
     artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'midas',
   },
@@ -55,6 +49,5 @@ export function validateApiConfig(): string[] {
   if (!apiConfig.jde.baseUrl) missing.push('VITE_JDE_BASE_URL');
   if (!apiConfig.tress.baseUrl) missing.push('VITE_TRESS_BASE_URL');
   if (!apiConfig.citi.baseUrl) missing.push('VITE_CITI_BASE_URL');
-  if (!apiConfig.cognos.baseUrl) missing.push('VITE_COGNOS_BASE_URL');
   return missing;
 }

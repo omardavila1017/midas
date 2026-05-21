@@ -147,6 +147,16 @@ export function calculateCashBalance(movements: FinancialMovement[], options: Pr
   });
 }
 
+/**
+ * Aplica las propuestas (`FinancialAdjustment`) a nivel MOVIMIENTO. Es el
+ * primer paso de mutación del pipeline de escenario: corre ANTES de generar
+ * los buckets. La segunda capa, `applyCellOverridesToBuckets`, corre después
+ * sobre los buckets ya agregados.
+ *
+ * Precedencia (decidida — ya no es ambigua): si una propuesta y un
+ * `CellOverride` tocan el mismo concepto/bucket, **el CellOverride gana** —
+ * reemplaza el valor agregado al render, encima de lo que dejó la propuesta.
+ */
 export function applyAdjustmentsToMovements(
   baseMovements: FinancialMovement[],
   adjustments: FinancialAdjustment[],
@@ -209,6 +219,14 @@ export interface ApplyCellOverridesArgs {
   initialCash?: number;
 }
 
+/**
+ * Aplica los `CellOverride` (ediciones manuales por celda) a nivel BUCKET, al
+ * render. Es la SEGUNDA capa de mutación: corre después de
+ * `applyAdjustmentsToMovements` (nivel movimiento) y de la agregación a
+ * buckets. El override gana sobre el valor de la propuesta para el mismo
+ * concepto/bucket (modo REPLACE reemplaza, DELTA suma). Los buckets históricos
+ * (anteriores a `asOfDate`) no se sobreescriben.
+ */
 export function applyCellOverridesToBuckets(args: ApplyCellOverridesArgs): ProjectionBucket[] {
   const { buckets, overrides, movements, rows, granularity, conceptKeyForMovement, asOfDate, initialCash } = args;
   const filteredOverrides = overrides.filter((override) => override.granularity === granularity);
@@ -433,6 +451,11 @@ function movementFromAdjustment(adjustment: FinancialAdjustment): FinancialMovem
 }
 
 function matchesAdjustmentTarget(movement: FinancialMovement, adjustment: FinancialAdjustment): boolean {
+  // A cancelled movement is gone — subsequent adjustments must not resurrect
+  // it. Without this guard, applySingleAdjustment rebuilds the movement with
+  // status='ADJUSTED' and the final filter at the end of
+  // applyAdjustmentsToMovements no longer drops it.
+  if (movement.status === 'CANCELLED') return false;
   const expression = adjustment.targetExpression.trim();
   if (!expression) return false;
   if (adjustment.targetType === 'MOVEMENT') {
@@ -565,7 +588,15 @@ function splitDate(adjustment: FinancialAdjustment, baseDate: string, index: num
   const custom = adjustment.splitConfig?.dates?.[index];
   if (custom) return custom;
   const frequency = adjustment.splitConfig?.frequency ?? 'WEEKLY';
-  const step = frequency === 'BIWEEKLY' ? 14 : frequency === 'MONTHLY' ? 30 : 7;
+  // MONTHLY must advance calendar months, not 30 days. 30 × 12 = 360, so a
+  // year of monthly splits drifted 5 days off real months. Use setUTCMonth
+  // for MONTHLY; WEEKLY/BIWEEKLY are exact in days.
+  if (frequency === 'MONTHLY') {
+    const parsed = parseIso(baseDate);
+    parsed.setUTCMonth(parsed.getUTCMonth() + index);
+    return toIso(parsed);
+  }
+  const step = frequency === 'BIWEEKLY' ? 14 : 7;
   return addDays(baseDate, step * index);
 }
 

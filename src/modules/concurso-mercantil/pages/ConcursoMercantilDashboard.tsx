@@ -218,7 +218,7 @@ export default function ConcursoMercantilDashboard({
                   </td>
                 </tr>
               )}
-              {recon.matches.map((m) => (
+              {recon.matches.filter((m) => m.status !== 'sin-datos-banco').map((m) => (
                 <tr key={m.key} className="border-b border-gray-100">
                   <td className="py-2 pr-3 font-medium">
                     {m.month} {m.year}

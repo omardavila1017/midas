@@ -50,7 +50,13 @@ const AMOUNT_TOLERANCE_PCT = 0.005; // 0.5%
 const AMOUNT_TOLERANCE_MIN_ABS = 1;
 const CXP_DATE_WINDOW_BEFORE_DAYS = 7;
 const CXP_DATE_WINDOW_AFTER_DAYS = 60;
-const BANK_DATE_WINDOW_DAYS = 2;
+// Ventana original era 2d, ahora ±120d (4 meses). Indemnizaciones, fideicomisos
+// y arrendamientos AFP salen por banco con lag de semanas/meses contra el
+// registro JDE; abrir 4m permite cazarlos. El tier `exact` sigue exigiendo
+// mismo día calendario, y `findCargoMatch` elige el cargo MÁS CERCANO en
+// fecha dentro del rango — así una ventana ancha no roba matches a otros
+// pagos: el más cercano gana siempre.
+const BANK_DATE_WINDOW_DAYS = 120;
 const SUBSET_MAX_INVOICES = 4;
 const DAY_MS = 86_400_000;
 
@@ -124,6 +130,10 @@ export interface CargoPaymentEnrichment {
   /** Pagos que originaron este CARGO (normalmente 1; raro 2+ si batch). */
   payments?: Array<{
     noPago: string;
+    /** Clave JDE del proveedor — = `numProveedor` del catálogo. Necesaria
+     *  para que el cruce con el catálogo de proveedores resuelva por id
+     *  (counterpartyId) en vez de caer al match por nombre crudo. */
+    claveProveedor: string;
     nombreProveedor: string;
     importe: number;
     tier: CargoMatchTier;
@@ -317,6 +327,7 @@ export function reconcilePayments(input: {
         status: 'MATCHED',
         payments: [{
           noPago: payment.noPago,
+          claveProveedor: payment.claveProveedor,
           nombreProveedor: payment.nombreProveedor,
           importe: payment.importePesos,
           tier: cargoMatch.tier,
@@ -425,19 +436,62 @@ function indexCargosByAccount(cargos: IndexedCargo[]): Map<string, IndexedCargo[
   return map;
 }
 
+/**
+ * Algunos pagos llegan con `Cuenta_Banco` vacío y el número de cuenta sólo
+ * vive dentro de `Cuenta_Bancaria` (caso típico: BanBajio, donde JDE empaca
+ * "BANBAJIO 33850201" como un solo segmento). Sin fallback el join contra el
+ * índice de cargos falla y todo cae a huérfano. Extraemos el cluster numérico
+ * más largo como cuenta de respaldo.
+ */
+function resolvePaymentAccountKey(payment: PagoProveedorRecord): string {
+  // BanBajio: el banco statement guarda cuenta-sentinela "BANBAJIO"; aquí
+  // detectamos el banco por nombre en cuentaBancaria (ej. "BANBAJIO 33850201")
+  // antes que cualquier otra heurística, para que ambos lados caigan al
+  // mismo key sintético.
+  if (BAJIO_PATTERN.test(payment.cuentaBancaria || '')) return BANBAJIO_KEY;
+  const primary = normalizeAccountKey(payment.cuentaBanco);
+  if (primary && primary.length >= 4) return primary;
+  // Fallback: digit cluster within cuentaBancaria. Pick the longest run so we
+  // don't grab a 2-digit cía code by accident.
+  const digitRuns = (payment.cuentaBancaria || '').match(/\d+/g) ?? [];
+  let longest = '';
+  for (const run of digitRuns) if (run.length > longest.length) longest = run;
+  return longest.replace(/^0+/, '');
+}
+
 function findCargoMatch(
   payment: PagoProveedorRecord,
   cargosByAccount: Map<string, IndexedCargo[]>,
   claimedCargo: Set<string>,
 ): (IndexedCargo & { tier: Exclude<CargoMatchTier, 'unmatched'> }) | undefined {
-  const accountCargos = cargosByAccount.get(normalizeAccountKey(payment.cuentaBanco)) ?? [];
+  const accountKey = resolvePaymentAccountKey(payment);
+  const accountCargos = cargosByAccount.get(accountKey) ?? [];
+  // Recolecta TODOS los matches dentro de la ventana y devuelve el mejor por
+  // (tier exact > tolerance) y, dentro de cada tier, el más cercano en fecha.
+  // Con la ventana abierta a ±15d, "primer match" se vuelve no determinístico
+  // y permite que un cargo lejano robe el slot a uno cercano del siguiente
+  // pago; ranking lo evita.
+  let best: (IndexedCargo & { tier: Exclude<CargoMatchTier, 'unmatched'>; days: number }) | undefined;
   for (const cargo of accountCargos) {
     if (claimedCargo.has(cargo.key)) continue;
     const tier = cargoMatchTier(payment, cargo.movement, cargo.fechaOperacion);
     if (tier === 'unmatched') continue;
-    return { ...cargo, tier };
+    const days = Math.abs(daysBetween(payment.fechaPago, cargo.fechaOperacion));
+    if (!best) {
+      best = { ...cargo, tier, days };
+      continue;
+    }
+    // exact siempre gana sobre tolerance; con mismo tier, gana menor días.
+    if (tier === 'exact' && best.tier !== 'exact') {
+      best = { ...cargo, tier, days };
+    } else if (tier === best.tier && days < best.days) {
+      best = { ...cargo, tier, days };
+    }
   }
-  return undefined;
+  if (!best) return undefined;
+  const { days: _days, ...rest } = best;
+  void _days;
+  return rest;
 }
 
 function findFolioMatch(cxps: CXPRecord[], comentario: string): CXPRecord | undefined {
@@ -573,8 +627,31 @@ function normalizeInvoice(value: string): string {
     .replace(/\s+/g, '');
 }
 
+// El statement bancario guarda `cuenta` ya normalizada por
+// `normalizeBankAccountNumber` → forma zero-padded del API JDE /bancos
+// (Banamex 11 díg, Banorte 10). PagoProveedor `cuentaBanco` viene crudo sin
+// ese padding. Quitar no-dígitos NO basta: "877732401" (pago) ≠ "00877732401"
+// (banco) → el join fallaba silenciosamente y todo CARGO caía a ORPHAN /
+// "Otros egresos". Quitamos también ceros a la izquierda en AMBOS lados
+// (simétrico, bank-agnóstico). Santander as-is no se ve afectado. El falso
+// match es improbable: `cargoMatchTier` ya exige importe exacto/±0.5% y fecha
+// ±2 días.
+/**
+ * Bajío forza un cuenta-sentinela "BANBAJIO" en `BankStatementLine.cuenta`
+ * (ver `src/services/jde.ts:420` — JDE no envía el número real porque el campo
+ * `Cuenta_Bancos` viene rotando por folio SPEI). El pago, en cambio, sí trae
+ * los dígitos reales ("33850201") en `cuentaBancaria`. Para que ambos lados
+ * conviertan al mismo key, detectamos BAJIO en cualquier lado y colapsamos a
+ * "BANK:BANBAJIO". Caso normal: solo dígitos, sin ceros líderes. (Riesgo nulo
+ * de colisión: ninguna cuenta numérica empieza con "BANK:".)
+ */
+const BANBAJIO_KEY = 'BANK:BANBAJIO';
+const BAJIO_PATTERN = /BAJ[IÍ]O/i;
+
 function normalizeAccountKey(value: string): string {
-  return (value || '').replace(/\D+/g, '');
+  const raw = (value || '').toString();
+  if (BAJIO_PATTERN.test(raw) || /^BANBAJIO$/i.test(raw.trim())) return BANBAJIO_KEY;
+  return raw.replace(/\D+/g, '').replace(/^0+/, '');
 }
 
 function normalizeCia(value: string): string {
