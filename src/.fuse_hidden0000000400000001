@@ -296,7 +296,7 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   financialProjection: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol'],
   financialPlanning: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol'],
   taxes: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina'],
-  conciliacion: ['cobranza', 'banks', 'pagos', 'cxp'],
+  conciliacion: ['cobranza', 'banks', 'pagos'],
   providers: [],
   clients: [],
 };
