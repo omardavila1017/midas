@@ -16,7 +16,7 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
-import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import { effectiveAmount, effectiveMovementDate } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
@@ -100,11 +100,6 @@ import {
 import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
 import { useProbabilisticForecast } from '../services/probabilisticForecastService';
-import {
-  FORECAST_MODELS,
-  type ForecastModelId,
-  type ForecastOutput,
-} from '../../../domain/comprasForecastModels';
 
 type ScenarioRun = ScenarioForecastRun;
 
@@ -126,25 +121,16 @@ interface Props {
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
-  cobranzaReconciliation?: RealReconciliationResult;
+  /** Cruce AuxiliarContable ↔ banco — alimenta facturas cobradas / CXPs pagadas. */
+  auxiliarReconciliation?: AuxiliarReconResult;
   /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
   rolRecords?: RolRecord[];
-  /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
-  paidCxpKeys?: Set<string>;
-  /** CARGO bancarios matcheados a PagoProveedor — reclasifican como AP_PAYMENT. */
-  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance?: number;
   onNavigateToTax?: () => void;
-  /** Modelo seleccionado para forecast de futuras OCs. */
-  forecastModelId?: ForecastModelId;
-  /** Cambia el modelo y persiste. */
-  onForecastModelChange?: (id: ForecastModelId) => void;
-  /** Salida del modelo seleccionado: receipts + estadísticas por proveedor. */
-  forecastSummary?: ForecastOutput;
   /** Visible tab flag. Hidden keep-alive instances should not start new heavy builds. */
   isActive?: boolean;
   /**
@@ -182,14 +168,13 @@ const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> =
 export default function FinancialProjectionDashboard(props: Props) {
   const today = useMemo(() => todayISO(), []);
 
-  // NOTE: function props (onNavigateToTax, onForecastModelChange) must NOT
-  // be part of this object — it is posted to a Web Worker and functions are
-  // not structured-cloneable (DataCloneError → worker dies → 38s sync fallback).
+  // NOTE: function props (onNavigateToTax) must NOT be part of this object —
+  // it is posted to a Web Worker and functions are not structured-cloneable
+  // (DataCloneError → worker dies → 38s sync fallback).
   const cacheProbeInput = useMemo(
     () => {
       const {
         onNavigateToTax: _onNavigateToTax,
-        onForecastModelChange: _onForecastModelChange,
         isActive: _isActive,
         ...data
       } = props;
@@ -204,10 +189,8 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.cxpRecords,
       props.cobranzaRecords,
       props.cobranzaPayments,
-      props.cobranzaReconciliation,
+      props.auxiliarReconciliation,
       props.rolRecords,
-      props.paidCxpKeys,
-      props.cargoEnrichments,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
@@ -999,11 +982,22 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   // while the real scenario compute is in-flight. Detect it so we render a
   // loading state instead of showing Base data labeled as Approved/Draft.
   const activeRunIsPlaceholder = activeRun.scenarioId !== activeScenarioId;
-  // Signal the splash gate now that we have a REAL per-scenario run (not the
-  // cross-scenario placeholder). Latched + idempotent: only the first
-  // non-placeholder paint fires; subsequent renders no-op.
+  // Signal the splash gate. Preferred path: a REAL per-scenario run (not the
+  // cross-scenario placeholder) — the splash releases straight into real data.
+  // Fallback: if the worker hasn't posted the real run within a short grace,
+  // signal anyway. The dashboard renders fine on the placeholder (it shows an
+  // in-dashboard loading state for the still-computing scenario, never
+  // mislabeled data), and a brief loading shell beats a splash that hangs
+  // until the App-level hard cap if the worker-convergence signal path stalls.
+  // signalProjectionFirstPaint is latched + idempotent, so whichever path
+  // fires first wins and the rest no-op.
   useEffect(() => {
-    if (!activeRunIsPlaceholder) signalProjectionFirstPaint();
+    if (!activeRunIsPlaceholder) {
+      signalProjectionFirstPaint();
+      return;
+    }
+    const t = setTimeout(() => signalProjectionFirstPaint(), 8000);
+    return () => clearTimeout(t);
   }, [activeRunIsPlaceholder]);
   const comparisonRun = useMemo(() => {
     if (!comparisonScenarioId) return null;
@@ -1162,11 +1156,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         title="Proyección Financiera"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ForecastModelSelector
-              value={props.forecastModelId}
-              onChange={props.onForecastModelChange}
-              summary={props.forecastSummary}
-            />
             <SegmentedControl
               value={granularity}
               options={GRANULARITY_OPTIONS}
@@ -1311,8 +1300,8 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
       </div>
 
       {/* Cobranza ↔ bancos: solo cuando hay datos JDE + abonos cargados. */}
-      {props.cobranzaReconciliation && props.cobranzaReconciliation.summary.totalAbonos > 0 && (
-        <CobranzaKpiCard reconciliation={props.cobranzaReconciliation} />
+      {props.auxiliarReconciliation && props.auxiliarReconciliation.summary.totalLineas > 0 && (
+        <CobranzaKpiCard reconciliation={props.auxiliarReconciliation} />
       )}
 
       <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
@@ -1516,41 +1505,6 @@ function addUtcDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
-}
-
-function ForecastModelSelector({
-  value,
-  onChange,
-  summary,
-}: {
-  value?: ForecastModelId;
-  onChange?: (id: ForecastModelId) => void;
-  summary?: ForecastOutput;
-}) {
-  if (!value || !onChange) return null;
-  const totalForecasted = summary?.receipts.reduce((s, r) => s + r.amountMxn, 0) ?? 0;
-  const providersCount = summary?.perProvider.length ?? 0;
-  return (
-    <div className="inline-flex h-10 items-stretch overflow-hidden rounded-xl border border-[var(--gray-200)] bg-white">
-      <label
-        className="flex items-center px-3 text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]"
-        htmlFor="forecast-model-selector"
-      >
-        Modelo OC
-      </label>
-      <select
-        id="forecast-model-selector"
-        value={value}
-        onChange={(e) => onChange(e.target.value as ForecastModelId)}
-        className="border-l border-[var(--gray-200)] bg-transparent px-3 text-[12px] font-medium text-[var(--gray-700)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
-        title={`${providersCount} proveedores · forecast total ${fmtCompact(totalForecasted)} (12m)`}
-      >
-        {FORECAST_MODELS.map((m) => (
-          <option key={m.id} value={m.id} title={m.description}>{m.label}</option>
-        ))}
-      </select>
-    </div>
-  );
 }
 
 function EmptyDataState() {

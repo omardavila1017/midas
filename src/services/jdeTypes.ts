@@ -454,6 +454,104 @@ export interface ComprasRecord {
 }
 
 // ───────────────────────────────────────────────────────────────
+// 6b. Auxiliar Contable (libro mayor JDE por cuenta de banco/caja)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Request body para POST /JDEdwards/AuxiliarContable. UNA compañía por
+ * request (como /compras, /cobranza). Devuelve el libro mayor de JDE
+ * posteado contra las cuentas del rango de objeto contable indicado.
+ *
+ * Para la conciliación histórica banco↔ERP se usa `tl="AA"` (libro mayor
+ * real), `objIni="1010"`/`objFin="1020"` (Caja + Bancos). Esas constantes
+ * viven en `domain/auxiliarReconciliationConfig.ts`.
+ */
+export interface AuxiliarContableRequest {
+  /** Código de compañía JDE (p.ej. "00042"). */
+  cia: string;
+  /** Fecha inicial inclusive (YYYY-MM-DD). */
+  fechaInicial: string;
+  /** Fecha final inclusive (YYYY-MM-DD). */
+  fechaFinal: string;
+  /** Tipo de libro JDE. "AA" = libro mayor real. */
+  tl: string;
+  /** Parámetro numérico del API (valor documentado: 999). */
+  nr: number;
+  /** Objeto contable inicial del rango (p.ej. "1010"). */
+  objIni: string;
+  /** Objeto contable final del rango (p.ej. "1020"). */
+  objFin: string;
+}
+
+/**
+ * Registro normalizado de una línea del libro mayor JDE posteada contra
+ * una cuenta de banco/caja. Cada línea es trazable a su documento fuente:
+ * `noFactura` (cobranza/CXC), `noOrdenCompra` (compras), `tipoPago`+`noPago`
+ * (pago a proveedor). `estatusConciliado="R"` = JDE ya la concilió.
+ *
+ * `flujo` se deriva localmente del signo de `importe` (ver `deriveFlujo` en
+ * auxiliarReconciliationEngine.ts — chokepoint único).
+ */
+export interface AuxiliarContableRecord {
+  /** Compañía JDE normalizada a 5 dígitos. */
+  cia: string;
+  /** Cuenta contable completa (Cuenta, trim — p.ej. "42.1020.0010409"). */
+  cuentaContable: string;
+  /** Id de cuenta (IdCuenta). */
+  idCuenta: string;
+  /** Objeto contable (Cuenta_Objeto, trim — "1010" caja | "1020" bancos). */
+  cuentaObjeto: string;
+  /** Nombre de la cuenta contable (Nombre_Cta, trim). */
+  nombreCuenta: string;
+  /** Número de cuenta bancaria (Cuenta_Banco, trim) — enlaza con /bancos. */
+  cuentaBanco: string;
+  /** Tipo de documento JDE (Tipo_Docto, trim). */
+  tipoDocto: string;
+  /** Número de documento (No_Docto). */
+  noDocto: number;
+  /** Número de factura asociada (No_Factura, trim). */
+  noFactura: string;
+  /** Número de orden de compra asociada (No_Orden_Compra, trim). */
+  noOrdenCompra: string;
+  /** Fecha contable normalizada a YYYY-MM-DD (de Fecha_Contable_ddmmaa). */
+  fechaContable: string;
+  /** Tipo de libro (Tipo_Libro — "AA"). */
+  tipoLibro: string;
+  /** Número de batch (No_Batch). */
+  noBatch: number;
+  /** Tipo de batch (Tipo_Batch, trim). */
+  tipoBatch: string;
+  /** Estatus de conciliación JDE (Estatus_conciliado — "R" = conciliado). */
+  estatusConciliado: string;
+  /** Importe del asiento. El signo codifica dirección (ver deriveFlujo). */
+  importe: number;
+  /** Moneda (Moneda — "MXP" / "USD"). */
+  moneda: string;
+  /** Tipo de cambio (Tipo_Cambio). */
+  tipoCambio: number;
+  /** Estado de posteo (Posteo — "P" = posteado). */
+  posteo: string;
+  /** Marca de reversa (Reversa, trim). */
+  reversa: string;
+  /** Concepto raw del asiento (trim). */
+  concepto: string;
+  /** Explicación del asiento (explicacion, trim). */
+  explicacion: string;
+  /** Nombre de la contraparte (Nombre, trim). */
+  nombre: string;
+  /** Tipo de pago (tipo_pago, trim) — junto con noPago enlaza a pagoProveedor. */
+  tipoPago: string;
+  /** Número de pago (no_pago, trim). */
+  noPago: string;
+  /** Fecha de pago normalizada a YYYY-MM-DD (de Fecha_pago_ddmmaa). */
+  fechaPago: string;
+  /** Documento original (documento_Original, trim). */
+  documentoOriginal: string;
+  /** Importe original del documento (Importe_Original). */
+  importeOriginal: number;
+}
+
+// ───────────────────────────────────────────────────────────────
 // 7. Nómina (TRESS — namespace upstream /v1/erp/tress)
 // ───────────────────────────────────────────────────────────────
 

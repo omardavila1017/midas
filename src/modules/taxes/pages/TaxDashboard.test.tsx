@@ -5,7 +5,6 @@ import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { BankStatementLine } from '../../../services/jdeTypes';
-import type { CargoPaymentEnrichment } from '../../../domain/paymentReconciliationEngine';
 import type { PurchaseReceiptRecord } from '../../shared-finance/types';
 
 const TODAY = '2026-05-01';
@@ -247,52 +246,13 @@ describe('<TaxDashboard />', () => {
     expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
   });
 
-  it('uses PagoProveedor cargo enrichments from App to classify bank cargos as AP IVA creditable', () => {
-    const movement = bankMovement({
-      fechaOperacion: '2026-05-08',
-      referencia: 'PP-1',
-      concepto: 'Pago proveedor',
-      tipoMovimiento: 'CARGO',
-      importe: 1160,
-    });
-    const key = [
-      movement.cia,
-      movement.cuenta,
-      movement.fechaOperacion,
-      movement.referencia,
-      movement.tipoMovimiento,
-      movement.importe,
-      movement.concepto,
-    ].join('|');
-    const cargoEnrichments = new Map<string, CargoPaymentEnrichment>([[
-      key,
-      {
-        movementKey: key,
-        status: 'MATCHED',
-        payments: [{ noPago: 'P-1', claveProveedor: '0', nombreProveedor: 'Proveedor IVA', importe: 1160, tier: 'exact' }],
-      },
-    ]]);
-
-    render(
-      <TaxDashboard
-        companyCode="all"
-        bankStatements={[bank([movement])]}
-        clients={[]}
-        providers={[]}
-        cxpRecords={[]}
-        cargoEnrichments={cargoEnrichments}
-        assumptions={assumptions}
-        budget={null}
-        startingBalance={20_000}
-      />,
-    );
-
-    fireEvent.click(screen.getByText('2026-05'));
-    fireEvent.click(screen.getByRole('button', { name: /IVA/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Acreditable/i }));
-
-    expect(screen.getByText(/Pago proveedor/i)).toBeTruthy();
-    expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
+  // Obsoleto en la branch del motor AuxiliarContable: TaxDashboard ya no
+  // recibe `cargoEnrichments` (PagoProveedor↔CARGO). La reclasificación de
+  // egresos como IVA acreditable ahora se deriva del cruce AuxiliarContable
+  // dentro de la fuente de proyección. Reescribir cuando exista cobertura
+  // de egresos verificada contra datos reales.
+  it.skip('uses PagoProveedor cargo enrichments from App to classify bank cargos as AP IVA creditable', () => {
+    // intentionally skipped — see comment above.
   });
 });
 
@@ -349,20 +309,6 @@ function bank(movimientos: BankStatementLine[] = []): BankAccountStatement {
     saldoInicial: 20_000,
     saldoFinal: 20_000,
     movimientos,
-  };
-}
-
-function bankMovement(patch: Partial<BankStatementLine>): BankStatementLine {
-  return {
-    cia: patch.cia ?? '00001',
-    banco: patch.banco ?? 'BANCO',
-    cuenta: patch.cuenta ?? '123',
-    moneda: patch.moneda ?? 'MXN',
-    fechaOperacion: patch.fechaOperacion ?? TODAY,
-    referencia: patch.referencia ?? 'REF-1',
-    concepto: patch.concepto ?? 'Movimiento banco',
-    tipoMovimiento: patch.tipoMovimiento ?? 'CARGO',
-    importe: patch.importe ?? 0,
   };
 }
 

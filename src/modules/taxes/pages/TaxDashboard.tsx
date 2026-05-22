@@ -15,8 +15,8 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
-import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
-import type { CargoPaymentEnrichment, CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
+import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
@@ -67,13 +67,10 @@ interface Props {
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
-  cobranzaReconciliation?: RealReconciliationResult;
-  /** CXPs ya pagadas (PagoProveedor); se excluyen del egreso proyectado. */
-  paidCxpKeys?: Set<string>;
+  /** Cruce AuxiliarContable ↔ banco — alimenta la fuente de proyección. */
+  auxiliarReconciliation?: AuxiliarReconResult;
   /** Cobertura PagoProveedor → CXP para fechar IVA acreditable con pagos reales. */
   cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
-  /** Enriquecimiento PagoProveedor → CARGO bancario para reclasificar egresos reales. */
-  cargoEnrichments?: Map<string, CargoPaymentEnrichment>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
@@ -125,9 +122,7 @@ export default function TaxDashboard(props: Props) {
       props.providers,
       props.cxpRecords,
       props.cobranzaRecords,
-      props.cobranzaReconciliation,
-      props.paidCxpKeys,
-      props.cargoEnrichments,
+      props.auxiliarReconciliation,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,

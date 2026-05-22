@@ -221,12 +221,13 @@ JDE typical response: ~60s. If you see persistent timeouts, check upstream — d
 
 ## Engines
 
-Treasury / cash-flow logic lives in `src/domain/`. Two reconciliation engines exist by design:
+Treasury / cash-flow logic lives in `src/domain/`. Reconciliation engines:
 
-- `reconciliationEngine.ts` — matches projected collection events against bank ABONOs (heuristic, ±5% tolerance).
-- `realReconciliationEngine.ts` — matches real cobranza invoices (JDE `/JDEdwards/cobranza`) against actual bank movements. 4-layer matching: exact → tolerance → subset-sum → unmatched.
+- `auxiliarReconciliationEngine.ts` — **historical bank reconciliation (current)**. Crosses the JDE general ledger (`/JDEdwards/AuxiliarContable`, accounting object 1010-1020 = Caja + Bancos) against real bank statement lines. Both sides are accounting records, so matching by (bank account, date, amount) is near-deterministic — match tiers: `jde-reconciled` (JDE's own `Estatus_conciliado='R'`) → `exact` → `tolerance` → `gl-orphan`; object-1010 caja lines and internal transfers bucket separately. Powers the **Conciliación** dashboard and, via `auxiliarProjectionAdapter.ts`, feeds the projection's "what was confirmed in bank" signal (`cobradaBancoKeys`, `paidCxpKeys`, bank-movement enrichments). Runs in `src/workers/auxiliarReconciliation.worker.ts`.
+- `reconciliationEngine.ts` — matches projected collection events against bank ABONOs (heuristic, ±5% tolerance). Forecast-side, not historical.
+- `realReconciliationEngine.ts` / `paymentReconciliationEngine.ts` — **legacy** heuristic engines (cobranza↔ABONO 4-layer; pagoProveedor↔CARGO). As of the AuxiliarContable migration these NO LONGER feed Conciliación or the projection — they remain ONLY because the **Pagos**, **CXP**, **Bancos** and **Cobranza** (`CollectionProjection`) display tabs still consume their match types for badges/drilldowns. Pending follow-up: rewrite those tabs onto `auxiliarReconciliationEngine` and delete both legacy engines.
 
-These are not duplicates — they answer different questions (forecast vs. realized).
+`reconciliationEngine.ts` (forecast) and the legacy engines are not duplicates — they answer different questions (forecast vs. realized).
 
 The forecast / scenario evaluation pipeline lives across `src/modules/financial-planning/services/` and `src/modules/shared-finance/calculation-engine/`. Order of computation for a non-base scenario is:
 

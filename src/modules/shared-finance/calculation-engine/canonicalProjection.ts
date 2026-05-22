@@ -61,7 +61,7 @@ import { buildRolProjectedInflows, type RolProjectedInflow } from '../../../doma
 import { bankMovementKey } from '../../../domain/bankMovementKey';
 import { todayISO } from '../../../formatters';
 import { isCorningAbono } from '../../../domain/bankStatements';
-import type { AbonoEnrichment, RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import type { BankInflowEnrichment } from '../../../domain/auxiliarProjectionAdapter';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
 import { buildCargoProviderIndex, matchCargoToProvider } from '../../../domain/cargoProviderMatch';
@@ -98,12 +98,19 @@ export interface CanonicalProjectionInputs {
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   /**
-   * Resultado del cruce JDE ↔ banco. Cuando se pasa, las facturas con
-   * `match.status === 'cobrada-banco'` no se vuelven a proyectar como
-   * cobro pendiente — el dinero ya está en los movimientos bancarios
-   * históricos. Sin esto la suma anual queda doblada.
+   * `${cia}::${noFactura}` de facturas de cobranza ya confirmadas contra el
+   * banco (derivado de AuxiliarContable vía `adaptAuxiliarForProjection`).
+   * Estas facturas NO se re-proyectan como cobro pendiente — el dinero ya
+   * está en los movimientos bancarios históricos. Sin esto la suma anual
+   * queda doblada.
    */
-  cobranzaReconciliation?: RealReconciliationResult;
+  cobradaBancoKeys?: Set<string>;
+  /**
+   * Enriquecimiento de movimientos bancarios ABONO con su factura/cliente
+   * (derivado de AuxiliarContable). Reclasifica ingresos históricos por
+   * cliente en vez de dejarlos bajo "Transferencias".
+   */
+  abonoEnrichments?: BankInflowEnrichment[];
   /**
    * Set de `${cia}::${noFactura}::${noProveedor}` de CXPs marcadas PAID por
    * PagoProveedor. Espejo egreso de cobranzaReconciliation: estas facturas
@@ -356,8 +363,8 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   // detectó qué factura(s) cubrió. Sin esto los ingresos pasados quedaban
   // todos bajo "Transferencias" en Planeación, ocultando el ingreso por
   // cliente en meses pasados.
-  const abonoEnrichmentByKey = new Map<string, AbonoEnrichment>();
-  for (const enrichment of inputs.cobranzaReconciliation?.abonoEnrichments ?? []) {
+  const abonoEnrichmentByKey = new Map<string, BankInflowEnrichment>();
+  for (const enrichment of inputs.abonoEnrichments ?? []) {
     abonoEnrichmentByKey.set(enrichment.movementKey, enrichment);
   }
   const cargoEnrichmentByKey = inputs.cargoEnrichments ?? new Map();
@@ -575,7 +582,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   //     AR_COLLECTION sintético por factura cobrada cuya fecha cae en
   //     un mes histórico y NO fue ya cruzada con un ABONO bancario en
   //     el paso 1 (evita doble conteo).
-  const cobradaBancoKeysHistoric = buildCobradaBancoKeySet(inputs.cobranzaReconciliation);
+  const cobradaBancoKeysHistoric = inputs.cobradaBancoKeys ?? new Set<string>();
   const companyCobranza = filterCobranzaByCompany(
     inputs.cobranzaRecords ?? [],
     inputs.companyCode,
@@ -902,7 +909,7 @@ function collectCxcInflowLines(
   // banco. Si las re-proyectamos, queda doblada. Sólo las descartamos
   // cuando el cruce fue automático (status='cobrada-banco'); facturas en
   // revisión manual o sin cruce siguen como pendiente proyectada.
-  const cobradaBancoKeys = buildCobradaBancoKeySet(inputs.cobranzaReconciliation);
+  const cobradaBancoKeys = inputs.cobradaBancoKeys ?? new Set<string>();
 
   for (const record of context.cxcRecords) {
     if (record.importePendientePesos <= 0) continue;
@@ -1205,25 +1212,6 @@ function filterCobranzaByCompany(records: CobranzaRecord[], companyCode: string)
 
 function cxcFacturaKey(record: CobranzaRecord): string {
   return `${record.cia}::${record.noFactura}`;
-}
-
-/**
- * Set de facturas que el reconciliation engine ya cruzó automáticamente
- * con un ABONO bancario. Sólo el estado 'cobrada-banco' bloquea la
- * proyección. 'cobrada-jde-sin-banco' o 'pendiente' pasan derecho:
- * el cobro aún no aparece en el banco, así que la CXC pendiente sigue
- * siendo el mejor estimado para la trayectoria de caja.
- */
-function buildCobradaBancoKeySet(
-  reconciliation: RealReconciliationResult | undefined,
-): Set<string> {
-  const out = new Set<string>();
-  if (!reconciliation) return out;
-  for (const match of reconciliation.matches) {
-    if (match.status !== 'cobrada-banco') continue;
-    out.add(`${match.cia}::${match.noFactura}`);
-  }
-  return out;
 }
 
 function addCoveredMonth(map: Map<string, Set<string>>, clientId: string, yearMonth: string): void {

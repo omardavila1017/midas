@@ -152,9 +152,7 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     `rol=len:${(input.rolRecords ?? []).length}`,
     `purchase=${fingerprintArray(input.purchaseReceipts ?? [], (item) => fields(item, ['cia', 'noProveedor', 'invoiceNo', 'purchaseOrderNo', 'receiptNo', 'estimatedDueDate', 'totalAmount', 'status', 'confidence']))}`,
     `payroll=${fingerprintArray(input.payrollCosts ?? [], (item) => fields(item, ['cia', 'year', 'month', 'paymentDate', 'payrollPeriod', 'conceptId', 'amount']))}`,
-    `reconciliation=${unknownFingerprint(input.cobranzaReconciliation)}`,
-    `paid=${setFingerprint(input.paidCxpKeys)}`,
-    `cargo=${mapFingerprint(input.cargoEnrichments)}`,
+    `reconciliation=${unknownFingerprint(input.auxiliarReconciliation)}`,
   ].join('|'))}`;
 }
 

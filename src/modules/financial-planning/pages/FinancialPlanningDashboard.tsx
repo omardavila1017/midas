@@ -10,7 +10,7 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
-import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import {
   bucketKeyForDate,
@@ -107,16 +107,10 @@ interface Props {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
-  cobranzaReconciliation?: RealReconciliationResult;
+  /** Cruce AuxiliarContable ↔ banco — alimenta facturas cobradas / CXPs pagadas. */
+  auxiliarReconciliation?: AuxiliarReconResult;
   /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
   rolRecords?: RolRecord[];
-  /**
-   * CXPs ya pagadas según PagoProveedor. Se excluyen del egreso
-   * proyectado para no doblar (el cargo bancario real ya las descontó).
-   */
-  paidCxpKeys?: Set<string>;
-  /** CARGO bancarios matcheados a PagoProveedor — reclasifican como AP_PAYMENT. */
-  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
@@ -170,10 +164,8 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.providers,
       props.cxpRecords,
       props.cobranzaRecords,
-      props.cobranzaReconciliation,
+      props.auxiliarReconciliation,
       props.rolRecords,
-      props.paidCxpKeys,
-      props.cargoEnrichments,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,

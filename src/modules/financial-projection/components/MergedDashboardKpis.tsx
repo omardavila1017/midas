@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
-import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { FinancialMovement, ForecastRun } from '../../shared-finance/types';
 import { effectiveAmount } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 
@@ -195,27 +195,29 @@ export const MinimumExpenseKpi: React.FC<{
 );
 
 /**
- * Tarjeta de KPI para Cobranza ↔ Bancos.
+ * Tarjeta de KPI para la conciliación AuxiliarContable ↔ Bancos.
  *
- * Muestra saldo CXC pendiente, % de ABONOs cruzados con factura JDE,
- * cobrado vs banco y un diagnóstico desplegable de mismatch por cía.
+ * Muestra % de líneas del libro mayor cruzadas a banco (ingresos y egresos),
+ * monto conciliado y un diagnóstico desplegable por cía.
  * Color semáforo: verde ≥95%, ámbar ≥70%, rojo <70%.
  */
 export const CobranzaKpiCard: React.FC<{
-  reconciliation: RealReconciliationResult;
+  reconciliation: AuxiliarReconResult;
 }> = ({ reconciliation }) => {
   const [showDiagnose, setShowDiagnose] = useState(false);
   const s = reconciliation.summary;
-  const pct = s.pctAbonosCruzados * 100;
-  const sinCobranza = s.totalFacturas === 0;
-  const tierColor = sinCobranza
+  const cruzables = s.ingresoLineas + s.egresoLineas;
+  const cruzadas = s.ingresoCruzadas + s.egresoCruzadas;
+  const pct = cruzables > 0 ? (cruzadas / cruzables) * 100 : 0;
+  const sinDatos = cruzables === 0;
+  const tierColor = sinDatos
     ? 'var(--gray-400)'
     : pct >= 95
       ? 'var(--success)'
       : pct >= 70
         ? 'var(--warning, #d97706)'
         : 'var(--danger)';
-  const tierBg = sinCobranza
+  const tierBg = sinDatos
     ? 'var(--gray-50)'
     : pct >= 95
       ? 'var(--success-muted)'
@@ -223,9 +225,8 @@ export const CobranzaKpiCard: React.FC<{
         ? 'var(--warning-muted, #fef3c7)'
         : 'var(--danger-muted)';
 
-  const ciasSoloFacturas = s.ciaBreakdown.filter(c => c.facturas > 0 && c.abonos === 0);
-  const ciasSoloAbonos = s.ciaBreakdown.filter(c => c.abonos > 0 && c.facturas === 0);
-  const tieneAlerta = !sinCobranza && pct < 70 && (ciasSoloFacturas.length > 0 || ciasSoloAbonos.length > 0);
+  const ciasBajas = s.ciaBreakdown.filter(c => c.lineas > 0 && c.pct < 70);
+  const tieneAlerta = !sinDatos && pct < 70 && ciasBajas.length > 0;
 
   return (
     <div
@@ -239,48 +240,47 @@ export const CobranzaKpiCard: React.FC<{
         <div className="flex-1 min-w-[200px]">
           <div className="flex items-center justify-between">
             <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
-              Cobranza cruzada con banco
+              Libro mayor cruzado con banco
             </p>
           </div>
           <p className="text-[28px] font-bold tabular-nums leading-tight mt-1" style={{ color: tierColor }}>
-            {sinCobranza ? '—' : `${pct.toFixed(1)}%`}
+            {sinDatos ? '—' : `${pct.toFixed(1)}%`}
           </p>
           <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
-            {sinCobranza
-              ? 'Sin cobranza JDE cargada · revisa la pestaña Cobranza'
-              : `${s.abonosFacturaCobrada} de ${s.totalAbonos} abonos · ${s.abonosSinFactura} sin factura`}
+            {sinDatos
+              ? 'Sin auxiliar contable cargado · revisa la pestaña Conciliación'
+              : `${cruzadas} de ${cruzables} líneas · ${s.glOrphanLineas} sin movimiento bancario`}
           </p>
         </div>
 
         <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
-            Saldo CXC pendiente
-          </p>
-          <p className="text-[20px] font-bold tabular-nums leading-tight mt-1" style={{ color: 'var(--gray-950)' }}>
-            {fmtCurrency(s.totalSaldoPendiente)}
-          </p>
-          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
-            {s.facturasPendientes.toLocaleString('es-MX')} facturas pendientes ·
-            &nbsp;{s.facturasCobradasBanco.toLocaleString('es-MX')} ya cobradas
-          </p>
-        </div>
-
-        <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
-          <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
-            Cobrado vs banco (período)
+            Ingresos cruzados
           </p>
           <p className="text-[20px] font-bold tabular-nums leading-tight mt-1" style={{ color: 'var(--success)' }}>
-            {fmtCurrency(s.totalCobradoBanco)}
+            {fmtCurrency(s.ingresoMontoCruzado)}
           </p>
           <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
-            {s.abonosTraspasoInterno > 0
-              ? `${s.abonosTraspasoInterno} traspasos internos descartados`
+            {s.pctIngresoCruzado.toFixed(1)}% · {s.conciliadasJde.toLocaleString('es-MX')} conciliadas por JDE
+          </p>
+        </div>
+
+        <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
+          <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
+            Egresos cruzados
+          </p>
+          <p className="text-[20px] font-bold tabular-nums leading-tight mt-1" style={{ color: 'var(--gray-950)' }}>
+            {fmtCurrency(s.egresoMontoCruzado)}
+          </p>
+          <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
+            {s.pctEgresoCruzado.toFixed(1)}% · {s.internoLineas > 0
+              ? `${s.internoLineas} traspasos internos descartados`
               : 'sin traspasos internos detectados'}
           </p>
         </div>
       </div>
 
-      {(tieneAlerta || (!sinCobranza && pct === 0)) && (
+      {(tieneAlerta || (!sinDatos && pct === 0)) && (
         <div className="mt-3 pt-3 border-t border-[var(--gray-200)]/60">
           <button
             onClick={() => setShowDiagnose(v => !v)}
@@ -290,21 +290,12 @@ export const CobranzaKpiCard: React.FC<{
           </button>
           {showDiagnose && (
             <div className="mt-2 text-[11px] space-y-2">
-              {ciasSoloFacturas.length > 0 && (
+              {ciasBajas.length > 0 && (
                 <div>
-                  <span className="font-bold text-[var(--danger)]">Cías con facturas pero sin abonos:</span>{' '}
-                  {ciasSoloFacturas.map(c => `${c.cia} (${c.facturas} fac)`).join(', ')}
+                  <span className="font-bold text-[var(--danger)]">Cías con cruce bajo:</span>{' '}
+                  {ciasBajas.map(c => `${c.cia} (${c.pct.toFixed(0)}%)`).join(', ')}
                   <div className="text-[var(--gray-500)] mt-0.5">
                     → Revisa que los estados de cuenta de esas cías estén cargados en la pestaña Bancos.
-                  </div>
-                </div>
-              )}
-              {ciasSoloAbonos.length > 0 && (
-                <div>
-                  <span className="font-bold text-[var(--danger)]">Cías con abonos pero sin facturas:</span>{' '}
-                  {ciasSoloAbonos.map(c => `${c.cia} (${c.abonos} ab)`).join(', ')}
-                  <div className="text-[var(--gray-500)] mt-0.5">
-                    → /cobranza no devolvió data para esas cías. Revisa permisos del token productivo en JDE.
                   </div>
                 </div>
               )}
@@ -314,18 +305,18 @@ export const CobranzaKpiCard: React.FC<{
                   <thead className="text-[var(--gray-400)]">
                     <tr>
                       <th className="text-left">Cía</th>
-                      <th className="text-right">Facturas</th>
-                      <th className="text-right">Abonos</th>
-                      <th className="text-right">Cruzados</th>
+                      <th className="text-right">Líneas</th>
+                      <th className="text-right">Cruzadas</th>
+                      <th className="text-right">% Cruce</th>
                     </tr>
                   </thead>
                   <tbody>
                     {s.ciaBreakdown.map(c => (
                       <tr key={c.cia}>
                         <td className="tabular-nums">{c.cia}</td>
-                        <td className="text-right tabular-nums">{c.facturas}</td>
-                        <td className="text-right tabular-nums">{c.abonos}</td>
-                        <td className="text-right tabular-nums">{c.matches}</td>
+                        <td className="text-right tabular-nums">{c.lineas}</td>
+                        <td className="text-right tabular-nums">{c.cruzadas}</td>
+                        <td className="text-right tabular-nums">{c.pct.toFixed(0)}%</td>
                       </tr>
                     ))}
                   </tbody>

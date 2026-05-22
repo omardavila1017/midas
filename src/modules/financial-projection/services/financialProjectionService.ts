@@ -20,7 +20,8 @@
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
-import type { RealReconciliationResult } from '../../../domain/realReconciliationEngine';
+import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
+import { adaptAuxiliarForProjection } from '../../../domain/auxiliarProjectionAdapter';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
 import { todayISO } from '../../../formatters';
@@ -56,25 +57,13 @@ export interface FinancialProjectionSourceInput {
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   /**
-   * Resultado del cruce JDE ↔ banco. Cuando se pasa, las facturas con
-   * `match.status === 'cobrada-banco'` no se vuelven a proyectar como
-   * cobro pendiente. Forma parte del cache key: cuando el worker emite
-   * un nuevo cruce, la proyección se recalcula automáticamente.
+   * Resultado del motor de conciliación histórica (AuxiliarContable ↔
+   * banco). Forma parte del cache key: cuando el worker emite un cruce
+   * nuevo, la proyección se recalcula. El servicio lo traduce internamente
+   * (`adaptAuxiliarForProjection`) a las señales que consume el canónico:
+   * facturas cobradas, CXPs pagadas y enriquecimiento de movimientos.
    */
-  cobranzaReconciliation?: RealReconciliationResult;
-  /**
-   * Set de cxpKeys (`${cia}::${noFactura}::${noProveedor}`) marcadas PAID
-   * por PagoProveedor. Espejo egreso de cobranzaReconciliation. Cuando se
-   * pasa, las CXPs pagadas se excluyen del egreso proyectado (el cargo
-   * bancario real ya descontó el dinero).
-   */
-  paidCxpKeys?: Set<string>;
-  /**
-   * Mapa `bankMovementKey` → enriquecimiento PagoProveedor. Cuando un CARGO
-   * histórico empata con un pago a proveedor, la proyección lo emite como
-   * AP_PAYMENT (con nombre de proveedor) en vez de TRANSFER/Otros Egresos.
-   */
-  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ nombreProveedor: string; importe: number }> }>;
+  auxiliarReconciliation?: AuxiliarReconResult;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   /**
@@ -147,9 +136,7 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.rolRecords),
     refId(input.purchaseReceipts),
     refId(input.payrollCosts),
-    refId(input.cobranzaReconciliation),
-    refId(input.paidCxpKeys),
-    refId(input.cargoEnrichments),
+    refId(input.auxiliarReconciliation),
     refId(input.assumptions),
     refId(input.budget),
   ];
@@ -186,6 +173,13 @@ export function buildFinancialProjectionSourceData(
     return cached;
   }
 
+  // Traduce el cruce AuxiliarContable a las señales que consume el canónico.
+  const bridge = adaptAuxiliarForProjection(
+    input.auxiliarReconciliation,
+    input.cxpRecords,
+    input.cobranzaRecords ?? [],
+  );
+
   const canonicalInputs = {
     companyCode: input.companyCode,
     bankStatements: input.bankStatements,
@@ -196,9 +190,10 @@ export function buildFinancialProjectionSourceData(
     rolRecords: input.rolRecords ?? [],
     purchaseReceipts: input.purchaseReceipts ?? [],
     payrollCosts: input.payrollCosts ?? [],
-    cobranzaReconciliation: input.cobranzaReconciliation,
-    paidCxpKeys: input.paidCxpKeys,
-    cargoEnrichments: input.cargoEnrichments,
+    cobradaBancoKeys: bridge.cobradaBancoKeys,
+    abonoEnrichments: bridge.abonoEnrichments,
+    paidCxpKeys: bridge.paidCxpKeys,
+    cargoEnrichments: bridge.cargoEnrichments,
     assumptions: input.assumptions,
     budget: input.budget,
     startingBalance: input.startingBalance,

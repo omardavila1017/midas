@@ -38,14 +38,13 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas-db', scope: 'indexedDB', owner: 'domain/persistence.ts', description: 'Base IDB del MidasStore (payloads pesados extraídos del store light).' },
 
   // ── Heavy records (IndexedDB) ───────────────────────────────────────────
-  { key: 'midas-heavy-store', scope: 'indexedDB', owner: 'services/heavyStoreIDB.ts', description: 'Records JDE/TRESS/CITI pesados: cxp, cobranza, cobranzaPayments, compras, pagoProveedor, nomina, rol + caches de banco.' },
+  { key: 'midas-heavy-store', scope: 'indexedDB', owner: 'services/heavyStoreIDB.ts', description: 'Records JDE/TRESS/CITI pesados: cxp, cobranza, cobranzaPayments, compras, pagoProveedor, nomina, rol, auxiliarContable + caches de banco.' },
   { key: 'midas-daily-cache', scope: 'indexedDB', owner: 'services/dailyApiCache.ts', description: 'Cache por día de respuestas JDE (5s open-timeout, fallback a memoria).' },
   { key: 'midas-financial-projection-cache', scope: 'indexedDB', owner: 'modules/financial-projection/services/financialProjectionPersistentCache.ts', description: 'Cache persistente de proyecciones financieras.' },
 
   // ── App.tsx (caches de banco + UI) ──────────────────────────────────────
   { key: 'midas.bankLastQuery.v2', scope: 'localStorage', owner: 'App.tsx', description: 'Último rango/estado de consulta de bancos. Guardado idle-debounced (~2.5s).' },
   { key: 'midas.navFocus', scope: 'localStorage', owner: 'App.tsx', description: 'Foco de navegación entre tabs.' },
-  { key: 'midas.projection.forecastModel.v1', scope: 'localStorage', owner: 'App.tsx', description: 'Modelo de pronóstico seleccionado en Proyección.' },
   { key: 'midas.bankStatements.v2', scope: 'localStorage', owner: 'App.tsx', description: 'Cache de estados de cuenta JDE.', legacy: true },
   { key: 'midas.bankSupplementalStatements.v1', scope: 'localStorage', owner: 'App.tsx', description: 'Cache de estados de cuenta subidos manualmente.', legacy: true },
 

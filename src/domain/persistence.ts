@@ -61,6 +61,7 @@
 import { CashFlowOverrides } from '../types';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './types';
 import type {
+  AuxiliarContableRecord,
   CobranzaPayment,
   CobranzaRecord,
   ComprasRecord,
@@ -197,6 +198,17 @@ export interface MidasStore {
    * El boot decide si refrescar comparando contra la semana actual.
    */
   rolLoadedKeys: Record<string, string>;
+  /**
+   * Auxiliar contable JDE (POST /JDEdwards/AuxiliarContable): libro mayor
+   * posteado contra cuentas de banco/caja. Fuente del motor de conciliación
+   * histórica. Una row por (cia, idCuenta, noDocto, tipoDocto). Heavy → IDB.
+   */
+  auxiliarContableRecords: AuxiliarContableRecord[];
+  /**
+   * Per-cia ISO timestamp del último refresh de AuxiliarContable. Mismo
+   * patrón que `comprasLoadedCias` — UNA compañía por request.
+   */
+  auxiliarContableLoadedCias: Record<string, string>;
   cashFlowOverrides: CashFlowOverrides;
   lastSaved: string;
 }
@@ -266,6 +278,8 @@ export function getDefaultStore(): MidasStore {
     nominaLoadedKeys: {},
     rolRecords: [],
     rolLoadedKeys: {},
+    auxiliarContableRecords: [],
+    auxiliarContableLoadedCias: {},
     cashFlowOverrides: {},
     lastSaved: isoNow(),
   };
@@ -437,6 +451,18 @@ function normalizeStore(raw: unknown): MidasStore {
     }
   }
 
+  // Auxiliar contable JDE — aditivo. Stores legacy default a vacío; el boot
+  // lo rellena por-cia en el primer arranque.
+  const auxiliarContableRecords = Array.isArray(o.auxiliarContableRecords)
+    ? (o.auxiliarContableRecords.filter((r) => !!r && typeof r === 'object') as AuxiliarContableRecord[])
+    : [];
+  const auxiliarContableLoadedCias: Record<string, string> = {};
+  if (o.auxiliarContableLoadedCias && typeof o.auxiliarContableLoadedCias === 'object') {
+    for (const [k, val] of Object.entries(o.auxiliarContableLoadedCias as Record<string, unknown>)) {
+      if (typeof val === 'string') auxiliarContableLoadedCias[k] = val;
+    }
+  }
+
   return {
     providers,
     clients,
@@ -457,6 +483,8 @@ function normalizeStore(raw: unknown): MidasStore {
     nominaLoadedKeys,
     rolRecords,
     rolLoadedKeys,
+    auxiliarContableRecords,
+    auxiliarContableLoadedCias,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
     assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
     lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,
@@ -547,6 +575,7 @@ function pickHeavy(store: MidasStore): HeavyStore {
     pagoProveedorRecords: store.pagoProveedorRecords,
     nominaRecords: store.nominaRecords,
     rolRecords: store.rolRecords,
+    auxiliarContableRecords: store.auxiliarContableRecords,
   };
 }
 

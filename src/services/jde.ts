@@ -41,6 +41,8 @@ import { JdeApiError } from './jdeTypes';
 import type {
   AgedBalanceRecord,
   AgedBalanceRequest,
+  AuxiliarContableRecord,
+  AuxiliarContableRequest,
   BankAccountStatement,
   BankStatementLine,
   BankStatementRequest,
@@ -1447,6 +1449,142 @@ export async function fetchComprasRange(
 }
 
 /**
+ * Parsea una fecha JDE en formato dd/mm/yyyy (p.ej. "13/04/2026") a
+ * YYYY-MM-DD. Tolera años de 2 dígitos y entradas ya ISO. Devuelve '' para
+ * valores vacíos o fechas centinela ("1899-..." / "0001-...").
+ */
+function parseDmyDate(v: unknown): string {
+  const s = toStr(v);
+  if (!s) return '';
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) {
+    const iso = trimIsoDate(v);
+    return isSentinelJdeDate(iso) ? '' : iso;
+  }
+  const day = m[1].padStart(2, '0');
+  const month = m[2].padStart(2, '0');
+  const year = m[3].length === 2 ? `20${m[3]}` : m[3].padStart(4, '0');
+  const iso = `${year}-${month}-${day}`;
+  return isSentinelJdeDate(iso) ? '' : iso;
+}
+
+function mapAuxiliarContable(raw: RawRecord): AuxiliarContableRecord {
+  return {
+    cia:               normalizeCia(pick(raw, ['Cia', 'cia', 'Compañia', 'Compania', 'compania', 'company'])),
+    cuentaContable:    toStr(pick(raw, ['Cuenta', 'cuenta', 'cuentaContable'])),
+    idCuenta:          toStr(pick(raw, ['IdCuenta', 'idCuenta', 'id_cuenta'])),
+    cuentaObjeto:      toStr(pick(raw, ['Cuenta_Objeto', 'cuenta_objeto', 'cuentaObjeto'])),
+    nombreCuenta:      toStr(pick(raw, ['Nombre_Cta', 'nombre_cta', 'nombreCuenta'])),
+    cuentaBanco:       toStr(pick(raw, ['Cuenta_Banco', 'cuenta_banco', 'cuentaBanco'])),
+    tipoDocto:         toStr(pick(raw, ['Tipo_Docto', 'tipo_docto', 'tipoDocto'])),
+    noDocto:           toNum(pick(raw, ['No_Docto', 'no_docto', 'noDocto'])),
+    noFactura:         toStr(pick(raw, ['No_Factura', 'no_factura', 'noFactura'])),
+    noOrdenCompra:     toStr(pick(raw, ['No_Orden_Compra', 'no_orden_compra', 'noOrdenCompra'])),
+    fechaContable:     parseDmyDate(pick(raw, ['Fecha_Contable_ddmmaa', 'fecha_contable_ddmmaa', 'Fecha_Contable', 'fechaContable'])),
+    tipoLibro:         toStr(pick(raw, ['Tipo_Libro', 'tipo_libro', 'tipoLibro'])),
+    noBatch:           toNum(pick(raw, ['No_Batch', 'no_batch', 'noBatch'])),
+    tipoBatch:         toStr(pick(raw, ['Tipo_Batch', 'tipo_batch', 'tipoBatch'])),
+    estatusConciliado: toStr(pick(raw, ['Estatus_conciliado', 'estatus_conciliado', 'estatusConciliado'])),
+    importe:           toNum(pick(raw, ['Importe', 'importe'])),
+    moneda:            toStr(pick(raw, ['Moneda', 'moneda', 'currency'])) || 'MXP',
+    tipoCambio:        toNum(pick(raw, ['Tipo_Cambio', 'tipo_cambio', 'tipoCambio'])),
+    posteo:            toStr(pick(raw, ['Posteo', 'posteo'])),
+    reversa:           toStr(pick(raw, ['Reversa', 'reversa'])),
+    concepto:          toStr(pick(raw, ['concepto', 'Concepto'])),
+    explicacion:       toStr(pick(raw, ['explicacion', 'Explicacion', 'explicación'])),
+    nombre:            toStr(pick(raw, ['Nombre', 'nombre'])),
+    tipoPago:          toStr(pick(raw, ['tipo_pago', 'Tipo_Pago', 'tipoPago'])),
+    noPago:            toStr(pick(raw, ['no_pago', 'No_Pago', 'noPago'])),
+    fechaPago:         parseDmyDate(pick(raw, ['Fecha_pago_ddmmaa', 'fecha_pago_ddmmaa', 'Fecha_Pago', 'fechaPago'])),
+    documentoOriginal: toStr(pick(raw, ['documento_Original', 'documento_original', 'documentoOriginal'])),
+    importeOriginal:   toNum(pick(raw, ['Importe_Original', 'importe_original', 'importeOriginal'])),
+  };
+}
+
+/**
+ * POST /JDEdwards/AuxiliarContable — UNA compañía por request.
+ *
+ * Devuelve el libro mayor JDE posteado contra las cuentas del rango de
+ * objeto contable indicado. Para rangos de fecha amplios usar
+ * `fetchAuxiliarContableRange`.
+ */
+export async function fetchAuxiliarContable(
+  req: AuxiliarContableRequest,
+  config: JdeClientConfig = {},
+): Promise<AuxiliarContableRecord[]> {
+  // El path debe ir en PascalCase exacto: el endpoint JDE está registrado
+  // como /JDEdwards/AuxiliarContable y responde 404 a `/auxiliarcontable`.
+  const raw = await jdeClient.post<unknown>('/AuxiliarContable', req, config);
+  return dropExcludedByCia(unwrapList(raw).map(mapAuxiliarContable));
+}
+
+/**
+ * Fetch del auxiliar contable de UNA compañía pidiendo MES POR MES con cache
+ * por mes calendario (mismo patrón que `fetchComprasRange`).
+ *
+ * `params` (tl/nr/objIni/objFin) son constantes fijas para la conciliación
+ * histórica — viven en `domain/auxiliarReconciliationConfig.ts`. La key de
+ * cache (`auxiliarcontable.{cia}.{YYYY-MM}`) NO incluye `params`: si algún
+ * caller variara `params` colisionaría — hoy son fijos, así que es seguro.
+ *
+ * Deduplica por `(cia, idCuenta, noDocto, tipoDocto)`.
+ */
+export async function fetchAuxiliarContableRange(
+  cia: string,
+  from: string,
+  to: string,
+  params: { tl: string; nr: number; objIni: string; objFin: string },
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<AuxiliarContableRecord[]> {
+  const config = options.config ?? {};
+
+  const MAX_ATTEMPTS = 3;
+  const fetchMonthWithRetry = async (
+    monthFrom: string,
+    monthTo: string,
+  ): Promise<AuxiliarContableRecord[]> => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await fetchAuxiliarContable(
+          { cia, fechaInicial: monthFrom, fechaFinal: monthTo, ...params },
+          config,
+        );
+      } catch (err) {
+        lastErr = err;
+        if (attempt === MAX_ATTEMPTS) break;
+        const delayMs = 500 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    throw lastErr;
+  };
+
+  const all = await fetchRangeWithMonthlyCache<AuxiliarContableRecord>('auxiliarcontable', {
+    from,
+    to,
+    cia,
+    fetchMonth: fetchMonthWithRetry,
+    onProgress: options.onProgress,
+    concurrency: options.concurrency ?? 4,
+  });
+
+  const seen = new Set<string>();
+  const merged: AuxiliarContableRecord[] = [];
+  for (const rec of all) {
+    const key = `${rec.cia}::${rec.idCuenta}::${rec.noDocto}::${rec.tipoDocto}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(rec);
+  }
+  return merged;
+}
+
+/**
  * Fetch cobranza (CXC) para una cía en rango de fechas — snapshot único.
  *
  * El endpoint /cobranza con `fechaInicial=null, fechaFinal=today` devuelve TODAS
@@ -2142,6 +2280,8 @@ export async function fetchRolRange(
 export type {
   AgedBalanceRecord,
   AgedBalanceRequest,
+  AuxiliarContableRecord,
+  AuxiliarContableRequest,
   BankAccountStatement,
   BankStatementLine,
   BankStatementRequest,

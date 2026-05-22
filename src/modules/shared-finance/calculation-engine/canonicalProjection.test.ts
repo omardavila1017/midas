@@ -6,10 +6,6 @@ import { comprasToPurchaseReceipts } from '../../../domain/comprasToPurchaseRece
 import type { BankAccountStatement, BankStatementLine, CobranzaRecord, ComprasRecord, RolRecord } from '../../../services/jdeTypes';
 import { isRealShortTermApiMovement } from '../../financial-planning/services/scenarioForecastRun';
 import { buildHistoricalMonths } from '../../../domain/cashFlowEngine';
-import type {
-  RealReconciliationMatch,
-  RealReconciliationResult,
-} from '../../../domain/realReconciliationEngine';
 import { bankMovementKey } from '../../../domain/bankMovementKey';
 import type { PayrollCostRecord, PurchaseReceiptRecord } from '../types';
 import { buildCanonicalProjection } from './canonicalProjection';
@@ -450,10 +446,9 @@ describe('canonicalProjection IVA metadata', () => {
       concepto: 'Cobro cliente Sendex',
       referencia: 'REF-MULTI',
     });
-    const reconciliation = reconciliationResult([]);
-    reconciliation.abonoEnrichments = [{
+    const abonoEnrichments = [{
       movementKey: bankMovementKey(abono),
-      status: 'factura-cobrada',
+      status: 'factura-cobrada' as const,
       facturas: [{
         cia: '00001',
         noFactura: 'F-100',
@@ -461,12 +456,6 @@ describe('canonicalProjection IVA metadata', () => {
         nombreCliente: 'Cliente Multicarga',
         importeBruto: 25_000,
       }],
-      cia: '00001',
-      cuenta: '06787361240',
-      fechaOperacion: '2026-04-16',
-      importe: 25_000,
-      concepto: 'Cobro cliente Sendex',
-      referencia: 'REF-MULTI',
       catalogClientId: 'C-100',
       catalogClientName: 'Cliente Multicarga',
     }];
@@ -484,7 +473,7 @@ describe('canonicalProjection IVA metadata', () => {
       clients: [],
       providers: [],
       cxpRecords: [],
-      cobranzaReconciliation: reconciliation,
+      abonoEnrichments,
       assumptions,
       budget: budget({}),
       startingBalance: 0,
@@ -536,11 +525,6 @@ describe('canonicalProjection IVA metadata', () => {
   it('suppresses CXC facturas already cross-matched to a bank ABONO (cobrada-banco)', () => {
     // Dos facturas: CXC-1 ya cruzó al banco (no debe re-proyectarse),
     // CXC-2 sigue pendiente (sí debe aparecer en la proyección).
-    const reconciliation = reconciliationResult([
-      reconMatch({ cia: '00001', noFactura: 'CXC-1', status: 'cobrada-banco' }),
-      reconMatch({ cia: '00001', noFactura: 'CXC-2', status: 'pendiente' }),
-    ]);
-
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [],
@@ -551,7 +535,7 @@ describe('canonicalProjection IVA metadata', () => {
         cobranzaRecord({ noFactura: 'CXC-1', importePendientePesos: 1_000, fechaFactura: '2026-05-01' }),
         cobranzaRecord({ noFactura: 'CXC-2', importePendientePesos: 2_000, fechaFactura: '2026-05-01' }),
       ],
-      cobranzaReconciliation: reconciliation,
+      cobradaBancoKeys: new Set(['00001::CXC-1']),
       assumptions,
       budget: budget({ incomeMay: 0 }),
       startingBalance: 10_000,
@@ -566,12 +550,8 @@ describe('canonicalProjection IVA metadata', () => {
 
   it('keeps CXC facturas in projection when status is cobrada-jde-sin-banco or pendiente', () => {
     // Cruce dudoso (JDE marca cobrada pero no aparece en banco) NO reduce
-    // la CXC proyectada — sólo cuando hay match automático con banco.
-    const reconciliation = reconciliationResult([
-      reconMatch({ cia: '00001', noFactura: 'CXC-A', status: 'cobrada-jde-sin-banco' }),
-      reconMatch({ cia: '00001', noFactura: 'CXC-B', status: 'pendiente' }),
-    ]);
-
+    // la CXC proyectada — sólo cuando hay match automático con banco. Sin
+    // entradas en `cobradaBancoKeys`, ambas facturas siguen proyectándose.
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [],
@@ -582,7 +562,7 @@ describe('canonicalProjection IVA metadata', () => {
         cobranzaRecord({ noFactura: 'CXC-A', importePendientePesos: 500, fechaFactura: '2026-05-01' }),
         cobranzaRecord({ noFactura: 'CXC-B', importePendientePesos: 700, fechaFactura: '2026-05-01' }),
       ],
-      cobranzaReconciliation: reconciliation,
+      cobradaBancoKeys: new Set<string>(),
       assumptions,
       budget: budget({ incomeMay: 0 }),
       startingBalance: 10_000,
@@ -1201,60 +1181,3 @@ function bankStatement(patch: Partial<BankAccountStatement> & Pick<BankAccountSt
   };
 }
 
-function reconMatch(patch: Partial<RealReconciliationMatch> & Pick<RealReconciliationMatch, 'cia' | 'noFactura' | 'status'>): RealReconciliationMatch {
-  return {
-    cia: patch.cia,
-    noFactura: patch.noFactura,
-    noCliente: patch.noCliente ?? '1',
-    nombreCliente: patch.nombreCliente ?? 'Cliente IVA',
-    status: patch.status,
-    importeBruto: patch.importeBruto ?? 0,
-    importePendiente: patch.importePendiente ?? 0,
-    fechaFactura: patch.fechaFactura ?? '2026-05-01',
-    fechaVence: patch.fechaVence ?? '2026-05-15',
-    diasVencida: patch.diasVencida ?? 0,
-    moneda: patch.moneda ?? 'MXN',
-    reviewStatus: patch.reviewStatus ?? (patch.status === 'cobrada-banco' ? 'auto' : 'unmatched'),
-    matchTier: patch.matchTier,
-    confidence: patch.confidence,
-    matchReason: patch.matchReason,
-    bankRef: patch.bankRef,
-    bankAmount: patch.bankAmount,
-    bankDate: patch.bankDate,
-    bankConcept: patch.bankConcept,
-    bankAccount: patch.bankAccount,
-    bankCia: patch.bankCia,
-    subsetGroupId: patch.subsetGroupId,
-    subsetSize: patch.subsetSize,
-  } as RealReconciliationMatch;
-}
-
-function reconciliationResult(matches: RealReconciliationMatch[]): RealReconciliationResult {
-  return {
-    matches,
-    abonoEnrichments: [],
-    paymentReconciliations: [],
-    reviewCandidates: [],
-    summary: {
-      totalFacturas: matches.length,
-      facturasCobradasBanco: matches.filter((m) => m.status === 'cobrada-banco').length,
-      facturasCobradasJdeSinBanco: matches.filter((m) => m.status === 'cobrada-jde-sin-banco').length,
-      facturasPendientes: matches.filter((m) => m.status === 'pendiente').length,
-      totalSaldoBruto: 0,
-      totalSaldoPendiente: 0,
-      totalCobradoBanco: 0,
-      totalAbonos: 0,
-      totalAbonoMonto: 0,
-      abonosFacturaCobrada: 0,
-      abonosSinFactura: 0,
-      abonosTraspasoInterno: 0,
-      abonosFederal: 0,
-      montoFederal: 0,
-      pctAbonosCruzados: 0,
-      pctFacturasCruzadas: 0,
-      ciaBreakdown: [],
-    } as RealReconciliationResult['summary'],
-    bankCoverage: { loadedDates: 0, totalMovements: 0, totalAbonos: 0 } as unknown as RealReconciliationResult['bankCoverage'],
-    timingsMs: { totalMs: 0, indexMs: 0, matchMs: 0 } as unknown as RealReconciliationResult['timingsMs'],
-  };
-}

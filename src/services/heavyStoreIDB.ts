@@ -18,6 +18,7 @@
  */
 
 import type {
+  AuxiliarContableRecord,
   CobranzaPayment,
   CobranzaRecord,
   ComprasRecord,
@@ -41,6 +42,7 @@ export const HEAVY_KEYS = [
   'pagoProveedorRecords',
   'nominaRecords',
   'rolRecords',
+  'auxiliarContableRecords',
 ] as const;
 
 export type HeavyKey = (typeof HEAVY_KEYS)[number];
@@ -53,6 +55,7 @@ export interface HeavyStore {
   pagoProveedorRecords: PagoProveedorRecord[];
   nominaRecords: PayrollCostRecord[];
   rolRecords: RolRecord[];
+  auxiliarContableRecords: AuxiliarContableRecord[];
 }
 
 export function emptyHeavyStore(): HeavyStore {
@@ -64,6 +67,7 @@ export function emptyHeavyStore(): HeavyStore {
     pagoProveedorRecords: [],
     nominaRecords: [],
     rolRecords: [],
+    auxiliarContableRecords: [],
   };
 }
 
