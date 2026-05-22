@@ -54,6 +54,7 @@ import {
 } from '../services/financialProjectionService';
 import {
   loadProjectionSourceFromPersistentCache,
+  projectionSourcePersistentCacheKey,
   loadScenarioRunFromPersistentCache,
   saveProjectionSourceToPersistentCache,
   saveScenarioRunToPersistentCache,
@@ -216,13 +217,31 @@ export default function FinancialProjectionDashboard(props: Props) {
     ],
   );
 
+  const hasProjectionInputs =
+    props.clients.length > 0 &&
+    (
+      props.bankStatements.length > 0 ||
+      props.cxpRecords.length > 0 ||
+      (props.cobranzaRecords?.length ?? 0) > 0 ||
+      (props.rolRecords?.length ?? 0) > 0 ||
+      (props.purchaseReceipts?.length ?? 0) > 0 ||
+      (props.payrollCosts?.length ?? 0) > 0
+    );
+
   // Cheap cache hit on first render → no warm-up frame, full UI synchronously.
   const cachedSource = useMemo(
-    () => tryGetCachedFinancialProjectionSourceData(cacheProbeInput),
-    [cacheProbeInput],
+    () => (hasProjectionInputs ? tryGetCachedFinancialProjectionSourceData(cacheProbeInput) : null),
+    [cacheProbeInput, hasProjectionInputs],
   );
 
-  const [source, setSource] = useState<FinancialProjectionSourceData | null>(cachedSource);
+  const sourceKey = useMemo(
+    () => projectionSourcePersistentCacheKey(cacheProbeInput),
+    [cacheProbeInput],
+  );
+  const [sourceState, setSourceState] = useState<{ key: string; data: FinancialProjectionSourceData } | null>(() =>
+    cachedSource ? { key: sourceKey, data: cachedSource } : null,
+  );
+  const source = hasProjectionInputs && sourceState?.key === sourceKey ? sourceState.data : null;
 
   // If we don't have the source cached, schedule the canonical build for
   // *after* the first paint so the user sees the chrome immediately.
@@ -248,9 +267,13 @@ export default function FinancialProjectionDashboard(props: Props) {
   // (fast path); only the expensive worker build waits for inputs to settle.
   // Each cacheProbeInput change cancels the pending build via effect cleanup.
   useEffect(() => {
+    if (!hasProjectionInputs) {
+      setSourceState(null);
+      return;
+    }
     if (props.isActive === false && !cachedSource) return;
     if (cachedSource) {
-      setSource(cachedSource);
+      setSourceState({ key: sourceKey, data: cachedSource });
       return;
     }
     let cancelled = false;
@@ -267,7 +290,7 @@ export default function FinancialProjectionDashboard(props: Props) {
         const built = buildFinancialProjectionSourceData(cacheProbeInput);
         if (!cancelled && sourceJobRef.current === jobId) {
           saveProjectionSourceToPersistentCache(cacheProbeInput, built);
-          setSource(built);
+          setSourceState({ key: sourceKey, data: built });
         }
       } catch {
         /* swallow — empty-state shows */
@@ -300,7 +323,7 @@ export default function FinancialProjectionDashboard(props: Props) {
         // eslint-disable-next-line no-console
         console.info(`[projection.source] persistent cache hit jobId=${jobId}`);
         rememberFinancialProjectionSourceData(cacheProbeInput, persisted);
-        setSource(persisted);
+        setSourceState({ key: sourceKey, data: persisted });
         return;
       }
       // Settle inputs before paying the ~20s / 227k-movement build. Boot data
@@ -335,7 +358,7 @@ export default function FinancialProjectionDashboard(props: Props) {
       // from Planning and useFinancialProjectionSource too. The `cancelled`
       // flag + jobId-filtered listener guarantee stale results no-op.
     };
-  }, [cachedSource, cacheProbeInput, props.isActive]);
+  }, [cachedSource, cacheProbeInput, props.isActive, sourceKey, hasProjectionInputs]);
 
   // Subscribe to shared source worker once; filter by the per-job input map
   // so we only react to jobs this dashboard posted.
@@ -351,7 +374,7 @@ export default function FinancialProjectionDashboard(props: Props) {
         console.info(`[projection.source] worker result jobId=${data.jobId}`);
         rememberFinancialProjectionSourceData(myInput, data.result);
         saveProjectionSourceToPersistentCache(myInput, data.result);
-        setSource(data.result);
+        setSourceState({ key: projectionSourcePersistentCacheKey(myInput), data: data.result });
       } else if (data.error) {
         // eslint-disable-next-line no-console
         console.warn(`[projection.source] worker error`, data.error);

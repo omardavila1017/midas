@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 
 const AppCoreWithProviders = lazy(() => import('./AppCoreWithProviders'));
+const sendaLogoUrl = `${import.meta.env.BASE_URL}logos/senda-corporativo.svg`;
 
 function AppBootShell() {
   return (
@@ -8,7 +9,7 @@ function AppBootShell() {
       <div className="flex min-h-screen items-center justify-center px-6">
         <div className="w-full max-w-sm text-center">
           <img
-            src="/logos/senda-corporativo.svg"
+            src={sendaLogoUrl}
             alt="Senda"
             className="mx-auto mb-5 h-10 w-auto"
             decoding="async"

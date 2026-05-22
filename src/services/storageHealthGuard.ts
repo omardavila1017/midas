@@ -216,7 +216,7 @@ export function purgeReasonMessage(reason: PurgeReason): string {
     case 'localstorage-near-quota':
       return 'Tu almacenamiento local estaba al límite. Lo limpié para mantener la app rápida.';
     case 'prior-boot-crash':
-      return 'La última sesión no cerró correctamente. Limpié el cache local para arrancar bien.';
+      return 'La última sesión no cerró correctamente. Conservé el cache local y reintenté la hidratación.';
     case 'manual-reset':
       return 'Reset manual completado.';
     default:

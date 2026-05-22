@@ -7,6 +7,7 @@ import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/he
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
 import { selectComprasForProjection } from './modules/financial-projection/services/comprasProjectionFilter';
+import { subscribeProjectionFirstPaint } from './modules/financial-projection/services/projectionBootSignal';
 import { buildProviderSpendIndex, enrichProvidersWithRecentSpend } from './domain/providerRecentSpend';
 import { deriveProvidersFromJde } from './domain/providerDerivation';
 import {
@@ -771,7 +772,7 @@ export default function App() {
     pagos: 'pending',
     nomina: 'pending',
     rol: 'pending',
-    projection: 'done',
+    projection: 'loading',
   });
   const [, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
@@ -884,8 +885,8 @@ export default function App() {
           if (caches.bankJdeStatements.length) setBankJdeStatements(caches.bankJdeStatements);
           if (caches.bankSupplementalStatements.length) setBankSupplementalStatements(caches.bankSupplementalStatements);
           if (caches.bankLastQuery) setBankLastQuery(caches.bankLastQuery);
+          setBankCacheLoaded(true);
         });
-        setBankCacheLoaded(true);
       });
     });
   }, []);
@@ -2125,9 +2126,8 @@ export default function App() {
   // cobranza) has settled (done or error). All five run in parallel; per-cía
   // fetches (CXP, cobranza) use bounded concurrency to respect JDE rate limits
   // without serializing every request.
-  // Splash gates on boot data fetches only. El cálculo local de Proyección ya
-  // no bloquea el shell global: su dashboard muestra skeleton propio mientras
-  // el worker termina el escenario activo.
+  // Splash gates on boot data fetches plus the first real Proyección run, so
+  // the landing screen never opens with zeroed KPIs from an empty source.
   const bootTasks = useMemo<BootTask[]>(
     () => [
       { id: 'catalog', label: 'Catálogos · clientes y proveedores', status: bootStatus.catalog },
@@ -2139,6 +2139,7 @@ export default function App() {
       { id: 'pagos', label: 'Pagos a proveedores', status: bootStatus.pagos },
       { id: 'nomina', label: 'TRESS · nómina', status: bootStatus.nomina },
       { id: 'rol', label: 'CITI · rol de viajes', status: bootStatus.rol },
+      { id: 'projection', label: 'Proyección · escenario activo', status: bootStatus.projection },
     ],
     [
       bootStatus.catalog,
@@ -2150,8 +2151,14 @@ export default function App() {
       bootStatus.pagos,
       bootStatus.nomina,
       bootStatus.rol,
+      bootStatus.projection,
     ],
   );
+  useEffect(() => {
+    return subscribeProjectionFirstPaint(() => {
+      setBootSlot('projection', 'done');
+    });
+  }, [setBootSlot]);
   useEffect(() => {
     if (isBooted) return;
     const allSettled = bootTasks.every(t => t.status === 'done' || t.status === 'error');
@@ -3581,7 +3588,7 @@ export default function App() {
             aria-label="Midas · Senda corporativo"
           >
             <img
-              src="/logos/senda-corporativo.svg"
+              src={`${import.meta.env.BASE_URL}logos/senda-corporativo.svg`}
               alt="Senda"
               width={108}
               height={22}

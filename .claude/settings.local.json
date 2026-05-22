@@ -25,7 +25,8 @@
       "Bash(gh pr *)",
       "Bash(/Applications/Conductor.app/Contents/Resources/bin/gh --version)",
       "Bash(git pull *)",
-      "Bash(git --version)"
+      "Bash(git --version)",
+      "Bash(npx playwright *)"
     ]
   }
 }

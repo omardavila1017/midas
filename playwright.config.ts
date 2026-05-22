@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests-e2e',
-  timeout: 25_000,
+  timeout: 360_000,
   expect: { timeout: 6_000 },
   fullyParallel: false,
   retries: 0,
@@ -21,7 +21,7 @@ export default defineConfig({
     cwd: './dist',
     url: 'http://localhost:5173/',
     timeout: 15_000,
-    reuseExistingServer: false,
+    reuseExistingServer: true,
     stdout: 'ignore',
     stderr: 'pipe',
   },

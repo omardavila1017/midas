@@ -1,7 +1,8 @@
 /**
  * Load clients from the local clientes-db.json catalog.
  *
- * The JSON lives in /public/clientes-db.json and is served by Vite at
+ * The JSON lives in /public/clientes-db.json and is served by Vite at the
+ * configured base path.
  * runtime. Each entry has: name, payDay, cycle, sales, creditDays, active.
  *
  * This loader converts raw JSON records into fully typed Client objects
@@ -141,7 +142,7 @@ function writeClientsCatalogCache(hash: string, clients: Client[]): void {
  */
 export async function loadClientsCatalog(): Promise<Client[]> {
   try {
-    const res = await fetch('/clientes-db.json');
+    const res = await fetch(`${import.meta.env.BASE_URL}clientes-db.json`);
     if (!res.ok) return [];
     // Lee como texto primero para poder hashear antes del JSON.parse —
     // permite saltarse parse + regex × N si el cache tiene el mismo hash.
