@@ -7,11 +7,14 @@ import type {
 self.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerRequest>) => {
   const { jobId, input } = event.data;
   const t0 = performance.now();
+  performance.mark?.(`projectionSource:${jobId}:start`);
   // eslint-disable-next-line no-console
   console.info(`[financialProjection.worker] start jobId=${jobId} cxp=${input.cxpRecords.length} cobranza=${input.cobranzaRecords?.length ?? 0} rol=${input.rolRecords?.length ?? 0} payroll=${input.payrollCosts?.length ?? 0} purchaseReceipts=${input.purchaseReceipts?.length ?? 0} bankStmts=${input.bankStatements.length}`);
   try {
     const result = buildFinancialProjectionSourceData(input);
     const elapsed = performance.now() - t0;
+    performance.mark?.(`projectionSource:${jobId}:end`);
+    performance.measure?.(`projectionSource:${jobId}`, `projectionSource:${jobId}:start`, `projectionSource:${jobId}:end`);
     // eslint-disable-next-line no-console
     console.info(`[financialProjection.worker] done jobId=${jobId} ${elapsed.toFixed(0)}ms · movements=${result.movements.length} suppliers=${result.suppliers.length} customers=${result.customers.length}`);
     const response: FinancialProjectionSourceWorkerResponse = { jobId, result };

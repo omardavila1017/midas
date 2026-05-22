@@ -381,10 +381,15 @@ export interface BankStatementsCache {
 }
 
 export async function loadBankStatementsFromIDB(): Promise<BankStatementsCache> {
+  try { performance.mark?.('bankStatements:idb:start'); } catch { /* noop */ }
   const [jde, supplemental] = await Promise.all([
     readRecords(BANK_JDE_IDB_KEY),
     readRecords(BANK_SUPPLEMENTAL_IDB_KEY),
   ]);
+  try {
+    performance.mark?.('bankStatements:idb:end');
+    performance.measure?.('bankStatements:idb', 'bankStatements:idb:start', 'bankStatements:idb:end');
+  } catch { /* noop */ }
   const out: BankStatementsCache = { jde, supplemental };
   if (jde.length === 0 && supplemental.length === 0 && !(await openDb())) {
     // eslint-disable-next-line no-console

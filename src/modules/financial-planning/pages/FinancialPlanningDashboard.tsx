@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   nextSourceJobId,
   postToSharedSourceWorker,
@@ -47,7 +47,6 @@ import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunW
 import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
 import { BucketColumn } from '../components/spreadsheet/gridGeometry';
-import { MovementDrillDownDrawer } from '../../financial-projection/components/MovementDrillDownDrawer';
 import {
   buildFinancialProjectionSourceData,
   calculateCurrentBankCash,
@@ -98,7 +97,7 @@ import {
   toneByCount,
   toneByDelta,
 } from '../../shared-finance/components/tone';
-import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
+import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
 
 interface Props {
@@ -134,6 +133,13 @@ interface Props {
 const USER = 'tesoreria@senda.local';
 type PlanningScenarioRun = ScenarioForecastRun;
 type SelectedPlanningCell = { conceptKey: string; bucketKey: string } | null;
+
+const MovementDrillDownDrawer = lazy(() =>
+  import('../../financial-projection/components/MovementDrillDownDrawer').then((module) => ({ default: module.MovementDrillDownDrawer })),
+);
+const MidasBubble = lazy(() =>
+  import('../../midas-ai').then((module) => ({ default: module.MidasBubble })),
+);
 
 /**
  * Outer entry — gates the heavy planning pipeline behind a paint.
@@ -717,7 +723,11 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         includeManualEntries,
       }),
       persistRun,
-      pipelineKey,
+      {
+        pipelineKey,
+        priority: scenarioId === activeScenarioId ? 'foreground' : 'background',
+        placeholderMode: scenarioId === activeScenarioId ? 'any' : 'same-scenario',
+      },
     );
   };
 
@@ -1347,17 +1357,19 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onConfirm={handleConfirmMerge}
       />
 
-      <MovementDrillDownDrawer
-        movement={detailMovement}
-        anchor={detailAnchor}
-        onClose={() => { setDetailMovement(null); setDetailAnchor(null); }}
-        invoiceContext={{
-          cxpRecords: props.cxpRecords,
-          clients: props.clients,
-          assumptions: props.assumptions,
-          budget: props.budget,
-        }}
-      />
+      <Suspense fallback={null}>
+        <MovementDrillDownDrawer
+          movement={detailMovement}
+          anchor={detailAnchor}
+          onClose={() => { setDetailMovement(null); setDetailAnchor(null); }}
+          invoiceContext={{
+            cxpRecords: props.cxpRecords,
+            clients: props.clients,
+            assumptions: props.assumptions,
+            budget: props.budget,
+          }}
+        />
+      </Suspense>
 
       <CellDetailPopover
         data={inspectedCell ? buildCellDetail(inspectedCell) : null}
@@ -1393,16 +1405,18 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onSave={handleSaveAdjustment}
       />
 
-      <MidasBubble
-        cia={props.companyCode}
-        asOfDate={today}
-        activeRun={activeRun}
-        providers={props.providers}
-        adjustments={storedAdjustments}
-        activeScenarioId={activeScenario.id}
-        activeScenarioKind={activeScenario.kind}
-        onAcceptProposal={handleAcceptMidasProposal}
-      />
+      <Suspense fallback={null}>
+        <MidasBubble
+          cia={props.companyCode}
+          asOfDate={today}
+          activeRun={activeRun}
+          providers={props.providers}
+          adjustments={storedAdjustments}
+          activeScenarioId={activeScenario.id}
+          activeScenarioKind={activeScenario.kind}
+          onAcceptProposal={handleAcceptMidasProposal}
+        />
+      </Suspense>
     </div>
   );
 

@@ -71,7 +71,6 @@ const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercant
 const ConciliacionDashboard = lazy(() => import('./components/ConciliacionDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
-import { subscribeProjectionFirstPaint } from './modules/financial-projection/services/projectionBootSignal';
 import DarkModeToggle from './components/ui/DarkModeToggle';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
@@ -772,9 +771,7 @@ export default function App() {
     pagos: 'pending',
     nomina: 'pending',
     rol: 'pending',
-    // req 6: el splash espera al primer run real de Proyección, no sólo a
-    // catálogo+empresas. Flip a 'done' vía señal del dashboard.
-    projection: 'loading',
+    projection: 'done',
   });
   const [, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
@@ -907,10 +904,17 @@ export default function App() {
   const bankJdeStatementsDeferred = useDeferredValue(bankJdeStatements);
   const bankSupplementalStatementsDeferred = useDeferredValue(bankSupplementalStatements);
   const bankStatements = useMemo(
-    () =>
-      mergeBankStatements(bankJdeStatementsDeferred, bankSupplementalStatementsDeferred).filter(
+    () => {
+      try { performance.mark?.('bankStatements:merge:start'); } catch { /* noop */ }
+      const merged = mergeBankStatements(bankJdeStatementsDeferred, bankSupplementalStatementsDeferred).filter(
         s => !matchesExclusionIdentity({ cia: s.cia }),
-      ),
+      );
+      try {
+        performance.mark?.('bankStatements:merge:end');
+        performance.measure?.('bankStatements:merge', 'bankStatements:merge:start', 'bankStatements:merge:end');
+      } catch { /* noop */ }
+      return merged;
+    },
     [bankJdeStatementsDeferred, bankSupplementalStatementsDeferred],
   );
   // BAJIO se exhibe en la pestaña Bancos pero no se contabiliza ni se proyecta:
@@ -2121,12 +2125,9 @@ export default function App() {
   // cobranza) has settled (done or error). All five run in parallel; per-cía
   // fetches (CXP, cobranza) use bounded concurrency to respect JDE rate limits
   // without serializing every request.
-  // Splash gates on EVERY boot fetch — usuario pidió "splash hasta que ya no
-  // haya ningún fetch". Antes sólo gateaba catalog+companies+projection y los
-  // demás (banks, CXP, cobranza, compras, pagos, nómina, rol) corrían en
-  // background, soltando el splash con APIs aún en vuelo. Ahora todas las
-  // fuentes JDE/TRESS/CITI quedan en el gate. El hard timeout (abajo) sigue
-  // siendo el escape contra cuelgues indefinidos.
+  // Splash gates on boot data fetches only. El cálculo local de Proyección ya
+  // no bloquea el shell global: su dashboard muestra skeleton propio mientras
+  // el worker termina el escenario activo.
   const bootTasks = useMemo<BootTask[]>(
     () => [
       { id: 'catalog', label: 'Catálogos · clientes y proveedores', status: bootStatus.catalog },
@@ -2138,7 +2139,6 @@ export default function App() {
       { id: 'pagos', label: 'Pagos a proveedores', status: bootStatus.pagos },
       { id: 'nomina', label: 'TRESS · nómina', status: bootStatus.nomina },
       { id: 'rol', label: 'CITI · rol de viajes', status: bootStatus.rol },
-      { id: 'projection', label: 'Proyección · primer cálculo', status: bootStatus.projection },
     ],
     [
       bootStatus.catalog,
@@ -2150,18 +2150,8 @@ export default function App() {
       bootStatus.pagos,
       bootStatus.nomina,
       bootStatus.rol,
-      bootStatus.projection,
     ],
   );
-  // El dashboard de Proyección (vista de aterrizaje, montada bajo el splash a
-  // opacity 0) emite la señal cuando tiene su primer run real. Eso cierra el
-  // slot 'projection' → el splash recién entonces se suelta. El churn de
-  // cold-boot que reventaba está acotado por el debounce de 12s del source
-  // (coalesce en ~1 build) + SOURCE_CACHE=2 → gatear es seguro.
-  useEffect(() => {
-    const unsub = subscribeProjectionFirstPaint(() => setBootSlot('projection', 'done'));
-    return unsub;
-  }, [setBootSlot]);
   useEffect(() => {
     if (isBooted) return;
     const allSettled = bootTasks.every(t => t.status === 'done' || t.status === 'error');
@@ -2177,8 +2167,8 @@ export default function App() {
   }, [bootTasks, isBooted]);
 
   // Hard timeout — never trap the user behind the splash. El splash gatea
-  // sobre TODOS los fetches de boot (catalog/companies/banks/CXP/cobranza/
-  // compras/pagos/nómina/rol/projection). Cold boot real con datasets
+  // sobre los fetches de boot (catalog/companies/banks/CXP/cobranza/
+  // compras/pagos/nómina/rol). Cold boot real con datasets
   // completos tarda hasta ~30 min (10 cías × varios endpoints, hidratación
   // IDB, primer build de source). 1800s = techo máximo: si algún fetch se
   // cuelga indefinidamente, el splash se suelta y la app abre degradada.

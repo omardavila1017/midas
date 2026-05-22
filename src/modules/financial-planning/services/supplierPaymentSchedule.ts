@@ -149,38 +149,55 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
     };
   }
 
-  const pending = [...managed].sort(compareQueueItems);
+  const managedByReadyDate = groupQueueItemsByReadyDate(managed);
+  const passthroughByDate = groupMovementsByDate(passthrough);
+  const managedByReadyDateSorted = [...managed].sort((a, b) => {
+    if (a.readyDate !== b.readyDate) return a.readyDate.localeCompare(b.readyDate);
+    return compareQueueItems(a, b);
+  });
+  const readyQueue: QueueItem[] = [];
   const installmentsByMovementId = new Map<string, PaymentInstallment[]>();
   const dates = enumerateDates(args.startDate, args.endDate);
   let cash = args.initialCash;
+  let readyCursor = 0;
   const dailyRows: DailyOperatingFlowRow[] = [];
 
   for (const date of dates) {
+    while (
+      readyCursor < managedByReadyDateSorted.length &&
+      managedByReadyDateSorted[readyCursor].readyDate <= date
+    ) {
+      insertReadyQueue(readyQueue, managedByReadyDateSorted[readyCursor]);
+      readyCursor += 1;
+    }
+
     const openingCash = Math.max(0, cash);
-    const todaysPassthrough = passthrough.filter((movement) => effectiveMovementDate(movement) === date);
-    const inflows = todaysPassthrough
-      .filter((movement) => movement.type === 'INFLOW')
-      .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
-    const confirmedInflows = todaysPassthrough
-      .filter((movement) => movement.type === 'INFLOW' && isConfirmedInflow(movement))
-      .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
-    const otherOutflows = todaysPassthrough
-      .filter((movement) => movement.type === 'OUTFLOW')
-      .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
-    const todayInflows = todaysPassthrough.filter((movement) => movement.type === 'INFLOW');
-    const todayOutflowMovements = todaysPassthrough.filter((movement) => movement.type === 'OUTFLOW');
-    const scheduledSupplierItems = managed.filter((item) => item.readyDate === date);
+    const todaysPassthrough = passthroughByDate.get(date) ?? EMPTY_MOVEMENTS;
+    const scheduledSupplierItems = managedByReadyDate.get(date) ?? EMPTY_QUEUE_ITEMS;
+    let inflows = 0;
+    let confirmedInflows = 0;
+    let otherOutflows = 0;
+    const todayInflows: FinancialMovement[] = [];
+    const todayOutflowMovements: FinancialMovement[] = [];
+    for (const movement of todaysPassthrough) {
+      const amount = effectiveAmount(movement);
+      if (movement.type === 'INFLOW') {
+        inflows += amount;
+        todayInflows.push(movement);
+        if (isConfirmedInflow(movement)) confirmedInflows += amount;
+      } else {
+        otherOutflows += amount;
+        todayOutflowMovements.push(movement);
+      }
+    }
 
     cash += inflows;
     cash -= otherOutflows;
 
     const paidToday: Array<{ item: QueueItem; amount: number }> = [];
-    const ready = pending
-      .filter((item) => item.readyDate <= date && item.remainingAmount > 0)
-      .sort(compareQueueItems);
 
-    while (ready.length > 0) {
-      const candidate = ready[0];
+    while (readyQueue.length > 0) {
+      const candidate = readyQueue[0];
       const available = Math.max(0, cash - args.minimumCash);
       if (available <= 0) break;
       const amount = Math.min(candidate.remainingAmount, available);
@@ -192,17 +209,13 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
       appendInstallment(installmentsByMovementId, candidate.movement.id, { date, amount });
 
       if (candidate.remainingAmount <= 0) {
-        removeQueueItem(pending, candidate);
-        ready.shift();
+        readyQueue.shift();
       } else {
         break;
       }
     }
 
-    const supplierNamesPending = pending
-      .filter((item) => item.readyDate <= date)
-      .slice()
-      .sort(compareQueueItems)
+    const supplierNamesPending = readyQueue
       .slice(0, 8)
       .map(supplierNameForItem);
 
@@ -229,7 +242,7 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
       ]).slice(0, 10),
       supplierNamesScheduled: uniqueLabels(scheduledSupplierItems.map(supplierNameForItem)).slice(0, 8),
       suppliersPaid: new Set(paidToday.map((payment) => payment.item.movement.id)).size,
-      suppliersPending: pending.filter((item) => item.readyDate <= date).length,
+      suppliersPending: readyQueue.length,
       supplierNamesPaid: uniqueLabels(paidToday.map((payment) => supplierNameForItem(payment.item))),
       supplierNamesPending: uniqueLabels(supplierNamesPending),
       net: expectedInflows - executedOutflows,
@@ -270,6 +283,41 @@ export function scheduleSupplierPaymentsByScore(args: ScheduleSupplierPaymentsAr
   };
 }
 
+const EMPTY_MOVEMENTS: FinancialMovement[] = [];
+const EMPTY_QUEUE_ITEMS: QueueItem[] = [];
+
+function groupMovementsByDate(movements: FinancialMovement[]): Map<string, FinancialMovement[]> {
+  const byDate = new Map<string, FinancialMovement[]>();
+  for (const movement of movements) {
+    const date = effectiveMovementDate(movement);
+    const bucket = byDate.get(date);
+    if (bucket) bucket.push(movement);
+    else byDate.set(date, [movement]);
+  }
+  return byDate;
+}
+
+function groupQueueItemsByReadyDate(items: QueueItem[]): Map<string, QueueItem[]> {
+  const byDate = new Map<string, QueueItem[]>();
+  for (const item of items) {
+    const bucket = byDate.get(item.readyDate);
+    if (bucket) bucket.push(item);
+    else byDate.set(item.readyDate, [item]);
+  }
+  return byDate;
+}
+
+function insertReadyQueue(queue: QueueItem[], item: QueueItem): void {
+  let lo = 0;
+  let hi = queue.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (compareQueueItems(item, queue[mid]) < 0) hi = mid;
+    else lo = mid + 1;
+  }
+  queue.splice(lo, 0, item);
+}
+
 function buildDailyRows(args: {
   startDate: string;
   endDate: string;
@@ -280,29 +328,41 @@ function buildDailyRows(args: {
   diagnostics: SupplierPaymentDiagnostics;
 }): SupplierPaymentPlan {
   let cash = args.initialCash;
+  const passthroughByDate = groupMovementsByDate(args.passthrough);
   const dailyRows = enumerateDates(args.startDate, args.endDate).map((date) => {
     const openingCash = Math.max(0, cash);
-    const movements = args.passthrough.filter((movement) => effectiveMovementDate(movement) === date);
-    const expectedInflows = movements
-      .filter((movement) => movement.type === 'INFLOW')
-      .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
-    const confirmedInflows = movements
-      .filter((movement) => movement.type === 'INFLOW' && isConfirmedInflow(movement))
-      .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
-    const executedOutflows = movements
-      .filter((movement) => movement.type === 'OUTFLOW')
-      .reduce((sum, movement) => sum + effectiveAmount(movement), 0);
+    const movements = passthroughByDate.get(date) ?? EMPTY_MOVEMENTS;
+    let expectedInflows = 0;
+    let confirmedInflows = 0;
+    let executedOutflows = 0;
+    const inflowMovements: FinancialMovement[] = [];
+    const confirmedInflowMovements: FinancialMovement[] = [];
+    const outflowMovements: FinancialMovement[] = [];
+    for (const movement of movements) {
+      const amount = effectiveAmount(movement);
+      if (movement.type === 'INFLOW') {
+        expectedInflows += amount;
+        inflowMovements.push(movement);
+        if (isConfirmedInflow(movement)) {
+          confirmedInflows += amount;
+          confirmedInflowMovements.push(movement);
+        }
+      } else {
+        executedOutflows += amount;
+        outflowMovements.push(movement);
+      }
+    }
     cash += expectedInflows - executedOutflows;
     return {
       date,
       openingCash,
       expectedInflows,
       confirmedInflows,
-      clientNamesExpected: uniqueLabels(movements.filter((movement) => movement.type === 'INFLOW').map(inflowLabel)).slice(0, 10),
-      clientNamesConfirmed: uniqueLabels(movements.filter((movement) => movement.type === 'INFLOW' && isConfirmedInflow(movement)).map(inflowLabel)).slice(0, 10),
+      clientNamesExpected: uniqueLabels(inflowMovements.map(inflowLabel)).slice(0, 10),
+      clientNamesConfirmed: uniqueLabels(confirmedInflowMovements.map(inflowLabel)).slice(0, 10),
       scheduledOutflows: executedOutflows,
       executedOutflows,
-      outflowConcepts: uniqueLabels(movements.filter((movement) => movement.type === 'OUTFLOW').map(outflowLabel)).slice(0, 10),
+      outflowConcepts: uniqueLabels(outflowMovements.map(outflowLabel)).slice(0, 10),
       supplierNamesScheduled: [],
       suppliersPaid: 0,
       suppliersPending: 0,
@@ -446,11 +506,6 @@ function compareQueueItems(a: QueueItem, b: QueueItem): number {
   if (a.originalDate !== b.originalDate) return a.originalDate.localeCompare(b.originalDate);
   if (a.readyDate !== b.readyDate) return a.readyDate.localeCompare(b.readyDate);
   return a.remainingAmount - b.remainingAmount;
-}
-
-function removeQueueItem(queue: QueueItem[], item: QueueItem): void {
-  const index = queue.findIndex((candidate) => candidate.movement.id === item.movement.id);
-  if (index >= 0) queue.splice(index, 1);
 }
 
 function buildProviderIndex(providers: Provider[]) {

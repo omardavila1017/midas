@@ -63,12 +63,16 @@ export function calculateMovementConfidence(input: {
 
 export function calculateBaseProjection(movements: FinancialMovement[], options: ProjectionOptions): ForecastRun {
   const granularity = options.granularity ?? 'daily';
-  const normalized = movements
-    .filter((movement) => movement.status !== 'CANCELLED')
-    .map((movement) => ({
-      ...movement,
-      confidenceBand: calculateConfidenceBand(movement.confidenceScore),
-    }));
+  const normalized: FinancialMovement[] = [];
+  for (const movement of movements) {
+    if (movement.status === 'CANCELLED') continue;
+    const confidenceBand = calculateConfidenceBand(movement.confidenceScore);
+    normalized.push(
+      movement.confidenceBand === confidenceBand
+        ? movement
+        : { ...movement, confidenceBand },
+    );
+  }
   const buckets = calculateCashBalance(normalized, { ...options, granularity });
   const alerts = calculateRiskAlerts(buckets, normalized);
   const bucketsWithAlerts = buckets.map((bucket) => ({

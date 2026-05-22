@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { lazy, startTransition, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import {
   AlertTriangle,
   CalendarClock,
@@ -30,26 +30,19 @@ import type {
   ProjectionGranularity,
   PurchaseReceiptRecord,
 } from '../../shared-finance/types';
-import { CashFlowChart } from '../components/CashFlowChart';
 import {
   CobranzaKpiCard,
   MinimumExpenseKpi,
   computeRunYtd,
 } from '../components/MergedDashboardKpis';
 import { computeMinimumOperatingExpense } from '../../../domain/minimumOperatingExpense';
-import { MovementDrillDownDrawer } from '../components/MovementDrillDownDrawer';
 import { ScenarioComparisonBar } from '../components/ScenarioComparisonBar';
 import { DeferredMount } from '../components/DeferredMount';
 import { ChartSkeleton } from '../components/SectionSkeletons';
 import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../services/projectionCache';
 import { projectionWindowFor } from '../services/projectionWindow';
 import { signalProjectionFirstPaint } from '../services/projectionBootSignal';
-import { setScenarioRunPlaceholder } from '../../shared-finance/hooks/useScenarioRunWorker';
-import type { BuildScenarioForecastRunArgs } from '../../financial-planning/services/scenarioForecastRun';
-import type {
-  ScenarioForecastRunWorkerRequest,
-  ScenarioForecastRunWorkerResponse,
-} from '../../../workers/scenarioForecastRunWorkerTypes';
+import { requestScenarioRun, setScenarioRunPlaceholder } from '../../shared-finance/hooks/useScenarioRunWorker';
 import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunWorker';
 import {
   buildFinancialProjectionSourceData,
@@ -103,7 +96,7 @@ import {
   toneByCount,
   toneByDelta,
 } from '../../shared-finance/components/tone';
-import { MidasBubble, type MidasProposalSuggestion } from '../../midas-ai';
+import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../../financial-planning/services/financialPlanningService';
 import { useProbabilisticForecast } from '../services/probabilisticForecastService';
 import {
@@ -113,6 +106,16 @@ import {
 } from '../../../domain/comprasForecastModels';
 
 type ScenarioRun = ScenarioForecastRun;
+
+const CashFlowChart = lazy(() =>
+  import('../components/CashFlowChart').then((module) => ({ default: module.CashFlowChart })),
+);
+const MovementDrillDownDrawer = lazy(() =>
+  import('../components/MovementDrillDownDrawer').then((module) => ({ default: module.MovementDrillDownDrawer })),
+);
+const MidasBubble = lazy(() =>
+  import('../../midas-ai').then((module) => ({ default: module.MidasBubble })),
+);
 
 interface Props {
   companyCode: string;
@@ -508,39 +511,25 @@ async function runPreloadProjectionScenarioRuns(input: {
     minimumCash,
   ].join('|');
 
-  let seededPlaceholder = false;
-  await Promise.all([baseScenario, approvedScenario].map(async (scenario) => {
+  const buildWarmRun = (scenario: FinancialScenario) => {
     const scenarioCustomRows = bootstrap.customRows.filter((row) => row.scenarioId === scenario.id);
     const scenarioOverrides = bootstrap.cellOverrides.filter((override) => override.scenarioId === scenario.id);
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => override.conceptKey + '@' + override.bucketKey + ':' + override.value);
     const cacheKey = [sharedInputsKey, scenario.id, 'monthly', customKey, overrideKey].join('||');
-    const cached = await loadScenarioRunFromPersistentCache(cacheKey);
-    if (cached) {
-      primeProjectionRunCache(cacheKey, cached);
-      // Persisted run = a valid ScenarioForecastRun shape → use it as the
-      // universal placeholder so the first Inner render never has to run the
-      // ~225k pipeline synchronously on the main thread (the "no abrió" freeze).
-      setScenarioRunPlaceholder(cached);
-      seededPlaceholder = true;
-    }
-  }));
-
-  // Cold path (no persisted run for the current inputs — e.g. the compras
-  // window changed the cache key). Build the *light* BASE run in the scenario
-  // worker (off the main thread) and seed the placeholder, so the shell stays
-  // up for the few worker seconds instead of the tab freezing/OOM-ing.
-  if (!seededPlaceholder && typeof Worker !== 'undefined') {
-    try {
-      const baseArgs: BuildScenarioForecastRunArgs = {
-        scenarioId: baseScenario.id,
-        scenarioName: baseScenario.name ?? baseScenario.id,
-        scenarioKind: 'BASE',
+    const pipelineKey = [sharedInputsKey, scenario.id, customKey, overrideKey].join('||');
+    return {
+      cacheKey,
+      pipelineKey,
+      args: {
+        scenarioId: scenario.id,
+        scenarioName: scenario.name ?? scenario.id,
+        scenarioKind: scenario.kind,
         sourceMovements: source.movements,
-        adjustments: [],
-        manualEntries: [],
-        customRows: [],
-        overrides: [],
+        adjustments: bootstrap.adjustments,
+        manualEntries: bootstrap.manualEntries,
+        customRows: scenarioCustomRows,
+        overrides: scenarioOverrides,
         clients: props.clients,
         providers: props.providers,
         assumptions: props.assumptions,
@@ -557,50 +546,51 @@ async function runPreloadProjectionScenarioRuns(input: {
         initialCash,
         supplierInitialCash,
         minimumCash,
-        granularity: 'monthly',
-        includeManualEntries: false,
-      };
-      const heavyKeys = [
-        'sourceMovements', 'clients', 'providers', 'cxpRecords',
-        'purchaseReceipts', 'payrollCosts', 'cobranzaPayments', 'bajioStatements',
-      ] as const;
-      const heavy: Record<string, unknown> = {};
-      const light: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(baseArgs)) {
-        if ((heavyKeys as readonly string[]).includes(k)) heavy[k] = v;
-        else light[k] = v;
+        granularity: 'monthly' as const,
+      },
+    };
+  };
+
+  let seededActive = false;
+  await Promise.all([approvedScenario, baseScenario].map(async (scenario) => {
+    const { cacheKey } = buildWarmRun(scenario);
+    const cached = await loadScenarioRunFromPersistentCache(cacheKey);
+    if (cached) {
+      primeProjectionRunCache(cacheKey, cached);
+      if (scenario.id === approvedScenario.id) {
+        setScenarioRunPlaceholder(cached);
+        seededActive = true;
       }
-      const worker = new Worker(
-        new URL('../../../workers/scenarioForecastRun.worker.ts', import.meta.url),
-        { type: 'module' },
-      );
-      await new Promise<void>((resolve) => {
-        const done = (() => {
-          let settled = false;
-          return () => { if (settled) return; settled = true; worker.terminate(); resolve(); };
-        })();
-        const timeout = setTimeout(done, 20_000);
-        worker.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerResponse>) => {
-          clearTimeout(timeout);
-          if (event.data.result) setScenarioRunPlaceholder(event.data.result);
-          done();
-        };
-        worker.onerror = () => { clearTimeout(timeout); done(); };
-        const req: ScenarioForecastRunWorkerRequest = {
-          jobId: 1,
-          cacheKey: 'warmup:base',
-          scenarioId: baseScenario.id,
-          sourceVersion: 0,
-          pipelineKey: 'warmup:base:pipeline',
-          heavy: heavy as ScenarioForecastRunWorkerRequest['heavy'],
-          light: light as ScenarioForecastRunWorkerRequest['light'],
-        };
-        worker.postMessage(req);
+    }
+  }));
+
+  if (!seededActive) {
+    try {
+      const approved = buildWarmRun(approvedScenario);
+      const run = await requestScenarioRun(approved.cacheKey, approvedScenario.id, approved.args, {
+        pipelineKey: approved.pipelineKey,
+        priority: 'foreground',
       });
-    } catch {
-      /* best-effort: if the warm build fails, runCached falls back as before */
+      primeProjectionRunCache(approved.cacheKey, run);
+      setScenarioRunPlaceholder(run);
+      saveScenarioRunToPersistentCache(approved.cacheKey, run);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[projection.warmup] approved scenario warmup failed', err);
     }
   }
+
+  const base = buildWarmRun(baseScenario);
+  void requestScenarioRun(base.cacheKey, baseScenario.id, base.args, {
+    pipelineKey: base.pipelineKey,
+    priority: 'background',
+    placeholderMode: 'same-scenario',
+  })
+    .then((run) => {
+      primeProjectionRunCache(base.cacheKey, run);
+      saveScenarioRunToPersistentCache(base.cacheKey, run);
+    })
+    .catch(() => { /* background warmup best-effort */ });
 }
 
 /**
@@ -869,6 +859,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     manualEntries,
     taxStore,
     props.providers,
+    activeScenarioId,
     yearStart,
     yearEnd,
     today,
@@ -937,7 +928,11 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
           granularity: gran,
         }),
         persistRun,
-        pipelineKey,
+        {
+          pipelineKey,
+          priority: scenarioId === activeScenarioId ? 'foreground' : 'background',
+          placeholderMode: scenarioId === activeScenarioId ? 'any' : 'same-scenario',
+        },
       );
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -972,6 +967,7 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     () => buildRun(baseScenario.id, deferredGranularity),
     [buildRun, baseScenario.id, deferredGranularity],
   );
+  const baseRunIsPlaceholder = baseRun.scenarioId !== baseScenario.id;
   const activeRun = useMemo(
     () => (activeScenarioId === baseScenario.id ? baseRun : buildRun(activeScenarioId, deferredGranularity)),
     [buildRun, activeScenarioId, baseScenario.id, baseRun, deferredGranularity],
@@ -992,6 +988,9 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     if (comparisonScenarioId === activeScenarioId) return activeRun;
     return buildRun(comparisonScenarioId, deferredGranularity);
   }, [buildRun, comparisonScenarioId, baseScenario.id, baseRun, activeScenarioId, activeRun, deferredGranularity]);
+  const comparisonRunIsPlaceholder = Boolean(
+    comparisonRun && comparisonScenarioId && comparisonRun.scenarioId !== comparisonScenarioId,
+  );
 
   // Granularity pre-warm REMOVED (was the crash users hit ~2.5s after
   // Proyección mounts). It called buildRun(activeScenarioId, 'daily'|'weekly')
@@ -1004,9 +1003,15 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
 
   // KPIs.
   const summary = activeRun.summary;
-  const comparisonReference = comparisonRun ? comparisonRun.summary.finalCash : baseRun.summary.finalCash;
+  const comparisonReference = comparisonRun && !comparisonRunIsPlaceholder
+    ? comparisonRun.summary.finalCash
+    : baseRunIsPlaceholder
+      ? summary.finalCash
+      : baseRun.summary.finalCash;
   const finalCashDelta = summary.finalCash - comparisonReference;
-  const comparisonLabel = comparisonRun ? comparisonRun.name : baseRun.name;
+  const comparisonLabel = comparisonRun && !comparisonRunIsPlaceholder
+    ? comparisonRun.name
+    : baseRunIsPlaceholder ? 'Base' : baseRun.name;
   const probabilistic = useProbabilisticForecast(activeRun, summary.minimumCashRequired);
 
   // Rescatado del Dashboard: piso operativo + YTD del año en curso. El YTD
@@ -1177,10 +1182,10 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
         activeName={scenarios.find((s) => s.id === activeScenarioId)?.name ?? activeRun.name}
         activeFinalCash={activeRunIsPlaceholder ? 0 : summary.finalCash}
         comparisonScenarioId={comparisonScenarioId}
-        comparisonName={comparisonRun?.name ?? null}
-        comparisonFinalCash={comparisonRun?.summary.finalCash ?? null}
-        baseName={baseRun.name}
-        baseFinalCash={baseRun.summary.finalCash}
+        comparisonName={comparisonRun && !comparisonRunIsPlaceholder ? comparisonRun.name : null}
+        comparisonFinalCash={comparisonRun && !comparisonRunIsPlaceholder ? comparisonRun.summary.finalCash : null}
+        baseName={baseRunIsPlaceholder ? 'Base' : baseRun.name}
+        baseFinalCash={baseRunIsPlaceholder ? summary.finalCash : baseRun.summary.finalCash}
         onChangeComparison={(id) => startTransition(() => setComparisonScenarioId(id))}
       />
 
@@ -1288,75 +1293,81 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
       )}
 
       <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
-        <CashFlowChart
-          projection={activeRun}
-          baseProjection={activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
-          comparisonProjection={comparisonRun ?? undefined}
-          probabilisticProjection={probabilistic.run}
-          onNavigateToTax={props.onNavigateToTax}
-          operatingFloor={deferredGranularity === 'monthly' ? minimumExpense.totalMonthly : undefined}
-        />
+        <Suspense fallback={<ChartSkeleton />}>
+          <CashFlowChart
+            projection={activeRun}
+            baseProjection={baseRunIsPlaceholder || activeRun.scenarioId === baseRun.scenarioId ? undefined : baseRun}
+            comparisonProjection={comparisonRun && !comparisonRunIsPlaceholder ? comparisonRun : undefined}
+            probabilisticProjection={probabilistic.run}
+            onNavigateToTax={props.onNavigateToTax}
+            operatingFloor={deferredGranularity === 'monthly' ? minimumExpense.totalMonthly : undefined}
+          />
+        </Suspense>
       </DeferredMount>
       </>}
 
-      <MovementDrillDownDrawer
-        movement={drillMovement}
-        anchor={drillAnchor}
-        onClose={handleCloseDrawer}
-        invoiceContext={drawerInvoiceContext}
-        quickActions={drillMovement ? (
-          <QuickMovementActions
-            movement={drillMovement}
-            isDraft={activeScenario.kind === 'DRAFT'}
-            onShiftDate={() => commitQuickAdjustment(drillMovement, 'SHIFT_DATE')}
-            onAmountOverride={() => commitQuickAdjustment(drillMovement, 'AMOUNT_OVERRIDE')}
-            onSplit={() => commitQuickAdjustment(drillMovement, 'SPLIT_PAYMENT')}
-          />
-        ) : undefined}
-      />
+      <Suspense fallback={null}>
+        <MovementDrillDownDrawer
+          movement={drillMovement}
+          anchor={drillAnchor}
+          onClose={handleCloseDrawer}
+          invoiceContext={drawerInvoiceContext}
+          quickActions={drillMovement ? (
+            <QuickMovementActions
+              movement={drillMovement}
+              isDraft={activeScenario.kind === 'DRAFT'}
+              onShiftDate={() => commitQuickAdjustment(drillMovement, 'SHIFT_DATE')}
+              onAmountOverride={() => commitQuickAdjustment(drillMovement, 'AMOUNT_OVERRIDE')}
+              onSplit={() => commitQuickAdjustment(drillMovement, 'SPLIT_PAYMENT')}
+            />
+          ) : undefined}
+        />
+      </Suspense>
 
-      <MidasBubble
-        cia={props.companyCode}
-        asOfDate={today}
-        activeRun={activeRun}
-        providers={props.providers}
-        adjustments={storedAdjustments}
-        activeScenarioId={activeScenario.id}
-        activeScenarioKind={activeScenario.kind}
-        onAcceptProposal={(suggestion: MidasProposalSuggestion) => {
-          try {
-            const targetScenarioId = ensureEditableScenario(`MIDAS · ${suggestion.draft.name}`.slice(0, 60));
-            const adjustment = createFinancialAdjustment({
-              name: suggestion.draft.name,
-              scenarioIds: [targetScenarioId],
-              type: suggestion.draft.type,
-              targetType: suggestion.draft.targetType,
-              targetExpression: suggestion.draft.targetExpression,
-              reasonCode: suggestion.draft.reasonCode,
-              justification: suggestion.draft.justification,
-              deltaAmount: suggestion.draft.deltaAmount,
-              deltaDays: suggestion.draft.deltaDays,
-              percentageChange: suggestion.draft.percentageChange,
-              adjustedValue: suggestion.draft.adjustedValue,
-              createdBy: 'midas@senda.local',
-            });
-            setStoredAdjustments((current) => [
-              ...current,
-              {
-                ...adjustment,
-                impactSummary: {
-                  cashImpact: suggestion.estimatedCashImpact,
-                  deficitDaysReduced: 0,
-                  riskChange: 0,
+      <Suspense fallback={null}>
+        <MidasBubble
+          cia={props.companyCode}
+          asOfDate={today}
+          activeRun={activeRun}
+          providers={props.providers}
+          adjustments={storedAdjustments}
+          activeScenarioId={activeScenario.id}
+          activeScenarioKind={activeScenario.kind}
+          onAcceptProposal={(suggestion: MidasProposalSuggestion) => {
+            try {
+              const targetScenarioId = ensureEditableScenario(`MIDAS · ${suggestion.draft.name}`.slice(0, 60));
+              const adjustment = createFinancialAdjustment({
+                name: suggestion.draft.name,
+                scenarioIds: [targetScenarioId],
+                type: suggestion.draft.type,
+                targetType: suggestion.draft.targetType,
+                targetExpression: suggestion.draft.targetExpression,
+                reasonCode: suggestion.draft.reasonCode,
+                justification: suggestion.draft.justification,
+                deltaAmount: suggestion.draft.deltaAmount,
+                deltaDays: suggestion.draft.deltaDays,
+                percentageChange: suggestion.draft.percentageChange,
+                adjustedValue: suggestion.draft.adjustedValue,
+                createdBy: 'midas@senda.local',
+              });
+              setStoredAdjustments((current) => [
+                ...current,
+                {
+                  ...adjustment,
+                  impactSummary: {
+                    cashImpact: suggestion.estimatedCashImpact,
+                    deficitDaysReduced: 0,
+                    riskChange: 0,
+                  },
                 },
-              },
-            ]);
-            setStatusMessage(`MIDAS guardó propuesta "${adjustment.name}" como DRAFT.`);
-          } catch (err) {
-            alert(err instanceof Error ? err.message : 'No se pudo crear la propuesta.');
-          }
-        }}
-      />
+              ]);
+              setStatusMessage(`MIDAS guardó propuesta "${adjustment.name}" como DRAFT.`);
+            } catch (err) {
+              alert(err instanceof Error ? err.message : 'No se pudo crear la propuesta.');
+            }
+          }}
+        />
+      </Suspense>
     </div>
   );
 }

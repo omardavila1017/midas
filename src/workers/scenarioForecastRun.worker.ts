@@ -26,7 +26,26 @@ let cachedHeavyVersion = -1;
 // independent pipeline, sent from main thread). Two requests differing only
 // in granularity share the same pipeline → cache hit → skip the heavy
 // pipeline work (~1300ms savings on grain flip).
-let cachedPipeline: { key: string; result: ScenarioPipelineResult } | null = null;
+const PIPELINE_CACHE_LIMIT = 4;
+const cachedPipelines = new Map<string, ScenarioPipelineResult>();
+
+function getCachedPipeline(key: string): ScenarioPipelineResult | undefined {
+  const value = cachedPipelines.get(key);
+  if (!value) return undefined;
+  cachedPipelines.delete(key);
+  cachedPipelines.set(key, value);
+  return value;
+}
+
+function setCachedPipeline(key: string, result: ScenarioPipelineResult): void {
+  if (cachedPipelines.has(key)) cachedPipelines.delete(key);
+  cachedPipelines.set(key, result);
+  while (cachedPipelines.size > PIPELINE_CACHE_LIMIT) {
+    const oldest = cachedPipelines.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    cachedPipelines.delete(oldest);
+  }
+}
 
 self.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerRequest>) => {
   const { jobId, cacheKey, scenarioId, sourceVersion, pipelineKey, heavy, light } = event.data;
@@ -35,7 +54,7 @@ self.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerRequest>) => {
     cachedHeavy = heavy;
     cachedHeavyVersion = sourceVersion;
     // Heavy bundle changed → pipeline cache stale (movements/clients/etc differ).
-    cachedPipeline = null;
+    cachedPipelines.clear();
   }
 
   if (!cachedHeavy || cachedHeavyVersion !== sourceVersion) {
@@ -57,12 +76,13 @@ self.onmessage = (event: MessageEvent<ScenarioForecastRunWorkerRequest>) => {
     const args = { ...cachedHeavy, ...light } as BuildScenarioForecastRunArgs;
     let pipeline: ScenarioPipelineResult;
     let pipelineHit = false;
-    if (cachedPipeline && cachedPipeline.key === pipelineKey) {
-      pipeline = cachedPipeline.result;
+    const cachedPipeline = getCachedPipeline(pipelineKey);
+    if (cachedPipeline) {
+      pipeline = cachedPipeline;
       pipelineHit = true;
     } else {
       pipeline = buildScenarioPipeline(args);
-      cachedPipeline = { key: pipelineKey, result: pipeline };
+      setCachedPipeline(pipelineKey, pipeline);
     }
     const result = aggregateScenarioForecastRun(pipeline, args);
     const elapsed = performance.now() - t0;

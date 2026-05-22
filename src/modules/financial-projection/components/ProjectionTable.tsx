@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Eye } from 'lucide-react';
 import { fmtCurrency } from '../../../formatters';
 import {
@@ -30,6 +31,8 @@ const CONFIDENCE_OPTIONS: Array<{ value: ProjectionTableFilters['confidence']; l
   { value: 'LOW', label: 'Baja' },
   { value: 'EXPLORATORY', label: 'Exploratorio' },
 ];
+const INITIAL_VISIBLE_ROWS = 300;
+const ROW_INCREMENT = 300;
 
 /**
  * Tabla de movimientos proyectados. Antes tenía 13 columnas (fecha, tipo,
@@ -60,16 +63,25 @@ export function ProjectionTable({
    */
   onSelectMovement: (movement: FinancialMovement, anchor: DOMRect) => void;
 }) {
-  const filtered = movements.filter((movement) => {
-    const haystack = `${movement.counterpartyName ?? ''} ${movement.concept} ${movement.category}`.toLowerCase();
-    return (
-      (!filters.search || haystack.includes(filters.search.toLowerCase()))
-      && (filters.type === 'ALL' || movement.type === filters.type)
-      && (filters.category === 'ALL' || movement.category === filters.category)
-      && (filters.status === 'ALL' || movement.status === filters.status)
-      && (filters.confidence === 'ALL' || movement.confidenceBand === filters.confidence)
-    );
-  });
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_ROWS);
+  const filtered = useMemo(() => {
+    const needle = filters.search.trim().toLowerCase();
+    return movements.filter((movement) => {
+      const haystack = `${movement.counterpartyName ?? ''} ${movement.concept} ${movement.category}`.toLowerCase();
+      return (
+        (!needle || haystack.includes(needle))
+        && (filters.type === 'ALL' || movement.type === filters.type)
+        && (filters.category === 'ALL' || movement.category === filters.category)
+        && (filters.status === 'ALL' || movement.status === filters.status)
+        && (filters.confidence === 'ALL' || movement.confidenceBand === filters.confidence)
+      );
+    });
+  }, [movements, filters]);
+  useEffect(() => {
+    setVisibleLimit(INITIAL_VISIBLE_ROWS);
+  }, [filters, movements]);
+  const visibleRows = filtered.slice(0, visibleLimit);
+  const hiddenCount = Math.max(0, filtered.length - visibleRows.length);
 
   return (
     <section className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white">
@@ -137,7 +149,7 @@ export function ProjectionTable({
                 </td>
               </tr>
             )}
-            {filtered.map((movement) => {
+            {visibleRows.map((movement) => {
               const effective = effectiveAmount(movement);
               return (
                 <tr
@@ -201,6 +213,17 @@ export function ProjectionTable({
           </tbody>
         </table>
       </div>
+      {hiddenCount > 0 && (
+        <div className="border-t border-[var(--gray-200)] px-4 py-3 text-center">
+          <button
+            type="button"
+            onClick={() => setVisibleLimit((current) => current + ROW_INCREMENT)}
+            className="inline-flex h-9 items-center rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+          >
+            Mostrar {Math.min(ROW_INCREMENT, hiddenCount)} más de {hiddenCount}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

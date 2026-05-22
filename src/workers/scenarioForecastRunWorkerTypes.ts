@@ -59,3 +59,6 @@ export interface ScenarioForecastRunWorkerResponse {
    */
   needsHeavy?: boolean;
 }
+
+export type ScenarioRunPriority = 'foreground' | 'background';
+export type ScenarioRunPlaceholderMode = 'same-scenario' | 'any' | 'none';
