@@ -693,7 +693,6 @@ function cobranzaPayment(input: {
       diasAntiguedadFafv: 0,
       importeCobrado: app.importeCobrado,
       importeOriginalFactura: app.importeOriginalFactura,
-      importePteFactura: 0,
       tasaIva: app.tasaIva,
       importeIvaFacturaOriginal: app.importeIvaFacturaOriginal,
     })),

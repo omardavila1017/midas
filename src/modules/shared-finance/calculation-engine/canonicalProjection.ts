@@ -119,6 +119,14 @@ export interface CanonicalProjectionInputs {
    */
   paidCxpKeys?: Set<string>;
   /**
+   * Set de `${cia}::${noOrdenCompra}` de OCs cuya salida ya cruzó banco vía
+   * AuxiliarContable. La proyección de compras (purchase receipts) las
+   * descarta como egreso futuro — el dinero ya salió aunque CXP ya cerró el
+   * saldo. Cierra el gap: sin esto, OC pagada cuyo CXP fue purgado del JDE
+   * abierto se re-proyectaba indefinidamente.
+   */
+  paidPurchaseOrderKeys?: Set<string>;
+  /**
    * Mapa `bankMovementKey(line)` → enriquecimiento PagoProveedor. Cuando un
    * CARGO histórico empata con un pago a proveedor, se reclasifica como
    * AP_PAYMENT con el nombre del proveedor — en vez de caer al cubo
@@ -654,6 +662,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     companyCode: inputs.companyCode,
     asOfDate: inputs.asOfDate,
     excludeProviderIds: concursoProviderIds,
+    paidPurchaseOrderKeys: inputs.paidPurchaseOrderKeys,
     providers: inputs.providers,
   }));
   for (const month of futureMonths) {

@@ -13,7 +13,6 @@ function pago(overrides: Partial<PagoProveedorRecord> = {}): PagoProveedorRecord
     cuentaBanco: '70138708851',
     fechaPago: '2026-05-04',
     importePesos: 8695,
-    importeDolares: 0,
     moneda: 'MXP',
     batchPago: '84523896',
     claveProveedor: '3228',

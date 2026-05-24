@@ -49,6 +49,15 @@ export interface AuxiliarProjectionBridge {
   cobradaBancoKeys: Set<string>;
   /** `${cia}::${noFactura}::${noProveedor}` de CXPs pagadas. */
   paidCxpKeys: Set<string>;
+  /**
+   * `${cia}::${noOrdenCompra}` de OCs cuya salida ya está posteada y cruzada
+   * al banco vía AuxiliarContable. La proyección de compras NO las vuelve a
+   * proyectar como egreso futuro — el dinero ya salió. Cierra el gap en que
+   * una OC pagada queda fuera del CXP abierto (JDE cierra el saldo) y la
+   * proyección la seguía mostrando como pendiente porque `purchaseMatchesCxp`
+   * solo cruza vs CXP, no vs el libro mayor.
+   */
+  paidPurchaseOrderKeys: Set<string>;
   /** `bankMovementKey` → enriquecimiento del CARGO. */
   cargoEnrichments: Map<string, BankOutflowEnrichment>;
   /** Enriquecimiento de cada ABONO cruzado a una factura. */
@@ -56,11 +65,13 @@ export interface AuxiliarProjectionBridge {
 }
 
 const FACTURA_PREFIX = 'factura:';
+const OC_PREFIX = 'oc:';
 
 export function emptyAuxiliarProjectionBridge(): AuxiliarProjectionBridge {
   return {
     cobradaBancoKeys: new Set(),
     paidCxpKeys: new Set(),
+    paidPurchaseOrderKeys: new Set(),
     cargoEnrichments: new Map(),
     abonoEnrichments: [],
   };
@@ -77,10 +88,15 @@ export function adaptAuxiliarForProjection(
   // Documentos confirmados contra banco, separados por dirección de flujo.
   const confirmedEgresoFacturas = new Set<string>();
   for (const [key, conf] of result.sourceConfirmation) {
-    if (!conf.confirmed || !key.startsWith(FACTURA_PREFIX)) continue;
-    const facturaId = key.slice(FACTURA_PREFIX.length); // `${cia}::${noFactura}`
-    if (conf.flujo === 'ingreso') bridge.cobradaBancoKeys.add(facturaId);
-    else confirmedEgresoFacturas.add(facturaId);
+    if (!conf.confirmed) continue;
+    if (key.startsWith(FACTURA_PREFIX)) {
+      const facturaId = key.slice(FACTURA_PREFIX.length); // `${cia}::${noFactura}`
+      if (conf.flujo === 'ingreso') bridge.cobradaBancoKeys.add(facturaId);
+      else confirmedEgresoFacturas.add(facturaId);
+    } else if (key.startsWith(OC_PREFIX) && conf.flujo === 'egreso') {
+      // `${cia}::${noOrdenCompra}` — la OC ya cruzó como salida en banco.
+      bridge.paidPurchaseOrderKeys.add(key.slice(OC_PREFIX.length));
+    }
   }
 
   // CXP pagada: su factura aparece como egreso confirmado en el libro mayor.

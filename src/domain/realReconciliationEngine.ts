@@ -250,7 +250,6 @@ export interface PaymentApplicationReconciliation {
   fechaVencimiento: string;
   importeCobrado: number;
   importeOriginalFactura: number;
-  importePteFactura: number;
   tasaIva: string;
   importeIvaFacturaOriginal: number;
   ivaCausadoProporcional: number;
@@ -965,7 +964,6 @@ function paymentApplicationView(
     fechaVencimiento: app.fechaVencimiento,
     importeCobrado: app.importeCobrado,
     importeOriginalFactura: app.importeOriginalFactura,
-    importePteFactura: app.importePteFactura,
     tasaIva: app.tasaIva,
     importeIvaFacturaOriginal: app.importeIvaFacturaOriginal,
     ivaCausadoProporcional: ivaOriginal * ratio,

@@ -99,6 +99,13 @@ export function buildPurchaseReceiptMovements(input: {
    */
   excludeProviderIds?: Set<string>;
   /**
+   * Set `${cia}::${noOrdenCompra}` de OCs ya cruzadas a banco vía
+   * AuxiliarContable. El dinero salió aunque CXP haya cerrado el saldo. Sin
+   * este filtro, una OC pagada quedaría re-proyectada porque
+   * `purchaseMatchesCxp` solo ve CXP abierto.
+   */
+  paidPurchaseOrderKeys?: Set<string>;
+  /**
    * Catálogo de proveedores. Si se pasa, cada egreso de OC se enriquece con
    * las reglas del proveedor (flexibilidad, criticidad, tipo) igual que CXP:
    * un proveedor `inamovible` bloquea el egreso para que el scheduler no lo
@@ -110,6 +117,7 @@ export function buildPurchaseReceiptMovements(input: {
   const scopedCxp = filterCxpByCompany(input.cxpRecords, input.companyCode);
   const cxpBySupplier = buildJdeSupplierIndex(scopedCxp);
   const excludeSet = input.excludeProviderIds;
+  const paidOcKeys = input.paidPurchaseOrderKeys;
   const providerIndex = input.providers && input.providers.length > 0
     ? buildProviderIndex(input.providers)
     : undefined;
@@ -117,6 +125,7 @@ export function buildPurchaseReceiptMovements(input: {
     .filter((record) => input.companyCode === 'all' || !input.companyCode || normalizeCia(record.cia) === normalizeCia(input.companyCode))
     .filter((record) => !record.isCancelled && record.amountMxn > 0)
     .filter((record) => !excludeSet || !excludeSet.has((record.noProveedor || '').trim().toUpperCase()))
+    .filter((record) => !paidOcKeys || !record.purchaseOrderNo || !paidOcKeys.has(`${normalizeCia(record.cia)}::${record.purchaseOrderNo}`))
     .filter((record) => {
       const candidates = cxpBySupplier.get(normalizeJde(record.noProveedor));
       return !candidates || !candidates.some((cxp) => purchaseMatchesCxp(record, cxp));

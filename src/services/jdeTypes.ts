@@ -289,8 +289,6 @@ export interface CobranzaRecord {
    * Campo agregado al endpoint el 2026-05-19.
    */
   frecuenciaFacturacionNombre?: string;
-  /** Registro original devuelto por el API, útil para depurar campos nuevos. */
-  raw?: Record<string, unknown>;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -317,7 +315,6 @@ export interface CobranzaPaymentApplication {
   diasAntiguedadFafv: number;
   importeCobrado: number;
   importeOriginalFactura: number;
-  importePteFactura: number;
   tasaIva: string;
   importeIvaFacturaOriginal: number;
 }
@@ -657,8 +654,6 @@ export interface PagoProveedorRecord {
   fechaPago: string;
   /** Importe pagado en pesos. */
   importePesos: number;
-  /** Importe pagado en dólares (si aplica). */
-  importeDolares: number;
   /** Moneda (MXP/USD). */
   moneda: string;
   /** ID de batch JDE que agrupó este pago. */

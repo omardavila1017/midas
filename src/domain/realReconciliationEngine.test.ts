@@ -84,7 +84,6 @@ function makeApplication(p: Partial<CobranzaPaymentApplication> & Pick<CobranzaP
     fechaVencimiento: p.fechaVencimiento ?? '2026-02-01',
     diasAntiguedadFafv: p.diasAntiguedadFafv ?? 0,
     importeOriginalFactura: p.importeOriginalFactura ?? p.importeCobrado,
-    importePteFactura: p.importePteFactura ?? 0,
     tasaIva: p.tasaIva ?? 'IVA16',
     importeIvaFacturaOriginal: p.importeIvaFacturaOriginal ?? 0,
     ...p,

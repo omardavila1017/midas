@@ -128,4 +128,30 @@ describe('buildPurchaseReceiptMovements — provider catalog rules', () => {
     const [m] = buildMovements([provider({ type: 'Combustibles', flexibility: 'flexible' })]);
     expect(m.providerCategory).toBe('Combustibles');
   });
+
+  it('skips OCs already cleared via AuxiliarContable (paidPurchaseOrderKeys)', () => {
+    const receipts = comprasToPurchaseReceipts([comprasRecord()], { asOfDate: '2026-04-15' });
+    const paid = new Set(['00001::18889']);
+    const movements = buildPurchaseReceiptMovements({
+      purchaseReceipts: receipts,
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: '2026-04-15',
+      paidPurchaseOrderKeys: paid,
+    });
+    expect(movements).toHaveLength(0);
+  });
+
+  it('keeps OCs whose noOrden is NOT in paidPurchaseOrderKeys', () => {
+    const receipts = comprasToPurchaseReceipts([comprasRecord()], { asOfDate: '2026-04-15' });
+    const paid = new Set(['00001::99999']);
+    const movements = buildPurchaseReceiptMovements({
+      purchaseReceipts: receipts,
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: '2026-04-15',
+      paidPurchaseOrderKeys: paid,
+    });
+    expect(movements).toHaveLength(1);
+  });
 });

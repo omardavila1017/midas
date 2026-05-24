@@ -1189,6 +1189,26 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     return runsWithOverridesByScenarioId.get(scenarioId)?.summary.finalCash ?? 0;
   };
 
+  // KPI ingresos CITI vs Federal — sumar el run activo en su ventana forward
+  // (después del asOfDate). La subcategoría la resuelve el motor canónico
+  // (`resolveInflowSubcategory` en canonicalProjection.ts) y la taxonomía de
+  // bucket la confirma `inflowBucketFor` en planningRowTaxonomy.ts. Filtro
+  // forward para evitar mezclar histórico ya cobrado con expectativa futura.
+  const inflowByEmpresa = useMemo(() => {
+    const totals = { citi: 0, federal: 0, otros: 0 };
+    for (const movement of activeRun.movements) {
+      if (movement.type !== 'INFLOW') continue;
+      if (effectiveMovementDate(movement) < props.today) continue;
+      const amount = effectiveAmount(movement);
+      if (amount <= 0) continue;
+      const sub = movement.subcategory;
+      if (sub === 'Federal') totals.federal += amount;
+      else if (sub === 'Clientes Citi') totals.citi += amount;
+      else totals.otros += amount;
+    }
+    return totals;
+  }, [activeRun.movements, props.today]);
+
   const pendingChangeCount = activeDraftDiff.length;
   const mergeRun = mergeOpen ? runsWithOverridesByScenarioId.get(mergeOpen) : null;
 
@@ -1261,7 +1281,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         <FirstSimulationNudge onCreateDraft={handleCreateDraft} />
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard
           label="Caja final"
           value={fmtCurrency(summary.finalCash)}
@@ -1286,6 +1306,19 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           icon={<TrendingUp className="w-4 h-4" />}
           color={toneByDelta(finalCashDelta)}
           sublabel={isDraft ? 'Propuesta activa' : 'Misma referencia'}
+        />
+        <KpiCard
+          label="Ingresos por empresa"
+          value={fmtCompact(inflowByEmpresa.citi + inflowByEmpresa.federal + inflowByEmpresa.otros)}
+          icon={<TrendingUp className="w-4 h-4" />}
+          sublabel="Forward (post-hoy)"
+          breakdown={[
+            { label: 'CITI', value: fmtCompact(inflowByEmpresa.citi) },
+            { label: 'Federal', value: fmtCompact(inflowByEmpresa.federal) },
+            ...(inflowByEmpresa.otros > 0
+              ? [{ label: 'Otros', value: fmtCompact(inflowByEmpresa.otros) }]
+              : []),
+          ]}
         />
       </div>
 

@@ -201,6 +201,36 @@ function unwrapList(raw: unknown): RawRecord[] {
   return [];
 }
 
+/**
+ * Strip in-place todos los campos del raw que no estén en la whitelist
+ * (case-insensitive). Reduce huella de memoria transitoria al parsear
+ * payloads grandes (auxiliar contable trae ~40 campos por línea; el mapper
+ * solo consume ~25). Es defensivo, no cambia el contrato — fields ELIMINAR
+ * de la tabla quedan documentados aquí.
+ *
+ * Mutación in-place (delete) para evitar reasignar 100k+ objetos cuando el
+ * raw ya está en heap por JSON.parse. Trade-off conocido: dispara
+ * polimorfismo de hidden class en V8, pero para arrays que se mapean una sola
+ * vez y se descartan, el costo es menor que reallocar.
+ *
+ * Mantener cada `KEPT_*_FIELDS` set en sync con los aliases que el mapper
+ * correspondiente pasa a `pick()`. Si agregas un alias nuevo al mapper sin
+ * actualizar el set, ese campo llegará como `undefined` al mapper.
+ */
+function stripToWhitelist(row: RawRecord, allowedLower: ReadonlySet<string>): RawRecord {
+  for (const key of Object.keys(row)) {
+    if (!allowedLower.has(key.toLowerCase())) {
+      delete row[key];
+    }
+  }
+  return row;
+}
+
+function stripAllToWhitelist(rows: RawRecord[], allowedLower: ReadonlySet<string>): RawRecord[] {
+  for (const row of rows) stripToWhitelist(row, allowedLower);
+  return rows;
+}
+
 function splitIntoFixedDayWindows(from: string, to: string, windowDays: number): Array<{ from: string; to: string }> {
   const windows: Array<{ from: string; to: string }> = [];
   const start = new Date(from + 'T00:00:00Z');
@@ -957,6 +987,49 @@ export async function fetchCompanies(config: JdeClientConfig = {}): Promise<Comp
  *     factura ya fue cobrada en JDE. Para facturas pendientes computamos
  *     `today − fechaVencimiento` localmente.
  */
+/**
+ * Whitelist de campos consumidos por mapCobranza. Mantener en sync con los
+ * aliases del mapper. JDE entrega ~30 campos por factura; con 10k+ facturas
+ * abiertas el stripping ahorra heap transitorio durante el parse.
+ */
+const KEPT_COBRANZA_FIELDS = new Set<string>([
+  'cia', 'compania', 'company',
+  'nocliente', 'no_cliente', 'nocte', 'cliente', 'customerno', 'customer',
+  'nombrecliente', 'nombre_cliente', 'nombre', 'razonsocial', 'razon_social', 'customername',
+  'rfc',
+  'nofactura', 'no_factura', 'factura', 'invoice', 'invoiceno',
+  'fechafactura', 'fecha_factura', 'fechaemision', 'fecha_emision',
+  'fechavence', 'fecha_vence', 'fechavencimiento', 'fecha_vencimiento', 'duedate',
+  'fechacobro', 'fecha_cobro', 'fecha_pago', 'fechaprogramacioncobro',
+  'fechaprogcobro', 'fechacobrado',
+  'fechacontable', 'fecha_contable',
+  'diasvencida', 'dias_vencida', 'diasvencido', 'dias_vencido',
+  'dias_fecha_vencimiento_vs_fecha_pago',
+  'importebrutopesos', 'importe_bruto_pesos', 'importebruto',
+  'importe_factura', 'monto', 'amount',
+  'importependientepesos', 'importe_pendiente_pesos', 'importependiente',
+  'importe_pendiente', 'saldopendiente', 'saldo_pendiente',
+  'importebrutodolares', 'importe_bruto_dolares',
+  'importependientedolares', 'importe_pendiente_dolares',
+  'moneda', 'currency',
+  'condpago', 'cond_pago', 'condicionpago',
+  'estatus', 'estado', 'edocobro', 'edo_cobro', 'status',
+  'tipocambio', 'tipo_cambio', 'tc',
+  'tasafiscal', 'tasa_fiscal',
+  'subtotal', 'sub_total',
+  'importeiva', 'importe_iva',
+  'importeretencion', 'importe_retencion',
+  'uuidfiscal', 'uuid_fiscal',
+  'diascredito', 'dias_credito',
+  'noclientepadre', 'no_cliente_padre',
+  'nombreclientepadre', 'nombre_cliente_padre',
+  'diapagoclave', 'clavediapagocc13', 'clave_dia_pago_cc13',
+  'diapagonombre', 'nombrediapagocc13', 'nombre_dia_pago_cc13',
+  'frecuenciafacturacionclave', 'clavefrecuenciafacturacioncc17', 'clave_frecuencia_facturacion_cc17',
+  'frecuenciafacturacionnombre', 'nombrefrecuenciafacturacioncc17', 'nombre_frecuencia_facturacion_cc17',
+  'norecibosepagofactura', 'no_recibo_se_pago_factura',
+]);
+
 function mapCobranza(raw: RawRecord): CobranzaRecord {
   // ── Importes ── el campo "Importe_Factura" es el gross final (subtotal +
   // IVA − retenciones). Es lo que se compara contra el ABONO bancario
@@ -1153,7 +1226,7 @@ export async function fetchCobranza(
   const body: CobranzaRequest = { ...req, cia: ciaWithComma };
 
   const raw = await jdeClient.post<unknown>('/cobranza', body, config);
-  const list = unwrapList(raw);
+  const list = stripAllToWhitelist(unwrapList(raw), KEPT_COBRANZA_FIELDS);
 
   // Log de diagnóstico — la primera vez que esta función responde con N
   // registros, mostramos el primero en la consola para que el equipo pueda
@@ -1185,6 +1258,44 @@ export async function fetchCobranza(
 // 5. Indicadores de Cobranza (recibos / aplicaciones)
 // ───────────────────────────────────────────────────────────────
 
+/**
+ * Whitelist de campos consumidos por mapCobranzaPaymentApplication +
+ * mapCobranzaPaymentHeader. Mantener en sync con los aliases de ambos
+ * mappers. `Tipo_Cliente` está en la respuesta pero no se usa (cero refs);
+ * `Importe_Pte_Factura` se eliminó del tipo el 2026-05-24 (se mapeaba pero
+ * jamás se leía en producción) — ambos quedan fuera del whitelist.
+ *
+ * Nota: las llaves del API vienen con espacios (`Id Pago`, `No Factura`) y
+ * separadores variables; `pick()` normaliza por lowercase. Aquí guardamos
+ * `id pago` con espacio explícito porque `stripToWhitelist` compara por
+ * lowercase exacto del key recibido.
+ */
+const KEPT_INDICADORES_FIELDS = new Set<string>([
+  'id pago', 'id_pago', 'idpago',
+  'cia', 'compania',
+  'no recibo', 'no_recibo', 'norecibo',
+  'fecha cobro', 'fecha_cobro', 'fechacobro',
+  'fecha contable', 'fecha_contable', 'fechacontable',
+  'cta bancaria', 'cta_bancaria', 'cuenta bancaria', 'cuenta_bancaria', 'cuentabancaria',
+  'banco',
+  'importe recibo', 'importe_recibo', 'importerecibo',
+  'pendiente de aplicar', 'pendiente_de_aplicar', 'pendienteaplicar',
+  'no cliente', 'no_cliente', 'nocliente',
+  'cliente',
+  'no batch', 'no_batch', 'nobatch',
+  'tipo cambio', 'tipo_cambio', 'tipocambio',
+  'fecha aplicacion', 'fecha_aplicacion', 'fechaaplicacion',
+  'tipo docto', 'tipo_docto', 'tipodocto',
+  'no factura', 'no_factura', 'nofactura', 'factura',
+  'fecha factura', 'fecha_factura', 'fechafactura',
+  'fecha vencimiento', 'fecha_vencimiento', 'fechavencimiento',
+  'dias antiguedad fafv', 'dias_antiguedad_fafv', 'diasantiguedadfafv',
+  'importe cobrado', 'importe_cobrado', 'importecobrado',
+  'importe original factura', 'importe_original_factura', 'importeoriginalfactura',
+  'tasa iva', 'tasa_iva', 'tasaiva',
+  'importe iva factura original', 'importe_iva_factura_original', 'importeivafacturaoriginal',
+]);
+
 function mapCobranzaPaymentApplication(raw: RawRecord, idPago: string, cia: string): CobranzaPaymentApplication | null {
   const noFactura = toStr(pick(raw, [
     'No Factura', 'No_Factura', 'noFactura', 'no_factura', 'factura',
@@ -1205,7 +1316,6 @@ function mapCobranzaPaymentApplication(raw: RawRecord, idPago: string, cia: stri
     diasAntiguedadFafv: toNum(pick(raw, ['Dias Antiguedad FAFV', 'Dias_Antiguedad_FAFV', 'diasAntiguedadFafv'])),
     importeCobrado: toNum(pick(raw, ['Importe Cobrado', 'Importe_Cobrado', 'importeCobrado', 'importe_cobrado'])),
     importeOriginalFactura: toNum(pick(raw, ['Importe Original Factura', 'Importe_Original_Factura', 'importeOriginalFactura'])),
-    importePteFactura: toNum(pick(raw, ['Importe Pte Factura', 'Importe_Pte_Factura', 'importePteFactura'])),
     tasaIva: toStr(pick(raw, ['tasa iva', 'tasa_iva', 'tasaIva', 'Tasa_IVA'])),
     importeIvaFacturaOriginal: toNum(pick(raw, [
       'Importe Iva Factura original',
@@ -1277,7 +1387,8 @@ export async function fetchIndicadoresCobranza(
   config: JdeClientConfig = {},
 ): Promise<CobranzaPayment[]> {
   const raw = await jdeClient.post<unknown>('/cobranzaindicadores', req, withLongRunningDefaults(config));
-  return normalizeCobranzaPayments(unwrapList(raw), req.cia);
+  const rows = stripAllToWhitelist(unwrapList(raw), KEPT_INDICADORES_FIELDS);
+  return normalizeCobranzaPayments(rows, req.cia);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -1302,6 +1413,43 @@ function addDaysIso(iso: string, days: number): string {
   d.setUTCDate(d.getUTCDate() + (Number.isFinite(days) ? Math.floor(days) : 0));
   return d.toISOString().slice(0, 10);
 }
+
+/**
+ * Whitelist de campos consumidos por mapCompras. Mantener en sync con los
+ * aliases del mapper. `Tipo_Cliente` aparece en la respuesta de /compras pero
+ * NO se usa (cero refs en código) — se descarta aquí explícitamente.
+ */
+const KEPT_COMPRAS_FIELDS = new Set<string>([
+  'compañia', 'compania', 'cia', 'company',
+  'c_proveedor', 'noproveedor',
+  'n_proveedor', 'nombreproveedor',
+  'n_orden', 'noorden',
+  't_orden', 'tipoorden',
+  'd_t_orden', 'desctipoorden',
+  'l_orden', 'lineaorden',
+  'c_producto', 'noproducto',
+  'd_producto', 'descproducto',
+  'concepto',
+  'cantidad',
+  'precio_u', 'preciounitario',
+  'precio_t', 'importetotal', 'importe',
+  't_moneda', 'moneda', 'currency',
+  'tipo_cambio', 'tipocambio',
+  'f_orden', 'f_pedido', 'fechapedido',
+  'f_recepcion', 'f_recepción', 'fecharecepcion',
+  'f_cancelada', 'fechacancelada',
+  'd_credito', 'diascredito',
+  'n_factura', 'nofactura',
+  'centro_costos', 'centrocostos',
+  'categoria',
+  'desc_categoria', 'desccategoria',
+  'familia',
+  'desc_familia', 'descfamilia',
+  'subfamilia', 'sub_familia',
+  'desc_subfamilia', 'desc_sub_familia', 'descsubfamilia',
+  'edo_sig', 'estadosiguiente',
+  'tasa_fiscal', 'tasafiscal',
+]);
 
 function mapCompras(raw: RawRecord): ComprasRecord {
   // El nuevo servicio (dev 2026-05-19) manda la fecha de pedido como
@@ -1366,7 +1514,8 @@ export async function fetchCompras(
   config: JdeClientConfig = {},
 ): Promise<ComprasRecord[]> {
   const raw = await jdeClient.post<unknown>('/compras', req, config);
-  return dropExcludedByCia(unwrapList(raw).map(mapCompras));
+  const rows = stripAllToWhitelist(unwrapList(raw), KEPT_COMPRAS_FIELDS);
+  return dropExcludedByCia(rows.map(mapCompras));
 }
 
 /**
@@ -1468,6 +1617,49 @@ function parseDmyDate(v: unknown): string {
   return isSentinelJdeDate(iso) ? '' : iso;
 }
 
+/**
+ * Whitelist de campos consumidos por mapAuxiliarContable. Mantener en sync
+ * con los aliases del mapper. La respuesta JDE trae ~40 campos por línea;
+ * stripping in-place reduce huella de heap durante el parse de batches grandes
+ * (el reconciliador histórico procesa ~2 años × ~100k líneas por cía).
+ *
+ * Documentación de descartes en CLAUDE.md (tabla 2026-05-24): Unidad_Negocios,
+ * Nivel_Cuenta, periodo, ano, Sublibro*, No_direccion, Presupuesto, contaAF,
+ * activo, no_unidad, Unidades, originador/Ultimo_Modifica_Batch,
+ * Fecha_*_Batch, Hora_Modifica, Ubicación/Almacen/AlmaFilial, Orden_Venta,
+ * Tipo_OV, Refacturacion, CodigoCategoria* y CC_Centro_Costos_46/47.
+ */
+const KEPT_AUXILIAR_FIELDS = new Set<string>([
+  'cia', 'compañia', 'compania', 'company',
+  'cuenta', 'cuentacontable',
+  'idcuenta', 'id_cuenta',
+  'cuenta_objeto', 'cuentaobjeto',
+  'nombre_cta', 'nombrecuenta',
+  'cuenta_banco', 'cuentabanco',
+  'tipo_docto', 'tipodocto',
+  'no_docto', 'nodocto',
+  'no_factura', 'nofactura',
+  'no_orden_compra', 'noordencompra',
+  'fecha_contable_ddmmaa', 'fecha_contable', 'fechacontable',
+  'tipo_libro', 'tipolibro',
+  'no_batch', 'nobatch',
+  'tipo_batch', 'tipobatch',
+  'estatus_conciliado', 'estatusconciliado',
+  'importe',
+  'moneda', 'currency',
+  'tipo_cambio', 'tipocambio',
+  'posteo',
+  'reversa',
+  'concepto',
+  'explicacion', 'explicación',
+  'nombre',
+  'tipo_pago', 'tipopago',
+  'no_pago', 'nopago',
+  'fecha_pago_ddmmaa', 'fecha_pago', 'fechapago',
+  'documento_original', 'documentooriginal',
+  'importe_original', 'importeoriginal',
+]);
+
 function mapAuxiliarContable(raw: RawRecord): AuxiliarContableRecord {
   return {
     cia:               normalizeCia(pick(raw, ['Cia', 'cia', 'Compañia', 'Compania', 'compania', 'company'])),
@@ -1515,17 +1707,23 @@ export async function fetchAuxiliarContable(
   // El path debe ir en PascalCase exacto: el endpoint JDE está registrado
   // como /JDEdwards/AuxiliarContable y responde 404 a `/auxiliarcontable`.
   const raw = await jdeClient.post<unknown>('/AuxiliarContable', req, config);
-  return dropExcludedByCia(unwrapList(raw).map(mapAuxiliarContable));
+  const rows = stripAllToWhitelist(unwrapList(raw), KEPT_AUXILIAR_FIELDS);
+  return dropExcludedByCia(rows.map(mapAuxiliarContable));
 }
 
 /**
- * Fetch del auxiliar contable de UNA compañía pidiendo MES POR MES con cache
- * por mes calendario (mismo patrón que `fetchComprasRange`).
+ * Fetch del auxiliar contable de UNA compañía pidiendo DÍA POR DÍA con cache
+ * por día calendario (mismo patrón que el loader de estados de cuenta).
  *
- * `params` (tl/nr/objIni/objFin) son constantes fijas para la conciliación
- * histórica — viven en `domain/auxiliarReconciliationConfig.ts`. La key de
- * cache (`auxiliarcontable.{cia}.{YYYY-MM}`) NO incluye `params`: si algún
- * caller variara `params` colisionaría — hoy son fijos, así que es seguro.
+ * El API rebota con rangos de mes — solo procesa un día por request, así que
+ * `fechaInicial === fechaFinal` en cada llamada. Días pasados se sirven del
+ * cache IDB (`auxiliarcontable.{cia}.{YYYY-MM-DD}`); el primer backfill es
+ * pesado pero queda cacheado.
+ *
+ * `params` (tl/nr/objetos) son constantes fijas — viven en
+ * `domain/auxiliarReconciliationConfig.ts`. El API tampoco acepta un rango de
+ * objeto (`objIni` debe igualar `objFin`): se hace UNA request por objeto
+ * (Caja 1010 + Bancos 1020) y se mergea.
  *
  * Deduplica por `(cia, idCuenta, noDocto, tipoDocto)`.
  */
@@ -1533,7 +1731,7 @@ export async function fetchAuxiliarContableRange(
   cia: string,
   from: string,
   to: string,
-  params: { tl: string; nr: number; objIni: string; objFin: string },
+  params: { tl: string; nr: number; objetos: readonly string[] },
   options: {
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
@@ -1543,17 +1741,28 @@ export async function fetchAuxiliarContableRange(
   const config = options.config ?? {};
 
   const MAX_ATTEMPTS = 3;
-  const fetchMonthWithRetry = async (
-    monthFrom: string,
-    monthTo: string,
-  ): Promise<AuxiliarContableRecord[]> => {
+  const fetchDayWithRetry = async (day: string): Promise<AuxiliarContableRecord[]> => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        return await fetchAuxiliarContable(
-          { cia, fechaInicial: monthFrom, fechaFinal: monthTo, ...params },
-          config,
+        // Una request por objeto contable — el API rechaza objIni≠objFin.
+        const perObjeto = await Promise.all(
+          params.objetos.map((objeto) =>
+            fetchAuxiliarContable(
+              {
+                cia,
+                fechaInicial: day,
+                fechaFinal: day,
+                tl: params.tl,
+                nr: params.nr,
+                objIni: objeto,
+                objFin: objeto,
+              },
+              config,
+            ),
+          ),
         );
+        return perObjeto.flat();
       } catch (err) {
         lastErr = err;
         if (attempt === MAX_ATTEMPTS) break;
@@ -1564,11 +1773,11 @@ export async function fetchAuxiliarContableRange(
     throw lastErr;
   };
 
-  const all = await fetchRangeWithMonthlyCache<AuxiliarContableRecord>('auxiliarcontable', {
+  const all = await fetchRangeWithDailyCache<AuxiliarContableRecord>('auxiliarcontable', {
     from,
     to,
     cia,
-    fetchMonth: fetchMonthWithRetry,
+    fetchDay: fetchDayWithRetry,
     onProgress: options.onProgress,
     concurrency: options.concurrency ?? 4,
   });
@@ -1754,6 +1963,35 @@ function inferCashTreatment(tipoConcepto: string): PayrollCashTreatment {
   return 'NON_CASH';
 }
 
+/**
+ * Whitelist de campos consumidos por mapNominaRow. Mantener en sync con los
+ * aliases del mapper.
+ *
+ * IMPORTANTE — desviación de la tabla 2026-05-24: la tabla del usuario marcó
+ * `TipoNomina` y `TipoConcepto` como ELIMINAR contando 4-6 refs cruda. Pero
+ * el campo mapeado (`payrollType` / `conceptType`) tiene ~20+ refs en
+ * payrollModuleService (huella dedup `year|month|cia|payrollType`,
+ * refinement IMSS/ISR, dashboard), sourceRecords (id movement, ruleApplied,
+ * filtro DEDUCCION) y PayrollDashboard (filtro UI). Removerlos rompería el
+ * dashboard y la clasificación fina de IMSS/ISR/préstamos. Se conservan.
+ */
+const KEPT_NOMINA_FIELDS = new Set<string>([
+  'idempresa', 'id_empresa', 'cia', 'compania',
+  'empresa', 'nombreempresa', 'razonsocial',
+  'monto', 'importe', 'amount',
+  'periodo', 'numperiodo',
+  'mes',
+  'idconcepto', 'id_concepto',
+  'concepto', 'nombreconcepto',
+  'tiponomina', 'tipo_nomina',
+  'tipoconcepto', 'tipo_concepto',
+  'fechainical', 'fechainicial', 'fecha_inicial',
+  'fechafinal', 'fecha_final',
+  'fechapago', 'fecha_pago',
+  'anio', 'year',
+  'mes_num', 'nummes', 'monthnumber',
+]);
+
 function mapNominaRow(raw: RawRecord): PayrollCostRecord {
   const idEmpresaRaw = pick(raw, ['IDEmpresa', 'idEmpresa', 'id_empresa', 'cia', 'compania']);
   const empresa = toStr(pick(raw, ['Empresa', 'empresa', 'nombreEmpresa', 'razonSocial']));
@@ -1873,7 +2111,8 @@ export async function fetchNomina(
   };
   const fetchOne = async (r: NominaRequest): Promise<PayrollCostRecord[]> => {
     const raw = await jdeClient.post<unknown>('/Nomina', r, merged);
-    return dropExcludedByCia(unwrapList(raw).map(mapNominaRow));
+    const rows = stripAllToWhitelist(unwrapList(raw), KEPT_NOMINA_FIELDS);
+    return dropExcludedByCia(rows.map(mapNominaRow));
   };
 
   const fetchWithRetry = async (r: NominaRequest): Promise<PayrollCostRecord[]> => {
@@ -1958,6 +2197,31 @@ function trimDmyDate(v: unknown): string {
   return trimIsoDate(v);
 }
 
+/**
+ * Whitelist de campos consumidos por mapPagoProveedor. `Importe_Pago_Dolares`
+ * se removió del tipo el 2026-05-24 (cero refs en producción, siempre 0 en
+ * MXP) — queda fuera del whitelist y del mapper.
+ */
+const KEPT_PAGOPROVEEDOR_FIELDS = new Set<string>([
+  'tipo_pago', 'tipopago',
+  'no_pago', 'nopago',
+  'no_cia', 'nocia', 'cia', 'compania',
+  'nombre_cia', 'nombrecia',
+  'cuenta_bancaria', 'cuentabancaria',
+  'cuenta_banco', 'cuentabanco',
+  'fecha_pago', 'fechapago',
+  'importe_pago_pesos', 'importepesos',
+  'moneda', 'currency',
+  'batch_pago', 'batchpago',
+  'clave_proveedor', 'claveproveedor',
+  'rfc_proveedor', 'rfcproveedor',
+  'nombre_proveedor', 'nombreproveedor',
+  'tipo_busqueda', 'tipobusqueda',
+  'clasificacion_proveedor', 'clasificacionproveedor',
+  'clasificacion_proveedor_financiera', 'clasificacionproveedorfinanciera',
+  'comentario_pago', 'comentariopago',
+]);
+
 function mapPagoProveedor(raw: RawRecord): PagoProveedorRecord {
   return {
     tipoPago:                          toStr(pick(raw, ['tipo_pago', 'tipoPago', 'TipoPago'])),
@@ -1968,7 +2232,6 @@ function mapPagoProveedor(raw: RawRecord): PagoProveedorRecord {
     cuentaBanco:                       toStr(pick(raw, ['Cuenta_Banco', 'cuenta_banco', 'cuentaBanco'])),
     fechaPago:                         trimDmyDate(pick(raw, ['Fecha_Pago', 'fecha_pago', 'fechaPago'])),
     importePesos:                      toNum(pick(raw, ['Importe_Pago_Pesos', 'importe_pago_pesos', 'importePesos'])),
-    importeDolares:                    toNum(pick(raw, ['Importe_Pago_Dolares', 'importe_pago_dolares', 'importeDolares'])),
     moneda:                            toStr(pick(raw, ['Moneda', 'moneda', 'currency'])) || 'MXP',
     batchPago:                         toStr(pick(raw, ['Batch_pago', 'batch_pago', 'batchPago'])),
     claveProveedor:                    toStr(pick(raw, ['Clave_Proveedor', 'clave_proveedor', 'claveProveedor'])),
@@ -1993,7 +2256,8 @@ export async function fetchPagoProveedor(
   config: JdeClientConfig = {},
 ): Promise<PagoProveedorRecord[]> {
   const raw = await jdeClient.post<unknown>('/pagoproveedor', req, config);
-  return dropExcludedByCia(unwrapList(raw).map(mapPagoProveedor));
+  const rows = stripAllToWhitelist(unwrapList(raw), KEPT_PAGOPROVEEDOR_FIELDS);
+  return dropExcludedByCia(rows.map(mapPagoProveedor));
 }
 
 /**

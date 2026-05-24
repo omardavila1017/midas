@@ -193,6 +193,7 @@ export function buildFinancialProjectionSourceData(
     cobradaBancoKeys: bridge.cobradaBancoKeys,
     abonoEnrichments: bridge.abonoEnrichments,
     paidCxpKeys: bridge.paidCxpKeys,
+    paidPurchaseOrderKeys: bridge.paidPurchaseOrderKeys,
     cargoEnrichments: bridge.cargoEnrichments,
     assumptions: input.assumptions,
     budget: input.budget,

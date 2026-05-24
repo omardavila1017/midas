@@ -932,6 +932,15 @@ function accumulatePurchaseReceiptIva({
   ensure: (period: string) => TaxPeriodAccumulator;
 }): Set<string> {
   const handledMovementIds = new Set<string>();
+  // NOTA: el acumulador de IVA acreditable proyectada NO recibe hoy
+  // `paidPurchaseOrderKeys` del AuxiliarContable. Eso significa que una OC
+  // ya pagada en banco (fuera de CXP abierto) se contabiliza como IVA
+  // futuro, sobre-estimando la reserva. La proyección canónica ya excluye
+  // estas OCs (canonicalProjection.ts via buildPurchaseReceiptMovements), pero
+  // el acumulador fiscal corre en su propio bucle. Wiring pendiente: agregar
+  // `paidPurchaseOrderKeys?: Set<string>` a buildTaxDashboardView →
+  // accumulatePurchaseReceiptIva y pasarlo aquí (también requiere extender
+  // BuildScenarioForecastRunArgs y plumbing desde useFinancialProjectionSource).
   const movements = buildPurchaseReceiptMovements({
     purchaseReceipts,
     cxpRecords,

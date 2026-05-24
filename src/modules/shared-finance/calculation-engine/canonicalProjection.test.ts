@@ -1108,7 +1108,6 @@ function cobranzaRecord(patch: Partial<CobranzaRecord>): CobranzaRecord {
     condPago: patch.condPago ?? '',
     estatus: patch.estatus ?? 'PENDIENTE',
     tipoCambio: patch.tipoCambio ?? 1,
-    raw: patch.raw,
   };
 }
 

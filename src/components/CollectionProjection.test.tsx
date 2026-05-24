@@ -126,7 +126,6 @@ function makeCobranzaPayment(overrides: Partial<CobranzaPayment> = {}): Cobranza
       diasAntiguedadFafv: 0,
       importeCobrado: 2500,
       importeOriginalFactura: 2500,
-      importePteFactura: 0,
       tasaIva: 'IVA16',
       importeIvaFacturaOriginal: 400,
     }],
