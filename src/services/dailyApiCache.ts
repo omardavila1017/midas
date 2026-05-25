@@ -466,6 +466,13 @@ interface FetchRangeOptions<T> {
   cia?: string;
   fetchDay: (day: string) => Promise<T[]>;
   onProgress?: (done: number, total: number) => void;
+  /**
+   * Llamado por CADA día que aporta records — tanto cache hits como fetches
+   * frescos. Permite al caller acumular y persistir incrementalmente en
+   * lugar de esperar a que toda la cía termine (cientos de días → minutos).
+   * Si el caller recarga antes del final, los días ya emitidos no se pierden.
+   */
+  onDay?: (records: T[]) => void;
   concurrency?: number;
   today?: string;
 }
@@ -511,6 +518,9 @@ export async function fetchRangeWithDailyCache<T>(
         const hit = await getDailyCachedAsync<T>(api, days[idx], cia);
         if (hit !== null) {
           cached[idx] = hit;
+          if (hit.length > 0) {
+            try { options.onDay?.(hit); } catch { /* swallow — caller bug */ }
+          }
         } else {
           // Entró en una carrera con un prune o un delete: re-fetch.
           toFetch.push(idx);
@@ -538,6 +548,9 @@ export async function fetchRangeWithDailyCache<T>(
         const records = await fetchDay(day);
         cached[idx] = records;
         setDailyCached(api, day, records, cia, today);
+        if (records.length > 0) {
+          try { options.onDay?.(records); } catch { /* swallow — caller bug */ }
+        }
       } catch {
         cached[idx] = [];
       } finally {

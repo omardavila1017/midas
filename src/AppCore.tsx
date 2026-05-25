@@ -2558,9 +2558,49 @@ export default function App() {
     (async () => {
       try {
         await primeDailyCache();
-        const fetchedTimestamps: Record<string, string> = {};
-        const fetchedByCia = new Map<string, AuxiliarContableRecord[]>();
         const errors: string[] = [];
+        let successCount = 0;
+        let totalLines = 0;
+
+        // Persistencia incremental PER-DÍA. Antes esperábamos a que la cía
+        // entera completara sus ~520 días para hacer save — para la primera
+        // cía eso son decenas de minutos (peor en cold boot). Ahora cada día
+        // exitoso (cache hit o fresh fetch) llama `onDay`; mergeamos al Map
+        // compartido y un throttler escribe IDB cada 3s si está sucio.
+        // 28 cías × 520 días × 1 write c/u sería ~14k writes — el throttler
+        // colapsa ráfagas a 1 write por intervalo, así que en práctica son
+        // pocas decenas durante toda la carga.
+        const mergedByKey = new Map<string, AuxiliarContableRecord>();
+        const keyOf = (r: AuxiliarContableRecord) =>
+          `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
+        for (const r of auxiliarContableRecords) {
+          mergedByKey.set(keyOf(r), r);
+        }
+        const initialSize = mergedByKey.size;
+        let dirty = false;
+        let lastFlushedSize = initialSize;
+        const flush = (label: string) => {
+          if (!dirty) return;
+          dirty = false;
+          const snapshot = Array.from(mergedByKey.values());
+          if (snapshot.length === lastFlushedSize) return;
+          lastFlushedSize = snapshot.length;
+          // eslint-disable-next-line no-console
+          console.info(`[auxiliarcontable] flush (${label}) · persisting snapshot=${snapshot.length}`);
+          setAuxiliarContableRecords(snapshot);
+          void saveHeavyRecords('auxiliarContableRecords', snapshot);
+        };
+        const flushInterval = window.setInterval(() => flush('throttle'), 3000);
+
+        const onDay = (batch: AuxiliarContableRecord[]) => {
+          for (const r of batch) {
+            const k = keyOf(r);
+            if (!mergedByKey.has(k)) {
+              mergedByKey.set(k, r);
+              dirty = true;
+            }
+          }
+        };
 
         let cursor = 0;
         const concurrency = Math.min(10, ciasToFetch.length);
@@ -2571,14 +2611,15 @@ export default function App() {
             const cia = ciasToFetch[idx];
             try {
               const fetched = await fetchAuxiliarContableRange(
-                cia, fechaInicial, fechaFinal, AUX_RECON_PARAMS, { concurrency: 4 },
+                cia, fechaInicial, fechaFinal, AUX_RECON_PARAMS,
+                { concurrency: 4, onDay },
               );
-              fetchedByCia.set(cia, fetched);
-              fetchedTimestamps[cia] = new Date().toISOString();
-              // Log per-cia para que el usuario vea progreso en consola y
-              // detecte cías que regresan 0 (permisos/data ausente).
+              successCount += 1;
+              totalLines += fetched.length;
+              const timestamp = new Date().toISOString();
               // eslint-disable-next-line no-console
-              console.info(`[auxiliarcontable] ${cia} · ${fetched.length} líneas`);
+              console.info(`[auxiliarcontable] ${cia} · ${fetched.length} líneas · acumulado=${mergedByKey.size}`);
+              setAuxiliarContableLoadedCias(prev => ({ ...prev, [cia]: timestamp }));
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               errors.push(`${cia}: ${msg}`);
@@ -2587,34 +2628,16 @@ export default function App() {
             }
           }
         };
-        await Promise.all(Array.from({ length: concurrency }, worker));
+        try {
+          await Promise.all(Array.from({ length: concurrency }, worker));
+        } finally {
+          window.clearInterval(flushInterval);
+          flush('final');
+        }
 
-        const fetchedAll: AuxiliarContableRecord[] = [];
-        for (const recs of fetchedByCia.values()) fetchedAll.push(...recs);
         // eslint-disable-next-line no-console
-        console.info(`[auxiliarcontable] boot sync · ${ciasToFetch.length} cías · ${fetchedAll.length} líneas · ${errors.length} errores`);
-        if (fetchedAll.length > 0) {
-          // Merge — nunca reemplazar. La llave incluye cia, sin colisión.
-          const merged = new Map<string, AuxiliarContableRecord>();
-          for (const r of auxiliarContableRecords) {
-            merged.set(`${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`, r);
-          }
-          for (const r of fetchedAll) {
-            merged.set(`${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`, r);
-          }
-          const mergedArr = Array.from(merged.values());
-          setAuxiliarContableRecords(mergedArr);
-          // Save EAGER — sin esperar el debounce de useHeavySaver (3.4s). Si
-          // el usuario refresca antes de eso, los registros se pierden. Save
-          // directo a IDB garantiza persistencia inmediata. useHeavySaver
-          // sigue activo para cambios posteriores; el saveQueues interno de
-          // heavyStoreIDB serializa writes así que no hay carrera.
-          void saveHeavyRecords('auxiliarContableRecords', mergedArr);
-        }
-        if (Object.keys(fetchedTimestamps).length > 0) {
-          setAuxiliarContableLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
-        }
-        if (errors.length > 0 && fetchedAll.length === 0) {
+        console.info(`[auxiliarcontable] boot sync · ${ciasToFetch.length} cías · ${totalLines} líneas nuevas · ${errors.length} errores · total persisted=${mergedByKey.size}`);
+        if (errors.length > 0 && successCount === 0) {
           auxiliarAutoFetchDone.current = false;
           setBootSlot('auxiliar', 'error');
           setDatasetSlot('auxiliar', 'error');
@@ -2891,49 +2914,67 @@ export default function App() {
       if (progressSlot === 'rol') setRolBootProgress({ done: 0, total: 1 });
 
       try {
+        // Upsert — NUNCA encoger la historia hidratada. Misma regla que
+        // cobranza/compras: merge por llave, el fresco gana (un viaje que
+        // adquiere `factura` actualiza → predicted→invoiced).
+        const rolKey = (r: RolRecord) =>
+          `${r.cia}::${r.kCliente}::${r.anio}::${r.semana}::${r.ruta}::${r.tipoViaje}`;
+
+        // Persistencia incremental per-ventana: fetchRolRange procesa días
+        // uno por uno (concurrency=2). Esperar al Promise.all final pierde
+        // todo si el usuario recarga a media carga (~horas para un año).
+        // El callback `onPartialBatch` dispara tras cada ventana exitosa;
+        // mergeamos al Map compartido, setState y saveHeavyRecords. El
+        // saveQueues interno de heavyStoreIDB serializa los writes.
+        const mergedByKey = new Map<string, RolRecord>();
+        for (const r of rolRecords) mergedByKey.set(rolKey(r), r);
+        const initialSize = mergedByKey.size;
+        let lastPersistedSize = initialSize;
+
         const records = await fetchRolRange(fechaInicial, fechaFinal, {
           onProgress: progressSlot === 'rol'
             ? (done, total) => setRolBootProgress({ done, total })
             : undefined,
+          onPartialBatch: (batch) => {
+            let changed = false;
+            for (const r of batch) {
+              const k = rolKey(r);
+              if (!mergedByKey.has(k) || mergedByKey.get(k) !== r) {
+                mergedByKey.set(k, r);
+                changed = true;
+              }
+            }
+            if (!changed) return;
+            const snapshot = Array.from(mergedByKey.values());
+            setRolRecords(snapshot);
+            void saveHeavyRecords('rolRecords', snapshot);
+            lastPersistedSize = snapshot.length;
+          },
         });
-        // Upsert — NUNCA encoger la historia hidratada. El API /roldiario
-        // responde vacío/parcial con frecuencia (permisos, ventana sin
-        // viajes); un `setRolRecords(records)` ciego borraba los ~65k
-        // registros de IDB y la proyección ROL quedaba en 0. Misma regla que
-        // cobranza/compras: merge por llave, el fresco gana (un viaje que
-        // adquiere `factura` actualiza → predicted→invoiced → cierra ciclo).
-        const rolKey = (r: RolRecord) =>
-          `${r.cia}::${r.kCliente}::${r.anio}::${r.semana}::${r.ruta}::${r.tipoViaje}`;
-        // Computar merge fuera del setter para poder hacer save EAGER.
-        // Antes el setter usaba prev y nunca exponía el array merged,
-        // forzándonos a esperar el debounce de useHeavySaver (3.4s) —
-        // reload temprano = data perdida (síntoma observado: rol/aux
-        // ausentes en heavy-store screenshot 2026-05-25).
-        const prevRol = rolRecords;
-        let mergedRol = prevRol;
-        if (records.length > 0) {
-          if (prevRol.length === 0) {
-            mergedRol = records;
-          } else {
-            const prevKeys = new Set(prevRol.map(rolKey));
-            const hasNewKey = records.some(r => !prevKeys.has(rolKey(r)));
-            if (hasNewKey) {
-              const byKey = new Map<string, RolRecord>();
-              for (const r of prevRol) byKey.set(rolKey(r), r);
-              for (const r of records) byKey.set(rolKey(r), r);
-              mergedRol = Array.from(byKey.values());
+
+        // Safety net: si `onPartialBatch` no se disparó (todas las ventanas
+        // vacías) pero records final tiene algo, hacer save una vez.
+        if (records.length > 0 && mergedByKey.size === lastPersistedSize) {
+          let changed = false;
+          for (const r of records) {
+            const k = rolKey(r);
+            if (!mergedByKey.has(k)) {
+              mergedByKey.set(k, r);
+              changed = true;
             }
           }
+          if (changed) {
+            const snapshot = Array.from(mergedByKey.values());
+            setRolRecords(snapshot);
+            void saveHeavyRecords('rolRecords', snapshot);
+          }
         }
-        if (mergedRol !== prevRol) {
-          setRolRecords(mergedRol);
-          void saveHeavyRecords('rolRecords', mergedRol);
-        }
+
         if (records.length > 0) {
           setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
         }
         // eslint-disable-next-line no-console
-        console.info(`[rol] sync · fetched=${records.length} viajes ${fechaInicial}..${fechaFinal} (upsert, no shrink)`);
+        console.info(`[rol] sync · fetched=${records.length} viajes ${fechaInicial}..${fechaFinal} · total persisted=${mergedByKey.size} (delta=${mergedByKey.size - initialSize})`);
         return { totalRecords: records.length, totalCias: 1, failedCias: 0 };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

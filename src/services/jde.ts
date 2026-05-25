@@ -1736,6 +1736,12 @@ export async function fetchAuxiliarContableRange(
   options: {
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
+    /**
+     * Llamado por CADA día con records — cache hits y fetches frescos.
+     * Permite al caller persistir incrementalmente sin esperar a que la cía
+     * complete sus ~520 días.
+     */
+    onDay?: (records: AuxiliarContableRecord[]) => void;
     config?: JdeClientConfig;
   } = {},
 ): Promise<AuxiliarContableRecord[]> {
@@ -1791,6 +1797,7 @@ export async function fetchAuxiliarContableRange(
     cia,
     fetchDay: fetchDayWithRetry,
     onProgress: options.onProgress,
+    onDay: options.onDay,
     concurrency: options.concurrency ?? 4,
   });
 
@@ -2493,6 +2500,14 @@ export async function fetchRolRange(
     kServidor?: number;
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
+    /**
+     * Llamado cada que UNA ventana diaria termina con éxito y trae al menos
+     * un registro. Permite al caller persistir incrementalmente en lugar de
+     * esperar al `Promise.all` final (que toma horas para un año completo).
+     * Si el caller recarga la página antes de que termine, las ventanas ya
+     * persistidas se conservan.
+     */
+    onPartialBatch?: (records: RolRecord[]) => void;
     config?: JdeClientConfig;
   } = {},
 ): Promise<RolRecord[]> {
@@ -2517,6 +2532,9 @@ export async function fetchRolRange(
           { f_Inicio: w.from, f_Final: w.to, k_Servidor: kServidor },
           config,
         );
+        if (results[slot].length > 0) {
+          try { options.onPartialBatch?.(results[slot]); } catch { /* swallow — caller bug */ }
+        }
       } catch (err) {
         failedWindows.push(`${w.from}..${w.to}`);
         // eslint-disable-next-line no-console
