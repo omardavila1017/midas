@@ -82,6 +82,15 @@ export interface BuildScenarioForecastRunArgs {
   minimumCash: number;
   granularity: ProjectionGranularity;
   includeManualEntries?: boolean;
+  /**
+   * Set `${cia}::${noOrdenCompra}` de OCs ya cruzadas a banco vía
+   * AuxiliarContable. Se propaga a `buildTaxDashboardView` →
+   * `accumulatePurchaseReceiptIva` para evitar que el acumulador fiscal
+   * cuente IVA acreditable proyectado de OCs ya pagadas (IVA ya realizado
+   * en período pasado). Mismo set que el motor canónico usa para skipear
+   * compras paid en la proyección de caja.
+   */
+  paidPurchaseOrderKeys?: Set<string>;
 }
 
 /**
@@ -123,6 +132,7 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
     assumptions: args.assumptions,
     cxpRecords: args.cxpRecords,
     purchaseReceipts: args.purchaseReceipts,
+    paidPurchaseOrderKeys: args.paidPurchaseOrderKeys,
     payrollCosts: args.payrollCosts,
     cobranzaPayments: args.cobranzaPayments,
     budget: args.budget,

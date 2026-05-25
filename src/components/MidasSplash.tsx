@@ -67,6 +67,11 @@ const HEARTBEAT_VARIANTS: Record<string, string[][]> = {
     ['Procesando lotes de pago programados…', 'Sincronizando el calendario de tesorería…', 'Compilando autorizaciones de transferencia…'],
     ['Descargando la cola de dispersión bancaria…', 'Mapeando órdenes de pago liquidadas…', 'Consolidando salidas de efectivo validadas…'],
   ],
+  auxiliar: [
+    ['Descargando auxiliar contable [ERP JDE]…', 'Indexando pólizas del libro mayor…', 'Preparando cruce banco ↔ contabilidad…'],
+    ['Extrayendo movimientos del objeto 1010-1020…', 'Compilando pólizas de Caja y Bancos…', 'Estructurando matriz de conciliación histórica…'],
+    ['Sincronizando AuxiliarContable de las cías activas…', 'Procesando dos años de asientos contables…', 'Consolidando libro mayor para conciliación…'],
+  ],
   projection: [
     ['Inicialización de la matriz de flujo de efectivo…', 'Procesamiento del modelo predictivo financiero…', 'Ejecución del algoritmo de proyección anual…'],
     ['Cargando variables macroeconómicas del sistema…', 'Corriendo el motor de simulación de escenarios…', 'Estructurando el primer cálculo de flujo…'],

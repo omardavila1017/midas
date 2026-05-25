@@ -28,6 +28,7 @@ import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber } from '../domain/bankStatements';
 import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
+import { isNonOperatingDay } from '../domain/bankHolidays';
 
 /**
  * Drop globally-excluded rows (empresa 33 / multicarga) at the JDE normalize
@@ -1742,6 +1743,17 @@ export async function fetchAuxiliarContableRange(
 
   const MAX_ATTEMPTS = 3;
   const fetchDayWithRetry = async (day: string): Promise<AuxiliarContableRecord[]> => {
+    // Short-circuit fines de semana + festivos bancarios MX. AuxiliarContable
+    // libro mayor (tl="AA") sólo registra movimientos en días hábiles —
+    // sábado/domingo y festivos siempre regresan `data: []`. Backfill de 2
+    // años son ~520 días no-operativos × 2 objetos = 1040 requests sintéticos.
+    // Saltarlos: 0 round-trips + cache se llena igual con `[]` para que
+    // futuros boots tampoco intenten. Si JDE algún día postea con fecha
+    // sábado (cierre mensual raro), invalidar cache manual y borrar este
+    // gate localmente.
+    const d = new Date(day + 'T00:00:00Z');
+    if (!Number.isNaN(d.getTime()) && isNonOperatingDay(d)) return [];
+
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
@@ -2285,6 +2297,11 @@ export async function fetchPagoProveedorRange(
 
   const MAX_ATTEMPTS = 3;
   const fetchDayWithRetry = async (day: string): Promise<PagoProveedorRecord[]> => {
+    // Bancos no emiten CARGOs a proveedor en fines de semana / festivos —
+    // mismo razonamiento que AuxiliarContable. Saltar evita 0-yield round-trips.
+    const d = new Date(day + 'T00:00:00Z');
+    if (!Number.isNaN(d.getTime()) && isNonOperatingDay(d)) return [];
+
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {

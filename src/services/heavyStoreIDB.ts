@@ -314,7 +314,11 @@ export async function saveHeavyRecords(key: HeavyKey, records: unknown[]): Promi
   const previous = saveQueues.get(key) ?? Promise.resolve();
   const next = previous
     .catch(() => undefined)
-    .then(() => saveChunkedRecords(key, records))
+    .then(async () => {
+      await saveChunkedRecords(key, records);
+      // eslint-disable-next-line no-console
+      console.info(`[heavyStoreIDB] saveHeavyRecords(${key}) · ${records.length}`);
+    })
     .finally(() => {
       if (saveQueues.get(key) === next) saveQueues.delete(key);
     });

@@ -93,6 +93,13 @@ export interface FinancialProjectionSourceData {
   customers: CustomerCollectionProfile[];
   /** Resultado canónico subyacente (mensual + bridge). */
   canonical: CanonicalProjectionResult;
+  /**
+   * Set `${cia}::${noOrdenCompra}` de OCs pagadas según AuxiliarContable.
+   * Mismo set que el canónico ya consume. Se expone aquí para que el
+   * acumulador fiscal (taxModuleService) lo reciba via worker args y evite
+   * doble-conteo de IVA acreditable.
+   */
+  paidPurchaseOrderKeys: Set<string>;
   /** True cuando hay banco o CXC JDE suficiente para proyectar flujo. */
   hasData: boolean;
 }
@@ -219,6 +226,7 @@ export function buildFinancialProjectionSourceData(
     suppliers,
     customers,
     canonical,
+    paidPurchaseOrderKeys: bridge.paidPurchaseOrderKeys,
     hasData,
   };
   SOURCE_CACHE.set(cacheKey, result);

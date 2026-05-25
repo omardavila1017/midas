@@ -34,8 +34,10 @@ import { buildRolCobranzaCross } from './rolCobranzaMatch';
 import {
   buildClientLookup,
   resolveClientCalendarDate,
+  significantTokens,
   type CollectionCalendarClientLookup,
 } from './collectionCalendarEngine';
+import { normalizeClientText } from './clientGrouping';
 
 export interface RolProjectedInflow {
   clientId: string;
@@ -107,8 +109,26 @@ export function buildRolProjectedInflows(args: {
     if (!r.efectuado) continue;
     if (!(r.subTotal > 0)) continue;
 
+    // Match en cascada: (1) claveJDE digit → catálogo, (2) fallback por
+    // tokens de `dCliente`/`cCliente` cuando el API CITI no expone claveJDE
+    // fiable. Sin esto, viajes huérfanos (sin claveJDE) quedan sin proyectar
+    // — el blocker que CLAUDE.md llamaba "API sin columna cliente fiable".
+    // Cuando varios clientes empatan por token, se toma el primero — más
+    // tolerante que perfecto, pero recupera cobertura no-proyectada.
+    let client: Client | undefined;
     const digits = onlyDigits(r.claveJDE);
-    const client = digits ? lookup.byDigits.get(digits)?.[0] : undefined;
+    if (digits) client = lookup.byDigits.get(digits)?.[0];
+    if (!client) {
+      const nameCandidates = new Map<string, Client>();
+      for (const value of [r.dCliente, r.cCliente]) {
+        for (const token of significantTokens(normalizeClientText(value ?? ''))) {
+          for (const c of lookup.byToken.get(token) ?? []) {
+            nameCandidates.set(c.id, c);
+          }
+        }
+      }
+      if (nameCandidates.size > 0) client = nameCandidates.values().next().value;
+    }
     if (!client) {
       // Sin cliente en catálogo no hay regla de pago confiable → no se
       // proyecta (conservador: no inflar caja con fecha adivinada).

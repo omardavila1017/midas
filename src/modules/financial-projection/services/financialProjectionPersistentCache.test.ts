@@ -82,6 +82,7 @@ function projectionSource(marker: string): FinancialProjectionSourceData {
       toYearMonth: '2026-05',
       predictive: null,
     },
+    paidPurchaseOrderKeys: new Set(),
     hasData: true,
   };
 }

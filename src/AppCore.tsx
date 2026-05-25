@@ -771,6 +771,7 @@ export default function App() {
     pagos: BootTaskStatus;
     nomina: BootTaskStatus;
     rol: BootTaskStatus;
+    auxiliar: BootTaskStatus;
     projection: BootTaskStatus;
   }>({
     catalog: 'loading',
@@ -782,13 +783,14 @@ export default function App() {
     pagos: 'pending',
     nomina: 'pending',
     rol: 'pending',
+    auxiliar: 'pending',
     projection: 'loading',
   });
   const [, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setRolBootProgress] = useState<{ done: number; total: number } | null>(null);
   const setBootSlot = useCallback(
-    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'projection', status: BootTaskStatus) => {
+    (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'auxiliar' | 'projection', status: BootTaskStatus) => {
       setBootStatus(prev => (prev[slot] === status ? prev : { ...prev, [slot]: status }));
     },
     [],
@@ -2174,6 +2176,7 @@ export default function App() {
       { id: 'pagos', label: 'Pagos a proveedores', status: bootStatus.pagos },
       { id: 'nomina', label: 'TRESS · nómina', status: bootStatus.nomina },
       { id: 'rol', label: 'CITI · rol de viajes', status: bootStatus.rol },
+      { id: 'auxiliar', label: 'Auxiliar contable · libro mayor', status: bootStatus.auxiliar },
       { id: 'projection', label: 'Proyección · escenario activo', status: bootStatus.projection },
     ],
     [
@@ -2186,6 +2189,7 @@ export default function App() {
       bootStatus.pagos,
       bootStatus.nomina,
       bootStatus.rol,
+      bootStatus.auxiliar,
       bootStatus.projection,
     ],
   );
@@ -2524,6 +2528,7 @@ export default function App() {
     const activeCias = filterActiveCompanies(companies).map(c => c.cia);
     if (activeCias.length === 0) {
       auxiliarAutoFetchDone.current = true;
+      setBootSlot('auxiliar', 'done');
       setDatasetSlot('auxiliar', 'ready');
       return;
     }
@@ -2533,14 +2538,23 @@ export default function App() {
       : activeCias;
     if (ciasToFetch.length === 0) {
       auxiliarAutoFetchDone.current = true;
+      setBootSlot('auxiliar', 'done');
       setDatasetSlot('auxiliar', 'ready');
       return;
     }
     auxiliarAutoFetchDone.current = true;
+    setBootSlot('auxiliar', 'loading');
     setDatasetSlot('auxiliar', 'loading');
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
-    const fechaInicial = `${today.getUTCFullYear()}-01-01`;
+    // 2 años de historia — match con cobranza/predictivo. El range `año-en-curso`
+    // anterior generaba sólo 5 meses de aux en mid-year y dejaba el heavy store
+    // anémico vs cobranza/bancos. Con el skip de fines-de-semana + festivos
+    // ~30% de los 730 días no disparan red y el daily cache absorbe
+    // reboots — solo el primer cold boot paga la cuenta completa.
+    const twoYearsAgo = new Date(today);
+    twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
+    const fechaInicial = twoYearsAgo.toISOString().slice(0, 10);
     (async () => {
       try {
         await primeDailyCache();
@@ -2561,9 +2575,15 @@ export default function App() {
               );
               fetchedByCia.set(cia, fetched);
               fetchedTimestamps[cia] = new Date().toISOString();
+              // Log per-cia para que el usuario vea progreso en consola y
+              // detecte cías que regresan 0 (permisos/data ausente).
+              // eslint-disable-next-line no-console
+              console.info(`[auxiliarcontable] ${cia} · ${fetched.length} líneas`);
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               errors.push(`${cia}: ${msg}`);
+              // eslint-disable-next-line no-console
+              console.warn(`[auxiliarcontable] ${cia} fail: ${msg}`);
             }
           }
         };
@@ -2575,30 +2595,42 @@ export default function App() {
         console.info(`[auxiliarcontable] boot sync · ${ciasToFetch.length} cías · ${fetchedAll.length} líneas · ${errors.length} errores`);
         if (fetchedAll.length > 0) {
           // Merge — nunca reemplazar. La llave incluye cia, sin colisión.
-          setAuxiliarContableRecords(prev => {
-            const map = new Map<string, AuxiliarContableRecord>();
-            for (const r of prev) map.set(`${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`, r);
-            for (const r of fetchedAll) map.set(`${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`, r);
-            return Array.from(map.values());
-          });
+          const merged = new Map<string, AuxiliarContableRecord>();
+          for (const r of auxiliarContableRecords) {
+            merged.set(`${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`, r);
+          }
+          for (const r of fetchedAll) {
+            merged.set(`${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`, r);
+          }
+          const mergedArr = Array.from(merged.values());
+          setAuxiliarContableRecords(mergedArr);
+          // Save EAGER — sin esperar el debounce de useHeavySaver (3.4s). Si
+          // el usuario refresca antes de eso, los registros se pierden. Save
+          // directo a IDB garantiza persistencia inmediata. useHeavySaver
+          // sigue activo para cambios posteriores; el saveQueues interno de
+          // heavyStoreIDB serializa writes así que no hay carrera.
+          void saveHeavyRecords('auxiliarContableRecords', mergedArr);
         }
         if (Object.keys(fetchedTimestamps).length > 0) {
           setAuxiliarContableLoadedCias(prev => ({ ...prev, ...fetchedTimestamps }));
         }
         if (errors.length > 0 && fetchedAll.length === 0) {
           auxiliarAutoFetchDone.current = false;
+          setBootSlot('auxiliar', 'error');
           setDatasetSlot('auxiliar', 'error');
           console.error('[auxiliarcontable] auto-fetch falló en todas las cías', errors.slice(0, 3).join('; '));
         } else {
+          setBootSlot('auxiliar', 'done');
           setDatasetSlot('auxiliar', 'ready');
         }
       } catch (err) {
         auxiliarAutoFetchDone.current = false;
+        setBootSlot('auxiliar', 'error');
         setDatasetSlot('auxiliar', 'error');
         console.error('[auxiliarcontable] auto-fetch falló', err);
       }
     })();
-  }, [requestedDatasets, storeHydrated, companies, auxiliarContableLoadedCias, auxiliarContableRecords.length, idbHydratedDatasets, setDatasetSlot]);
+  }, [requestedDatasets, storeHydrated, companies, auxiliarContableLoadedCias, auxiliarContableRecords.length, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
 
   // ── Auto-load PagoProveedor durante el boot ──
   // Endpoint global (no filtra por cia, igual que /compras). Mismo lookback
@@ -2872,24 +2904,31 @@ export default function App() {
         // adquiere `factura` actualiza → predicted→invoiced → cierra ciclo).
         const rolKey = (r: RolRecord) =>
           `${r.cia}::${r.kCliente}::${r.anio}::${r.semana}::${r.ruta}::${r.tipoViaje}`;
-        setRolRecords(prev => {
-          if (records.length === 0) return prev;
-          if (prev.length === 0) return records;
-          // Skip si el fetch no trae llaves nuevas (mismas viajes ya
-          // cacheados). Devolver `prev` con misma ref evita re-render →
-          // evita planningProps recompute → evita source cache miss →
-          // evita worker rebuild de cientos de MB. Updates in-place a un
-          // viaje existente (p.ej. factura llenada) se acumulan hasta que
-          // otra señal invalide el cache; aceptable porque el flujo ROL no
-          // es real-time.
-          const prevKeys = new Set(prev.map(rolKey));
-          const hasNewKey = records.some(r => !prevKeys.has(rolKey(r)));
-          if (!hasNewKey) return prev;
-          const byKey = new Map<string, RolRecord>();
-          for (const r of prev) byKey.set(rolKey(r), r);
-          for (const r of records) byKey.set(rolKey(r), r);
-          return Array.from(byKey.values());
-        });
+        // Computar merge fuera del setter para poder hacer save EAGER.
+        // Antes el setter usaba prev y nunca exponía el array merged,
+        // forzándonos a esperar el debounce de useHeavySaver (3.4s) —
+        // reload temprano = data perdida (síntoma observado: rol/aux
+        // ausentes en heavy-store screenshot 2026-05-25).
+        const prevRol = rolRecords;
+        let mergedRol = prevRol;
+        if (records.length > 0) {
+          if (prevRol.length === 0) {
+            mergedRol = records;
+          } else {
+            const prevKeys = new Set(prevRol.map(rolKey));
+            const hasNewKey = records.some(r => !prevKeys.has(rolKey(r)));
+            if (hasNewKey) {
+              const byKey = new Map<string, RolRecord>();
+              for (const r of prevRol) byKey.set(rolKey(r), r);
+              for (const r of records) byKey.set(rolKey(r), r);
+              mergedRol = Array.from(byKey.values());
+            }
+          }
+        }
+        if (mergedRol !== prevRol) {
+          setRolRecords(mergedRol);
+          void saveHeavyRecords('rolRecords', mergedRol);
+        }
         if (records.length > 0) {
           setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
         }

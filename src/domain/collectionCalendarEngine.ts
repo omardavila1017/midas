@@ -534,7 +534,7 @@ const GENERIC_CLIENT_TOKENS = new Set([
   'LOS', 'Y', 'GRUPO', 'CLIENTE', 'SERVICIOS', 'TRANSPORTES', 'MEXICO',
 ]);
 
-function significantTokens(value: string): string[] {
+export function significantTokens(value: string): string[] {
   return value
     .split(/\s+/)
     .filter(token => token.length >= 3 && !GENERIC_CLIENT_TOKENS.has(token));

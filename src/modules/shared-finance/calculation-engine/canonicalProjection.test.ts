@@ -889,6 +889,11 @@ describe('canonicalProjection ROL projection (modelo corregido)', () => {
   });
 
   it('no proyecta ROL sin cliente en catálogo (sin regla de pago confiable)', () => {
+    // claveJDE no matchea por dígito Y los tokens de dCliente/cCliente no
+    // empatan con NINGÚN nombre del catálogo → orphan. El fallback por
+    // tokens (introducido 2026-05-24) sólo recupera cuando el name SÍ
+    // existe en el catálogo bajo otra forma — viajes totalmente foráneos
+    // siguen siendo huérfanos.
     const canonical = buildCanonicalProjection({
       companyCode: 'all',
       bankStatements: [],
@@ -897,7 +902,14 @@ describe('canonicalProjection ROL projection (modelo corregido)', () => {
       cxpRecords: [],
       cobranzaRecords: [],
       rolRecords: [
-        rolRecord({ claveJDE: '999999', fechaViaje: '2026-05-04', subTotal: 5000, efectuado: true }),
+        rolRecord({
+          claveJDE: '999999',
+          cCliente: 'XYZ',
+          dCliente: 'Foraneo Sin Match En Catalogo',
+          fechaViaje: '2026-05-04',
+          subTotal: 5000,
+          efectuado: true,
+        }),
       ],
       assumptions,
       budget: budget({ incomeMay: 0 }),
@@ -906,6 +918,36 @@ describe('canonicalProjection ROL projection (modelo corregido)', () => {
     });
 
     expect(canonical.movements.some((m) => m.id.startsWith('rol:'))).toBe(false);
+  });
+
+  it('recupera ROL huérfano vía token de nombre cuando claveJDE no matchea', () => {
+    // claveJDE='999999' no matchea dígito, pero dCliente='Cliente IVA' SÍ
+    // empata por tokens al catálogo `client-1` (name='Cliente IVA').
+    // Fallback recupera el ingreso — antes (sin fallback) este viaje quedaba
+    // sin proyectar pese a tener nombre conocido en catálogo.
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [client({ id: 'client-1', creditDays: 30 })],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [],
+      rolRecords: [
+        rolRecord({
+          claveJDE: '999999',
+          dCliente: 'Cliente IVA',
+          fechaViaje: '2026-05-04',
+          subTotal: 5000,
+          efectuado: true,
+        }),
+      ],
+      assumptions,
+      budget: budget({ incomeMay: 0 }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    expect(canonical.movements.some((m) => m.id.startsWith('rol:'))).toBe(true);
   });
 });
 

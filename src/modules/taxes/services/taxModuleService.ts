@@ -321,6 +321,12 @@ export function buildTaxDashboardView(params: {
   cxpRecords?: CXPRecord[];
   cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
   purchaseReceipts?: PurchaseReceiptRecord[];
+  /**
+   * OCs cuya salida ya cruzó banco vía AuxiliarContable. Evita doble-conteo
+   * de IVA acreditable: si la OC pagó en marzo, el IVA se realizó en marzo
+   * (real); proyectarlo de nuevo sobreestima la reserva fiscal.
+   */
+  paidPurchaseOrderKeys?: Set<string>;
   payrollCosts?: PayrollCostRecord[];
   cobranzaPayments?: CobranzaPayment[];
   budget?: Budget | null;
@@ -370,6 +376,7 @@ export function buildTaxDashboardView(params: {
   const handledPurchaseMovementIds = accumulatePurchaseReceiptIva({
     purchaseReceipts: params.purchaseReceipts ?? [],
     cxpRecords: params.cxpRecords ?? [],
+    paidPurchaseOrderKeys: params.paidPurchaseOrderKeys,
     companyCode: params.companyCode,
     startDate,
     endDate,
@@ -917,6 +924,7 @@ function addCxpIvaLine({
 function accumulatePurchaseReceiptIva({
   purchaseReceipts,
   cxpRecords,
+  paidPurchaseOrderKeys,
   companyCode,
   startDate,
   endDate,
@@ -925,6 +933,7 @@ function accumulatePurchaseReceiptIva({
 }: {
   purchaseReceipts: PurchaseReceiptRecord[];
   cxpRecords: CXPRecord[];
+  paidPurchaseOrderKeys?: Set<string>;
   companyCode?: string;
   startDate: string;
   endDate: string;
@@ -932,18 +941,14 @@ function accumulatePurchaseReceiptIva({
   ensure: (period: string) => TaxPeriodAccumulator;
 }): Set<string> {
   const handledMovementIds = new Set<string>();
-  // NOTA: el acumulador de IVA acreditable proyectada NO recibe hoy
-  // `paidPurchaseOrderKeys` del AuxiliarContable. Eso significa que una OC
-  // ya pagada en banco (fuera de CXP abierto) se contabiliza como IVA
-  // futuro, sobre-estimando la reserva. La proyección canónica ya excluye
-  // estas OCs (canonicalProjection.ts via buildPurchaseReceiptMovements), pero
-  // el acumulador fiscal corre en su propio bucle. Wiring pendiente: agregar
-  // `paidPurchaseOrderKeys?: Set<string>` a buildTaxDashboardView →
-  // accumulatePurchaseReceiptIva y pasarlo aquí (también requiere extender
-  // BuildScenarioForecastRunArgs y plumbing desde useFinancialProjectionSource).
+  // OCs ya pagadas (per AuxiliarContable) realizaron su IVA acreditable en el
+  // período del cargo real. Excluirlas evita sobre-estimar la reserva fiscal
+  // futura. Mismo set que canonicalProjection consume — wiring viene desde
+  // BuildScenarioForecastRunArgs → buildTaxDashboardView.
   const movements = buildPurchaseReceiptMovements({
     purchaseReceipts,
     cxpRecords,
+    paidPurchaseOrderKeys,
     companyCode: companyCode ?? 'all',
     asOfDate,
     endDate,

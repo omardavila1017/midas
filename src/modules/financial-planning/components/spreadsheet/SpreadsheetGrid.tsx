@@ -410,11 +410,27 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         <button
           type="button"
           onClick={() => onClickRow?.(row.conceptKey)}
+          // `title` muestra la subcategoría fina del egreso (Combustibles,
+          // Indirectos, Servicios TI, etc.) o providerCategory cuando el
+          // catálogo lo enriqueció. Discoverable via hover sin romper la
+          // altura uniforme de fila que requiere la virtualización del grid.
+          title={
+            row.providerCategoryLabel && row.providerCategoryLabel !== row.label
+              ? `${row.label} · ${row.providerCategoryLabel}`
+              : row.subgroupLabel && row.subgroupLabel !== row.label
+                ? `${row.label} · ${row.subgroupLabel}`
+                : row.label
+          }
           className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-medium text-[var(--gray-950)] hover:text-[var(--primary)]"
           style={{ paddingLeft: depth * 18 }}
         >
           {row.isCustom && <Sparkles className="h-3 w-3 text-[var(--primary)]" strokeWidth={1.5} />}
           <span className="truncate">{row.label}</span>
+          {row.providerCategoryLabel && row.providerCategoryLabel !== row.label && (
+            <span className="ml-auto shrink-0 truncate rounded-sm bg-[var(--gray-100)] px-1 text-[9px] font-normal text-[var(--gray-600)]">
+              {row.providerCategoryLabel}
+            </span>
+          )}
         </button>
       </StickyLeftCell>
       {leftSpacer}

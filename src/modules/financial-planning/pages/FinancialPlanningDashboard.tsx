@@ -700,6 +700,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         assumptions: props.assumptions,
         cxpRecords: props.cxpRecords,
         purchaseReceipts: props.purchaseReceipts,
+        paidPurchaseOrderKeys: source.paidPurchaseOrderKeys,
         payrollCosts: props.payrollCosts,
         budget: props.budget,
         companyCode: props.companyCode,
