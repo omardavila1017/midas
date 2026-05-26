@@ -65,6 +65,10 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas.financialProjection.taxAdjustments.v1', scope: 'localStorage', owner: 'modules/financial-projection/services/taxPlanningService.ts', description: 'Ajustes de impuestos de proyección (legacy de IVA — ver midas.taxes.v1).' },
   { key: 'midas.dashboard.projectionOverrides.v1', scope: 'localStorage', owner: 'modules/shared-finance/calculation-engine/canonicalProjection.ts', description: 'Overrides de proyección del Dashboard.' },
 
+  // ── KPIs y Objetivos ────────────────────────────────────────────────────
+  { key: 'midas.kpisObjectives.customKpis.v1', scope: 'localStorage', owner: 'modules/kpis-objectives/services/customKpisStorage.ts', description: 'CustomKpi[] — KPIs definidos por el usuario con valor manual.' },
+  { key: 'midas.kpisObjectives.objectives.v1', scope: 'localStorage', owner: 'modules/kpis-objectives/services/objectivesStorage.ts', description: 'Objective[] — metas y su seguimiento (numérico mensual, umbral de KPI, cualitativo).' },
+
   // ── Taxes ───────────────────────────────────────────────────────────────
   { key: 'midas.taxes.v1', scope: 'localStorage', owner: 'modules/taxes/services/taxModuleService.ts', description: 'TaxStore: obligaciones, ajustes y overrides de tasa.' },
 

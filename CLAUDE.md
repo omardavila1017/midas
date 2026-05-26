@@ -93,6 +93,7 @@ src/
 │   ├── concurso-mercantil/      # Convenio concursal: data/ (Excel→code, 29 trimestres + 80 acreedores, en miles) + pages/ (dashboard: calendario + cruce banco + futuro) + services/ (convenioMovements → DEBT egresos a Aprobado)
 │   │   ├── data/, pages/, services/
 │   ├── payroll/                 # TRESS nómina loader; expansion to movements happens INSIDE canonicalProjection
+│   ├── kpis-objectives/         # KPIs autocalculados (bancos + cobranza + CXP) + KPIs custom + objetivos con seguimiento (sección "Objetivos")
 │   └── midas-ai/                # MidasBubble proposal suggestion bot
 ├── components/                  # Treasury UI: CXP, Bancos, Clients, Providers, etc. (Dashboard.tsx removed — merged into Proyección 2026-05-18)
 ├── workers/                     # Web workers (reconciliation)

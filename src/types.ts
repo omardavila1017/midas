@@ -24,7 +24,8 @@ export type TabId =
   | 'pagos'
   | 'bancos'
   | 'netflow'
-  | 'conciliacion';
+  | 'conciliacion'
+  | 'kpisObjectives';
 
 export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 
