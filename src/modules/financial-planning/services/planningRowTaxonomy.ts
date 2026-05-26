@@ -7,7 +7,26 @@ import type {
   PlanningRow,
 } from '../../shared-finance/types';
 import { slug } from './customRowsStorage';
-import { macroBucketForSupplier } from './providerCategoryGeneralization';
+import { macroBucketForSupplier, UNCATEGORIZED_PROVIDER_BUCKET } from './providerCategoryGeneralization';
+
+export const UNIDENTIFIED_BANK_OUTFLOW_BUCKET = 'Egresos bancarios sin identificar';
+
+export const OUTFLOW_BUCKET_ORDER = [
+  'Flota',
+  'Proveedor TI',
+  'Inmuebles y rentas',
+  'Personal y nómina',
+  'Servicios',
+  'Int. CM',
+  UNCATEGORIZED_PROVIDER_BUCKET,
+  'Impuestos',
+  'Nómina',
+  'Deuda',
+  'CAPEX',
+  'OPEX',
+  UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
+  'Manual',
+];
 
 export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   AR_COLLECTION: 'Cobranza',
@@ -17,7 +36,7 @@ export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   DEBT: 'Deuda',
   CAPEX: 'CAPEX',
   OPEX: 'OPEX',
-  TRANSFER: 'Otros Egresos',
+  TRANSFER: UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
   MANUAL: 'Manual',
 };
 
@@ -134,13 +153,13 @@ function cleanConceptLabel(concept: string | undefined): string | null {
 
 const CATEGORY_BUCKET_LABEL: Record<FinancialMovementCategory, string> = {
   AR_COLLECTION: 'Cobranza',
-  AP_PAYMENT: 'Otros proveedores',
+  AP_PAYMENT: UNCATEGORIZED_PROVIDER_BUCKET,
   PAYROLL: 'Nómina',
   TAX: 'Impuestos',
   DEBT: 'Deuda',
   CAPEX: 'CAPEX',
   OPEX: 'OPEX',
-  TRANSFER: 'Otros movimientos',
+  TRANSFER: UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
   MANUAL: 'Manual',
 };
 
@@ -150,26 +169,26 @@ export function bucketForMovement(movement: FinancialMovement): string {
     return macroBucketForSupplier({
       counterpartyId: movement.counterpartyId,
       counterpartyName: movement.counterpartyName,
+      providerCategory: movement.providerCategory,
     });
   }
-  if (movement.category === 'TRANSFER') return 'Otros egresos';
+  if (movement.category === 'TRANSFER') return UNIDENTIFIED_BANK_OUTFLOW_BUCKET;
   return CATEGORY_BUCKET_LABEL[movement.category];
 }
 
 function bucketForCategory(type: FinancialMovementType, category: FinancialMovementCategory): string {
   if (type === 'INFLOW') return category === 'AR_COLLECTION' ? 'Otros ingresos' : 'Otros ingresos';
-  if (category === 'TRANSFER') return 'Otros egresos';
+  if (category === 'TRANSFER') return UNIDENTIFIED_BANK_OUTFLOW_BUCKET;
   return CATEGORY_BUCKET_LABEL[category];
 }
 
 export function rowGroup(type: FinancialMovementType, category: FinancialMovementCategory): string {
   const sectionLabel = type === 'INFLOW' ? 'Ingresos' : 'Egresos';
   // TRANSFER cae tanto en ingreso (ABONOs sin cobranza match) como en
-  // egreso (CARGOs sin pago match). El label `'Otros Egresos'` sólo
-  // tiene sentido para egresos; en ingresos lo etiquetamos como
-  // `'Otros Ingresos'`.
+  // egreso (CARGOs sin pago match). En egresos usamos un label explícito
+  // para distinguirlo de proveedores sin categoría.
   const tail = category === 'TRANSFER'
-    ? (type === 'INFLOW' ? 'Otros Ingresos' : 'Otros Egresos')
+    ? (type === 'INFLOW' ? 'Otros Ingresos' : UNIDENTIFIED_BANK_OUTFLOW_BUCKET)
     : CATEGORY_LABELS[category];
   return `${sectionLabel} · ${tail}`;
 }

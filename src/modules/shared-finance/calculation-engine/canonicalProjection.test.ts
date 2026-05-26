@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
+import type { AuxiliarReconLine } from '../../../domain/auxiliarReconciliationEngine';
 import { comprasToPurchaseReceipts } from '../../../domain/comprasToPurchaseReceipts';
 import type { BankAccountStatement, BankStatementLine, CobranzaRecord, ComprasRecord, RolRecord } from '../../../services/jdeTypes';
 import { isRealShortTermApiMovement } from '../../financial-planning/services/scenarioForecastRun';
@@ -429,6 +430,44 @@ describe('canonicalProjection IVA metadata', () => {
     expect(names.size).toBe(2);
     expect(unidentified.some((m) => m.counterpartyName?.includes('CTA-A'))).toBe(true);
     expect(unidentified.some((m) => m.counterpartyName?.includes('CTA-B'))).toBe(true);
+  });
+
+  it('classifies historic AuxiliarContable IVA payments as tax movements', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00002',
+          cuenta: 'CTA-OTHER',
+          movimientos: [
+            bankMovement({ cia: '00002', cuenta: 'CTA-OTHER', tipoMovimiento: 'ABONO', importe: 1, fechaOperacion: '2026-04-01' }),
+          ],
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-05-01',
+      auxiliarReconLines: [
+        auxiliarLine({
+          glKey: '00001::aux::IVA',
+          fechaContable: '2026-04-17',
+          importe: -250,
+          sourceRef: 'PAGO IVA MARZO',
+          contraparte: 'SAT',
+        }),
+      ],
+    });
+
+    const iva = canonical.movements.find((m) => m.id === 'auxiliar-historic:00001::aux::IVA');
+    expect(iva).toBeTruthy();
+    expect(iva?.category).toBe('TAX');
+    expect(iva?.subcategory).toBe('IVA');
+    expect(iva?.counterpartyName).toBe('SAT — IVA');
+    expect(iva?.counterpartyType).toBe('TAX_AUTHORITY');
   });
 
   // Branch no-long-term-projection: regla de negocio nueva — TODA cuenta de
@@ -1222,3 +1261,33 @@ function bankStatement(patch: Partial<BankAccountStatement> & Pick<BankAccountSt
   };
 }
 
+function auxiliarLine(patch: {
+  glKey: string;
+  fechaContable: string;
+  importe: number;
+  sourceRef: string;
+  contraparte?: string;
+}): AuxiliarReconLine {
+  return {
+    glKey: patch.glKey,
+    cia: '00001',
+    cuentaBanco: 'CTA-1',
+    nombreCuenta: 'BANCO',
+    flujo: 'egreso',
+    esCaja: false,
+    fechaContable: patch.fechaContable,
+    importe: patch.importe,
+    moneda: 'MXN',
+    tipoDocto: 'PV',
+    tipoDoctoDesc: 'Pago',
+    estatusConciliado: 'R',
+    matchTier: 'jde-reconciled',
+    confidence: 1,
+    source: {
+      kind: 'otro',
+      cia: '00001',
+      ref: patch.sourceRef,
+      contraparte: patch.contraparte,
+    },
+  };
+}

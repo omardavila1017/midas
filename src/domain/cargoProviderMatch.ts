@@ -159,6 +159,7 @@ export function matchCargoToProvider(args: {
         return {
           counterpartyId: receipt.noProveedor || undefined,
           counterpartyName: receipt.supplierName || 'Proveedor compras',
+          providerType: receipt.categoryName || receipt.familyName || receipt.subfamilyName,
           matchSource: 'compras-amount',
         };
       }

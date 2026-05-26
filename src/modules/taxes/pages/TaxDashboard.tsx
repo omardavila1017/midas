@@ -80,7 +80,7 @@ interface Props {
 
 type RangePreset = '90d' | 'eoy';
 type DetailTab = 'summary' | 'iva' | 'isn' | 'imss' | 'payments';
-type IvaLineMode = 'caused' | 'creditable';
+type IvaLineMode = 'caused' | 'creditable' | 'paid';
 
 const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
   { id: '90d', label: '90 días' },
@@ -144,9 +144,12 @@ export default function TaxDashboard(props: Props) {
       assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
       cxpPaymentCoverage: props.cxpPaymentCoverage,
+      auxiliarReconciliation: props.auxiliarReconciliation,
       purchaseReceipts: props.purchaseReceipts,
+      paidPurchaseOrderKeys: source?.paidPurchaseOrderKeys,
       payrollCosts: props.payrollCosts,
       cobranzaPayments: props.cobranzaPayments,
+      bankStatements: props.bankStatements,
       budget: props.budget,
       companyCode: props.companyCode,
       startDate: fiscalYearStart,
@@ -154,8 +157,9 @@ export default function TaxDashboard(props: Props) {
       movements: source?.movements ?? [],
       store: taxStore,
       today,
+      ivaMode: 'REAL',
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 
@@ -169,6 +173,7 @@ export default function TaxDashboard(props: Props) {
   const selected = view.periods.find((period) => period.period === selectedPeriod) ?? view.periods[0];
   const hasFiscalData = props.clients.length > 0
     || props.cxpRecords.length > 0
+    || props.bankStatements.some((statement) => statement.movimientos.length > 0)
     || props.budget != null
     || (source?.movements.length ?? 0) > 0
     || taxStore.adjustments.length > 0
@@ -1002,7 +1007,7 @@ function TaxPeriodDetail({
 }) {
   const sourceCount = (tab: DetailTab) => {
     if (tab === 'summary') return period.obligations.length;
-    if (tab === 'iva') return period.iva.incomeLines.length + period.iva.expenseLines.length;
+    if (tab === 'iva') return period.iva.incomeLines.length + period.iva.expenseLines.length + period.iva.paidLines.length;
     if (tab === 'isn') return period.payrollLines.length;
     if (tab === 'imss') return period.imssLines.length;
     return period.obligations.length;
@@ -1129,7 +1134,16 @@ function IvaDetail({
   onUpdateTaxRate: (target: TaxRateTarget, rate: 8 | 16) => void;
 }) {
   const [mode, setMode] = useState<IvaLineMode>('caused');
-  const lines = mode === 'caused' ? iva.incomeLines : iva.expenseLines;
+  const lines = mode === 'caused'
+    ? iva.incomeLines
+    : mode === 'creditable'
+      ? iva.expenseLines
+      : iva.paidLines;
+  const empty = mode === 'caused'
+    ? 'Sin facturas causadas en el periodo.'
+    : mode === 'creditable'
+      ? 'Sin egresos acreditables en el periodo.'
+      : 'Sin pagos reales de IVA identificados en bancos.';
 
   return (
     <div className="space-y-3 p-4">
@@ -1138,6 +1152,7 @@ function IvaDetail({
         <MiniStat label="Causado 8%" value={fmtCurrency(iva.ivaCaused8)} />
         <MiniStat label="Acreditable 16%" value={fmtCurrency(iva.ivaCreditable16)} />
         <MiniStat label="Acreditable 8%" value={fmtCurrency(iva.ivaCreditable8)} />
+        <MiniStat label="IVA pagado" value={fmtCurrency(iva.ivaPaid)} />
         <MiniStat label="IVA neto" value={fmtCurrency(iva.netIva)} />
         <MiniStat label={iva.payable > 0 ? 'Por pagar' : 'Saldo a favor'} value={fmtCurrency(iva.payable > 0 ? iva.payable : iva.balanceInFavor)} />
       </div>
@@ -1147,13 +1162,14 @@ function IvaDetail({
         options={[
           { id: 'caused' as const, label: `Causado (${iva.incomeLines.length})` },
           { id: 'creditable' as const, label: `Acreditable (${iva.expenseLines.length})` },
+          { id: 'paid' as const, label: `Pagado (${iva.paidLines.length})` },
         ]}
         onChange={setMode}
       />
 
       <IvaLinesTable
         lines={lines}
-        empty={mode === 'caused' ? 'Sin facturas causadas en el periodo.' : 'Sin egresos acreditables en el periodo.'}
+        empty={empty}
         onUpdateTaxRate={onUpdateTaxRate}
       />
 
@@ -1204,19 +1220,23 @@ function IvaLinesTable({
                   <td className="px-3 py-2 tabular-nums text-[var(--gray-600)]">{fmtDate(line.date)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(line.taxBase)}</td>
                   <td className="px-3 py-2">
-                    <select
-                      aria-label={`Tasa IVA ${line.concept}`}
-                      value={line.taxRate === 8 ? 8 : 16}
-                      disabled={!line.rateTarget}
-                      onChange={(event) => {
-                        if (!line.rateTarget) return;
-                        onUpdateTaxRate(line.rateTarget, Number(event.target.value) as 8 | 16);
-                      }}
-                      className="h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-700)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
-                    >
-                      <option value={16}>16%</option>
-                      <option value={8}>8%</option>
-                    </select>
+                    {line.taxRate == null ? (
+                      <span className="text-[11px] text-[var(--gray-400)]">N/A</span>
+                    ) : (
+                      <select
+                        aria-label={`Tasa IVA ${line.concept}`}
+                        value={line.taxRate === 8 ? 8 : 16}
+                        disabled={!line.rateTarget}
+                        onChange={(event) => {
+                          if (!line.rateTarget) return;
+                          onUpdateTaxRate(line.rateTarget, Number(event.target.value) as 8 | 16);
+                        }}
+                        className="h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white px-2 text-[11px] font-medium text-[var(--gray-700)] outline-none focus:border-[var(--primary)] disabled:bg-[var(--gray-50)] disabled:text-[var(--gray-400)]"
+                      >
+                        <option value={16}>16%</option>
+                        <option value={8}>8%</option>
+                      </select>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(line.taxAmount)}</td>
                   <td className="px-3 py-2">

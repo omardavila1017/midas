@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import TaxDashboard from './TaxDashboard';
 import type { Budget } from '../../../domain/budget';
+import type { CXPRecord } from '../../../domain/persistence';
+import type { AuxiliarReconLine, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { BankStatementLine } from '../../../services/jdeTypes';
+import type { BankStatementLine, CobranzaPayment } from '../../../services/jdeTypes';
 import type { PurchaseReceiptRecord } from '../../shared-finance/types';
 
 const TODAY = '2026-05-01';
@@ -36,6 +38,7 @@ describe('<TaxDashboard />', () => {
         clients={[client()]}
         providers={[]}
         cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
@@ -79,6 +82,7 @@ describe('<TaxDashboard />', () => {
         clients={[client()]}
         providers={[]}
         cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
@@ -97,6 +101,7 @@ describe('<TaxDashboard />', () => {
         clients={[client()]}
         providers={[]}
         cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
@@ -126,6 +131,7 @@ describe('<TaxDashboard />', () => {
         clients={[client()]}
         providers={[]}
         cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
@@ -156,6 +162,7 @@ describe('<TaxDashboard />', () => {
         clients={[client()]}
         providers={[]}
         cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
@@ -178,6 +185,7 @@ describe('<TaxDashboard />', () => {
         clients={[client()]}
         providers={[]}
         cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
         assumptions={assumptions}
         budget={budget()}
         startingBalance={20_000}
@@ -192,7 +200,32 @@ describe('<TaxDashboard />', () => {
     expect(card.className).not.toContain('md:grid-cols-[130px_1fr_120px_110px_160px]');
   });
 
-  it('shows budget IVA creditable for February and persists editable rate overrides', () => {
+  it('shows historic IVA paid from bank statements in the IVA detail', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank([bankLine({ concepto: 'PAGO IVA MAYO', importe: 100 })])]}
+        clients={[]}
+        providers={[]}
+        cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
+        assumptions={assumptions}
+        budget={null}
+        startingBalance={20_000}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('2026-05'));
+    fireEvent.click(screen.getByRole('button', { name: /IVA/i }));
+    expect(screen.getByText('IVA pagado')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pagado (1)' }));
+
+    expect(screen.getByText('Pago IVA · PAGO IVA MAYO')).toBeTruthy();
+    expect(screen.getByText('SAT — IVA')).toBeTruthy();
+  });
+
+  it('does not create creditable IVA from budget in the invoice-only tax dashboard', () => {
     render(
       <TaxDashboard
         companyCode="all"
@@ -206,31 +239,19 @@ describe('<TaxDashboard />', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('2026-02'));
-    fireEvent.click(screen.getByRole('button', { name: /IVA/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Acreditable/i }));
-
-    expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
-    const rate = screen.getByLabelText(/Tasa IVA Diésel presupuestado/i);
-    expect(rate).toBeTruthy();
-    fireEvent.change(rate, { target: { value: '8' } });
-
-    const stored = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
-    expect(stored.taxRateOverrides[0]).toMatchObject({
-      targetType: 'CONCEPT',
-      targetKey: 'DIESEL',
-      rate: 8,
-    });
+    expect(screen.queryByText('2026-02')).toBeNull();
+    expect(screen.getByText(/Sin periodos fiscales visibles/i)).toBeTruthy();
   });
 
-  it('uses purchase receipts passed from App as creditable IVA in taxes', () => {
+  it('uses CXP invoices, not standalone purchase receipts, as creditable IVA in taxes', () => {
     render(
       <TaxDashboard
         companyCode="all"
         bankStatements={[bank()]}
         clients={[]}
         providers={[]}
-        cxpRecords={[]}
+        cxpRecords={[cxpRecord({ noFactura: 'F-CXP-16' })]}
+        auxiliarReconciliation={auxiliarResult([auxiliarLine({ noFactura: 'F-CXP-16' })])}
         purchaseReceipts={[purchaseReceipt({ invoiceNo: 'OC-IVA-16' })]}
         assumptions={assumptions}
         budget={null}
@@ -242,7 +263,8 @@ describe('<TaxDashboard />', () => {
     fireEvent.click(screen.getByRole('button', { name: /IVA/i }));
     fireEvent.click(screen.getByRole('button', { name: /Acreditable/i }));
 
-    expect(screen.getByText(/OC-IVA-16/i)).toBeTruthy();
+    expect(screen.getByText(/F-CXP-16/i)).toBeTruthy();
+    expect(screen.queryByText(/OC-IVA-16/i)).toBeNull();
     expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
   });
 
@@ -277,6 +299,74 @@ function client(): Client {
   };
 }
 
+function cobranzaPayment(): CobranzaPayment {
+  return {
+    idPago: 'PAY-IVA',
+    cia: '00001',
+    fechaCobro: '2026-05-10',
+    fechaContable: '2026-05-10',
+    cuentaBancaria: '123',
+    banco: 'BANCO',
+    noRecibo: 'PAY-IVA',
+    importeRecibo: 1160,
+    pendienteAplicar: 0,
+    noCliente: 'C-1',
+    cliente: 'Cliente IVA',
+    noBatch: 'B-1',
+    tipoCambio: 1,
+    applications: [{
+      idPago: 'PAY-IVA',
+      cia: '00001',
+      fechaAplicacion: '2026-05-10',
+      noCliente: 'C-1',
+      cliente: 'Cliente IVA',
+      tipoDocto: 'RI',
+      noFactura: 'RI-IVA',
+      noFacturaNormalizada: 'RI-IVA',
+      fechaFactura: '2026-05-01',
+      fechaVencimiento: '2026-05-31',
+      diasAntiguedadFafv: 0,
+      importeCobrado: 1160,
+      importeOriginalFactura: 1160,
+      tasaIva: 'IVA16',
+      importeIvaFacturaOriginal: 160,
+    }],
+  };
+}
+
+function cxpRecord(patch: Partial<CXPRecord> = {}): CXPRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    noProveedor: patch.noProveedor ?? 'P-1',
+    nombre: patch.nombre ?? 'Proveedor IVA',
+    noFactura: patch.noFactura ?? 'F-CXP',
+    fechaFactura: patch.fechaFactura ?? '2026-05-01',
+    fechaVence: patch.fechaVence ?? '2026-05-17',
+    fechaProgramacionPago: patch.fechaProgramacionPago ?? '2026-05-17',
+    diasVencida: patch.diasVencida ?? 0,
+    importeBrutoPesos: patch.importeBrutoPesos ?? 1160,
+    importePendientePesos: patch.importePendientePesos ?? 1160,
+    importeSubtotalPesos: patch.importeSubtotalPesos ?? 1000,
+    importeImpuestosPesos: patch.importeImpuestosPesos ?? 160,
+    importeBrutoDolares: patch.importeBrutoDolares ?? 0,
+    importePendienteDolares: patch.importePendienteDolares ?? 0,
+    moneda: patch.moneda ?? 'MXN',
+    condPago: patch.condPago ?? '',
+    clasifica: patch.clasifica ?? '',
+    clasificacionProveedor: patch.clasificacionProveedor ?? '',
+    edoPago: patch.edoPago ?? '',
+    tipoCambio: patch.tipoCambio ?? 1,
+    porVencer: patch.porVencer ?? 0,
+    v1_30: patch.v1_30 ?? 0,
+    v31_60: patch.v31_60 ?? 0,
+    v61_90: patch.v61_90 ?? 0,
+    v91_120: patch.v91_120 ?? 0,
+    v121_150: patch.v121_150 ?? 0,
+    v151_180: patch.v151_180 ?? 0,
+    mas180: patch.mas180 ?? 0,
+  };
+}
+
 function budget(input: { dieselFeb?: number } = {}): Budget {
   const expenseTotal = Array.from({ length: 12 }, () => 0);
   expenseTotal[4] = 1000;
@@ -299,6 +389,74 @@ function budget(input: { dieselFeb?: number } = {}): Budget {
   };
 }
 
+function auxiliarResult(lines: AuxiliarReconLine[]): AuxiliarReconResult {
+  return {
+    lines,
+    bankOrphans: [],
+    inconsistencies: [],
+    sourceConfirmation: new Map(),
+    summary: {
+      totalLineas: lines.length,
+      ingresoLineas: 0,
+      ingresoCruzadas: 0,
+      ingresoMonto: 0,
+      ingresoMontoCruzado: 0,
+      pctIngresoCruzado: 0,
+      egresoLineas: lines.length,
+      egresoCruzadas: lines.length,
+      egresoMonto: lines.reduce((sum, line) => sum + Math.abs(line.importe), 0),
+      egresoMontoCruzado: lines.reduce((sum, line) => sum + Math.abs(line.importe), 0),
+      pctEgresoCruzado: lines.length > 0 ? 100 : 0,
+      conciliadasJde: 0,
+      cajaLineas: 0,
+      cajaMonto: 0,
+      internoLineas: 0,
+      internoMonto: 0,
+      glOrphanLineas: 0,
+      glOrphanMonto: 0,
+      bankOrphanLineas: 0,
+      bankOrphanMonto: 0,
+      ciaBreakdown: [],
+      inconsistencyCounts: {
+        'non-bank-batch-in-1020': 0,
+        'jde-not-marked-reconciled': 0,
+        'duplicate-gsaid-on-bank': 0,
+        'idcuenta-collision-on-aux': 0,
+      },
+    },
+  };
+}
+
+function auxiliarLine(patch: { noFactura: string; bankDate?: string; importe?: number }): AuxiliarReconLine {
+  const bankDate = patch.bankDate ?? '2026-05-12';
+  const importe = patch.importe ?? -1160;
+  return {
+    glKey: `00001::aux::PV::${patch.noFactura}`,
+    cia: '00001',
+    cuentaBanco: '123',
+    nombreCuenta: 'BANCO',
+    flujo: 'egreso',
+    esCaja: false,
+    fechaContable: bankDate,
+    importe,
+    moneda: 'MXP',
+    tipoDocto: 'PV',
+    tipoDoctoDesc: 'Pago',
+    estatusConciliado: '',
+    matchTier: 'exact',
+    confidence: 0.97,
+    bankMovementKey: `bank:${patch.noFactura}`,
+    bankDate,
+    bankAmount: importe,
+    source: {
+      kind: 'factura',
+      cia: '00001',
+      ref: patch.noFactura,
+      contraparte: 'Proveedor IVA',
+    },
+  };
+}
+
 function bank(movimientos: BankStatementLine[] = []): BankAccountStatement {
   return {
     cia: '00001',
@@ -309,6 +467,25 @@ function bank(movimientos: BankStatementLine[] = []): BankAccountStatement {
     saldoInicial: 20_000,
     saldoFinal: 20_000,
     movimientos,
+  };
+}
+
+function bankLine(patch: Partial<BankStatementLine> = {}): BankStatementLine {
+  return {
+    cia: patch.cia ?? '00001',
+    banco: patch.banco ?? 'BANCO',
+    nombreBanco: patch.nombreBanco ?? 'BANCO',
+    cuenta: patch.cuenta ?? '123',
+    moneda: patch.moneda ?? 'MXN',
+    fechaOperacion: patch.fechaOperacion ?? '2026-05-20',
+    referencia: patch.referencia ?? 'REF-IVA',
+    concepto: patch.concepto ?? 'PAGO IVA',
+    tipoMovimiento: patch.tipoMovimiento ?? 'CARGO',
+    importe: patch.importe ?? 100,
+    infAdi1: patch.infAdi1,
+    infAdi2: patch.infAdi2,
+    infAdi3: patch.infAdi3,
+    gsaid: patch.gsaid,
   };
 }
 

@@ -696,6 +696,17 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     const counterpartyName = line.source.contraparte
       || line.nombreCuenta
       || (isInflow ? 'Ingreso JDE' : 'Egreso JDE');
+    const auxiliarTaxClassification = !isInflow
+      ? classifyBankConcept({
+          concepto: [
+            line.tipoDoctoDesc,
+            line.tipoDocto,
+            line.source.ref,
+            line.source.contraparte,
+            line.nombreCuenta,
+          ].filter(Boolean).join(' '),
+        })
+      : undefined;
     // Cliente catálogo: si la contraparte coincide con un cliente conocido,
     // colapsamos al grupo comercial. Para egresos no hacemos lookup de
     // proveedor (la línea GL no trae idProveedor confiable) — cae a
@@ -714,15 +725,23 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       type: isInflow ? 'INFLOW' : 'OUTFLOW',
       category: isInflow
         ? (line.source.kind === 'factura' ? 'AR_COLLECTION' : 'TRANSFER')
-        : (line.source.kind === 'pago' || line.source.kind === 'factura'
+        : auxiliarTaxClassification?.category === 'TAX'
+          ? 'TAX'
+          : (line.source.kind === 'pago' || line.source.kind === 'factura'
             ? 'AP_PAYMENT'
             : 'TRANSFER'),
-      subcategory: inflowSubcategory,
+      subcategory: isInflow ? inflowSubcategory : auxiliarTaxClassification?.subcategory,
       companyId: line.cia,
       bankAccountId: line.cuentaBanco,
       counterpartyId: undefined,
-      counterpartyName,
-      counterpartyType: isInflow ? 'CUSTOMER' : 'SUPPLIER',
+      counterpartyName: auxiliarTaxClassification?.category === 'TAX'
+        ? auxiliarTaxClassification.counterpartyName
+        : counterpartyName,
+      counterpartyType: isInflow
+        ? 'CUSTOMER'
+        : auxiliarTaxClassification?.category === 'TAX'
+          ? 'TAX_AUTHORITY'
+          : 'SUPPLIER',
       concept: `${line.tipoDoctoDesc || line.tipoDocto || 'GL'} ${line.source.ref || ''} · ${counterpartyName}`.trim(),
       currency: line.moneda || 'MXN',
       originalAmount: monto,
@@ -1439,4 +1458,3 @@ function scaleTaxMeta(
 function positiveNumber(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
-

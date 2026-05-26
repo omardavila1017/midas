@@ -39,6 +39,7 @@ describe('planning row taxonomy', () => {
     ]);
     expect(rows.find((row) => row.label === 'Proveedor A')?.subgroupLabel).toBe('REFACCIONARIO');
     expect(rows.find((row) => row.label === 'Proveedor A')?.providerCategoryLabel).toBe('REFACCIONES');
+    expect(rows.find((row) => row.label === 'Proveedor A')?.bucketLabel).toBe('Flota');
     expect(aggregateRowValueForBucket({
       conceptKey: conceptKeyForMovement(movements[0]),
       movementsInBucket: movements,
@@ -78,6 +79,7 @@ describe('planning row taxonomy', () => {
 
     expect(row?.category).toBe('AP_PAYMENT');
     expect(row?.providerCategoryLabel).toBe('COMBUSTIBLE');
+    expect(row?.bucketLabel).toBe('Flota');
     expect(aggregateRowValueForBucket({
       conceptKey: conceptKeyForMovement(recurring),
       movementsInBucket: [recurring],
@@ -104,6 +106,64 @@ describe('planning row taxonomy', () => {
     expect(rows[0]?.bucketLabel).toBe('Multicarga');
     expect(rows[0]?.label).toBe('Cliente Multicarga');
     expect(conceptKeyForMovement(inflow)).toBe('INFLOW:AR_COLLECTION:cliente-multicarga');
+  });
+
+  it('uses providerCategory as bucket source when the catalog lookup cannot resolve the supplier', () => {
+    const rows = buildPlanningRows({
+      movements: [
+        movement({
+          id: 'bank-unmatched-provider',
+          sourceSystem: 'BANK',
+          counterpartyId: undefined,
+          counterpartyName: 'AIRE HIDRAULICOS Y NEU',
+          providerCategory: 'MANTENIMIENTO INDUSTRIAL',
+          subcategory: 'MANTENIMIENTO INDUSTRIAL',
+          projectedAmount: 1200,
+        }),
+      ],
+      customRows: [],
+      overrides: [],
+    });
+
+    expect(rows[0]?.providerCategoryLabel).toBe('MANTENIMIENTO INDUSTRIAL');
+    expect(rows[0]?.bucketLabel).toBe('Flota');
+  });
+
+  it('separates uncategorized suppliers from unidentified bank outflows', () => {
+    const rows = buildPlanningRows({
+      movements: [
+        movement({
+          id: 'supplier-unknown-category',
+          counterpartyName: 'Proveedor conocido',
+          providerCategory: 'GIRO NO MAPEADO',
+          subcategory: 'GIRO NO MAPEADO',
+          projectedAmount: 900,
+        }),
+        movement({
+          id: 'supplier-without-category',
+          counterpartyName: 'Proveedor sin catalogo',
+          subcategory: undefined,
+          projectedAmount: 700,
+        }),
+        movement({
+          id: 'bank-unidentified',
+          sourceSystem: 'BANK',
+          category: 'TRANSFER',
+          counterpartyName: 'Sin identificar · BANCO 123',
+          counterpartyType: 'BANK',
+          concept: 'Cargo folio 123',
+          projectedAmount: 500,
+        }),
+      ],
+      customRows: [],
+      overrides: [],
+    });
+
+    expect(rows.find((row) => row.label === 'Proveedor conocido')?.bucketLabel).toBe('Proveedores sin categoría');
+    expect(rows.find((row) => row.label === 'Proveedor sin catalogo')?.bucketLabel).toBe('Proveedores sin categoría');
+    expect(rows.find((row) => row.label === 'Sin identificar · BANCO 123')?.bucketLabel).toBe('Egresos bancarios sin identificar');
+    expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros');
+    expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros egresos');
   });
 });
 

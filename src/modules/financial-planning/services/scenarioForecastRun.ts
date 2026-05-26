@@ -142,6 +142,7 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
     movements: adjustedMovements,
     store: args.taxStore,
     today: args.today,
+    ivaMode: 'FORECAST',
   });
 
   const taxMovements = taxSeedView

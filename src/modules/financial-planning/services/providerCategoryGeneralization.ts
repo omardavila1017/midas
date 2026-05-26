@@ -80,7 +80,8 @@ export function lookupProviderCategoria(opts: {
 
 /**
  * Generalización: ~85 `categoria` crudas → 7 macro-buckets. Orden importa
- * (primero el patrón más específico). Sin match → "Otros".
+ * (primero el patrón más específico). Sin match → proveedor conocido pero
+ * pendiente de clasificar.
  *
  * Cubre tanto la taxonomía manual de Alberto ("REFACCIONARIO", "RENTAS") como
  * la taxonomía JDE compras (`descCategoria` / `descFamilia` como "Indirectos",
@@ -91,12 +92,12 @@ const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bint\.?\s*cm\b|concurso\s*merc/i, label: 'Int. CM' },
   {
     pattern:
-      /tecnolog|soporte|telecom|\bgps\b|sistema\s*de\s*archivo|licencias?\s*(bfiskur|bavel)|honorarios?\s*ti\b|celulares|accesorios?\s*eq|impresoras|inform[áa]tic|software|hardware|electr[óo]nica?/i,
+      /tecnolog|\bti\b|soporte|telecom|\bgps\b|sistema\s*de\s*archivo|licencias?\s*(bfiskur|bavel)|honorarios?\s*ti\b|celulares|accesorios?\s*eq|impresoras|inform[áa]tic|software|hardware|electr[óo]nica?/i,
     label: 'Proveedor TI',
   },
   {
     pattern:
-      /refac|llanta|neumat|combust|diesel|gasolin|lubric|mantenim|lavado\s*unidad|verificac.*unidad|ferreter|chatarra|amenidades?\s*bus|renta\s*(de\s*)?(unidad|traila)|casetas?|peaje|autoconsumo|corral[óo]n|taller\s*atenci[óo]n\s*accident|\bfletes?\b|entrega|recolecci|paqueter|automotriz/i,
+      /refac|carrocer|hojalater|pintura|llanta|neumat|combust|diesel|gasolin|lubric|mantenim|lavado\s*unidad|verificac.*unidad|ferreter|chatarra|amenidades?\s*bus|renta\s*(de\s*)?(unidad|traila)|casetas?|peaje|autoconsumo|corral[óo]n|taller\s*atenci[óo]n\s*accident|\bfletes?\b|entrega|recolecci|paqueter|automotriz/i,
     label: 'Flota',
   },
   {
@@ -110,34 +111,37 @@ const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   },
   {
     pattern:
-      /servicios?\s*p[úu]blicos?|recolec|residuos|pipas?\s*de\s*agua|vigilanc|traslado\s*de\s*valores|seguros?\s*y?\s*fianzas?|honorarios?|publicidad|mercadot|imprenta|papeler|membres|fumigac|aseo|limpie|agencia\s*de\s*viaje|entradas?\s*a\s*parques|\bbancos?\b|gubernament|atenci[óo]n\s*a\s*clientes|bolsas?\s*de\s*valores|mobiliar|boleto|donatar|membres[íi]a/i,
+      /servicios?\s*p[úu]blicos?|servicios?\s*generales?|consultor|recolec|residuos|pipas?\s*de\s*agua|vigilanc|traslado\s*de\s*valores|seguros?\s*y?\s*fianzas?|honorarios?|publicidad|mercadot|imprenta|papeler|membres|fumigac|aseo|limpie|agencia\s*de\s*viaje|entradas?\s*a\s*parques|\bbancos?\b|gubernament|atenci[óo]n\s*a\s*clientes|bolsas?\s*de\s*valores|mobiliar|boleto|donatar|membres[íi]a/i,
     label: 'Servicios',
   },
 ];
 
+export const UNCATEGORIZED_PROVIDER_BUCKET = 'Proveedores sin categoría';
+
 export function generalizeCategoria(raw: string | undefined | null): string {
   const trimmed = raw?.trim();
-  if (!trimmed) return 'Otros';
+  if (!trimmed) return UNCATEGORIZED_PROVIDER_BUCKET;
   for (const { pattern, label } of MACRO_PATTERNS) {
     if (pattern.test(trimmed)) return label;
   }
-  return 'Otros';
+  return UNCATEGORIZED_PROVIDER_BUCKET;
 }
 
 /**
  * Bucket macro para un movimiento de proveedor: cruza con catálogo y
- * generaliza. Sin cruce → "Otros".
+ * generaliza. Sin cruce → proveedor conocido pero pendiente de clasificar.
  */
 export function macroBucketForSupplier(opts: {
   counterpartyId?: string;
   counterpartyName?: string;
+  providerCategory?: string;
 }): string {
   // Regla de negocio: Busbud es proveedor de Federal aunque la categoría JDE
   // diga otra cosa (caso bidireccional cliente+proveedor del mismo grupo).
   if (opts.counterpartyName && /\bbusbud\b/i.test(opts.counterpartyName)) {
     return 'Federal';
   }
-  const categoria = lookupProviderCategoria(opts);
-  if (!categoria) return 'Otros';
+  const categoria = opts.providerCategory || lookupProviderCategoria(opts);
+  if (!categoria) return UNCATEGORIZED_PROVIDER_BUCKET;
   return generalizeCategoria(categoria);
 }

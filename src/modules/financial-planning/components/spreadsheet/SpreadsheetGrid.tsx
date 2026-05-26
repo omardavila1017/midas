@@ -15,6 +15,10 @@ import {
   ROW_HEIGHT,
   colWidthForGranularity,
 } from './gridGeometry';
+import {
+  OUTFLOW_BUCKET_ORDER,
+  UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
+} from '../../services/planningRowTaxonomy';
 
 export interface SpreadsheetGridProps {
   rows: PlanningRow[];
@@ -90,13 +94,13 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     (inputRows: PlanningRow[], type: FinancialMovementType): DisplayRow[] => {
       const byBucket = new Map<string, PlanningRow[]>();
       for (const row of inputRows) {
-        const label = row.bucketLabel || (type === 'INFLOW' ? 'Otros ingresos' : 'Otros egresos');
+        const label = row.bucketLabel || (type === 'INFLOW' ? 'Otros ingresos' : UNIDENTIFIED_BANK_OUTFLOW_BUCKET);
         const bucket = byBucket.get(label);
         if (bucket) bucket.push(row);
         else byBucket.set(label, [row]);
       }
       return Array.from(byBucket.entries())
-        .sort(([a], [b]) => a.localeCompare(b, 'es-MX'))
+        .sort(([a], [b]) => compareBucketLabels(a, b, type))
         .flatMap<DisplayRow>(([label, groupRows]) => {
           const id = bucketId(type, label);
           const sortedRows = [...groupRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
@@ -759,6 +763,18 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       )}
     </div>
   );
+}
+
+function compareBucketLabels(a: string, b: string, type: FinancialMovementType): number {
+  if (type === 'INFLOW') return a.localeCompare(b, 'es-MX');
+  const ai = OUTFLOW_BUCKET_ORDER.indexOf(a);
+  const bi = OUTFLOW_BUCKET_ORDER.indexOf(b);
+  if (ai !== -1 || bi !== -1) {
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  }
+  return a.localeCompare(b, 'es-MX');
 }
 
 // Renders only the rows intersecting the scroll viewport. Row height is

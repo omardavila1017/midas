@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
+import type { AuxiliarReconLine, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
-import type { CobranzaPayment } from '../../../services/jdeTypes';
+import type { BankAccountStatement, BankStatementLine, CobranzaPayment } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, PurchaseReceiptRecord, TaxObligation } from '../../shared-finance/types';
 import {
@@ -18,7 +19,93 @@ import {
 } from './taxModuleService';
 
 describe('taxModuleService', () => {
-  it('calculates IVA from projected CXC and JDE CXP invoice fields', () => {
+  it('detects real historic IVA paid from bank statements and reduces payable', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-IVA',
+          fechaCobro: '2026-05-08',
+          importeRecibo: 1160,
+          applications: [{
+            noFactura: 'C-IVA',
+            importeCobrado: 1160,
+            importeOriginalFactura: 1160,
+            importeIvaFacturaOriginal: 160,
+            tasaIva: '16',
+          }],
+        }),
+      ],
+      bankStatements: [bank([bankLine({
+        fechaOperacion: '2026-05-20',
+        concepto: 'PAGO IVA MAYO',
+        importe: 100,
+      })])],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCaused).toBeCloseTo(160);
+    expect(may.realIva.ivaPaid).toBeCloseTo(100);
+    expect(may.realIva.payable).toBeCloseTo(60);
+    expect(may.realIva.paidLines[0]).toMatchObject({
+      concept: 'Pago IVA · PAGO IVA MAYO',
+      counterpartyName: 'SAT — IVA',
+      sourceSystem: 'BANK',
+      taxAmount: 100,
+    });
+  });
+
+  it('does not treat bank fee IVA as historic IVA paid', () => {
+    const view = buildTaxDashboardView({
+      bankStatements: [bank([bankLine({
+        fechaOperacion: '2026-05-20',
+        concepto: 'IVA COMISION SPEI',
+        importe: 50,
+      })])],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    expect(view.periods).toHaveLength(0);
+  });
+
+  it('reflects real IVA payments already classified in projection movements', () => {
+    const view = buildTaxDashboardView({
+      movements: [
+        movement('tax-iva-bank', 'OUTFLOW', 'TAX', '2026-05-18', 250, {
+          sourceSystem: 'BANK',
+          counterpartyName: 'SAT — IVA',
+          concept: 'PAGO REFERENCIADO IVA',
+          subcategory: 'IVA',
+          status: 'REAL',
+        }),
+      ],
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaPaid).toBe(250);
+    expect(may.realIva.balanceInFavor).toBe(250);
+    expect(may.realIva.paidLines[0]).toMatchObject({
+      concept: 'Pago IVA · PAGO REFERENCIADO IVA',
+      sourceSystem: 'BANK',
+    });
+  });
+
+  it('calculates forecast IVA from projected CXC and scheduled JDE CXP invoice fields', () => {
     const view = buildTaxDashboardView({
       clients: [
         client({ id: 'ar-16', name: 'Cliente 16', ivaRate: 16, mayBilling: 1000 }),
@@ -40,6 +127,7 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
@@ -56,7 +144,7 @@ describe('taxModuleService', () => {
     });
   });
 
-  it('prorates partial CXP invoices and estimates unclear invoices under regimen 601', () => {
+  it('prorates forecast CXP invoices and leaves invoices without fiscal fields unclassified', () => {
     const view = buildTaxDashboardView({
       cxpRecords: [
         cxpRecord({
@@ -81,13 +169,14 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
-    expect(may.iva.expenseBase16).toBeCloseTo(500 + 500 / 1.16);
-    expect(may.iva.ivaCreditable).toBeCloseTo(80 + (500 - 500 / 1.16));
-    expect(may.iva.unclassifiedExpense).toBe(0);
-    expect(may.iva.expenseLines.some((line) => line.concept.includes('F-UNCLEAR'))).toBe(true);
+    expect(may.iva.expenseBase16).toBeCloseTo(500);
+    expect(may.iva.ivaCreditable).toBeCloseTo(80);
+    expect(may.iva.unclassifiedExpense).toBe(500);
+    expect(may.iva.unclassifiedLines.some((line) => line.concept.includes('F-UNCLEAR'))).toBe(true);
   });
 
   it('dates creditable CXP IVA on the real PagoProveedor date when coverage is paid', () => {
@@ -120,7 +209,7 @@ describe('taxModuleService', () => {
     expect(may?.iva.ivaCreditable ?? 0).toBe(0);
   });
 
-  it('splits partial PagoProveedor coverage between paid date and projected remainder', () => {
+  it('keeps paid CXP IVA in real and projected remainder in forecast when BOTH mode is used', () => {
     const cxp = cxpRecord({
       noFactura: 'F-PARTIAL-COVERAGE',
       fechaProgramacionPago: '2026-06-10',
@@ -141,16 +230,108 @@ describe('taxModuleService', () => {
       endDate: '2026-06-30',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'BOTH',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
     const jun = view.periods.find((period) => period.period === '2026-06')!;
-    expect(may.iva.ivaCreditable).toBeCloseTo(80);
-    expect(jun.iva.ivaCreditable).toBeCloseTo(80);
-    expect(jun.iva.expenseLines[0].concept).toContain('Remanente proyectado');
+    expect(may.realIva.ivaCreditable).toBeCloseTo(80);
+    expect(may.forecastIva.ivaCreditable).toBe(0);
+    expect(jun.realIva.ivaCreditable).toBe(0);
+    expect(jun.forecastIva.ivaCreditable).toBeCloseTo(80);
+    expect(jun.forecastIva.expenseLines[0].concept).toContain('Remanente proyectado');
   });
 
-  it('uses matched purchase receipt tax rate when CXP has no tax fields', () => {
+  it('uses AuxiliarContable as the paid CXP coverage source while keeping IVA from CXP invoice fields', () => {
+    const cxp = cxpRecord({
+      cia: '00011',
+      noProveedor: 'P-AUX',
+      nombre: 'Proveedor Auxiliar',
+      noFactura: 'F-AUX',
+      fechaProgramacionPago: '2026-06-10',
+      importeSubtotalPesos: 1000,
+      importeImpuestosPesos: 160,
+      importeBrutoPesos: 1160,
+      importePendientePesos: 1160,
+    });
+    const view = buildTaxDashboardView({
+      cxpRecords: [cxp],
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'F-AUX',
+          contraparte: 'Proveedor Auxiliar',
+          bankDate: '2026-05-12',
+          importe: -580,
+          bankAmount: -580,
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-06-30',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'BOTH',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    const jun = view.periods.find((period) => period.period === '2026-06')!;
+    expect(may.realIva.ivaCreditable).toBeCloseTo(80);
+    expect(may.realIva.expenseLines[0]).toMatchObject({
+      concept: 'Pago Auxiliar PV 2026-05-12 · Factura F-AUX · Proveedor Auxiliar',
+      taxAmount: 80,
+      rateSource: 'JDE',
+    });
+    expect(jun.realIva.ivaCreditable).toBe(0);
+    expect(jun.forecastIva.ivaCreditable).toBeCloseTo(80);
+    expect(jun.forecastIva.expenseLines[0].concept).toContain('Remanente proyectado');
+  });
+
+  it('REAL mode skips projected IVA from open CXP, clients, purchase receipts, budget and generic movements', () => {
+    const view = buildTaxDashboardView({
+      clients: [client({ id: 'projected', name: 'Cliente proyectado', ivaRate: 16, mayBilling: 1000 })],
+      assumptions,
+      cxpRecords: [
+        cxpRecord({
+          noFactura: 'F-ONLY',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 160,
+          importeBrutoPesos: 1160,
+          importePendientePesos: 1160,
+        }),
+      ],
+      purchaseReceipts: [
+        purchaseReceipt({
+          invoiceNo: 'OC-IVA',
+          amountMxn: 1160,
+          totalAmount: 1160,
+          taxRate: 16,
+          taxTreatment: 'IVA_CREDITABLE',
+        }),
+      ],
+      budget: budget({ expenseConcepts: [{ concept: 'Diésel', may: 1160 }] }),
+      movements: [
+        movement('movement-iva', 'OUTFLOW', 'OPEX', '2026-05-20', 1160, {
+          taxTreatment: 'IVA_CREDITABLE',
+          taxRate: 16,
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.iva.ivaCaused).toBe(0);
+    expect(may.iva.ivaCreditable).toBe(0);
+    expect(may.iva.expenseLines).toHaveLength(0);
+  });
+
+  it('does not invent forecast CXP IVA when the invoice has no fiscal fields', () => {
     const view = buildTaxDashboardView({
       cxpRecords: [
         cxpRecord({
@@ -179,12 +360,13 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
-    expect(may.iva.expenseBase8).toBeCloseTo(1000);
-    expect(may.iva.ivaCreditable8).toBeCloseTo(80);
-    expect(may.iva.expenseLines).toHaveLength(1);
+    expect(may.iva.ivaCreditable).toBe(0);
+    expect(may.iva.unclassifiedExpense).toBe(1080);
+    expect(may.iva.expenseLines).toHaveLength(0);
   });
 
   it('adds unmatched active purchase receipts to creditable IVA and excludes cancelled receipts', () => {
@@ -215,6 +397,7 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
@@ -240,6 +423,7 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
@@ -264,6 +448,7 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
@@ -285,6 +470,7 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
@@ -316,6 +502,7 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const feb = view.periods.find((period) => period.period === '2026-02')!;
@@ -326,7 +513,7 @@ describe('taxModuleService', () => {
     expect(may.iva.expenseLines).toHaveLength(1);
   });
 
-  it('recalculates provider lines when a provider IVA override is set to 8%', () => {
+  it('keeps invoice fiscal fields authoritative over provider IVA overrides for CXP', () => {
     const view = buildTaxDashboardView({
       cxpRecords: [
         cxpRecord({
@@ -352,14 +539,15 @@ describe('taxModuleService', () => {
         }],
       },
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
-    expect(may.iva.expenseBase8).toBeCloseTo(1160 / 1.08);
-    expect(may.iva.ivaCreditable8).toBeCloseTo(1160 - 1160 / 1.08);
+    expect(may.iva.expenseBase16).toBeCloseTo(1000);
+    expect(may.iva.ivaCreditable16).toBeCloseTo(160);
     expect(may.iva.expenseLines[0]).toMatchObject({
-      taxRate: 8,
-      rateSource: 'OVERRIDE',
+      taxRate: 16,
+      rateSource: 'JDE',
       rateTarget: { targetType: 'PROVIDER', targetKey: 'P-FRONTERA' },
     });
   });
@@ -375,6 +563,7 @@ describe('taxModuleService', () => {
       endDate: '2026-07-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const june = view.periods.find((period) => period.period === '2026-06')!;
@@ -394,6 +583,7 @@ describe('taxModuleService', () => {
       endDate: '2026-05-31',
       store: defaultTaxStore(),
       today: '2026-05-01',
+      ivaMode: 'FORECAST',
     });
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
@@ -699,6 +889,36 @@ function cobranzaPayment(input: {
   };
 }
 
+function bank(movimientos: BankStatementLine[] = []): BankAccountStatement {
+  return {
+    cia: '00011',
+    banco: 'BANAMEX',
+    cuenta: '123',
+    moneda: 'MXN',
+    fechaEstadoCuenta: '2026-05-31',
+    movimientos,
+  };
+}
+
+function bankLine(patch: Partial<BankStatementLine> = {}): BankStatementLine {
+  return {
+    cia: patch.cia ?? '00011',
+    banco: patch.banco ?? 'BANAMEX',
+    nombreBanco: patch.nombreBanco ?? 'BANAMEX',
+    cuenta: patch.cuenta ?? '123',
+    moneda: patch.moneda ?? 'MXN',
+    fechaOperacion: patch.fechaOperacion ?? '2026-05-20',
+    referencia: patch.referencia ?? 'REF-IVA',
+    concepto: patch.concepto ?? 'PAGO IVA',
+    tipoMovimiento: patch.tipoMovimiento ?? 'CARGO',
+    importe: patch.importe ?? 100,
+    infAdi1: patch.infAdi1,
+    infAdi2: patch.infAdi2,
+    infAdi3: patch.infAdi3,
+    gsaid: patch.gsaid,
+  };
+}
+
 function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
   return {
     cia: patch.cia ?? '00001',
@@ -740,6 +960,79 @@ function coverage(record: CXPRecord, patch: Omit<CxpPaymentCoverage, 'cxpKey'>):
   return {
     cxpKey: coverageKey(record),
     ...patch,
+  };
+}
+
+function auxiliarResult(lines: AuxiliarReconLine[]): AuxiliarReconResult {
+  return {
+    lines,
+    bankOrphans: [],
+    inconsistencies: [],
+    sourceConfirmation: new Map(),
+    summary: {
+      totalLineas: lines.length,
+      ingresoLineas: 0,
+      ingresoCruzadas: 0,
+      ingresoMonto: 0,
+      ingresoMontoCruzado: 0,
+      pctIngresoCruzado: 0,
+      egresoLineas: lines.length,
+      egresoCruzadas: lines.length,
+      egresoMonto: lines.reduce((sum, line) => sum + Math.abs(line.importe), 0),
+      egresoMontoCruzado: lines.reduce((sum, line) => sum + Math.abs(line.importe), 0),
+      pctEgresoCruzado: lines.length > 0 ? 100 : 0,
+      conciliadasJde: 0,
+      cajaLineas: 0,
+      cajaMonto: 0,
+      internoLineas: 0,
+      internoMonto: 0,
+      glOrphanLineas: 0,
+      glOrphanMonto: 0,
+      bankOrphanLineas: 0,
+      bankOrphanMonto: 0,
+      ciaBreakdown: [],
+      inconsistencyCounts: {
+        'non-bank-batch-in-1020': 0,
+        'jde-not-marked-reconciled': 0,
+        'duplicate-gsaid-on-bank': 0,
+        'idcuenta-collision-on-aux': 0,
+      },
+    },
+  };
+}
+
+function auxiliarLine(patch: {
+  cia: string;
+  noFactura: string;
+  contraparte: string;
+  bankDate: string;
+  importe: number;
+  bankAmount?: number;
+}): AuxiliarReconLine {
+  return {
+    glKey: `${patch.cia}::aux::PV::${patch.noFactura}`,
+    cia: patch.cia,
+    cuentaBanco: '70144758151',
+    nombreCuenta: 'BANAMEX CTA',
+    flujo: 'egreso',
+    esCaja: false,
+    fechaContable: patch.bankDate,
+    importe: patch.importe,
+    moneda: 'MXP',
+    tipoDocto: 'PV',
+    tipoDoctoDesc: 'Pago',
+    estatusConciliado: '',
+    matchTier: 'exact',
+    confidence: 0.97,
+    bankMovementKey: `bank:${patch.noFactura}`,
+    bankDate: patch.bankDate,
+    bankAmount: patch.bankAmount,
+    source: {
+      kind: 'factura',
+      cia: patch.cia,
+      ref: patch.noFactura,
+      contraparte: patch.contraparte,
+    },
   };
 }
 
@@ -829,6 +1122,7 @@ function movement(
     sourceSystem: patch.sourceSystem ?? 'FORECAST',
     type,
     category,
+    subcategory: patch.subcategory,
     counterpartyName: patch.counterpartyName,
     counterpartyType: patch.counterpartyType,
     concept: patch.concept ?? id,
@@ -842,7 +1136,7 @@ function movement(
     forecastMethod: 'RULE',
     taxTreatment: patch.taxTreatment,
     taxRate: patch.taxRate,
-    status: 'PROJECTED_BASE',
+    status: patch.status ?? 'PROJECTED_BASE',
     lockState: 'UNLOCKED',
     createdAt: '2026-05-01T00:00:00.000Z',
     updatedAt: '2026-05-01T00:00:00.000Z',
