@@ -17,6 +17,7 @@
 import { jdeClient, JdeClientConfig } from './jdeClient';
 import {
   fetchRangeWithDailyCache,
+  fetchRangeWithChunkedDailyCache,
   fetchRangeWithMonthlyCache,
   hasDailyCached,
   getDailyCachedAsync,
@@ -28,6 +29,7 @@ import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber } from '../domain/bankStatements';
 import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
+import { isAuxiliarAllowlistedCia } from '../domain/auxiliarReconciliationConfig';
 import { isNonOperatingDay } from '../domain/bankHolidays';
 
 /**
@@ -647,9 +649,32 @@ export async function fetchBankStatements(
   return singleFlight(
     `bancos:${stableStringify(req)}:${stableStringify(config)}`,
     async () => {
+  // Días pasados → daily-cache IDB. El prime de boot dispara 6 paralelas
+  // (`today + 5 días atrás`) como fallback por si hoy no tiene datos; sin
+  // este check los 5 días pasados, ya hidratados en IDB por sesiones
+  // anteriores, repegan al API en cada reload. La cache key es la misma
+  // que usa `fetchBankStatementsRange` (`banks.${formato}`), así que ambos
+  // path comparten el almacenamiento.
+  const cacheApiKey = `banks.${req.formatoElectronico}`;
+  const today = todayISO();
+  const isPast = req.fechaEstadoCuenta < today;
+  if (isPast) {
+    await primeDailyCache();
+    if (hasDailyCached(cacheApiKey, req.fechaEstadoCuenta)) {
+      const cached = await getDailyCachedAsync<BankAccountStatement>(
+        cacheApiKey,
+        req.fechaEstadoCuenta,
+      );
+      if (cached !== null) return cached;
+    }
+  }
+
   const raw = await jdeClient.post<unknown>('/bancos', req, config);
   const list = unwrapList(raw);
-  if (list.length === 0) return [];
+  if (list.length === 0) {
+    if (isPast) setDailyCached(cacheApiKey, req.fechaEstadoCuenta, []);
+    return [];
+  }
 
   // El API actual de JDE Desarrollo devuelve líneas planas con
   // Saldo_Inicial/Saldo_Final repetidos por cuenta → agrupar.
@@ -666,7 +691,9 @@ export async function fetchBankStatements(
     keptRaw.push(list[i]);
     keptLines.push(ln);
   }
-  return groupByAccount(keptRaw, keptLines, req.fechaEstadoCuenta);
+  const grouped = groupByAccount(keptRaw, keptLines, req.fechaEstadoCuenta);
+  if (isPast) setDailyCached(cacheApiKey, req.fechaEstadoCuenta, grouped);
+  return grouped;
     },
   );
 }
@@ -1705,11 +1732,16 @@ export async function fetchAuxiliarContable(
   req: AuxiliarContableRequest,
   config: JdeClientConfig = {},
 ): Promise<AuxiliarContableRecord[]> {
+  // Allowlist explícita — solo 6 cías. Bloqueamos cualquier otra ANTES de
+  // pegarle al API. Cía 33 (multicarga) se incluye explícitamente aquí pese
+  // a estar en la exclusión global; por eso NO usamos `dropExcludedByCia`
+  // downstream — el filtro de allowlist ya es el gate canónico para auxiliar.
+  if (!isAuxiliarAllowlistedCia(req.cia)) return [];
   // El path debe ir en PascalCase exacto: el endpoint JDE está registrado
   // como /JDEdwards/AuxiliarContable y responde 404 a `/auxiliarcontable`.
   const raw = await jdeClient.post<unknown>('/AuxiliarContable', req, config);
   const rows = stripAllToWhitelist(unwrapList(raw), KEPT_AUXILIAR_FIELDS);
-  return dropExcludedByCia(rows.map(mapAuxiliarContable));
+  return rows.map(mapAuxiliarContable);
 }
 
 /**
@@ -1732,7 +1764,7 @@ export async function fetchAuxiliarContableRange(
   cia: string,
   from: string,
   to: string,
-  params: { tl: string; nr: number; objetos: readonly string[] },
+  params: { tl: string; nr: number; objetos: readonly { ini: string; fin: string }[] },
   options: {
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
@@ -1747,40 +1779,52 @@ export async function fetchAuxiliarContableRange(
 ): Promise<AuxiliarContableRecord[]> {
   const config = options.config ?? {};
 
-  const MAX_ATTEMPTS = 3;
-  const fetchDayWithRetry = async (day: string): Promise<AuxiliarContableRecord[]> => {
-    // Short-circuit fines de semana + festivos bancarios MX. AuxiliarContable
-    // libro mayor (tl="AA") sólo registra movimientos en días hábiles —
-    // sábado/domingo y festivos siempre regresan `data: []`. Backfill de 2
-    // años son ~520 días no-operativos × 2 objetos = 1040 requests sintéticos.
-    // Saltarlos: 0 round-trips + cache se llena igual con `[]` para que
-    // futuros boots tampoco intenten. Si JDE algún día postea con fecha
-    // sábado (cierre mensual raro), invalidar cache manual y borrar este
-    // gate localmente.
-    const d = new Date(day + 'T00:00:00Z');
-    if (!Number.isNaN(d.getTime()) && isNonOperatingDay(d)) return [];
+  // Piso duro: nunca pedir auxiliar contable < 2025-01-01 (decisión
+  // 2026-05-25). 2024 queda descartado por completo aún si el caller pasa
+  // un `from` más viejo.
+  const AUX_HARD_FLOOR = '2025-01-01';
+  if (from < AUX_HARD_FLOOR) from = AUX_HARD_FLOOR;
+  if (to < AUX_HARD_FLOOR) return [];
 
+  const MAX_ATTEMPTS = 3;
+  // 3 días por chunk. Ventana de 7 días empujaba responses a 1.9-2 min
+  // (al borde del timeout de 120s del jdeClient) y ~30% se cancelaban.
+  // 3 días mantiene el response < 60s con margen sano (decisión 2026-05-25).
+  const AUX_CHUNK_DAYS = 3;
+  const fetchChunkOnce = (
+    chunkFrom: string,
+    chunkTo: string,
+  ): Promise<AuxiliarContableRecord[]> =>
+    Promise.all(
+      params.objetos.map((rango) =>
+        fetchAuxiliarContable(
+          {
+            cia,
+            fechaInicial: chunkFrom,
+            fechaFinal: chunkTo,
+            tl: params.tl,
+            nr: params.nr,
+            objIni: rango.ini,
+            objFin: rango.fin,
+          },
+          config,
+        ),
+      ),
+    ).then((perObjeto) => perObjeto.flat());
+
+  const fetchChunkWithRetry = async (
+    chunkFrom: string,
+    chunkTo: string,
+  ): Promise<AuxiliarContableRecord[]> => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        // Una request por objeto contable — el API rechaza objIni≠objFin.
-        const perObjeto = await Promise.all(
-          params.objetos.map((objeto) =>
-            fetchAuxiliarContable(
-              {
-                cia,
-                fechaInicial: day,
-                fechaFinal: day,
-                tl: params.tl,
-                nr: params.nr,
-                objIni: objeto,
-                objFin: objeto,
-              },
-              config,
-            ),
-          ),
-        );
-        return perObjeto.flat();
+        // Una request por rango de objeto contable × ventana de 3 días.
+        // API acepta objIni≠objFin Y rangos de fecha amplios. El cache se
+        // llena per-día (splittea por fechaContable dentro de
+        // `fetchRangeWithChunkedDailyCache`) — días no-operativos quedan
+        // cacheados como `[]` sin disparar request extra.
+        return await fetchChunkOnce(chunkFrom, chunkTo);
       } catch (err) {
         lastErr = err;
         if (attempt === MAX_ATTEMPTS) break;
@@ -1788,18 +1832,51 @@ export async function fetchAuxiliarContableRange(
         await new Promise((r) => setTimeout(r, delayMs));
       }
     }
-    throw lastErr;
+    // Fallback per-día: chunks de 3 días pueden tronar por timeout o por
+    // payload pesado en ventanas con mucho movimiento. Reintentamos UNO POR
+    // UNO los días del chunk — payload más chico = respuesta más rápida,
+    // menos chance de timeout. Días que igual fallen quedan vacíos y NO se
+    // cachean (no envenenan); reintenta en boot siguiente.
+    // eslint-disable-next-line no-console
+    console.warn(`[auxiliarcontable] ${cia} chunk ${chunkFrom}..${chunkTo} falló 3x · fallback per-día`);
+    const days: string[] = [];
+    {
+      const start = new Date(chunkFrom + 'T00:00:00Z');
+      const end = new Date(chunkTo + 'T00:00:00Z');
+      for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+        days.push(d.toISOString().slice(0, 10));
+      }
+    }
+    const perDay: AuxiliarContableRecord[][] = [];
+    let perDaySuccess = 0;
+    for (const day of days) {
+      try {
+        perDay.push(await fetchChunkOnce(day, day));
+        perDaySuccess++;
+      } catch (dayErr) {
+        // eslint-disable-next-line no-console
+        console.warn(`[auxiliarcontable] ${cia} día ${day} falló: ${dayErr instanceof Error ? dayErr.message : String(dayErr)}`);
+        perDay.push([]);
+      }
+    }
+    if (perDaySuccess === 0) throw lastErr;
+    return perDay.flat();
   };
 
-  const all = await fetchRangeWithDailyCache<AuxiliarContableRecord>('auxiliarcontable', {
-    from,
-    to,
-    cia,
-    fetchDay: fetchDayWithRetry,
-    onProgress: options.onProgress,
-    onDay: options.onDay,
-    concurrency: options.concurrency ?? 4,
-  });
+  const all = await fetchRangeWithChunkedDailyCache<AuxiliarContableRecord>(
+    'auxiliarcontable',
+    {
+      from,
+      to,
+      cia,
+      chunkSize: AUX_CHUNK_DAYS,
+      fetchChunk: fetchChunkWithRetry,
+      dateOf: (r) => r.fechaContable,
+      onProgress: options.onProgress,
+      onDay: options.onDay,
+      concurrency: options.concurrency ?? 4,
+    },
+  );
 
   const seen = new Set<string>();
   const merged: AuxiliarContableRecord[] = [];

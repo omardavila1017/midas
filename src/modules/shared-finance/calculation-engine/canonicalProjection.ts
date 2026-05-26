@@ -62,6 +62,7 @@ import { bankMovementKey } from '../../../domain/bankMovementKey';
 import { todayISO } from '../../../formatters';
 import { isCorningAbono } from '../../../domain/bankStatements';
 import type { BankInflowEnrichment } from '../../../domain/auxiliarProjectionAdapter';
+import type { AuxiliarReconLine } from '../../../domain/auxiliarReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
 import { buildCargoProviderIndex, matchCargoToProvider } from '../../../domain/cargoProviderMatch';
@@ -134,6 +135,16 @@ export interface CanonicalProjectionInputs {
    * cobranza (ingresos).
    */
   cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ claveProveedor?: string; nombreProveedor: string; importe: number }> }>;
+  /**
+   * Líneas del libro mayor JDE (AuxiliarContable) con su estado de
+   * conciliación bancaria. Cuando un mes histórico (cia, ym) NO está cubierto
+   * por estados de cuenta bancarios cargados, las líneas GL son la verdad
+   * realizada — se emiten como movimientos sintéticos `auxiliar-historic:*`
+   * para que Planeación muestre el flujo histórico incluso sin banco.
+   * Espejo egreso de `cobranza-historic:*` (que sólo cubre ingresos vía
+   * cobranza JDE). Líneas caja/interno se omiten.
+   */
+  auxiliarReconLines?: AuxiliarReconLine[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   /**
@@ -644,6 +655,90 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       comments: ['Cobro real reportado por JDE. No editable desde Planeación.'],
       createdAt: `${cobroDate}T00:00:00.000Z`,
       updatedAt: `${cobroDate}T00:00:00.000Z`,
+    });
+  }
+
+  // 1c) Histórico desde AuxiliarContable (libro mayor JDE) — espejo de
+  //     `cobranza-historic` pero cubre INGRESOS y EGRESOS. Cuando un mes
+  //     histórico (cia, ym) NO tiene estado de cuenta cargado en el paso 1,
+  //     las líneas GL son la verdad realizada del cash flow: salieron del
+  //     banco/caja. Sin esto Planeación queda en blanco para egresos pasados
+  //     hasta que el usuario cargue manualmente los estados de cuenta —
+  //     AuxiliarContable se carga automático y cubre 2025-01 → hoy.
+  //
+  //     Filtros:
+  //     - Sólo flujo ingreso/egreso (caja=movimientos internos de caja,
+  //       interno=traspasos entre cuentas propias — no son flujo real).
+  //     - Sólo meses históricos dentro de la ventana monthly.
+  //     - Sólo (cia, ym) SIN cobertura bancaria (mismo cut que 1b).
+  //     - Sólo líneas SIN `bankMovementKey` cuando el mes SÍ tiene cobertura
+  //       (línea cruzada ya está representada vía `bank:*`).
+  for (const line of inputs.auxiliarReconLines ?? []) {
+    if (
+      inputs.companyCode !== 'all'
+      && inputs.companyCode
+      && line.cia !== inputs.companyCode
+    ) continue;
+    if (line.flujo !== 'ingreso' && line.flujo !== 'egreso') continue;
+    const fecha = line.fechaContable;
+    if (!fecha || fecha.length < 10) continue;
+    if (fecha >= inputs.asOfDate) continue;
+    const ym = fecha.slice(0, 7);
+    const monthInfo = monthlyByYm.get(ym);
+    if (!monthInfo || !monthInfo.isHistorical) continue;
+    // Si el banco cubre el mes para esta cia, los movimientos ya están en
+    // el paso 1. Sólo emitimos aux-historic cuando NO hay estado de cuenta:
+    // el GL es la única fuente de la verdad realizada para ese período.
+    if (bankCoverage.has(`${line.cia}::${ym}`)) continue;
+    const monto = Math.abs(line.importe);
+    if (!Number.isFinite(monto) || monto <= 0) continue;
+    const isInflow = line.flujo === 'ingreso';
+    const counterpartyName = line.source.contraparte
+      || line.nombreCuenta
+      || (isInflow ? 'Ingreso JDE' : 'Egreso JDE');
+    // Cliente catálogo: si la contraparte coincide con un cliente conocido,
+    // colapsamos al grupo comercial. Para egresos no hacemos lookup de
+    // proveedor (la línea GL no trae idProveedor confiable) — cae a
+    // counterpartyName crudo + categoría TRANSFER.
+    const inflowSubcategory = isInflow
+      ? resolveInflowSubcategory({
+          counterpartyId: undefined,
+          clientById,
+          isRolCollection: line.source.kind === 'factura',
+        })
+      : undefined;
+    out.push({
+      id: `auxiliar-historic:${line.glKey}`,
+      sourceSystem: 'JDE',
+      sourceObjectId: line.source.ref || line.glKey,
+      type: isInflow ? 'INFLOW' : 'OUTFLOW',
+      category: isInflow
+        ? (line.source.kind === 'factura' ? 'AR_COLLECTION' : 'TRANSFER')
+        : (line.source.kind === 'pago' || line.source.kind === 'factura'
+            ? 'AP_PAYMENT'
+            : 'TRANSFER'),
+      subcategory: inflowSubcategory,
+      companyId: line.cia,
+      bankAccountId: line.cuentaBanco,
+      counterpartyId: undefined,
+      counterpartyName,
+      counterpartyType: isInflow ? 'CUSTOMER' : 'SUPPLIER',
+      concept: `${line.tipoDoctoDesc || line.tipoDocto || 'GL'} ${line.source.ref || ''} · ${counterpartyName}`.trim(),
+      currency: line.moneda || 'MXN',
+      originalAmount: monto,
+      baseAmount: monto,
+      projectedAmount: monto,
+      actualDate: fecha,
+      projectedDate: fecha,
+      confidenceScore: 100,
+      confidenceBand: calculateConfidenceBand(100),
+      forecastMethod: 'RULE',
+      ruleApplied: 'AuxiliarContable JDE (libro mayor)',
+      status: 'REAL',
+      lockState: 'LOCKED',
+      comments: ['Dato real del libro mayor JDE. Banco no cargado para este mes — fuente: AuxiliarContable.'],
+      createdAt: `${fecha}T00:00:00.000Z`,
+      updatedAt: `${fecha}T00:00:00.000Z`,
     });
   }
 

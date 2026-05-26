@@ -202,6 +202,10 @@ export function buildFinancialProjectionSourceData(
     paidCxpKeys: bridge.paidCxpKeys,
     paidPurchaseOrderKeys: bridge.paidPurchaseOrderKeys,
     cargoEnrichments: bridge.cargoEnrichments,
+    // Líneas GL completas — canonicalProjection las usa en step 1c para
+    // emitir `auxiliar-historic:*` cuando un mes no tiene banco cargado
+    // (cubre egresos pasados que cobranza-historic no rellena).
+    auxiliarReconLines: input.auxiliarReconciliation?.lines,
     assumptions: input.assumptions,
     budget: input.budget,
     startingBalance: input.startingBalance,

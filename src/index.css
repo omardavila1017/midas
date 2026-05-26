@@ -1528,3 +1528,22 @@ html.dark .senda-mark-inverted {
 @keyframes typing-shadow046 { 0% { transform: scaleX(1.5); } 40% { transform: scaleX(1); opacity: 0.7; } 100% { transform: scaleX(0.2); opacity: 0.4; } }
 .typing-shadow:nth-child(4) { left: 45%; animation-delay: 0.2s; }
 .typing-shadow:nth-child(5) { left: auto; right: 15%; animation-delay: 0.3s; }
+
+/* Pause glyph — reemplaza la animación de dots cuando el usuario pausa
+   las descargas. Animación adaptada de Uiverse (catraco): un rotate+scale
+   "fill" de 0.5s que enfatiza el cambio de estado. */
+.splash-pause-glyph {
+  width: 60px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a5a5b0;
+  fill: currentColor;
+  animation: splash-pause-fill 0.5s ease;
+}
+@keyframes splash-pause-fill {
+  0%   { transform: rotate(-180deg) scale(0); opacity: 0; }
+  50%  { transform: rotate(-10deg) scale(1.2); opacity: 1; }
+  100% { transform: rotate(0deg) scale(1); opacity: 1; }
+}

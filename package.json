@@ -14,7 +14,6 @@
     "security:gitleaks": "gitleaks detect --no-git --redact --source ."
   },
   "dependencies": {
-    "exceljs": "^4.4.0",
     "lucide-react": "^0.383.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -37,7 +36,7 @@
     "vitest": "^2.1.8"
   },
   "optionalDependencies": {
-    "@rollup/rollup-win32-x64-msvc": "^4.60.3",
-    "@rollup/rollup-linux-arm64-gnu": "^4.60.2"
+    "@rollup/rollup-linux-arm64-gnu": "^4.60.2",
+    "@rollup/rollup-win32-x64-msvc": "^4.60.3"
   }
 }

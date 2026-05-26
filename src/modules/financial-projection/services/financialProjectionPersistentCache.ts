@@ -152,7 +152,13 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     `rol=len:${(input.rolRecords ?? []).length}`,
     `purchase=${fingerprintArray(input.purchaseReceipts ?? [], (item) => fields(item, ['cia', 'noProveedor', 'invoiceNo', 'purchaseOrderNo', 'receiptNo', 'estimatedDueDate', 'totalAmount', 'status', 'confidence']))}`,
     `payroll=${fingerprintArray(input.payrollCosts ?? [], (item) => fields(item, ['cia', 'year', 'month', 'paymentDate', 'payrollPeriod', 'conceptId', 'amount']))}`,
-    `reconciliation=${unknownFingerprint(input.auxiliarReconciliation)}`,
+    // Reconciliation fingerprint: structural counts only. Serializing the full
+    // AuxiliarReconResult (lines + bankOrphans + sourceConfirmation Map) builds
+    // a ~25MB string and burns the main thread on boot (foldHash char-by-char).
+    // Any real change to the recon output moves at least one summary counter,
+    // a list length, or the sourceConfirmation size — same trade-off as the
+    // cxp/cobranza/rol `len:` fingerprints above.
+    `reconciliation=${reconciliationFingerprint(input.auxiliarReconciliation)}`,
   ].join('|'))}`;
 }
 
@@ -415,6 +421,24 @@ function budgetFingerprint(value: unknown): string {
     `income=${fingerprintArray(budget.incomeTotal ?? [], primitive)}`,
     `expense=${fingerprintArray(budget.expenseTotal ?? [], primitive)}`,
   ].join('|');
+}
+
+function reconciliationFingerprint(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const recon = value as {
+    lines?: unknown[];
+    bankOrphans?: unknown[];
+    sourceConfirmation?: Map<unknown, unknown> | Record<string, unknown>;
+    summary?: Record<string, unknown>;
+  };
+  const linesLen = Array.isArray(recon.lines) ? recon.lines.length : 0;
+  const orphansLen = Array.isArray(recon.bankOrphans) ? recon.bankOrphans.length : 0;
+  const sc = recon.sourceConfirmation;
+  const scSize = sc instanceof Map ? sc.size : sc && typeof sc === 'object' ? Object.keys(sc).length : 0;
+  const summary = recon.summary && typeof recon.summary === 'object' ? recon.summary : {};
+  const summaryKeys = Object.keys(summary).sort();
+  const summaryParts = summaryKeys.map((k) => `${k}=${primitive(summary[k])}`).join(',');
+  return `L${linesLen}|O${orphansLen}|S${scSize}|{${summaryParts}}`;
 }
 
 function unknownFingerprint(value: unknown): string {

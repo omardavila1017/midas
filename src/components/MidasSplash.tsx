@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Snowflake, AlertTriangle } from 'lucide-react';
+import { Snowflake, AlertTriangle, Pause, Play } from 'lucide-react';
 import { clearAllMidasStorage } from '../domain/storageRegistry';
 import { clearAuth } from './Login';
+import { jdeFetchPauseGate } from '../services/pauseGate';
 
 export type BootTaskStatus = 'pending' | 'loading' | 'done' | 'error';
 
@@ -108,6 +109,14 @@ function counterText(done: number, total: number, elapsed: string, variantIndex:
   return formats[variantIndex] ?? formats[0];
 }
 
+function formatErrorStatus(status: number): string {
+  if (status === -1) return 'cancelado/timeout';
+  if (status === 0) return 'error de red';
+  if (status === -2) return 'error desconocido';
+  if (status === 408) return 'HTTP 408 (timeout)';
+  return `HTTP ${status}`;
+}
+
 function heartbeatFor(taskId: string, tick: number, variantIndex: number): string {
   const variants = HEARTBEAT_VARIANTS[taskId];
   if (!variants || variants.length === 0) {
@@ -137,6 +146,19 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
   const startedAtRef = useRef(startedAt);
   const [coldBootConfirming, setColdBootConfirming] = useState(false);
   const [coldBootRunning, setColdBootRunning] = useState(false);
+  // Pause/resume de TODOS los fetches JDE. El gate vive en jdeClient — pausar
+  // bloquea cualquier nueva request (boot + refresh + manual) sin cancelar
+  // in-flight. Tracking `lastError` permite mostrar el endpoint que rompió.
+  const [gateState, setGateState] = useState(() => ({
+    paused: jdeFetchPauseGate.isPaused(),
+    lastError: jdeFetchPauseGate.getLastError(),
+  }));
+  useEffect(() => jdeFetchPauseGate.subscribe(() => setGateState({
+    paused: jdeFetchPauseGate.isPaused(),
+    lastError: jdeFetchPauseGate.getLastError(),
+  })), []);
+  const fetchPaused = gateState.paused;
+  const lastError = gateState.lastError;
 
   // Variante global elegida una sola vez por sesión — coherencia de tono en
   // todo el ciclo (heartbeats, contador, near-done, aria).
@@ -146,15 +168,16 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
     if (!visible) setLeaving(true);
   }, [visible]);
 
-  // Heartbeat: cambia el sub-texto cada 2.5s para que el usuario vea que la
-  // app sigue viva aunque un fetch tarde 60s. requestAnimationFrame en lugar
-  // de setInterval para que se autopause si el thread se traba (mejor señal).
+  // Heartbeat: cambia el sub-texto cada 5s para que el usuario alcance a
+  // leer cada frase. Antes era 2.5s — apenas se alcanzaban a leer las más
+  // largas. requestAnimationFrame en lugar de setInterval para que se
+  // autopause si el thread se traba (mejor señal).
   useEffect(() => {
     if (!visible) return;
     let raf = 0;
     let lastTick = performance.now();
     const loop = (now: number) => {
-      if (now - lastTick > 2500) {
+      if (now - lastTick > 5000) {
         lastTick = now;
         setHeartbeatTick(t => t + 1);
       }
@@ -237,14 +260,22 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
           </span>
         </div>
 
-        <div className="typing-indicator" role="img" aria-label="Cargando">
-          <div className="typing-circle" />
-          <div className="typing-circle" />
-          <div className="typing-circle" />
-          <div className="typing-shadow" />
-          <div className="typing-shadow" />
-          <div className="typing-shadow" />
-        </div>
+        {fetchPaused ? (
+          <div className="splash-pause-glyph" role="img" aria-label="Descargas pausadas">
+            <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden>
+              <path d="M8 5h3v14H8zM13 5h3v14h-3z" />
+            </svg>
+          </div>
+        ) : (
+          <div className="typing-indicator" role="img" aria-label="Cargando">
+            <div className="typing-circle" />
+            <div className="typing-circle" />
+            <div className="typing-circle" />
+            <div className="typing-shadow" />
+            <div className="typing-shadow" />
+            <div className="typing-shadow" />
+          </div>
+        )}
 
         <div
           className="flex flex-col items-center gap-1"
@@ -305,31 +336,97 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
           </div>
         </div>
 
-        <div style={{ marginTop: 8, minHeight: 28, display: 'flex', justifyContent: 'center' }}>
+        {lastError && (
+          <div
+            role="alert"
+            aria-live="assertive"
+            style={{
+              marginTop: 12,
+              maxWidth: 420,
+              padding: '10px 14px',
+              borderRadius: 8,
+              background: 'rgba(217, 119, 6, 0.08)',
+              border: '1px solid rgba(217, 119, 6, 0.35)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
+            }}
+          >
+            <AlertTriangle
+              className="w-4 h-4"
+              strokeWidth={2}
+              style={{ color: '#d97706', flexShrink: 0, marginTop: 2 }}
+            />
+            <div style={{ fontSize: 12, lineHeight: 1.45, color: 'var(--skeuo-ink)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>
+                Descargas pausadas — {formatErrorStatus(lastError.status)}
+              </div>
+              <div style={{ opacity: 0.85, wordBreak: 'break-word' }}>
+                <code style={{ fontSize: 11, padding: '1px 4px', borderRadius: 3, background: 'rgba(0,0,0,0.06)' }}>
+                  {lastError.path}
+                </code>
+                {' '}falló. Reanudar para continuar a pesar del error.
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 8, minHeight: 28, display: 'flex', justifyContent: 'center', gap: 12, alignItems: 'center' }}>
           {!coldBootConfirming ? (
-            <button
-              type="button"
-              onClick={() => setColdBootConfirming(true)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--skeuo-brass-deep)',
-                opacity: 0.55,
-                fontSize: 11,
-                fontWeight: 500,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '4px 8px',
-                borderRadius: 6,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
-              onMouseLeave={e => (e.currentTarget.style.opacity = '0.55')}
-            >
-              <Snowflake className="w-3 h-3" strokeWidth={1.75} />
-              {COLD_BOOT_STRINGS.triggerButton}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => jdeFetchPauseGate.toggle()}
+                aria-label={fetchPaused ? 'Reanudar descargas' : 'Pausar descargas'}
+                title={fetchPaused
+                  ? 'Reanudar todos los fetches'
+                  : 'Pausar todos los fetches (in-flight terminan; nuevos esperan)'}
+                style={{
+                  background: fetchPaused ? 'var(--skeuo-brass-deep)' : 'transparent',
+                  border: fetchPaused ? 'none' : '1px solid var(--skeuo-brass-deep)',
+                  color: fetchPaused ? 'var(--skeuo-paper)' : 'var(--skeuo-brass-deep)',
+                  opacity: fetchPaused ? 1 : 0.75,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  transition: 'opacity 120ms, background 120ms',
+                }}
+                onMouseEnter={e => { if (!fetchPaused) e.currentTarget.style.opacity = '1'; }}
+                onMouseLeave={e => { if (!fetchPaused) e.currentTarget.style.opacity = '0.75'; }}
+              >
+                {fetchPaused
+                  ? <><Play className="w-3 h-3" strokeWidth={2} /> Reanudar descargas</>
+                  : <><Pause className="w-3 h-3" strokeWidth={2} /> Pausar descargas</>}
+              </button>
+              <button
+                type="button"
+                onClick={() => setColdBootConfirming(true)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--skeuo-brass-deep)',
+                  opacity: 0.55,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                }}
+                onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
+                onMouseLeave={e => (e.currentTarget.style.opacity = '0.55')}
+              >
+                <Snowflake className="w-3 h-3" strokeWidth={1.75} />
+                {COLD_BOOT_STRINGS.triggerButton}
+              </button>
+            </>
           ) : (
             <div
               role="dialog"

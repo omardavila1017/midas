@@ -47,7 +47,7 @@ import {
   type PagoProveedorRecord,
   type RolRecord,
 } from './services/jde';
-import { AUX_RECON_PARAMS } from './domain/auxiliarReconciliationConfig';
+import { AUX_RECON_PARAMS, isAuxiliarAllowlistedCia } from './domain/auxiliarReconciliationConfig';
 import {
   reconcileAuxiliar,
   emptyAuxiliarReconResult,
@@ -2525,7 +2525,12 @@ export default function App() {
     if (!storeHydrated) return;
     if (companies.length === 0) return;
     if (!idbHydratedDatasets.has('auxiliar')) return;
-    const activeCias = filterActiveCompanies(companies).map(c => c.cia);
+    // Allowlist explícita para auxiliar contable — NO usamos
+    // `filterActiveCompanies` aquí porque incluye cía 33 (multicarga) que
+    // está en la exclusión global. La lista vive en auxiliarReconciliationConfig.
+    const activeCias = companies
+      .filter(c => c.activa !== false && isAuxiliarAllowlistedCia(c.cia))
+      .map(c => c.cia);
     if (activeCias.length === 0) {
       auxiliarAutoFetchDone.current = true;
       setBootSlot('auxiliar', 'done');
@@ -2547,17 +2552,56 @@ export default function App() {
     setDatasetSlot('auxiliar', 'loading');
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
-    // 2 años de historia — match con cobranza/predictivo. El range `año-en-curso`
-    // anterior generaba sólo 5 meses de aux en mid-year y dejaba el heavy store
-    // anémico vs cobranza/bancos. Con el skip de fines-de-semana + festivos
-    // ~30% de los 730 días no disparan red y el daily cache absorbe
-    // reboots — solo el primer cold boot paga la cuenta completa.
+    // Piso duro: 2025-01-01. Descarta 2024 completo (decisión 2026-05-25 —
+    // libros 2024 ya no se cruzan contra bancos vivos y bloated el heavy
+    // store). El backfill arranca el 1° de enero 2025.
+    const AUX_HARD_FLOOR = '2025-01-01';
     const twoYearsAgo = new Date(today);
     twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
-    const fechaInicial = twoYearsAgo.toISOString().slice(0, 10);
+    const candidate = twoYearsAgo.toISOString().slice(0, 10);
+    const lookbackStart = candidate < AUX_HARD_FLOOR ? AUX_HARD_FLOOR : candidate;
     (async () => {
       try {
         await primeDailyCache();
+        // Delta sync per-cia (mismo patrón que pagos/compras). Antes hacíamos
+        // backfill FULL 1.5yr en cada cia cuando TTL expiraba — el chunked
+        // daily-cache filtra chunks ya cacheados pero los gaps fuerzan
+        // cientos de requests por boot. Con delta: arrancamos en
+        // `lastSeen + 1` por cia, sólo el delta pega el API.
+        //
+        // `lastSeen` = MÁX entre daily-cache IDB y heavy-store
+        // (`auxiliarContableRecords[].fechaContable`). Necesitamos ambos: el
+        // daily-cache se vacía/poda y el heavy-store sobrevive (cuota
+        // dinámica IDB) — sin leer heavy-store un cache wipe nos manda al
+        // full backfill aunque el histórico ya esté hidratado en estado.
+        const maxStateByCia = new Map<string, string>();
+        for (const r of auxiliarContableRecords) {
+          const prev = maxStateByCia.get(r.cia);
+          if (!prev || r.fechaContable > prev) maxStateByCia.set(r.cia, r.fechaContable);
+        }
+        // Boot clamp: NUNCA pedir más de 7 días atrás en boot. Cias con gaps
+        // viejos (cache parado en 2026-01-12) intentaban backfill 130+ días
+        // cada boot y abortaban antes de terminar — death loop. El gap viejo
+        // queda como gap; el refresh manual (force=true desde UI) sí hace el
+        // full backfill cuando el usuario lo pida. Hoy + 7 días atrás cubre
+        // la ventana de reconciliación viva.
+        const BOOT_DELTA_MAX_LOOKBACK_DAYS = 7;
+        const clampDate = new Date(today);
+        clampDate.setUTCDate(clampDate.getUTCDate() - BOOT_DELTA_MAX_LOOKBACK_DAYS);
+        const bootClampStart = clampDate.toISOString().slice(0, 10);
+        const perCiaFechaInicial = new Map<string, string>();
+        for (const cia of ciasToFetch) {
+          const maxCached = getMaxCachedDay('auxiliarcontable', cia);
+          const maxState = maxStateByCia.get(cia) ?? null;
+          const lastSeen = maxCached && maxState
+            ? (maxCached > maxState ? maxCached : maxState)
+            : (maxCached ?? maxState);
+          const candidateFrom = lastSeen ? nextIsoDay(lastSeen) : lookbackStart;
+          const flooredFrom = candidateFrom < lookbackStart ? lookbackStart : candidateFrom;
+          // Clamp a últimos 7 días para boots — gaps viejos no se rellenan automáticamente.
+          const clamped = flooredFrom < bootClampStart ? bootClampStart : flooredFrom;
+          perCiaFechaInicial.set(cia, clamped);
+        }
         const errors: string[] = [];
         let successCount = 0;
         let totalLines = 0;
@@ -2609,7 +2653,19 @@ export default function App() {
             const idx = cursor++;
             if (idx >= ciasToFetch.length) return;
             const cia = ciasToFetch[idx];
+            const fechaInicial = perCiaFechaInicial.get(cia) ?? lookbackStart;
+            if (fechaInicial > fechaFinal) {
+              // Cache cubre hasta hoy — nada nuevo que traer. Marca timestamp
+              // para que el TTL de 6h corra y no re-evaluemos este boot.
+              successCount += 1;
+              setAuxiliarContableLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+              // eslint-disable-next-line no-console
+              console.info(`[auxiliarcontable] ${cia} · cache cubre hasta ${fechaFinal}, skip`);
+              continue;
+            }
             try {
+              // eslint-disable-next-line no-console
+              console.info(`[auxiliarcontable] ${cia} · fetch ${fechaInicial}→${fechaFinal} (${fechaInicial === lookbackStart ? 'FULL' : 'DELTA'})`);
               const fetched = await fetchAuxiliarContableRange(
                 cia, fechaInicial, fechaFinal, AUX_RECON_PARAMS,
                 { concurrency: 4, onDay },
@@ -2902,12 +2958,32 @@ export default function App() {
     async (force = true, progressSlot?: 'rol') => {
       const today = new Date();
       const year = today.getUTCFullYear();
-      const fechaInicial = `${year}-01-01`;
+      const yearStart = `${year}-01-01`;
       const fechaFinal = today.toISOString().slice(0, 10);
       const cacheKey = `${year}:full`;
       // Refresh si force=true, si no hay cache aún, o si el timestamp es viejo.
       const lastFetch = rolLoadedKeys[cacheKey];
       if (!force && rolRecords.length > 0 && lastFetch && isFreshTimestamp(lastFetch, COBRANZA_AUTO_REFRESH_TTL_MS)) {
+        return { totalRecords: rolRecords.length, totalCias: 1, failedCias: 0 };
+      }
+      // Delta sync: heavy-store rolRecords[].fechaViaje da el último día con
+      // viajes hidratados. fetchRolRange parte el rango en ventanas DIARIAS
+      // sin cache (cada día = 1 request a CITI). Sin delta, cada boot TTL-
+      // expirado dispara ~145 ventanas Jan 1→today. Con delta arrancamos en
+      // `lastSeen + 1`. force=true (refresh manual) mantiene full range.
+      let maxState: string | null = null;
+      for (const r of rolRecords) {
+        if (r.fechaViaje && (!maxState || r.fechaViaje > maxState)) {
+          maxState = r.fechaViaje;
+        }
+      }
+      const fechaInicial = (!force && maxState && maxState >= yearStart)
+        ? nextIsoDay(maxState)
+        : yearStart;
+      if (fechaInicial > fechaFinal) {
+        // eslint-disable-next-line no-console
+        console.info(`[rol] sync · heavy-store cubre hasta ${maxState}, skip (today=${fechaFinal})`);
+        setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
         return { totalRecords: rolRecords.length, totalCias: 1, failedCias: 0 };
       }
 
@@ -3484,8 +3560,41 @@ export default function App() {
         rangeStart = clamp.toISOString().slice(0, 10);
       }
       const maxCachedBanks = getMaxCachedDay(`banks.${defaultFormat}`);
+      // Delta sync. Antes el backfill pegaba 2 años a fetchBankStatementsRange
+      // siempre — el chunked cache filtraba días cacheados pero gaps internos
+      // forzaban 50-100 reqs/boot por días pasados (`2025-10-06` etc).
+      //
+      // Tomamos como `lastSeen` el MÁX entre el daily-cache IDB y el
+      // movimiento más reciente del heavy-store (`bankJdeStatements`).
+      // Necesitamos ambos: el daily-cache se vacía/poda y el heavy-store
+      // sobrevive (cuota dinámica IDB, save debounced) — sin leer heavy-store
+      // un cache wipe nos manda al full 2yr backfill aunque el histórico ya
+      // esté hidratado en estado. force=true mantiene el full range para
+      // refresh manual.
+      let maxStateBanks: string | null = null;
+      for (const acc of bankJdeStatements) {
+        for (const mov of acc.movimientos) {
+          if (!maxStateBanks || mov.fechaOperacion > maxStateBanks) {
+            maxStateBanks = mov.fechaOperacion;
+          }
+        }
+      }
+      const lastSeen = maxCachedBanks && maxStateBanks
+        ? (maxCachedBanks > maxStateBanks ? maxCachedBanks : maxStateBanks)
+        : (maxCachedBanks ?? maxStateBanks);
+      if (!force && lastSeen && lastSeen > rangeStart) {
+        rangeStart = nextIsoDay(lastSeen);
+      }
       // eslint-disable-next-line no-console
-      console.info(`[banks] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} · hydratedState=${bankJdeStatements.length} · force=${force} · idbPersist=${isDailyCachePersistent()} · range ${rangeStart}→${today} (FULL via daily cache)`);
+      console.info(`[banks] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} · hydratedState=${bankJdeStatements.length} · force=${force} · idbPersist=${isDailyCachePersistent()} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`);
+
+      if (rangeStart > today) {
+        // eslint-disable-next-line no-console
+        console.info('[banks] backfill sync · cache cubre hasta hoy, skip');
+        setBankFetchStatus('idle');
+        setBankFetchProgress(null);
+        return { primed, ranged: true };
+      }
 
       const full = await fetchBankStatementsRange(
         rangeStart,

@@ -570,6 +570,170 @@ export async function fetchRangeWithDailyCache<T>(
   return merged;
 }
 
+/**
+ * Variante chunked: agrupa los días en ventanas de `chunkSize` días calendario,
+ * hace UNA request por ventana (`fetchChunk(from, to)`), splittea los records
+ * de vuelta a buckets por día usando `dateOf(record)`, y guarda cache POR DÍA
+ * (incluyendo `[]` para los días sin records). Beneficio: si el API soporta
+ * rangos (e.g. AuxiliarContable), bajas el #requests por chunkSize× sin perder
+ * la granularidad del cache — un reboot futuro sigue leyendo per-día.
+ *
+ * Ventanas donde TODOS los días ya están cacheados se sirven 100% del cache
+ * (no fetch). Ventanas con al menos 1 miss disparan UN fetch completo de la
+ * ventana y reescriben TODOS los días del rango (overwrite intencional — el
+ * costo del round-trip ya está pagado).
+ */
+interface FetchRangeChunkedOptions<T> {
+  from: string;
+  to: string;
+  cia?: string;
+  chunkSize: number;
+  fetchChunk: (chunkFrom: string, chunkTo: string) => Promise<T[]>;
+  /** Returns YYYY-MM-DD for a record, used to bucket the chunk response per day. */
+  dateOf: (record: T) => string;
+  onProgress?: (done: number, total: number) => void;
+  onDay?: (records: T[]) => void;
+  concurrency?: number;
+  today?: string;
+}
+
+export async function fetchRangeWithChunkedDailyCache<T>(
+  api: string,
+  options: FetchRangeChunkedOptions<T>,
+): Promise<T[]> {
+  const {
+    from, to, cia, chunkSize, fetchChunk, dateOf,
+    onProgress, onDay, concurrency = 3, today = todayIso(),
+  } = options;
+
+  await ensureMemoryReady();
+
+  const days = buildDayList(from, to);
+  if (days.length === 0) return [];
+  const size = Math.max(1, Math.floor(chunkSize));
+
+  // Group into N-day windows (calendar contiguous).
+  const windows: string[][] = [];
+  for (let i = 0; i < days.length; i += size) {
+    windows.push(days.slice(i, i + size));
+  }
+
+  const dayIndex = new Map<string, number>();
+  days.forEach((d, i) => dayIndex.set(d, i));
+  const out: Array<T[] | null> = new Array(days.length).fill(null);
+
+  // Classify chunks.
+  const allCachedChunks: number[] = [];
+  const chunksNeedFetch: number[] = [];
+  for (let ci = 0; ci < windows.length; ci++) {
+    const win = windows[ci];
+    let all = true;
+    for (const day of win) {
+      if (!isPastDay(day, today) || !hasDailyCached(api, day, cia)) {
+        all = false;
+        break;
+      }
+    }
+    (all ? allCachedChunks : chunksNeedFetch).push(ci);
+  }
+
+  let done = 0;
+  onProgress?.(done, days.length);
+
+  // Serve all-cached chunks.
+  {
+    let rc = 0;
+    const READ_CONCURRENCY = 8;
+    const reader = async () => {
+      while (true) {
+        const slot = rc++;
+        if (slot >= allCachedChunks.length) return;
+        const win = windows[allCachedChunks[slot]];
+        for (const day of win) {
+          const hit = await getDailyCachedAsync<T>(api, day, cia);
+          const idx = dayIndex.get(day)!;
+          if (hit !== null) {
+            out[idx] = hit;
+            if (hit.length > 0) { try { onDay?.(hit); } catch { /* swallow */ } }
+          } else {
+            // Race con prune: queda vacío; el chunk no se re-fetchea.
+            out[idx] = [];
+          }
+          done++;
+          onProgress?.(done, days.length);
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.max(1, Math.min(READ_CONCURRENCY, allCachedChunks.length)) },
+        reader,
+      ),
+    );
+  }
+
+  // Fetch the rest by chunk.
+  let cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const slot = cursor++;
+      if (slot >= chunksNeedFetch.length) return;
+      const win = windows[chunksNeedFetch[slot]];
+      const winFrom = win[0];
+      const winTo = win[win.length - 1];
+
+      let records: T[] | null;
+      try {
+        records = await fetchChunk(winFrom, winTo);
+      } catch {
+        // Chunk truena (timeout, red caída, 5xx después de retries). NO
+        // cachear `[]` — eso envenenaría el cache y boots futuros saltarían
+        // estos días. Skippeamos cache write y onDay; al próximo boot se
+        // intenta de nuevo.
+        records = null;
+      }
+
+      if (records === null) {
+        done += win.length;
+        onProgress?.(done, days.length);
+        continue;
+      }
+
+      // Bucket por día.
+      const buckets = new Map<string, T[]>();
+      for (const day of win) buckets.set(day, []);
+      for (const r of records) {
+        const d = dateOf(r);
+        const bucket = buckets.get(d);
+        if (bucket) bucket.push(r);
+        // Records fuera del window se ignoran — no debería pasar pero defensa.
+      }
+
+      // Write cache per-day + emit per-day.
+      for (const day of win) {
+        const dayRecs = buckets.get(day) ?? [];
+        out[dayIndex.get(day)!] = dayRecs;
+        setDailyCached(api, day, dayRecs, cia, today);
+        if (dayRecs.length > 0) { try { onDay?.(dayRecs); } catch { /* swallow */ } }
+        done++;
+        onProgress?.(done, days.length);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.max(1, Math.min(concurrency, chunksNeedFetch.length)) },
+      worker,
+    ),
+  );
+
+  const merged: T[] = [];
+  for (const arr of out) {
+    if (arr && arr.length > 0) merged.push(...arr);
+  }
+  return merged;
+}
+
 function buildDayList(from: string, to: string): string[] {
   const start = new Date(from + 'T00:00:00Z');
   const end = new Date(to + 'T00:00:00Z');

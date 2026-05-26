@@ -13,6 +13,7 @@
 
 import { JdeApiError } from './jdeTypes';
 import { apiConfig } from '../config/api.config';
+import { jdeFetchPauseGate, type PauseGateError } from './pauseGate';
 
 export interface JdeClientConfig {
   /** Base URL sin trailing slash. Default: import.meta.env.VITE_JDE_BASE_URL || "/api/jde". */
@@ -118,6 +119,28 @@ async function request<T>(
   body: unknown,
   config: JdeClientConfig,
 ): Promise<T> {
+  try {
+    return await requestInner<T>(method, path, body, config);
+  } catch (err) {
+    // Auto-pause on final error (after retries exhausted, or non-retriable
+    // status like 404/500). Solo dispara una vez por reload. JdeApiError
+    // tiene `path` + `status`; otros errores quedan como status -2.
+    const path0 = path;
+    const info: PauseGateError =
+      err instanceof JdeApiError
+        ? { path: err.endpoint ?? path0, status: err.status, message: err.message }
+        : { path: path0, status: -2, message: err instanceof Error ? err.message : String(err) };
+    jdeFetchPauseGate.tryAutoPause(info);
+    throw err;
+  }
+}
+
+async function requestInner<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  body: unknown,
+  config: JdeClientConfig,
+): Promise<T> {
   const baseUrl = resolveBaseUrl(config.baseUrl);
   const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 
@@ -135,9 +158,19 @@ async function request<T>(
   let lastErr: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    // El semáforo va POR ATTEMPT — soltamos slot durante el backoff para
-    // que otra request no quede bloqueada esperando un retry dormido.
-    await acquireJdeSlot();
+    // Pause gate + semáforo, loop hasta tener AMBOS sin pausa al final.
+    // Sin el re-check post-slot, workers ya en queue del semáforo bypassean
+    // el gate: cuando un slot se libera tras pause, el siguiente worker
+    // toma el slot y arranca su fetch sin volver a consultar la pausa.
+    // Aquí: wait → acquire → si paused mientras esperabas slot, release y
+    // vuelve a esperar. Garantiza 0 fetches nuevos mientras esté pausado.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      await jdeFetchPauseGate.wait();
+      await acquireJdeSlot();
+      if (!jdeFetchPauseGate.isPaused()) break;
+      releaseJdeSlot();
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
