@@ -1,3 +1,5 @@
+import type { Provider } from '../../../domain/types';
+import { SCORE_LABELS, scoreBucket, type ScoreBucket } from '../../../domain/providerScore';
 import type {
   CellOverride,
   FinancialMovement,
@@ -8,6 +10,31 @@ import type {
 } from '../../shared-finance/types';
 import { slug } from './customRowsStorage';
 import { macroBucketForSupplier, UNCATEGORIZED_PROVIDER_BUCKET } from './providerCategoryGeneralization';
+
+function providerLookupKey(value: string | undefined | null): string {
+  if (!value) return '';
+  return value
+    .toUpperCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveProviderScore(
+  movement: FinancialMovement,
+  byId: Map<string, Provider>,
+  byName: Map<string, Provider>,
+): { label: string; bucket: ScoreBucket } | undefined {
+  if (movement.type !== 'OUTFLOW' || movement.category !== 'AP_PAYMENT') return undefined;
+  const provider =
+    (movement.counterpartyId ? byId.get(movement.counterpartyId) : undefined) ??
+    byName.get(providerLookupKey(movement.counterpartyName));
+  if (!provider) return undefined;
+  const bucket = scoreBucket(provider);
+  return { label: SCORE_LABELS[bucket], bucket };
+}
 
 export const UNIDENTIFIED_BANK_OUTFLOW_BUCKET = 'Egresos bancarios sin identificar';
 
@@ -71,10 +98,20 @@ export interface BuildPlanningRowsArgs {
   movements: FinancialMovement[];
   customRows: PlanningCustomRow[];
   overrides: CellOverride[];
+  /** Catálogo de proveedores. Si se provee, las filas de AP_PAYMENT reciben
+   *  `providerScoreLabel` (Operativo/Prioritario/Negociable/Flexible). */
+  providers?: Provider[];
 }
 
 export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
   const map = new Map<string, PlanningRow>();
+  const providerById = new Map<string, Provider>();
+  const providerByName = new Map<string, Provider>();
+  for (const provider of args.providers ?? []) {
+    if (provider.id) providerById.set(provider.id, provider);
+    const key = providerLookupKey(provider.name);
+    if (key) providerByName.set(key, provider);
+  }
 
   for (const movement of args.movements) {
     const key = conceptKeyForMovement(movement);
@@ -89,6 +126,7 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
     const providerCategoryLabel = movement.type === 'OUTFLOW' && movement.category === 'AP_PAYMENT'
       ? movement.providerCategory
       : undefined;
+    const score = resolveProviderScore(movement, providerById, providerByName);
     map.set(key, {
       conceptKey: key,
       label: tail,
@@ -98,6 +136,8 @@ export function buildPlanningRows(args: BuildPlanningRowsArgs): PlanningRow[] {
       category: movement.category,
       subgroupLabel,
       providerCategoryLabel,
+      providerScoreLabel: score?.label,
+      providerScoreBucket: score?.bucket,
     });
   }
 

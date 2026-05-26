@@ -1101,6 +1101,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       movements: approvedRun.movements,
       customRows: [...approvedCustomScoped, ...draftCustomScoped],
       overrides: [...approvedOverrides, ...draftOverrides],
+      providers: props.providers,
     });
     const labelByKey = new Map(allRows.map((row) => [row.conceptKey, row.label]));
     const approvedAggregateMap = new Map<string, number>();

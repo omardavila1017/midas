@@ -26,7 +26,9 @@
       "Bash(/Applications/Conductor.app/Contents/Resources/bin/gh --version)",
       "Bash(git pull *)",
       "Bash(git --version)",
-      "Bash(npx playwright *)"
+      "Bash(npx playwright *)",
+      "Bash(awk 'NR==19' /Users/paolo/Documents/GitHub/flujo-senda/src/modules/financial-planning/services/planningRowTaxonomy.ts)",
+      "Bash(npx vitest *)"
     ]
   }
 }

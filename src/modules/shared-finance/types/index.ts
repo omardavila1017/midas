@@ -422,6 +422,15 @@ export interface PlanningRow {
   category: FinancialMovementCategory;
   subgroupLabel?: string;
   providerCategoryLabel?: string;
+  /**
+   * Etiqueta de criticidad del proveedor según SCORE_LABELS
+   * (Operativo / Prioritario / Negociable / Flexible). Solo se llena para
+   * filas de proveedor (OUTFLOW + AP_PAYMENT) cuando hay un Provider en el
+   * catálogo. La UI la muestra como chip junto al nombre.
+   */
+  providerScoreLabel?: string;
+  /** Bucket de criticidad subyacente — para colorear el chip. */
+  providerScoreBucket?: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO';
   isCustom?: boolean;
 }
 

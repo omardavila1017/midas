@@ -238,6 +238,7 @@ export function aggregateScenarioForecastRun(
     movements: rawProjection.movements,
     customRows: args.customRows,
     overrides: args.overrides,
+    providers: args.providers,
   });
   const buckets = applyCellOverridesToBuckets({
     buckets: rawProjection.buckets,

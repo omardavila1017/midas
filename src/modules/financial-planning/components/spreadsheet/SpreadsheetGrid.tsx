@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Lock, Plus, Sparkles } from 'lucide-react';
 import { fmtCompact } from '../../../../formatters';
@@ -49,6 +50,23 @@ type DisplayRow =
 
 function bucketId(type: FinancialMovementType, label: string): string {
   return `${type}:${label}`;
+}
+
+// Chip de criticidad de proveedor (Operativo/Prioritario/Negociable/Flexible).
+// Misma paleta que el chip de score del Catálogo de Proveedores para que el
+// usuario reconozca el código de color (rojo→verde por flexibilidad de pago).
+function providerScoreChipStyle(bucket: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO'): CSSProperties {
+  switch (bucket) {
+    case 'CRITICO':
+      return { background: 'var(--danger-muted)', color: 'var(--danger)' };
+    case 'ALTO':
+      return { background: '#FEE2E2', color: '#B91C1C' };
+    case 'MEDIO':
+      return { background: '#FFEDD5', color: '#9A3412' };
+    case 'BAJO':
+    default:
+      return { background: 'var(--success-muted)', color: 'var(--success)' };
+  }
 }
 
 // Column overscan: extra columns rendered each side of the viewport so fast
@@ -418,20 +436,32 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           // Indirectos, Servicios TI, etc.) o providerCategory cuando el
           // catálogo lo enriqueció. Discoverable via hover sin romper la
           // altura uniforme de fila que requiere la virtualización del grid.
-          title={
+          title={[
+            row.label,
             row.providerCategoryLabel && row.providerCategoryLabel !== row.label
-              ? `${row.label} · ${row.providerCategoryLabel}`
+              ? row.providerCategoryLabel
               : row.subgroupLabel && row.subgroupLabel !== row.label
-                ? `${row.label} · ${row.subgroupLabel}`
-                : row.label
-          }
+                ? row.subgroupLabel
+                : null,
+            row.providerScoreLabel ? `Criticidad: ${row.providerScoreLabel}` : null,
+          ].filter(Boolean).join(' · ')}
           className="flex w-full items-center gap-1.5 truncate text-left text-[12px] font-medium text-[var(--gray-950)] hover:text-[var(--primary)]"
           style={{ paddingLeft: depth * 18 }}
         >
           {row.isCustom && <Sparkles className="h-3 w-3 text-[var(--primary)]" strokeWidth={1.5} />}
           <span className="truncate">{row.label}</span>
+          {row.providerScoreLabel && row.providerScoreBucket && (
+            <span
+              className="ml-auto shrink-0 truncate rounded-sm px-1 text-[9px] font-medium"
+              style={providerScoreChipStyle(row.providerScoreBucket)}
+            >
+              {row.providerScoreLabel}
+            </span>
+          )}
           {row.providerCategoryLabel && row.providerCategoryLabel !== row.label && (
-            <span className="ml-auto shrink-0 truncate rounded-sm bg-[var(--gray-100)] px-1 text-[9px] font-normal text-[var(--gray-600)]">
+            <span
+              className={`${row.providerScoreLabel ? '' : 'ml-auto'} shrink-0 truncate rounded-sm bg-[var(--gray-100)] px-1 text-[9px] font-normal text-[var(--gray-600)]`}
+            >
               {row.providerCategoryLabel}
             </span>
           )}
