@@ -139,6 +139,15 @@ const INTERNAL_BENEFICIARIES: readonly string[] = [
 const INTERNAL_COMPANY_CODES: readonly string[] = [
   'TRCC',
   'TRTT',
+  // Códigos cortos de razones sociales del grupo presentes en conceptos del
+  // auxiliar contable (ej. "SIR-TICH ABRL 2026 ..."). Word-boundary garantiza
+  // que no atrape substrings accidentales (p.ej. "SIR" en "ASIR"). Limitado
+  // a códigos ≥3 chars con bajo riesgo de colisión con razones sociales
+  // externas. Códigos como "SES" o "MUL" se omiten — alto riesgo de falso
+  // positivo (cualquier "ses..." o "Multi..." de un cliente externo matcharía).
+  'SIR',
+  'TICH',
+  'STDN',
 ];
 
 /**

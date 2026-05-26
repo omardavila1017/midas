@@ -1819,15 +1819,14 @@ export async function fetchAuxiliarContableRange(
   if (to < AUX_HARD_FLOOR) return [];
 
   const MAX_ATTEMPTS = 3;
-  // 1 día por chunk (decisión 2026-05-26). Antes 3 días: responses sanas pero
-  // ventanas con mucho movimiento todavía rebotaban con timeout, y el
-  // fallback per-día implícito pegaba doble request a JDE por cada chunk
-  // fallido. Forzando 1d siempre: payload pequeño, response rápido,
-  // semántica del cache 1:1 con `fechaContable`. Costo: ~3× requests por cía
-  // (chunk=3 → 233 reqs/cia → 700 reqs/cia para 2yr). Aceptable porque
-  // (a) cache IDB sirve días pasados sin red, (b) concurrencia 4 amortigua,
-  // (c) elimina la complicación del bucket-split del chunked cache.
-  const AUX_CHUNK_DAYS = 1;
+  // 7 días por chunk (decisión 2026-05-26 #2). Antes 1 día: cada cía YTD
+  // pegaba ~146 requests JDE serializados — 3-4h por boot. Con timeout JDE
+  // subido a 240s y fallback per-día explícito abajo, 7d es seguro: chunks
+  // pesados que rebotan se reintentan UNO POR UNO sin envenenar el cache.
+  // Costo: ~125 reqs/cia para YTD vs 146 (mejora ~7x), tiempo ~20-30 min
+  // por boot cold vs 3-4h. El daily-cache IDB seguía siendo per-día (split
+  // dentro de `fetchRangeWithChunkedDailyCache`).
+  const AUX_CHUNK_DAYS = 7;
   const fetchChunkOnce = (
     chunkFrom: string,
     chunkTo: string,

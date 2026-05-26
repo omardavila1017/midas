@@ -41,12 +41,15 @@ import { BANK_TIPO_BATCH } from './auxiliarReconciliationConfig';
 
 // ── Configuración ──────────────────────────────────────────────────────────
 
-/** Tolerancia relativa de importe para la capa `tolerance`. */
-const AMOUNT_TOLERANCE_PCT = 0.005;
+/** Tolerancia relativa de importe para la capa `tolerance`. Subido de 0.005
+ *  (0.5%) a 0.05 (5%) tras diagnóstico empírico: comisiones SPEI / retenciones
+ *  / FX causan diffs sistemáticos de 1-3% entre aux y banco. */
+const AMOUNT_TOLERANCE_PCT = 0.05;
 /** Tolerancia absoluta mínima de importe. */
 const AMOUNT_TOLERANCE_MIN_ABS = 1;
-/** Ventana de fecha (±N días) para la capa `tolerance`. */
-const DATE_WINDOW_DAYS = 5;
+/** Ventana de fecha (±N días) para la capa `tolerance`. Subido de 5 a 30:
+ *  el lag entre asiento contable y movimiento bancario llega a 2-3 semanas. */
+const DATE_WINDOW_DAYS = 30;
 const DAY_MS = 86_400_000;
 
 // ── Tipos públicos ─────────────────────────────────────────────────────────
@@ -59,7 +62,25 @@ export type AuxiliarMatchTier =
   | 'tolerance'
   | 'gl-orphan'
   | 'caja'
-  | 'interno';
+  | 'interno'
+  /** Asiento contable interno (tipoDocto=VI: registros de viaje) que llega
+   *  como 1020 pero NO es movimiento bancario — no debe contarse como cruce
+   *  fallido. */
+  | 'asiento-interno'
+  /** Línea aux 1020 cuya cía NO tiene estado de cuenta bancario cargado —
+   *  match imposible por gap de datos, no por error del motor. */
+  | 'sin-banco'
+  /** Línea aux 1020 sin `cuentaBanco` poblada — no hay cuenta a la cual
+   *  buscar contraparte. Gap del API, no error del motor. */
+  | 'sin-cuenta-aux'
+  /** Línea aux 1020 cuya fechaContable es posterior al último movimiento
+   *  del estado de cuenta de esa cuenta — banco aún no entregó el extracto
+   *  del día. Match imposible por timing, no por error del motor. */
+  | 'timing-pendiente'
+  /** Match en cuenta hermana de la misma cía. La empresa asienta el pago en
+   *  cuenta A pero el movimiento real salió de cuenta B (concentración de
+   *  liquidez). Confianza menor que `tolerance` por la heurística. */
+  | 'cross-account';
 
 /** Documento fuente al que una línea GL es trazable. */
 export interface AuxiliarSourceRef {
@@ -126,6 +147,9 @@ export interface AuxiliarBankOrphan {
   flujo: AuxiliarFlujo;
   concepto: string;
   referencia: string;
+  /** true si el movimiento cae fuera de la ventana de fechas del aux —
+   *  match imposible por desfase temporal, no por error real. */
+  outOfWindow: boolean;
 }
 
 /** Confirmación de un documento fuente contra el banco — contrato con la proyección. */
@@ -157,10 +181,29 @@ export interface AuxiliarReconSummary {
   cajaMonto: number;
   internoLineas: number;
   internoMonto: number;
+  /** Asientos VI (viaje) en 1020 — no son movs bancarios. */
+  asientoInternoLineas: number;
+  asientoInternoMonto: number;
+  /** Líneas aux cuya cía no tiene estados de cuenta cargados. */
+  sinBancoLineas: number;
+  sinBancoMonto: number;
+  /** Líneas aux 1020 sin `cuentaBanco` poblada — no hay clave a buscar. */
+  sinCuentaAuxLineas: number;
+  sinCuentaAuxMonto: number;
+  /** Líneas aux posteriores al cierre del extracto bancario — banco aún
+   *  no ha entregado el extracto del día. */
+  timingPendienteLineas: number;
+  timingPendienteMonto: number;
   glOrphanLineas: number;
   glOrphanMonto: number;
+  /** Bank orphans dentro de la ventana aux — candidatos reales a investigar. */
   bankOrphanLineas: number;
   bankOrphanMonto: number;
+  /** Bank orphans fuera de la ventana aux — match imposible por rango. */
+  bankOrphanOutOfWindowLineas: number;
+  bankOrphanOutOfWindowMonto: number;
+  /** Ventana de fechas del aux 1020. Útil para mostrar al usuario. */
+  auxWindow: { min: string | null; max: string | null };
   ciaBreakdown: Array<{ cia: string; lineas: number; cruzadas: number; pct: number }>;
   /** Conteos por tipo de inconsistencia detectada. */
   inconsistencyCounts: Record<AuxiliarInconsistencyKind, number>;
@@ -226,12 +269,6 @@ function daysBetween(isoA: string, isoB: string): number {
   return Math.abs(a - b) / DAY_MS;
 }
 
-function amountWithinTolerance(a: number, b: number): boolean {
-  const diff = Math.abs(a - b);
-  const tol = Math.max(AMOUNT_TOLERANCE_MIN_ABS, Math.abs(a) * AMOUNT_TOLERANCE_PCT);
-  return diff <= tol;
-}
-
 /** Llaves de documento fuente que esta línea GL confirma. */
 function sourceKeysFor(rec: AuxiliarContableRecord): string[] {
   const keys: string[] = [];
@@ -275,6 +312,11 @@ const CONFIDENCE: Record<AuxiliarMatchTier, number> = {
   'gl-orphan': 0,
   caja: 0,
   interno: 0,
+  'asiento-interno': 0,
+  'sin-banco': 0,
+  'sin-cuenta-aux': 0,
+  'timing-pendiente': 0,
+  'cross-account': 0.75,
 };
 
 // ── Motor ────────────────────────────────────────────────────────────────
@@ -292,10 +334,36 @@ export function reconcileAuxiliar(
 
   const inconsistencies: AuxiliarInconsistency[] = [];
 
+  // 0. Pre-cálculo: ventana de fechas aux 1020 (post-cia-filter) y cías con
+  //    estado de cuenta cargado. Sirven para clasificar líneas/movs que NUNCA
+  //    podrían cruzar por razones estructurales (desfase de rango / gap data)
+  //    en buckets aparte, sin inflar `gl-orphan` ni `bank-orphan`.
+  let auxMin: string | null = null;
+  let auxMax: string | null = null;
+  for (const rec of records) {
+    if (!passesCia(rec.cia)) continue;
+    if (rec.cuentaObjeto !== '1020') continue;
+    const f = rec.fechaContable;
+    if (!f) continue;
+    if (auxMin === null || f < auxMin) auxMin = f;
+    if (auxMax === null || f > auxMax) auxMax = f;
+  }
+  const ciasConBanco = new Set<string>();
+  for (const stmt of bankStatements) {
+    if (!passesCia(stmt.cia)) continue;
+    // La presencia del stmt indica que la cía tiene banco cargado, aunque no
+    // haya movs en este rango. Los movs aportan el cia real cuando difiere.
+    ciasConBanco.add(stmt.cia);
+    for (const l of stmt.movimientos) if (l.cia) ciasConBanco.add(l.cia);
+  }
+
   // 1. Normalizar líneas bancarias. Indexadas por `${accountKey}|${flujo}`.
   const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
   const bankPool = new Map<string, BankNorm[]>();
   const allBankNorms: BankNorm[] = [];
+  // Última fecha de movimiento por cuenta — sirve para detectar líneas aux
+  // posteriores al cierre del extracto bancario (bucket `timing-pendiente`).
+  const bankMaxDateByAccount = new Map<string, string>();
   const gsaidSeen = new Map<string, { count: number; cia: string; movementKey: string }>();
   for (const stmt of bankStatements) {
     if (!passesCia(stmt.cia)) continue;
@@ -338,10 +406,21 @@ export function reconcileAuxiliar(
       }
 
       if (!accountKey || internal) continue;
+      // Última fecha por cuenta (sin distinguir flujo — el "cierre" del
+      // extracto aplica a la cuenta entera).
+      const prevMax = bankMaxDateByAccount.get(accountKey);
+      if (!prevMax || norm.fecha > prevMax) bankMaxDateByAccount.set(accountKey, norm.fecha);
       const poolKey = `${accountKey}|${flujo}`;
       const bucket = bankPool.get(poolKey);
       if (bucket) bucket.push(norm);
       else bankPool.set(poolKey, [norm]);
+      // Pool secundario por (cia, flujo) — usado para fallback `cross-account`
+      // cuando el aux se asentó en una cuenta pero el banco lo registró en
+      // cuenta hermana de la misma cía.
+      const ciaKey = `cia:${stmt.cia}|${flujo}`;
+      const ciaBucket = bankPool.get(ciaKey);
+      if (ciaBucket) ciaBucket.push(norm);
+      else bankPool.set(ciaKey, [norm]);
     }
   }
 
@@ -415,9 +494,36 @@ export function reconcileAuxiliar(
       lines.push(base);
       continue;
     }
+    // tipoDocto=VI son asientos contables de viaje (registros internos);
+    // llegan como 1020 pero NO tienen contraparte bancaria — no inflar
+    // gl-orphan con ellos. Bucket aparte para auditoría.
+    if (rec.tipoDocto === 'VI') {
+      base.matchTier = 'asiento-interno';
+      lines.push(base);
+      continue;
+    }
+    // Si la cía no tiene estado de cuenta cargado, ninguna línea aux 1020 de
+    // esa cía puede cruzar — gap de datos, no error de motor. Bucket aparte.
+    if (!ciasConBanco.has(rec.cia)) {
+      base.matchTier = 'sin-banco';
+      lines.push(base);
+      continue;
+    }
+    // Si la línea aux no trae `cuentaBanco` poblada, no hay clave a la cual
+    // emparejar — gap del API. Bucket aparte (no inflar gl-orphan).
+    if (!rec.cuentaBanco || !rec.cuentaBanco.trim()) {
+      base.matchTier = 'sin-cuenta-aux';
+      lines.push(base);
+      continue;
+    }
+    // El auxiliar separa "concepto" (corto, máquina) de "explicacion" (libre,
+     // humano) y "nombre" (contraparte). Internal transfer detector mira
+     // concepto+referencia — pasamos `nombre` como parte del referencia para
+     // que detecte casos como "SIR-TICH ABRL 2026" o "BANCO NACIONAL DE MX, SA".
+    const internalSearchText = [rec.explicacion, rec.nombre].filter(Boolean).join(' ');
     const internal = isInternalTransfer({
       concepto: rec.concepto,
-      referencia: rec.explicacion,
+      referencia: internalSearchText,
       cuenta: rec.cuentaBanco,
     });
     if (internal) {
@@ -434,53 +540,99 @@ export function reconcileAuxiliar(
     });
   }
 
-  // Pasada A — match exacto (misma fecha, importe al céntimo).
+  // Match en una sola pasada con best-fit global. El motor anterior corría
+  // dos pasadas greedy (exact primero, tolerance después) — pero la pasada
+  // exacta usaba `find()` (first-match): si dos líneas aux competían por el
+  // mismo movimiento banco, la primera ganaba y la segunda quedaba huérfana
+  // aunque hubiera otra contraparte casi-exacta disponible. Bug detectado
+  // empíricamente: 14 orphans con monto+fecha exactos dentro del rango.
+  //
+  // Estrategia nueva: construir todos los pares candidatos elegibles (mismo
+  // accountKey + flujo, dentro de DATE_WINDOW_DAYS, dentro de
+  // AMOUNT_TOLERANCE_PCT), puntuarlos por score normalizado, ordenar y
+  // consumir en orden óptimo. Tier:
+  //   - score 0 (diff=0, dt=0) → exact
+  //   - score > 0                → tolerance
+  type Cand = { item: typeof pending[number]; bank: BankNorm; score: number; exact: boolean };
+  const cands: Cand[] = [];
   for (const item of pending) {
     const bucket = bankPool.get(`${item.accountKey}|${item.line.flujo}`);
     if (!bucket) continue;
-    const hit = bucket.find(
-      (b) => !b.consumed && b.fecha === item.line.fechaContable && b.importe === item.absImporte,
-    );
-    if (hit) {
-      hit.consumed = true;
-      item.line.bankMovementKey = hit.movementKey;
-      item.line.bankDate = hit.fecha;
-      item.line.bankAmount = hit.line.importe;
-      item.line.matchTier = 'exact';
-    }
-  }
-
-  // Pasada B — tolerancia (±0.5% importe, ±5 días) sobre las aún sin pareja.
-  for (const item of pending) {
-    if (item.line.bankMovementKey) continue;
-    const bucket = bankPool.get(`${item.accountKey}|${item.line.flujo}`);
-    if (!bucket) continue;
-    let best: BankNorm | undefined;
-    let bestDelta = Number.POSITIVE_INFINITY;
     for (const b of bucket) {
-      if (b.consumed) continue;
       const dDays = daysBetween(b.fecha, item.line.fechaContable);
       if (dDays > DATE_WINDOW_DAYS) continue;
-      if (!amountWithinTolerance(b.importe, item.absImporte)) continue;
-      const delta = Math.abs(b.importe - item.absImporte) + dDays;
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        best = b;
-      }
+      const diff = Math.abs(b.importe - item.absImporte);
+      const tol = Math.max(AMOUNT_TOLERANCE_MIN_ABS, item.absImporte * AMOUNT_TOLERANCE_PCT);
+      if (diff > tol) continue;
+      const diffPct = item.absImporte > 0 ? diff / item.absImporte : 0;
+      // Normalizado: ambos componentes en rango 0..1. Igual peso.
+      const score = dDays / DATE_WINDOW_DAYS + diffPct / AMOUNT_TOLERANCE_PCT;
+      cands.push({ item, bank: b, score, exact: diff === 0 && dDays === 0 });
     }
-    if (best) {
-      best.consumed = true;
-      item.line.bankMovementKey = best.movementKey;
-      item.line.bankDate = best.fecha;
-      item.line.bankAmount = best.line.importe;
-      item.line.matchTier = 'tolerance';
+  }
+  cands.sort((a, b) => a.score - b.score);
+  for (const c of cands) {
+    if (c.bank.consumed) continue;
+    if (c.item.line.bankMovementKey) continue;
+    c.bank.consumed = true;
+    c.item.line.bankMovementKey = c.bank.movementKey;
+    c.item.line.bankDate = c.bank.fecha;
+    c.item.line.bankAmount = c.bank.line.importe;
+    c.item.line.matchTier = c.exact ? 'exact' : 'tolerance';
+  }
+
+  // 3. Capa cross-account: para los aún sin pareja, intentar match en cuenta
+  //    hermana de la misma cía. Caso real: la empresa asienta el pago en una
+  //    cuenta contable pero el banco lo registró en otra cuenta del grupo
+  //    (concentración de liquidez). Tolerancia: misma que `tolerance`, pero
+  //    el item.accountKey no aplica — se busca por (cia, flujo).
+  const crossCands: Cand[] = [];
+  for (const item of pending) {
+    if (item.line.bankMovementKey) continue;
+    const ciaBucket = bankPool.get(`cia:${item.line.cia}|${item.line.flujo}`);
+    if (!ciaBucket) continue;
+    for (const b of ciaBucket) {
+      // Saltar las del mismo accountKey — ya las consideramos en best-fit.
+      if (b.accountKey === item.accountKey) continue;
+      const dDays = daysBetween(b.fecha, item.line.fechaContable);
+      if (dDays > DATE_WINDOW_DAYS) continue;
+      const diff = Math.abs(b.importe - item.absImporte);
+      const tol = Math.max(AMOUNT_TOLERANCE_MIN_ABS, item.absImporte * AMOUNT_TOLERANCE_PCT);
+      if (diff > tol) continue;
+      const diffPct = item.absImporte > 0 ? diff / item.absImporte : 0;
+      const score = dDays / DATE_WINDOW_DAYS + diffPct / AMOUNT_TOLERANCE_PCT;
+      crossCands.push({ item, bank: b, score, exact: false });
+    }
+  }
+  crossCands.sort((a, b) => a.score - b.score);
+  for (const c of crossCands) {
+    if (c.bank.consumed) continue;
+    if (c.item.line.bankMovementKey) continue;
+    c.bank.consumed = true;
+    c.item.line.bankMovementKey = c.bank.movementKey;
+    c.item.line.bankDate = c.bank.fecha;
+    c.item.line.bankAmount = c.bank.line.importe;
+    c.item.line.matchTier = 'cross-account';
+  }
+
+  // 4. Para los que aún quedan sin pareja, ¿estamos viendo el ledger más allá
+  //    del cierre del estado de cuenta? Si la fecha aux es posterior al
+  //    último movimiento bancario de esa cuenta, el match es imposible por
+  //    timing — banco aún no entregó el extracto del día. Bucket aparte.
+  for (const item of pending) {
+    if (item.line.bankMovementKey) continue;
+    const maxBank = bankMaxDateByAccount.get(item.accountKey);
+    if (maxBank && item.line.fechaContable > maxBank) {
+      item.line.matchTier = 'timing-pendiente';
     }
   }
 
-  // 3. Tier final: `estatusConciliado === 'R'` gana sobre exact/tolerance/orphan.
+  // 5. Tier final: `estatusConciliado === 'R'` gana sobre exact/tolerance/orphan.
   for (const item of pending) {
     const wasMatched =
-      item.line.matchTier === 'exact' || item.line.matchTier === 'tolerance';
+      item.line.matchTier === 'exact' ||
+      item.line.matchTier === 'tolerance' ||
+      item.line.matchTier === 'cross-account';
     if (item.line.estatusConciliado.trim().toUpperCase() === 'R') {
       item.line.matchTier = 'jde-reconciled';
     } else if (wasMatched) {
@@ -507,7 +659,8 @@ export function reconcileAuxiliar(
     const confirmed =
       line.matchTier === 'jde-reconciled' ||
       line.matchTier === 'exact' ||
-      line.matchTier === 'tolerance';
+      line.matchTier === 'tolerance' ||
+      line.matchTier === 'cross-account';
     if (line.matchTier === 'caja' || line.matchTier === 'interno') continue;
     const keys = rec ? sourceKeysFor(rec) : [];
     for (const key of keys) {
@@ -526,9 +679,15 @@ export function reconcileAuxiliar(
   }
 
   // 5. Movimientos bancarios sin línea GL (excluye internos).
+  //    Los marcamos con `outOfWindow=true` si caen fuera del rango aux: el
+  //    match era imposible por desfase temporal, no por error del motor.
   const bankOrphans: AuxiliarBankOrphan[] = [];
   for (const b of allBankNorms) {
     if (b.consumed || b.internal) continue;
+    const oow =
+      auxMin !== null && auxMax !== null
+        ? b.fecha < auxMin || b.fecha > auxMax
+        : false;
     bankOrphans.push({
       movementKey: b.movementKey,
       cia: b.line.cia,
@@ -538,6 +697,7 @@ export function reconcileAuxiliar(
       flujo: b.flujo,
       concepto: b.line.concepto,
       referencia: b.line.referencia,
+      outOfWindow: oow,
     });
   }
 
@@ -545,7 +705,7 @@ export function reconcileAuxiliar(
     lines,
     bankOrphans,
     sourceConfirmation,
-    summary: buildSummary(lines, bankOrphans, inconsistencies),
+    summary: buildSummary(lines, bankOrphans, inconsistencies, { min: auxMin, max: auxMax }),
     inconsistencies,
   };
 }
@@ -554,6 +714,7 @@ function buildSummary(
   lines: AuxiliarReconLine[],
   bankOrphans: AuxiliarBankOrphan[],
   inconsistencies: AuxiliarInconsistency[],
+  auxWindow: { min: string | null; max: string | null },
 ): AuxiliarReconSummary {
   const inconsistencyCounts: Record<AuxiliarInconsistencyKind, number> = {
     'non-bank-batch-in-1020': 0,
@@ -563,6 +724,20 @@ function buildSummary(
   };
   for (const inc of inconsistencies) inconsistencyCounts[inc.kind] += 1;
 
+  let bankOrphanIn = 0;
+  let bankOrphanInMonto = 0;
+  let bankOrphanOut = 0;
+  let bankOrphanOutMonto = 0;
+  for (const b of bankOrphans) {
+    const m = Math.abs(b.importe);
+    if (b.outOfWindow) {
+      bankOrphanOut += 1;
+      bankOrphanOutMonto += m;
+    } else {
+      bankOrphanIn += 1;
+      bankOrphanInMonto += m;
+    }
+  }
   const s: AuxiliarReconSummary = {
     totalLineas: lines.length,
     ingresoLineas: 0,
@@ -580,10 +755,21 @@ function buildSummary(
     cajaMonto: 0,
     internoLineas: 0,
     internoMonto: 0,
+    asientoInternoLineas: 0,
+    asientoInternoMonto: 0,
+    sinBancoLineas: 0,
+    sinBancoMonto: 0,
+    sinCuentaAuxLineas: 0,
+    sinCuentaAuxMonto: 0,
+    timingPendienteLineas: 0,
+    timingPendienteMonto: 0,
     glOrphanLineas: 0,
     glOrphanMonto: 0,
-    bankOrphanLineas: bankOrphans.length,
-    bankOrphanMonto: bankOrphans.reduce((acc, b) => acc + Math.abs(b.importe), 0),
+    bankOrphanLineas: bankOrphanIn,
+    bankOrphanMonto: bankOrphanInMonto,
+    bankOrphanOutOfWindowLineas: bankOrphanOut,
+    bankOrphanOutOfWindowMonto: bankOrphanOutMonto,
+    auxWindow,
     ciaBreakdown: [],
     inconsistencyCounts,
   };
@@ -593,7 +779,8 @@ function buildSummary(
     const cruzada =
       line.matchTier === 'jde-reconciled' ||
       line.matchTier === 'exact' ||
-      line.matchTier === 'tolerance';
+      line.matchTier === 'tolerance' ||
+      line.matchTier === 'cross-account';
     if (line.estatusConciliado.trim().toUpperCase() === 'R') s.conciliadasJde += 1;
 
     if (line.matchTier === 'caja') {
@@ -604,6 +791,26 @@ function buildSummary(
     if (line.matchTier === 'interno') {
       s.internoLineas += 1;
       s.internoMonto += monto;
+      continue;
+    }
+    if (line.matchTier === 'asiento-interno') {
+      s.asientoInternoLineas += 1;
+      s.asientoInternoMonto += monto;
+      continue;
+    }
+    if (line.matchTier === 'sin-banco') {
+      s.sinBancoLineas += 1;
+      s.sinBancoMonto += monto;
+      continue;
+    }
+    if (line.matchTier === 'sin-cuenta-aux') {
+      s.sinCuentaAuxLineas += 1;
+      s.sinCuentaAuxMonto += monto;
+      continue;
+    }
+    if (line.matchTier === 'timing-pendiente') {
+      s.timingPendienteLineas += 1;
+      s.timingPendienteMonto += monto;
       continue;
     }
     if (line.matchTier === 'gl-orphan') {
@@ -667,10 +874,21 @@ export function emptyAuxiliarReconResult(): AuxiliarReconResult {
       cajaMonto: 0,
       internoLineas: 0,
       internoMonto: 0,
+      asientoInternoLineas: 0,
+      asientoInternoMonto: 0,
+      sinBancoLineas: 0,
+      sinBancoMonto: 0,
+      sinCuentaAuxLineas: 0,
+      sinCuentaAuxMonto: 0,
+      timingPendienteLineas: 0,
+      timingPendienteMonto: 0,
       glOrphanLineas: 0,
       glOrphanMonto: 0,
       bankOrphanLineas: 0,
       bankOrphanMonto: 0,
+      bankOrphanOutOfWindowLineas: 0,
+      bankOrphanOutOfWindowMonto: 0,
+      auxWindow: { min: null, max: null },
       ciaBreakdown: [],
       inconsistencyCounts: {
         'non-bank-batch-in-1020': 0,

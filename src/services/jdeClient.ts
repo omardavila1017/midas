@@ -30,10 +30,12 @@ export interface JdeClientConfig {
   retries?: number;
 }
 
-// JDE tarda ~60s típico. 120s da margen sin secuestrar el slot 3min+.
-// Retries con backoff 0..4s. Si 3 intentos fallan, mejor degradar UI que
-// quemar 8min en un sólo endpoint colgado.
-const DEFAULT_TIMEOUT_MS = 120_000;
+// JDE tarda ~60s típico. 240s da margen para días pesados (cierre de mes en
+// AuxiliarContable, cierre fiscal en cobranza). Subido de 120s → 240s tras
+// detectar 408s sistemáticos en backfill YTD del auxiliar. Retries con
+// backoff 0..4s. Si 3 intentos fallan, mejor degradar UI que quemar 16min
+// en un sólo endpoint colgado.
+const DEFAULT_TIMEOUT_MS = 240_000;
 const DEFAULT_RETRIES = 2;
 const RETRY_STATUSES = new Set([408, 502, 503, 504]);
 

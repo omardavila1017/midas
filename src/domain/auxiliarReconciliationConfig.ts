@@ -27,15 +27,17 @@
 export const AUX_RECON_PARAMS = {
   tl: 'AA',
   nr: 999,
-  // Un solo rango total (1000-9999) por día por cía. Cubre TODAS las
-  // categorías del catálogo en una sola request:
-  //   1000-1999 ACTIVOS · 2000-2999 PASIVOS · 3000-3999 CAPITAL
-  //   4000-4999 INGRESOS · 5000-5999 OPERACIÓN · 6000-6999 LOGÍSTICA
-  //   7000-7999 VENTAS · 8000-8999 ADMIN · 9000/9100/9300 FIN/DEPR/OTROS
-  // Confirmado con Palomo 2026-05-25: el API acepta `objIni ≠ objFin`.
-  // Si JDE alguna vez rebota este rango, expandir a pares por categoría.
+  // Rango recortado a 1010-1020 (caja + bancos) — decisión 2026-05-26 #2.
+  // Antes 1000-9999 (toda la contabilidad): JDE rebotaba con timeout 4min
+  // en chunks de 7 días porque cada response arrastra cientos de miles de
+  // records (activos+pasivos+capital+ingresos+gastos+depreciación). El
+  // cruce banco↔ERP NO necesita ese histórico — solo objeto 1010+1020.
+  // Si en el futuro se quiere alimentar dashboards de P&L o gastos por
+  // categoría, añadir un fetch separado con rangos por bucket y cache
+  // independiente — NO re-expandir este rango, vuelve a romper la
+  // conciliación.
   objetos: [
-    { ini: '1000', fin: '9999' },
+    { ini: '1010', fin: '1020' },
   ] as const,
 } as const;
 

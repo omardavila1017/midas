@@ -2562,8 +2562,37 @@ export default function App() {
       return;
     }
     const hasHydratedRecords = auxiliarContableRecords.length > 0;
+    // Cobertura YTD por cía: refetch si hay agujero entre el floor del año
+    // y hoy. TTL fresh sólo significa "ya refresqué este boot", no "ventana
+    // completa". Floor = inicio del año en curso (KPIs YTD del dashboard).
+    //
+    // Detección de agujero: cualquier cía con `maxDate < today` necesita
+    // delta-sync (días recientes); cualquier cía con `minDate > yearStart`
+    // necesita backfill (días viejos del YTD). Ambos → refetch.
+    const expectedFloorDate = `${new Date().getUTCFullYear()}-01-01`;
+    const expectedTopDate = new Date().toISOString().slice(0, 10);
+    const minDateByCia = new Map<string, string>();
+    const maxDateByCia = new Map<string, string>();
+    for (const r of auxiliarContableRecords) {
+      if (r.cuentaObjeto !== '1020') continue;
+      const minP = minDateByCia.get(r.cia);
+      if (!minP || r.fechaContable < minP) minDateByCia.set(r.cia, r.fechaContable);
+      const maxP = maxDateByCia.get(r.cia);
+      if (!maxP || r.fechaContable > maxP) maxDateByCia.set(r.cia, r.fechaContable);
+    }
     const ciasToFetch = hasHydratedRecords
-      ? activeCias.filter(cia => !isFreshTimestamp(auxiliarContableLoadedCias[cia], COMPRAS_AUTO_REFRESH_TTL_MS))
+      ? activeCias.filter(cia => {
+          if (!isFreshTimestamp(auxiliarContableLoadedCias[cia], COMPRAS_AUTO_REFRESH_TTL_MS)) return true;
+          const minDate = minDateByCia.get(cia);
+          const maxDate = maxDateByCia.get(cia);
+          // Sin records → necesita fetch (cía nueva).
+          if (!minDate || !maxDate) return true;
+          // Cobertura insuficiente del YTD por el lado viejo → backfill.
+          if (minDate > expectedFloorDate) return true;
+          // Cobertura stale por el lado nuevo → delta sync.
+          if (maxDate < expectedTopDate) return true;
+          return false;
+        })
       : activeCias;
     if (ciasToFetch.length === 0) {
       auxiliarAutoFetchDone.current = true;
@@ -2603,16 +2632,19 @@ export default function App() {
           const prev = maxStateByCia.get(r.cia);
           if (!prev || r.fechaContable > prev) maxStateByCia.set(r.cia, r.fechaContable);
         }
-        // Boot clamp: NUNCA pedir más de 7 días atrás en boot. Cias con gaps
-        // viejos (cache parado en 2026-01-12) intentaban backfill 130+ días
-        // cada boot y abortaban antes de terminar — death loop. El gap viejo
-        // queda como gap; el refresh manual (force=true desde UI) sí hace el
-        // full backfill cuando el usuario lo pida. Hoy + 7 días atrás cubre
-        // la ventana de reconciliación viva.
-        const BOOT_DELTA_MAX_LOOKBACK_DAYS = 7;
-        const clampDate = new Date(today);
-        clampDate.setUTCDate(clampDate.getUTCDate() - BOOT_DELTA_MAX_LOOKBACK_DAYS);
-        const bootClampStart = clampDate.toISOString().slice(0, 10);
+        // Boot clamp: lookback dinámico hasta inicio del año en curso (YTD).
+        // Antes era fijo 7 días → la conciliación cruzaba 96% sobre 8 días vs
+        // YTD banco 5 meses ⇒ solo 6% de los ingresos YTD aparecían cruzados.
+        // Ahora pedimos aux desde `${year}-01-01` para que el cruce represente
+        // el año completo.
+        //
+        // Riesgo mitigado: el chunked-daily-cache filtra días ya hidratados
+        // (IDB `auxiliarcontable.{cia}.{YYYY-MM-DD}`), así que un boot warm
+        // solo pide los días faltantes. Timeout JDE subido a 240s para
+        // cierre-de-mes pesados. NO gatea el splash — el splash gatea por
+        // `done|error` no por tiempo, y la pestaña Conciliación tolera
+        // resultados vacíos hasta que llegue.
+        const bootClampStart = `${today.getUTCFullYear()}-01-01`;
         const perCiaFechaInicial = new Map<string, string>();
         for (const cia of ciasToFetch) {
           const maxCached = getMaxCachedDay('auxiliarcontable', cia);
@@ -2622,7 +2654,7 @@ export default function App() {
             : (maxCached ?? maxState);
           const candidateFrom = lastSeen ? nextIsoDay(lastSeen) : lookbackStart;
           const flooredFrom = candidateFrom < lookbackStart ? lookbackStart : candidateFrom;
-          // Clamp a últimos 7 días para boots — gaps viejos no se rellenan automáticamente.
+          // Clamp al inicio del año en curso — refleja la ventana YTD de los KPIs.
           const clamped = flooredFrom < bootClampStart ? bootClampStart : flooredFrom;
           perCiaFechaInicial.set(cia, clamped);
         }
