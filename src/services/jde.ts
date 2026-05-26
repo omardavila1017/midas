@@ -784,6 +784,10 @@ export async function fetchBankStatementsRange(
       needsFetch.push(i);
     }
   }
+  // eslint-disable-next-line no-console
+  console.info(
+    `[banks-range trace] from=${from} to=${to} days=${dates.length} cached=${cachedIdx.length} needsFetch=${needsFetch.length}`,
+  );
   {
     let rc = 0;
     const READ_CONCURRENCY = 8;
@@ -811,6 +815,20 @@ export async function fetchBankStatementsRange(
       ),
     );
   }
+  // Trace: cuántos días de cache produjeron datos reales (>0 statements).
+  let postReadNonEmpty = 0;
+  let postReadTotalMovs = 0;
+  for (let i = 0; i < dates.length; i++) {
+    const r = results[i];
+    if (r && r.length > 0) {
+      postReadNonEmpty++;
+      for (const s of r) postReadTotalMovs += s.movimientos.length;
+    }
+  }
+  // eslint-disable-next-line no-console
+  console.info(
+    `[banks-range trace] post-read · ${postReadNonEmpty} días con data del cache · ${postReadTotalMovs} movs en cache · needsFetch ahora=${needsFetch.length}`,
+  );
   let done = dates.length - needsFetch.length;
 
   let cursor = 0;
@@ -871,6 +889,20 @@ export async function fetchBankStatementsRange(
   );
   // Forzar el último emit para que el caller siempre vea done == total.
   emitProgress(true);
+  // Trace: cuántos días totales tienen data después de live fetches.
+  let postFetchNonEmpty = 0;
+  let postFetchTotalMovs = 0;
+  for (let i = 0; i < dates.length; i++) {
+    const r = results[i];
+    if (r && r.length > 0) {
+      postFetchNonEmpty++;
+      for (const s of r) postFetchTotalMovs += s.movimientos.length;
+    }
+  }
+  // eslint-disable-next-line no-console
+  console.info(
+    `[banks-range trace] post-fetch · ${postFetchNonEmpty} días con data total · ${postFetchTotalMovs} movs total`,
+  );
 
   // Merge by (cia, cuenta, moneda).
   const merged = new Map<string, BankAccountStatement>();
@@ -1787,10 +1819,15 @@ export async function fetchAuxiliarContableRange(
   if (to < AUX_HARD_FLOOR) return [];
 
   const MAX_ATTEMPTS = 3;
-  // 3 días por chunk. Ventana de 7 días empujaba responses a 1.9-2 min
-  // (al borde del timeout de 120s del jdeClient) y ~30% se cancelaban.
-  // 3 días mantiene el response < 60s con margen sano (decisión 2026-05-25).
-  const AUX_CHUNK_DAYS = 3;
+  // 1 día por chunk (decisión 2026-05-26). Antes 3 días: responses sanas pero
+  // ventanas con mucho movimiento todavía rebotaban con timeout, y el
+  // fallback per-día implícito pegaba doble request a JDE por cada chunk
+  // fallido. Forzando 1d siempre: payload pequeño, response rápido,
+  // semántica del cache 1:1 con `fechaContable`. Costo: ~3× requests por cía
+  // (chunk=3 → 233 reqs/cia → 700 reqs/cia para 2yr). Aceptable porque
+  // (a) cache IDB sirve días pasados sin red, (b) concurrencia 4 amortigua,
+  // (c) elimina la complicación del bucket-split del chunked cache.
+  const AUX_CHUNK_DAYS = 1;
   const fetchChunkOnce = (
     chunkFrom: string,
     chunkTo: string,

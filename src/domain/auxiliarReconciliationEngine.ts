@@ -37,6 +37,7 @@ import { bankMovementKey } from './bankMovementKey';
 import { findBankAccount } from './bankAccountsCatalog';
 import { buildOwnAccountsIndex, buildOwnAccountDetector, isInternalTransfer } from './netCashFlowEngine';
 import { describeDocType } from './jdeDocTypeCatalog';
+import { BANK_TIPO_BATCH } from './auxiliarReconciliationConfig';
 
 // ── Configuración ──────────────────────────────────────────────────────────
 
@@ -95,6 +96,26 @@ export interface AuxiliarReconLine {
   source: AuxiliarSourceRef;
 }
 
+/**
+ * Inconsistencia detectada por el engine — para auditoría. NO altera el
+ * resultado del cruce; sólo lo anota. La UI las muestra como alertas
+ * críticas para que el operador investigue antes de cerrar el período.
+ */
+export type AuxiliarInconsistencyKind =
+  | 'non-bank-batch-in-1020'
+  | 'jde-not-marked-reconciled'
+  | 'duplicate-gsaid-on-bank'
+  | 'idcuenta-collision-on-aux';
+
+export interface AuxiliarInconsistency {
+  kind: AuxiliarInconsistencyKind;
+  cia: string;
+  /** Referencia local — glKey, movementKey, gsaid, idCuenta según aplique. */
+  ref: string;
+  /** Detalle libre para UI / log. */
+  detail: string;
+}
+
 /** Movimiento bancario sin línea GL que lo respalde. */
 export interface AuxiliarBankOrphan {
   movementKey: string;
@@ -141,6 +162,8 @@ export interface AuxiliarReconSummary {
   bankOrphanLineas: number;
   bankOrphanMonto: number;
   ciaBreakdown: Array<{ cia: string; lineas: number; cruzadas: number; pct: number }>;
+  /** Conteos por tipo de inconsistencia detectada. */
+  inconsistencyCounts: Record<AuxiliarInconsistencyKind, number>;
 }
 
 export interface AuxiliarReconResult {
@@ -153,11 +176,23 @@ export interface AuxiliarReconResult {
    */
   sourceConfirmation: Map<string, AuxiliarSourceConfirmation>;
   summary: AuxiliarReconSummary;
+  /**
+   * Inconsistencias detectadas para auditoría (no alteran el cruce, sólo lo
+   * anotan). La UI puede mostrarlas como alertas críticas previo a cierre.
+   */
+  inconsistencies: AuxiliarInconsistency[];
 }
 
 export interface AuxiliarReconOptions {
   /** Si se pasa, solo se concilian estas compañías. */
   ciaFilter?: Set<string>;
+  /**
+   * Tipos de Batch que cuentan como movimientos bancarios reales. Records de
+   * objeto 1020 con otro `Tipo_Batch` se reportan como
+   * `non-bank-batch-in-1020`. Default: `BANK_TIPO_BATCH`.
+   * Pasar `null` desactiva la auditoría.
+   */
+  tipoBatchFilter?: ReadonlySet<string> | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -251,11 +286,17 @@ export function reconcileAuxiliar(
 ): AuxiliarReconResult {
   const ciaFilter = options.ciaFilter;
   const passesCia = (cia: string) => !ciaFilter || ciaFilter.has(cia);
+  // Default ON. Para desactivar (test/back-compat), pasar `null` explícito.
+  const tipoBatchFilter =
+    options.tipoBatchFilter === undefined ? BANK_TIPO_BATCH : options.tipoBatchFilter;
+
+  const inconsistencies: AuxiliarInconsistency[] = [];
 
   // 1. Normalizar líneas bancarias. Indexadas por `${accountKey}|${flujo}`.
   const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
   const bankPool = new Map<string, BankNorm[]>();
   const allBankNorms: BankNorm[] = [];
+  const gsaidSeen = new Map<string, { count: number; cia: string; movementKey: string }>();
   for (const stmt of bankStatements) {
     if (!passesCia(stmt.cia)) continue;
     for (const line of stmt.movimientos) {
@@ -276,6 +317,26 @@ export function reconcileAuxiliar(
         consumed: false,
       };
       allBankNorms.push(norm);
+
+      // Audit: gsaid duplicado del lado bancos.
+      const gsaid = (line.gsaid ?? '').trim();
+      if (gsaid) {
+        const prev = gsaidSeen.get(gsaid);
+        if (prev) {
+          prev.count += 1;
+          if (prev.count === 2) {
+            inconsistencies.push({
+              kind: 'duplicate-gsaid-on-bank',
+              cia: line.cia || stmt.cia,
+              ref: gsaid,
+              detail: `gsaid '${gsaid}' aparece en ≥2 líneas bancarias (primera: ${prev.movementKey})`,
+            });
+          }
+        } else {
+          gsaidSeen.set(gsaid, { count: 1, cia: line.cia || stmt.cia, movementKey: norm.movementKey });
+        }
+      }
+
       if (!accountKey || internal) continue;
       const poolKey = `${accountKey}|${flujo}`;
       const bucket = bankPool.get(poolKey);
@@ -290,12 +351,46 @@ export function reconcileAuxiliar(
   const pending: Array<{ rec: AuxiliarContableRecord; line: AuxiliarReconLine; absImporte: number; accountKey: string }> = [];
   const recByGlKey = new Map<string, AuxiliarContableRecord>();
 
+  // Conteo de idCuenta dentro de cuentas 1020 — detecta colisiones del lado aux.
+  const idCuentaSeen = new Map<string, { count: number; cia: string }>();
+
   for (const rec of records) {
     if (!passesCia(rec.cia)) continue;
     const flujo = deriveFlujo(rec);
     // Solo el objeto 1020 son cuentas bancarias con estado de cuenta. El
     // resto del rango (1010 caja) no tiene contraparte que cruzar.
     const esCaja = rec.cuentaObjeto !== '1020';
+
+    // Audit: dentro de 1020, vigilar Tipo_Batch e idCuenta.
+    if (!esCaja) {
+      const tb = (rec.tipoBatch ?? '').trim();
+      if (tipoBatchFilter && tipoBatchFilter.size > 0 && !tipoBatchFilter.has(tb)) {
+        inconsistencies.push({
+          kind: 'non-bank-batch-in-1020',
+          cia: rec.cia,
+          ref: glKeyFor(rec),
+          detail: `Tipo_Batch '${tb || '(empty)'}' en cuenta 1020 — fuera de BANK_TIPO_BATCH`,
+        });
+      }
+      const idc = (rec.idCuenta ?? '').trim();
+      if (idc) {
+        const prev = idCuentaSeen.get(idc);
+        if (prev) {
+          prev.count += 1;
+          if (prev.count === 2) {
+            inconsistencies.push({
+              kind: 'idcuenta-collision-on-aux',
+              cia: rec.cia,
+              ref: idc,
+              detail: `idCuenta '${idc}' aparece en ≥2 líneas auxiliares 1020`,
+            });
+          }
+        } else {
+          idCuentaSeen.set(idc, { count: 1, cia: rec.cia });
+        }
+      }
+    }
+
     const base: AuxiliarReconLine = {
       glKey: glKeyFor(rec),
       cia: rec.cia,
@@ -384,8 +479,20 @@ export function reconcileAuxiliar(
 
   // 3. Tier final: `estatusConciliado === 'R'` gana sobre exact/tolerance/orphan.
   for (const item of pending) {
+    const wasMatched =
+      item.line.matchTier === 'exact' || item.line.matchTier === 'tolerance';
     if (item.line.estatusConciliado.trim().toUpperCase() === 'R') {
       item.line.matchTier = 'jde-reconciled';
+    } else if (wasMatched) {
+      // El engine encontró pareja bancaria, pero JDE no la marca como
+      // conciliada. Auditoría — puede ser timing (proceso JDE corre con lag)
+      // o desacuerdo real entre engine y JDE.
+      inconsistencies.push({
+        kind: 'jde-not-marked-reconciled',
+        cia: item.line.cia,
+        ref: item.line.glKey,
+        detail: `matched (${item.line.matchTier}) pero Estatus_conciliado='${item.line.estatusConciliado || '(empty)'}'`,
+      });
     }
     item.line.confidence = CONFIDENCE[item.line.matchTier];
   }
@@ -438,14 +545,24 @@ export function reconcileAuxiliar(
     lines,
     bankOrphans,
     sourceConfirmation,
-    summary: buildSummary(lines, bankOrphans),
+    summary: buildSummary(lines, bankOrphans, inconsistencies),
+    inconsistencies,
   };
 }
 
 function buildSummary(
   lines: AuxiliarReconLine[],
   bankOrphans: AuxiliarBankOrphan[],
+  inconsistencies: AuxiliarInconsistency[],
 ): AuxiliarReconSummary {
+  const inconsistencyCounts: Record<AuxiliarInconsistencyKind, number> = {
+    'non-bank-batch-in-1020': 0,
+    'jde-not-marked-reconciled': 0,
+    'duplicate-gsaid-on-bank': 0,
+    'idcuenta-collision-on-aux': 0,
+  };
+  for (const inc of inconsistencies) inconsistencyCounts[inc.kind] += 1;
+
   const s: AuxiliarReconSummary = {
     totalLineas: lines.length,
     ingresoLineas: 0,
@@ -468,6 +585,7 @@ function buildSummary(
     bankOrphanLineas: bankOrphans.length,
     bankOrphanMonto: bankOrphans.reduce((acc, b) => acc + Math.abs(b.importe), 0),
     ciaBreakdown: [],
+    inconsistencyCounts,
   };
   const ciaAgg = new Map<string, { lineas: number; cruzadas: number }>();
   for (const line of lines) {
@@ -554,6 +672,13 @@ export function emptyAuxiliarReconResult(): AuxiliarReconResult {
       bankOrphanLineas: 0,
       bankOrphanMonto: 0,
       ciaBreakdown: [],
+      inconsistencyCounts: {
+        'non-bank-batch-in-1020': 0,
+        'jde-not-marked-reconciled': 0,
+        'duplicate-gsaid-on-bank': 0,
+        'idcuenta-collision-on-aux': 0,
+      },
     },
+    inconsistencies: [],
   };
 }

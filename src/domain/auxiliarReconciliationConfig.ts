@@ -64,3 +64,17 @@ export function isAuxiliarAllowlistedCia(cia: unknown): boolean {
   const n = typeof cia === 'number' ? cia : parseInt(String(cia).trim(), 10);
   return Number.isFinite(n) && AUXILIAR_CIA_ALLOWLIST_NUMS.has(n);
 }
+
+/**
+ * Tipos de Batch que representan movimientos bancarios reales.
+ *   "+"   estado de cuenta bancario
+ *   "+B"  estados de cuenta (variante)
+ *   "G"   batch general
+ *   "K"   cheques C/P
+ *   "&"   giros C/P
+ *
+ * Cualquier otro Tipo_Batch que aparezca con cuenta_objeto=1020 es
+ * sospechoso — el engine lo reporta como inconsistencia
+ * (`non-bank-batch-in-1020`) para auditoría.
+ */
+export const BANK_TIPO_BATCH: ReadonlySet<string> = new Set(['+', '+B', 'G', 'K', '&']);

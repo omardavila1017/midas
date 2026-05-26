@@ -19,7 +19,7 @@ import { loadProviderScoreOverlay } from './domain/loadProvidersCatalog';
 import { setProviderCatalogForCategoryLookup } from './modules/financial-planning/services/providerCategoryGeneralization';
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog } from './services/catalog.service';
-import { primeDailyCache, getMaxCachedDay, nextIsoDay, isDailyCachePersistent } from './services/dailyApiCache';
+import { primeDailyCache, getMaxCachedDay, nextIsoDay, isDailyCachePersistent, dailyCacheStats } from './services/dailyApiCache';
 import {
   loadBankStatementsFromIDB,
   saveBankJdeStatementsToIDB,
@@ -2843,6 +2843,36 @@ export default function App() {
       // the closure held the entire pre-commit dataset + the per-call response
       // arrays simultaneously. Per-cia commit lets the response array go
       // GC-eligible as soon as it lands in React state.
+      //
+      // Persistencia EAGER per-cia a IDB (2026-05-26): el reactive
+      // `useHeavySaver` debouncea 3.4s. Si el usuario refresca a media carga
+      // (28 cías × 2 años, decenas de minutos), las payments/records ya
+      // commiteados en React se pierden del heavy-store al recargar — mismo
+      // síntoma que aux/rol antes del fix 88746b5 (cobranzaindicadores
+      // ausente del heavy-store screenshot 2026-05-26). Acumulamos por cía
+      // en Maps locales y disparamos `saveHeavyRecords` tras cada cía. El
+      // saveQueues interno de heavyStoreIDB serializa los writes, así que
+      // 28 cías × 2 keys no compiten.
+      const recordsByCia = new Map<string, CobranzaRecord[]>();
+      for (const r of cobranzaRecords) {
+        const arr = recordsByCia.get(r.cia);
+        if (arr) arr.push(r); else recordsByCia.set(r.cia, [r]);
+      }
+      const paymentsByCia = new Map<string, CobranzaPayment[]>();
+      for (const p of cobranzaPayments) {
+        const arr = paymentsByCia.get(p.cia);
+        if (arr) arr.push(p); else paymentsByCia.set(p.cia, [p]);
+      }
+      const flattenRecords = () => {
+        const out: CobranzaRecord[] = [];
+        for (const arr of recordsByCia.values()) out.push(...arr);
+        return out;
+      };
+      const flattenPayments = () => {
+        const out: CobranzaPayment[] = [];
+        for (const arr of paymentsByCia.values()) out.push(...arr);
+        return out;
+      };
       let completed = 0;
       let cursor = 0;
       const concurrency = Math.min(10, ciasToFetch.length);
@@ -2859,14 +2889,14 @@ export default function App() {
             const stamped = recordsResult.value.map(r => ({ ...r, cia: r.cia || cia }));
             totalRecords += stamped.length;
             const ts = new Date().toISOString();
+            recordsByCia.set(cia, stamped);
+            const snapshot = flattenRecords();
             // Commit this cia's records immediately; React 18 batches the
             // setState calls across the concurrency pool, so 30 calls don't
             // turn into 30 renders.
-            setCobranzaRecords(prev => [
-              ...prev.filter(r => r.cia !== cia),
-              ...stamped,
-            ]);
+            setCobranzaRecords(snapshot);
             setCobranzaLoadedCias(prev => ({ ...prev, [cia]: ts }));
+            void saveHeavyRecords('cobranzaRecords', snapshot);
           } else {
             const msg = recordsResult.reason instanceof Error ? recordsResult.reason.message : String(recordsResult.reason);
             errors.push(`${cia}: ${msg}`);
@@ -2874,11 +2904,11 @@ export default function App() {
           if (paymentsResult.status === 'fulfilled') {
             const payments = paymentsResult.value;
             const ts = new Date().toISOString();
-            setCobranzaPayments(prev => [
-              ...prev.filter(p => p.cia !== cia),
-              ...payments,
-            ]);
+            paymentsByCia.set(cia, payments);
+            const snapshot = flattenPayments();
+            setCobranzaPayments(snapshot);
             setCobranzaPaymentsLoadedCias(prev => ({ ...prev, [cia]: ts }));
+            void saveHeavyRecords('cobranzaPayments', snapshot);
           } else {
             const msg = paymentsResult.reason instanceof Error ? paymentsResult.reason.message : String(paymentsResult.reason);
             errors.push(`indicadores ${cia}: ${msg}`);
@@ -3560,6 +3590,7 @@ export default function App() {
         rangeStart = clamp.toISOString().slice(0, 10);
       }
       const maxCachedBanks = getMaxCachedDay(`banks.${defaultFormat}`);
+      const cachedDayCount = dailyCacheStats(`banks.${defaultFormat}`).count;
       // Delta sync. Antes el backfill pegaba 2 años a fetchBankStatementsRange
       // siempre — el chunked cache filtraba días cacheados pero gaps internos
       // forzaban 50-100 reqs/boot por días pasados (`2025-10-06` etc).
@@ -3571,31 +3602,48 @@ export default function App() {
       // un cache wipe nos manda al full 2yr backfill aunque el histórico ya
       // esté hidratado en estado. force=true mantiene el full range para
       // refresh manual.
+      //
+      // Cold-boot guard: tanto el state hidratado como la daily-cache pueden
+      // tener su MAX en `today-1` aunque solo abarquen 5 días (el prime
+      // cachea today + 5 días back). Confiar en ese MAX como floor mandaba
+      // `rangeStart = today` y el backfill se reducía a un día. Confiamos
+      // SOLO si el lado en cuestión cubre ≥ HISTORY_SPAN_DAYS — si no,
+      // descartamos como insuficiente y dejamos `rangeStart` en `yearStart`.
+      const HISTORY_SPAN_DAYS = 90;
       let maxStateBanks: string | null = null;
+      const distinctStateDates = new Set<string>();
       for (const acc of bankJdeStatements) {
         for (const mov of acc.movimientos) {
+          distinctStateDates.add(mov.fechaOperacion);
           if (!maxStateBanks || mov.fechaOperacion > maxStateBanks) {
             maxStateBanks = mov.fechaOperacion;
           }
         }
       }
-      const lastSeen = maxCachedBanks && maxStateBanks
-        ? (maxCachedBanks > maxStateBanks ? maxCachedBanks : maxStateBanks)
-        : (maxCachedBanks ?? maxStateBanks);
+      const stateSpansHistory = distinctStateDates.size >= HISTORY_SPAN_DAYS;
+      const cacheSpansHistory = cachedDayCount >= HISTORY_SPAN_DAYS;
+      const trustedStateMax = stateSpansHistory ? maxStateBanks : null;
+      const trustedCacheMax = cacheSpansHistory ? maxCachedBanks : null;
+      const lastSeen = trustedCacheMax && trustedStateMax
+        ? (trustedCacheMax > trustedStateMax ? trustedCacheMax : trustedStateMax)
+        : (trustedCacheMax ?? trustedStateMax);
       if (!force && lastSeen && lastSeen > rangeStart) {
         rangeStart = nextIsoDay(lastSeen);
       }
       // eslint-disable-next-line no-console
-      console.info(`[banks] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} · hydratedState=${bankJdeStatements.length} · force=${force} · idbPersist=${isDailyCachePersistent()} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`);
+      console.info(
+        `[banks v3-fix] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} (${cachedDayCount}d) · hydratedState=${bankJdeStatements.length} stmts / ${distinctStateDates.size} dates · stateSpansHistory=${stateSpansHistory} · cacheSpansHistory=${cacheSpansHistory} · trustedStateMax=${trustedStateMax ?? 'null'} · trustedCacheMax=${trustedCacheMax ?? 'null'} · force=${force} · idbPersist=${isDailyCachePersistent()} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`,
+      );
 
       if (rangeStart > today) {
         // eslint-disable-next-line no-console
-        console.info('[banks] backfill sync · cache cubre hasta hoy, skip');
+        console.info('[banks v3-fix] backfill sync · cache cubre hasta hoy, SKIP — esto NO debería pasar en cold boot');
         setBankFetchStatus('idle');
         setBankFetchProgress(null);
         return { primed, ranged: true };
       }
 
+      const fetchStart = performance.now();
       const full = await fetchBankStatementsRange(
         rangeStart,
         today,
@@ -3612,19 +3660,38 @@ export default function App() {
           },
         },
       );
+      const fetchMs = Math.round(performance.now() - fetchStart);
+      const totalMovs = full.reduce((acc, s) => acc + s.movimientos.length, 0);
+      // eslint-disable-next-line no-console
+      console.info(
+        `[banks v3-fix] backfill sync · fetch done · ${fetchMs}ms · ${full.length} statements · ${totalMovs} movs total`,
+      );
       if (full.length > 0) {
         // Merge en lugar de replace: preserva cualquier statement adicional
         // que loadStore haya hidratado, y dedupea movimientos por (cia,
         // cuenta, moneda).
-        setBankJdeStatements(prev => mergeBankStatements(prev, full));
+        setBankJdeStatements(prev => {
+          const merged = mergeBankStatements(prev, full);
+          const mergedMovs = merged.reduce((acc, s) => acc + s.movimientos.length, 0);
+          // eslint-disable-next-line no-console
+          console.info(
+            `[banks v3-fix] backfill sync · merge done · prev=${prev.length} stmts → merged=${merged.length} stmts · ${mergedMovs} movs`,
+          );
+          return merged;
+        });
         setBankLastQuery({
           fechaEstadoCuenta: today,
           formatoElectronico: defaultFormat,
           hasUploadedSantander: bankSupplementalStatements.length > 0,
         });
         ranged = true;
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[banks v3-fix] backfill sync · fetch retornó 0 statements — no merge');
       }
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[banks v3-fix] backfill sync · ERROR caught', err);
       // Keep the last known state visible when the range refresh fails.
     }
 

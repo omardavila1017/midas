@@ -145,6 +145,79 @@ describe('reconcileAuxiliar', () => {
     const empty = emptyAuxiliarReconResult();
     expect(empty.lines).toHaveLength(0);
     expect(empty.summary.totalLineas).toBe(0);
+    expect(empty.inconsistencies).toEqual([]);
+    expect(empty.summary.inconsistencyCounts['jde-not-marked-reconciled']).toBe(0);
+  });
+});
+
+describe('reconcileAuxiliar — inconsistencies', () => {
+  it('flags non-bank-batch-in-1020 when Tipo_Batch is outside BANK_TIPO_BATCH', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ tipoBatch: 'RB', cuentaObjeto: '1020' })],
+      [statement([])],
+    );
+    expect(res.summary.inconsistencyCounts['non-bank-batch-in-1020']).toBe(1);
+    expect(
+      res.inconsistencies.some(
+        (i) => i.kind === 'non-bank-batch-in-1020' && i.detail.includes('RB'),
+      ),
+    ).toBe(true);
+  });
+
+  it('does NOT flag non-bank-batch for objeto 1010 (caja)', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ tipoBatch: 'RB', cuentaObjeto: '1010' })],
+      [statement([])],
+    );
+    expect(res.summary.inconsistencyCounts['non-bank-batch-in-1020']).toBe(0);
+  });
+
+  it('skips non-bank-batch detection when tipoBatchFilter is null', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ tipoBatch: 'RB' })],
+      [statement([])],
+      { tipoBatchFilter: null },
+    );
+    expect(res.summary.inconsistencyCounts['non-bank-batch-in-1020']).toBe(0);
+  });
+
+  it('flags jde-not-marked-reconciled when matched but estatus is not R', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ estatusConciliado: '' })],
+      [statement([bankLine()])],
+    );
+    expect(res.lines[0].matchTier).toBe('exact');
+    expect(res.summary.inconsistencyCounts['jde-not-marked-reconciled']).toBe(1);
+  });
+
+  it('does NOT flag jde-not-marked-reconciled when estatus is R', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ estatusConciliado: 'R' })],
+      [statement([bankLine()])],
+    );
+    expect(res.lines[0].matchTier).toBe('jde-reconciled');
+    expect(res.summary.inconsistencyCounts['jde-not-marked-reconciled']).toBe(0);
+  });
+
+  it('flags duplicate-gsaid-on-bank when same gsaid appears on >1 bank line', () => {
+    const res = reconcileAuxiliar(
+      [],
+      [
+        statement([
+          bankLine({ gsaid: '01640819', referencia: 'A' }),
+          bankLine({ gsaid: '01640819', referencia: 'B' }),
+        ]),
+      ],
+    );
+    expect(res.summary.inconsistencyCounts['duplicate-gsaid-on-bank']).toBe(1);
+  });
+
+  it('flags idcuenta-collision-on-aux when same idCuenta repeats in 1020', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ idCuenta: 'ACCT1', noDocto: 1 }), glLine({ idCuenta: 'ACCT1', noDocto: 2 })],
+      [statement([])],
+    );
+    expect(res.summary.inconsistencyCounts['idcuenta-collision-on-aux']).toBe(1);
   });
 });
 
