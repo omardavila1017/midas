@@ -205,6 +205,7 @@ const BancosForm = ({
   const [formato, setFormato] = useState<BankStatementFormat>(initial?.formatoElectronico ?? 'SWIFT');
   const [loading, setLoading] = useState(false);
   const [loadingSource, setLoadingSource] = useState<'jde' | 'file' | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<'jde' | 'file' | null>(null);
   const [success, setSuccess] = useState(false);
@@ -212,12 +213,32 @@ const BancosForm = ({
 
   const consultar = useCallback(async () => {
     setLoading(true); setLoadingSource('jde'); setError(null); setErrorSource(null); setSuccess(false);
+    setLoadingProgress(null);
+    // Walkback: la fecha pedida puede caer en domingo / festivo / atraso de
+    // carga JDE. Si vuelve vacío, retrocedemos día por día hasta 14 días para
+    // encontrar el último con cuentas. El usuario ve el primero que pegue.
+    const WALKBACK_DAYS = 14;
+    const triedDates: string[] = [];
     try {
-      const res = await fetchBankStatements({ fechaEstadoCuenta: fecha, formatoElectronico: formato });
-      if (res.length === 0) throw new Error(`JDE devolvió 0 cuentas para ${fecha} (${formato})`);
-      setCount(res.length);
-      setSuccess(true);
-      onLoadedJde(res, { fechaEstadoCuenta: fecha, formatoElectronico: formato });
+      const start = new Date(`${fecha}T00:00:00Z`);
+      for (let i = 0; i <= WALKBACK_DAYS; i++) {
+        const probe = new Date(start);
+        probe.setUTCDate(probe.getUTCDate() - i);
+        const probeFecha = probe.toISOString().slice(0, 10);
+        triedDates.push(probeFecha);
+        if (i > 0) setLoadingProgress(`Sin data en ${triedDates[i - 1]}, probando ${probeFecha}…`);
+        const res = await fetchBankStatements({ fechaEstadoCuenta: probeFecha, formatoElectronico: formato });
+        if (res.length > 0) {
+          setCount(res.length);
+          setSuccess(true);
+          setLoadingProgress(null);
+          onLoadedJde(res, { fechaEstadoCuenta: probeFecha, formatoElectronico: formato });
+          return;
+        }
+      }
+      throw new Error(
+        `JDE devolvió 0 cuentas en ${triedDates.length} fechas (${triedDates[0]} → ${triedDates[triedDates.length - 1]}, ${formato}). Posible atraso de carga upstream.`,
+      );
     } catch (e) {
       if (e instanceof JdeApiError) {
         const hint = e.status === 401 ? ' — error de autenticación con el servidor' : '';
@@ -227,6 +248,7 @@ const BancosForm = ({
       }
       setErrorSource('jde');
       setLoading(false);
+      setLoadingProgress(null);
     }
   }, [fecha, formato, onLoadedJde]);
 
@@ -345,6 +367,9 @@ const BancosForm = ({
             <p className="text-[12px] text-[var(--gray-400)] mt-1">
               {loadingSource === 'file' ? 'Preparando movimientos bancarios' : `${fecha} · ${formato}`}
             </p>
+            {loadingProgress && (
+              <p className="text-[11px] text-[var(--warning)] mt-2">{loadingProgress}</p>
+            )}
           </div>
         )}
 

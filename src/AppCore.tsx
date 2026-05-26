@@ -102,6 +102,7 @@ import {
   attachImportedStatementsToKnownCompanies,
   excludeBajio,
   isBajioStatement,
+  latestStatementDate,
   mergeBankStatements,
   type BankQueryState,
 } from './domain/bankStatements';
@@ -489,11 +490,26 @@ async function loadBankCaches(): Promise<BankCacheLoad> {
     const bankJdeStatements: BankAccountStatement[] = isSantander ? [] : jdeFromIdb;
     const bankSupplementalStatements: BankAccountStatement[] =
       supplementalFromIdb.length > 0 ? supplementalFromIdb : (isSantander ? jdeFromIdb : []);
-    const bankLastQuery: BankQueryState | null = parsedQuery
+    let bankLastQuery: BankQueryState | null = parsedQuery
       ? (isSantander || supplementalFromIdb.length > 0
           ? { ...parsedQuery, hasUploadedSantander: true }
           : parsedQuery)
       : null;
+
+    // Synthesize a fallback lastQuery if IDB tiene statements pero localStorage
+    // perdió `midas.bankLastQuery.v2` (cuota, reset, otra pestaña). Sin esto,
+    // Bancos chequea `statements.length > 0 && lastQuery` y muestra el form
+    // vacío aunque tengamos cientos de stmts hidratados.
+    if (!bankLastQuery && bankJdeStatements.length > 0) {
+      const latest = latestStatementDate(bankJdeStatements) ?? todayISO();
+      bankLastQuery = {
+        fechaEstadoCuenta: latest,
+        formatoElectronico: 'SWIFT',
+        hasUploadedSantander: bankSupplementalStatements.length > 0,
+      };
+      // eslint-disable-next-line no-console
+      console.info(`[loadBankCaches] lastQuery synth desde IDB · fecha=${latest} · ${bankJdeStatements.length} stmts`);
+    }
 
     return { bankJdeStatements, bankSupplementalStatements, bankLastQuery };
   } catch (err) {
@@ -3514,10 +3530,13 @@ export default function App() {
       }
     }
 
-    // Prime: hoy + últimos 5 días hábiles
+    // Prime: hoy + últimos 14 días. JDE atrasa la carga de bancos en
+    // domingos / festivos / puentes; 5 días back no alcanza cuando cae un
+    // lunes festivo + fin de semana. 14 paralelas siguen dentro del mismo
+    // orden de magnitud que el backfill anual (concurrency 10).
     const tryDates = [today];
     const d = new Date();
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 14; i++) {
       d.setDate(d.getDate() - 1);
       tryDates.push(d.toISOString().slice(0, 10));
     }
