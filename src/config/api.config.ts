@@ -13,6 +13,11 @@ const DEFAULT_JDE_BASE_URL = '/api/jde';
 const DEFAULT_TRESS_BASE_URL = '/api/tress';
 const DEFAULT_OPENAI_BASE_URL = '/api/openai';
 const DEFAULT_CITI_BASE_URL = '/api/citi';
+// Viajes Especiales: endpoint dev directo srv-desarrollo:95. Comparte la
+// arquitectura ROL CITI (rango de fechas → registros de viaje con factura
+// + UUID + Dias_Credito + K_Cliente). Endpoint productivo pendiente; cuando
+// se publique, ajustar el default o configurarlo vía proxy igual que CITI.
+const DEFAULT_VIAJES_ESPECIALES_BASE_URL = '/api/viajes-especiales';
 
 export const apiConfig = {
   jde: {
@@ -35,6 +40,16 @@ export const apiConfig = {
     baseUrl: import.meta.env.VITE_CITI_BASE_URL || DEFAULT_CITI_BASE_URL,
     authValue: '',
   },
+  // Viajes Especiales — viajes ad-hoc con factura propia, fecha de factura
+  // exacta y dias de credito por viaje (no por catalogo). El response trae
+  // K_Cliente / D_Cliente / Clave_JDE / K_Empresa para auto-poblar el grupo
+  // "Viajes Especiales" del catalogo de clientes y Factura_JDE + UUID para
+  // cruzar contra cobranza JDE (mismo patron ROL ↔ cobranza).
+  // Endpoint dev: http://srv-desarrollo:95/ViajesEspeciales/Servicios.
+  viajesEspeciales: {
+    baseUrl: import.meta.env.VITE_VIAJES_ESPECIALES_BASE_URL || DEFAULT_VIAJES_ESPECIALES_BASE_URL,
+    authValue: '',
+  },
   atlas: {
     artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'midas',
   },
@@ -49,5 +64,6 @@ export function validateApiConfig(): string[] {
   if (!apiConfig.jde.baseUrl) missing.push('VITE_JDE_BASE_URL');
   if (!apiConfig.tress.baseUrl) missing.push('VITE_TRESS_BASE_URL');
   if (!apiConfig.citi.baseUrl) missing.push('VITE_CITI_BASE_URL');
+  if (!apiConfig.viajesEspeciales.baseUrl) missing.push('VITE_VIAJES_ESPECIALES_BASE_URL');
   return missing;
 }

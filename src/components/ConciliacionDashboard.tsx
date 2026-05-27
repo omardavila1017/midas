@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, ArrowDownCircle, ArrowUpCircle, Banknote, FileWarning, Wallet } from 'lucide-react';
 import PageHeader from './ui/PageHeader';
 import { KpiCard, type KpiCardProps } from './ui/KpiCard';
@@ -8,12 +8,11 @@ import type {
   AuxiliarInconsistencyKind,
   AuxiliarReconResult,
 } from '../domain/auxiliarReconciliationEngine';
+import type { Company } from '../services/jdeTypes';
+import ConciliacionOrphansDrilldown from './ConciliacionOrphansDrilldown';
 
 const INCONSISTENCY_LABELS: Record<AuxiliarInconsistencyKind, string> = {
   'non-bank-batch-in-1020': 'Tipo_Batch fuera de bancos en cuenta 1020',
-  'jde-not-marked-reconciled': 'JDE no marcó Estatus_conciliado=R (pero cruzó)',
-  'duplicate-gsaid-on-bank': 'gsaid duplicado en estado de cuenta',
-  'idcuenta-collision-on-aux': 'idCuenta repetido en líneas auxiliares',
 };
 
 function InconsistenciesSection({ list }: { list: AuxiliarInconsistency[] }) {
@@ -94,6 +93,7 @@ function InconsistenciesSection({ list }: { list: AuxiliarInconsistency[] }) {
  */
 interface Props {
   reconciliation: AuxiliarReconResult;
+  companies?: Company[];
 }
 
 /** Tono por porcentaje de cruce: <50 rojo, <80 ámbar, ≥80 verde. */
@@ -105,8 +105,27 @@ function toneForPct(pct: number): KpiCardProps['tone'] {
 
 const SECTION_TITLE = 'text-[13px] font-bold uppercase tracking-[0.08em]';
 
-export default function ConciliacionDashboard({ reconciliation }: Props) {
+export default function ConciliacionDashboard({ reconciliation, companies }: Props) {
   const s = reconciliation.summary;
+  const [drilldownFlujo, setDrilldownFlujo] = useState<'ingreso' | 'egreso' | null>(null);
+
+  /** Lookup cía → razón social. La tabla de breakdown muestra el nombre como
+   *  título primario y deja el código como subtítulo para deshacer ambigüedad
+   *  (dos cías pueden compartir nombre comercial). Fallback al código si la
+   *  cía no está en el catálogo cargado.
+   *
+   *  El API JDE entrega `nombre` ya combinado como "00001 - TRANSPORTES..."
+   *  (código + separador + razón social). Para no duplicar el código en
+   *  título y subtítulo, removemos el prefijo `${cia}[- |]` si existe. */
+  const ciaNameByCode = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of companies ?? []) {
+      if (!c.cia || !c.nombre) continue;
+      const stripped = c.nombre.replace(new RegExp(`^${c.cia}\\s*[-|·]?\\s*`), '').trim();
+      m.set(c.cia, stripped || c.nombre);
+    }
+    return m;
+  }, [companies]);
 
   const vacio = useMemo(
     () => s.totalLineas === 0 && s.bankOrphanLineas === 0,
@@ -157,6 +176,8 @@ export default function ConciliacionDashboard({ reconciliation }: Props) {
               { label: 'Cruzadas', value: fmtInt(s.ingresoCruzadas), valueColor: 'var(--success)' },
               { label: 'Sin movimiento bancario', value: fmtInt(s.ingresoLineas - s.ingresoCruzadas), valueColor: 'var(--danger)' },
             ]}
+            onClick={s.ingresoLineas > s.ingresoCruzadas ? () => setDrilldownFlujo('ingreso') : undefined}
+            navHint="Ver líneas sin cruce"
           />
           <KpiCard
             label="Monto ingresos (libro mayor)"
@@ -197,6 +218,8 @@ export default function ConciliacionDashboard({ reconciliation }: Props) {
               { label: 'Cruzadas', value: fmtInt(s.egresoCruzadas), valueColor: 'var(--success)' },
               { label: 'Sin movimiento bancario', value: fmtInt(s.egresoLineas - s.egresoCruzadas), valueColor: 'var(--danger)' },
             ]}
+            onClick={s.egresoLineas > s.egresoCruzadas ? () => setDrilldownFlujo('egreso') : undefined}
+            navHint="Ver líneas sin cruce"
           />
           <KpiCard
             label="Monto egresos (libro mayor)"
@@ -240,8 +263,20 @@ export default function ConciliacionDashboard({ reconciliation }: Props) {
         </section>
       )}
 
-      {/* Desglose por compañía — diagnóstico de cruce bajo. */}
-      {s.ciaBreakdown.length > 0 && (
+      <ConciliacionOrphansDrilldown
+        reconciliation={reconciliation}
+        flujo={drilldownFlujo}
+        ciaNameByCode={ciaNameByCode}
+        onClose={() => setDrilldownFlujo(null)}
+      />
+
+      {/* Desglose por compañía — diagnóstico de cruce bajo.
+         *
+         * MULTICARGA (cía 00033) se excluye del desglose: está en la
+         * allowlist de AuxiliarContable por requerimiento operativo, pero la
+         * meta de cruce 100% no aplica para ella (volumen mínimo, esquema
+         * contable distinto). Filtrarla evita ruido en el KPI por-empresa. */}
+      {s.ciaBreakdown.filter((r) => r.cia !== '00033').length > 0 && (
         <div
           className="overflow-hidden rounded-[var(--radius-lg)] border"
           style={{ borderColor: 'var(--gray-200)', background: 'var(--surface)' }}
@@ -256,9 +291,16 @@ export default function ConciliacionDashboard({ reconciliation }: Props) {
               </tr>
             </thead>
             <tbody>
-              {s.ciaBreakdown.map((row) => (
+              {s.ciaBreakdown.filter((r) => r.cia !== '00033').map((row) => {
+                const nombre = ciaNameByCode.get(row.cia);
+                return (
                 <tr key={row.cia} className="border-t" style={{ borderColor: 'var(--gray-100)' }}>
-                  <td className="px-3 py-1.5 font-medium tabular-nums" style={{ color: 'var(--gray-950)' }}>{row.cia}</td>
+                  <td className="px-3 py-1.5" style={{ color: 'var(--gray-950)' }}>
+                    <div className="font-medium">{nombre ?? row.cia}</div>
+                    {nombre && (
+                      <div className="text-[10px] tabular-nums" style={{ color: 'var(--gray-500)' }}>{row.cia}</div>
+                    )}
+                  </td>
                   <td className="px-3 py-1.5 text-right tabular-nums" style={{ color: 'var(--gray-700)' }}>{fmtInt(row.lineas)}</td>
                   <td className="px-3 py-1.5 text-right tabular-nums" style={{ color: 'var(--gray-700)' }}>{fmtInt(row.cruzadas)}</td>
                   <td
@@ -268,7 +310,8 @@ export default function ConciliacionDashboard({ reconciliation }: Props) {
                     {fmtPctInt(row.pct)}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

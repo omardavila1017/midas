@@ -68,6 +68,7 @@ import type {
   Company,
   PagoProveedorRecord,
   RolRecord,
+  ViajeEspecialRecord,
 } from '../services/jdeTypes';
 import type { PayrollCostRecord } from '../modules/shared-finance/types';
 import {
@@ -199,6 +200,17 @@ export interface MidasStore {
    */
   rolLoadedKeys: Record<string, string>;
   /**
+   * Viajes Especiales (API srv-desarrollo:95/ViajesEspeciales/Servicios):
+   * viajes ad-hoc con Factura_JDE + Fecha_Factura + Dias_Credito por viaje.
+   * Cache aditivo año en curso. Heavy → vive en IDB. Una row por K_Renta.
+   */
+  viajesEspecialesRecords: ViajeEspecialRecord[];
+  /**
+   * ISO timestamp del último fetch Viajes Especiales exitoso, indexado por
+   * `${anio}:full` (la ventana fija es Y-01-01..hoy, igual que ROL).
+   */
+  viajesEspecialesLoadedKeys: Record<string, string>;
+  /**
    * Auxiliar contable JDE (POST /JDEdwards/AuxiliarContable): libro mayor
    * posteado contra cuentas de banco/caja. Fuente del motor de conciliación
    * histórica. Una row por (cia, idCuenta, noDocto, tipoDocto). Heavy → IDB.
@@ -278,6 +290,8 @@ export function getDefaultStore(): MidasStore {
     nominaLoadedKeys: {},
     rolRecords: [],
     rolLoadedKeys: {},
+    viajesEspecialesRecords: [],
+    viajesEspecialesLoadedKeys: {},
     auxiliarContableRecords: [],
     auxiliarContableLoadedCias: {},
     cashFlowOverrides: {},
@@ -451,6 +465,18 @@ function normalizeStore(raw: unknown): MidasStore {
     }
   }
 
+  // Viajes Especiales — aditivo. Stores legacy default a vacío; el boot
+  // lo rellena en el primer arranque.
+  const viajesEspecialesRecords = Array.isArray(o.viajesEspecialesRecords)
+    ? (o.viajesEspecialesRecords.filter((r) => !!r && typeof r === 'object') as ViajeEspecialRecord[])
+    : [];
+  const viajesEspecialesLoadedKeys: Record<string, string> = {};
+  if (o.viajesEspecialesLoadedKeys && typeof o.viajesEspecialesLoadedKeys === 'object') {
+    for (const [k, val] of Object.entries(o.viajesEspecialesLoadedKeys as Record<string, unknown>)) {
+      if (typeof val === 'string') viajesEspecialesLoadedKeys[k] = val;
+    }
+  }
+
   // Auxiliar contable JDE — aditivo. Stores legacy default a vacío; el boot
   // lo rellena por-cia en el primer arranque.
   const auxiliarContableRecords = Array.isArray(o.auxiliarContableRecords)
@@ -483,6 +509,8 @@ function normalizeStore(raw: unknown): MidasStore {
     nominaLoadedKeys,
     rolRecords,
     rolLoadedKeys,
+    viajesEspecialesRecords,
+    viajesEspecialesLoadedKeys,
     auxiliarContableRecords,
     auxiliarContableLoadedCias,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
@@ -575,6 +603,7 @@ function pickHeavy(store: MidasStore): HeavyStore {
     pagoProveedorRecords: store.pagoProveedorRecords,
     nominaRecords: store.nominaRecords,
     rolRecords: store.rolRecords,
+    viajesEspecialesRecords: store.viajesEspecialesRecords,
     auxiliarContableRecords: store.auxiliarContableRecords,
   };
 }

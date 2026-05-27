@@ -9,7 +9,7 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
+import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import {
@@ -111,6 +111,8 @@ interface Props {
   auxiliarReconciliation?: AuxiliarReconResult;
   /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
   rolRecords?: RolRecord[];
+  /** Viajes Especiales: ingresos especiales con factura/UUID propios. */
+  viajesEspecialesRecords?: ViajeEspecialRecord[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
@@ -166,6 +168,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.cobranzaRecords,
       props.auxiliarReconciliation,
       props.rolRecords,
+      props.viajesEspecialesRecords,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,

@@ -105,6 +105,11 @@ export default defineConfig(({ mode }) => {
   // (nginx/cloudflare) que reescriba /api/citi → http://srv-desarrollo:92/CITI.
   const citiUp = parseUpstream(env.VITE_CITI_UPSTREAM || env.CITI_UPSTREAM || 'http://srv-desarrollo:92/CITI')
   const citiToken = env.CITI_TOKEN || jdeToken || env.VITE_CITI_TOKEN
+  // Viajes Especiales — endpoint dev srv-desarrollo:95. Comparte token JDE
+  // (mismo backend Senda). Prod pendiente; ajustar VITE_VIAJES_ESPECIALES_UPSTREAM
+  // cuando se publique el endpoint productivo.
+  const viajesEspUp = parseUpstream(env.VITE_VIAJES_ESPECIALES_UPSTREAM || env.VIAJES_ESPECIALES_UPSTREAM || 'http://srv-desarrollo:95/ViajesEspeciales')
+  const viajesEspToken = env.VIAJES_ESPECIALES_TOKEN || jdeToken || env.VITE_VIAJES_ESPECIALES_TOKEN
 
   // Bundle analyzer only when ANALYZE=1. Writes dist/stats.html with a
   // treemap of chunk content + duplicate-module detection.
@@ -165,6 +170,13 @@ export default defineConfig(({ mode }) => {
           secure: false,
           rewrite: (p) => p.replace(/^\/api\/citi/, citiUp.path),
           configure: (proxy) => configureProxy(proxy, { token: citiToken }),
+        },
+        '/api/viajes-especiales': {
+          target: viajesEspUp.origin,
+          changeOrigin: true,
+          secure: false,
+          rewrite: (p) => p.replace(/^\/api\/viajes-especiales/, viajesEspUp.path),
+          configure: (proxy) => configureProxy(proxy, { token: viajesEspToken }),
         },
       },
     },

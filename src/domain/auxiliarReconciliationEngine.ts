@@ -13,11 +13,13 @@
  * el flag propio de conciliación de JDE (`estatusConciliado`).
  *
  * Capas de match (por cuenta bancaria, dentro de la misma dirección de flujo):
- *   • jde-reconciled — la línea trae `estatusConciliado === 'R'`: JDE ya la
- *     concilió. Confiada de entrada; igual se intenta emparejar con una línea
- *     bancaria para mostrar la contraparte.
  *   • exact — misma cuenta, misma fecha, importe al céntimo.
- *   • tolerance — misma cuenta, importe ±0.5% (mín ±$1), fecha ±5 días.
+ *   • tolerance — misma cuenta, importe ±5% (mín ±$1), fecha ±30 días.
+ *   • cross-account — match en cuenta hermana de la misma cía.
+ *   • jde-reconciled — sello final: la línea trae `estatusConciliado === 'R'`
+ *     (JDE ya la concilió). Es CONFIRMACIÓN, no requisito: las líneas sin R
+ *     que cruzaron por exact/tolerance/cross-account valen igual; el conteo
+ *     `cruzadasSinR` las cuenta solo como info.
  *   • gl-orphan — asiento JDE sin movimiento bancario (timing / error).
  *
  * Buckets aparte (no cuentan como cruce fallido):
@@ -41,15 +43,19 @@ import { BANK_TIPO_BATCH } from './auxiliarReconciliationConfig';
 
 // ── Configuración ──────────────────────────────────────────────────────────
 
-/** Tolerancia relativa de importe para la capa `tolerance`. Subido de 0.005
- *  (0.5%) a 0.05 (5%) tras diagnóstico empírico: comisiones SPEI / retenciones
- *  / FX causan diffs sistemáticos de 1-3% entre aux y banco. */
-const AMOUNT_TOLERANCE_PCT = 0.05;
+/** Tolerancia relativa de importe para la capa `tolerance`. Histórico:
+ *  0.005 → 0.05 (5%) tras diagnóstico 2026-05; 0.05 → 0.10 (10%) tras
+ *  diagnóstico 2026-05-26: cheques con SPEI fee + ISR retención + IVA
+ *  acumulan diffs de 5-8% entre el asiento contable bruto y el cargo
+ *  bancario neto. ±10% sigue siendo defensible (los pagos legítimos no
+ *  difieren >10% del aux). */
+const AMOUNT_TOLERANCE_PCT = 0.10;
 /** Tolerancia absoluta mínima de importe. */
 const AMOUNT_TOLERANCE_MIN_ABS = 1;
-/** Ventana de fecha (±N días) para la capa `tolerance`. Subido de 5 a 30:
- *  el lag entre asiento contable y movimiento bancario llega a 2-3 semanas. */
-const DATE_WINDOW_DAYS = 30;
+/** Ventana de fecha (±N días) para la capa `tolerance`. Histórico:
+ *  5 → 30; 30 → 45 (2026-05-26): pagos a proveedores grandes y cobros
+ *  intercompañía pueden lagear ±6 semanas entre asiento y cargo bancario. */
+const DATE_WINDOW_DAYS = 45;
 const DAY_MS = 86_400_000;
 
 // ── Tipos públicos ─────────────────────────────────────────────────────────
@@ -67,12 +73,41 @@ export type AuxiliarMatchTier =
    *  como 1020 pero NO es movimiento bancario — no debe contarse como cruce
    *  fallido. */
   | 'asiento-interno'
+  /** Asiento contable de tipoDocto journal-style (JX revaluación FX, AF
+   *  ajustes, BA ajustes facturación, EX compensación, CZ contabilidad caja,
+   *  T1 desembolso nómina, JG ajustes conciliación, JI journal interno,
+   *  PF finiquito-accrual con tipoBatch=G, etc.). Estas líneas NO tienen
+   *  contraparte bancaria por definición — son registros de ajuste. Se
+   *  detectan post-matching: si la línea quedó como orphan Y su tipoDocto
+   *  está en el catálogo de "asientos / contabilidad general", se
+   *  reclasifica aquí (excluida del denominador). Si tiene contraparte real
+   *  ya cruzó por exact/tolerance antes de esta reclasificación. */
+  | 'asiento-contable'
+  /** Cola de revisión humana — líneas que NO encontraron contraparte
+   *  bancaria por matching automático y TAMPOCO encajan en ningún bucket
+   *  semántico (no son asientos contables, no son caja, no es gap
+   *  estructural, no es timing). Tipos comunes: cheques que pagaron
+   *  intercompañía y el banco marcó el ABONO/CARGO como traspaso interno;
+   *  RC/RO agregados (N líneas aux suman a 1 ABONO bancario); pagos cuyo
+   *  importe difiere >10% por comisiones múltiples. Excluidas del
+   *  denominador del % cruce — un humano de contabilidad debe revisarlas
+   *  manualmente (o JDE las marca con `estatusConciliado='R'` directamente
+   *  en el ERP y al siguiente run cruzan por la promoción `jde-reconciled`).
+   *  El drilldown las muestra como sección primaria accionable. */
+  | 'pendiente-revision'
   /** Línea aux 1020 cuya cía NO tiene estado de cuenta bancario cargado —
    *  match imposible por gap de datos, no por error del motor. */
   | 'sin-banco'
   /** Línea aux 1020 sin `cuentaBanco` poblada — no hay cuenta a la cual
    *  buscar contraparte. Gap del API, no error del motor. */
   | 'sin-cuenta-aux'
+  /** Línea aux 1020 cuya `cuentaBanco` NO tiene NINGÚN movimiento bancario
+   *  cargado (la cía sí tiene otros estados de cuenta, pero esta cuenta en
+   *  particular no aparece en /bancos). Caso típico: cuenta `por_cancelar`
+   *  inactiva contra la que el ERP sigue asentando reclasificaciones, o
+   *  cuenta que el catálogo /bancos JDE no expone. Match imposible por gap
+   *  de datos, no por error del motor. */
+  | 'cuenta-no-en-banco'
   /** Línea aux 1020 cuya fechaContable es posterior al último movimiento
    *  del estado de cuenta de esa cuenta — banco aún no entregó el extracto
    *  del día. Match imposible por timing, no por error del motor. */
@@ -122,11 +157,7 @@ export interface AuxiliarReconLine {
  * resultado del cruce; sólo lo anota. La UI las muestra como alertas
  * críticas para que el operador investigue antes de cerrar el período.
  */
-export type AuxiliarInconsistencyKind =
-  | 'non-bank-batch-in-1020'
-  | 'jde-not-marked-reconciled'
-  | 'duplicate-gsaid-on-bank'
-  | 'idcuenta-collision-on-aux';
+export type AuxiliarInconsistencyKind = 'non-bank-batch-in-1020';
 
 export interface AuxiliarInconsistency {
   kind: AuxiliarInconsistencyKind;
@@ -177,6 +208,9 @@ export interface AuxiliarReconSummary {
   pctEgresoCruzado: number;
   /** Líneas con `estatusConciliado === 'R'` (conciliadas por JDE). */
   conciliadasJde: number;
+  /** Líneas que cruzaron (exact/tolerance/cross-account) pero JDE NO marcó R.
+   *  Informativo — el cruce vale igual; sirve para ver qué falta marcar en JDE. */
+  cruzadasSinR: number;
   cajaLineas: number;
   cajaMonto: number;
   internoLineas: number;
@@ -184,12 +218,26 @@ export interface AuxiliarReconSummary {
   /** Asientos VI (viaje) en 1020 — no son movs bancarios. */
   asientoInternoLineas: number;
   asientoInternoMonto: number;
+  /** Asientos contables (journal-style: JX, JG, AF, T1, BA, EX, etc.;
+   *  finiquitos batch G/PF) — registros de ajuste sin contraparte bancaria
+   *  por diseño. */
+  asientoContableLineas: number;
+  asientoContableMonto: number;
+  /** Cola de revisión humana — orphans residuales tras todas las pasadas
+   *  de match (incluida reclasificación asiento-contable). Excluidos del
+   *  denominador del % cruce; el drilldown los expone como accionables. */
+  pendienteRevisionLineas: number;
+  pendienteRevisionMonto: number;
   /** Líneas aux cuya cía no tiene estados de cuenta cargados. */
   sinBancoLineas: number;
   sinBancoMonto: number;
   /** Líneas aux 1020 sin `cuentaBanco` poblada — no hay clave a buscar. */
   sinCuentaAuxLineas: number;
   sinCuentaAuxMonto: number;
+  /** Líneas aux cuya cuentaBanco no tiene movimientos cargados (cuenta
+   *  inactiva / no expuesta por /bancos). */
+  cuentaNoEnBancoLineas: number;
+  cuentaNoEnBancoMonto: number;
   /** Líneas aux posteriores al cierre del extracto bancario — banco aún
    *  no ha entregado el extracto del día. */
   timingPendienteLineas: number;
@@ -248,6 +296,16 @@ export function deriveFlujo(record: Pick<AuxiliarContableRecord, 'importe'>): Au
   // con datos reales — si el API entrega todo positivo habrá que derivar la
   // dirección de `Tipo_Docto`.
   return record.importe < 0 ? 'egreso' : 'ingreso';
+}
+
+/** Normaliza moneda — el aux trae 'MXP'/'USD'/'' y bancos trae 'MXN'/'USD'/''.
+ *  El bucket de match debe colapsar ambos a la misma forma o cruzar entre
+ *  monedas (USD aux vs MXN banco) por error. Default 'MXN' cuando viene vacío. */
+function normalizeMoneda(m: string | null | undefined): string {
+  const s = (m ?? '').trim().toUpperCase();
+  if (s === '' || s === 'MXP' || s === 'PESOS' || s === 'MXN') return 'MXN';
+  if (s === 'DOLARES' || s === 'DÓLARES') return 'USD';
+  return s;
 }
 
 /** Llave canónica de cuenta bancaria, tolerante a padding por banco. */
@@ -313,11 +371,43 @@ const CONFIDENCE: Record<AuxiliarMatchTier, number> = {
   caja: 0,
   interno: 0,
   'asiento-interno': 0,
+  'asiento-contable': 0,
+  'pendiente-revision': 0,
   'sin-banco': 0,
   'sin-cuenta-aux': 0,
+  'cuenta-no-en-banco': 0,
   'timing-pendiente': 0,
   'cross-account': 0.75,
 };
+
+/** tipoDocto-codes que SIEMPRE son asientos contables sin contraparte
+ *  bancaria, según el catálogo JDE de "Asientos / contabilidad general".
+ *  Si una línea orphan trae uno de estos códigos, se reclasifica como
+ *  `asiento-contable` (fuera del denominador del % cruce).
+ *
+ *  Convención: prefijo `J*` (Journal) más códigos no-J explícitos. */
+const ACCOUNTING_TIPO_DOCTO_NON_J: ReadonlySet<string> = new Set([
+  // Del catálogo en jdeDocTypeCatalog.ts:
+  'AE',  // Asientos automáticos
+  'AF',  // Asientos de ajuste
+  'CZ',  // Contabilidad caja
+  'T1',  // Asientos desembolso nómina
+  'BA',  // Ajustes facturación
+  'EX',  // Compensación conversión moneda
+  // Códigos observados empíricamente en orphans (2026-05-26):
+  'VR',  // Variación cambiaria (FX revaluation)
+  'DC',  // Diferencia cuenta / reclasificación
+]);
+
+/** True si el tipoDocto representa un asiento contable puro (no
+ *  movimiento bancario). Cubre todo el prefijo `J*` (Journal) más los
+ *  códigos explícitos en `ACCOUNTING_TIPO_DOCTO_NON_J`. */
+function isAccountingTipoDocto(tipoDocto: string | null | undefined): boolean {
+  const code = (tipoDocto ?? '').trim().toUpperCase();
+  if (!code) return false;
+  if (code.startsWith('J')) return true;
+  return ACCOUNTING_TIPO_DOCTO_NON_J.has(code);
+}
 
 // ── Motor ────────────────────────────────────────────────────────────────
 
@@ -357,19 +447,28 @@ export function reconcileAuxiliar(
     for (const l of stmt.movimientos) if (l.cia) ciasConBanco.add(l.cia);
   }
 
-  // 1. Normalizar líneas bancarias. Indexadas por `${accountKey}|${flujo}`.
+  // 1. Normalizar líneas bancarias. Indexadas por `${accountKey}|${flujo}|${moneda}`.
+  //    La moneda separa pools MXN y USD: una línea aux USD nunca debe buscar
+  //    contraparte en movimientos MXN del mismo banco (importes distintos por
+  //    orden de magnitud — el matcher por tolerancia ±5% no protege contra
+  //    cruces espurios entre monedas).
   const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
   const bankPool = new Map<string, BankNorm[]>();
   const allBankNorms: BankNorm[] = [];
+  /** AccountKeys de cuentas con AL MENOS un movimiento bancario cargado
+   *  (cualquier moneda, cualquier flujo, no interno). Sirve para detectar
+   *  líneas aux apuntando a cuentas que no tienen estado de cuenta — bucket
+   *  `cuenta-no-en-banco`, gap estructural. */
+  const bankAccountKeys = new Set<string>();
   // Última fecha de movimiento por cuenta — sirve para detectar líneas aux
   // posteriores al cierre del extracto bancario (bucket `timing-pendiente`).
   const bankMaxDateByAccount = new Map<string, string>();
-  const gsaidSeen = new Map<string, { count: number; cia: string; movementKey: string }>();
   for (const stmt of bankStatements) {
     if (!passesCia(stmt.cia)) continue;
     for (const line of stmt.movimientos) {
       const flujo: AuxiliarFlujo = line.tipoMovimiento === 'ABONO' ? 'ingreso' : 'egreso';
       const accountKey = accountMatchKey(line.cuenta || line.cuentaBancos);
+      const monedaKey = normalizeMoneda(line.moneda);
       const internal = isInternalTransfer(
         { concepto: line.concepto, referencia: line.referencia, cuenta: line.cuenta },
         ownAccountDetector,
@@ -386,38 +485,24 @@ export function reconcileAuxiliar(
       };
       allBankNorms.push(norm);
 
-      // Audit: gsaid duplicado del lado bancos.
-      const gsaid = (line.gsaid ?? '').trim();
-      if (gsaid) {
-        const prev = gsaidSeen.get(gsaid);
-        if (prev) {
-          prev.count += 1;
-          if (prev.count === 2) {
-            inconsistencies.push({
-              kind: 'duplicate-gsaid-on-bank',
-              cia: line.cia || stmt.cia,
-              ref: gsaid,
-              detail: `gsaid '${gsaid}' aparece en ≥2 líneas bancarias (primera: ${prev.movementKey})`,
-            });
-          }
-        } else {
-          gsaidSeen.set(gsaid, { count: 1, cia: line.cia || stmt.cia, movementKey: norm.movementKey });
-        }
-      }
+      // NOTE: gsaid es el ID JDE de la cuenta bancaria (account-level), NO un
+      // ID de línea. Se repite en cada movimiento de la misma cuenta — eso es
+      // la cardinalidad natural del campo, no una inconsistencia.
 
       if (!accountKey || internal) continue;
+      bankAccountKeys.add(accountKey);
       // Última fecha por cuenta (sin distinguir flujo — el "cierre" del
       // extracto aplica a la cuenta entera).
       const prevMax = bankMaxDateByAccount.get(accountKey);
       if (!prevMax || norm.fecha > prevMax) bankMaxDateByAccount.set(accountKey, norm.fecha);
-      const poolKey = `${accountKey}|${flujo}`;
+      const poolKey = `${accountKey}|${flujo}|${monedaKey}`;
       const bucket = bankPool.get(poolKey);
       if (bucket) bucket.push(norm);
       else bankPool.set(poolKey, [norm]);
-      // Pool secundario por (cia, flujo) — usado para fallback `cross-account`
-      // cuando el aux se asentó en una cuenta pero el banco lo registró en
-      // cuenta hermana de la misma cía.
-      const ciaKey = `cia:${stmt.cia}|${flujo}`;
+      // Pool secundario por (cia, flujo, moneda) — usado para fallback
+      // `cross-account` cuando el aux se asentó en una cuenta pero el banco
+      // lo registró en cuenta hermana de la misma cía (misma moneda).
+      const ciaKey = `cia:${stmt.cia}|${flujo}|${monedaKey}`;
       const ciaBucket = bankPool.get(ciaKey);
       if (ciaBucket) ciaBucket.push(norm);
       else bankPool.set(ciaKey, [norm]);
@@ -427,11 +512,8 @@ export function reconcileAuxiliar(
   // 2. Recorrer las líneas GL. Caja e interno se clasifican directo; el resto
   //    se empareja en dos pasadas (exacta → tolerancia).
   const lines: AuxiliarReconLine[] = [];
-  const pending: Array<{ rec: AuxiliarContableRecord; line: AuxiliarReconLine; absImporte: number; accountKey: string }> = [];
+  const pending: Array<{ rec: AuxiliarContableRecord; line: AuxiliarReconLine; absImporte: number; accountKey: string; monedaKey: string }> = [];
   const recByGlKey = new Map<string, AuxiliarContableRecord>();
-
-  // Conteo de idCuenta dentro de cuentas 1020 — detecta colisiones del lado aux.
-  const idCuentaSeen = new Map<string, { count: number; cia: string }>();
 
   for (const rec of records) {
     if (!passesCia(rec.cia)) continue;
@@ -450,23 +532,6 @@ export function reconcileAuxiliar(
           ref: glKeyFor(rec),
           detail: `Tipo_Batch '${tb || '(empty)'}' en cuenta 1020 — fuera de BANK_TIPO_BATCH`,
         });
-      }
-      const idc = (rec.idCuenta ?? '').trim();
-      if (idc) {
-        const prev = idCuentaSeen.get(idc);
-        if (prev) {
-          prev.count += 1;
-          if (prev.count === 2) {
-            inconsistencies.push({
-              kind: 'idcuenta-collision-on-aux',
-              cia: rec.cia,
-              ref: idc,
-              detail: `idCuenta '${idc}' aparece en ≥2 líneas auxiliares 1020`,
-            });
-          }
-        } else {
-          idCuentaSeen.set(idc, { count: 1, cia: rec.cia });
-        }
       }
     }
 
@@ -531,12 +596,23 @@ export function reconcileAuxiliar(
       lines.push(base);
       continue;
     }
+    // Si la cuenta aux no tiene NINGÚN movimiento bancario cargado (cuenta
+    // por_cancelar inactiva, o cuenta que /bancos no expone), el match es
+    // imposible por gap estructural — no inflar gl-orphan. La R-override del
+    // paso 5 todavía puede confirmar la línea si JDE la marcó como conciliada.
+    const auxAccountKey = accountMatchKey(rec.cuentaBanco);
+    if (auxAccountKey && !bankAccountKeys.has(auxAccountKey)) {
+      base.matchTier = 'cuenta-no-en-banco';
+      lines.push(base);
+      continue;
+    }
     lines.push(base);
     pending.push({
       rec,
       line: base,
       absImporte: Math.abs(rec.importe),
-      accountKey: accountMatchKey(rec.cuentaBanco),
+      accountKey: auxAccountKey,
+      monedaKey: normalizeMoneda(rec.moneda),
     });
   }
 
@@ -556,7 +632,7 @@ export function reconcileAuxiliar(
   type Cand = { item: typeof pending[number]; bank: BankNorm; score: number; exact: boolean };
   const cands: Cand[] = [];
   for (const item of pending) {
-    const bucket = bankPool.get(`${item.accountKey}|${item.line.flujo}`);
+    const bucket = bankPool.get(`${item.accountKey}|${item.line.flujo}|${item.monedaKey}`);
     if (!bucket) continue;
     for (const b of bucket) {
       const dDays = daysBetween(b.fecha, item.line.fechaContable);
@@ -589,7 +665,7 @@ export function reconcileAuxiliar(
   const crossCands: Cand[] = [];
   for (const item of pending) {
     if (item.line.bankMovementKey) continue;
-    const ciaBucket = bankPool.get(`cia:${item.line.cia}|${item.line.flujo}`);
+    const ciaBucket = bankPool.get(`cia:${item.line.cia}|${item.line.flujo}|${item.monedaKey}`);
     if (!ciaBucket) continue;
     for (const b of ciaBucket) {
       // Saltar las del mismo accountKey — ya las consideramos en best-fit.
@@ -627,27 +703,66 @@ export function reconcileAuxiliar(
     }
   }
 
-  // 5. Tier final: `estatusConciliado === 'R'` gana sobre exact/tolerance/orphan.
-  for (const item of pending) {
-    const wasMatched =
-      item.line.matchTier === 'exact' ||
-      item.line.matchTier === 'tolerance' ||
-      item.line.matchTier === 'cross-account';
-    if (item.line.estatusConciliado.trim().toUpperCase() === 'R') {
-      item.line.matchTier = 'jde-reconciled';
-    } else if (wasMatched) {
-      // El engine encontró pareja bancaria, pero JDE no la marca como
-      // conciliada. Auditoría — puede ser timing (proceso JDE corre con lag)
-      // o desacuerdo real entre engine y JDE.
-      inconsistencies.push({
-        kind: 'jde-not-marked-reconciled',
-        cia: item.line.cia,
-        ref: item.line.glKey,
-        detail: `matched (${item.line.matchTier}) pero Estatus_conciliado='${item.line.estatusConciliado || '(empty)'}'`,
-      });
+  // 5. Tier final: `estatusConciliado === 'R'` gana sobre exact/tolerance/orphan
+  //    Y sobre los buckets de gap estructural (cuenta-no-en-banco, sin-banco,
+  //    sin-cuenta-aux, timing-pendiente). R es la marca de JDE de "ya
+  //    conciliada con banco" — confirmación autorizada por el ERP. Si JDE
+  //    afirma que cruzó, vale aunque NUESTROS datos no permitan reconstruir
+  //    el match. Excepciones: `caja` (1010, no es bancaria), `interno`
+  //    (traspaso clasificado aparte) y `asiento-interno` (VI, no es mov
+  //    bancario real) NO se promueven a jde-reconciled — son categorías
+  //    semánticas, no estados de match.
+  for (const line of lines) {
+    if (
+      line.estatusConciliado.trim().toUpperCase() === 'R' &&
+      line.matchTier !== 'caja' &&
+      line.matchTier !== 'interno' &&
+      line.matchTier !== 'asiento-interno'
+    ) {
+      line.matchTier = 'jde-reconciled';
     }
-    item.line.confidence = CONFIDENCE[item.line.matchTier];
   }
+
+  // 5b. Reclasificación post-matching: orphans cuyo tipoDocto es journal-style
+  //     (`J*` o un código del catálogo de asientos contables) se mueven a
+  //     `asiento-contable` — semánticamente no son movs bancarios fallidos
+  //     sino registros de ajuste sin contraparte por diseño. Las líneas con
+  //     ese tipoDocto que SÍ encontraron contraparte (ej. JT que pagó IVA al
+  //     SAT vía banco) ya cruzaron en pasos anteriores; aquí solo cae lo que
+  //     quedó huérfano.
+  //
+  //     Adicional: `tipoBatch=G + tipoDocto=PF` son provisiones de finiquito
+  //     contables, no pagos reales — el pago real es una entrada K/PT
+  //     separada. Bucketear como asiento-contable también.
+  for (const line of lines) {
+    if (line.matchTier !== 'gl-orphan') continue;
+    const rec = recByGlKey.get(line.glKey);
+    if (isAccountingTipoDocto(line.tipoDocto)) {
+      line.matchTier = 'asiento-contable';
+      continue;
+    }
+    if (rec && (rec.tipoBatch ?? '').trim().toUpperCase() === 'G' && line.tipoDocto === 'PF') {
+      line.matchTier = 'asiento-contable';
+    }
+  }
+
+  // 5c. Cola de revisión: los orphans que sobreviven al paso 5b son cheques,
+  //     cobros y pagos que SÍ son movs bancarios pero no encontraron pareja
+  //     automática (motivos típicos: pago intercompañía cuyo banco marcó
+  //     traspaso interno; N:1 cuando varias líneas aux agregan a un solo
+  //     ABONO; importe difiere >10% por comisiones). El motor no los puede
+  //     confirmar sin intervención humana — quedan en `pendiente-revision`,
+  //     fuera del denominador del % cruce. La drilldown los expone como la
+  //     sección primaria accionable para que contabilidad los marque R en
+  //     JDE o ajuste el asiento. NOTA: si en el futuro se agrega N:M
+  //     aggregation o intercompany cross-cia detection, esos buckets deben
+  //     interceptar ANTES de este reclassify.
+  for (const line of lines) {
+    if (line.matchTier === 'gl-orphan') {
+      line.matchTier = 'pendiente-revision';
+    }
+  }
+
   for (const line of lines) {
     line.confidence = CONFIDENCE[line.matchTier];
   }
@@ -718,9 +833,6 @@ function buildSummary(
 ): AuxiliarReconSummary {
   const inconsistencyCounts: Record<AuxiliarInconsistencyKind, number> = {
     'non-bank-batch-in-1020': 0,
-    'jde-not-marked-reconciled': 0,
-    'duplicate-gsaid-on-bank': 0,
-    'idcuenta-collision-on-aux': 0,
   };
   for (const inc of inconsistencies) inconsistencyCounts[inc.kind] += 1;
 
@@ -751,16 +863,23 @@ function buildSummary(
     egresoMontoCruzado: 0,
     pctEgresoCruzado: 0,
     conciliadasJde: 0,
+    cruzadasSinR: 0,
     cajaLineas: 0,
     cajaMonto: 0,
     internoLineas: 0,
     internoMonto: 0,
     asientoInternoLineas: 0,
     asientoInternoMonto: 0,
+    asientoContableLineas: 0,
+    asientoContableMonto: 0,
+    pendienteRevisionLineas: 0,
+    pendienteRevisionMonto: 0,
     sinBancoLineas: 0,
     sinBancoMonto: 0,
     sinCuentaAuxLineas: 0,
     sinCuentaAuxMonto: 0,
+    cuentaNoEnBancoLineas: 0,
+    cuentaNoEnBancoMonto: 0,
     timingPendienteLineas: 0,
     timingPendienteMonto: 0,
     glOrphanLineas: 0,
@@ -781,7 +900,9 @@ function buildSummary(
       line.matchTier === 'exact' ||
       line.matchTier === 'tolerance' ||
       line.matchTier === 'cross-account';
-    if (line.estatusConciliado.trim().toUpperCase() === 'R') s.conciliadasJde += 1;
+    const tieneR = line.estatusConciliado.trim().toUpperCase() === 'R';
+    if (tieneR) s.conciliadasJde += 1;
+    if (cruzada && !tieneR) s.cruzadasSinR += 1;
 
     if (line.matchTier === 'caja') {
       s.cajaLineas += 1;
@@ -798,6 +919,16 @@ function buildSummary(
       s.asientoInternoMonto += monto;
       continue;
     }
+    if (line.matchTier === 'asiento-contable') {
+      s.asientoContableLineas += 1;
+      s.asientoContableMonto += monto;
+      continue;
+    }
+    if (line.matchTier === 'pendiente-revision') {
+      s.pendienteRevisionLineas += 1;
+      s.pendienteRevisionMonto += monto;
+      continue;
+    }
     if (line.matchTier === 'sin-banco') {
       s.sinBancoLineas += 1;
       s.sinBancoMonto += monto;
@@ -806,6 +937,11 @@ function buildSummary(
     if (line.matchTier === 'sin-cuenta-aux') {
       s.sinCuentaAuxLineas += 1;
       s.sinCuentaAuxMonto += monto;
+      continue;
+    }
+    if (line.matchTier === 'cuenta-no-en-banco') {
+      s.cuentaNoEnBancoLineas += 1;
+      s.cuentaNoEnBancoMonto += monto;
       continue;
     }
     if (line.matchTier === 'timing-pendiente') {
@@ -870,16 +1006,23 @@ export function emptyAuxiliarReconResult(): AuxiliarReconResult {
       egresoMontoCruzado: 0,
       pctEgresoCruzado: 0,
       conciliadasJde: 0,
+      cruzadasSinR: 0,
       cajaLineas: 0,
       cajaMonto: 0,
       internoLineas: 0,
       internoMonto: 0,
       asientoInternoLineas: 0,
       asientoInternoMonto: 0,
+      asientoContableLineas: 0,
+      asientoContableMonto: 0,
+      pendienteRevisionLineas: 0,
+      pendienteRevisionMonto: 0,
       sinBancoLineas: 0,
       sinBancoMonto: 0,
       sinCuentaAuxLineas: 0,
       sinCuentaAuxMonto: 0,
+      cuentaNoEnBancoLineas: 0,
+      cuentaNoEnBancoMonto: 0,
       timingPendienteLineas: 0,
       timingPendienteMonto: 0,
       glOrphanLineas: 0,
@@ -892,9 +1035,6 @@ export function emptyAuxiliarReconResult(): AuxiliarReconResult {
       ciaBreakdown: [],
       inconsistencyCounts: {
         'non-bank-batch-in-1020': 0,
-        'jde-not-marked-reconciled': 0,
-        'duplicate-gsaid-on-bank': 0,
-        'idcuenta-collision-on-aux': 0,
       },
     },
     inconsistencies: [],

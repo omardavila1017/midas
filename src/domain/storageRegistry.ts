@@ -38,7 +38,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas-db', scope: 'indexedDB', owner: 'domain/persistence.ts', description: 'Base IDB del MidasStore (payloads pesados extraídos del store light).' },
 
   // ── Heavy records (IndexedDB) ───────────────────────────────────────────
-  { key: 'midas-heavy-store', scope: 'indexedDB', owner: 'services/heavyStoreIDB.ts', description: 'Records JDE/TRESS/CITI pesados: cxp, cobranza, cobranzaPayments, compras, pagoProveedor, nomina, rol, auxiliarContable + caches de banco.' },
+  { key: 'midas-heavy-store', scope: 'indexedDB', owner: 'services/heavyStoreIDB.ts', description: 'Records JDE/TRESS/CITI pesados: cxp, cobranza, cobranzaPayments, compras, pagoProveedor, nomina, rol, viajesEspeciales, auxiliarContable + caches de banco.' },
   { key: 'midas-daily-cache', scope: 'indexedDB', owner: 'services/dailyApiCache.ts', description: 'Cache por día de respuestas JDE (5s open-timeout, fallback a memoria).' },
   { key: 'midas-financial-projection-cache', scope: 'indexedDB', owner: 'modules/financial-projection/services/financialProjectionPersistentCache.ts', description: 'Cache persistente de proyecciones financieras.' },
 

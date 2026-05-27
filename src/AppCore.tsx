@@ -36,6 +36,7 @@ import {
   fetchPagoProveedorRange,
   fetchNomina,
   fetchRolRange,
+  fetchViajesEspecialesRange,
   fetchAuxiliarContableRange,
   type Company,
   type AuxiliarContableRecord,
@@ -46,6 +47,7 @@ import {
   type ComprasRecord,
   type PagoProveedorRecord,
   type RolRecord,
+  type ViajeEspecialRecord,
 } from './services/jde';
 import { AUX_RECON_PARAMS, isAuxiliarAllowlistedCia } from './domain/auxiliarReconciliationConfig';
 import {
@@ -99,6 +101,7 @@ import {
 } from 'lucide-react';
 import { clearAllMidasStorage } from './domain/storageRegistry';
 import { filterActiveCompanies, matchesExclusionIdentity } from './domain/companyExclusion';
+import { applyViajesEspecialesGroup } from './domain/viajesEspecialesCatalog';
 import {
   attachImportedStatementsToKnownCompanies,
   excludeBajio,
@@ -735,6 +738,13 @@ export default function App() {
   // `Factura`/`UUID_Fiscal` cuando el viaje ya se facturó.
   const [rolRecords, setRolRecords] = useState<RolRecord[]>([]);
   const [rolLoadedKeys, setRolLoadedKeys] = useState<Record<string, string>>({});
+  // Viajes Especiales — API dev http://srv-desarrollo:95/ViajesEspeciales.
+  // Trae viajes ad-hoc con Factura_JDE + Fecha_Factura + Dias_Credito por
+  // viaje (no por catálogo). Auto-fetch al boot, mismo año base que ROL.
+  // Sirve para (1) auto-poblar el grupo Viajes Especiales del catálogo y
+  // (2) proyectar cobros que cobranza JDE aún no expone (`cxc:especial:`).
+  const [viajesEspecialesRecords, setViajesEspecialesRecords] = useState<ViajeEspecialRecord[]>([]);
+  const [viajesEspecialesLoadedKeys, setViajesEspecialesLoadedKeys] = useState<Record<string, string>>({});
   // Auxiliar contable JDE — endpoint /JDEdwards/AuxiliarContable. Libro
   // mayor posteado contra cuentas de banco/caja (objeto 1010-1020). Fuente
   // del motor de conciliación histórica banco↔ERP. Auto-fetch por-cía al
@@ -1591,10 +1601,25 @@ export default function App() {
             setNominaLoadedKeys(prev => deriveNominaLoadedKeysFromRecords(records, prev));
           }
         } else if (dataset === 'rol') {
-          const records = await loadHeavyRecords('rolRecords');
-          if (records.length > 0) {
-            setRolRecords(records);
-            patchRolLoadedKeysFromRecords(setRolLoadedKeys, records, lightStoreLastSavedRef.current);
+          // Viajes Especiales se hidrata DENTRO del slot 'rol' (no agrega
+          // boot status nuevo). Ambos APIs son trip-level CITI; comparten
+          // ciclo de vida lógico desde la perspectiva del usuario.
+          const [rolRecs, viajesRecs] = await Promise.all([
+            loadHeavyRecords('rolRecords'),
+            loadHeavyRecords('viajesEspecialesRecords'),
+          ]);
+          if (rolRecs.length > 0) {
+            setRolRecords(rolRecs);
+            patchRolLoadedKeysFromRecords(setRolLoadedKeys, rolRecs, lightStoreLastSavedRef.current);
+          }
+          if (viajesRecs.length > 0) {
+            setViajesEspecialesRecords(viajesRecs);
+            // Marcar año actual como ya cargado (la ventana fija es Y-01-01..hoy).
+            const year = new Date().getUTCFullYear();
+            setViajesEspecialesLoadedKeys(prev => ({
+              ...prev,
+              [`${year}:full`]: lightStoreLastSavedRef.current ?? new Date().toISOString(),
+            }));
           }
         } else if (dataset === 'auxiliar') {
           const records = await loadHeavyRecords('auxiliarContableRecords');
@@ -2043,6 +2068,7 @@ export default function App() {
       companies, companiesLoadedAt,
       nominaRecords, nominaLoadedKeys,
       rolRecords, rolLoadedKeys,
+      viajesEspecialesRecords, viajesEspecialesLoadedKeys,
       auxiliarContableRecords, auxiliarContableLoadedCias,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
@@ -2081,6 +2107,7 @@ export default function App() {
     pagoProveedorRecords,
     nominaRecords,
     rolRecords,
+    viajesEspecialesRecords,
     auxiliarContableRecords,
   });
   latestHeavyRecordsRef.current = {
@@ -2091,6 +2118,7 @@ export default function App() {
     pagoProveedorRecords,
     nominaRecords,
     rolRecords,
+    viajesEspecialesRecords,
     auxiliarContableRecords,
   };
   const useHeavySaver = (key: HeavyKey, records: unknown[]) => {
@@ -2123,6 +2151,7 @@ export default function App() {
   useHeavySaver('pagoProveedorRecords', pagoProveedorRecords);
   useHeavySaver('nominaRecords', nominaRecords);
   useHeavySaver('rolRecords', rolRecords);
+  useHeavySaver('viajesEspecialesRecords', viajesEspecialesRecords);
   useHeavySaver('auxiliarContableRecords', auxiliarContableRecords);
 
   useEffect(() => {
@@ -3176,6 +3205,122 @@ export default function App() {
     })();
   }, [requestedDatasets, storeHydrated, refreshRol, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
 
+  // ── Viajes Especiales: viajes ad-hoc con Factura_JDE/Fecha_Factura/Dias_Credito.
+  // Auto-fetch año en curso. Corre EN PARALELO con ROL (mismo dataset slot),
+  // no agrega boot status nuevo — falla silenciosa para no bloquear boot.
+  // Misma lógica de delta-sync que ROL: fechaFactura/fSalidaPrimera más alto
+  // como cursor; sin él, full backfill desde 1°-ene.
+  const refreshViajesEspeciales = useCallback(
+    async (force = true) => {
+      const today = new Date();
+      const year = today.getUTCFullYear();
+      const yearStart = `${year}-01-01`;
+      const fechaFinal = today.toISOString().slice(0, 10);
+      const cacheKey = `${year}:full`;
+      const lastFetch = viajesEspecialesLoadedKeys[cacheKey];
+      if (!force && viajesEspecialesRecords.length > 0 && lastFetch && isFreshTimestamp(lastFetch, COBRANZA_AUTO_REFRESH_TTL_MS)) {
+        return { totalRecords: viajesEspecialesRecords.length };
+      }
+      let maxState: string | null = null;
+      for (const v of viajesEspecialesRecords) {
+        const d = v.fechaFactura || v.fSalidaPrimera;
+        if (d && (!maxState || d > maxState)) maxState = d;
+      }
+      const fechaInicial = (!force && maxState && maxState >= yearStart)
+        ? nextIsoDay(maxState)
+        : yearStart;
+      if (fechaInicial > fechaFinal) {
+        // eslint-disable-next-line no-console
+        console.info(`[viajes-esp] sync · heavy-store cubre hasta ${maxState}, skip`);
+        setViajesEspecialesLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
+        return { totalRecords: viajesEspecialesRecords.length };
+      }
+      try {
+        const mergedByKey = new Map<number, ViajeEspecialRecord>();
+        for (const v of viajesEspecialesRecords) mergedByKey.set(v.kRenta, v);
+        const initialSize = mergedByKey.size;
+        let lastPersistedSize = initialSize;
+        const records = await fetchViajesEspecialesRange(fechaInicial, fechaFinal, {
+          onPartialBatch: (batch) => {
+            let changed = false;
+            for (const v of batch) {
+              if (!mergedByKey.has(v.kRenta)) {
+                mergedByKey.set(v.kRenta, v);
+                changed = true;
+              }
+            }
+            if (!changed) return;
+            const snapshot = Array.from(mergedByKey.values());
+            setViajesEspecialesRecords(snapshot);
+            void saveHeavyRecords('viajesEspecialesRecords', snapshot);
+            lastPersistedSize = snapshot.length;
+          },
+        });
+        if (records.length > 0 && mergedByKey.size === lastPersistedSize) {
+          let changed = false;
+          for (const v of records) {
+            if (!mergedByKey.has(v.kRenta)) {
+              mergedByKey.set(v.kRenta, v);
+              changed = true;
+            }
+          }
+          if (changed) {
+            const snapshot = Array.from(mergedByKey.values());
+            setViajesEspecialesRecords(snapshot);
+            void saveHeavyRecords('viajesEspecialesRecords', snapshot);
+          }
+        }
+        if (records.length > 0) {
+          setViajesEspecialesLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
+        }
+        // eslint-disable-next-line no-console
+        console.info(`[viajes-esp] sync · fetched=${records.length} ${fechaInicial}..${fechaFinal} · total persisted=${mergedByKey.size} (delta=${mergedByKey.size - initialSize})`);
+        return { totalRecords: records.length };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.warn('[viajes-esp] fetch falló:', msg);
+        return { totalRecords: 0 };
+      }
+    },
+    [viajesEspecialesLoadedKeys, viajesEspecialesRecords],
+  );
+
+  const viajesEspecialesAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (viajesEspecialesAutoFetchDone.current) return;
+    if (!requestedDatasets.has('rol')) return;
+    if (!storeHydrated) return;
+    if (!idbHydratedDatasets.has('rol')) return;
+    viajesEspecialesAutoFetchDone.current = true;
+    void refreshViajesEspeciales(false);
+  }, [requestedDatasets, storeHydrated, idbHydratedDatasets, refreshViajesEspeciales]);
+
+  // Auto-poblado: cuando Viajes Especiales API trae rows, promueve los
+  // clientes correspondientes al grupo `group-viajes-especiales` automá-
+  // ticamente. Respeta `manualGroupOverride === true`. Se dispara cuando
+  // cambian (clients, viajesEspecialesRecords); el helper devuelve la
+  // misma ref si no hay cambios para evitar loops de setState.
+  const lastViajesPromotionRef = useRef<{ clientsRef: unknown; recordsRef: unknown } | null>(null);
+  useEffect(() => {
+    if (viajesEspecialesRecords.length === 0) return;
+    if (clients.length === 0) return;
+    const guard = lastViajesPromotionRef.current;
+    if (guard && guard.clientsRef === clients && guard.recordsRef === viajesEspecialesRecords) return;
+    const { clients: next, promotedCount, unmatchedClaveJdeCount } =
+      applyViajesEspecialesGroup(clients, viajesEspecialesRecords);
+    lastViajesPromotionRef.current = { clientsRef: next, recordsRef: viajesEspecialesRecords };
+    if (next === clients) return;
+    setClients(next);
+    if (promotedCount > 0 || unmatchedClaveJdeCount > 0) {
+      // eslint-disable-next-line no-console
+      console.info(
+        `[viajes-esp-catalog] promovidos=${promotedCount} clientes a Viajes Especiales · `
+        + `K_Cliente sin match en catálogo=${unmatchedClaveJdeCount}`,
+      );
+    }
+  }, [clients, viajesEspecialesRecords]);
+
   // Si JDE no devuelve compañías (companies en error), CXP/cobranza/compras/
   // pagos/nómina nunca se dispararon — marcamos los slots como error para
   // destrabar el boot. ROL no depende de companies (es global CITI).
@@ -3939,6 +4084,7 @@ export default function App() {
     cobranzaPayments,
     auxiliarReconciliation,
     rolRecords,
+    viajesEspecialesRecords,
     purchaseReceipts: purchaseReceiptsFromCompras,
     payrollCosts: nominaRecords,
     assumptions,
@@ -3956,6 +4102,7 @@ export default function App() {
     cobranzaPayments,
     auxiliarReconciliation,
     rolRecords,
+    viajesEspecialesRecords,
     purchaseReceiptsFromCompras,
     nominaRecords,
     assumptions,
@@ -3972,6 +4119,7 @@ export default function App() {
     cobranzaRecords,
     auxiliarReconciliation,
     rolRecords,
+    viajesEspecialesRecords,
     purchaseReceipts: purchaseReceiptsFromCompras,
     payrollCosts: nominaRecords,
     assumptions,
@@ -3987,6 +4135,7 @@ export default function App() {
     cobranzaRecords,
     auxiliarReconciliation,
     rolRecords,
+    viajesEspecialesRecords,
     purchaseReceiptsFromCompras,
     nominaRecords,
     assumptions,
@@ -4442,6 +4591,7 @@ export default function App() {
               <Suspense fallback={<LazyTabFallback label="Conciliación" />}>
                 <ConciliacionDashboard
                   reconciliation={auxiliarReconciliation}
+                  companies={companies}
                 />
               </Suspense>
             )}

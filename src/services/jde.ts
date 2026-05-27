@@ -63,6 +63,8 @@ import type {
   PagoProveedorRequest,
   RolRecord,
   RolRequest,
+  ViajeEspecialRecord,
+  ViajeEspecialRequest,
 } from './jdeTypes';
 import type {
   PayrollCashTreatment,
@@ -2688,6 +2690,167 @@ export async function fetchRolRange(
   return merged;
 }
 
+// ───────────────────────────────────────────────────────────────
+// 10. Viajes Especiales
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Convierte `"2026-04-09T09:00:00"` → `"2026-04-09"`. Tolera valores ya
+ * normalizados o vacíos.
+ */
+function toIsoDate(v: unknown): string | undefined {
+  const s = toStr(v).trim();
+  if (!s) return undefined;
+  return s.slice(0, 10);
+}
+
+function mapViajeEspecial(raw: RawRecord): ViajeEspecialRecord {
+  // Fallbacks por si el API sirve `Factura_JDE`/`UUID` con espacios trailing
+  // (visto en el sample). normalizamos trim + upper para que el cruce con
+  // cobranza no falle por whitespace.
+  const facturaRaw = toStr(pick(raw, ['Factura_JDE', 'factura_jde', 'facturaJDE']));
+  const uuidRaw = toStr(pick(raw, ['UUID', 'uuid', 'uuidFiscal', 'UUID_Fiscal']));
+  return {
+    cia:               normalizeCia(pick(raw, ['Clave_JDE_Empresa', 'clave_jde_empresa', 'cia'])),
+    empresaCodigo:     toStr(pick(raw, ['K_Empresa', 'k_empresa', 'empresaCodigo'])),
+    kRenta:            toNum(pick(raw, ['K_Renta', 'k_renta', 'kRenta'])),
+    kCliente:          toNum(pick(raw, ['K_Cliente', 'k_cliente', 'kCliente'])),
+    dCliente:          toStr(pick(raw, ['D_Cliente', 'd_cliente', 'dCliente'])).trim(),
+    rfc:               toStr(pick(raw, ['Rrc_Cliente', 'rfc_cliente', 'RFC', 'rfc'])).trim(),
+    claveJDE:          toStr(pick(raw, ['Clave_JDE', 'clave_jde', 'claveJDE'])).trim(),
+    totalNegociado:    toNum(pick(raw, ['Total_Negociado', 'total_negociado', 'totalNegociado'])),
+    diasCredito:       toNum(pick(raw, ['Dias_Credito', 'dias_credito', 'diasCredito'])),
+    facturaJDE:        facturaRaw ? facturaRaw.trim().toUpperCase() : undefined,
+    uuidFiscal:        uuidRaw ? uuidRaw.trim().toUpperCase() : undefined,
+    fSalidaPrimera:    toIsoDate(pick(raw, ['f_salida_primera', 'fSalidaPrimera', 'F_Salida_Primera'])),
+    fRegresoUltima:    toIsoDate(pick(raw, ['f_Regreso_ultima', 'fRegresoUltima', 'F_Regreso_Ultima'])),
+    fechaFactura:      toIsoDate(pick(raw, ['Fecha_Factura', 'fecha_factura', 'fechaFactura'])),
+    numeroBatch:       toStr(pick(raw, ['numeroBatch', 'numero_batch', 'Numero_Batch'])) || undefined,
+    referenciaDeposito: toStr(pick(raw, ['Referencia_Deposito', 'referencia_deposito', 'referenciaDeposito'])) || undefined,
+  };
+}
+
+let viajesEspShapeLogged = false;
+
+/**
+ * POST {viajesEspeciales}/Servicios — viajes especiales del rango.
+ *
+ * Endpoint dev `http://srv-desarrollo:95/ViajesEspeciales/Servicios` (proxy
+ * `/api/viajes-especiales`). Acepta solo `f_Inicio` / `f_Final`. Trae cia
+ * por row vía `Clave_JDE_Empresa`.
+ */
+export async function fetchViajesEspeciales(
+  req: ViajeEspecialRequest,
+  config: JdeClientConfig = {},
+): Promise<ViajeEspecialRecord[]> {
+  const merged = withLongRunningDefaults({
+    baseUrl: apiConfig.viajesEspeciales.baseUrl,
+    authValue: apiConfig.viajesEspeciales.authValue || undefined,
+    timeoutMs: 300_000,
+    ...config,
+  });
+  let raw: unknown;
+  try {
+    raw = await jdeClient.post<unknown>('/Servicios', req, merged);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[viajes-esp] fetch error: ${err instanceof Error ? err.message : String(err)} · body sent: ${JSON.stringify(req)}`);
+    if (err instanceof JdeApiError) {
+      // eslint-disable-next-line no-console
+      console.warn(`[viajes-esp] server response body: ${typeof err.body === 'string' ? err.body : JSON.stringify(err.body)}`);
+    }
+    throw err;
+  }
+  const list = unwrapList(raw);
+
+  if (typeof window !== 'undefined' && !viajesEspShapeLogged) {
+    viajesEspShapeLogged = true;
+    // eslint-disable-next-line no-console
+    console.info(`[viajes-esp] ${list.length} registros entre ${req.f_Inicio} y ${req.f_Final}`);
+    if (list.length > 0) {
+      // eslint-disable-next-line no-console
+      console.info('[viajes-esp] sample raw:', list[0]);
+      // eslint-disable-next-line no-console
+      console.info('[viajes-esp] sample mapped:', mapViajeEspecial(list[0]));
+    }
+  }
+
+  return dropExcludedByCia(list.map(mapViajeEspecial));
+}
+
+/**
+ * Wrapper rango. Dedup por `K_Renta` (id único del viaje). Trocea por mes
+ * calendario para tolerar payloads grandes; concurrencia baja.
+ */
+export async function fetchViajesEspecialesRange(
+  fechaInicial: string,
+  fechaFinal: string,
+  options: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    onPartialBatch?: (records: ViajeEspecialRecord[]) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<ViajeEspecialRecord[]> {
+  const config = options.config ?? {};
+  const windows = splitIntoMonthlyWindows(fechaInicial, fechaFinal);
+  if (windows.length === 0) return [];
+
+  options.onProgress?.(0, windows.length);
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  const results: ViajeEspecialRecord[][] = new Array(windows.length);
+  const failedWindows: string[] = [];
+  let cursor = 0;
+  let completed = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const slot = cursor++;
+      if (slot >= windows.length) return;
+      const w = windows[slot];
+      try {
+        results[slot] = await fetchViajesEspeciales(
+          { f_Inicio: w.from, f_Final: w.to },
+          config,
+        );
+        if (results[slot].length > 0) {
+          try { options.onPartialBatch?.(results[slot]); } catch { /* swallow */ }
+        }
+      } catch (err) {
+        failedWindows.push(`${w.from}..${w.to}`);
+        // eslint-disable-next-line no-console
+        console.warn(`[viajes-esp] ventana ${w.from}..${w.to} falló: ${err instanceof Error ? err.message : String(err)}`);
+        results[slot] = [];
+      } finally {
+        completed += 1;
+        options.onProgress?.(completed, windows.length);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, windows.length) }, worker),
+  );
+
+  if (failedWindows.length === windows.length) {
+    throw new JdeApiError(
+      `Viajes Especiales no respondió en ninguna ventana`,
+      504,
+      '/Servicios',
+      { fechaInicial, fechaFinal, failedWindows },
+    );
+  }
+
+  // Dedup por K_Renta (id único). Si el mismo viaje aparece en dos
+  // ventanas (no debería pasar pero defensa) gana el primero.
+  const seen = new Set<number>();
+  const merged: ViajeEspecialRecord[] = [];
+  for (const rec of results.flat()) {
+    if (seen.has(rec.kRenta)) continue;
+    seen.add(rec.kRenta);
+    merged.push(rec);
+  }
+  return merged;
+}
+
 // Re-exports convenientes
 export type {
   AgedBalanceRecord,
@@ -2713,5 +2876,7 @@ export type {
   PagoProveedorRequest,
   RolRecord,
   RolRequest,
+  ViajeEspecialRecord,
+  ViajeEspecialRequest,
 } from './jdeTypes';
 export { JdeApiError } from './jdeTypes';

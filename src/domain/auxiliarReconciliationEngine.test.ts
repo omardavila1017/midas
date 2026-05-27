@@ -96,10 +96,58 @@ describe('reconcileAuxiliar', () => {
     expect(res.lines[0].matchTier).toBe('jde-reconciled');
   });
 
-  it('leaves a GL line with no bank counterpart as gl-orphan', () => {
+  it('leaves a GL line with no matching bank movement as pendiente-revision', () => {
+    // La cuenta SÍ tiene un movimiento bancario cargado, pero el importe está
+    // muy fuera de tolerancia — match falla en la fase de candidatos.
+    // Los gl-orphans no-asiento-contable se promueven a pendiente-revision
+    // (cola humana, fuera del denominador del % cruce).
+    const res = reconcileAuxiliar(
+      [glLine({ importe: 1000 })],
+      [statement([bankLine({ importe: 99999, fechaOperacion: '2026-04-13' })])],
+    );
+    expect(res.lines[0].matchTier).toBe('pendiente-revision');
+    expect(res.summary.pendienteRevisionLineas).toBe(1);
+    expect(res.summary.glOrphanLineas).toBe(0);
+  });
+
+  it('buckets a GL line whose cuenta has no bank movements as cuenta-no-en-banco', () => {
+    // statement([]) significa que la cía tiene banco cargado pero ESTA cuenta
+    // específica no tiene movimientos — gap estructural, no orphan real.
     const res = reconcileAuxiliar([glLine()], [statement([])]);
-    expect(res.lines[0].matchTier).toBe('gl-orphan');
-    expect(res.summary.glOrphanLineas).toBe(1);
+    expect(res.lines[0].matchTier).toBe('cuenta-no-en-banco');
+    expect(res.summary.cuentaNoEnBancoLineas).toBe(1);
+    expect(res.summary.glOrphanLineas).toBe(0);
+  });
+
+  it('does not cross USD aux against MXN bank movement (currency-aware match)', () => {
+    // Línea aux en USD: no debe emparejar con movimiento bancario MXN del
+    // mismo importe absoluto — pools separados por moneda. Cae a
+    // pendiente-revision (no es asiento-contable porque RI no es journal).
+    const res = reconcileAuxiliar(
+      [glLine({ importe: 1000, moneda: 'USD' })],
+      [statement([bankLine({ importe: 1000, moneda: 'MXN' })])],
+    );
+    expect(res.lines[0].matchTier).toBe('pendiente-revision');
+  });
+
+  it('matches USD aux against USD bank movement', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ importe: 1000, moneda: 'USD' })],
+      [statement([bankLine({ importe: 1000, moneda: 'USD' })])],
+    );
+    expect(res.lines[0].matchTier).toBe('exact');
+  });
+
+  it('buckets journal tipoDocto orphans (JX, JG, JR, VR, etc.) as asiento-contable', () => {
+    // JX = Revaluación moneda extranjera — asiento contable puro, no es mov
+    // bancario. Sin contraparte → asiento-contable (no pendiente-revision).
+    const res = reconcileAuxiliar(
+      [glLine({ tipoDocto: 'JX' })],
+      [statement([bankLine({ importe: 9999 })])],
+    );
+    expect(res.lines[0].matchTier).toBe('asiento-contable');
+    expect(res.summary.asientoContableLineas).toBe(1);
+    expect(res.summary.pendienteRevisionLineas).toBe(0);
   });
 
   it('reports a bank movement with no GL line as a bank-orphan', () => {
@@ -127,11 +175,13 @@ describe('reconcileAuxiliar', () => {
   });
 
   it('does not cross an ingreso GL line against a CARGO (direction must match)', () => {
+    // Ingreso aux vs CARGO bancario: pools de flujo separados, no cruzan.
+    // Cae a pendiente-revision (RI no es journal-style → no asiento-contable).
     const res = reconcileAuxiliar(
       [glLine({ importe: 1000 })],
       [statement([bankLine({ tipoMovimiento: 'CARGO', importe: 1000 })])],
     );
-    expect(res.lines[0].matchTier).toBe('gl-orphan');
+    expect(res.lines[0].matchTier).toBe('pendiente-revision');
   });
 
   it('records source confirmation keyed by factura', () => {
@@ -146,27 +196,28 @@ describe('reconcileAuxiliar', () => {
     expect(empty.lines).toHaveLength(0);
     expect(empty.summary.totalLineas).toBe(0);
     expect(empty.inconsistencies).toEqual([]);
-    expect(empty.summary.inconsistencyCounts['jde-not-marked-reconciled']).toBe(0);
+    expect(empty.summary.inconsistencyCounts['non-bank-batch-in-1020']).toBe(0);
+    expect(empty.summary.cruzadasSinR).toBe(0);
   });
 });
 
 describe('reconcileAuxiliar — inconsistencies', () => {
   it('flags non-bank-batch-in-1020 when Tipo_Batch is outside BANK_TIPO_BATCH', () => {
     const res = reconcileAuxiliar(
-      [glLine({ tipoBatch: 'RB', cuentaObjeto: '1020' })],
+      [glLine({ tipoBatch: 'N', cuentaObjeto: '1020' })],
       [statement([])],
     );
     expect(res.summary.inconsistencyCounts['non-bank-batch-in-1020']).toBe(1);
     expect(
       res.inconsistencies.some(
-        (i) => i.kind === 'non-bank-batch-in-1020' && i.detail.includes('RB'),
+        (i) => i.kind === 'non-bank-batch-in-1020' && i.detail.includes('N'),
       ),
     ).toBe(true);
   });
 
   it('does NOT flag non-bank-batch for objeto 1010 (caja)', () => {
     const res = reconcileAuxiliar(
-      [glLine({ tipoBatch: 'RB', cuentaObjeto: '1010' })],
+      [glLine({ tipoBatch: 'N', cuentaObjeto: '1010' })],
       [statement([])],
     );
     expect(res.summary.inconsistencyCounts['non-bank-batch-in-1020']).toBe(0);
@@ -181,44 +232,30 @@ describe('reconcileAuxiliar — inconsistencies', () => {
     expect(res.summary.inconsistencyCounts['non-bank-batch-in-1020']).toBe(0);
   });
 
-  it('flags jde-not-marked-reconciled when matched but estatus is not R', () => {
+  it('counts matched-without-R as cruzadasSinR (info only, not an inconsistency)', () => {
     const res = reconcileAuxiliar(
       [glLine({ estatusConciliado: '' })],
       [statement([bankLine()])],
     );
     expect(res.lines[0].matchTier).toBe('exact');
-    expect(res.summary.inconsistencyCounts['jde-not-marked-reconciled']).toBe(1);
+    expect(res.summary.cruzadasSinR).toBe(1);
+    expect(res.summary.conciliadasJde).toBe(0);
+    expect(res.inconsistencies.some((i) => (i.kind as string) === 'jde-not-marked-reconciled')).toBe(false);
   });
 
-  it('does NOT flag jde-not-marked-reconciled when estatus is R', () => {
+  it('R promotes match to jde-reconciled and counts as conciliadasJde', () => {
     const res = reconcileAuxiliar(
       [glLine({ estatusConciliado: 'R' })],
       [statement([bankLine()])],
     );
     expect(res.lines[0].matchTier).toBe('jde-reconciled');
-    expect(res.summary.inconsistencyCounts['jde-not-marked-reconciled']).toBe(0);
+    expect(res.summary.conciliadasJde).toBe(1);
+    expect(res.summary.cruzadasSinR).toBe(0);
   });
 
-  it('flags duplicate-gsaid-on-bank when same gsaid appears on >1 bank line', () => {
-    const res = reconcileAuxiliar(
-      [],
-      [
-        statement([
-          bankLine({ gsaid: '01640819', referencia: 'A' }),
-          bankLine({ gsaid: '01640819', referencia: 'B' }),
-        ]),
-      ],
-    );
-    expect(res.summary.inconsistencyCounts['duplicate-gsaid-on-bank']).toBe(1);
-  });
+  // gsaid es el ID JDE de la cuenta bancaria (account-level); repetirse en
+  // múltiples líneas es la cardinalidad esperada, no una inconsistencia.
 
-  it('flags idcuenta-collision-on-aux when same idCuenta repeats in 1020', () => {
-    const res = reconcileAuxiliar(
-      [glLine({ idCuenta: 'ACCT1', noDocto: 1 }), glLine({ idCuenta: 'ACCT1', noDocto: 2 })],
-      [statement([])],
-    );
-    expect(res.summary.inconsistencyCounts['idcuenta-collision-on-aux']).toBe(1);
-  });
 });
 
 describe('adaptAuxiliarForProjection', () => {

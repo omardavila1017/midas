@@ -23,7 +23,7 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import { adaptAuxiliarForProjection } from '../../../domain/auxiliarProjectionAdapter';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
+import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import { todayISO } from '../../../formatters';
 import {
   currentBankStatements,
@@ -54,6 +54,8 @@ export interface FinancialProjectionSourceInput {
   cobranzaRecords?: CobranzaRecord[];
   /** ROL CITI: viajes ejecutados. Forma parte del cache key. */
   rolRecords?: RolRecord[];
+  /** Viajes Especiales (API srv-desarrollo:95). Forma parte del cache key. */
+  viajesEspecialesRecords?: ViajeEspecialRecord[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   /**
@@ -141,6 +143,7 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.cxpRecords),
     refId(input.cobranzaRecords),
     refId(input.rolRecords),
+    refId(input.viajesEspecialesRecords),
     refId(input.purchaseReceipts),
     refId(input.payrollCosts),
     refId(input.auxiliarReconciliation),
@@ -195,6 +198,7 @@ export function buildFinancialProjectionSourceData(
     cxpRecords: input.cxpRecords,
     cobranzaRecords: input.cobranzaRecords ?? [],
     rolRecords: input.rolRecords ?? [],
+    viajesEspecialesRecords: input.viajesEspecialesRecords ?? [],
     purchaseReceipts: input.purchaseReceipts ?? [],
     payrollCosts: input.payrollCosts ?? [],
     cobradaBancoKeys: bridge.cobradaBancoKeys,

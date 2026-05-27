@@ -1,6 +1,6 @@
 {
-  "version": "1.4",
-  "generated": "2026-05-18",
+  "version": "1.5",
+  "generated": "2026-05-26",
   "notes": [
     "Catálogo de cuentas bancarias del Grupo Senda (operativas y de tesorería).",
     "Fuente: planilla interna de Tesorería (2026-05-15) filtrada contra el API JDE /bancos.",
@@ -9,7 +9,8 @@
     "role/subRole/flow se conservan del catálogo v1.1 por CLABE. flow regla: concentradora=ingreso, pagadora=egreso, resto=neutro.",
     "Corrección histórica: Banorte 577117543 traía moneda='PAGADORA' (error de captura) → MXN.",
     "v1.3: alta de 2 cuentas BANAMEX FEDERAL que /bancos sí regresa pero salían SIN CATÁLOGO: Oficios y Proyectos en Rec Clas de Per (70140350859, POR CANCELAR / CPAE) y Transportes Tamaulipas FONDO GARANTIA SCT (70138237077). cuentaDigits = forma 11 dígitos exacta del API.",
-    "v1.4: alta de cuenta centinela BANBAJIO (FIDEICOMISO DINA, Citi). El API de Bajío manda un Cuenta_Bancos distinto por línea, así que mapBankLine colapsa todo al centinela cuenta='BANBAJIO'; cuentaDigits no numérico se cruza por token textual (bySentinel)."
+    "v1.4: alta de cuenta centinela BANBAJIO (FIDEICOMISO DINA, Citi). El API de Bajío manda un Cuenta_Bancos distinto por línea, así que mapBankLine colapsa todo al centinela cuenta='BANBAJIO'; cuentaDigits no numérico se cruza por token textual (bySentinel).",
+    "v1.5: alta de cuenta inactiva BANORTE USD SES 0356130989 (confirmada por contabilidad SES 2026-05-26 como 'no se usa'). El aux contable asienta 9 líneas/año contra ella pero /bancos no la regresa — sin estado de cuenta no hay con qué cruzar. Se incluye con role='por_cancelar' para que el engine de conciliación la pueda etiquetar como 'cuenta-no-en-banco' (gap estructural) en lugar de inflar gl-orphan. Aplica el mismo patrón a cualquier cuenta catalogada cuyo accountKey no aparezca en el bankPool."
   ],
   "currencyMap": {"PESOS": "MXN", "DOLARES": "USD"},
   "roleValues": ["concentradora", "pagadora", "reserva", "credito", "ahorro", "por_cancelar", "garantia", "saldo_retenido"],
@@ -48,6 +49,7 @@
     {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "SERVICIO INDUSTRIAL REGIOMONTANO SA DE CV", "cuenta": "103310148", "cuentaDigits": "0103310148", "clabe": "072580001033101481", "moneda": "USD", "unidadNegocio": "CITI", "concepto": "PAGADORA DOLARES", "role": "pagadora", "subRole": "dolares", "flow": "egreso"},
     {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "SERVICIO INDUSTRIAL REGIOMONTANO SA DE CV", "cuenta": "577117534", "cuentaDigits": "0577117534", "clabe": "072580005771175348", "moneda": "MXN", "unidadNegocio": "CITI", "concepto": "PAGADORA - DOTACIONES DE EFECTIVO", "role": "pagadora", "subRole": "dotacion_efectivo", "flow": "egreso"},
     {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "SERVICIOS ESPECIALIZADOS SENDA SA DE CV", "cuenta": "103948347", "cuentaDigits": "0103948347", "clabe": "072580001039483475", "moneda": "USD", "unidadNegocio": "FEDERAL", "concepto": "CONCENTRADORA DÓLARES - CORRESPONSALIA CAMBIARIA", "role": "concentradora", "subRole": "dolares_corresponsalia", "flow": "ingreso"},
+    {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "SERVICIOS ESPECIALIZADOS SENDA SA DE CV", "cuenta": "356130989", "cuentaDigits": "0356130989", "clabe": null, "moneda": "USD", "unidadNegocio": "FEDERAL", "concepto": "POR CANCELAR - INACTIVA (v1.5)", "role": "por_cancelar", "subRole": null, "flow": "neutro"},
     {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "SERVICIOS T DE N SA DE CV", "cuenta": "168414873", "cuentaDigits": "0168414873", "clabe": "072580001684148738", "moneda": "USD", "unidadNegocio": "FEDERAL", "concepto": "CONCENTRADORA DÓLARES - CORRESPONSALIA CAMBIARIA", "role": "concentradora", "subRole": "dolares_corresponsalia", "flow": "ingreso"},
     {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "SERVICIOS T DE N SA DE CV", "cuenta": "170755926", "cuentaDigits": "0170755926", "clabe": "072580001707559262", "moneda": "MXN", "unidadNegocio": "FEDERAL", "concepto": "CONCENTRADORA - TPV VENTA CON TC AMEX", "role": "concentradora", "subRole": "tpv_amex", "flow": "ingreso"},
     {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "SERVICIOS T DE N SA DE CV", "cuenta": "174698704", "cuentaDigits": "0174698704", "clabe": "072580001746987044", "moneda": "MXN", "unidadNegocio": "FEDERAL", "concepto": "INGRESO POR TPV - VENTA PAGINA WEB (BETTEREZ) Y APP", "role": "concentradora", "subRole": "tpv_web_app", "flow": "ingreso"},

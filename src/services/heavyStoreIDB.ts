@@ -24,6 +24,7 @@ import type {
   ComprasRecord,
   PagoProveedorRecord,
   RolRecord,
+  ViajeEspecialRecord,
 } from './jdeTypes';
 import type { PayrollCostRecord } from '../modules/shared-finance/types';
 import type { CXPRecord } from '../domain/persistence';
@@ -42,6 +43,7 @@ export const HEAVY_KEYS = [
   'pagoProveedorRecords',
   'nominaRecords',
   'rolRecords',
+  'viajesEspecialesRecords',
   'auxiliarContableRecords',
 ] as const;
 
@@ -55,6 +57,7 @@ export interface HeavyStore {
   pagoProveedorRecords: PagoProveedorRecord[];
   nominaRecords: PayrollCostRecord[];
   rolRecords: RolRecord[];
+  viajesEspecialesRecords: ViajeEspecialRecord[];
   auxiliarContableRecords: AuxiliarContableRecord[];
 }
 
@@ -67,6 +70,7 @@ export function emptyHeavyStore(): HeavyStore {
     pagoProveedorRecords: [],
     nominaRecords: [],
     rolRecords: [],
+    viajesEspecialesRecords: [],
     auxiliarContableRecords: [],
   };
 }

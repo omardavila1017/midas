@@ -68,15 +68,47 @@ export function isAuxiliarAllowlistedCia(cia: unknown): boolean {
 }
 
 /**
- * Tipos de Batch que representan movimientos bancarios reales.
- *   "+"   estado de cuenta bancario
- *   "+B"  estados de cuenta (variante)
- *   "G"   batch general
- *   "K"   cheques C/P
- *   "&"   giros C/P
+ * Tipos de Batch que representan movimientos bancarios reales (cargo/abono
+ * que pega cuenta 1010/1020). Catálogo JDE confirmado 2026-05-26.
  *
- * Cualquier otro Tipo_Batch que aparezca con cuenta_objeto=1020 es
+ *   Estados de cuenta:
+ *     "+"   Estado de cuenta bancario
+ *     "+B"  Estados de cuenta (variante)
+ *   Cheques:
+ *     "K"   Cheques de C/P (Automáticos)
+ *     "L"   Cheques ALRS
+ *     "M"   Cheques manuales y nulos con cotejamiento
+ *     "W"   Cheques manuales sin cotejamiento
+ *   Recibos / cobranza:
+ *     "R"   Recibos de caja y ajustes
+ *     "RB"  Recibos y ajustes
+ *     "9"   Lockbox / Batch de recibos caja
+ *     "9B"  Recibos automáticos
+ *   Pagos directos / vouchers:
+ *     "Q"   Pagos directos
+ *     "V"   Registro de comprobantes (voucher → pago proveedor que pega 1020)
+ *   Giros:
+ *     "&"   Giros de C/P
+ *     "&B"  Registro de giros
+ *     "DB"  Recibos de giros
+ *   General:
+ *     "G"   Contabilidad general (asientos manuales que pueden afectar 1020)
+ *
+ * Quedan fuera a propósito:
+ *   "I"/"IB" facturas — reconocimiento CXC, no cobro
+ *   "#"/"#1" comprobantes nómina — reconocimiento, no dispersión
+ *   "X", "XX", "N", "O", "F", "FB", "AR", "E", etc. — GL/operativo sin
+ *   impacto bancario directo.
+ *
+ * Cualquier Tipo_Batch fuera de esta lista con cuenta_objeto=1020 es
  * sospechoso — el engine lo reporta como inconsistencia
  * (`non-bank-batch-in-1020`) para auditoría.
  */
-export const BANK_TIPO_BATCH: ReadonlySet<string> = new Set(['+', '+B', 'G', 'K', '&']);
+export const BANK_TIPO_BATCH: ReadonlySet<string> = new Set([
+  '+', '+B',
+  'K', 'L', 'M', 'W',
+  'R', 'RB', '9', '9B',
+  'Q', 'V',
+  '&', '&B', 'DB',
+  'G',
+]);

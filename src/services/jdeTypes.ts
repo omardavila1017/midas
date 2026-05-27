@@ -789,6 +789,89 @@ export interface RolRecord {
 }
 
 // ───────────────────────────────────────────────────────────────
+// Viajes Especiales
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Request body para POST {viajesEspeciales}/Servicios.
+ *
+ * Endpoint dev `http://srv-desarrollo:95/ViajesEspeciales/Servicios`. Acepta
+ * solo el rango — NO requiere k_Servidor ni cia (la respuesta trae la cia
+ * por row vía `K_Empresa` / `Clave_JDE_Empresa`).
+ */
+export interface ViajeEspecialRequest {
+  /** Fecha inicial inclusive (YYYY-MM-DD). */
+  f_Inicio: string;
+  /** Fecha final inclusive (YYYY-MM-DD). */
+  f_Final: string;
+}
+
+/**
+ * Registro normalizado de un viaje especial.
+ *
+ * Shape crudo del API (2026-05-26):
+ *   {
+ *     "K_Renta": 722862,
+ *     "f_salida_primera": "2026-04-09T09:00:00",
+ *     "f_Regreso_ultima": "2026-04-09T13:30:00",
+ *     "K_Cliente": 27756,
+ *     "D_Cliente": "INSTITUTO TECNOLOGICO ...",
+ *     "Rrc_Cliente": "ITE 430714KI0",                 // RFC
+ *     "Clave_JDE": "1270361",                         // = noCliente en cobranza
+ *     "K_Empresa": "SIRS2",                           // razón social Senda
+ *     "Clave_JDE_Empresa": "11",                      // cia JDE
+ *     "Total_Negociado": 1951.21,                     // subtotal sin IVA
+ *     "Dias_Credito": 30,                             // crédito por viaje (no por cliente)
+ *     "Factura_JDE": "RI-305588",
+ *     "UUID": "58D6899F-...",
+ *     "Fecha_Factura": "2026-04-13T13:40:00",
+ *     "numeroBatch": "31751093",
+ *     "Referencia_Deposito": "01012703615"
+ *   }
+ *
+ * Notas operativas:
+ *   - El crédito vive POR VIAJE (`Dias_Credito`), no por catálogo del
+ *     cliente. La proyección debe usarlo en lugar de la regla del catálogo.
+ *   - `Factura_JDE`/`UUID` permiten cruzar contra cobranza JDE igual que ROL.
+ *   - `K_Cliente` (clave CITI) y `Clave_JDE` (clave JDE) ambas viven en el
+ *     row. Cruce con catálogo: `Clave_JDE` empata con `Client.jdeAccounts[].noCliente`.
+ */
+export interface ViajeEspecialRecord {
+  /** Compañía JDE normalizada (Clave_JDE_Empresa). */
+  cia: string;
+  /** Razón social corta Senda (K_Empresa, p.ej. "SIRS2"). */
+  empresaCodigo: string;
+  /** Clave de la renta CITI (K_Renta) — id único del viaje. */
+  kRenta: number;
+  /** Clave CITI del cliente (K_Cliente, numérico). */
+  kCliente: number;
+  /** Razón social del cliente (D_Cliente). */
+  dCliente: string;
+  /** RFC del cliente, trim. */
+  rfc: string;
+  /** Clave JDE del cliente — llave de cruce con cobranza/CXC (= noCliente). */
+  claveJDE: string;
+  /** Importe negociado SIN IVA (Total_Negociado). */
+  totalNegociado: number;
+  /** Días de crédito acordados POR VIAJE. */
+  diasCredito: number;
+  /** Folio de factura JDE (`RI-XXXXXX`). Vacío hasta que se facture. */
+  facturaJDE?: string;
+  /** UUID fiscal SAT, trim. */
+  uuidFiscal?: string;
+  /** Fecha de salida del primer servicio (YYYY-MM-DD). */
+  fSalidaPrimera?: string;
+  /** Fecha de regreso del último servicio (YYYY-MM-DD). */
+  fRegresoUltima?: string;
+  /** Fecha de emisión de la factura (YYYY-MM-DD). */
+  fechaFactura?: string;
+  /** Número de batch JDE. */
+  numeroBatch?: string;
+  /** Referencia de depósito (línea de captura). */
+  referenciaDeposito?: string;
+}
+
+// ───────────────────────────────────────────────────────────────
 // Errores
 // ───────────────────────────────────────────────────────────────
 

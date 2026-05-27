@@ -187,7 +187,7 @@ describe('validateAuxiliarBankKeys — filters', () => {
     const r = validateAuxiliarBankKeys({
       records: [
         rec({ idCuenta: '111', tipoBatch: '+' }), // kept
-        rec({ idCuenta: '222', tipoBatch: 'V' }), // dropped — not in BANK_TIPO_BATCH
+        rec({ idCuenta: '222', tipoBatch: 'N' }), // dropped — not in BANK_TIPO_BATCH
         rec({ idCuenta: '333', tipoBatch: 'K' }), // kept
       ],
       bankStatements: [
@@ -199,7 +199,7 @@ describe('validateAuxiliarBankKeys — filters', () => {
       ],
     });
     expect(r.coverage.recordsAfterFilter).toBe(2);
-    expect(r.tipoBatchAudit.histogram.find((h) => h.tipoBatch === 'V')?.keptByFilter).toBe(false);
+    expect(r.tipoBatchAudit.histogram.find((h) => h.tipoBatch === 'N')?.keptByFilter).toBe(false);
     expect(r.tipoBatchAudit.histogram.find((h) => h.tipoBatch === '+')?.keptByFilter).toBe(true);
   });
 
@@ -371,6 +371,8 @@ describe('BANK_TIPO_BATCH', () => {
     expect(BANK_TIPO_BATCH.has('G')).toBe(true);
     expect(BANK_TIPO_BATCH.has('K')).toBe(true);
     expect(BANK_TIPO_BATCH.has('&')).toBe(true);
-    expect(BANK_TIPO_BATCH.has('V')).toBe(false);
+    expect(BANK_TIPO_BATCH.has('V')).toBe(true);
+    expect(BANK_TIPO_BATCH.has('RB')).toBe(true);
+    expect(BANK_TIPO_BATCH.has('N')).toBe(false);
   });
 });

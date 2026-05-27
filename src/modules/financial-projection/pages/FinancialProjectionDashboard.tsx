@@ -15,7 +15,7 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaPayment, CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import { effectiveAmount, effectiveMovementDate } from '../../shared-finance/calculation-engine/financialProjectionEngine';
@@ -125,6 +125,8 @@ interface Props {
   auxiliarReconciliation?: AuxiliarReconResult;
   /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
   rolRecords?: RolRecord[];
+  /** Viajes Especiales: ingresos especiales con factura/UUID propios. */
+  viajesEspecialesRecords?: ViajeEspecialRecord[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
@@ -191,6 +193,7 @@ export default function FinancialProjectionDashboard(props: Props) {
       props.cobranzaPayments,
       props.auxiliarReconciliation,
       props.rolRecords,
+      props.viajesEspecialesRecords,
       props.purchaseReceipts,
       props.payrollCosts,
       props.assumptions,
@@ -1217,7 +1220,7 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           piso operativo. Mismo scenario-run que el chart. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard
-          label={`Ingresos YTD ${currentYear}`}
+          label={`Ingresos operativos YTD ${currentYear}`}
           value={fmtCurrency(ytd.ingresosYtd)}
           icon={<TrendingUp className="w-4 h-4" strokeWidth={1.5} />}
           color="var(--tone-success, var(--success))"
@@ -1230,7 +1233,7 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           navHint="Ver detalle de cobranza"
         />
         <KpiCard
-          label={`Egresos YTD ${currentYear}`}
+          label={`Egresos operativos YTD ${currentYear}`}
           value={fmtCurrency(ytd.egresosYtd)}
           icon={<TrendingDown className="w-4 h-4" strokeWidth={1.5} />}
           color="var(--tone-danger, var(--danger))"

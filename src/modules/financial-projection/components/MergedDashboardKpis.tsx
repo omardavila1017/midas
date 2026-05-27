@@ -255,7 +255,7 @@ export const CobranzaKpiCard: React.FC<{
 
         <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
-            Ingresos cruzados
+            Abonos conciliados
           </p>
           <p className="text-[20px] font-bold tabular-nums leading-tight mt-1" style={{ color: 'var(--success)' }}>
             {fmtCurrency(s.ingresoMontoCruzado)}
@@ -267,7 +267,7 @@ export const CobranzaKpiCard: React.FC<{
 
         <div className="flex-1 min-w-[200px] border-l border-[var(--gray-200)]/60 pl-6">
           <p className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--gray-500)' }}>
-            Egresos cruzados
+            Cargos conciliados
           </p>
           <p className="text-[20px] font-bold tabular-nums leading-tight mt-1" style={{ color: 'var(--gray-950)' }}>
             {fmtCurrency(s.egresoMontoCruzado)}

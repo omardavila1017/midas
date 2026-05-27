@@ -56,7 +56,10 @@ import type { CXPRecord } from '../../../domain/persistence';
 import { getConcursoProviderIds, isConcursoMercantil, normalizeProviderId } from '../../../domain/concursoMercantil';
 import type { Client, Provider, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord, RolRecord } from '../../../services/jdeTypes';
+import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
+import { buildViajesEspecialesCobranzaCross, buildViajesEspecialesFacturaKeys } from '../../../domain/viajesEspecialesCobranzaMatch';
+import { VIAJES_ESPECIALES_GROUP_ID } from '../../../domain/viajesEspecialesCatalog';
+import { isPersonName } from '../../../domain/personNameHeuristic';
 import { buildRolProjectedInflows, type RolProjectedInflow } from '../../../domain/rolProjectionEngine';
 import { bankMovementKey } from '../../../domain/bankMovementKey';
 import { todayISO } from '../../../formatters';
@@ -66,7 +69,7 @@ import type { AuxiliarReconLine } from '../../../domain/auxiliarReconciliationEn
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
 import { buildCargoProviderIndex, matchCargoToProvider } from '../../../domain/cargoProviderMatch';
-import { enrichMovementWithCatalog } from '../../../domain/bankAccountsCatalog';
+import { enrichMovementWithCatalog, findBankAccount } from '../../../domain/bankAccountsCatalog';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type {
   FinancialMovement,
@@ -96,6 +99,18 @@ export interface CanonicalProjectionInputs {
    * `rol:` y la fecha futura lo excluyen de Base por construcción.
    */
   rolRecords?: RolRecord[];
+  /**
+   * Viajes Especiales (API srv-desarrollo:95/ViajesEspeciales/Servicios).
+   * Cada row trae Factura_JDE + Fecha_Factura + Dias_Credito propios. Se usa
+   * para:
+   *   1) Re-etiquetar facturas CXC que pertenecen a viajes especiales con
+   *      subcategory='Viajes Especiales' (en vez del default 'Clientes Citi').
+   *   2) Proyectar viajes facturados que aún no aparecen en cobranza JDE
+   *      como `cxc:especial:` con Fecha_Factura + Dias_Credito del API.
+   * Como cxc:, sólo afecta escenarios Aprobado/propuesta — Base filtra ids
+   * que no estén en su allowlist de short-term API real.
+   */
+  viajesEspecialesRecords?: ViajeEspecialRecord[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   /**
@@ -264,16 +279,21 @@ interface BuildArgs {
 //   • Otros ingresos = SOLO lo no reconocido.
 const INCOME_SUBCAT_FEDERAL = 'Federal';
 const INCOME_SUBCAT_CITI = 'Clientes Citi';
+const INCOME_SUBCAT_VIAJES_ESPECIALES = 'Viajes Especiales';
 
 /**
- * Reglas de negocio para enrutar un cobro CXC/ROL al bucket de ingreso.
- * - Federal: SOLO Betterez/Busbud/Via (mismo cliente, varios nombres del
- *   grupo Federal — única excepción que el negocio define).
- * - Clientes Citi: TODO lo demás del catálogo, incluyendo Corning, Viajes
- *   Especiales y cualquier cliente sin match. Por petición del negocio,
- *   Viajes Especiales ya no se separa como subgrupo aparte.
+ * Reglas de negocio para enrutar un cobro al bucket de ingreso.
+ * - Federal: ÚNICAMENTE ABONOs que aterrizan en cuentas del catálogo con
+ *   `unidadNegocio === 'FEDERAL'`. No se infiere por nombre de cliente ni
+ *   por nombre de banco — el dueño de la cuenta es la única fuente de verdad.
+ * - Viajes Especiales: ABONO en cuenta del catálogo con
+ *   `subRole === 'viajes_especiales'` (cuenta TRANSPORTES TAMAULIPAS
+ *   "678 38444"). Domina sobre `unidadNegocio = FEDERAL` de esa misma
+ *   cuenta — el subRole es más específico.
+ * - Clientes Citi: TODO lo demás (cobranza/CXC/ROL antes de tocar banco,
+ *   ABONOs a cuentas no-Federal, clientes sin match).
  */
-const FEDERAL_NAME_RE = /\b(busbud|betterez|via)\b/i;
+const VIAJES_ESPECIALES_SUBROLE = 'viajes_especiales';
 
 /**
  * Si el cliente pertenece a un grupo comercial, devuelve el GRUPO PADRE como
@@ -287,44 +307,53 @@ function clientDisplayCounterparty(client: { id: string; name?: string; commerci
   return { id: client.id, name: client.name };
 }
 
-function rolCitiSubcategoryFor(client: { name?: string; commercialGroupId?: string; commercialGroupName?: string } | null | undefined): string {
-  if (!client) return INCOME_SUBCAT_CITI;
-  const haystack = `${client.name ?? ''} ${client.commercialGroupName ?? ''}`;
-  if (FEDERAL_NAME_RE.test(haystack)) return INCOME_SUBCAT_FEDERAL;
-  return INCOME_SUBCAT_CITI;
-}
-
 function resolveInflowSubcategory(args: {
   counterpartyId?: string;
+  /** Nombre del counterparty (cliente o concepto). Se usa como fallback de
+   *  clasificación Viajes Especiales por heurística de nombre persona cuando
+   *  el catálogo aún no promovió al cliente al grupo. */
+  counterpartyName?: string;
   clientById: Map<string, Client>;
-  bankFallbackLabel?: string;
   businessUnitId?: string;
-  /** El ingreso proviene de un viaje ejecutado (cobranza/CXC JDE). Todo el
-   *  ROL es Senda Citi salvo que el cliente sea Federal (Betterez/Busbud/Via). */
+  /** `subRole` del catálogo de cuentas bancarias (`viajes_especiales`,
+   *  `nomina_operadores`, etc.). Cuando vale `viajes_especiales` el ABONO
+   *  va al bucket Viajes Especiales aunque `unidadNegocio` sea FEDERAL —
+   *  el subRole es más específico. */
+  bankSubRole?: string | null;
+  /** El ingreso proviene de un viaje ejecutado (cobranza/CXC JDE). Marca
+   *  informativa; ROL nunca se clasifica como Federal por sí solo. */
   isRolCollection?: boolean;
 }): string {
-  // 1) Cliente del catálogo manda: Federal SOLO si name/grupo match
-  //    Betterez/Busbud/Via; cualquier otro cliente del catálogo = Citi.
+  // 1) subRole `viajes_especiales` manda sobre cualquier otra señal.
+  if (args.bankSubRole === VIAJES_ESPECIALES_SUBROLE) {
+    return INCOME_SUBCAT_VIAJES_ESPECIALES;
+  }
+  // 2) Cliente del grupo Viajes Especiales (catálogo, auto-poblado desde el
+  //    API de Viajes Especiales o por isPersonName en AppCore). Manda sobre
+  //    Federal por cuenta — un ABONO de un cliente VE que cae en una cuenta
+  //    unidadNegocio=FEDERAL sigue siendo VE, no Federal.
   if (args.counterpartyId) {
     const client = args.clientById.get(args.counterpartyId);
-    if (client) {
-      const haystack = `${client.name ?? ''} ${client.commercialGroupName ?? ''}`;
-      if (FEDERAL_NAME_RE.test(haystack)) return INCOME_SUBCAT_FEDERAL;
-      return INCOME_SUBCAT_CITI;
+    if (client?.commercialGroupId === VIAJES_ESPECIALES_GROUP_ID) {
+      return INCOME_SUBCAT_VIAJES_ESPECIALES;
     }
   }
-  // 2) Sin cliente identificado: el catálogo de cuentas de banco decide.
-  //    SOLO las cuentas marcadas `unidadNegocio = FEDERAL` (treasury-mantenido)
-  //    clasifican su ingreso como Federal. CITI / MULTICARGA / RESERVA y
-  //    cualquier cuenta sin catálogo caen a Clientes Citi (regla del negocio:
-  //    lo único que no es Citi es la línea Federal).
+  // 3) Fallback por NOMBRE: nombre de persona física → Viajes Especiales.
+  //    Cubre el caso "cliente auto-creado del API JDE pero aún no promovido
+  //    al grupo del catálogo" (auto-poblado del API VE no corrió, o cliente
+  //    venía de un static catalog con id no-`auto-*`). Solo aplica cuando
+  //    SÍ existe match a cobranza (counterpartyId presente) — sin eso
+  //    `counterpartyName` puede ser el banco genérico y daría falsos positivos.
+  if (args.counterpartyId && args.counterpartyName && isPersonName(args.counterpartyName)) {
+    return INCOME_SUBCAT_VIAJES_ESPECIALES;
+  }
+  // 3) Federal SOLO por cuenta del catálogo. No se infiere por nombre de
+  //    cliente (Busbud/Betterez/Via) ni por nombre de banco — el dueño de
+  //    la cuenta (treasury-mantenido) es la única fuente de verdad.
   if (args.businessUnitId && String(args.businessUnitId).toUpperCase() === 'FEDERAL') {
     return INCOME_SUBCAT_FEDERAL;
   }
-  if (args.bankFallbackLabel && FEDERAL_NAME_RE.test(args.bankFallbackLabel)) {
-    return INCOME_SUBCAT_FEDERAL;
-  }
-  // 3) Default: Clientes Citi (cobranza/CXC/ROL/ABONO de cuenta no-Federal).
+  // 3) Default: Clientes Citi (cobranza/CXC/ROL, ABONO no-Federal, sin match).
   return INCOME_SUBCAT_CITI;
 }
 
@@ -452,13 +481,9 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       const isMatchedAp = !!matchedPayment;
       // ABONOs sin match a factura → agrupar por banco origen para que la
       // tabla de Planeación no muestre cientos de filas únicas por concepto
-      // bancario. Santander recibe etiqueta "Federal — Santander" según
-      // convención de negocio del user (todo lo que cae en Santander es
-      // ingreso federal). Otros bancos llevan su nombre legible.
-      const bankLabel = (statement.banco || statement.nombreBanco || 'Banco').toUpperCase();
-      const bankFallbackName = bankLabel === 'SANTANDER'
-        ? 'Federal — Santander'
-        : (statement.nombreBanco || statement.banco || 'Banco');
+      // bancario. La clasificación Federal/Citi la decide el catálogo de
+      // cuentas (unidadNegocio), no el nombre del banco.
+      const bankFallbackName = statement.nombreBanco || statement.banco || 'Banco';
       // CARGOs sin identificar (concepto sin patrón fiscal/proveedor) se
       // etiquetan por cuenta de banco origen. Sin esto, miles de cargos sin
       // cruce colapsan en una sola fila "Sin identificar" de varios miles de
@@ -524,9 +549,10 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
             ? INCOME_SUBCAT_CITI
             : resolveInflowSubcategory({
                 counterpartyId,
+                counterpartyName,
                 clientById,
                 businessUnitId: catalogEnrich?.entry.unidadNegocio,
-                bankFallbackLabel: !isCobranzaInflow ? bankFallbackName : undefined,
+                bankSubRole: catalogEnrich?.entry.subRole,
                 isRolCollection: isCobranzaInflow,
               }))
         : undefined;
@@ -632,7 +658,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       sourceObjectId: record.noFactura,
       type: 'INFLOW',
       category: 'AR_COLLECTION',
-      subcategory: resolveInflowSubcategory({ counterpartyId, clientById, isRolCollection: true }),
+      subcategory: resolveInflowSubcategory({ counterpartyId, counterpartyName, clientById, isRolCollection: true }),
       companyId: record.cia,
       counterpartyId,
       counterpartyName,
@@ -711,10 +737,19 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     // colapsamos al grupo comercial. Para egresos no hacemos lookup de
     // proveedor (la línea GL no trae idProveedor confiable) — cae a
     // counterpartyName crudo + categoría TRANSFER.
+    //
+    // Para ABONOs históricos cubiertos por AuxiliarContable (paso 1c), la
+    // cía del asiento contable + la cuenta bancaria son la fuente de verdad.
+    // El subRole de la cuenta (`viajes_especiales` para la cuenta "678 38444"
+    // de TRANSPORTES TAMAULIPAS) baja el ingreso al bucket correcto en vez
+    // de caer al genérico FEDERAL por el `unidadNegocio` de la misma cuenta.
+    const auxBankEntry = isInflow ? findBankAccount(line.cuentaBanco) : null;
     const inflowSubcategory = isInflow
       ? resolveInflowSubcategory({
           counterpartyId: undefined,
           clientById,
+          businessUnitId: auxBankEntry?.unidadNegocio,
+          bankSubRole: auxBankEntry?.subRole,
           isRolCollection: line.source.kind === 'factura',
         })
       : undefined;
@@ -899,6 +934,18 @@ interface InflowContext {
   rolInflowsByYm: Map<string, RolProjectedInflow[]>;
   /** clientId → set `yyyy-mm` de cobro cubierto por ROL (suprime `client:`). */
   rolCoverageByClientMonth: Map<string, Set<string>>;
+  /**
+   * `${cia}::${noFactura}` de facturas que pertenecen a viajes especiales.
+   * Cuando una línea cxc: tiene su factura en este set, se reetiqueta
+   * subcategory='Viajes Especiales' y el id pasa a `cxc:especial:`.
+   */
+  viajesEspFacturaKeys: Set<string>;
+  /**
+   * Viajes facturados con factura que cobranza JDE aún no expone. Se
+   * agrupan por `yyyy-mm` del cobro proyectado (Fecha_Factura + Dias_Credito)
+   * para emitir movimientos sintéticos `cxc:especial:` en `collectInflowLines`.
+   */
+  viajesEspUnmatchedByYm: Map<string, ViajeEspecialRecord[]>;
 }
 
 function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
@@ -947,13 +994,70 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
     );
   }
 
+  // Viajes Especiales: cruce factura/UUID vs cobranza. Unmatched (factura
+  // emitida pero cobranza aún no la tiene) se proyectan más abajo como
+  // `cxc:especial:` con Fecha_Factura + Dias_Credito del API. Matched solo
+  // sirve para re-etiquetar el cxc: existente con subcategory Viajes Especiales.
+  const viajesRecords = (inputs.viajesEspecialesRecords ?? []).filter((v) =>
+    inputs.companyCode === 'all' || !inputs.companyCode || v.cia === inputs.companyCode,
+  );
+  const viajesCross = buildViajesEspecialesCobranzaCross(viajesRecords, cxcRecords);
+  const viajesEspFacturaKeys = buildViajesEspecialesFacturaKeys(viajesRecords);
+  const viajesEspUnmatchedByYm = new Map<string, ViajeEspecialRecord[]>();
+  for (const v of [...viajesCross.unmatched, ...viajesCross.withoutInvoice]) {
+    const projectedDate = projectViajeEspecialDate(v, inputs.asOfDate);
+    if (!projectedDate) continue;
+    const ym = projectedDate.slice(0, 7);
+    const arr = viajesEspUnmatchedByYm.get(ym);
+    if (arr) arr.push(v);
+    else viajesEspUnmatchedByYm.set(ym, [v]);
+  }
+  if (typeof console !== 'undefined' && viajesRecords.length > 0) {
+    // eslint-disable-next-line no-console
+    console.info(
+      `[viajes-esp-diag] viajes=${viajesRecords.length} matched=${viajesCross.matched.length} `
+      + `unmatched=${viajesCross.unmatched.length} sinFactura=${viajesCross.withoutInvoice.length} `
+      + `· líneas cxc:especial: proyectadas=${Array.from(viajesEspUnmatchedByYm.values()).reduce((s, a) => s + a.length, 0)}`,
+    );
+  }
+
   return {
     cxcRecords,
     cxcCoverageByClientMonth,
     clientMatchByFactura,
     rolInflowsByYm,
     rolCoverageByClientMonth: rol.coverageByClientMonth,
+    viajesEspFacturaKeys,
+    viajesEspUnmatchedByYm,
   };
+}
+
+/**
+ * Fecha de cobro proyectada para un Viaje Especial sin match en cobranza.
+ * Usa Fecha_Factura + Dias_Credito (regla del API, no del catálogo).
+ * Si no hay Fecha_Factura, cae a fSalidaPrimera (fecha del servicio).
+ * Si ya venció (< asOfDate) se reagenda al siguiente día operativo.
+ */
+function projectViajeEspecialDate(
+  viaje: ViajeEspecialRecord,
+  asOfDate: string,
+): string | null {
+  const base = viaje.fechaFactura || viaje.fSalidaPrimera;
+  if (!base) return null;
+  const credit = Number.isFinite(viaje.diasCredito) && viaje.diasCredito > 0
+    ? viaje.diasCredito
+    : 30;
+  const start = new Date(base + 'T00:00:00Z');
+  if (Number.isNaN(start.getTime())) return null;
+  start.setUTCDate(start.getUTCDate() + credit);
+  const projected = start.toISOString().slice(0, 10);
+  // Si ya venció, jala al siguiente día desde asOf (mismo trato que cxc:).
+  if (projected < asOfDate) {
+    const next = new Date(asOfDate + 'T00:00:00Z');
+    next.setUTCDate(next.getUTCDate() + 1);
+    return next.toISOString().slice(0, 10);
+  }
+  return projected;
 }
 
 /**
@@ -981,10 +1085,9 @@ function collectInflowLines(
   // por la regla de pago del catálogo (overlay /cobranza). `amountLocked` →
   // no se escala al total del Dashboard (mismo trato que `cxc:`).
   for (const inflow of context.rolInflowsByYm.get(month.yearMonth) ?? []) {
-    const rolSubcat = rolCitiSubcategoryFor({
-      name: inflow.clientName,
-      commercialGroupId: inflow.commercialGroupId,
-    });
+    // ROL proyectado siempre cae a Citi: Federal se reconoce solo cuando el
+    // ABONO aterriza en una cuenta del catálogo con unidadNegocio=FEDERAL.
+    const rolSubcat = INCOME_SUBCAT_CITI;
     // Si el cliente ROL tiene grupo comercial, agrupa el ROL al grupo padre.
     const rolClient = inputs.clients.find((c) => c.id === inflow.clientId);
     const rolDisplay = rolClient ? clientDisplayCounterparty(rolClient) : { id: inflow.clientId, name: inflow.clientName };
@@ -1015,6 +1118,46 @@ function collectInflowLines(
 
   // Proyección genérica `client:` por regla de catálogo eliminada en esta
   // branch — solo aparecen ingresos reales (CXC abierto + ROL ejecutado).
+
+  // Viajes Especiales sin match en cobranza: proyectar el cobro con
+  // Fecha_Factura + Dias_Credito DEL API (regla por viaje, no por catálogo).
+  // Si una factura aparece después en cobranza, el cruce en el siguiente
+  // boot moverá ese viaje a `matched` y aquí dejará de emitirse — el cxc:
+  // de cobranza lo cubrirá (reetiquetado como Viajes Especiales).
+  for (const viaje of context.viajesEspUnmatchedByYm.get(month.yearMonth) ?? []) {
+    const projectedDate = projectViajeEspecialDate(viaje, inputs.asOfDate);
+    if (!projectedDate || projectedDate.slice(0, 7) !== month.yearMonth) continue;
+    const subTotal = viaje.totalNegociado;
+    const grossAmount = subTotal * 1.16;
+    const facturaLabel = viaje.facturaJDE || `K_Renta ${viaje.kRenta}`;
+    lines.push({
+      id: `cxc:especial:viaje:${viaje.cia}:${viaje.kRenta}`,
+      amount: grossAmount,
+      date: projectedDate,
+      concept: `Viaje especial ${facturaLabel} · ${viaje.dCliente || 'Cliente sin nombre'}`,
+      category: 'AR_COLLECTION',
+      subcategory: INCOME_SUBCAT_VIAJES_ESPECIALES,
+      companyId: viaje.cia,
+      counterpartyId: viaje.claveJDE || String(viaje.kCliente),
+      counterpartyName: viaje.dCliente || undefined,
+      counterpartyType: 'CUSTOMER',
+      ruleApplied: viaje.fechaFactura
+        ? `Viajes Especiales · Fecha_Factura + ${viaje.diasCredito || 30}d crédito`
+        : `Viajes Especiales · viaje + ${viaje.diasCredito || 30}d crédito`,
+      sourceSystem: 'JDE',
+      sourceObjectId: viaje.facturaJDE || String(viaje.kRenta),
+      issueDate: viaje.fechaFactura,
+      forecastMethod: 'RULE',
+      confidenceScore: viaje.facturaJDE ? 78 : 64,
+      lockState: 'RESTRICTED',
+      taxTreatment: 'IVA_CAUSED',
+      taxRate: 16,
+      taxBaseAmount: subTotal,
+      taxAmount: grossAmount - subTotal,
+      comment: `Viaje especial reportado por API ${viaje.facturaJDE ? 'con factura' : 'sin factura'} y aún no presente en cobranza JDE. Crédito y fecha provienen del API de Viajes Especiales.`,
+      amountLocked: true,
+    });
+  }
 
   return lines;
 }
@@ -1065,9 +1208,18 @@ function collectCxcInflowLines(
         ? 'Sin regla confiable; se usa vencimiento JDE.'
         : 'Sin regla confiable; se usa fecha de factura JDE.';
 
-    const cxcSubcat = rolCitiSubcategoryFor(clientMatch?.client ?? null);
+    // CXC proyectado: Citi por defecto, Viajes Especiales si la factura está
+    // en el set de viajes especiales (cruce factura/UUID vs API). Federal se
+    // reconoce solo cuando el ABONO aterriza en cuenta unidadNegocio=FEDERAL.
+    const isViajeEspecialCxc = context.viajesEspFacturaKeys.has(
+      `${record.cia}::${(record.noFactura ?? '').trim().toUpperCase()}`,
+    );
+    const cxcSubcat = isViajeEspecialCxc
+      ? INCOME_SUBCAT_VIAJES_ESPECIALES
+      : INCOME_SUBCAT_CITI;
+    const cxcIdPrefix = isViajeEspecialCxc ? 'cxc:especial' : 'cxc';
     lines.push({
-      id: `cxc:${record.cia}:${record.noCliente}:${record.noFactura}`,
+      id: `${cxcIdPrefix}:${record.cia}:${record.noCliente}:${record.noFactura}`,
       amount: record.importePendientePesos,
       date: dateInfo.date,
       concept: `Factura CXC ${record.noFactura || 'sin folio'} · ${record.nombreCliente || 'Cliente sin nombre'}`,
