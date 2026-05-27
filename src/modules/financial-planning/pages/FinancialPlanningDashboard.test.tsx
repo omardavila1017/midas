@@ -73,9 +73,13 @@ describe('<FinancialPlanningDashboard />', () => {
     await flushPlanningWarmup();
     fireEvent.click(screen.getByRole('button', { name: /Nueva propuesta/i }));
 
-    const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
-    const drafts = stored.filter((scenario: { kind?: string }) => scenario.kind === 'DRAFT');
-    expect(drafts.length).toBeGreaterThanOrEqual(1);
+    // Scenario writes are debouncedPersist'd (coalesces rapid edits). Wait
+    // for the trailing-edge flush to land the draft into localStorage.
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('midas.financialPlanning.scenarios.v1') ?? '[]');
+      const drafts = stored.filter((scenario: { kind?: string }) => scenario.kind === 'DRAFT');
+      expect(drafts.length).toBeGreaterThanOrEqual(1);
+    });
   });
 
   it('shows proposal actions and opens the pending-change review', async () => {

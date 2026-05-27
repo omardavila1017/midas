@@ -27,5 +27,14 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Firefox cubre el motor Gecko (no Chromium). Si Firefox no está
+    // instalado el runner falla rápido; instalar con
+    // `npx playwright install firefox`.
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    // Microsoft Edge real (no solo motor Chromium genérico). Usa el binario
+    // msedge-stable del sistema vía `channel: 'msedge'`. Instalar con
+    // `npx playwright install msedge`. Es el browser que el usuario reportó
+    // como crasheando — validar aquí es el target principal.
+    { name: 'msedge', use: { ...devices['Desktop Edge'], channel: 'msedge' } },
   ],
 });

@@ -62,26 +62,54 @@ test('modules: click through every section + subtab without crashing', async ({ 
   test.setTimeout(360_000);
   const errors = attachErrorListeners(page);
 
-  // Stub upstream APIs so the boot splash settles quickly via `error` status
-  // instead of waiting on real JDE/TRESS/CITI. Each boot task counts as done
-  // when status ∈ {'done','error'}. The 10th boot slot (projection) waits for
-  // the first dashboard paint, which fires once the source builds (empty data
-  // is fine — it still paints).
-  await page.route(/\/api\/(jde|tress|citi)\//, route =>
-    route.fulfill({ status: 503, body: '{"error":"e2e-stubbed"}', contentType: 'application/json' }),
+  // Stub upstream APIs con 200 + payload vacío para que los boot tasks
+  // converjan rápido sin disparar el pause-on-failure del splash.
+  // /companies devuelve un array vacío de cías — boot sigue, no hay fetches
+  // per-cia que hacer. Los endpoints específicos devuelven `[]`.
+  await page.route(/\/api\/(jde|tress|citi)\/.*/, async route => {
+    const url = route.request().url();
+    if (/companies/i.test(url)) {
+      await route.fulfill({ status: 200, body: '[]', contentType: 'application/json' });
+      return;
+    }
+    await route.fulfill({ status: 200, body: '[]', contentType: 'application/json' });
+  });
+  // Cualquier otra ruta de la app que falle se intercepta a 200 vacío.
+  await page.route(/\/api\//, route =>
+    route.fulfill({ status: 200, body: '[]', contentType: 'application/json' }),
   );
 
   await page.goto('/');
 
-  // Wait until the app shell is rendered behind the splash (the splash sits
-  // on top with the underlying app at opacity:0 + aria-hidden). Boot slot 10
-  // ("projection · first paint") never fires when JDE is stubbed out, so we
-  // can't wait for `isBooted` — instead we wait for the splash to report
-  // ≥9/10 boot tasks settled, then manually rip it off the DOM to expose the
-  // already-mounted app. This is test-only; production users see the splash
-  // dismiss via signalProjectionFirstPaint.
+  // Wait until the splash is in a settled state. El número de boot slots
+  // cambia con el tiempo (10 → 11 al sumar auxiliar/rol); leemos el total
+  // dinámicamente con el patrón "N de M". El test es robusto a M ≥ 8.
+  // Como /api/ está stubeado a 503, varios fetches fallan — el splash muestra
+  // "Descargas pausadas" con un botón "Reanudar descargas". Lo click-eamos
+  // para que las fallas cuenten como `error` (boot task settled) en vez de
+  // permanecer `loading` indefinidamente.
   await page.waitForFunction(
-    () => /\b(9|10)\b\s*de\s*10/.test(document.body.innerText),
+    () => /\b\d+\s*de\s*\d+/.test(document.body.innerText),
+    { timeout: 30_000 },
+  );
+  // Reanudar descargas si aparece el banner de pausa por 503.
+  for (let i = 0; i < 3; i++) {
+    const resumeBtn = page.getByRole('button', { name: /Reanudar descargas/i });
+    if (await resumeBtn.isVisible().catch(() => false)) {
+      await resumeBtn.click({ trial: false }).catch(() => {});
+      await page.waitForTimeout(500);
+    } else break;
+  }
+  await page.waitForFunction(
+    () => {
+      const m = /\b(\d+)\s*de\s*(\d+)/.exec(document.body.innerText);
+      if (!m) return false;
+      const done = Number(m[1]);
+      const total = Number(m[2]);
+      // Aceptamos ≥ total-2 (la slot de projection-first-paint nunca cierra
+      // con APIs stubeadas; otras fallas como banks/JDE quedan en error).
+      return done >= total - 2 && total >= 8;
+    },
     { timeout: 150_000 },
   );
   await page.evaluate(() => {

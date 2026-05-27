@@ -132,6 +132,21 @@ const SOURCE_CACHE = new Map<CacheKey, FinancialProjectionSourceData>();
 // usuario navega y vuelve.
 const SOURCE_CACHE_LIMIT = 1;
 
+/**
+ * Memory pressure escape hatch — runtimeGuardian llama cuando heap > 85% del
+ * límite del browser. SOURCE_CACHE pesa ~250MB con datasets reales; liberarlo
+ * preempte Error code: 5. El siguiente render lo recomputa (segundos visibles).
+ * Expuesto como función para que el dashboard la registre desde main thread —
+ * un side-effect en module init rompía el bundling de los workers (no admiten
+ * dynamic imports anidados con code-splitting).
+ */
+export function clearProjectionSourceCache(): void {
+  if (SOURCE_CACHE.size === 0) return;
+  // eslint-disable-next-line no-console
+  console.warn(`[financialProjectionService] clearing SOURCE_CACHE (size=${SOURCE_CACHE.size})`);
+  SOURCE_CACHE.clear();
+}
+
 function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string): CacheKey {
   // We mix array references via WeakRef-like identity sentinels: each
   // unique array gets a stable id assigned the first time we see it. This

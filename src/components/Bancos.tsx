@@ -1059,6 +1059,15 @@ const BancosDashboard = ({
    Movements table
    ═══════════════════════════════════════════════════════════════════════ */
 
+// Soft cap defensivo: cuando una cuenta histórica se expande con muchos
+// movimientos (cuentas de operación pesadas pasan de 10k movs en 2 años) el
+// render de todas las filas en un solo commit OOM-kileaba el tab ("Aw, Snap!
+// Error code: 5"). Hard-cap 1500 filas iniciales con botón "Cargar más" en
+// chunks de 1500 — los totales siguen agregando sobre todas las filas (no
+// se pierde funcionalidad, solo se difiere DOM). El usuario que necesita ver
+// movs viejos puede hacer click; el usuario normal nunca ve el límite.
+const BANCOS_ROW_CHUNK = 1500;
+
 const BancosMovimientos = ({
   acc,
   internalReasonOf,
@@ -1070,6 +1079,13 @@ const BancosMovimientos = ({
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
   cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }) => {
+  // Reset al cambiar de cuenta (componente se remontaría igual al colapsar
+  // pero los filtros tampoco lo remontan — solo cambia `acc`).
+  const [renderLimit, setRenderLimit] = useState(BANCOS_ROW_CHUNK);
+  useEffect(() => {
+    setRenderLimit(BANCOS_ROW_CHUNK);
+  }, [acc.cia, acc.cuenta]);
+
   if (acc.movimientos.length === 0) {
     return (
       <div className="bg-[var(--surface-alt)] px-4 py-6 text-center text-[12px] text-[var(--gray-400)]">
@@ -1079,10 +1095,16 @@ const BancosMovimientos = ({
   }
 
   // Pre-clasifica para no llamar internalReasonOf dos veces por fila.
+  // SOBRE TODO el array — los totales son sobre TODAS las filas (no las
+  // visibles bajo el soft-cap).
   const classified = acc.movimientos.map(m => ({
     m,
     internalReason: internalReasonOf(acc.cia, acc.cuenta, m),
   }));
+  const totalRows = classified.length;
+  const cappedRows = totalRows > renderLimit;
+  const visibleClassified = cappedRows ? classified.slice(0, renderLimit) : classified;
+  const hiddenCount = totalRows - visibleClassified.length;
 
   let abonosBruto = 0, abonosReal = 0, cargosBruto = 0, cargosReal = 0, internalCount = 0;
   for (const { m, internalReason } of classified) {
@@ -1112,7 +1134,7 @@ const BancosMovimientos = ({
             </tr>
           </thead>
           <tbody>
-            {classified.map(({ m, internalReason }, i) => {
+            {visibleClassified.map(({ m, internalReason }, i) => {
               const isCargo = m.tipoMovimiento === 'CARGO';
               const isInternal = internalReason !== null;
               const tooltip = isInternal ? INTERNAL_REASON_LABELS[internalReason] : m.concepto;
@@ -1204,6 +1226,33 @@ const BancosMovimientos = ({
                 </tr>
               );
             })}
+            {cappedRows && (
+              <tr className="bg-[var(--surface-alt)] border-b border-[var(--gray-100)]">
+                <td colSpan={6} className="py-2 text-center text-[11px] text-[var(--gray-500)]">
+                  Mostrando {visibleClassified.length.toLocaleString()} de {totalRows.toLocaleString()} movs ·
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={() => setRenderLimit(prev => prev + BANCOS_ROW_CHUNK)}
+                    className="text-[var(--accent-blue)] font-bold underline-offset-2 hover:underline"
+                  >
+                    Cargar {Math.min(BANCOS_ROW_CHUNK, hiddenCount).toLocaleString()} más
+                  </button>
+                  {hiddenCount > BANCOS_ROW_CHUNK && (
+                    <>
+                      {' · '}
+                      <button
+                        type="button"
+                        onClick={() => setRenderLimit(totalRows)}
+                        className="text-[var(--gray-500)] underline-offset-2 hover:underline"
+                      >
+                        Cargar todas ({totalRows.toLocaleString()})
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            )}
             <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-bold">
               <td className="py-2" colSpan={3}>
                 Totales visibles

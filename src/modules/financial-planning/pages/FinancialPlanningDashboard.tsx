@@ -42,6 +42,8 @@ import { FirstSimulationNudge } from '../components/FirstSimulationNudge';
 import { MovementPickerModal } from '../components/MovementPickerModal';
 import { AdjustmentEditorPopover } from '../components/AdjustmentEditorPopover';
 import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../../financial-projection/services/projectionCache';
+import { clearProjectionSourceCache } from '../../financial-projection/services/financialProjectionService';
+import { onMemoryPressure } from '../../../services/runtimeGuardian';
 import { projectionWindowFor } from '../../financial-projection/services/projectionWindow';
 import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunWorker';
 import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
@@ -75,6 +77,7 @@ import {
 import { loadCellOverrides, saveCellOverrides } from '../services/cellOverridesStorage';
 import { buildCustomConceptKey, loadCustomRows, saveCustomRows } from '../services/customRowsStorage';
 import { loadChangeLog, saveChangeLog } from '../services/changeLogStorage';
+import { debouncedPersist } from '../services/debouncedPersist';
 import {
   describeAddRow,
   describeClearCell,
@@ -448,6 +451,15 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   // don't pin renderer memory for the whole SPA session (the slow-burn cause
   // of the Chrome "Aw Snap" code 5 OOM after switching scenarios/tabs).
   useEffect(() => () => clearProjectionRunCache(), []);
+  // Memory pressure handler: si runtimeGuardian detecta heap > 85%, libera
+  // ambos caches (juntos ~530MB con datasets reales) para preempt Error
+  // code: 5. Mismo patrón que FinancialProjectionDashboard.
+  useEffect(() => {
+    return onMemoryPressure(() => {
+      clearProjectionRunCache();
+      clearProjectionSourceCache();
+    });
+  }, []);
 
   // Off-main-thread scenario pipeline. Cache hit = sync (unchanged); miss =
   // worker + stale-while-recompute so cell edits never freeze the tab.
@@ -501,13 +513,17 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const [changeLog, setChangeLog] = useState<ScenarioChangeLogEntry[]>(() => loadChangeLog([]));
   const [taxStore, setTaxStore] = useState(() => loadTaxStore(defaultTaxStore()));
 
-  // Persistence — write through whenever state changes.
-  useEffect(() => { savePlanningScenarios(storedScenarios); }, [storedScenarios]);
-  useEffect(() => { savePlanningAdjustments(storedAdjustments); }, [storedAdjustments]);
-  useEffect(() => { saveManualPlanningEntries(manualEntries); }, [manualEntries]);
-  useEffect(() => { saveCustomRows(customRows); }, [customRows]);
-  useEffect(() => { saveCellOverrides(cellOverrides); }, [cellOverrides]);
-  useEffect(() => { saveChangeLog(changeLog); }, [changeLog]);
+  // Persistence — write through whenever state changes. Coalesced via
+  // debouncedPersist so rapid edits collapse to a single localStorage write
+  // (JSON.stringify of these arrays is multi-MB on real datasets and was
+  // blocking the main thread per keystroke). Flushed on beforeunload/pagehide
+  // so no data is lost.
+  useEffect(() => { debouncedPersist('planning.scenarios', storedScenarios, savePlanningScenarios); }, [storedScenarios]);
+  useEffect(() => { debouncedPersist('planning.adjustments', storedAdjustments, savePlanningAdjustments); }, [storedAdjustments]);
+  useEffect(() => { debouncedPersist('planning.manualEntries', manualEntries, saveManualPlanningEntries); }, [manualEntries]);
+  useEffect(() => { debouncedPersist('planning.customRows', customRows, saveCustomRows); }, [customRows]);
+  useEffect(() => { debouncedPersist('planning.cellOverrides', cellOverrides, saveCellOverrides); }, [cellOverrides]);
+  useEffect(() => { debouncedPersist('planning.changeLog', changeLog, saveChangeLog); }, [changeLog]);
 
   useEffect(() => {
     const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));

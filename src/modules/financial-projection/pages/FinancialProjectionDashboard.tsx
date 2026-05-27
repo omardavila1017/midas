@@ -40,6 +40,8 @@ import { ScenarioComparisonBar } from '../components/ScenarioComparisonBar';
 import { DeferredMount } from '../components/DeferredMount';
 import { ChartSkeleton } from '../components/SectionSkeletons';
 import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../services/projectionCache';
+import { clearProjectionSourceCache } from '../services/financialProjectionService';
+import { onMemoryPressure } from '../../../services/runtimeGuardian';
 import { projectionWindowFor } from '../services/projectionWindow';
 import { signalProjectionFirstPaint } from '../services/projectionBootSignal';
 import { requestScenarioRun, setScenarioRunPlaceholder } from '../../shared-finance/hooks/useScenarioRunWorker';
@@ -79,6 +81,7 @@ import { loadCellOverrides, saveCellOverrides } from '../../financial-planning/s
 import { loadCustomRows, saveCustomRows } from '../../financial-planning/services/customRowsStorage';
 import { createNewDraft, duplicateDraft } from '../../financial-planning/services/scenarioDuplicate';
 import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
+import { debouncedPersist } from '../../financial-planning/services/debouncedPersist';
 import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
 import { type ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
 import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../../financial-planning/services/scenarioBootstrap';
@@ -636,6 +639,16 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   // post-pipeline movements arrays) stay pinned for the whole SPA session if
   // the user never enters Planning. Mirror FinancialPlanningDashboard.tsx:455.
   useEffect(() => () => clearProjectionRunCache(), []);
+  // Memory pressure handler: si runtimeGuardian detecta heap > 85% del límite
+  // del browser, libera proyección runCache + sourceCache (juntos ~530MB con
+  // datasets reales). El próximo render recomputa visiblemente (segundos)
+  // pero previene Error code: 5 (sesión muerta).
+  useEffect(() => {
+    return onMemoryPressure(() => {
+      clearProjectionRunCache();
+      clearProjectionSourceCache();
+    });
+  }, []);
   // Projection window is granularity-aware — defined just below, after
   // `deferredGranularity`. Monthly keeps the natural-year span (merged
   // Dashboard history + 12mo forward); weekly/daily are bounded to a near
@@ -663,27 +676,27 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const savedChangeLogRef = useRef(false);
   useEffect(() => {
     if (!savedScenariosRef.current) { savedScenariosRef.current = true; return; }
-    savePlanningScenarios(storedScenarios);
+    debouncedPersist('planning.scenarios', storedScenarios, savePlanningScenarios);
   }, [storedScenarios]);
   useEffect(() => {
     if (!savedAdjustmentsRef.current) { savedAdjustmentsRef.current = true; return; }
-    savePlanningAdjustments(storedAdjustments);
+    debouncedPersist('planning.adjustments', storedAdjustments, savePlanningAdjustments);
   }, [storedAdjustments]);
   useEffect(() => {
     if (!savedManualRef.current) { savedManualRef.current = true; return; }
-    saveManualPlanningEntries(manualEntries);
+    debouncedPersist('planning.manualEntries', manualEntries, saveManualPlanningEntries);
   }, [manualEntries]);
   useEffect(() => {
     if (!savedOverridesRef.current) { savedOverridesRef.current = true; return; }
-    saveCellOverrides(cellOverrides);
+    debouncedPersist('planning.cellOverrides', cellOverrides, saveCellOverrides);
   }, [cellOverrides]);
   useEffect(() => {
     if (!savedCustomRowsRef.current) { savedCustomRowsRef.current = true; return; }
-    saveCustomRows(customRows);
+    debouncedPersist('planning.customRows', customRows, saveCustomRows);
   }, [customRows]);
   useEffect(() => {
     if (!savedChangeLogRef.current) { savedChangeLogRef.current = true; return; }
-    saveChangeLog(changeLog);
+    debouncedPersist('planning.changeLog', changeLog, saveChangeLog);
   }, [changeLog]);
 
   useEffect(() => {

@@ -138,6 +138,7 @@ import {
   markBootComplete,
   purgeReasonMessage,
 } from './services/storageHealthGuard';
+import { trackNavigation } from './services/runtimeGuardian';
 
 // Umbral más laxo que AUTO_ACCEPT_THRESHOLD (0.85) — todo lo que cae aquí se
 // adjunta solo a la cuenta del catálogo, sin pasar por wizard.
@@ -782,6 +783,18 @@ export default function App() {
       }
     }
   }, []);
+  // Track navigation transitions for runtime diagnostics. `setActiveTab` is
+  // called from many sites — a single effect on `activeTab` catches all of
+  // them and records heap usage at the moment of transition. Helps correlate
+  // crashes/freezes with the user's last module switch.
+  const prevTabRef = useRef<TabId | null>(null);
+  useEffect(() => {
+    const prev = prevTabRef.current;
+    if (prev !== activeTab) {
+      trackNavigation(activeTab, prev ?? undefined);
+      prevTabRef.current = activeTab;
+    }
+  }, [activeTab]);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   // Flag aparte de catalogLoaded — éste indica que loadStore() (light de
   // localStorage v12 + heavies de IDB) terminó de hidratar el state. Los boot

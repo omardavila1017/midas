@@ -57,6 +57,10 @@ export const projectionRunCache = new LRU<string, unknown>(MAX_ENTRIES);
 // Release every retained run. Call this when the owning React tree unmounts
 // (e.g. user navigates away from Planning) so the fat movements/buckets arrays
 // become GC-eligible instead of staying pinned for the whole SPA session.
+// También se invoca desde el handler de memory-pressure de runtimeGuardian
+// (registrado en el effect de los dashboards — NO en module init, porque
+// este archivo se importa desde sharedSourceWorker y los worker bundles no
+// admiten code-splitting con dynamic imports).
 export function clearProjectionRunCache(): void {
   projectionRunCache.clear();
 }
