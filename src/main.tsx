@@ -6,6 +6,7 @@ import { ToastProvider } from './components/Toast'
 import AuthGate from './components/Login'
 import { runStorageHealthGuard } from './services/storageHealthGuard'
 import { installRuntimeGuardian } from './services/runtimeGuardian'
+import { installNominaDebug } from './modules/payroll/services/nominaDebug'
 
 // CRÍTICO: corre antes de cualquier import de persistence o hidratación.
 // Si detecta storage envenenado (corrupto, sobre-tamaño, o crash previo),
@@ -18,6 +19,11 @@ runStorageHealthGuard()
 // Crítico para diagnosticar crashes esporádicos en Chrome/Edge. No bloquea
 // boot ni tira si algún feature no existe.
 installRuntimeGuardian()
+
+// Helper read-only de diagnóstico de Nómina: expone `window.__midas__.nomina`
+// (dump/byMonth) para inspeccionar heavy-store vs nominaLoadedKeys desde la
+// consola. No dispara fetches ni toca estado.
+installNominaDebug()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

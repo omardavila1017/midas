@@ -2232,6 +2232,21 @@ function isNominaResponseSuspect(records: PayrollCostRecord[]): boolean {
   return cashCount > 0 && dedCount / cashCount < 0.3;
 }
 
+// Firma de truncamiento específica de las APORTACIONES: la response trae
+// percepciones (y puede traer deducciones) pero NINGÚN `EMPLOYER_TAX`. El
+// gateway corta el payload >1MB justo en el bloque de Obligación Empresa, así
+// que la nómina llega "completa" salvo las aportaciones patronales → la UI
+// muestra Aportaciones = $0. `isNominaResponseSuspect` (Firma 1) NO la detecta
+// porque su `.some(DEDUCTION || EMPLOYER_TAX)` se satisface con solo tener
+// deducciones. Sin este signal el fan-out por tipoNómina nunca disparaba para
+// ese caso. Nota: en la capa de fetch el `cashTreatment` aún es el crudo del
+// mapper (`EMPLOYER_TAX` = Obligación Empresa); `refineBatch` corre después.
+function nominaLacksEmployerTax(records: PayrollCostRecord[]): boolean {
+  if (records.length === 0) return false; // empty es legítimo
+  if (!records.some(r => r.cashTreatment === 'CASH_OUT')) return false;
+  return !records.some(r => r.cashTreatment === 'EMPLOYER_TAX');
+}
+
 export async function fetchNomina(
   req: NominaRequest,
   config: JdeClientConfig = {},
@@ -2280,8 +2295,17 @@ export async function fetchNomina(
   const fanout: PayrollCostRecord[] = [];
   for (const idEmpresa of NOMINA_FANOUT_EMPRESAS) {
     let empRecords = await fetchWithRetry({ ...req, idEmpresa });
-    if (isNominaResponseSuspect(empRecords) && req.tipoNomina === 99) {
-      // Empresa-mes aún >1MB → segundo troceo por tipoNómina.
+    // Segundo troceo por tipoNómina cuando la empresa-mes aún rebasa 1MB.
+    // Dispara por la firma de truncamiento general (`isNominaResponseSuspect`)
+    // O por la firma específica de aportaciones faltantes
+    // (`nominaLacksEmployerTax`): el corte del gateway puede dejar la nómina
+    // entera salvo el bloque EMPLOYER_TAX, que la firma general no detecta.
+    // Acotado a 2 sub-requests; si tras el troceo siguen faltando aportaciones
+    // (mes en curso aún sin calcular en TRESS), devolvemos best-effort sin loop.
+    if (
+      req.tipoNomina === 99 &&
+      (isNominaResponseSuspect(empRecords) || nominaLacksEmployerTax(empRecords))
+    ) {
       const byTipo: PayrollCostRecord[] = [];
       for (const tipoNomina of NOMINA_FANOUT_TIPOS) {
         byTipo.push(...(await fetchWithRetry({ ...req, idEmpresa, tipoNomina })));

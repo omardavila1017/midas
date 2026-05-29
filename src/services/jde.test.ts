@@ -464,4 +464,41 @@ describe('Nómina (TRESS) — mapNominaRow', () => {
       }),
     );
   });
+
+  it('trocea por tipoNómina cuando la response trae percepciones/deducciones pero ninguna aportación (truncamiento de EMPLOYER_TAX)', async () => {
+    // Firma específica del bug: el gateway corta el bloque de Obligación
+    // Empresa, así que la nómina llega "completa" salvo las aportaciones →
+    // Aportaciones = $0 en la UI. `isNominaResponseSuspect` no la detecta
+    // (tiene deducciones), así que sin `nominaLacksEmployerTax` el troceo por
+    // tipoNómina nunca disparaba.
+    const sinAportacion = [
+      { ...baseRow, TipoConcepto: 'Percepción', Monto: 100_000 },
+      { ...baseRow, TipoConcepto: 'Deducción', Monto: 15_000 },
+    ];
+    const conAportacion = [
+      ...sinAportacion,
+      { ...baseRow, TipoConcepto: 'Aportación Patronal', Monto: 18_000 },
+    ];
+    const tipoCalls: number[] = [];
+    const fetchMock = vi.fn(async (_url: string, options: { body: string }) => {
+      const body = JSON.parse(options.body) as { tipoNomina: number };
+      tipoCalls.push(body.tipoNomina);
+      // tipoNomina=99 (empresa-level) llega truncado; el split por tipo 1/3 sí
+      // trae las aportaciones.
+      const data = body.tipoNomina === 99 ? sinAportacion : conAportacion;
+      return new Response(
+        JSON.stringify({ status: 200, success: true, message: 'OK', data }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio: 2026, mes: 5 });
+
+    // El troceo disparó sub-requests por tipoNómina 1 y 3 para cada empresa.
+    expect(tipoCalls).toContain(1);
+    expect(tipoCalls).toContain(3);
+    // Y el resultado final ya incluye aportaciones (EMPLOYER_TAX).
+    expect(result.some(r => r.cashTreatment === 'EMPLOYER_TAX')).toBe(true);
+  });
 });
