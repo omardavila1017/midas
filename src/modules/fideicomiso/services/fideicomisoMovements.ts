@@ -11,9 +11,9 @@
 //   - EGRESO:  la obligación mensual fija a DINA el día 15 de cada mes de la
 //     ventana (config-driven, lockState 'LOCKED', mismo patrón que convenio).
 //
-// Ambas patas se clasifican `category: 'DEBT'` con subcategoría de
-// fideicomiso para que se agrupen en una sola fila legible y NO contaminen
-// AR/AP ni se neteen como traspaso interno.
+// El egreso DINA se clasifica como deuda de fideicomiso. El ingreso Corning
+// se presenta como Clientes Citi para que sume en el bucket comercial correcto
+// de Planeación, sin perder el id/concepto de fideicomiso para auditoría.
 //
 // Invariante Base: el llamador NO invoca esto para `id === 'base'` (mismo
 // gate que impuestos/convenio). Recortado a la ventana [startDate, endDate].
@@ -127,7 +127,7 @@ export function buildFideicomisoMovements(params: {
         sourceObjectId: dedupe,
         type: 'INFLOW',
         category: 'DEBT',
-        subcategory: 'FIDEICOMISO_CORNING',
+        subcategory: 'Clientes Citi',
         counterpartyName: 'CORNING',
         counterpartyType: 'BANK',
         concept: m.concepto || `Depósito Corning · Fideicomiso Dina ${fecha}`,

@@ -197,6 +197,7 @@ function formatByUnit(value: number, unit: KpiRow['unit']): string {
   if (unit === 'MXN') return formatCurrency(value);
   if (unit === 'pct') return `${(value * 100).toFixed(1)}%`;
   if (unit === 'days') return `${Math.round(value)} días`;
+  if (unit === 'ratio') return `${value.toFixed(2)}x`;
   return new Intl.NumberFormat('es-MX').format(value);
 }
 

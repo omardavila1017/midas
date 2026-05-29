@@ -1,9 +1,9 @@
 // KPIs y Objetivos — modelo del módulo.
 //
-// El módulo NO recomputa proyecciones. Lee datos crudos ya cargados por el
-// shell (bancos, cobranza, CXP, nómina) y deriva un puñado de KPIs simples;
-// el resto los define el usuario manualmente. Los objetivos se evalúan contra
-// estos KPIs cuando es posible y caen a status manual cuando no.
+// El módulo usa el mismo motor de Planeación Financiera cuando el shell entrega
+// esa base; sólo cae a datos crudos para KPIs puntuales sin equivalente en el
+// forecast. Los objetivos se evalúan contra estos KPIs cuando es posible y caen
+// a status manual cuando no.
 
 export type SystemKpiId =
   | 'caja_actual'
@@ -11,10 +11,28 @@ export type SystemKpiId =
   | 'cxp_pendiente'
   | 'gasto_ytd'
   | 'flujo_neto_ytd'
+  | 'caja_final_planeacion'
+  | 'deficit_dias_planeacion'
   | 'cobranza_mes'
-  | 'gasto_mes';
+  | 'gasto_mes'
+  | 'flujo_neto_mes'
+  | 'flujo_neto_30d'
+  | 'cobertura_cxp_caja'
+  | 'liquidez_inmediata'
+  | 'cobertura_caja_cxc'
+  | 'capital_trabajo_operativo'
+  | 'cobertura_flujo_30d'
+  | 'dso_cobranza'
+  | 'dpo_cxp'
+  | 'cxp_vencida'
+  | 'pct_cxp_vencida'
+  | 'cxp_por_vencer_30d'
+  | 'runway_caja_dias'
+  | 'ticket_promedio_cobranza_mes'
+  | 'cobranza_pendiente_aplicar'
+  | 'cuentas_bancarias_activas';
 
-export type KpiUnit = 'MXN' | 'count' | 'pct' | 'days';
+export type KpiUnit = 'MXN' | 'count' | 'pct' | 'days' | 'ratio';
 
 export interface SystemKpiDescriptor {
   id: SystemKpiId;
@@ -50,6 +68,8 @@ export interface KpiRow {
   value: number | null;
   /** Δ vs. periodo previo cuando aplica. null si no se puede computar. */
   deltaPrev: number | null;
+  /** Explica por qué el valor no es calculable con la base cargada. */
+  emptyReason?: string;
   /** Si es custom, viene la entidad para edición. */
   custom?: CustomKpi;
 }

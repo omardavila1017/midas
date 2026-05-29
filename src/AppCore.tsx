@@ -4124,12 +4124,13 @@ export default function App() {
   ]);
   const planningProps = useMemo(() => ({
     companyCode: selectedCia,
-    bankStatements,
+    bankStatements: accountableBankStatements,
     bajioStatements,
     clients,
     providers,
     cxpRecords,
     cobranzaRecords,
+    cobranzaPayments,
     auxiliarReconciliation,
     rolRecords,
     viajesEspecialesRecords,
@@ -4140,12 +4141,13 @@ export default function App() {
     startingBalance: undefined,
   }), [
     selectedCia,
-    bankStatements,
+    accountableBankStatements,
     bajioStatements,
     clients,
     providers,
     cxpRecords,
     cobranzaRecords,
+    cobranzaPayments,
     auxiliarReconciliation,
     rolRecords,
     viajesEspecialesRecords,
@@ -4611,9 +4613,22 @@ export default function App() {
             {activeTab === 'kpisObjectives' && (
               <Suspense fallback={<LazyTabFallback label="KPIs y Objetivos" />}>
                 <KpisObjectivesDashboard
+                  companyCode={selectedCia}
                   bankStatements={accountableBankStatements}
+                  bajioStatements={bajioStatements}
+                  clients={clients}
+                  providers={providers}
+                  cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
                   cxpRecords={cxpRecords}
+                  auxiliarReconciliation={auxiliarReconciliation}
+                  rolRecords={rolRecords}
+                  viajesEspecialesRecords={viajesEspecialesRecords}
+                  purchaseReceipts={purchaseReceiptsFromCompras}
+                  payrollCosts={nominaRecords}
+                  assumptions={assumptions}
+                  budget={null}
+                  startingBalance={undefined}
                 />
               </Suspense>
             )}

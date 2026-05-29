@@ -274,8 +274,10 @@ interface BuildArgs {
 // con el usuario 2026-05-15):
 //   • ROL = viajes ejecutados (cobranza/CXC JDE, real o proyectado). TODO el
 //     ROL es Senda Citi → bucket "Clientes Citi".
-//   • Federal = lo que el catálogo de bancos etiqueta unidadNegocio=FEDERAL
-//     (ingreso real) + el modelo predictivo histórico para meses futuros.
+//   • Cobranza/CXC/ROL con cliente/factura = Citi, aunque el ABONO haya caído
+//     en una cuenta bancaria Federal. La cuenta queda como metadato.
+//   • Federal = ABONOs reales no ligados a cobranza/cliente que el catálogo
+//     de bancos etiqueta unidadNegocio=FEDERAL.
 //   • Otros ingresos = SOLO lo no reconocido.
 const INCOME_SUBCAT_FEDERAL = 'Federal';
 const INCOME_SUBCAT_CITI = 'Clientes Citi';
@@ -283,15 +285,14 @@ const INCOME_SUBCAT_VIAJES_ESPECIALES = 'Viajes Especiales';
 
 /**
  * Reglas de negocio para enrutar un cobro al bucket de ingreso.
- * - Federal: ÚNICAMENTE ABONOs que aterrizan en cuentas del catálogo con
- *   `unidadNegocio === 'FEDERAL'`. No se infiere por nombre de cliente ni
- *   por nombre de banco — el dueño de la cuenta es la única fuente de verdad.
  * - Viajes Especiales: ABONO en cuenta del catálogo con
  *   `subRole === 'viajes_especiales'` (cuenta TRANSPORTES TAMAULIPAS
  *   "678 38444"). Domina sobre `unidadNegocio = FEDERAL` de esa misma
  *   cuenta — el subRole es más específico.
- * - Clientes Citi: TODO lo demás (cobranza/CXC/ROL antes de tocar banco,
- *   ABONOs a cuentas no-Federal, clientes sin match).
+ * - Clientes Citi: cobranza/CXC/ROL con cliente/factura; también ABONOs a
+ *   cuentas no-Federal o sin match.
+ * - Federal: ABONOs reales NO ligados a cobranza/cliente que aterrizan en
+ *   cuentas del catálogo con `unidadNegocio === 'FEDERAL'`.
  */
 const VIAJES_ESPECIALES_SUBROLE = 'viajes_especiales';
 
@@ -347,13 +348,18 @@ function resolveInflowSubcategory(args: {
   if (args.counterpartyId && args.counterpartyName && isPersonName(args.counterpartyName)) {
     return INCOME_SUBCAT_VIAJES_ESPECIALES;
   }
-  // 3) Federal SOLO por cuenta del catálogo. No se infiere por nombre de
-  //    cliente (Busbud/Betterez/Via) ni por nombre de banco — el dueño de
-  //    la cuenta (treasury-mantenido) es la única fuente de verdad.
+  // 4) Cobranza/CXC/ROL con cliente/factura manda como Citi. La cuenta
+  //    bancaria se conserva en `businessUnitId`, pero no reclasifica a
+  //    Federal un ingreso comercial de Citi.
+  if (args.isRolCollection) {
+    return INCOME_SUBCAT_CITI;
+  }
+  // 5) Federal SOLO para ABONOs reales no ligados a cobranza/cliente que
+  //    caen en una cuenta Federal del catálogo.
   if (args.businessUnitId && String(args.businessUnitId).toUpperCase() === 'FEDERAL') {
     return INCOME_SUBCAT_FEDERAL;
   }
-  // 3) Default: Clientes Citi (cobranza/CXC/ROL, ABONO no-Federal, sin match).
+  // 6) Default: Clientes Citi (ABONO no-Federal o sin match).
   return INCOME_SUBCAT_CITI;
 }
 
@@ -365,8 +371,8 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   // clientById debe resolver tanto por client.id (slug del catálogo) como
   // por noCliente JDE (numérico). Los ABONOs de cobranza pasan `noCliente`
   // crudo cuando el enriquecimiento no encontró el catalogClientId — sin
-  // este alias, resolveInflowSubcategory caía a businessUnitId del banco
-  // (Federal) en lugar de la regla del catálogo (Citi).
+  // este alias, resolveInflowSubcategory no puede detectar grupos como
+  // Viajes Especiales antes del default comercial Citi.
   const clientById = new Map<string, Client>();
   for (const c of inputs.clients) {
     clientById.set(c.id, c);
@@ -376,7 +382,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     }
     // Indexar también por commercialGroupId. Cuando un movimiento se colapsa
     // al grupo padre como counterparty, `resolveInflowSubcategory` debe poder
-    // resolver el grupo y aplicar las reglas (Federal vs Citi) del catálogo.
+    // resolver el grupo y aplicar reglas comerciales como Viajes Especiales.
     if (c.commercialGroupId && !clientById.has(c.commercialGroupId)) {
       clientById.set(c.commercialGroupId, c);
     }
@@ -481,9 +487,18 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       const isMatchedAp = !!matchedPayment;
       // ABONOs sin match a factura → agrupar por banco origen para que la
       // tabla de Planeación no muestre cientos de filas únicas por concepto
-      // bancario. La clasificación Federal/Citi la decide el catálogo de
-      // cuentas (unidadNegocio), no el nombre del banco.
+      // bancario. Sin cruce de cobranza, Federal/Citi se decide por la cuenta
+      // del catálogo; con cruce, manda la identidad comercial del cliente.
       const bankFallbackName = statement.nombreBanco || statement.banco || 'Banco';
+      // Etiqueta de fila para ABONOs sin cruce de factura: preferimos el
+      // CONCEPTO del catálogo de cuentas (ej. "CONCENTRADORA - IMSS",
+      // "TPV AMEX", "CONCENTRADORA VENTA FEDERAL") sobre el nombre genérico
+      // del banco. Así dentro de cada bucket (Federal/Citi) la Planeación
+      // desglosa el ingreso por concepto en vez de colapsarlo en una sola
+      // fila "BANAMEX". NO altera la clasificación: el bucket lo sigue
+      // decidiendo `unidadNegocio` (resolveInflowSubcategory). Solo cambia el
+      // label visible. Si la cuenta no está catalogada, cae al nombre de banco.
+      const bankInflowName = catalogEnrich?.entry.concepto?.trim() || bankFallbackName;
       // CARGOs sin identificar (concepto sin patrón fiscal/proveedor) se
       // etiquetan por cuenta de banco origen. Sin esto, miles de cargos sin
       // cruce colapsan en una sola fila "Sin identificar" de varios miles de
@@ -530,7 +545,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
         : isMatchedAp
           ? matchedPayment!.nombreProveedor || undefined
           : isInflow
-            ? bankFallbackName
+            ? bankInflowName
             : (cargoProviderHit?.counterpartyName
                 ?? (unmatchedCargoClassification!.category === 'TRANSFER'
                   ? unidentifiedOutflowName
@@ -837,7 +852,145 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
   }
 
-  return out;
+  return prorateCitiConcentradoraByClient(out, inputs);
+}
+
+/** subRole del catálogo de las cuentas concentradoras de clientes comerciales Citi. */
+const CITI_CLIENT_SUBROLE = 'clientes_citi';
+
+/**
+ * Atribución por cliente de los depósitos reales a las concentradoras Citi.
+ *
+ * Un depósito a la concentradora "CONCENTRADORA CLIENTES CITI" es UN
+ * movimiento bancario que agrupa el cobro de muchos clientes; el banco no trae
+ * el folio de factura (la conciliación AuxiliarContable solo cruza objeto
+ * 1010-1020, sin la línea CXC), así que no se puede amarrar 1:1 a un cliente.
+ * El detalle por cliente SÍ vive en la cobranza JDE (`fechaCobro`, `noCliente`).
+ *
+ * Aquí prorrateamos: por cada (cía, mes), repartimos el TOTAL real depositado a
+ * las concentradoras `clientes_citi` entre los clientes según su peso en la
+ * cobranza cobrada ese mes. El total mensual del banco se conserva EXACTO
+ * (Σ pesos = 1) — es la verdad del efectivo; solo cambia la atribución por
+ * cliente. La cobranza se usa como PESO (ratio), nunca como monto, así que no
+ * hay doble conteo. Si un (cía, mes) no tiene cobranza, el depósito amontonado
+ * se conserva tal cual (fallback — la fila concentradora sigue ahí).
+ *
+ * Fecha de las líneas sintéticas: la del depósito más grande del mes (mejor
+ * proxy de cuándo entró el grueso del efectivo). Aproximación aceptada para el
+ * desglose por cliente; el reparto intra-mes diario es aproximado.
+ */
+function prorateCitiConcentradoraByClient(
+  movements: FinancialMovement[],
+  inputs: CanonicalProjectionInputs,
+): FinancialMovement[] {
+  const groupKeyOf = (m: FinancialMovement): string =>
+    `${m.companyId ?? ''}::${(m.actualDate ?? m.projectedDate ?? '').slice(0, 7)}`;
+  const isTarget = (m: FinancialMovement): boolean =>
+    m.type === 'INFLOW'
+    && m.status === 'REAL'
+    && m.category === 'TRANSFER'
+    && m.subcategory === INCOME_SUBCAT_CITI
+    && findBankAccount(m.bankAccountId)?.subRole === CITI_CLIENT_SUBROLE;
+
+  const targets = movements.filter(isTarget);
+  if (targets.length === 0) return movements;
+
+  // 1) Total real depositado + fecha representativa por (cía, mes).
+  interface Group { cia: string; ym: string; total: number; repDate: string; repAmount: number; }
+  const groups = new Map<string, Group>();
+  for (const m of targets) {
+    const date = m.actualDate ?? m.projectedDate;
+    if (!date) continue;
+    const amt = Math.abs(m.projectedAmount ?? m.baseAmount ?? 0);
+    if (!(amt > 0)) continue;
+    const key = groupKeyOf(m);
+    const g = groups.get(key);
+    if (g) {
+      g.total += amt;
+      if (amt > g.repAmount) { g.repAmount = amt; g.repDate = date; }
+    } else {
+      groups.set(key, { cia: m.companyId ?? '', ym: date.slice(0, 7), total: amt, repDate: date, repAmount: amt });
+    }
+  }
+
+  // 2) Pesos por cliente desde la cobranza JDE (fechaCobro en ese cía/mes).
+  const clientLookup = buildClientLookup(inputs.clients);
+  const weightsByGroup = new Map<string, Map<string, { name: string; amount: number }>>();
+  const cobranzaTotalByGroup = new Map<string, number>();
+  for (const rec of inputs.cobranzaRecords ?? []) {
+    const cobroDate = cleanDate(rec.fechaCobro);
+    if (!cobroDate) continue;
+    const key = `${rec.cia}::${cobroDate.slice(0, 7)}`;
+    if (!groups.has(key)) continue;
+    if (isInternalCounterparty(rec.rfc, rec.nombreCliente)) continue;
+    const amount = Math.abs(rec.importeBrutoPesos);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const match = findClientForCobranza(rec, clientLookup);
+    // Viajes Especiales no son clientes comerciales Citi — fuera del peso.
+    if (match?.client.commercialGroupId === VIAJES_ESPECIALES_GROUP_ID) continue;
+    const display = match
+      ? clientDisplayCounterparty(match.client)
+      : { id: rec.noCliente, name: rec.nombreCliente || 'Cliente sin nombre' };
+    if (!display.id) continue;
+    if (isPersonName(display.name ?? '')) continue;
+    let w = weightsByGroup.get(key);
+    if (!w) { w = new Map(); weightsByGroup.set(key, w); }
+    const e = w.get(display.id);
+    if (e) e.amount += amount;
+    else w.set(display.id, { name: display.name ?? 'Cliente', amount });
+    cobranzaTotalByGroup.set(key, (cobranzaTotalByGroup.get(key) ?? 0) + amount);
+  }
+
+  // 3) Emitir líneas por cliente y marcar los grupos prorrateados.
+  const proratedGroups = new Set<string>();
+  const synthetic: FinancialMovement[] = [];
+  for (const [key, g] of groups) {
+    const weights = weightsByGroup.get(key);
+    const cobTotal = cobranzaTotalByGroup.get(key) ?? 0;
+    if (!weights || weights.size === 0 || !(cobTotal > 0)) continue; // fallback: deja el lump
+    proratedGroups.add(key);
+    for (const [clientId, info] of weights) {
+      const amount = g.total * (info.amount / cobTotal);
+      if (!(amount > 0)) continue;
+      synthetic.push({
+        id: `citi-prorrateo:${g.cia}:${clientId}:${g.ym}`,
+        sourceSystem: 'BANK',
+        type: 'INFLOW',
+        category: 'AR_COLLECTION',
+        subcategory: INCOME_SUBCAT_CITI,
+        companyId: g.cia,
+        counterpartyId: clientId,
+        counterpartyName: info.name,
+        counterpartyType: 'CUSTOMER',
+        concept: `Cobro Citi ${info.name} (prorrateo depósito concentradora ${g.ym})`,
+        currency: 'MXN',
+        originalAmount: amount,
+        baseAmount: amount,
+        projectedAmount: amount,
+        actualDate: g.repDate,
+        projectedDate: g.repDate,
+        confidenceScore: 100,
+        confidenceBand: calculateConfidenceBand(100),
+        forecastMethod: 'RULE',
+        ruleApplied: 'Prorrateo depósito concentradora Citi por cobranza JDE',
+        status: 'REAL',
+        lockState: 'LOCKED',
+        comments: ['Atribución por cliente del depósito real a la concentradora Citi, prorrateada según la cobranza JDE del periodo. El total mensual del banco se conserva exacto.'],
+        createdAt: `${g.repDate}T00:00:00.000Z`,
+        updatedAt: `${g.repDate}T00:00:00.000Z`,
+      });
+    }
+  }
+
+  if (proratedGroups.size === 0) return movements;
+
+  // 4) Quitar SOLO los depósitos amontonados de los grupos que sí prorrateamos.
+  const dropIds = new Set(
+    targets.filter((t) => proratedGroups.has(groupKeyOf(t))).map((t) => t.id),
+  );
+  const result = movements.filter((m) => !dropIds.has(m.id));
+  result.push(...synthetic);
+  return result;
 }
 
 function groupMovementsByYearMonth(movements: FinancialMovement[]): Map<string, FinancialMovement[]> {
@@ -1085,8 +1238,8 @@ function collectInflowLines(
   // por la regla de pago del catálogo (overlay /cobranza). `amountLocked` →
   // no se escala al total del Dashboard (mismo trato que `cxc:`).
   for (const inflow of context.rolInflowsByYm.get(month.yearMonth) ?? []) {
-    // ROL proyectado siempre cae a Citi: Federal se reconoce solo cuando el
-    // ABONO aterriza en una cuenta del catálogo con unidadNegocio=FEDERAL.
+    // ROL proyectado siempre cae a Citi. Federal sólo aplica a ABONOs reales
+    // no ligados a cliente/factura que caen en cuenta Federal.
     const rolSubcat = INCOME_SUBCAT_CITI;
     // Si el cliente ROL tiene grupo comercial, agrupa el ROL al grupo padre.
     const rolClient = inputs.clients.find((c) => c.id === inflow.clientId);
@@ -1209,8 +1362,7 @@ function collectCxcInflowLines(
         : 'Sin regla confiable; se usa fecha de factura JDE.';
 
     // CXC proyectado: Citi por defecto, Viajes Especiales si la factura está
-    // en el set de viajes especiales (cruce factura/UUID vs API). Federal se
-    // reconoce solo cuando el ABONO aterriza en cuenta unidadNegocio=FEDERAL.
+    // en el set de viajes especiales (cruce factura/UUID vs API).
     const isViajeEspecialCxc = context.viajesEspFacturaKeys.has(
       `${record.cia}::${(record.noFactura ?? '').trim().toUpperCase()}`,
     );

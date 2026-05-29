@@ -23,6 +23,7 @@ const UNIT_OPTIONS: { value: KpiUnit; label: string }[] = [
   { value: 'count', label: 'Conteo' },
   { value: 'pct', label: 'Porcentaje (0–1)' },
   { value: 'days', label: 'Días' },
+  { value: 'ratio', label: 'Razón (x)' },
 ];
 
 export function CustomKpiEditor({ open, initial, onClose, onSubmit }: Props) {

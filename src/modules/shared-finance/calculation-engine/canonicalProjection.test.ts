@@ -470,10 +470,9 @@ describe('canonicalProjection IVA metadata', () => {
     expect(iva?.counterpartyType).toBe('TAX_AUTHORITY');
   });
 
-  // Branch no-long-term-projection: regla de negocio nueva — TODA cuenta de
-  // banco que no sea Federal (Betterez/Busbud/Via) clasifica su ingreso como
-  // Clientes Citi. El businessUnitId del catálogo se conserva como metadato
-  // pero ya no determina la subcategoría del ingreso.
+  // Branch no-long-term-projection: regla de negocio — la cobranza con
+  // cliente/factura clasifica como Clientes Citi. El businessUnitId del
+  // catálogo se conserva como metadato pero no reclasifica el cobro.
   it('classifies non-Federal bank inflows as Clientes Citi while preserving businessUnit metadata', () => {
     const abono = bankMovement({
       cia: '00001',
@@ -492,11 +491,11 @@ describe('canonicalProjection IVA metadata', () => {
         cia: '00001',
         noFactura: 'F-100',
         noCliente: 'C-100',
-        nombreCliente: 'Cliente Multicarga',
+        nombreCliente: 'ACME INDUSTRIAL SA DE CV',
         importeBruto: 25_000,
       }],
       catalogClientId: 'C-100',
-      catalogClientName: 'Cliente Multicarga',
+      catalogClientName: 'ACME INDUSTRIAL SA DE CV',
     }];
 
     const canonical = buildCanonicalProjection({
@@ -523,8 +522,99 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.businessUnitId).toBe('MULTICARGA');
     expect(movement?.subcategory).toBe('Clientes Citi');
     expect(movement?.category).toBe('AR_COLLECTION');
-    expect(movement?.counterpartyName).toBe('Cliente Multicarga');
+    expect(movement?.counterpartyName).toBe('ACME INDUSTRIAL SA DE CV');
     expect(movement?.bankAccountId).toBe('06787361240');
+  });
+
+  it('classifies crossed Federal-account cobranza as Clientes Citi while preserving Federal metadata', () => {
+    const abono = bankMovement({
+      cia: '00011',
+      banco: 'BANAMEX',
+      cuenta: '70138237069',
+      tipoMovimiento: 'ABONO',
+      importe: 40_000,
+      fechaOperacion: '2026-04-16',
+      concepto: 'Cobro cliente Citi en cuenta Federal',
+      referencia: 'REF-FED-CITI',
+    });
+    const abonoEnrichments = [{
+      movementKey: bankMovementKey(abono),
+      status: 'factura-cobrada' as const,
+      facturas: [{
+        cia: '00011',
+        noFactura: 'F-200',
+        noCliente: 'C-200',
+        nombreCliente: 'CITI INDUSTRIAL SA DE CV',
+        importeBruto: 40_000,
+      }],
+      catalogClientId: 'C-200',
+      catalogClientName: 'CITI INDUSTRIAL SA DE CV',
+    }];
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00011',
+          banco: 'BANAMEX',
+          cuenta: '70138237069',
+          movimientos: [abono],
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      abonoEnrichments,
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-04-22',
+    });
+
+    const movement = canonical.movements.find((m) => m.sourceObjectId === 'REF-FED-CITI');
+    expect(movement?.businessUnitId).toBe('FEDERAL');
+    expect(movement?.subcategory).toBe('Clientes Citi');
+    expect(movement?.category).toBe('AR_COLLECTION');
+    expect(movement?.counterpartyName).toBe('CITI INDUSTRIAL SA DE CV');
+    expect(movement?.bankAccountId).toBe('70138237069');
+  });
+
+  it('classifies unmatched Federal-account inflows as Federal', () => {
+    const abono = bankMovement({
+      cia: '00011',
+      banco: 'BANAMEX',
+      cuenta: '70138237069',
+      tipoMovimiento: 'ABONO',
+      importe: 15_000,
+      fechaOperacion: '2026-04-16',
+      concepto: 'Venta Federal sin factura cruzada',
+      referencia: 'REF-FED-UNMATCHED',
+    });
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00011',
+          banco: 'BANAMEX',
+          cuenta: '70138237069',
+          movimientos: [abono],
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-04-22',
+    });
+
+    const movement = canonical.movements.find((m) => m.sourceObjectId === 'REF-FED-UNMATCHED');
+    expect(movement?.businessUnitId).toBe('FEDERAL');
+    expect(movement?.subcategory).toBe('Federal');
+    expect(movement?.category).toBe('TRANSFER');
+    expect(movement?.counterpartyType).toBe('BANK');
   });
 
   it('excludes catalog-neutral bank accounts from real inflows and outflows', () => {

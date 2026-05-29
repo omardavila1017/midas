@@ -81,9 +81,8 @@ const INCOME_BUCKETS = new Set([
 function inflowBucketFor(movement: FinancialMovement): string {
   if (movement.type !== 'INFLOW') return '';
   // El bucket de ingreso lo decide `subcategory` (ya resuelto en el motor
-  // canónico con la regla del catálogo de clientes: Federal sólo para
-  // Betterez/Busbud/Via, resto Citi). NO re-derivar desde businessUnitId del
-  // banco — la cuenta es metadato contable, no clasifica al cliente.
+  // canónico: cliente/factura manda para cobranza, cuenta bancaria sólo para
+  // ABONOs sin cruce). NO re-derivar desde businessUnitId del banco.
   const sub = movement.subcategory;
   if (sub && INCOME_BUCKETS.has(sub)) return sub;
   return 'Otros ingresos';

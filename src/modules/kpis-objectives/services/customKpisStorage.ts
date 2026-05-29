@@ -61,5 +61,7 @@ function readFiniteNumber(value: unknown): number | null {
 }
 
 function readUnit(value: unknown): KpiUnit | null {
-  return value === 'MXN' || value === 'count' || value === 'pct' || value === 'days' ? value : null;
+  return value === 'MXN' || value === 'count' || value === 'pct' || value === 'days' || value === 'ratio'
+    ? value
+    : null;
 }

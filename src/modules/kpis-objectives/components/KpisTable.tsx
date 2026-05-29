@@ -1,5 +1,6 @@
 import { Pencil, Plus, Trash2 } from 'lucide-react';
-import type { KpiRow, KpiUnit } from '../types';
+import type { KpiRow } from '../types';
+import { formatKpiDelta, formatKpiValue } from '../services/kpiFormatting';
 
 interface Props {
   rows: KpiRow[];
@@ -64,12 +65,19 @@ export function KpisTable({ rows, onAddCustom, onEditCustom, onDeleteCustom }: P
                     </div>
                   )}
                 </td>
-                <td className="px-5 py-3 text-right tabular-nums font-medium" style={{ color: 'var(--gray-950)' }}>
-                  {formatValue(row.value, row.unit)}
+                <td className="px-5 py-3 text-right">
+                  <div className="tabular-nums font-medium" style={{ color: 'var(--gray-950)' }}>
+                    {formatKpiValue(row.value, row.unit)}
+                  </div>
+                  {row.value === null && row.emptyReason && (
+                    <div className="mt-0.5 text-[10px] leading-tight" style={{ color: 'var(--gray-400)' }}>
+                      {row.emptyReason}
+                    </div>
+                  )}
                 </td>
                 <td className="px-5 py-3 text-right tabular-nums">
                   {row.deltaPrev === null ? (
-                    <span style={{ color: 'var(--gray-400)' }}>—</span>
+                    <span style={{ color: 'var(--gray-400)' }}>-</span>
                   ) : (
                     <span
                       style={{
@@ -81,8 +89,7 @@ export function KpisTable({ rows, onAddCustom, onEditCustom, onDeleteCustom }: P
                             : 'var(--gray-500)',
                       }}
                     >
-                      {row.deltaPrev > 0 ? '+' : ''}
-                      {formatValue(row.deltaPrev, row.unit)}
+                      {formatKpiDelta(row.deltaPrev, row.unit)}
                     </span>
                   )}
                 </td>
@@ -130,18 +137,4 @@ export function KpisTable({ rows, onAddCustom, onEditCustom, onDeleteCustom }: P
       </div>
     </section>
   );
-}
-
-function formatValue(value: number | null, unit: KpiUnit): string {
-  if (value === null) return '—';
-  if (unit === 'MXN') {
-    return new Intl.NumberFormat('es-MX', {
-      style: 'currency',
-      currency: 'MXN',
-      maximumFractionDigits: 0,
-    }).format(value);
-  }
-  if (unit === 'pct') return `${(value * 100).toFixed(1)}%`;
-  if (unit === 'days') return `${Math.round(value)} días`;
-  return new Intl.NumberFormat('es-MX').format(value);
 }

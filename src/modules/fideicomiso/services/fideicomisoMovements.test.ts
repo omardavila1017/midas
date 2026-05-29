@@ -44,10 +44,12 @@ describe('buildFideicomisoMovements', () => {
       line({ tipoMovimiento: 'CARGO', concepto: 'CORNING devolución', importe: 100, fechaOperacion: '2026-05-12' }), // no ABONO
     ]);
     const movs = buildFideicomisoMovements({ ...WINDOW, bajioStatements: [stmt] });
-    const corning = movs.filter(m => m.subcategory === 'FIDEICOMISO_CORNING');
+    const corning = movs.filter(m => m.id.startsWith('fideicomiso-corning:'));
     expect(corning).toHaveLength(1);
     expect(corning[0].type).toBe('INFLOW');
     expect(corning[0].status).toBe('REAL');
+    expect(corning[0].subcategory).toBe('Clientes Citi');
+    expect(corning[0].counterpartyName).toBe('CORNING');
     expect(corning[0].projectedAmount).toBe(5_000_000);
     expect(corning[0].projectedDate).toBe('2026-05-10');
   });
@@ -58,7 +60,7 @@ describe('buildFideicomisoMovements', () => {
       ...WINDOW,
       bajioStatements: [bajio([mov]), bajio([mov])],
     });
-    expect(movs.filter(m => m.subcategory === 'FIDEICOMISO_CORNING')).toHaveLength(1);
+    expect(movs.filter(m => m.id.startsWith('fideicomiso-corning:'))).toHaveLength(1);
   });
 
   it('recorta a la ventana: Corning fuera de rango se ignora', () => {
@@ -67,8 +69,9 @@ describe('buildFideicomisoMovements', () => {
       line({ concepto: 'CORNING', importe: 2_000, fechaOperacion: '2026-06-01' }),
     ]);
     const movs = buildFideicomisoMovements({ ...WINDOW, bajioStatements: [stmt] });
-    const corning = movs.filter(m => m.subcategory === 'FIDEICOMISO_CORNING');
+    const corning = movs.filter(m => m.id.startsWith('fideicomiso-corning:'));
     expect(corning).toHaveLength(1);
+    expect(corning[0].subcategory).toBe('Clientes Citi');
     expect(corning[0].projectedDate).toBe('2026-06-01');
   });
 

@@ -9,7 +9,7 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import {
@@ -110,6 +110,7 @@ interface Props {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  cobranzaPayments?: CobranzaPayment[];
   /** Cruce AuxiliarContable ↔ banco — alimenta facturas cobradas / CXPs pagadas. */
   auxiliarReconciliation?: AuxiliarReconResult;
   /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
@@ -169,6 +170,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.providers,
       props.cxpRecords,
       props.cobranzaRecords,
+      props.cobranzaPayments,
       props.auxiliarReconciliation,
       props.rolRecords,
       props.viajesEspecialesRecords,
@@ -406,6 +408,10 @@ async function preloadPlanningScenarioRuns(input: {
       taxStore.overdueBalance,
     ].join(':'),
     fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? '')),
+    fingerprintArray(
+      props.cobranzaPayments ?? [],
+      (payment) => payment.idPago + ':' + payment.importeRecibo + ':' + payment.pendienteAplicar,
+    ),
     fingerprintArray(
       props.bajioStatements ?? [],
       (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
@@ -655,6 +661,10 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       taxStore.overdueBalance,
     ].join(':');
     const providerKey = fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? ''));
+    const cobranzaPaymentsKey = fingerprintArray(
+      props.cobranzaPayments ?? [],
+      (payment) => payment.idPago + ':' + payment.importeRecibo + ':' + payment.pendienteAplicar,
+    );
     const bajioKey = fingerprintArray(
       props.bajioStatements ?? [],
       (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
@@ -665,6 +675,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       manualKey,
       taxKey,
       providerKey,
+      cobranzaPaymentsKey,
       bajioKey,
       yearStart,
       yearEnd,
@@ -680,6 +691,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     manualEntries,
     taxStore,
     props.providers,
+    props.cobranzaPayments,
     props.bajioStatements,
     yearStart,
     yearEnd,
@@ -721,6 +733,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         purchaseReceipts: props.purchaseReceipts,
         paidPurchaseOrderKeys: source.paidPurchaseOrderKeys,
         payrollCosts: props.payrollCosts,
+        cobranzaPayments: props.cobranzaPayments,
         budget: props.budget,
         companyCode: props.companyCode,
         taxStore,
