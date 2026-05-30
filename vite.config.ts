@@ -179,7 +179,7 @@ export default defineConfig(({ mode }) => {
           configure: (proxy) => configureProxy(proxy, { token: viajesEspToken }),
         },
       },
-    },
+    }, 
     build: {
       // Las dependencias de charts e icons pesan ~350 KB juntas y rara vez
       // cambian. Separarlas a chunks propios acelera el arranque de sesiones
