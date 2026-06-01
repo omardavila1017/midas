@@ -50,6 +50,25 @@ describe('<SpreadsheetGrid />', () => {
     expect(appearsBefore('Proveedores sin categoría', 'Impuestos')).toBe(true);
     expect(appearsBefore('Impuestos', 'Egresos bancarios sin identificar')).toBe(true);
   });
+
+  it('separates supplier outflows into category sections and shows providers by default', () => {
+    renderGrid(vi.fn(), [
+      outflowRow('OUTFLOW:AP_PAYMENT:taller-a', 'Taller A', 'Flota', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
+      outflowRow('OUTFLOW:AP_PAYMENT:taller-b', 'Taller B', 'Flota', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
+      outflowRow('OUTFLOW:AP_PAYMENT:chasis', 'Chasis Norte', 'Flota', 'AP_PAYMENT', 'CHASIS'),
+      outflowRow('OUTFLOW:AP_PAYMENT:refacciones', 'Refacciones Norte', 'Flota', 'AP_PAYMENT', 'REFACCIONARIO'),
+      outflowRow('OUTFLOW:AP_PAYMENT:ti', 'Soporte TI', 'Proveedor TI', 'AP_PAYMENT', 'TECNOLOGIA Y SOPORTE'),
+    ]);
+
+    expect(screen.getByText('Flota · Taller')).toBeTruthy();
+    expect(screen.getByText('Flota · Chasis')).toBeTruthy();
+    expect(screen.getByText('Flota · Refacciones')).toBeTruthy();
+    expect(screen.getByText('Proveedor TI · Tecnologia y Soporte')).toBeTruthy();
+    expect(screen.getByText('Taller A')).toBeTruthy();
+    expect(screen.getByText('Taller B')).toBeTruthy();
+    expect(screen.getByText('Chasis Norte')).toBeTruthy();
+    expect(appearsBefore('Flota · Taller', 'Flota · Refacciones')).toBe(true);
+  });
 });
 
 function renderGrid(onInspectCell: (conceptKey: string, bucketKey: string) => void, rows: PlanningRow[] = [row]) {
@@ -84,6 +103,7 @@ function outflowRow(
   label: string,
   bucketLabel: string,
   category: PlanningRow['category'],
+  providerCategoryLabel?: string,
 ): PlanningRow {
   return {
     conceptKey,
@@ -92,6 +112,7 @@ function outflowRow(
     bucketLabel,
     type: 'OUTFLOW',
     category,
+    providerCategoryLabel,
   };
 }
 

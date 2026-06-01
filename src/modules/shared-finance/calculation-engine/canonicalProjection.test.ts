@@ -143,6 +143,40 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.subcategory).toBe('TECNOLOGIA Y SOPORTE');
   });
 
+  it('uses direct JDE CXP classification when the provider catalog has no category', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [
+        provider({
+          name: 'PROVEEDOR CHASIS',
+          type: 'Sin categoría',
+          numProveedorJDE: '777',
+        }),
+      ],
+      cxpRecords: [
+        cxpRecord({
+          noProveedor: '777',
+          nombre: 'PROVEEDOR CHASIS',
+          noFactura: 'F-CHASIS',
+          clasifica: 'CHASIS',
+          importePendientePesos: 900,
+        }),
+      ],
+      assumptions,
+      budget: budget({ expenseMay: 900, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const movement = canonical.movements.find((item) => item.id.startsWith('cxp:') && item.sourceObjectId === 'F-CHASIS');
+
+    expect(movement).toBeTruthy();
+    expect(movement?.subcategory).toBe('CHASIS');
+    expect(movement?.providerCategory).toBe('CHASIS');
+  });
+
   // Branch no-long-term-projection: recurring-provider:/recurring-operating: removed.
   it.skip('adds future AP_PAYMENT rows from recurring bank/provider patterns when there is no future CXP', () => {
     const canonical = buildCanonicalProjection({
@@ -430,6 +464,55 @@ describe('canonicalProjection IVA metadata', () => {
     expect(names.size).toBe(2);
     expect(unidentified.some((m) => m.counterpartyName?.includes('CTA-A'))).toBe(true);
     expect(unidentified.some((m) => m.counterpartyName?.includes('CTA-B'))).toBe(true);
+  });
+
+  it('uses direct PagoProveedor JDE classification on matched bank CARGOs', () => {
+    const cargo = bankMovement({
+      cia: '00001',
+      cuenta: 'CTA-PAGO',
+      tipoMovimiento: 'CARGO',
+      importe: 12_500,
+      fechaOperacion: '2026-04-15',
+      concepto: 'PAGO PROVEEDOR JDE',
+    });
+    const cargoEnrichments = new Map([
+      [bankMovementKey(cargo), {
+        status: 'MATCHED' as const,
+        payments: [{
+          claveProveedor: '888',
+          nombreProveedor: 'PROVEEDOR CLASIFICADO JDE',
+          clasificacionProveedor: 'CHASIS',
+          clasificacionProveedorFinanciera: '220 - Por Clasificar',
+          importe: 12_500,
+        }],
+      }],
+    ]);
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [
+        bankStatement({
+          cia: '00001',
+          cuenta: 'CTA-PAGO',
+          movimientos: [cargo],
+        }),
+      ],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-05-01',
+      cargoEnrichments,
+    });
+
+    const movement = canonical.movements.find((m) => m.status === 'REAL' && m.category === 'AP_PAYMENT');
+
+    expect(movement).toBeTruthy();
+    expect(movement?.counterpartyName).toBe('PROVEEDOR CLASIFICADO JDE');
+    expect(movement?.subcategory).toBe('CHASIS');
+    expect(movement?.providerCategory).toBe('CHASIS');
   });
 
   it('classifies historic AuxiliarContable IVA payments as tax movements', () => {

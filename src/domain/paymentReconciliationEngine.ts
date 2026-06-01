@@ -186,6 +186,10 @@ export interface CargoPaymentEnrichment {
      *  (counterpartyId) en vez de caer al match por nombre crudo. */
     claveProveedor: string;
     nombreProveedor: string;
+    /** Clasificación operativa que viene directo de PagoProveedor/JDE. */
+    clasificacionProveedor?: string;
+    /** Clasificación financiera que viene directo de PagoProveedor/JDE. */
+    clasificacionProveedorFinanciera?: string;
     importe: number;
     tier: CargoMatchTier;
   }>;
@@ -386,6 +390,8 @@ export function reconcilePayments(input: {
           noPago: payment.noPago,
           claveProveedor: payment.claveProveedor,
           nombreProveedor: payment.nombreProveedor,
+          clasificacionProveedor: payment.clasificacionProveedor,
+          clasificacionProveedorFinanciera: payment.clasificacionProveedorFinanciera,
           importe: payment.importePesos,
           tier: cargoMatch.tier,
         }],
@@ -441,6 +447,8 @@ export function reconcilePayments(input: {
           noPago: pm.payment.noPago,
           claveProveedor: pm.payment.claveProveedor,
           nombreProveedor: pm.payment.nombreProveedor,
+          clasificacionProveedor: pm.payment.clasificacionProveedor,
+          clasificacionProveedorFinanciera: pm.payment.clasificacionProveedorFinanciera,
           importe: pm.payment.importePesos,
           tier: resolved.tier,
         }],

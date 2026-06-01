@@ -129,6 +129,25 @@ describe('planning row taxonomy', () => {
     expect(rows[0]?.bucketLabel).toBe('Flota');
   });
 
+  it('treats CHASIS as a classified fleet supplier category', () => {
+    const rows = buildPlanningRows({
+      movements: [
+        movement({
+          id: 'supplier-chasis',
+          counterpartyName: 'Proveedor Chasis',
+          providerCategory: 'CHASIS',
+          subcategory: 'CHASIS',
+          projectedAmount: 1800,
+        }),
+      ],
+      customRows: [],
+      overrides: [],
+    });
+
+    expect(rows[0]?.providerCategoryLabel).toBe('CHASIS');
+    expect(rows[0]?.bucketLabel).toBe('Flota');
+  });
+
   it('separates uncategorized suppliers from unidentified bank outflows', () => {
     const rows = buildPlanningRows({
       movements: [

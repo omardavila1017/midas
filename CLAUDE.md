@@ -92,7 +92,7 @@ src/
 │   │   ├── pages/, services/
 │   ├── concurso-mercantil/      # Convenio concursal: data/ (Excel→code, 29 trimestres + 80 acreedores, en miles) + pages/ (dashboard: calendario + cruce banco + futuro) + services/ (convenioMovements → DEBT egresos a Aprobado)
 │   │   ├── data/, pages/, services/
-│   ├── payroll/                 # TRESS nómina loader; expansion to movements happens INSIDE canonicalProjection
+│   ├── payroll/                 # TRESS nómina loader + dashboard analítico (sub-tabs: Resumen/Comparativo/Conceptos/Tendencia/Predictivo/Alertas/Detalle, services/payrollAnalyticsService + payrollForecastAdapter + payrollAnomalyService; ver README.md). API agregado (empresa×concepto×periodo×mes) — SIN empleado/puesto/CC → análisis por empleado/CC bloqueado, ver "API gaps" en README. Expansion to movements happens INSIDE canonicalProjection
 │   ├── kpis-objectives/         # KPIs autocalculados (bancos + cobranza + CXP) + KPIs custom + objetivos con seguimiento (sección "Objetivos")
 │   └── midas-ai/                # MidasBubble proposal suggestion bot
 ├── components/                  # Treasury UI: CXP, Bancos, Clients, Providers, etc. (Dashboard.tsx removed — merged into Proyección 2026-05-18)

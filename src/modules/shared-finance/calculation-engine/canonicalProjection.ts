@@ -149,7 +149,13 @@ export interface CanonicalProjectionInputs {
    * genérico "Otros Egresos". Mismo patrón que `abonoEnrichments` para
    * cobranza (ingresos).
    */
-  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{ claveProveedor?: string; nombreProveedor: string; importe: number }> }>;
+  cargoEnrichments?: Map<string, { status: 'MATCHED' | 'ORPHAN'; payments?: Array<{
+    claveProveedor?: string;
+    nombreProveedor: string;
+    clasificacionProveedor?: string;
+    clasificacionProveedorFinanciera?: string;
+    importe: number;
+  }> }>;
   /**
    * Líneas del libro mayor JDE (AuxiliarContable) con su estado de
    * conciliación bancaria. Cuando un mes histórico (cia, ym) NO está cubierto
@@ -485,6 +491,12 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
         ? cargoEnrich.payments?.[0]
         : undefined;
       const isMatchedAp = !!matchedPayment;
+      const matchedPaymentProviderCategory = matchedPayment
+        ? usableJdeProviderCategory(
+            matchedPayment.clasificacionProveedor,
+            matchedPayment.clasificacionProveedorFinanciera,
+          )
+        : undefined;
       // ABONOs sin match a factura → agrupar por banco origen para que la
       // tabla de Planeación no muestre cientos de filas únicas por concepto
       // bancario. Sin cruce de cobranza, Federal/Citi se decide por la cuenta
@@ -582,11 +594,13 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       // `proveedores_nomina`, …). Esto evita cientos de CARGOs etiquetados
       // como genérico "Otros Egresos" cuando el banco solo manda folios
       // numéricos pero el destino de la cuenta es claro.
-      const cargoSubcategory = cargoProviderHit?.providerType
-        ?? unmatchedCargoClassification?.subcategory
-        ?? (catalogEnrich && !isInflow
-          ? catalogEnrich.entry.subRole ?? catalogEnrich.entry.role
-          : undefined);
+      const cargoSubcategory = isMatchedAp
+        ? matchedPaymentProviderCategory
+        : cargoProviderHit?.providerType
+          ?? unmatchedCargoClassification?.subcategory
+          ?? (catalogEnrich && !isInflow
+            ? catalogEnrich.entry.subRole ?? catalogEnrich.entry.role
+            : undefined);
       out.push({
         id: `bank:${statement.cia}:${statement.cuenta}:${line.referencia ?? ''}:${line.fechaOperacion}:${out.length}`,
         sourceSystem: 'BANK',
@@ -600,7 +614,7 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
               ? 'TRANSFER'
               : cargoCategory,
         subcategory: isInflow ? inflowSubcategory : cargoSubcategory,
-        providerCategory: !isInflow ? (cargoProviderHit?.providerType ?? undefined) : undefined,
+        providerCategory: !isInflow ? (matchedPaymentProviderCategory ?? cargoProviderHit?.providerType ?? undefined) : undefined,
         companyId: statement.cia,
         businessUnitId: catalogEnrich?.entry.unidadNegocio,
         bankAccountId: statement.cuenta,
@@ -1479,11 +1493,12 @@ function collectOutflowLines(
       supplier: record.nombre,
       classification: record.clasificacionProveedor || record.clasifica,
     });
-    const providerType = provider?.type
-      || catalog.providerType
-      || record.clasificacionProveedor
-      || record.clasifica
-      || 'Sin clasificar';
+    const providerType = usableJdeProviderCategory(
+      provider?.type,
+      catalog.providerType,
+      record.clasificacionProveedor,
+      record.clasifica,
+    ) || 'Sin clasificar';
     const score = provider?.score != null
       ? Math.max(0, Math.min(100, Math.round(provider.score)))
       : (record.edoPago ?? '').toUpperCase().includes('APROB')
@@ -1699,6 +1714,25 @@ function providerJdeKey(value: string | undefined): string {
   const numeric = trimmed.replace(/\D/g, '');
   if (numeric) return String(Number(numeric));
   return supplierLookupKey(trimmed);
+}
+
+function usableJdeProviderCategory(...values: Array<string | null | undefined>): string | undefined {
+  for (const value of values) {
+    const normalized = normalizeJdeProviderCategory(value);
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+function normalizeJdeProviderCategory(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim().replace(/\s+/g, ' ');
+  if (!trimmed) return undefined;
+  const withoutPrefix = trimmed.replace(/^\d{2,4}\s*-\s*/, '').trim();
+  if (!withoutPrefix) return undefined;
+  if (/^POR\s*CLASIFICAR$/i.test(withoutPrefix)) return undefined;
+  if (/^SIN\s*(CLASIFICAR|CATEGOR[IÍ]A)$/i.test(withoutPrefix)) return undefined;
+  if (/^N\/?A$/i.test(withoutPrefix)) return undefined;
+  return withoutPrefix;
 }
 
 function cxcTaxMeta(

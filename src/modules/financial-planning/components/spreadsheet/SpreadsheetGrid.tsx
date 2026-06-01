@@ -112,7 +112,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     (inputRows: PlanningRow[], type: FinancialMovementType): DisplayRow[] => {
       const byBucket = new Map<string, PlanningRow[]>();
       for (const row of inputRows) {
-        const label = row.bucketLabel || (type === 'INFLOW' ? 'Otros ingresos' : UNIDENTIFIED_BANK_OUTFLOW_BUCKET);
+        const label = displayBucketLabelForRow(row, type);
         const bucket = byBucket.get(label);
         if (bucket) bucket.push(row);
         else byBucket.set(label, [row]);
@@ -123,7 +123,8 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           const id = bucketId(type, label);
           const sortedRows = [...groupRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
           const header: DisplayRow = { kind: 'bucket', id, label, rows: sortedRows, type };
-          if (!expandedBuckets[id]) return [header];
+          const expanded = expandedBuckets[id] ?? isExpandedByDefault(type, sortedRows);
+          if (!expanded) return [header];
           return [header, ...sortedRows.map((row) => ({ kind: 'data' as const, row, depth: 1 }))];
         });
     },
@@ -538,7 +539,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   );
 
   const renderBucketRow = (group: Extract<DisplayRow, { kind: 'bucket' }>, rowIndex: number) => {
-    const expanded = !!expandedBuckets[group.id];
+    const expanded = expandedBuckets[group.id] ?? isExpandedByDefault(group.type, group.rows);
     return (
       <div
         key={group.id}
@@ -797,14 +798,80 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
 function compareBucketLabels(a: string, b: string, type: FinancialMovementType): number {
   if (type === 'INFLOW') return a.localeCompare(b, 'es-MX');
-  const ai = OUTFLOW_BUCKET_ORDER.indexOf(a);
-  const bi = OUTFLOW_BUCKET_ORDER.indexOf(b);
+  const aBase = baseOutflowBucketLabel(a);
+  const bBase = baseOutflowBucketLabel(b);
+  const ai = OUTFLOW_BUCKET_ORDER.indexOf(aBase);
+  const bi = OUTFLOW_BUCKET_ORDER.indexOf(bBase);
   if (ai !== -1 || bi !== -1) {
     if (ai === -1) return 1;
     if (bi === -1) return -1;
-    return ai - bi;
+    if (ai !== bi) return ai - bi;
   }
+  const subOrder = compareSupplierSubcategoryLabels(a, b);
+  if (subOrder !== 0) return subOrder;
   return a.localeCompare(b, 'es-MX');
+}
+
+function displayBucketLabelForRow(row: PlanningRow, type: FinancialMovementType): string {
+  const fallback = type === 'INFLOW' ? 'Otros ingresos' : UNIDENTIFIED_BANK_OUTFLOW_BUCKET;
+  const bucketLabel = row.bucketLabel || fallback;
+  if (type !== 'OUTFLOW' || row.category !== 'AP_PAYMENT') return bucketLabel;
+  const category = supplierCategoryGroupLabel(row.providerCategoryLabel ?? row.subgroupLabel);
+  return category ? `${bucketLabel} · ${category}` : bucketLabel;
+}
+
+function isExpandedByDefault(type: FinancialMovementType, rows: PlanningRow[]): boolean {
+  return type === 'OUTFLOW' && rows.some((row) => row.category === 'AP_PAYMENT');
+}
+
+function baseOutflowBucketLabel(label: string): string {
+  return label.split(' · ')[0]?.trim() || label;
+}
+
+const SUPPLIER_CATEGORY_ORDER = [
+  'Taller',
+  'Chasis',
+  'Refacciones',
+  'Combustible',
+  'Llantas',
+  'Mantenimiento',
+];
+
+function compareSupplierSubcategoryLabels(a: string, b: string): number {
+  const aSub = supplierSubcategoryPart(a);
+  const bSub = supplierSubcategoryPart(b);
+  const ai = SUPPLIER_CATEGORY_ORDER.indexOf(aSub);
+  const bi = SUPPLIER_CATEGORY_ORDER.indexOf(bSub);
+  if (ai !== -1 || bi !== -1) {
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    if (ai !== bi) return ai - bi;
+  }
+  return 0;
+}
+
+function supplierSubcategoryPart(label: string): string {
+  return label.split(' · ')[1]?.trim() ?? '';
+}
+
+function supplierCategoryGroupLabel(raw: string | undefined): string | null {
+  const value = raw?.trim().replace(/\s+/g, ' ');
+  if (!value || value === 'Sin clasificar') return null;
+  if (/taller/i.test(value)) return 'Taller';
+  if (/chasis/i.test(value)) return 'Chasis';
+  if (/refacc/i.test(value)) return 'Refacciones';
+  if (/combust|diesel|gasolin/i.test(value)) return 'Combustible';
+  if (/llanta|neumat/i.test(value)) return 'Llantas';
+  if (/mantenim/i.test(value)) return 'Mantenimiento';
+  return toReadableSupplierCategory(value);
+}
+
+function toReadableSupplierCategory(value: string): string {
+  if (/[a-záéíóúñ]/.test(value)) return value;
+  return value
+    .toLocaleLowerCase('es-MX')
+    .replace(/\b\p{L}/gu, (char) => char.toLocaleUpperCase('es-MX'))
+    .replace(/\b(De|Del|La|Las|Los|Y|En|A)\b/g, (word) => word.toLocaleLowerCase('es-MX'));
 }
 
 // Renders only the rows intersecting the scroll viewport. Row height is

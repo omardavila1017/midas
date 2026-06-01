@@ -2,32 +2,56 @@
  * Dashboard de Nómina — consumidor del API TRESS `/v1/erp/tress/nomina`.
  *
  * Lee `nominaRecords` y `nominaLoadedKeys` del store (cache aditivo), permite
- * disparar un refresh por (cia, tipoNomina, año, mes) y renderiza KPIs +
- * tablas. La fórmula del cash neto al empleado vive en `payrollModuleService`.
+ * disparar un refresh por (cia, tipoNomina, año, mes) y organiza el análisis en
+ * sub-pestañas (Resumen / Comparativo / Conceptos / Tendencia / Predictivo /
+ * Alertas / Detalle). La fórmula del cash neto vive en `payrollModuleService`;
+ * las agregaciones de análisis en `payrollAnalyticsService`.
+ *
+ * Dos datasets se derivan de los filtros:
+ *   - `monthSnapshot`: filtrado por (cía, tipo, año, mes) — alimenta las vistas
+ *     instantáneas (Resumen, Comparativo, Conceptos, Detalle).
+ *   - `historyFiltered`: filtrado sólo por (cía, tipo), TODA la historia —
+ *     alimenta las vistas temporales (Tendencia, Predictivo, Alertas).
  *
  * App.tsx entrega estos registros al motor canónico para Planeación,
- * Proyección e Impuestos. Aquí se mantienen visibles los datos crudos y
- * agregados para revisión operativa.
+ * Proyección e Impuestos. El API es agregado (empresa × concepto × periodo ×
+ * mes) y no trae empleado/puesto/centro de costo — ver `README.md` para el
+ * mapeo HTML→API y los gaps.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Banknote, Calendar, Coins, Download, Loader2, RefreshCcw, Users } from 'lucide-react';
-import { fmtCompact, fmtCurrency, fmtDate } from '../../../formatters';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertTriangle,
+  BarChart3,
+  Building2,
+  LayoutGrid,
+  Loader2,
+  PieChart,
+  RefreshCcw,
+  Sparkles,
+  Table,
+  TrendingUp,
+  type LucideIcon,
+} from 'lucide-react';
+import { fmtDate } from '../../../formatters';
 import PageHeader from '../../../components/ui/PageHeader';
-import KpiCard from '../../../components/ui/KpiCard';
-import EmptyState from '../../shared-finance/components/EmptyState';
 import type { PayrollCostRecord } from '../../shared-finance/types';
 import { fetchNomina, JdeApiError } from '../../../services/jde';
 import {
-  computeKpis,
   filterRecords,
   findSuspectMonths,
   lastNMonths,
   mergeNominaBatch,
   nominaCacheKey,
-  summarizeByConcept,
-  summarizePeriods,
 } from '../services/payrollModuleService';
+
+const PayrollResumenView = lazy(() => import('../components/PayrollResumenView'));
+const PayrollCompanyView = lazy(() => import('../components/PayrollCompanyView'));
+const PayrollConceptView = lazy(() => import('../components/PayrollConceptView'));
+const PayrollTrendView = lazy(() => import('../components/PayrollTrendView'));
+const PayrollForecastView = lazy(() => import('../components/PayrollForecastView'));
+const PayrollAlertsView = lazy(() => import('../components/PayrollAlertsView'));
+const PayrollTablesView = lazy(() => import('../components/PayrollTablesView'));
 
 /** Mes actual + N-1 anteriores. Refresh jala este histórico para proyectar. */
 const HISTORY_WINDOW_MONTHS = 4;
@@ -40,17 +64,11 @@ interface Props {
   nominaLoadedKeys: Record<string, string>;
   /**
    * Cuántos meses esperados ya bajaron del backfill (24 meses = fast-path YTD
-   * + histórico). Mientras `loaded < total` la UI muestra un banner para que
-   * el usuario no asuma que los KPIs (4 meses YTD) son definitivos.
+   * + histórico). Mientras `loaded < total` la UI muestra un banner.
    */
   backfillProgress?: { loaded: number; total: number };
   syncStatus?: 'idle' | 'loading' | 'ready' | 'stale' | 'error';
-  /**
-   * Callback al merge exitoso — App.tsx persiste en MidasStore.
-   * `cacheKeys` puede contener varias entradas cuando el refresh jala un
-   * histórico (mes actual + meses anteriores), una por cada (anio, mes)
-   * fetched OK.
-   */
+  /** Callback al merge exitoso — App.tsx persiste en MidasStore. */
   onNominaFetched: (
     merged: PayrollCostRecord[],
     cacheKeys: Record<string, string>,
@@ -79,6 +97,26 @@ const MONTHS = [
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
 ];
 
+type SubTabId = 'resumen' | 'empresa' | 'conceptos' | 'tendencia' | 'predictivo' | 'alertas' | 'detalle';
+
+interface SubTabDef {
+  id: SubTabId;
+  label: string;
+  icon: LucideIcon;
+  /** `history` usa el dataset multi-mes; `snapshot` usa el mes filtrado. */
+  scope: 'snapshot' | 'history';
+}
+
+const SUB_TABS: SubTabDef[] = [
+  { id: 'resumen', label: 'Resumen', icon: PieChart, scope: 'snapshot' },
+  { id: 'empresa', label: 'Comparativo', icon: Building2, scope: 'snapshot' },
+  { id: 'conceptos', label: 'Conceptos', icon: BarChart3, scope: 'snapshot' },
+  { id: 'tendencia', label: 'Tendencia', icon: TrendingUp, scope: 'history' },
+  { id: 'predictivo', label: 'Predictivo', icon: Sparkles, scope: 'history' },
+  { id: 'alertas', label: 'Alertas', icon: AlertTriangle, scope: 'history' },
+  { id: 'detalle', label: 'Detalle', icon: Table, scope: 'snapshot' },
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function normalizeCia(idEmpresa: number): string {
@@ -101,6 +139,7 @@ export default function PayrollDashboard({
   const [tipoNomina, setTipoNomina] = useState<number>(99);
   const [anio, setAnio] = useState<number>(now.getFullYear());
   const [mes, setMes] = useState<number>(now.getMonth() + 1);
+  const [activeTab, setActiveTab] = useState<SubTabId>('resumen');
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const autoRefreshAttemptsRef = useRef<Set<string>>(new Set());
@@ -108,15 +147,15 @@ export default function PayrollDashboard({
   const cacheKey = nominaCacheKey({ idEmpresa, tipoNomina, anio, mes });
   const lastLoadedAt = nominaLoadedKeys[cacheKey];
 
-  // Vista filtrada por (selectedCia/idEmpresa, año, mes, tipoNomina).
-  // `companyCode` es la cia activa global del app; si el usuario filtra por
-  // una cia específica en el módulo, se respeta esa.
+  // `companyCode` es la cia activa global; si el usuario filtra por una cia
+  // específica en el módulo, se respeta esa.
   const ciaFilter = idEmpresa === 99
     ? (companyCode && companyCode !== 'all' ? companyCode : undefined)
     : normalizeCia(idEmpresa);
   const tipoFilter = tipoNomina === 99 ? undefined : (tipoNomina === 1 ? 'Semanal' : 'Quincenal');
 
-  const filtered = useMemo(
+  // Snapshot del mes: alimenta Resumen / Comparativo / Conceptos / Detalle.
+  const monthSnapshot = useMemo(
     () => filterRecords(nominaRecords, {
       cia: ciaFilter,
       year: anio,
@@ -126,15 +165,16 @@ export default function PayrollDashboard({
     [nominaRecords, ciaFilter, anio, mes, tipoFilter],
   );
 
-  const kpis = useMemo(() => computeKpis(filtered), [filtered]);
-  const periods = useMemo(() => summarizePeriods(filtered), [filtered]);
-  const conceptBreakdown = useMemo(() => summarizeByConcept(filtered), [filtered]);
-  const topConcepts = conceptBreakdown.slice(0, 12);
+  // Historia completa (cía + tipo, todos los meses): Tendencia / Predictivo /
+  // Alertas. No filtra por año/mes a propósito.
+  const historyFiltered = useMemo(
+    () => filterRecords(nominaRecords, { cia: ciaFilter, payrollType: tipoFilter }),
+    [nominaRecords, ciaFilter, tipoFilter],
+  );
 
   /**
-   * Refresh = mes seleccionado + (HISTORY_WINDOW_MONTHS-1) anteriores.
-   * Fetch en paralelo para que la latencia total ≈ max(fetch) y no Σ.
-   * Si alguna falla, persistimos las que sí pasaron y reportamos el resto.
+   * Refresh = mes seleccionado + (HISTORY_WINDOW_MONTHS-1) anteriores, en
+   * paralelo. Persiste lo que pase y reporta lo que falle.
    */
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -185,10 +225,9 @@ export default function PayrollDashboard({
     }
   }, [idEmpresa, tipoNomina, anio, mes, nominaRecords, onNominaFetched]);
 
-  const hasData = filtered.length > 0;
   const visibleMonthIsPartial = useMemo(
-    () => findSuspectMonths(filtered).some((item) => item.year === anio && item.month === mes),
-    [filtered, anio, mes],
+    () => findSuspectMonths(monthSnapshot).some((item) => item.year === anio && item.month === mes),
+    [monthSnapshot, anio, mes],
   );
   const yearOptions = useMemo(() => {
     const current = now.getFullYear();
@@ -205,6 +244,8 @@ export default function PayrollDashboard({
 
   const backfillInProgress = backfillProgress && backfillProgress.loaded < backfillProgress.total;
   const autoSyncInProgress = syncStatus === 'loading' || syncStatus === 'stale';
+
+  const activeScope = SUB_TABS.find(t => t.id === activeTab)?.scope ?? 'snapshot';
 
   return (
     <div className="space-y-6">
@@ -284,66 +325,62 @@ export default function PayrollDashboard({
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--gray-500)' }}>
-              Empresa
-            </span>
+            <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--gray-500)' }}>Empresa</span>
             <select
               value={idEmpresa}
               onChange={(e) => setIdEmpresa(Number(e.target.value))}
               className="rounded-md border px-2 py-1.5"
               style={{ borderColor: 'var(--gray-300)', background: 'var(--surface)' }}
             >
-              {ID_EMPRESA_CHOICES.map(c => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
+              {ID_EMPRESA_CHOICES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--gray-500)' }}>
-              Tipo de Nómina
-            </span>
+            <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--gray-500)' }}>Tipo de Nómina</span>
             <select
               value={tipoNomina}
               onChange={(e) => setTipoNomina(Number(e.target.value))}
               className="rounded-md border px-2 py-1.5"
               style={{ borderColor: 'var(--gray-300)', background: 'var(--surface)' }}
             >
-              {TIPO_NOMINA_CHOICES.map(c => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
+              {TIPO_NOMINA_CHOICES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--gray-500)' }}>
-              Año
+              Año {activeScope === 'history' && <span className="lowercase">(no aplica)</span>}
             </span>
             <select
               value={anio}
               onChange={(e) => setAnio(Number(e.target.value))}
-              className="rounded-md border px-2 py-1.5"
+              disabled={activeScope === 'history'}
+              className="rounded-md border px-2 py-1.5 disabled:opacity-50"
               style={{ borderColor: 'var(--gray-300)', background: 'var(--surface)' }}
             >
-              {yearOptions.map(y => (
-                <option key={y} value={y}>{y}</option>
-              ))}
+              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--gray-500)' }}>
-              Mes
+              Mes {activeScope === 'history' && <span className="lowercase">(no aplica)</span>}
             </span>
             <select
               value={mes}
               onChange={(e) => setMes(Number(e.target.value))}
-              className="rounded-md border px-2 py-1.5"
+              disabled={activeScope === 'history'}
+              className="rounded-md border px-2 py-1.5 disabled:opacity-50"
               style={{ borderColor: 'var(--gray-300)', background: 'var(--surface)' }}
             >
-              {MONTHS.map((label, i) => (
-                <option key={i} value={i + 1}>{label}</option>
-              ))}
+              {MONTHS.map((label, i) => <option key={i} value={i + 1}>{label}</option>)}
             </select>
           </label>
         </div>
+        {activeScope === 'history' && (
+          <p className="mt-2 text-xs" style={{ color: 'var(--gray-500)' }}>
+            Esta vista usa la historia completa (todos los meses) de la empresa y tipo de nómina
+            seleccionados; los filtros de año/mes no aplican aquí.
+          </p>
+        )}
         {errMsg && (
           <p
             className="mt-3 rounded-md border px-3 py-2 text-sm"
@@ -358,184 +395,58 @@ export default function PayrollDashboard({
         )}
       </section>
 
-      {/* KPIs */}
-      <section className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <KpiCard
-          label="Nómina Bruta"
-          value={fmtCurrency(kpis.totalGross)}
-          icon={<Coins className="h-4 w-4" />}
-          sublabel="Σ Percepciones"
-        />
-        <KpiCard
-          label="Pago Neto al Empleado"
-          value={fmtCurrency(kpis.totalNetCash)}
-          icon={<Banknote className="h-4 w-4" />}
-          sublabel="Lo que sale del banco en FechaPago"
-          tone="success"
-        />
-        <KpiCard
-          label="Retenciones (ISR/IMSS Empleado)"
-          value={fmtCurrency(kpis.totalWithholdings)}
-          icon={<Download className="h-4 w-4" />}
-          sublabel="Se enteran al SAT/IMSS después"
-          tone="warning"
-        />
-        <KpiCard
-          label="Aportaciones Patronales"
-          value={fmtCurrency(kpis.totalEmployerTaxes)}
-          icon={<Users className="h-4 w-4" />}
-          sublabel={`${kpis.payingCompanies} cía(s) · ${kpis.periodCount} periodo(s)`}
-        />
-      </section>
-
-      {/* Periodos */}
-      <section
-        className="rounded-lg border"
+      {/* Sub-pestañas */}
+      <nav
+        className="flex flex-wrap gap-1 rounded-lg border p-1"
         style={{ borderColor: 'var(--gray-200)', background: 'var(--surface)' }}
+        aria-label="Vistas de análisis de nómina"
       >
-        <header
-          className="border-b px-4 py-3"
-          style={{ borderColor: 'var(--gray-200)' }}
-        >
-          <h3 className="text-sm font-semibold" style={{ color: 'var(--gray-900)' }}>
-            Periodos de pago
-          </h3>
-          <p className="text-xs" style={{ color: 'var(--gray-500)' }}>
-            Agrupado por (compañía, fecha de pago, periodo). El cash neto es lo que
-            sale del banco al empleado el día de pago.
-          </p>
-        </header>
-        {!hasData ? (
-          <div className="p-6">
-            <EmptyState
-              icon={<Calendar className="h-6 w-6" />}
-              title="Sin datos para estos filtros"
-              description='Ajusta los filtros o presiona "Refrescar TRESS" para cargar la información.'
-            />
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead
-                className="text-[11px] uppercase tracking-wide"
-                style={{ color: 'var(--gray-500)', borderBottom: '1px solid var(--gray-200)' }}
-              >
-                <tr>
-                  <th className="px-3 py-2 text-left">Compañía</th>
-                  <th className="px-3 py-2 text-left">Tipo</th>
-                  <th className="px-3 py-2 text-left">Periodo</th>
-                  <th className="px-3 py-2 text-left">Fecha pago</th>
-                  <th className="px-3 py-2 text-right">Bruto</th>
-                  <th className="px-3 py-2 text-right">Deducciones</th>
-                  <th className="px-3 py-2 text-right">Retenciones</th>
-                  <th className="px-3 py-2 text-right">Patronal</th>
-                  <th className="px-3 py-2 text-right" style={{ color: 'var(--success)' }}>
-                    Pago neto
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {periods.map((p) => (
-                  <tr
-                    key={`${p.cia}|${p.paymentDate}|${p.payrollType}|${p.payrollPeriod}`}
-                    style={{ borderBottom: '1px solid var(--gray-100)' }}
-                  >
-                    <td className="px-3 py-2">
-                      <div className="font-medium" style={{ color: 'var(--gray-900)' }}>
-                        {p.empresaNomina || p.cia}
-                      </div>
-                      <div className="text-xs" style={{ color: 'var(--gray-500)' }}>
-                        {p.cia}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">{p.payrollType}</td>
-                    <td className="px-3 py-2">{p.payrollPeriod}</td>
-                    <td className="px-3 py-2">{p.paymentDate}</td>
-                    <td className="px-3 py-2 text-right">{fmtCompact(p.grossEarnings)}</td>
-                    <td className="px-3 py-2 text-right">{fmtCompact(p.netDeductions)}</td>
-                    <td className="px-3 py-2 text-right">{fmtCompact(p.withholdings)}</td>
-                    <td className="px-3 py-2 text-right">{fmtCompact(p.employerTaxes)}</td>
-                    <td
-                      className="px-3 py-2 text-right font-semibold"
-                      style={{ color: 'var(--success)' }}
-                    >
-                      {fmtCompact(p.netCashOnPaymentDate)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+        {SUB_TABS.map((t) => {
+          const Icon = t.icon;
+          const active = activeTab === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setActiveTab(t.id)}
+              aria-current={active ? 'page' : undefined}
+              className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition"
+              style={{
+                background: active ? 'var(--accent-blue)' : 'transparent',
+                color: active ? '#fff' : 'var(--gray-600)',
+              }}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {t.label}
+            </button>
+          );
+        })}
+      </nav>
 
-      {/* Top conceptos */}
-      {hasData && (
-        <section
-          className="rounded-lg border"
-          style={{ borderColor: 'var(--gray-200)', background: 'var(--surface)' }}
-        >
-          <header
-            className="border-b px-4 py-3"
-            style={{ borderColor: 'var(--gray-200)' }}
-          >
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--gray-900)' }}>
-              Top conceptos (por monto)
-            </h3>
-            <p className="text-xs" style={{ color: 'var(--gray-500)' }}>
-              Los 12 conceptos con mayor monto absoluto en el filtro actual.
-            </p>
-          </header>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead
-                className="text-[11px] uppercase tracking-wide"
-                style={{ color: 'var(--gray-500)', borderBottom: '1px solid var(--gray-200)' }}
-              >
-                <tr>
-                  <th className="px-3 py-2 text-left">Concepto</th>
-                  <th className="px-3 py-2 text-left">Tipo</th>
-                  <th className="px-3 py-2 text-left">Tratamiento cash</th>
-                  <th className="px-3 py-2 text-right">Ocurrencias</th>
-                  <th className="px-3 py-2 text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topConcepts.map((c) => (
-                  <tr
-                    key={`${c.conceptId}|${c.conceptName}`}
-                    style={{ borderBottom: '1px solid var(--gray-100)' }}
-                  >
-                    <td className="px-3 py-2">
-                      <div className="font-medium" style={{ color: 'var(--gray-900)' }}>
-                        {c.conceptName}
-                      </div>
-                      <div className="text-xs" style={{ color: 'var(--gray-500)' }}>
-                        #{c.conceptId}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">{c.conceptType}</td>
-                    <td className="px-3 py-2">
-                      <span
-                        className="rounded-md px-2 py-0.5 text-xs"
-                        style={{
-                          background: 'var(--gray-100)',
-                          color: 'var(--gray-700)',
-                        }}
-                      >
-                        {c.cashTreatment}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right">{c.occurrences}</td>
-                    <td className="px-3 py-2 text-right font-medium">
-                      {fmtCurrency(c.total)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <Suspense
+        fallback={
+          <div className="flex items-center gap-2 p-6 text-sm" style={{ color: 'var(--gray-500)' }}>
+            <Loader2 className="h-4 w-4 animate-spin" /> Cargando vista…
           </div>
-        </section>
+        }
+      >
+        {activeTab === 'resumen' && <PayrollResumenView records={monthSnapshot} />}
+        {activeTab === 'empresa' && <PayrollCompanyView records={monthSnapshot} />}
+        {activeTab === 'conceptos' && <PayrollConceptView records={monthSnapshot} />}
+        {activeTab === 'tendencia' && <PayrollTrendView records={historyFiltered} />}
+        {activeTab === 'predictivo' && <PayrollForecastView records={historyFiltered} />}
+        {activeTab === 'alertas' && <PayrollAlertsView records={historyFiltered} />}
+        {activeTab === 'detalle' && <PayrollTablesView records={monthSnapshot} />}
+      </Suspense>
+
+      {activeScope === 'snapshot' && monthSnapshot.length === 0 && (
+        <div
+          className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+          style={{ borderColor: 'var(--gray-200)', background: 'var(--surface)', color: 'var(--gray-500)' }}
+        >
+          <LayoutGrid className="h-4 w-4" />
+          <span>Sin datos para {MONTHS[mes - 1]} {anio} con los filtros actuales. Ajusta los filtros o refresca TRESS.</span>
+        </div>
       )}
     </div>
   );
