@@ -16,6 +16,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { getRoleForEmail } from '../config/userRoles';
 import { roleCanAccess, type Role } from '../config/roles';
+import { resolveSessionEmail } from './authSession';
 import type { AppTabId } from '../modules/shared-finance/components/NavigationContext';
 
 interface AuthContextValue {
@@ -30,19 +31,16 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 /**
- * Resuelve el correo del usuario actual.
+ * Resuelve el correo del usuario actual: la sesión del login (lo que el usuario
+ * tecleó) tiene precedencia, con fallback al email inyectado por el entorno
+ * (`VITE_CURRENT_USER_EMAIL`). La lógica vive en `authSession.ts` para que el
+ * gate (`Login.tsx`) y este contexto compartan exactamente la misma fuente.
  *
- * TODO(auth): conectar con la identidad real de Atlas SSO. Hoy se inyecta el
- * email mock vía `VITE_CURRENT_USER_EMAIL` (DEV ONLY) — cuando el backend
- * exponga un claim de sesión / header, leerlo aquí en lugar del env var.
+ * TODO(auth): cuando Atlas SSO exponga un claim de sesión / header al frontend,
+ * leerlo ahí en lugar del env var (sin tocar la precedencia de la sesión).
  */
 function resolveCurrentEmail(): string | null {
-  // DEV ONLY: reemplazar por identidad real de Atlas/backend.
-  const fromEnv = import.meta.env.VITE_CURRENT_USER_EMAIL;
-  if (typeof fromEnv === 'string' && fromEnv.trim()) {
-    return fromEnv.trim();
-  }
-  return null;
+  return resolveSessionEmail();
 }
 
 export function AuthProvider({
