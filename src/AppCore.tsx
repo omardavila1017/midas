@@ -72,7 +72,8 @@ const CollectionProjection = lazy(() => import('./components/CollectionProjectio
 const FideicomisoDashboard = lazy(() => import('./components/FideicomisoDashboard'));
 const FinancialProjectionDashboard = lazy(() => import('./modules/financial-projection/pages/FinancialProjectionDashboard'));
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
-const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
+// Módulo de Impuestos en construcción — render deshabilitado (ver pestaña 'taxes' abajo).
+// const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
 const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
 const ConciliacionDashboard = lazy(() => import('./components/ConciliacionDashboard'));
@@ -348,7 +349,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'compras', label: 'Órdenes de Compras',  icon: FolderOpen },
     { id: 'pagos',   label: 'Pagos',               icon: CreditCard },
     { id: 'payroll', label: 'Nómina',              icon: Users },
-    { id: 'taxes',   label: 'Impuestos',           icon: Landmark },
+    { id: 'taxes',   label: 'Impuestos (Bajo construcción)', icon: Landmark },
   ],
   cobranza: [
     { id: 'netflow',           label: 'Flujo Neto',        icon: Wallet },
@@ -4467,24 +4468,22 @@ export default function App() {
             ) : (
               <>
             {activeTab === 'taxes' && (
-              <Suspense fallback={<LazyTabFallback label="Impuestos" />}>
-                <TaxDashboard
-                  companyCode={selectedCia}
-                  bankStatements={accountableBankStatements}
-                  clients={clients}
-                  providers={providers}
-                  cxpRecords={cxpRecords}
-                  cobranzaRecords={cobranzaRecords}
-                  cobranzaPayments={cobranzaPayments}
-                  auxiliarReconciliation={auxiliarReconciliation}
-                  cxpPaymentCoverage={paymentReconciliation.cxpCoverage}
-                  purchaseReceipts={purchaseReceiptsFromCompras}
-                  payrollCosts={nominaRecords}
-                  assumptions={assumptions}
-                  budget={null}
-                  startingBalance={undefined}
-                />
-              </Suspense>
+              // Módulo de Impuestos temporalmente deshabilitado — en construcción.
+              // El TaxDashboard sigue alimentando Planeación/Proyección a través de
+              // canonicalProjection; solo se oculta la pestaña dedicada. Para
+              // reactivarla, restaurar el render de <TaxDashboard /> (ver historial git).
+              <div className="flex flex-col items-center justify-center text-center py-24 px-6">
+                <div className="flex items-center justify-center w-16 h-16 rounded-full bg-amber-100 text-amber-600 mb-6">
+                  <Landmark className="w-8 h-8" />
+                </div>
+                <h2 className="text-xl font-semibold text-foreground mb-2">
+                  Impuestos — Bajo construcción
+                </h2>
+                <p className="text-sm text-muted-foreground max-w-md">
+                  Este módulo no está disponible por el momento. Estamos trabajando
+                  en él y volverá a estar accesible próximamente.
+                </p>
+              </div>
             )}
             {activeTab === 'payroll' && (
               <Suspense fallback={<LazyTabFallback label="Nómina" />}>
