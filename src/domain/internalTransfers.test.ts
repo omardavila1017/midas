@@ -274,6 +274,54 @@ describe('buildPairMatchedKeys', () => {
     expect(buildPairMatchedKeys(stmts).size).toBe(0);
   });
 
+  it('PAIRS across days within the window (traspaso que liquida en T+1)', () => {
+    // CARGO el viernes, ABONO gemelo el lunes (desfase de liquidación SPEI /
+    // fin de semana). Mismo importe, cuentas distintas → traspaso interno.
+    const stmts: BankAccountStatement[] = [
+      acc('00011', '0190000001', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, fechaOperacion: '2026-04-17' }),
+      ]),
+      acc('00011', '0190000002', [
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, fechaOperacion: '2026-04-20' }),
+      ]),
+    ];
+    expect(buildPairMatchedKeys(stmts).size).toBe(2);
+  });
+
+  it('does NOT pair when the day gap exceeds the window', () => {
+    const stmts: BankAccountStatement[] = [
+      acc('00011', '0190000001', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, fechaOperacion: '2026-04-10' }),
+      ]),
+      acc('00011', '0190000002', [
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, fechaOperacion: '2026-04-20' }),
+      ]),
+    ];
+    expect(buildPairMatchedKeys(stmts).size).toBe(0);
+  });
+
+  it('prefers the same-day ABONO over a near-day one when both are available', () => {
+    // Un CARGO con dos ABONOs candidatos: uno el mismo día, otro a 2 días.
+    // El pareo debe consumir el del mismo día (match óptimo, distancia 0).
+    const stmts: BankAccountStatement[] = [
+      acc('00011', '0190000001', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, fechaOperacion: '2026-04-20', referencia: 'C1' }),
+      ]),
+      acc('00011', '0190000002', [
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, fechaOperacion: '2026-04-20', referencia: 'A_SAMEDAY' }),
+      ]),
+      acc('00011', '0190000003', [
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, fechaOperacion: '2026-04-22', referencia: 'A_NEAR' }),
+      ]),
+    ];
+    const keys = buildPairMatchedKeys(stmts);
+    expect(keys.size).toBe(2);
+    const sameDayKey = movementHashKey('00011', '0190000002', stmts[1].movimientos[0]);
+    const nearKey = movementHashKey('00011', '0190000003', stmts[2].movimientos[0]);
+    expect(keys.has(sameDayKey)).toBe(true);
+    expect(keys.has(nearKey)).toBe(false);
+  });
+
   it('classifyMovement reports "pair-matched" when key is in pairedKeys', () => {
     const stmts: BankAccountStatement[] = [
       acc('00011', '0190000001', [

@@ -435,6 +435,33 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     inputs.purchaseReceipts ?? [],
   );
 
+  // Reconciliación de traspasos internos. Cada CARGO/ABONO que descartamos
+  // abajo (interno heurístico o cuenta neutra del catálogo) deja de contar en
+  // la caja, PERO el saldo bancario real sí los incluye — se cancelan entre
+  // cuentas propias. La detección no es perfectamente simétrica (con ~$18B de
+  // traspasos, un residuo <1% = cientos de M), así que el neto descartado
+  // (Σ ABONO − Σ CARGO internos) hace que la caja de `movements[]` derive del
+  // saldo real (caja Base salía negativa con banco real positivo). Acumulamos
+  // ese neto por (cia, mes) y lo re-emitimos como UN movimiento
+  // `internal-recon:` para anclar la caja al banco sin re-inflar los brutos con
+  // los miles de millones de traspasos individuales. `buildHistoricalMonths`
+  // ya hace lo equivalente en su `closingCash` (suma todos los movimientos).
+  const internalReconByKey = new Map<string, { net: number; cia: string; lastDate: string }>();
+  const accrueInternalResidual = (cia: string, ym: string, tipo: string, importe: number, fecha: string) => {
+    const amt = Math.abs(importe || 0);
+    if (!(amt > 0)) return;
+    const signed = tipo === 'ABONO' ? amt : -amt;
+    const key = `${cia}::${ym}`;
+    const date = fecha || `${ym}-01`;
+    const cur = internalReconByKey.get(key);
+    if (cur) {
+      cur.net += signed;
+      if (date > cur.lastDate) cur.lastDate = date;
+    } else {
+      internalReconByKey.set(key, { net: signed, cia, lastDate: date });
+    }
+  };
+
   // 1) Histórico bancario — los mismos números que sumó el Dashboard.
   for (const statement of inputs.bankStatements) {
     if (
@@ -462,7 +489,10 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
           statement.cia,
           statement.cuenta,
         ).kind === 'internal'
-      ) continue;
+      ) {
+        accrueInternalResidual(statement.cia, ym, line.tipoMovimiento, line.importe, line.fechaOperacion);
+        continue;
+      }
       // Catálogo de cuentas: cuentas con role neutro (reserva, ahorro,
       // crédito, garantía, por_cancelar, saldo_retenido) son traspasos
       // internos por definición — se excluyen del modelo de planeación
@@ -475,7 +505,10 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
         tipoMovimiento: line.tipoMovimiento,
         importe: line.importe,
       });
-      if (catalogEnrich && catalogEnrich.entry.flow === 'neutro') continue;
+      if (catalogEnrich && catalogEnrich.entry.flow === 'neutro') {
+        accrueInternalResidual(statement.cia, ym, line.tipoMovimiento, line.importe, line.fechaOperacion);
+        continue;
+      }
       const isInflow = line.tipoMovimiento === 'ABONO';
       const movementKey = bankMovementKey(line);
       const enrichment = isInflow ? abonoEnrichmentByKey.get(movementKey) : undefined;
@@ -647,6 +680,42 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
         updatedAt: `${line.fechaOperacion}T00:00:00.000Z`,
       });
     }
+  }
+
+  // 1a) Re-emite el neto de traspasos internos descartados por (cia, mes).
+  //     Sin esto la caja acumulada de `movements[]` quedaba por debajo del
+  //     saldo bancario real (Σ ABONO − Σ CARGO internos no apareados). Un solo
+  //     movimiento neutro por bucket; categoría INTERNAL_RECON queda fuera de
+  //     los brutos de Ingresos/Egresos pero cuenta en la caja. status REAL +
+  //     fecha pasada → sobrevive el filtro de Base (real corto plazo, ≤ hoy).
+  for (const { net, cia, lastDate } of internalReconByKey.values()) {
+    if (Math.abs(net) < 1) continue;
+    const isInflow = net >= 0;
+    out.push({
+      id: `internal-recon:${cia}:${lastDate}`,
+      sourceSystem: 'BANK',
+      type: isInflow ? 'INFLOW' : 'OUTFLOW',
+      category: 'INTERNAL_RECON',
+      subcategory: 'Traspasos internos (neto)',
+      companyId: cia,
+      counterpartyType: 'BANK',
+      concept: 'Traspasos internos (neto)',
+      currency: 'MXN',
+      originalAmount: Math.abs(net),
+      baseAmount: Math.abs(net),
+      projectedAmount: Math.abs(net),
+      actualDate: lastDate,
+      projectedDate: lastDate,
+      confidenceScore: 100,
+      confidenceBand: calculateConfidenceBand(100),
+      forecastMethod: 'RULE',
+      ruleApplied: 'Reconciliación neta de traspasos internos vs saldo bancario',
+      status: 'REAL',
+      lockState: 'LOCKED',
+      comments: ['Neto de transferencias entre cuentas propias que la detección no pudo aparear individualmente. Ancla la caja al saldo bancario real; no es un ingreso/egreso económico.'],
+      createdAt: `${lastDate}T00:00:00.000Z`,
+      updatedAt: `${lastDate}T00:00:00.000Z`,
+    });
   }
 
   // 1b) Histórico desde cobranza JDE. Cuando el banco no cubre meses

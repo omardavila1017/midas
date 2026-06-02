@@ -418,6 +418,59 @@ describe('canonicalProjection IVA metadata', () => {
     expect(sumOutflows).toBe(aprilDashboard?.expense ?? 0);
   });
 
+  it('re-emits the net of ASYMMETRIC internal transfers so cash reconciles to the bank', () => {
+    // Un traspaso interno cuya contraparte NO está cargada (cuenta destino en
+    // otra empresa/Bajío fuera del dataset): se detecta por leyenda y se
+    // descarta, pero su pata gemela nunca llega. Sin reconciliación la caja
+    // queda 30k por debajo del banco real. El movimiento INTERNAL_RECON
+    // devuelve ese neto a la caja sin re-inflar los brutos.
+    const bankStatements: BankAccountStatement[] = [
+      bankStatement({
+        cia: '00001',
+        cuenta: 'CTA-A',
+        saldoInicial: 0,
+        movimientos: [
+          // Interno (leyenda) sin contraparte cargada → descartado, residual +30k.
+          bankMovement({ cia: '00001', cuenta: 'CTA-A', tipoMovimiento: 'ABONO', importe: 30_000, fechaOperacion: '2026-04-10', concepto: 'TRASPASO REF 99' }),
+          // Cobro real → INFLOW.
+          bankMovement({ cia: '00001', cuenta: 'CTA-A', tipoMovimiento: 'ABONO', importe: 10_000, fechaOperacion: '2026-04-15', concepto: 'Cobro cliente real' }),
+          // Pago real → OUTFLOW.
+          bankMovement({ cia: '00001', cuenta: 'CTA-A', tipoMovimiento: 'CARGO', importe: 5_000, fechaOperacion: '2026-04-12', concepto: 'Disposicion folio 7001' }),
+        ],
+      }),
+    ];
+
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements,
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate: '2026-04-22',
+    });
+
+    const recon = canonical.movements.filter((m) => m.category === 'INTERNAL_RECON');
+    expect(recon).toHaveLength(1);
+    expect(recon[0]?.type).toBe('INFLOW');
+    expect(recon[0]?.projectedAmount).toBe(30_000);
+    // El residual sobrevive el filtro de Base (real corto plazo).
+    expect(isRealShortTermApiMovement(recon[0]!)).toBe(true);
+
+    // Reconciliación: el neto de TODOS los movimientos REAL (incluido el
+    // recon) debe igualar el neto real del banco (30k traspaso + 10k − 5k = 35k).
+    const real = canonical.movements.filter(
+      (m) => m.status === 'REAL' && m.projectedDate?.startsWith('2026-04'),
+    );
+    const netCash = real.reduce(
+      (s, m) => s + (m.type === 'INFLOW' ? m.projectedAmount : -m.projectedAmount),
+      0,
+    );
+    expect(netCash).toBe(35_000);
+  });
+
   it('labels unidentified bank CARGOs per origin account instead of one collapsed row', () => {
     // Dos CARGOs sin cruce a pago/proveedor ni patrón fiscal, en dos cuentas
     // distintas. Antes ambos caían a un counterpartyName constante

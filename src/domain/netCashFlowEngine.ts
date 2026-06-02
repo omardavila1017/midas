@@ -381,22 +381,43 @@ export function movementHashKey(
 }
 
 /**
+ * Ventana (en días) dentro de la cual un CARGO y su ABONO gemelo se
+ * consideran el mismo traspaso interno aunque no liquiden el mismo día.
+ *
+ * Por qué existe: un traspaso entre cuentas propias muchas veces NO cae el
+ * mismo día en ambas patas — SPEI liquida en T+1, los fines de semana
+ * empujan la contraparte al lunes, y los cortes de mes desfasan la
+ * operación. Con el criterio anterior (mismo día exacto) esas patas
+ * quedaban huérfanas: el CARGO se contaba como "Egreso bancario sin
+ * identificar" y su ABONO lo absorbía el filtro `opaque-income`. Resultado:
+ * egresos inflados sin su ingreso compensatorio → la caja proyectada se iba
+ * a negativo artificialmente. Ampliar la ventana cierra esa asimetría.
+ *
+ * Seguridad: el pareo es SIMÉTRICO — sólo marca un CARGO como interno si
+ * existe un ABONO del MISMO importe (al centavo) en OTRA cuenta del grupo
+ * dentro de la ventana, y marca AMBOS. Por construcción el flujo NETO no
+ * cambia al remover un par (−X y +X se cancelan), así que un eventual falso
+ * positivo nunca altera la trayectoria de caja; sólo limpia los brutos.
+ */
+const PAIR_MATCH_WINDOW_DAYS = 3;
+
+/**
  * Recorre todos los movimientos y devuelve el Set de llaves que parecen ser
- * traspasos internos pareados por monto.
+ * traspasos internos pareados por monto, permitiendo desfase de días entre
+ * las dos patas (ver `PAIR_MATCH_WINDOW_DAYS`).
  *
- * Criterio: en (fechaOperacion, importe) — sin importar la cia — el bucket
- * contiene K CARGOs y K ABONOs (mismo número de cada lado, K ≥ 1) y ninguna
- * cuenta aparece simultáneamente como origen y destino. En ese caso se
- * marcan TODOS los movimientos del bucket como pair-matched.
+ * Criterio: se agrupan los movimientos por importe (sin importar la cia —
+ * todas las cuentas de `statements` pertenecen al grupo). Dentro de cada
+ * grupo se parean CARGOs con ABONOs en cuentas DISTINTAS, eligiendo siempre
+ * el ABONO más cercano en fecha (mismo día primero) dentro de la ventana.
+ * Cada ABONO se usa a lo más una vez; el sobrante queda como real.
  *
- * Por qué se relajó respecto a la versión anterior:
- *   - La cia ya no participa en la llave: todas las cuentas de `statements`
- *     pertenecen al grupo, así que un CARGO en cia A y un ABONO en cia B
- *     del mismo grupo es un traspaso interno legítimo.
- *   - Se permite N-a-N (no sólo 1-a-1) para no perder días con varios
- *     traspasos del mismo monto. La asimetría de conteos (p.ej. 2 CARGOs +
- *     1 ABONO) sigue descartando el bucket completo, evitando confundir un
- *     ingreso real con un traspaso.
+ * Por qué greedy-por-cercanía:
+ *   - Se permite N-a-N para no perder días con varios traspasos del mismo
+ *     monto. La asimetría de conteos (p.ej. 2 CARGOs + 1 ABONO) sólo parea
+ *     min(K,N), dejando el sobrante como real.
+ *   - "Mismo día" sigue siendo el match más fuerte (distancia 0 gana), así
+ *     que el comportamiento previo es un subconjunto del nuevo.
  */
 export function buildPairMatchedKeys(
   statements: readonly BankAccountStatement[] | undefined,
@@ -408,7 +429,10 @@ export function buildPairMatchedKeys(
     key: string;
     cuenta: string;
     tipo: 'ABONO' | 'CARGO' | string;
+    dayMs: number;
   };
+  // Agrupado por importe únicamente; la proximidad de fecha se resuelve con
+  // la ventana al momento de parear.
   const buckets = new Map<string, Entry[]>();
 
   for (const acc of statements) {
@@ -419,17 +443,26 @@ export function buildPairMatchedKeys(
       if (!mov.fechaOperacion || !mov.tipoMovimiento) continue;
       const importe = Number(mov.importe);
       if (!Number.isFinite(importe) || importe <= 0) continue;
-      const bucketKey = `${mov.fechaOperacion}::${importe}`;
-      const list = buckets.get(bucketKey);
+      const iso = parseDate(mov.fechaOperacion);
+      if (!iso) continue;
+      const dayMs = new Date(iso + 'T00:00:00Z').getTime();
+      if (Number.isNaN(dayMs)) continue;
+      // Llave de importe normalizada a centavos para evitar que diferencias
+      // de punto flotante separen montos que son el mismo peso.
+      const amountKey = String(Math.round(importe * 100));
+      const list = buckets.get(amountKey);
       const entry: Entry = {
         key: movementHashKey(cia, cuenta, mov),
         cuenta,
         tipo: mov.tipoMovimiento,
+        dayMs,
       };
       if (list) list.push(entry);
-      else buckets.set(bucketKey, [entry]);
+      else buckets.set(amountKey, [entry]);
     }
   }
+
+  const windowMs = PAIR_MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
   for (const list of buckets.values()) {
     if (list.length < 2) continue;
@@ -437,30 +470,36 @@ export function buildPairMatchedKeys(
     const abonos = list.filter(e => e.tipo === 'ABONO');
     if (cargos.length === 0 || abonos.length === 0) continue;
 
-    // Greedy pairing across distinct cuentas. Permite cardinalidad asimétrica
-    // (K CARGOs + N ABONOs, K ≠ N): se parean min(K,N) movimientos siempre
-    // que cada par esté en cuentas distintas. El sobrante queda como real.
-    // Orden determinista por (cuenta, key) para que la elección de cuáles
-    // se marcan no dependa del orden de iteración.
+    // Orden determinista por (fecha, cuenta, key) para que la elección de
+    // cuáles se marcan no dependa del orden de iteración.
     const sortedCargos = [...cargos].sort((a, b) =>
-      a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
+      a.dayMs - b.dayMs || a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
     );
     const sortedAbonos = [...abonos].sort((a, b) =>
-      a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
+      a.dayMs - b.dayMs || a.cuenta.localeCompare(b.cuenta) || a.key.localeCompare(b.key),
     );
     const usedAbono = new Set<number>();
     for (const cargo of sortedCargos) {
-      let matchedIdx = -1;
+      // Elige el ABONO no usado más cercano en fecha, en cuenta distinta,
+      // dentro de la ventana. Mismo día (distancia 0) es el match óptimo.
+      let bestIdx = -1;
+      let bestDist = Infinity;
       for (let i = 0; i < sortedAbonos.length; i++) {
         if (usedAbono.has(i)) continue;
-        if (sortedAbonos[i].cuenta === cargo.cuenta) continue;
-        matchedIdx = i;
-        break;
+        const ab = sortedAbonos[i];
+        if (ab.cuenta === cargo.cuenta) continue;
+        const dist = Math.abs(ab.dayMs - cargo.dayMs);
+        if (dist > windowMs) continue;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+          if (dist === 0) break;
+        }
       }
-      if (matchedIdx === -1) continue;
-      usedAbono.add(matchedIdx);
+      if (bestIdx === -1) continue;
+      usedAbono.add(bestIdx);
       out.add(cargo.key);
-      out.add(sortedAbonos[matchedIdx].key);
+      out.add(sortedAbonos[bestIdx].key);
     }
   }
 

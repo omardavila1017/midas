@@ -132,7 +132,7 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
   // may appear from the FIRST day of the current month forward; anything
   // earlier must be real bank/cobranza/GL (status REAL/EXECUTED). This keeps
   // the rolling caja through past months equal to what actually hit the bank
-  // (Cobranza real), so Planeación's caja final stays consistent with the
+  // (Cobranza real), so Planeación's caja final stays consistent con el
   // cash-flow module. Past-dated projections only leak when a previous month
   // lacks bank coverage and the canonical classifies it as non-historical.
   // Applies to BOTH Planeación and Proyección (shared pipeline). Base is
@@ -148,9 +148,7 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
 
   const movementsBeforeAdjust = isBase
     ? args.sourceMovements.filter(
-      (movement) =>
-        isRealShortTermApiMovement(movement) &&
-        effectiveMovementDate(movement) <= args.today,
+      (movement) => isRealShortTermApiMovement(movement) && effectiveMovementDate(movement) <= args.today,
     )
     : [...nonBaseSource, ...manualMovements];
 
@@ -223,11 +221,20 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
       bajioStatements: args.bajioStatements ?? [],
     });
 
+  // Las obligaciones (impuestos, convenio, fideicomiso) son compromisos hacia
+  // adelante. Su porción pasada ya está realizada en el banco (la muestra el
+  // histórico real), así que inyectarlas en meses cerrados duplicaría contra
+  // el banco y desviaría el histórico de Base. Se recortan al mes en curso en
+  // adelante (mismo corte que `nonBaseSource`) para que el pasado quede
+  // idéntico entre escenarios. Sin esto, p.ej. el fideicomiso DINA (~$14.4M
+  // mensual) se inyectaba en meses cerrados e inflaba el histórico de Aprobado.
+  const futureObligations = (ms: FinancialMovement[]) =>
+    ms.filter((m) => effectiveMovementDate(m) >= currentMonthStart);
   const movementsWithTreasuryRules = [
     ...adjustedMovements,
-    ...taxMovements,
-    ...convenioMovements,
-    ...fideicomisoMovements,
+    ...futureObligations(taxMovements),
+    ...futureObligations(convenioMovements),
+    ...futureObligations(fideicomisoMovements),
   ];
   const supplierSchedule = scheduleSupplierPaymentsByScore({
     movements: movementsWithTreasuryRules,

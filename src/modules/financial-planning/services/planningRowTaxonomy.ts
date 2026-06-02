@@ -37,6 +37,7 @@ function resolveProviderScore(
 }
 
 export const UNIDENTIFIED_BANK_OUTFLOW_BUCKET = 'Egresos bancarios sin identificar';
+export const INTERNAL_RECON_BUCKET = 'Traspasos internos (neto)';
 
 export const OUTFLOW_BUCKET_ORDER = [
   'Flota',
@@ -52,6 +53,7 @@ export const OUTFLOW_BUCKET_ORDER = [
   'CAPEX',
   'OPEX',
   UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
+  INTERNAL_RECON_BUCKET,
   'Manual',
 ];
 
@@ -64,6 +66,7 @@ export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   CAPEX: 'CAPEX',
   OPEX: 'OPEX',
   TRANSFER: UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
+  INTERNAL_RECON: INTERNAL_RECON_BUCKET,
   MANUAL: 'Manual',
 };
 
@@ -75,11 +78,13 @@ const INCOME_BUCKETS = new Set([
   'Reserva',
   'Turimex LLC',
   'Viajes Especiales',
+  INTERNAL_RECON_BUCKET,
   'Otros ingresos',
 ]);
 
 function inflowBucketFor(movement: FinancialMovement): string {
   if (movement.type !== 'INFLOW') return '';
+  if (movement.category === 'INTERNAL_RECON') return INTERNAL_RECON_BUCKET;
   // El bucket de ingreso lo decide `subcategory` (ya resuelto en el motor
   // canónico: cliente/factura manda para cobranza, cuenta bancaria sólo para
   // ABONOs sin cruce). NO re-derivar desde businessUnitId del banco.
@@ -199,6 +204,7 @@ const CATEGORY_BUCKET_LABEL: Record<FinancialMovementCategory, string> = {
   CAPEX: 'CAPEX',
   OPEX: 'OPEX',
   TRANSFER: UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
+  INTERNAL_RECON: INTERNAL_RECON_BUCKET,
   MANUAL: 'Manual',
 };
 

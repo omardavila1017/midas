@@ -10,6 +10,11 @@ export type FinancialMovementCategory =
   | 'CAPEX'
   | 'OPEX'
   | 'TRANSFER'
+  // Neto de traspasos entre cuentas propias que la detección de internos no
+  // pudo aparear individualmente. Ancla la caja al saldo bancario real sin
+  // re-inflar los brutos. Ver canonicalProjection (emisión) + netCashFlowEngine
+  // (detección). NO es un ingreso/egreso económico — es reconciliación.
+  | 'INTERNAL_RECON'
   | 'MANUAL';
 
 export type FinancialCounterpartyType =
