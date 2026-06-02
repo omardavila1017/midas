@@ -76,7 +76,6 @@ const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planni
 // const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
 const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
-const ConciliacionDashboard = lazy(() => import('./components/ConciliacionDashboard'));
 const KpisObjectivesDashboard = lazy(() => import('./modules/kpis-objectives/pages/KpisObjectivesDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
@@ -97,7 +96,7 @@ import {
   HandCoins, ChevronRight, BookUser, TrendingUp,
   Receipt, Wallet, FolderOpen,
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
-  Snowflake, AlertTriangle, GitCompareArrows, Target,
+  Snowflake, AlertTriangle, Target,
   type LucideIcon,
 } from 'lucide-react';
 import { clearAllMidasStorage } from './domain/storageRegistry';
@@ -291,7 +290,6 @@ const RECONCILIATION_TABS = new Set<TabId>([
   'financialProjection',
   'financialPlanning',
   'taxes',
-  'conciliacion',
 ]);
 
 type DatasetKey = 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'banks' | 'auxiliar';
@@ -310,7 +308,6 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   financialProjection: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'],
   financialPlanning: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'],
   taxes: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'auxiliar'],
-  conciliacion: ['cobranza', 'banks', 'pagos', 'cxp', 'auxiliar'],
   providers: [],
   clients: [],
   kpisObjectives: ['cxp', 'cobranza', 'banks'],
@@ -319,7 +316,7 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
 const KEEP_ALIVE_TABS = new Set<TabId>(['financialProjection', 'financialPlanning']);
 
 
-type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'conciliacion' | 'objetivos';
+type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'objetivos';
 
 /**
  * Section + tab order is the canonical sidebar ordering, grouped by money flow.
@@ -338,7 +335,6 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: s
   { id: 'porPagar',   label: 'Por Pagar',           icon: CreditCard, description: 'CXP, órdenes, pagos, nómina e impuestos' },
   { id: 'cobranza',   label: 'Cobranza',            icon: HandCoins,  description: 'Flujo neto, cobranza y compromisos' },
   { id: 'catalogos',  label: 'Catálogos',           icon: BookUser,   description: 'Clientes, proveedores y bancos' },
-  { id: 'conciliacion', label: 'Conciliación',      icon: GitCompareArrows, description: 'KPIs de cruce banco ↔ cobranza y pagos' },
   { id: 'objetivos',  label: 'Objetivos',           icon: Target,     description: 'KPIs y metas con seguimiento' },
 ];
 
@@ -365,9 +361,6 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'providers', label: 'Proveedores',  icon: Users },
     { id: 'bancos',    label: 'Bancos',       icon: Landmark },
   ],
-  conciliacion: [
-    { id: 'conciliacion', label: 'Conciliación', icon: GitCompareArrows },
-  ],
   objetivos: [
     { id: 'kpisObjectives', label: 'KPIs y Objetivos', icon: Target },
   ],
@@ -378,7 +371,6 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   cxp: 'porPagar', compras: 'porPagar', pagos: 'porPagar', payroll: 'porPagar', taxes: 'porPagar',
   netflow: 'cobranza', collections: 'cobranza', concursoMercantil: 'cobranza', fideicomiso: 'cobranza',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
-  conciliacion: 'conciliacion',
   kpisObjectives: 'objetivos',
 };
 
@@ -387,7 +379,6 @@ const DEFAULT_TAB: Record<SectionId, TabId> = {
   porPagar: 'cxp',
   cobranza: 'netflow',
   proyeccion: 'financialProjection',
-  conciliacion: 'conciliacion',
   objetivos: 'kpisObjectives',
 };
 
@@ -4650,14 +4641,6 @@ export default function App() {
                   selectedCia={selectedCia}
                   onEnsureBankCoverage={ensureBankCoverageForCollections}
                   bankCoverageLoading={bankCoverageLoading}
-                />
-              </Suspense>
-            )}
-            {activeTab === 'conciliacion' && (
-              <Suspense fallback={<LazyTabFallback label="Conciliación" />}>
-                <ConciliacionDashboard
-                  reconciliation={auxiliarReconciliation}
-                  companies={companies}
                 />
               </Suspense>
             )}
