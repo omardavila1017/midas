@@ -191,6 +191,28 @@ describe('reconcileAuxiliar', () => {
     expect(conf?.flujo).toBe('ingreso');
   });
 
+  it('classifies egresos with tipoPago/noPago as pago even when No_Factura is populated', () => {
+    const res = reconcileAuxiliar(
+      [glLine({
+        importe: -1160,
+        tipoDocto: 'PV',
+        noFactura: 'PV900',
+        tipoPago: 'PV',
+        noPago: '900',
+        nombre: 'Proveedor Pago',
+      })],
+      [statement([bankLine({ tipoMovimiento: 'CARGO', importe: 1160 })])],
+    );
+
+    expect(res.lines[0].source).toMatchObject({
+      kind: 'pago',
+      ref: 'PV900',
+      contraparte: 'Proveedor Pago',
+    });
+    expect(res.sourceConfirmation.get('pago:00042::PV900')?.confirmed).toBe(true);
+    expect(res.sourceConfirmation.get('factura:00042::PV900')?.confirmed).toBe(true);
+  });
+
   it('empty result has zeroed summary', () => {
     const empty = emptyAuxiliarReconResult();
     expect(empty.lines).toHaveLength(0);

@@ -253,6 +253,13 @@ export interface ComprasToPurchaseReceiptsOptions {
    */
   excludePastUnexecuted?: boolean;
   /**
+   * Si true, conserva OCs CONFIRMED aunque su fecha de pago proyectada esté
+   * en el pasado. Útil para Impuestos: AuxiliarContable puede confirmar que
+   * la OC ya se pagó y Compras aporta la tasa fiscal para IVA acreditable.
+   * Default false para no inflar la proyección de caja futura.
+   */
+  includePastConfirmed?: boolean;
+  /**
    * Contexto disponible para callers que necesitan aplicar la regla anterior
    * con trazabilidad. El adapter no emite OCs pasadas desde compras para evitar
    * doble conteo contra CXP/PagoProveedor.
@@ -310,7 +317,7 @@ export function comprasToPurchaseReceipts(
         if (eff > 0) dueDate = addDays(r.fechaRecepcion, eff);
       }
       if (options.excludePastUnexecuted && isPastPaymentGrace(dueDate, asOfDate)) continue;
-      if (!options.excludePastUnexecuted && dueDate < asOfDate) continue;
+      if (!options.excludePastUnexecuted && !options.includePastConfirmed && dueDate < asOfDate) continue;
       const record = buildRecord(r, dueDate, 'CONFIRMED');
       if (record) out.push(record);
     } else if (includeProjected && stats && r.fechaPedido) {

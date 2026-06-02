@@ -72,8 +72,7 @@ const CollectionProjection = lazy(() => import('./components/CollectionProjectio
 const FideicomisoDashboard = lazy(() => import('./components/FideicomisoDashboard'));
 const FinancialProjectionDashboard = lazy(() => import('./modules/financial-projection/pages/FinancialProjectionDashboard'));
 const FinancialPlanningDashboard = lazy(() => import('./modules/financial-planning/pages/FinancialPlanningDashboard'));
-// Módulo de Impuestos en construcción — render deshabilitado (ver pestaña 'taxes' abajo).
-// const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
+const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
 const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
 const KpisObjectivesDashboard = lazy(() => import('./modules/kpis-objectives/pages/KpisObjectivesDashboard'));
@@ -348,7 +347,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'compras', label: 'Órdenes de Compras',  icon: FolderOpen },
     { id: 'pagos',   label: 'Pagos',               icon: CreditCard },
     { id: 'payroll', label: 'Nómina',              icon: Users },
-    { id: 'taxes',   label: 'Impuestos (Bajo construcción)', icon: Landmark },
+    { id: 'taxes',   label: 'Impuestos', icon: Landmark },
   ],
   cobranza: [
     { id: 'netflow',           label: 'Flujo Neto',        icon: Wallet },
@@ -1388,6 +1387,49 @@ export default function App() {
       });
     },
     [isBooted, comprasForProjection, cxpRecordsDeferred, nonInternalPagoProveedorRecords],
+  );
+
+  const purchaseReceiptsForTaxes = useMemo(
+    () => {
+      if (!isBooted) return [];
+      const today = todayISO();
+      const fiscalYearStart = `${today.slice(0, 4)}-01-01`;
+      const paidAuxOcKeys = new Set<string>();
+      for (const [key, confirmation] of auxiliarReconciliation.sourceConfirmation) {
+        if (!confirmation.confirmed || confirmation.flujo !== 'egreso') continue;
+        if (!key.startsWith('oc:')) continue;
+        paidAuxOcKeys.add(key.slice('oc:'.length));
+      }
+      for (const line of auxiliarReconciliation.lines) {
+        if (line.flujo !== 'egreso' || line.source.kind !== 'oc') continue;
+        if (
+          line.matchTier !== 'jde-reconciled'
+          && line.matchTier !== 'exact'
+          && line.matchTier !== 'tolerance'
+          && line.matchTier !== 'cross-account'
+        ) continue;
+        paidAuxOcKeys.add(`${line.cia}::${line.source.ref}`);
+      }
+      const comprasFiscalSlice = comprasRecordsDeferred.filter((record) => {
+        const pay = record.fechaPagoProyectada ? String(record.fechaPagoProyectada).slice(0, 10) : '';
+        const receipt = record.fechaRecepcion ? String(record.fechaRecepcion).slice(0, 10) : '';
+        const order = record.fechaPedido ? String(record.fechaPedido).slice(0, 10) : '';
+        const paidByAux = record.noOrden ? paidAuxOcKeys.has(`${record.cia}::${record.noOrden}`) : false;
+        return (pay && pay >= fiscalYearStart)
+          || (receipt && receipt >= fiscalYearStart)
+          || paidByAux
+          || (!pay && order && order >= fiscalYearStart);
+      });
+      return comprasToPurchaseReceipts(comprasFiscalSlice, {
+        asOfDate: today,
+        includeProjected: false,
+        excludePastUnexecuted: false,
+        includePastConfirmed: true,
+        cxpRecords: cxpRecordsDeferred,
+        pagoProveedorRecords: nonInternalPagoProveedorRecords,
+      });
+    },
+    [isBooted, auxiliarReconciliation, comprasRecordsDeferred, cxpRecordsDeferred, nonInternalPagoProveedorRecords],
   );
 
   // Promedio de gasto por proveedor en los últimos 3 meses calendario,
@@ -4511,22 +4553,26 @@ export default function App() {
             ) : (
               <>
             {activeTab === 'taxes' && (
-              // Módulo de Impuestos temporalmente deshabilitado — en construcción.
-              // El TaxDashboard sigue alimentando Planeación/Proyección a través de
-              // canonicalProjection; solo se oculta la pestaña dedicada. Para
-              // reactivarla, restaurar el render de <TaxDashboard /> (ver historial git).
-              <div className="flex flex-col items-center justify-center text-center py-24 px-6">
-                <div className="flex items-center justify-center w-16 h-16 rounded-full bg-amber-100 text-amber-600 mb-6">
-                  <Landmark className="w-8 h-8" />
-                </div>
-                <h2 className="text-xl font-semibold text-foreground mb-2">
-                  Impuestos — Bajo construcción
-                </h2>
-                <p className="text-sm text-muted-foreground max-w-md">
-                  Este módulo no está disponible por el momento. Estamos trabajando
-                  en él y volverá a estar accesible próximamente.
-                </p>
-              </div>
+              <Suspense fallback={<LazyTabFallback label="Impuestos" />}>
+                <TaxDashboard
+                  companyCode={selectedCia}
+                  bankStatements={accountableBankStatements}
+                  clients={clients}
+                  providers={providers}
+                  cxpRecords={cxpRecords}
+                  cobranzaRecords={cobranzaRecords}
+                  cobranzaPayments={cobranzaPayments}
+                  cxpPaymentCoverage={paymentReconciliation.cxpCoverage}
+                  paymentMatches={paymentReconciliation.paymentMatches}
+                  auxiliarReconciliation={auxiliarReconciliation}
+                  purchaseReceipts={purchaseReceiptsForTaxes}
+                  projectionPurchaseReceipts={purchaseReceiptsFromCompras}
+                  payrollCosts={nominaRecords}
+                  assumptions={assumptions}
+                  budget={null}
+                  startingBalance={undefined}
+                />
+              </Suspense>
             )}
             {activeTab === 'payroll' && (
               <Suspense fallback={<LazyTabFallback label="Nómina" />}>

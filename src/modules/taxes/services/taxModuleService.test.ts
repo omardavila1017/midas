@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
-import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
+import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import type { AuxiliarReconLine, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
-import type { BankAccountStatement, BankStatementLine, CobranzaPayment } from '../../../services/jdeTypes';
+import type { BankAccountStatement, BankStatementLine, CobranzaPayment, PagoProveedorRecord } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, PurchaseReceiptRecord, TaxObligation } from '../../shared-finance/types';
 import {
@@ -285,6 +285,258 @@ describe('taxModuleService', () => {
     expect(jun.realIva.ivaCreditable).toBe(0);
     expect(jun.forecastIva.ivaCreditable).toBeCloseTo(80);
     expect(jun.forecastIva.expenseLines[0].concept).toContain('Remanente proyectado');
+  });
+
+  it('keeps PagoProveedor CXP coverage when AuxiliarContable has non-invoice egreso lines', () => {
+    const cxp = cxpRecord({
+      cia: '00011',
+      noProveedor: 'P-PAGO',
+      nombre: 'Proveedor PagoProveedor',
+      noFactura: 'F-PAGO',
+      fechaProgramacionPago: '2026-06-10',
+      importeSubtotalPesos: 1000,
+      importeImpuestosPesos: 160,
+      importeBrutoPesos: 1160,
+      importePendientePesos: 1160,
+    });
+
+    const view = buildTaxDashboardView({
+      cxpRecords: [cxp],
+      cxpPaymentCoverage: new Map([[coverageKey(cxp), coverage(cxp, {
+        status: 'PAID',
+        totalPaidPesos: 1160,
+        payments: [{ noPago: 'PP-1', fechaPago: '2026-05-12', importe: 1160, tier: 'invoice-amount' }],
+      })]]),
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'PV-ONLY',
+          contraparte: 'Proveedor PagoProveedor',
+          bankDate: '2026-05-12',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'pago',
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-06-30',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCreditable).toBeCloseTo(160);
+    expect(may.realIva.expenseLines[0]).toMatchObject({
+      concept: 'Pago PP-1 · Factura F-PAGO · Proveedor PagoProveedor',
+      taxAmount: 160,
+      rateSource: 'JDE',
+    });
+  });
+
+  it('uses Auxiliar pago plus PaymentMatch CXP fields as real creditable IVA', () => {
+    const cxp = cxpRecord({
+      cia: '00011',
+      noProveedor: 'P-PAGO-CXP',
+      nombre: 'Proveedor pago CXP',
+      noFactura: 'F-PAGO-CXP',
+      fechaProgramacionPago: '2026-06-10',
+      importeSubtotalPesos: 1000,
+      importeImpuestosPesos: 160,
+      importeBrutoPesos: 1160,
+      importePendientePesos: 1160,
+    });
+    const payment = pagoProveedor({
+      cia: '00011',
+      tipoPago: 'PT',
+      noPago: '900',
+      claveProveedor: 'P-PAGO-CXP',
+      nombreProveedor: 'Proveedor pago CXP',
+      fechaPago: '2026-05-12',
+      importePesos: 1160,
+      comentarioPago: 'Pago factura F-PAGO-CXP',
+    });
+
+    const view = buildTaxDashboardView({
+      cxpRecords: [cxp],
+      paymentMatches: [paymentMatch(payment, [{ cxp, tier: 'invoice-amount', confidence: 0.96 }])],
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'PT900',
+          contraparte: 'Proveedor pago CXP',
+          bankDate: '2026-05-12',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'pago',
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-06-30',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCreditable).toBeCloseTo(160);
+    expect(may.realIva.expenseLines[0]).toMatchObject({
+      concept: 'Pago PT900 · Factura F-PAGO-CXP · Proveedor pago CXP',
+      taxBase: 1000,
+      taxAmount: 160,
+      rateSource: 'JDE',
+    });
+  });
+
+  it('uses Auxiliar pago plus PagoProveedor to find paid Compras receipts when CXP is gone', () => {
+    const payment = pagoProveedor({
+      cia: '00011',
+      tipoPago: 'PV',
+      noPago: '901',
+      claveProveedor: 'P-COMPRA',
+      nombreProveedor: 'Proveedor Compra pagada',
+      fechaPago: '2026-05-18',
+      importePesos: 1160,
+      comentarioPago: 'Pago factura F-COMPRA-901 OC-901',
+    });
+
+    const view = buildTaxDashboardView({
+      purchaseReceipts: [
+        purchaseReceipt({
+          cia: '00011',
+          noProveedor: 'P-COMPRA',
+          supplierName: 'Proveedor Compra pagada',
+          invoiceNo: 'F-COMPRA-901',
+          purchaseOrderNo: 'OC-901',
+          amountMxn: 1160,
+          totalAmount: 1160,
+          taxRate: 16,
+          taxRateCode: 'IVA16',
+          taxTreatment: 'IVA_CREDITABLE',
+          taxBaseAmount: 1000,
+          taxAmount: 160,
+        }),
+      ],
+      paymentMatches: [paymentMatch(payment, [])],
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'PV901',
+          contraparte: 'Proveedor Compra pagada',
+          bankDate: '2026-05-18',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'pago',
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCreditable).toBeCloseTo(160);
+    expect(may.realIva.expenseLines[0]).toMatchObject({
+      concept: 'OC pagada F-COMPRA-901 · Proveedor Compra pagada',
+      taxBase: 1000,
+      taxAmount: 160,
+      estimated: false,
+    });
+  });
+
+  it('keeps Auxiliar pago without fiscal document unclassified instead of inventing IVA', () => {
+    const payment = pagoProveedor({
+      cia: '00011',
+      tipoPago: 'PV',
+      noPago: '902',
+      claveProveedor: 'P-NO-CFDI',
+      nombreProveedor: 'Proveedor sin CFDI',
+      fechaPago: '2026-05-19',
+      importePesos: 1160,
+      comentarioPago: 'Pago sin CFDI fiscal',
+    });
+    const view = buildTaxDashboardView({
+      paymentMatches: [paymentMatch(payment, [])],
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'PV902',
+          contraparte: 'Proveedor sin CFDI',
+          bankDate: '2026-05-19',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'pago',
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCreditable).toBe(0);
+    expect(may.realIva.unclassifiedExpense).toBe(1160);
+    expect(may.realIva.unclassifiedLines[0]).toMatchObject({
+      concept: 'Pago proveedor sin desglose fiscal PV902',
+      taxAmount: 0,
+      estimated: false,
+    });
+  });
+
+  it('calculates real creditable IVA from paid purchase receipts when CXP is no longer open', () => {
+    const view = buildTaxDashboardView({
+      purchaseReceipts: [
+        purchaseReceipt({
+          cia: '00011',
+          noProveedor: 'P-OC',
+          supplierName: 'Proveedor OC pagada',
+          invoiceNo: 'F-OC-PAID',
+          purchaseOrderNo: 'OC-PAID',
+          amountMxn: 1160,
+          totalAmount: 1160,
+          taxRate: 16,
+          taxRateCode: 'IVA16',
+          taxTreatment: 'IVA_CREDITABLE',
+          taxBaseAmount: 1000,
+          taxAmount: 160,
+        }),
+      ],
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'OC-PAID',
+          contraparte: 'Proveedor OC pagada',
+          bankDate: '2026-05-22',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'oc',
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCreditable).toBeCloseTo(160);
+    expect(may.realIva.expenseLines[0]).toMatchObject({
+      concept: 'OC pagada F-OC-PAID · Proveedor OC pagada',
+      taxBase: 1000,
+      taxAmount: 160,
+      rateSource: 'JDE',
+      estimated: false,
+    });
   });
 
   it('REAL mode skips projected IVA from open CXP, clients, purchase receipts, budget and generic movements', () => {
@@ -713,6 +965,7 @@ describe('taxModuleService', () => {
       }),
     ]);
     const store = {
+      ...defaultTaxStore(),
       adjustments: [
         createTaxManualAdjustment({
           taxType: 'ISN',
@@ -721,14 +974,96 @@ describe('taxModuleService', () => {
           amount: 45,
         }),
       ],
-      obligations: [],
-      taxRateOverrides: [],
-      overdueBalance: 0,
     };
 
     const view = buildTaxDashboardView({ projection, store, today: '2026-06-01' });
     expect(view.periods[0].payrollBase).toBe(1000);
     expect(view.periods[0].isn).toBe(45);
+  });
+
+  it('calculates provisional ISR from collected income when fiscal coefficient is configured', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-ISR',
+          fechaCobro: '2026-05-10',
+          importeRecibo: 1160,
+          applications: [{
+            noFactura: 'RI-ISR',
+            importeCobrado: 1160,
+            importeOriginalFactura: 1160,
+            importeIvaFacturaOriginal: 160,
+            tasaIva: '16',
+          }],
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: {
+        ...defaultTaxStore(),
+        settings: {
+          isrProvisionalCoefficient: 0.10,
+          isrRate: 0.30,
+        },
+      },
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.isr.nominalIncome).toBeCloseTo(1000);
+    expect(may.isr.estimatedTaxableProfit).toBeCloseTo(100);
+    expect(may.isr.calculated).toBeCloseTo(30);
+    expect(may.isr.payable).toBeCloseTo(30);
+    expect(may.total).toBeCloseTo(190);
+    expect(may.obligations.some((obligation) => obligation.taxType === 'ISR')).toBe(true);
+  });
+
+  it('detects real ISR paid from bank statements and reduces provisional ISR payable', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-ISR-BANK',
+          fechaCobro: '2026-05-10',
+          importeRecibo: 1160,
+          applications: [{
+            noFactura: 'RI-ISR-BANK',
+            importeCobrado: 1160,
+            importeOriginalFactura: 1160,
+            importeIvaFacturaOriginal: 160,
+            tasaIva: '16',
+          }],
+        }),
+      ],
+      bankStatements: [bank([bankLine({
+        fechaOperacion: '2026-05-17',
+        concepto: 'PAGO ISR MAYO',
+        importe: 10,
+      })])],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: {
+        ...defaultTaxStore(),
+        settings: {
+          isrProvisionalCoefficient: 0.10,
+          isrRate: 0.30,
+        },
+      },
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.isr.calculated).toBeCloseTo(30);
+    expect(may.isr.paid).toBeCloseTo(10);
+    expect(may.isr.payable).toBeCloseTo(20);
+    expect(may.isr.paidLines[0]).toMatchObject({
+      concept: 'Pago ISR · PAGO ISR MAYO',
+      sourceSystem: 'BANK',
+      taxAmount: 10,
+    });
   });
 
   it('detects IMSS from JDE-like movements and includes manual pending obligations', () => {
@@ -963,6 +1298,40 @@ function coverage(record: CXPRecord, patch: Omit<CxpPaymentCoverage, 'cxpKey'>):
   };
 }
 
+function pagoProveedor(patch: Partial<PagoProveedorRecord> = {}): PagoProveedorRecord {
+  return {
+    tipoPago: patch.tipoPago ?? 'PV',
+    noPago: patch.noPago ?? '900',
+    cia: patch.cia ?? '00011',
+    nombreCia: patch.nombreCia ?? 'Senda',
+    cuentaBancaria: patch.cuentaBancaria ?? 'BANAMEX',
+    cuentaBanco: patch.cuentaBanco ?? '123',
+    fechaPago: patch.fechaPago ?? '2026-05-12',
+    importePesos: patch.importePesos ?? 1160,
+    moneda: patch.moneda ?? 'MXN',
+    batchPago: patch.batchPago ?? 'B-PP',
+    claveProveedor: patch.claveProveedor ?? 'P-1',
+    rfcProveedor: patch.rfcProveedor ?? 'RFC010101',
+    nombreProveedor: patch.nombreProveedor ?? 'Proveedor IVA',
+    tipoBusqueda: patch.tipoBusqueda ?? '',
+    clasificacionProveedor: patch.clasificacionProveedor ?? '',
+    clasificacionProveedorFinanciera: patch.clasificacionProveedorFinanciera ?? '',
+    comentarioPago: patch.comentarioPago ?? '',
+  };
+}
+
+function paymentMatch(
+  payment: PagoProveedorRecord,
+  cxpMatches: PaymentMatch['cxpMatches'],
+): PaymentMatch {
+  return {
+    payment,
+    status: cxpMatches.length > 0 ? 'MATCHED_CXP_ONLY' : 'MATCHED_BANK_ONLY',
+    cxpMatches,
+    reason: 'test match',
+  };
+}
+
 function auxiliarResult(lines: AuxiliarReconLine[]): AuxiliarReconResult {
   return {
     lines,
@@ -1023,6 +1392,7 @@ function auxiliarLine(patch: {
   bankDate: string;
   importe: number;
   bankAmount?: number;
+  sourceKind?: AuxiliarReconLine['source']['kind'];
 }): AuxiliarReconLine {
   return {
     glKey: `${patch.cia}::aux::PV::${patch.noFactura}`,
@@ -1043,7 +1413,7 @@ function auxiliarLine(patch: {
     bankDate: patch.bankDate,
     bankAmount: patch.bankAmount,
     source: {
-      kind: 'factura',
+      kind: patch.sourceKind ?? 'factura',
       cia: patch.cia,
       ref: patch.noFactura,
       contraparte: patch.contraparte,

@@ -16,7 +16,7 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
-import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
+import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../../../formatters';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
@@ -52,6 +52,7 @@ import {
   upsertTaxRateOverride,
   upsertTaxObligation,
   type IvaPeriodDetail,
+  type TaxSettings,
   type TaxDashboardView,
   type TaxPeriodSummary,
   type TaxRateTarget,
@@ -71,7 +72,11 @@ interface Props {
   auxiliarReconciliation?: AuxiliarReconResult;
   /** Cobertura PagoProveedor → CXP para fechar IVA acreditable con pagos reales. */
   cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
+  /** PagoProveedor completo para resolver Auxiliar `pago` contra CXP/Compras. */
+  paymentMatches?: PaymentMatch[];
   purchaseReceipts?: PurchaseReceiptRecord[];
+  /** Rebanada ligera para el worker canónico; si se omite usa purchaseReceipts. */
+  projectionPurchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
@@ -79,7 +84,7 @@ interface Props {
 }
 
 type RangePreset = '90d' | 'eoy';
-type DetailTab = 'summary' | 'iva' | 'isn' | 'imss' | 'payments';
+type DetailTab = 'summary' | 'iva' | 'isr' | 'isn' | 'imss' | 'payments';
 type IvaLineMode = 'caused' | 'creditable' | 'paid';
 
 const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
@@ -113,7 +118,7 @@ export default function TaxDashboard(props: Props) {
   }, [taxStore]);
 
   const cacheProbeInput = useMemo(
-    () => ({ ...props, asOfDate: today }),
+    () => ({ ...props, purchaseReceipts: props.projectionPurchaseReceipts ?? props.purchaseReceipts, asOfDate: today }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       props.companyCode,
@@ -124,6 +129,7 @@ export default function TaxDashboard(props: Props) {
       props.cobranzaRecords,
       props.auxiliarReconciliation,
       props.purchaseReceipts,
+      props.projectionPurchaseReceipts,
       props.payrollCosts,
       props.assumptions,
       props.budget,
@@ -144,6 +150,7 @@ export default function TaxDashboard(props: Props) {
       assumptions: props.assumptions,
       cxpRecords: props.cxpRecords,
       cxpPaymentCoverage: props.cxpPaymentCoverage,
+      paymentMatches: props.paymentMatches,
       auxiliarReconciliation: props.auxiliarReconciliation,
       purchaseReceipts: props.purchaseReceipts,
       paidPurchaseOrderKeys: source?.paidPurchaseOrderKeys,
@@ -159,7 +166,7 @@ export default function TaxDashboard(props: Props) {
       today,
       ivaMode: 'REAL',
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.paymentMatches, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 
@@ -239,6 +246,11 @@ export default function TaxDashboard(props: Props) {
     setStatusMessage(`Tasa IVA actualizada a ${rate}%.`);
   };
 
+  const handleUpdateTaxSettings = (settings: TaxSettings) => {
+    setTaxStore((current) => ({ ...current, settings }));
+    setStatusMessage('Configuracion fiscal actualizada.');
+  };
+
   const resetView = () => {
     setPreset('eoy');
     setSelectedPeriod(today.slice(0, 7));
@@ -302,10 +314,12 @@ export default function TaxDashboard(props: Props) {
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <SegmentedControl label="Rango" value={preset} options={RANGE_PRESETS} onChange={setPreset} />
           <div className="ml-auto text-[12px] text-[var(--gray-500)]">
-            IVA por cobrado/pagado · vencimiento semilla día 17
+            IVA por cobrado/pagado · ISR provisional configurable · vencimiento día 17
           </div>
         </div>
       </section>
+
+      <TaxSettingsPanel settings={taxStore.settings} onChange={handleUpdateTaxSettings} />
 
       <TaxOperationalOverview view={view} today={today} />
 
@@ -540,9 +554,75 @@ const ADJUSTMENT_KIND_BY_TAX: Record<TaxType, Array<{ id: TaxManualAdjustment['k
     { id: 'IVA_PAID', label: 'IVA pagado' },
     { id: 'IVA_PAYABLE', label: 'IVA por pagar' },
   ],
+  ISR: [
+    { id: 'ISR_MANUAL', label: 'ISR provisional' },
+    { id: 'ISR_PAID', label: 'ISR pagado' },
+  ],
   ISN: [{ id: 'ISN_OVERRIDE', label: 'Override ISN' }],
   IMSS: [{ id: 'IMSS_MANUAL', label: 'IMSS manual' }],
 };
+
+function TaxSettingsPanel({
+  settings,
+  onChange,
+}: {
+  settings: TaxSettings;
+  onChange: (settings: TaxSettings) => void;
+}) {
+  const [coefficient, setCoefficient] = useState(String((settings.isrProvisionalCoefficient * 100).toFixed(2)));
+  const [rate, setRate] = useState(String((settings.isrRate * 100).toFixed(2)));
+
+  useEffect(() => {
+    setCoefficient(String((settings.isrProvisionalCoefficient * 100).toFixed(2)));
+    setRate(String((settings.isrRate * 100).toFixed(2)));
+  }, [settings.isrProvisionalCoefficient, settings.isrRate]);
+
+  const commit = () => {
+    const nextCoefficient = Number(coefficient) / 100;
+    const nextRate = Number(rate) / 100;
+    onChange({
+      isrProvisionalCoefficient: Number.isFinite(nextCoefficient) ? Math.max(0, Math.min(1, nextCoefficient)) : 0,
+      isrRate: Number.isFinite(nextRate) ? Math.max(0, Math.min(1, nextRate)) : 0.30,
+    });
+  };
+
+  return (
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-4 py-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-[260px] flex-1">
+          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Configuracion ISR</h2>
+          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
+            El pago provisional requiere coeficiente de utilidad fiscal. Si no existe, captura ISR manual.
+          </p>
+        </div>
+        <Field label="Coef. utilidad %">
+          <input
+            value={coefficient}
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            onChange={(event) => setCoefficient(event.target.value)}
+            onBlur={commit}
+            className={`${taxInputClass} text-right tabular-nums`}
+          />
+        </Field>
+        <Field label="Tasa ISR %">
+          <input
+            value={rate}
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            onChange={(event) => setRate(event.target.value)}
+            onBlur={commit}
+            className={`${taxInputClass} text-right tabular-nums`}
+          />
+        </Field>
+      </div>
+    </section>
+  );
+}
 
 function TaxForms({
   activePeriod,
@@ -633,6 +713,7 @@ function TaxForms({
             <Field label="Impuesto">
               <select value={taxType} onChange={(event) => setTaxType(event.target.value as TaxType)} className={taxInputClass}>
                 <option value="IVA">IVA</option>
+                <option value="ISR">ISR</option>
                 <option value="ISN">ISN</option>
                 <option value="IMSS">IMSS</option>
               </select>
@@ -661,6 +742,7 @@ function TaxForms({
             <Field label="Impuesto">
               <select value={obligationType} onChange={(event) => setObligationType(event.target.value as TaxType)} className={taxInputClass}>
                 <option value="IVA">IVA</option>
+                <option value="ISR">ISR</option>
                 <option value="ISN">ISN</option>
                 <option value="IMSS">IMSS</option>
               </select>
@@ -775,7 +857,7 @@ function OverdueBalanceSection({
             <span className="text-[18px] font-bold tabular-nums text-[var(--warning)]">{fmtCurrency(newPeriodTotal)}</span>
           </div>
           <div className="mt-0.5 flex items-center justify-between text-[11px] text-[var(--gray-400)]">
-            <span>Calculado (IVA+ISN+IMSS)</span>
+            <span>Calculado (IVA+ISR+ISN+IMSS)</span>
           </div>
         </div>
 
@@ -828,10 +910,10 @@ function TaxPeriodTable({
   onSelectPeriod: (period: string) => void;
   onInlineEdit: (period: string, taxType: TaxType, kind: TaxManualAdjustment['kind'], amount: number) => void;
 }) {
-  const [editingCell, setEditingCell] = useState<{ period: string; field: 'iva' | 'isn' | 'imss' } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ period: string; field: 'iva' | 'isr' | 'isn' | 'imss' } | null>(null);
   const [editValue, setEditValue] = useState('');
 
-  const startEdit = (period: string, field: 'iva' | 'isn' | 'imss', currentValue: number) => {
+  const startEdit = (period: string, field: 'iva' | 'isr' | 'isn' | 'imss', currentValue: number) => {
     setEditingCell({ period, field });
     setEditValue(String(Math.round(currentValue)));
   };
@@ -845,6 +927,7 @@ function TaxPeriodTable({
     }
     const kindMap: Record<string, { taxType: TaxType; kind: TaxManualAdjustment['kind'] }> = {
       iva: { taxType: 'IVA', kind: 'IVA_PAYABLE' },
+      isr: { taxType: 'ISR', kind: 'ISR_MANUAL' },
       isn: { taxType: 'ISN', kind: 'ISN_OVERRIDE' },
       imss: { taxType: 'IMSS', kind: 'IMSS_MANUAL' },
     };
@@ -860,15 +943,16 @@ function TaxPeriodTable({
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
         <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Obligaciones por periodo</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
-          Haz clic en un monto de IVA, ISN o IMSS para editarlo. Selecciona un periodo para ver su detalle.
+          Haz clic en un monto de IVA, ISR, ISN o IMSS para editarlo. Selecciona un periodo para ver su detalle.
         </p>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-[12px]">
+        <table className="w-full min-w-[980px] text-[12px]">
           <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             <tr>
               <th className="px-4 py-2.5">Periodo</th>
               <th className="px-4 py-2.5 text-right">IVA neto</th>
+              <th className="px-4 py-2.5 text-right">ISR</th>
               <th className="px-4 py-2.5 text-right">ISN</th>
               <th className="px-4 py-2.5 text-right">IMSS</th>
               <th className="px-4 py-2.5 text-right">Total</th>
@@ -893,6 +977,15 @@ function TaxPeriodTable({
                     editing={editingCell?.period === period.period && editingCell.field === 'iva'}
                     editValue={editValue}
                     onStartEdit={(e) => { e.stopPropagation(); startEdit(period.period, 'iva', period.ivaNet); }}
+                    onEditChange={setEditValue}
+                    onCommit={commitEdit}
+                    onCancel={cancelEdit}
+                  />
+                  <EditableCell
+                    value={period.isr.payable}
+                    editing={editingCell?.period === period.period && editingCell.field === 'isr'}
+                    editValue={editValue}
+                    onStartEdit={(e) => { e.stopPropagation(); startEdit(period.period, 'isr', period.isr.payable); }}
                     onEditChange={setEditValue}
                     onCommit={commitEdit}
                     onCancel={cancelEdit}
@@ -924,7 +1017,7 @@ function TaxPeriodTable({
             })}
             {view.periods.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-[12px] text-[var(--gray-400)]">Sin periodos fiscales visibles.</td>
+                <td colSpan={9} className="px-4 py-10 text-center text-[12px] text-[var(--gray-400)]">Sin periodos fiscales visibles.</td>
               </tr>
             )}
           </tbody>
@@ -1008,6 +1101,7 @@ function TaxPeriodDetail({
   const sourceCount = (tab: DetailTab) => {
     if (tab === 'summary') return period.obligations.length;
     if (tab === 'iva') return period.iva.incomeLines.length + period.iva.expenseLines.length + period.iva.paidLines.length;
+    if (tab === 'isr') return period.isr.incomeLines.length + period.isr.paidLines.length;
     if (tab === 'isn') return period.payrollLines.length;
     if (tab === 'imss') return period.imssLines.length;
     return period.obligations.length;
@@ -1021,8 +1115,9 @@ function TaxPeriodDetail({
       </div>
 
       {/* Summary mini-stats */}
-      <div className="grid grid-cols-3 gap-2 border-b border-[var(--gray-200)] px-4 py-3">
+      <div className="grid grid-cols-2 gap-2 border-b border-[var(--gray-200)] px-4 py-3 sm:grid-cols-4">
         <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
+        <MiniStat label="ISR" value={fmtCurrency(period.isr.payable)} />
         <MiniStat label="ISN (3%)" value={fmtCurrency(period.isn)} />
         <MiniStat label="IMSS" value={fmtCurrency(period.imss)} />
       </div>
@@ -1033,6 +1128,7 @@ function TaxPeriodDetail({
           options={[
             { id: 'summary' as const, label: 'Resumen' },
             { id: 'iva' as const, label: `IVA (${sourceCount('iva')})` },
+            { id: 'isr' as const, label: `ISR (${sourceCount('isr')})` },
             { id: 'isn' as const, label: `Nómina / ISN (${sourceCount('isn')})` },
             { id: 'imss' as const, label: `IMSS (${sourceCount('imss')})` },
             { id: 'payments' as const, label: `Pagos (${sourceCount('payments')})` },
@@ -1042,6 +1138,7 @@ function TaxPeriodDetail({
       </div>
       {detailTab === 'summary' && <PeriodOperationalSummary period={period} onApprovePayment={onApprovePayment} />}
       {detailTab === 'iva' && <IvaDetail iva={period.iva} onUpdateTaxRate={onUpdateTaxRate} />}
+      {detailTab === 'isr' && <IsrDetail period={period} />}
       {detailTab === 'isn' && <IsnDetail period={period} />}
       {detailTab === 'imss' && <ImssDetail period={period} />}
       {detailTab === 'payments' && (
@@ -1117,8 +1214,9 @@ function PeriodOperationalSummary({
           )}
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
+        <MiniStat label="ISR" value={fmtCurrency(period.isr.payable)} />
         <MiniStat label="ISN" value={fmtCurrency(period.isn)} />
         <MiniStat label="IMSS" value={fmtCurrency(period.imss)} />
       </div>
@@ -1142,7 +1240,9 @@ function IvaDetail({
   const empty = mode === 'caused'
     ? 'Sin facturas causadas en el periodo.'
     : mode === 'creditable'
-      ? 'Sin egresos acreditables en el periodo.'
+      ? iva.unclassifiedExpense > 0
+        ? `Sin egresos acreditables con desglose fiscal. Hay ${iva.unclassifiedLines.length} egresos pagados pendientes de clasificar por ${fmtCurrency(iva.unclassifiedExpense)}.`
+        : 'Sin egresos acreditables en el periodo.'
       : 'Sin pagos reales de IVA identificados en bancos.';
 
   return (
@@ -1176,6 +1276,7 @@ function IvaDetail({
       {(iva.unclassifiedIncome > 0 || iva.unclassifiedExpense > 0) && (
         <div className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-[var(--gray-50)] px-3 py-2 text-[11px] text-[var(--gray-500)]">
           Sin clasificar: {fmtCurrency(iva.unclassifiedIncome + iva.unclassifiedExpense)}
+          {iva.unclassifiedExpense > 0 ? ` · Egresos pagados sin desglose fiscal: ${fmtCurrency(iva.unclassifiedExpense)}` : ''}
         </div>
       )}
     </div>
@@ -1251,6 +1352,41 @@ function IvaLinesTable({
           </table>
         )}
       </div>
+    </div>
+  );
+}
+
+function IsrDetail({ period }: { period: TaxPeriodSummary }) {
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="Ingresos nominales" value={fmtCurrency(period.isr.nominalIncome)} />
+        <MiniStat label="Coeficiente utilidad" value={`${(period.isr.coefficient * 100).toFixed(2)}%`} />
+        <MiniStat label="Tasa ISR" value={`${(period.isr.rate * 100).toFixed(2)}%`} />
+        <MiniStat label="ISR calculado" value={fmtCurrency(period.isr.calculated)} />
+        <MiniStat label="ISR manual" value={fmtCurrency(period.isr.manual)} />
+        <MiniStat label="ISR pagado" value={fmtCurrency(period.isr.paid)} />
+        <MiniStat label="Por pagar" value={fmtCurrency(period.isr.payable)} />
+      </div>
+      {period.isr.coefficient <= 0 && period.isr.manual <= 0 && (
+        <div className="rounded-[var(--radius)] border border-[var(--warning)]/20 bg-[var(--warning-muted)] px-3 py-2 text-[11px] text-[var(--warning)]">
+          ISR automatico en cero: captura el coeficiente de utilidad fiscal o agrega ISR manual.
+        </div>
+      )}
+      <CollapsibleSourceLines
+        title={`Ingresos base ISR · ${period.isr.incomeLines.length}`}
+        lines={period.isr.incomeLines}
+        empty="Sin ingresos cobrados en el periodo para estimar ISR."
+        expanded
+        onToggle={() => {}}
+      />
+      <CollapsibleSourceLines
+        title={`Pagos ISR · ${period.isr.paidLines.length}`}
+        lines={period.isr.paidLines}
+        empty="Sin pagos reales de ISR detectados en banco o movimientos."
+        expanded={period.isr.paidLines.length > 0}
+        onToggle={() => {}}
+      />
     </div>
   );
 }

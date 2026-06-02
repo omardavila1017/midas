@@ -1,5 +1,5 @@
 import type { CXPRecord } from '../../../domain/persistence';
-import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
+import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import type { AuxiliarReconLine, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
@@ -37,6 +37,8 @@ export const TAX_STORE_CHANGED_EVENT = 'midas:taxes:changed';
 const LEGACY_IVA_ADJUSTMENTS_KEY = 'midas.financialProjection.taxAdjustments.v1';
 const LEGACY_OPERATING_SCENARIOS_KEY = 'midas.operating.scenarios.v1';
 const ISN_RATE = 0.03;
+const ISR_CORPORATE_RATE = 0.30;
+const DEFAULT_ISR_PROVISIONAL_COEFFICIENT = 0;
 const REGIMEN_601_IVA_RATE = 16;
 
 export type IvaMode = 'REAL' | 'FORECAST' | 'BOTH';
@@ -89,9 +91,20 @@ export interface TaxStore {
   adjustments: TaxManualAdjustment[];
   obligations: TaxObligation[];
   taxRateOverrides: TaxRateOverride[];
+  settings: TaxSettings;
   /** Saldo vencido acumulado de impuestos (no cubierto por los periodos visibles). */
   overdueBalance: number;
   migratedAt?: string;
+}
+
+export interface TaxSettings {
+  /**
+   * Coeficiente de utilidad del ultimo ejercicio fiscal. El ISR provisional de
+   * persona moral no se puede inferir de facturas; sin este dato queda en cero
+   * y se captura manualmente.
+   */
+  isrProvisionalCoefficient: number;
+  isrRate: number;
 }
 
 export type TaxRateOverrideTargetType = 'CLIENT' | 'PROVIDER' | 'CONCEPT';
@@ -152,6 +165,23 @@ export interface IvaPeriodDetail {
   unclassifiedLines: TaxSourceLine[];
 }
 
+export interface IsrPeriodDetail {
+  period: string;
+  dueDate: string;
+  nominalIncome: number;
+  coefficient: number;
+  rate: number;
+  estimatedTaxableProfit: number;
+  calculated: number;
+  manual: number;
+  paid: number;
+  payable: number;
+  status: TaxStatus;
+  paymentPlan: TaxPaymentPlanItem[];
+  incomeLines: TaxSourceLine[];
+  paidLines: TaxSourceLine[];
+}
+
 export interface TaxPeriodSummary {
   period: string;
   dueDate: string;
@@ -169,6 +199,7 @@ export interface TaxPeriodSummary {
   /** IVA proyectado/reserva: CXP abiertas, OCs, presupuesto y movimientos estimados. */
   forecastIva: IvaPeriodDetail;
   ivaMode: IvaMode;
+  isr: IsrPeriodDetail;
   payrollBase: number;
   payrollLines: TaxSourceLine[];
   imssLines: TaxSourceLine[];
@@ -182,6 +213,7 @@ export interface TaxDashboardView {
   totals: {
     ivaNet: number;
     isn: number;
+    isr: number;
     imss: number;
     total: number;
     /** Total incluyendo el saldo vencido arrastrado. */
@@ -194,7 +226,41 @@ export interface TaxDashboardView {
 }
 
 export function defaultTaxStore(): TaxStore {
-  return { adjustments: [], obligations: [], taxRateOverrides: [], overdueBalance: 0 };
+  return {
+    adjustments: [],
+    obligations: [],
+    taxRateOverrides: [],
+    settings: defaultTaxSettings(),
+    overdueBalance: 0,
+  };
+}
+
+function defaultTaxSettings(): TaxSettings {
+  return {
+    isrProvisionalCoefficient: DEFAULT_ISR_PROVISIONAL_COEFFICIENT,
+    isrRate: ISR_CORPORATE_RATE,
+  };
+}
+
+function normalizeTaxSettings(value: unknown): TaxSettings {
+  if (!value || typeof value !== 'object') return defaultTaxSettings();
+  const raw = value as Record<string, unknown>;
+  const coefficient = readAmount(raw.isrProvisionalCoefficient);
+  const rate = readAmount(raw.isrRate);
+  return {
+    isrProvisionalCoefficient: Number.isFinite(coefficient)
+      ? Math.max(0, Math.min(1, coefficient))
+      : DEFAULT_ISR_PROVISIONAL_COEFFICIENT,
+    isrRate: Number.isFinite(rate)
+      ? Math.max(0, Math.min(1, rate))
+      : ISR_CORPORATE_RATE,
+  };
+}
+
+function isDefaultTaxSettings(settings: TaxSettings | undefined): boolean {
+  const normalized = normalizeTaxSettings(settings);
+  return normalized.isrProvisionalCoefficient === DEFAULT_ISR_PROVISIONAL_COEFFICIENT
+    && normalized.isrRate === ISR_CORPORATE_RATE;
 }
 
 export function loadTaxStore(fallback: TaxStore = defaultTaxStore()): TaxStore {
@@ -218,6 +284,7 @@ export function saveTaxStore(store: TaxStore): void {
       store.adjustments.length === 0
       && store.obligations.length === 0
       && store.taxRateOverrides.length === 0
+      && isDefaultTaxSettings(store.settings)
       && store.overdueBalance <= 0
     ) {
       localStorage.removeItem(TAX_STORE_KEY);
@@ -283,7 +350,7 @@ export function createManualTaxObligation(input: {
     pendingAmount: Math.max(0, input.amount - paidAmount),
     dueDate: input.dueDate && isIsoDate(input.dueDate) ? input.dueDate : taxDueDate(input.period),
     paymentPlan: [],
-    risk: input.taxType === 'IMSS' ? 'LEGAL' : input.taxType === 'IVA' ? 'HIGH' : 'MEDIUM',
+    risk: taxRisk(input.taxType),
     comment: input.comment?.trim() || undefined,
     status: input.status ?? (input.amount > 0 ? 'PENDING' : 'PROJECTED'),
   };
@@ -375,6 +442,7 @@ export function buildTaxDashboardView(params: {
   assumptions?: CashFlowAssumptions;
   cxpRecords?: CXPRecord[];
   cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
+  paymentMatches?: PaymentMatch[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   /**
    * OCs cuya salida ya cruzó banco vía AuxiliarContable. Evita doble-conteo
@@ -438,6 +506,20 @@ export function buildTaxDashboardView(params: {
       endDate,
       ensure: ensureReal,
     });
+    accumulateHistoricIsrPaidFromBankStatements({
+      bankStatements: params.bankStatements ?? [],
+      companyCode: params.companyCode,
+      startDate,
+      endDate,
+      ensure: ensureShared,
+    });
+    accumulateHistoricIsrPaidFromMovements({
+      movements,
+      hasDirectBankStatements: (params.bankStatements ?? []).length > 0,
+      startDate,
+      endDate,
+      ensure: ensureShared,
+    });
   }
 
   if (includeForecastIva) {
@@ -455,10 +537,14 @@ export function buildTaxDashboardView(params: {
     params.auxiliarReconciliation,
     params.cxpRecords ?? [],
   );
-  const cxpPaymentCoverage = params.auxiliarReconciliation
-    && params.auxiliarReconciliation.summary.totalLineas > 0
-    ? auxiliarCoverage
-    : params.cxpPaymentCoverage;
+  const auxiliarPagoCoverage = buildAuxiliarPagoCxpPaymentCoverage(
+    params.auxiliarReconciliation,
+    params.paymentMatches ?? [],
+  );
+  const cxpPaymentCoverage = mergeCxpPaymentCoverage(
+    params.cxpPaymentCoverage,
+    mergeCxpPaymentCoverage(auxiliarCoverage, auxiliarPagoCoverage),
+  );
 
   if (includeRealIva) {
     accumulateCxpIva({
@@ -474,6 +560,17 @@ export function buildTaxDashboardView(params: {
       includeOpenCxp: false,
       includeProjectedRemainder: false,
       allowEstimatedBreakdown: false,
+    });
+    accumulatePaidPurchaseReceiptIvaFromAuxiliar({
+      purchaseReceipts: params.purchaseReceipts ?? [],
+      auxiliarReconciliation: params.auxiliarReconciliation,
+      cxpRecords: params.cxpRecords ?? [],
+      cxpPaymentCoverage,
+      paymentMatches: params.paymentMatches ?? [],
+      companyCode: params.companyCode,
+      startDate,
+      endDate,
+      ensure: ensureReal,
     });
   }
 
@@ -546,6 +643,8 @@ export function buildTaxDashboardView(params: {
     if (adjustment.kind === 'IVA_CREDITABLE') row.manualIvaCreditable += adjustment.amount;
     if (adjustment.kind === 'IVA_PAID') row.ivaPaid += adjustment.amount;
     if (adjustment.kind === 'IVA_PAYABLE') row.manualIvaPayable += adjustment.amount;
+    if (adjustment.kind === 'ISR_MANUAL') row.manualIsr += adjustment.amount;
+    if (adjustment.kind === 'ISR_PAID') row.isrPaid += adjustment.amount;
     if (adjustment.kind === 'ISN_OVERRIDE') row.isnOverride = adjustment.amount;
     if (adjustment.kind === 'IMSS_MANUAL') row.imssManual += adjustment.amount;
   }
@@ -590,6 +689,7 @@ export function buildTaxDashboardView(params: {
   const totals = periods.reduce<TaxDashboardView['totals']>((sum, period) => ({
     ivaNet: sum.ivaNet + period.ivaNet,
     isn: sum.isn + period.isn,
+    isr: sum.isr + period.isr.payable,
     imss: sum.imss + period.imss,
     total: sum.total + period.total,
     totalWithOverdue: sum.totalWithOverdue + period.total,
@@ -599,6 +699,7 @@ export function buildTaxDashboardView(params: {
   }), {
     ivaNet: 0,
     isn: 0,
+    isr: 0,
     imss: 0,
     total: 0,
     totalWithOverdue: totalOverdue,
@@ -740,6 +841,8 @@ interface TaxPeriodAccumulator {
   imssDetected: number;
   imssManual: number;
   imssLines: TaxSourceLine[];
+  manualIsr: number;
+  isrPaid: number;
   manualObligations: TaxObligation[];
 }
 
@@ -783,6 +886,8 @@ function createEmptyAccumulator(period: string): TaxPeriodAccumulator {
     imssDetected: 0,
     imssManual: 0,
     imssLines: [],
+    manualIsr: 0,
+    isrPaid: 0,
     manualObligations: [],
   };
 }
@@ -803,26 +908,19 @@ function buildAuxiliarCxpPaymentCoverage(
     else cxpByFactura.set(key, [cxp]);
   }
 
-  for (const line of result.lines) {
-    if (!isConfirmedAuxiliarLine(line)) continue;
-    if (line.flujo !== 'egreso' || line.source.kind !== 'factura') continue;
-    const candidates = cxpByFactura.get(`${line.cia}::${normalizeText(line.source.ref)}`) ?? [];
-    const cxp = pickCxpForAuxiliarLine(candidates, line);
-    if (!cxp) continue;
-
-    const amount = positiveNumber(Math.abs(line.bankAmount ?? line.importe));
-    const date = cleanIsoDate(line.bankDate) ?? cleanIsoDate(line.fechaContable);
-    if (amount <= 0 || !date) continue;
-
+  const addPayment = (
+    cxp: CXPRecord,
+    amount: number,
+    date: string,
+    noPago: string,
+    tier: CxpPaymentCoverage['payments'][number]['tier'],
+  ) => {
+    if (amount <= 0 || !date) return;
     const key = cxpCoverageKey(cxp);
     const existing = out.get(key);
-    const payment = {
-      noPago: `Auxiliar ${line.tipoDocto || 'GL'} ${line.fechaContable || date}`,
-      fechaPago: date,
-      importe: amount,
-      tier: 'folio-exact' as const,
-    };
+    const payment = { noPago, fechaPago: date, importe: amount, tier };
     if (existing) {
+      if (existing.payments.some((item) => paymentCoverageDedupeKey(item) === paymentCoverageDedupeKey(payment))) return;
       existing.totalPaidPesos += amount;
       existing.payments.push(payment);
       existing.status = cxpCoverageStatus(existing.totalPaidPesos, cxp.importeBrutoPesos);
@@ -834,9 +932,264 @@ function buildAuxiliarCxpPaymentCoverage(
         payments: [payment],
       });
     }
+  };
+
+  for (const line of result.lines) {
+    if (!isConfirmedAuxiliarLine(line)) continue;
+    if (line.flujo !== 'egreso' || line.source.kind !== 'factura') continue;
+    const candidates = cxpByFactura.get(`${line.cia}::${normalizeText(line.source.ref)}`) ?? [];
+    const cxp = pickCxpForAuxiliarLine(candidates, line);
+    if (!cxp) continue;
+
+    const amount = positiveNumber(Math.abs(line.bankAmount ?? line.importe));
+    const date = cleanIsoDate(line.bankDate) ?? cleanIsoDate(line.fechaContable);
+    if (amount <= 0 || !date) continue;
+
+    addPayment(cxp, amount, date, `Auxiliar ${line.tipoDocto || 'GL'} ${line.fechaContable || date}`, 'folio-exact');
+  }
+
+  for (const [sourceKey, confirmation] of result.sourceConfirmation) {
+    if (!confirmation.confirmed || confirmation.flujo !== 'egreso') continue;
+    if (!sourceKey.startsWith('factura:')) continue;
+    const [, payload] = sourceKey.split('factura:');
+    const [cia, ref] = payload.split('::');
+    if (!cia || !ref) continue;
+    const candidates = cxpByFactura.get(`${cia}::${normalizeText(ref)}`) ?? [];
+    if (candidates.length !== 1) continue;
+    const date = cleanIsoDate(confirmation.bankDate) ?? cleanIsoDate(confirmation.fechaContable);
+    const amount = positiveNumber(Math.abs(confirmation.importe));
+    if (!date || amount <= 0) continue;
+    addPayment(candidates[0], amount, date, `Auxiliar factura ${ref}`, 'folio-exact');
+    }
+
+  return out;
+}
+
+function buildAuxiliarPagoCxpPaymentCoverage(
+  result: AuxiliarReconResult | undefined,
+  paymentMatches: PaymentMatch[],
+): Map<string, CxpPaymentCoverage> {
+  const out = new Map<string, CxpPaymentCoverage>();
+  if (!result || result.summary.totalLineas === 0 || paymentMatches.length === 0) return out;
+
+  const matchesByPaymentKey = buildPaymentMatchIndex(paymentMatches);
+  for (const line of result.lines) {
+    if (!isConfirmedAuxiliarLine(line)) continue;
+    if (line.flujo !== 'egreso' || line.source.kind !== 'pago') continue;
+    const match = findPaymentMatchForAuxiliarLine(line, matchesByPaymentKey);
+    if (!match || match.cxpMatches.length === 0) continue;
+
+    const amount = positiveNumber(Math.abs(line.bankAmount ?? line.importe));
+    const date = cleanIsoDate(line.bankDate) ?? cleanIsoDate(line.fechaContable) ?? cleanIsoDate(match.payment.fechaPago);
+    if (amount <= 0 || !date) continue;
+
+    const totalMatchedGross = match.cxpMatches.reduce((sum, hit) => (
+      sum + positiveNumber(hit.cxp.importeBrutoPesos || hit.cxp.importePendientePesos)
+    ), 0);
+    const paymentGross = positiveNumber(match.payment.importePesos) || amount || totalMatchedGross;
+
+    for (const hit of match.cxpMatches) {
+      const cxpGross = positiveNumber(hit.cxp.importeBrutoPesos || hit.cxp.importePendientePesos);
+      const allocated = allocatePaymentAmount({
+        lineAmount: amount,
+        paymentAmount: paymentGross,
+        cxpAmount: cxpGross,
+        totalMatchedAmount: totalMatchedGross,
+      });
+      if (allocated <= 0) continue;
+
+      const key = cxpCoverageKey(hit.cxp);
+      const payment = {
+        noPago: paymentLabel(match.payment, line),
+        fechaPago: date,
+        importe: allocated,
+        tier: hit.tier,
+      };
+      const existing = out.get(key);
+      if (existing) {
+        existing.totalPaidPesos += allocated;
+        existing.payments.push(payment);
+        existing.status = cxpCoverageStatus(existing.totalPaidPesos, hit.cxp.importeBrutoPesos);
+      } else {
+        out.set(key, {
+          cxpKey: key,
+          status: cxpCoverageStatus(allocated, hit.cxp.importeBrutoPesos),
+          totalPaidPesos: allocated,
+          payments: [payment],
+        });
+      }
+    }
   }
 
   return out;
+}
+
+function mergeCxpPaymentCoverage(
+  primary: Map<string, CxpPaymentCoverage> | undefined,
+  secondary: Map<string, CxpPaymentCoverage> | undefined,
+): Map<string, CxpPaymentCoverage> | undefined {
+  if ((!primary || primary.size === 0) && (!secondary || secondary.size === 0)) return undefined;
+  const out = new Map<string, CxpPaymentCoverage>();
+
+  const add = (coverage: CxpPaymentCoverage) => {
+    const current = out.get(coverage.cxpKey);
+    if (!current) {
+      out.set(coverage.cxpKey, {
+        ...coverage,
+        payments: [...coverage.payments],
+      });
+      return;
+    }
+
+    const seen = new Set(current.payments.map(paymentCoverageDedupeKey));
+    for (const payment of coverage.payments) {
+      const key = paymentCoverageDedupeKey(payment);
+      if (seen.has(key)) continue;
+      current.payments.push(payment);
+      seen.add(key);
+    }
+    current.totalPaidPesos = current.payments.reduce((sum, payment) => sum + positiveNumber(payment.importe), 0);
+    current.status = strongestCoverageStatus(current.status, coverage.status);
+  };
+
+  for (const coverage of primary?.values() ?? []) add(coverage);
+  for (const coverage of secondary?.values() ?? []) add(coverage);
+  return out;
+}
+
+function paymentCoverageDedupeKey(payment: CxpPaymentCoverage['payments'][number]): string {
+  return `${payment.noPago}::${payment.fechaPago}::${Math.round(payment.importe * 100)}::${payment.tier}`;
+}
+
+function strongestCoverageStatus(
+  left: CxpPaymentCoverage['status'],
+  right: CxpPaymentCoverage['status'],
+): CxpPaymentCoverage['status'] {
+  if (left === 'PAID' || right === 'PAID') return 'PAID';
+  if (left === 'PARTIAL' || right === 'PARTIAL') return 'PARTIAL';
+  return 'OPEN';
+}
+
+function buildPaymentMatchIndex(paymentMatches: PaymentMatch[]): Map<string, PaymentMatch> {
+  const out = new Map<string, PaymentMatch>();
+  for (const match of paymentMatches) {
+    for (const key of paymentLookupKeys(match.payment.cia, match.payment.tipoPago, match.payment.noPago)) {
+      if (!out.has(key)) out.set(key, match);
+    }
+  }
+  return out;
+}
+
+function findPaymentMatchForAuxiliarLine(
+  line: AuxiliarReconLine,
+  matchesByPaymentKey: Map<string, PaymentMatch>,
+): PaymentMatch | undefined {
+  const ref = normalizePaymentRef(line.source.ref);
+  if (!ref) return undefined;
+  const candidates = [
+    paymentLookupKey(line.cia, ref),
+    paymentLookupKey(line.source.cia, ref),
+  ];
+  for (const key of candidates) {
+    const match = matchesByPaymentKey.get(key);
+    if (match) return match;
+  }
+  return undefined;
+}
+
+function paymentLookupKeys(cia: string, tipoPago: string, noPago: string): string[] {
+  const keys = new Set<string>();
+  const normalizedTipo = normalizePaymentRef(tipoPago);
+  const normalizedNoPago = normalizePaymentRef(noPago);
+  if (normalizedNoPago) keys.add(paymentLookupKey(cia, normalizedNoPago));
+  if (normalizedTipo && normalizedNoPago) keys.add(paymentLookupKey(cia, `${normalizedTipo}${normalizedNoPago}`));
+  return [...keys];
+}
+
+function paymentLookupKey(cia: string, ref: string): string {
+  return `${cia}::${normalizePaymentRef(ref)}`;
+}
+
+function normalizePaymentRef(value: string | undefined): string {
+  return normalizeText(value ?? '').replace(/[^A-Z0-9]/g, '');
+}
+
+function paymentLabel(payment: PaymentMatch['payment'], line: AuxiliarReconLine): string {
+  const ref = payment.tipoPago || payment.noPago
+    ? `${payment.tipoPago}${payment.noPago}`.trim()
+    : line.source.ref;
+  return ref || `Auxiliar ${line.tipoDocto || 'pago'}`;
+}
+
+function allocatePaymentAmount({
+  lineAmount,
+  paymentAmount,
+  cxpAmount,
+  totalMatchedAmount,
+}: {
+  lineAmount: number;
+  paymentAmount: number;
+  cxpAmount: number;
+  totalMatchedAmount: number;
+}): number {
+  if (lineAmount <= 0) return 0;
+  if (totalMatchedAmount > 0 && cxpAmount > 0) {
+    return Math.min(cxpAmount, lineAmount * (cxpAmount / totalMatchedAmount));
+  }
+  if (paymentAmount > 0 && cxpAmount > 0) {
+    return Math.min(cxpAmount, lineAmount * Math.min(1, cxpAmount / paymentAmount));
+  }
+  return lineAmount;
+}
+
+function findPurchaseReceiptForPayment(
+  payment: PaymentMatch['payment'],
+  purchaseReceipts: PurchaseReceiptRecord[],
+  companyCode?: string,
+): PurchaseReceiptRecord | undefined {
+  const amount = positiveNumber(payment.importePesos);
+  const comment = normalizePaymentSearchText(payment.comentarioPago);
+  const candidates = purchaseReceipts.filter((receipt) => {
+    if (companyCode && companyCode !== 'all' && receipt.cia !== companyCode) return false;
+    if (payment.cia && receipt.cia !== payment.cia) return false;
+    if (receipt.isCancelled || receipt.amountMxn <= 0) return false;
+    if (normalizeJde(receipt.noProveedor) !== normalizeJde(payment.claveProveedor)) return false;
+    return true;
+  });
+  if (candidates.length === 0) return undefined;
+
+  const commentMatches = candidates.filter((receipt) => {
+    if (!comment) return false;
+    return receiptRefsForSearch(receipt).some((ref) => ref && comment.includes(ref));
+  });
+  if (commentMatches.length === 1) return commentMatches[0];
+  const exactCommentAmountMatches = commentMatches.filter((receipt) => amountsClose(receipt.amountMxn, amount));
+  if (exactCommentAmountMatches.length === 1) return exactCommentAmountMatches[0];
+
+  const exactAmountMatches = candidates.filter((receipt) => amountsClose(receipt.amountMxn, amount));
+  if (exactAmountMatches.length === 1) return exactAmountMatches[0];
+  return undefined;
+}
+
+function receiptRefsForSearch(receipt: PurchaseReceiptRecord): string[] {
+  return [
+    receipt.invoiceNo,
+    receipt.purchaseOrderNo,
+    receipt.receiptNo,
+  ].map(normalizePaymentSearchText).filter(Boolean);
+}
+
+function normalizePaymentSearchText(value: string | undefined): string {
+  return normalizeText(value ?? '').replace(/[^A-Z0-9]/g, '');
+}
+
+function amountsClose(left: number, right: number): boolean {
+  if (left <= 0 || right <= 0) return false;
+  return Math.abs(left - right) <= Math.max(1, Math.min(left, right) * 0.005);
+}
+
+function purchaseReceiptTaxDedupeKey(receipt: PurchaseReceiptRecord): string {
+  return `${receipt.cia}::${receipt.purchaseOrderNo || 'no-oc'}::${receipt.invoiceNo || receipt.receiptNo || 'no-doc'}::${receipt.noProveedor}`;
 }
 
 function isConfirmedAuxiliarLine(line: AuxiliarReconLine): boolean {
@@ -997,6 +1350,90 @@ function accumulateHistoricIvaPaidFromMovements({
       date,
       concept: `Pago IVA · ${movement.concept || movement.counterpartyName || 'Movimiento fiscal'}`,
       counterpartyName: movement.counterpartyName ?? 'SAT — IVA',
+      amount,
+      taxBase: 0,
+      taxAmount: amount,
+      sourceSystem: movement.sourceSystem,
+      estimated: false,
+    });
+  }
+}
+
+function accumulateHistoricIsrPaidFromBankStatements({
+  bankStatements,
+  companyCode,
+  startDate,
+  endDate,
+  ensure,
+}: {
+  bankStatements: BankAccountStatement[];
+  companyCode?: string;
+  startDate: string;
+  endDate: string;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  for (const statement of bankStatements) {
+    if (companyCode && companyCode !== 'all' && statement.cia !== companyCode) continue;
+    for (const movement of statement.movimientos) {
+      if (movement.tipoMovimiento !== 'CARGO') continue;
+      const date = cleanIsoDate(movement.fechaOperacion);
+      if (!date || date < startDate || date > endDate) continue;
+      const classification = classifyBankConcept({
+        concepto: movement.concepto,
+        infAdi1: movement.infAdi1,
+        infAdi2: movement.infAdi2,
+        infAdi3: movement.infAdi3,
+      });
+      if (classification.category !== 'TAX' || classification.subcategory !== 'ISR') continue;
+      const amount = positiveNumber(movement.importe);
+      if (amount <= 0) continue;
+      const acc = ensure(date.slice(0, 7));
+      const concept = movement.concepto || movement.referencia || 'Movimiento bancario';
+      acc.isrPaid += amount;
+      acc.paidLines.push({
+        movementId: `bank-isr-paid:${movement.cia}:${movement.banco}:${movement.cuenta}:${movement.fechaOperacion}:${movement.referencia}:${movement.gsaid ?? ''}`,
+        date,
+        concept: `Pago ISR · ${concept}`,
+        counterpartyName: classification.counterpartyName,
+        amount,
+        taxBase: 0,
+        taxAmount: amount,
+        sourceSystem: 'BANK',
+        estimated: false,
+      });
+    }
+  }
+}
+
+function accumulateHistoricIsrPaidFromMovements({
+  movements,
+  hasDirectBankStatements,
+  startDate,
+  endDate,
+  ensure,
+}: {
+  movements: FinancialMovement[];
+  hasDirectBankStatements: boolean;
+  startDate: string;
+  endDate: string;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  for (const movement of movements) {
+    if (movement.type !== 'OUTFLOW') continue;
+    if (movement.category !== 'TAX' || movement.subcategory !== 'ISR') continue;
+    if (hasDirectBankStatements && movement.sourceSystem === 'BANK') continue;
+    if (movement.status !== 'REAL' && movement.status !== 'EXECUTED') continue;
+    const date = cleanIsoDate(effectiveMovementDate(movement));
+    if (!date || date < startDate || date > endDate) continue;
+    const amount = positiveNumber(effectiveAmount(movement));
+    if (amount <= 0) continue;
+    const acc = ensure(date.slice(0, 7));
+    acc.isrPaid += amount;
+    acc.paidLines.push({
+      movementId: `movement-isr-paid:${movement.id}`,
+      date,
+      concept: `Pago ISR · ${movement.concept || movement.counterpartyName || 'Movimiento fiscal'}`,
+      counterpartyName: movement.counterpartyName ?? 'SAT — ISR',
       amount,
       taxBase: 0,
       taxAmount: amount,
@@ -1326,6 +1763,146 @@ function accumulatePurchaseReceiptIva({
   return handledMovementIds;
 }
 
+function accumulatePaidPurchaseReceiptIvaFromAuxiliar({
+  purchaseReceipts,
+  auxiliarReconciliation,
+  cxpRecords,
+  cxpPaymentCoverage,
+  paymentMatches,
+  companyCode,
+  startDate,
+  endDate,
+  ensure,
+}: {
+  purchaseReceipts: PurchaseReceiptRecord[];
+  auxiliarReconciliation?: AuxiliarReconResult;
+  cxpRecords: CXPRecord[];
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
+  paymentMatches: PaymentMatch[];
+  companyCode?: string;
+  startDate: string;
+  endDate: string;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  if (!auxiliarReconciliation) return;
+
+  const paidOcDateByKey = new Map<string, string>();
+  const paidReceiptDateByKey = new Map<string, string>();
+  const paymentMatchesByKey = buildPaymentMatchIndex(paymentMatches);
+  const unclassifiedPaymentKeys = new Set<string>();
+  for (const line of auxiliarReconciliation.lines) {
+    if (!isConfirmedAuxiliarLine(line)) continue;
+    if (line.flujo !== 'egreso') continue;
+    if (companyCode && companyCode !== 'all' && line.cia !== companyCode) continue;
+    const date = cleanIsoDate(line.bankDate) ?? cleanIsoDate(line.fechaContable);
+    if (!date) continue;
+    if (line.source.kind === 'oc') {
+      const key = purchaseOrderKey(line.cia, line.source.ref);
+      const current = paidOcDateByKey.get(key);
+      if (!current || date < current) paidOcDateByKey.set(key, date);
+      continue;
+    }
+    if (line.source.kind !== 'pago') continue;
+
+    const match = findPaymentMatchForAuxiliarLine(line, paymentMatchesByKey);
+    if (!match && paymentMatches.length === 0) continue;
+    if (match?.cxpMatches.length) continue;
+    const matchedReceipt = match
+      ? findPurchaseReceiptForPayment(match.payment, purchaseReceipts, companyCode)
+      : undefined;
+    if (matchedReceipt) {
+      const key = purchaseReceiptTaxDedupeKey(matchedReceipt);
+      const current = paidReceiptDateByKey.get(key);
+      if (!current || date < current) paidReceiptDateByKey.set(key, date);
+      continue;
+    }
+
+    const amount = positiveNumber(Math.abs(line.bankAmount ?? line.importe));
+    const unclassifiedKey = `${line.glKey}::${date}::${Math.round(amount * 100)}`;
+    if (date < startDate || date > endDate) continue;
+    if (amount <= 0 || unclassifiedPaymentKeys.has(unclassifiedKey)) continue;
+    unclassifiedPaymentKeys.add(unclassifiedKey);
+    const row = ensure(date.slice(0, 7));
+    row.unclassifiedExpense += amount;
+    row.unclassifiedLines.push({
+      movementId: `paid-supplier-unclassified:${unclassifiedKey}`,
+      date,
+      concept: `Pago proveedor sin desglose fiscal ${line.source.ref || line.tipoDocto || ''}`.trim(),
+      counterpartyName: line.source.contraparte,
+      amount,
+      taxBase: amount,
+      taxAmount: 0,
+      sourceSystem: 'JDE',
+      estimated: false,
+    });
+  }
+  if (paidOcDateByKey.size === 0 && paidReceiptDateByKey.size === 0) return;
+
+  const cxpBySupplier = buildJdeSupplierIndex(cxpRecords);
+  const emitted = new Set<string>();
+  for (const receipt of purchaseReceipts) {
+    if (companyCode && companyCode !== 'all' && receipt.cia !== companyCode) continue;
+    if (receipt.isCancelled || receipt.amountMxn <= 0) continue;
+    const dedupeKey = purchaseReceiptTaxDedupeKey(receipt);
+    const ocDate = receipt.purchaseOrderNo
+      ? paidOcDateByKey.get(purchaseOrderKey(receipt.cia, receipt.purchaseOrderNo))
+      : undefined;
+    const date = ocDate ?? paidReceiptDateByKey.get(dedupeKey);
+    if (!date || date < startDate || date > endDate) continue;
+
+    // Si esta misma factura CXP ya se acreditó con cobertura PagoProveedor o
+    // Auxiliar por folio, no la dupliques desde Compras.
+    const matchedCxp = cxpBySupplier
+      .get(normalizeJde(receipt.noProveedor))
+      ?.find((cxp) => purchaseMatchesCxp(receipt, cxp));
+    if (matchedCxp && cxpPaymentCoverage?.has(cxpCoverageKey(matchedCxp))) continue;
+
+    if (emitted.has(dedupeKey)) continue;
+    emitted.add(dedupeKey);
+
+    const row = ensure(date.slice(0, 7));
+    const taxRate = receipt.taxRate === 16 || receipt.taxRate === 8 ? receipt.taxRate : undefined;
+    if (!taxRate || receipt.taxTreatment !== 'IVA_CREDITABLE') {
+      if (receipt.taxTreatment === 'UNCLASSIFIED') {
+        row.unclassifiedExpense += receipt.amountMxn;
+        row.unclassifiedLines.push({
+          movementId: `paid-purchase-unclassified:${dedupeKey}`,
+          date,
+          concept: `OC pagada ${receipt.invoiceNo || receipt.purchaseOrderNo} · ${receipt.supplierName}`,
+          counterpartyName: receipt.supplierName,
+          amount: receipt.amountMxn,
+          taxBase: receipt.amountMxn,
+          taxAmount: 0,
+          sourceSystem: 'JDE',
+          estimated: false,
+        });
+      }
+      continue;
+    }
+
+    const breakdown = receipt.taxBaseAmount != null && receipt.taxAmount != null
+      ? {
+        taxBase: positiveNumber(receipt.taxBaseAmount),
+        taxAmount: positiveNumber(receipt.taxAmount),
+      }
+      : grossToIvaBreakdown(receipt.amountMxn, taxRate);
+    addIvaCreditable(row, {
+      movementId: `paid-purchase:${dedupeKey}`,
+      date,
+      concept: `OC pagada ${receipt.invoiceNo || receipt.purchaseOrderNo} · ${receipt.supplierName}`,
+      counterpartyName: receipt.supplierName,
+      amount: receipt.amountMxn,
+      taxBase: breakdown.taxBase,
+      taxRate,
+      taxAmount: breakdown.taxAmount,
+      sourceSystem: 'JDE',
+      rateTarget: providerRateTarget(receipt.noProveedor || receipt.supplierName),
+      rateSource: 'JDE',
+      estimated: false,
+    }, taxRate);
+  }
+}
+
 function accumulateBudgetIvaComplement({
   budget,
   startDate,
@@ -1525,12 +2102,14 @@ function finalizeTaxPeriod({
   const activeIvaDetail = buildIvaDetail(activeIva, store, today);
   const realIvaDetail = buildIvaDetail(realIva, store, today);
   const forecastIvaDetail = buildIvaDetail(forecastIva, store, today);
+  const isrDetail = buildIsrDetail(activeIvaDetail, shared, store, today);
 
   const isn = shared.isnOverride ?? shared.payrollBase * ISN_RATE;
   const imss = shared.imssDetected + shared.imssManual;
 
   const calculated: TaxObligation[] = [
     calculatedObligation('IVA', period, activeIvaDetail.payable, taxDueDate(period), statusFromPaymentPlan(activeIvaDetail.payable, paymentPlanFor(store, 'IVA', period), today, taxDueDate(period)), paymentPlanFor(store, 'IVA', period), 'CALCULATED'),
+    calculatedObligation('ISR', period, isrDetail.payable, taxDueDate(period), isrDetail.status, isrDetail.paymentPlan, isrDetail.calculated > 0 ? 'CALCULATED' : isrDetail.manual > 0 ? 'MANUAL' : 'CALCULATED'),
     calculatedObligation('ISN', period, isn, taxDueDate(period), statusFromPaymentPlan(isn, paymentPlanFor(store, 'ISN', period), today, taxDueDate(period)), paymentPlanFor(store, 'ISN', period), shared.isnOverride != null ? 'MANUAL' : 'CALCULATED'),
     calculatedObligation('IMSS', period, imss, taxDueDate(period), statusFromPaymentPlan(imss, paymentPlanFor(store, 'IMSS', period), today, taxDueDate(period)), paymentPlanFor(store, 'IMSS', period), shared.imssDetected > 0 ? 'JDE' : shared.imssManual > 0 ? 'MANUAL' : 'CALCULATED'),
   ].filter((obligation) => obligation.totalAmount > 0 || obligation.paymentPlan.length > 0);
@@ -1548,7 +2127,7 @@ function finalizeTaxPeriod({
       .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
       .reduce((paymentSum, payment) => paymentSum + payment.amount, 0),
   0);
-  const total = activeIvaDetail.payable + isn + imss;
+  const total = activeIvaDetail.payable + isrDetail.payable + isn + imss;
 
   return {
     period,
@@ -1564,9 +2143,43 @@ function finalizeTaxPeriod({
     realIva: realIvaDetail,
     forecastIva: forecastIvaDetail,
     ivaMode,
+    isr: isrDetail,
     payrollBase: shared.payrollBase,
     payrollLines: shared.payrollLines,
     imssLines: shared.imssLines,
+  };
+}
+
+function buildIsrDetail(
+  iva: IvaPeriodDetail,
+  shared: TaxPeriodAccumulator,
+  store: TaxStore,
+  today: string,
+): IsrPeriodDetail {
+  const settings = store.settings ?? defaultTaxSettings();
+  const coefficient = clampTaxRate(settings.isrProvisionalCoefficient);
+  const rate = clampTaxRate(settings.isrRate || ISR_CORPORATE_RATE);
+  const nominalIncome = iva.incomeBase16 + iva.incomeBase8;
+  const estimatedTaxableProfit = nominalIncome * coefficient;
+  const calculated = estimatedTaxableProfit * rate;
+  const grossPayable = calculated + shared.manualIsr - shared.isrPaid;
+  const payable = Math.max(0, grossPayable);
+  const plan = paymentPlanFor(store, 'ISR', shared.period);
+  return {
+    period: shared.period,
+    dueDate: shared.dueDate,
+    nominalIncome,
+    coefficient,
+    rate,
+    estimatedTaxableProfit,
+    calculated,
+    manual: shared.manualIsr,
+    paid: shared.isrPaid,
+    payable,
+    status: statusFromPaymentPlan(payable, plan, today, shared.dueDate),
+    paymentPlan: plan,
+    incomeLines: iva.incomeLines,
+    paidLines: shared.paidLines.filter((line) => normalizeText(line.concept).includes('ISR')),
   };
 }
 
@@ -1592,7 +2205,7 @@ function calculatedObligation(
     pendingAmount: Math.max(0, amount - paid),
     dueDate,
     paymentPlan,
-    risk: taxType === 'IMSS' ? 'LEGAL' : taxType === 'IVA' ? 'HIGH' : 'MEDIUM',
+    risk: taxRisk(taxType),
     status,
   };
 }
@@ -1636,6 +2249,16 @@ function paidAmount(plan: TaxPaymentPlanItem[]): number {
   return plan
     .filter((payment) => payment.status === 'PAID')
     .reduce((sum, payment) => sum + payment.amount, 0);
+}
+
+function taxRisk(taxType: TaxType): TaxObligation['risk'] {
+  if (taxType === 'IMSS') return 'LEGAL';
+  if (taxType === 'IVA' || taxType === 'ISR') return 'HIGH';
+  return 'MEDIUM';
+}
+
+function clampTaxRate(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 1) : 0;
 }
 
 interface TaxRateContext {
@@ -1955,6 +2578,10 @@ function cxpCoverageKey(record: CXPRecord): string {
   return `${record.cia}::${record.noFactura}::${record.noProveedor}`;
 }
 
+function purchaseOrderKey(cia: string, purchaseOrderNo: string): string {
+  return `${normalizeText(cia)}::${purchaseOrderNo.trim()}`;
+}
+
 function isHandledCxpMovement(movement: FinancialMovement, keys: Set<string>): boolean {
   if (keys.has(`id:${movement.id}`)) return true;
   if (movement.sourceSystem !== 'JDE') return false;
@@ -2024,6 +2651,7 @@ function normalizeTaxStore(value: unknown, fallback: TaxStore): TaxStore {
     taxRateOverrides: Array.isArray(raw.taxRateOverrides)
       ? raw.taxRateOverrides.map(normalizeTaxRateOverride).filter((item): item is TaxRateOverride => item !== null)
       : fallback.taxRateOverrides,
+    settings: normalizeTaxSettings(raw.settings ?? fallback.settings),
     overdueBalance: typeof raw.overdueBalance === 'number' && Number.isFinite(raw.overdueBalance)
       ? Math.max(0, raw.overdueBalance)
       : fallback.overdueBalance,
@@ -2069,6 +2697,7 @@ function migrateLegacyTaxStore(): TaxStore {
     adjustments,
     obligations: dedupeObligations(obligations),
     taxRateOverrides: [],
+    settings: defaultTaxSettings(),
     overdueBalance: 0,
     migratedAt: adjustments.length > 0 || obligations.length > 0 ? new Date().toISOString() : undefined,
   };
@@ -2142,7 +2771,7 @@ function normalizeLegacyOperatingDebt(value: unknown): TaxObligation | null {
     pendingAmount: Math.max(0, amount),
     dueDate,
     paymentPlan: plan,
-    risk: taxType === 'IMSS' ? 'LEGAL' : taxType === 'IVA' ? 'HIGH' : 'MEDIUM',
+    risk: taxRisk(taxType),
     comment: typeof raw.comments === 'string' && raw.comments.trim() ? raw.comments.trim() : undefined,
     status: statusFromPaymentPlan(amount, plan, todayISO(), dueDate),
   };
@@ -2221,7 +2850,7 @@ function normalizeObligation(value: unknown): TaxObligation | null {
     paymentPlan,
     risk: raw.risk === 'LOW' || raw.risk === 'MEDIUM' || raw.risk === 'HIGH' || raw.risk === 'LEGAL'
       ? raw.risk
-      : taxType === 'IMSS' ? 'LEGAL' : taxType === 'IVA' ? 'HIGH' : 'MEDIUM',
+      : taxRisk(taxType),
     comment: typeof raw.comment === 'string' && raw.comment.trim() ? raw.comment.trim() : undefined,
     status: normalizeStatus(raw.status) ?? statusFromPaymentPlan(totalAmount, paymentPlan, todayISO(), dueDate),
   };
@@ -2245,7 +2874,7 @@ function normalizePayment(value: unknown): TaxPaymentPlanItem | null {
 }
 
 function normalizeTaxType(value: unknown): TaxType | null {
-  return value === 'IVA' || value === 'ISN' || value === 'IMSS' ? value : null;
+  return value === 'IVA' || value === 'ISR' || value === 'ISN' || value === 'IMSS' ? value : null;
 }
 
 function normalizeSource(value: unknown): TaxSource | null {
@@ -2269,6 +2898,8 @@ function normalizeAdjustmentKind(value: unknown): TaxManualAdjustment['kind'] | 
     || value === 'IVA_CREDITABLE'
     || value === 'IVA_PAID'
     || value === 'IVA_PAYABLE'
+    || value === 'ISR_MANUAL'
+    || value === 'ISR_PAID'
     || value === 'ISN_OVERRIDE'
     || value === 'IMSS_MANUAL'
     ? value

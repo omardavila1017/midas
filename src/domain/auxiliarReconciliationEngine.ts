@@ -338,6 +338,9 @@ function sourceKeysFor(rec: AuxiliarContableRecord): string[] {
 
 function deriveSource(rec: AuxiliarContableRecord): AuxiliarSourceRef {
   const contraparte = rec.nombre || rec.nombreCuenta || undefined;
+  if (deriveFlujo(rec) === 'egreso' && rec.tipoPago && rec.noPago) {
+    return { kind: 'pago', cia: rec.cia, ref: `${rec.tipoPago}${rec.noPago}`, contraparte };
+  }
   if (rec.noFactura) return { kind: 'factura', cia: rec.cia, ref: rec.noFactura, contraparte };
   if (rec.noOrdenCompra) return { kind: 'oc', cia: rec.cia, ref: rec.noOrdenCompra, contraparte };
   if (rec.tipoPago && rec.noPago) {
