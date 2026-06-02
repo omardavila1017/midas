@@ -2803,8 +2803,10 @@ export async function fetchViajesEspeciales(
 }
 
 /**
- * Wrapper rango. Dedup por `K_Renta` (id único del viaje). Trocea por mes
- * calendario para tolerar payloads grandes; concurrencia baja.
+ * Wrapper rango. Dedup por `K_Renta` (id único del viaje). Trocea **por día**
+ * porque el endpoint `/Servicios` devuelve 500 ante rangos de varios días
+ * (p.ej. un mes completo `2026-01-01..2026-01-31`); solo tolera consultas de
+ * un único día. Concurrencia baja para no saturar el servidor de desarrollo.
  */
 export async function fetchViajesEspecialesRange(
   fechaInicial: string,
@@ -2817,11 +2819,13 @@ export async function fetchViajesEspecialesRange(
   } = {},
 ): Promise<ViajeEspecialRecord[]> {
   const config = options.config ?? {};
-  const windows = splitIntoMonthlyWindows(fechaInicial, fechaFinal);
+  const windows = splitIntoFixedDayWindows(fechaInicial, fechaFinal, 1);
   if (windows.length === 0) return [];
 
   options.onProgress?.(0, windows.length);
-  const concurrency = Math.max(1, options.concurrency ?? 2);
+  // Día por ventana ⇒ muchas más ventanas que antes (≈365/año), pero cada
+  // request es ligero; subimos la concurrencia por defecto para compensar.
+  const concurrency = Math.max(1, options.concurrency ?? 4);
   const results: ViajeEspecialRecord[][] = new Array(windows.length);
   const failedWindows: string[] = [];
   let cursor = 0;
