@@ -10,6 +10,7 @@ import type {
 import { calculateConfidenceBand } from './calculation-engine/financialProjectionEngine';
 import { buildProviderIndex, lookupProvider, type ProviderIndex } from '../../domain/providerIdentity';
 import { enrichFromCatalog, type Flexibility } from '../../domain/providerCatalog';
+import { isInternalCounterparty } from '../../domain/netCashFlowEngine';
 
 const DAY_MS = 86_400_000;
 
@@ -124,6 +125,12 @@ export function buildPurchaseReceiptMovements(input: {
   return input.purchaseReceipts
     .filter((record) => input.companyCode === 'all' || !input.companyCode || normalizeCia(record.cia) === normalizeCia(input.companyCode))
     .filter((record) => !record.isCancelled && record.amountMxn > 0)
+    // OC intercompañía (proveedor = empresa propia del grupo): traspaso, no
+    // egreso real. Espejo del filtro CXP (canonicalProjection) y del filtro CXC
+    // para que una compra entre empresas del grupo no infle los egresos de
+    // Planeación. PurchaseReceiptRecord no trae RFC — se matchea por nombre /
+    // código de empresa propia (TRCC, TRTT, SIR, TICH, STDN, TRANSPORTES TAMAULIP).
+    .filter((record) => !isInternalCounterparty(undefined, record.supplierName))
     .filter((record) => !excludeSet || !excludeSet.has((record.noProveedor || '').trim().toUpperCase()))
     .filter((record) => !paidOcKeys || !record.purchaseOrderNo || !paidOcKeys.has(`${normalizeCia(record.cia)}::${record.purchaseOrderNo}`))
     .filter((record) => {

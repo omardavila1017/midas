@@ -22,6 +22,7 @@ import {
   buildPurchaseReceiptMovements,
 } from '../../shared-finance/sourceRecords';
 import { adaptAuxiliarForProjection } from '../../../domain/auxiliarProjectionAdapter';
+import { isInternalCounterparty } from '../../../domain/netCashFlowEngine';
 import {
   emptyAuxiliarReconResult,
   type AuxiliarReconResult,
@@ -397,6 +398,28 @@ describe('Planning cash-flow truth · cross-source fidelity', () => {
       // Pass the Base allowlist.
       expect(isRealShortTermApiMovement(m)).toBe(true);
     }
+  });
+
+  it('drops intercompany purchase orders (proveedor = empresa propia del grupo) from egresos', () => {
+    const purchaseReceipts: PurchaseReceiptRecord[] = [
+      // Real external supplier — must stay.
+      receipt({ noProveedor: 'P-EXT', supplierName: 'Proveedor Externo SA', invoiceNo: 'R-1' }),
+      // Intercompany supplier by truncated beneficiary name — must be dropped.
+      receipt({ noProveedor: 'P-INT', supplierName: 'TRANSPORTES TAMAULIPAS', invoiceNo: 'R-2' }),
+      // Intercompany supplier by short group code — must be dropped.
+      receipt({ noProveedor: 'P-INT2', supplierName: 'TRCC S.A. DE C.V.', invoiceNo: 'R-3' }),
+    ];
+
+    const movements = buildPurchaseReceiptMovements({
+      purchaseReceipts,
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: TODAY,
+    });
+
+    const suppliers = movements.map((m) => m.counterpartyName);
+    expect(suppliers).toEqual(['Proveedor Externo SA']);
+    expect(movements.every((m) => !isInternalCounterparty(undefined, m.counterpartyName))).toBe(true);
   });
 
   it('every payroll: (non-forecast) movement traces back to a TRESS payroll record', () => {

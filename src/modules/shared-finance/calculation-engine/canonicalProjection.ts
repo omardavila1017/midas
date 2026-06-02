@@ -735,6 +735,12 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
       && line.cia !== inputs.companyCode
     ) continue;
     if (line.flujo !== 'ingreso' && line.flujo !== 'egreso') continue;
+    // Traspaso intercompañía / entre cuentas propias del grupo: el motor de
+    // conciliación ya lo etiquetó `matchTier === 'interno'`. No es un ingreso
+    // ni egreso económico real (el otro lado lo compensa), así que se excluye
+    // del modelo de Planeación — mismo criterio que el filtro de movimientos
+    // internos del paso 1 (banco) y los filtros CXP/CXC por contraparte interna.
+    if (line.matchTier === 'interno') continue;
     const fecha = line.fechaContable;
     if (!fecha || fecha.length < 10) continue;
     if (fecha >= inputs.asOfDate) continue;
