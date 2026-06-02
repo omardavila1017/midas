@@ -248,6 +248,8 @@ Treasury / cash-flow logic lives in `src/domain/`. Reconciliation engines:
 
 `reconciliationEngine.ts` (forecast) and the legacy engines are not duplicates — they answer different questions (forecast vs. realized).
 
+- `src/modules/financial-planning/services/cashFlowBankReconciliation.ts` — **Planeación ↔ Banco cross-check (histórico cerrado)**. `reconcilePlanningAgainstBank({ movements, initialCash, bankStatements, companyCode, today })` toma los movimientos del run **Base** y los cruza, mes histórico cerrado por mes (excluye el mes en curso), contra la verdad bancaria de `buildHistoricalMonths` (cashFlowEngine). Invariante de negocio que verifica: la **caja final de Planeación == saldo final bancario** al peso, y los **ingresos/egresos == ABONO/CARGO reales** (excluyendo traspasos internos). El cruce funciona porque ambos lados comparten `classifyMovement` + el corte de cuentas neutras; la caja incluye el plug sintético `INTERNAL_RECON` (lo ancla al banco) mientras que los brutos económicos lo excluyen (no es flujo económico). Sólo reconcilia meses con cobertura bancaria. Se ejecuta en un effect de `FinancialPlanningDashboard.tsx` (consola `[planning.bank-recon]` + `window.__midas__.planningBankReconciliation` para inspección); regresión cubierta por `cashFlowBankReconciliation.test.ts` (end-to-end banco→canonical→Base→cruce). Es read-only/diagnóstico — no muta el run.
+
 The forecast / scenario evaluation pipeline lives across `src/modules/financial-planning/services/` and `src/modules/shared-finance/calculation-engine/`. Order of computation for a non-base scenario is:
 
 1. Base movements from `source.movements` (real CXP + cobranza + payroll + compras + recurring providers + manual entries)

@@ -83,6 +83,7 @@ import {
   savePlanningScenarios,
 } from '../services/financialPlanningStorage';
 import { loadCellOverrides, saveCellOverrides } from '../services/cellOverridesStorage';
+import { reconcilePlanningAgainstBank } from '../services/cashFlowBankReconciliation';
 import { buildCustomConceptKey, loadCustomRows, saveCustomRows } from '../services/customRowsStorage';
 import { loadChangeLog, saveChangeLog } from '../services/changeLogStorage';
 import { debouncedPersist } from '../services/debouncedPersist';
@@ -787,6 +788,38 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [baseScenario.id, sharedRunInputsKey, cellOverrides, customRows, runVersion],
   );
+
+  // Cruce Planeación ↔ Banco para meses históricos cerrados. El run Base sólo
+  // debe contener lo real (banco/cobranza/CXP/OC/nómina); su caja final por mes
+  // histórico tiene que cuadrar al peso con el saldo final bancario y sus
+  // ingresos/egresos con los ABONO/CARGO reales. Si algo lo rompe, lo dejamos
+  // observable (consola + window.__midas__.planningBankReconciliation) en vez de
+  // que el desvío pase inadvertido. No bloquea render — sólo traza.
+  useEffect(() => {
+    if (!props.bankStatements || props.bankStatements.length === 0) return;
+    const report = reconcilePlanningAgainstBank({
+      movements: baseRun.movements,
+      initialCash,
+      bankStatements: props.bankStatements,
+      companyCode: props.companyCode,
+      today,
+    });
+    try {
+      (window as unknown as { __midas__?: Record<string, unknown> }).__midas__ = {
+        ...(window as unknown as { __midas__?: Record<string, unknown> }).__midas__,
+        planningBankReconciliation: report,
+      };
+    } catch {
+      /* window no disponible (SSR/tests) — ignorar */
+    }
+    if (!report.reconciled) {
+      console.warn(
+        `[planning.bank-recon] caja/ingresos/egresos NO cuadran con banco en ${report.divergentMonths.join(', ')} `
+        + `(máx Δcaja=${report.maxClosingCashDiff.toFixed(2)})`,
+        report.months.filter((m) => !m.reconciled),
+      );
+    }
+  }, [baseRun, initialCash, props.bankStatements, props.companyCode, today]);
 
   // Reuse approved/base when the active scenario is one of them — the cache
   // would hit anyway, but skipping the call avoids an extra function frame
