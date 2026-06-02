@@ -127,13 +127,32 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
     })
     : [];
 
+  // Non-base invariant: previous months show real historical only — no
+  // projections before the current month. Projected lines (PROJECTED_BASE)
+  // may appear from the FIRST day of the current month forward; anything
+  // earlier must be real bank/cobranza/GL (status REAL/EXECUTED). This keeps
+  // the rolling caja through past months equal to what actually hit the bank
+  // (Cobranza real), so Planeación's caja final stays consistent with the
+  // cash-flow module. Past-dated projections only leak when a previous month
+  // lacks bank coverage and the canonical classifies it as non-historical.
+  // Applies to BOTH Planeación and Proyección (shared pipeline). Base is
+  // already narrower (real short-term API + cut at today).
+  const currentMonthStart = `${args.today.slice(0, 7)}-01`;
+  const isRealHistoricalMovement = (movement: FinancialMovement): boolean =>
+    movement.status === 'REAL' || movement.status === 'EXECUTED';
+  const nonBaseSource = args.sourceMovements.filter(
+    (movement) =>
+      isRealHistoricalMovement(movement) ||
+      effectiveMovementDate(movement) >= currentMonthStart,
+  );
+
   const movementsBeforeAdjust = isBase
     ? args.sourceMovements.filter(
       (movement) =>
         isRealShortTermApiMovement(movement) &&
         effectiveMovementDate(movement) <= args.today,
     )
-    : [...args.sourceMovements, ...manualMovements];
+    : [...nonBaseSource, ...manualMovements];
 
   const adjustedMovements = isBase
     ? movementsBeforeAdjust

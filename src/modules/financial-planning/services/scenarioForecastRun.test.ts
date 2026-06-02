@@ -119,6 +119,54 @@ describe('scenarioForecastRun', () => {
     expect(run.summary.finalCash).toBe(1_200);
   });
 
+  it('drops projected movements dated in previous months but keeps real historical (non-base)', () => {
+    const run = buildScenarioForecastRun({
+      scenarioId: 'approved',
+      scenarioName: 'Aprobado',
+      scenarioKind: 'APPROVED',
+      sourceMovements: [
+        // Previous month, real → kept (real bank/cobranza historical).
+        movement('bank-real-prev', 'INFLOW', 'TRANSFER', 'Banco real', 400, {
+          status: 'REAL',
+          projectedDate: '2026-04-10',
+        }),
+        // Previous month, projected → dropped (no projections before current month).
+        movement('proj-prev', 'INFLOW', 'AR_COLLECTION', 'Proyectado pasado', 900, {
+          status: 'PROJECTED_BASE',
+          projectedDate: '2026-04-15',
+        }),
+        // Current month, projected → kept (actual para adelante).
+        movement('proj-current', 'INFLOW', 'AR_COLLECTION', 'Proyectado actual', 700, {
+          status: 'PROJECTED_BASE',
+          projectedDate: '2026-05-20',
+        }),
+      ],
+      adjustments: [],
+      manualEntries: [],
+      customRows: [],
+      overrides: [],
+      clients: [],
+      providers: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      cxpRecords: [],
+      budget: null,
+      companyCode: 'all',
+      taxStore: defaultTaxStore(),
+      startDate: '2026-04-01',
+      endDate: '2026-05-31',
+      today: '2026-05-12',
+      initialCash: 0,
+      supplierInitialCash: 0,
+      minimumCash: 0,
+      granularity: 'monthly',
+    });
+
+    const ids = run.movements.map((item) => item.id);
+    expect(ids).toContain('bank-real-prev');
+    expect(ids).toContain('proj-current');
+    expect(ids).not.toContain('proj-prev');
+  });
+
   it('passes CXP payment coverage into forecast taxes to avoid current-period IVA double counting', () => {
     const cxp = cxpRecord({
       cia: '00001',
