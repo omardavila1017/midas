@@ -8,8 +8,8 @@
  *
  * Fuente de identidad: hoy NO hay un claim de sesión expuesto al frontend
  * (revisado `api/_lib/atlasProxy.ts` — solo inyecta tokens server-side, no
- * devuelve el email del usuario). Como puente temporal de desarrollo leemos el
- * correo de `import.meta.env.VITE_CURRENT_USER_EMAIL`. Reemplazar por la
+ * devuelve el email del usuario). El correo sale de la SESIÓN del login UX
+ * (`authSession.ts`), que el usuario captura en `Login.tsx`. Reemplazar por la
  * identidad real cuando Atlas la exponga (ver TODO abajo).
  */
 
@@ -31,13 +31,13 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 /**
- * Resuelve el correo del usuario actual: la sesión del login (lo que el usuario
- * tecleó) tiene precedencia, con fallback al email inyectado por el entorno
- * (`VITE_CURRENT_USER_EMAIL`). La lógica vive en `authSession.ts` para que el
- * gate (`Login.tsx`) y este contexto compartan exactamente la misma fuente.
+ * Resuelve el correo del usuario actual desde la sesión del login (lo que el
+ * usuario tecleó y, según "Recordar este equipo", quedó en local/sessionStorage).
+ * La lógica vive en `authSession.ts` para que el gate (`Login.tsx`) y este
+ * contexto compartan exactamente la misma fuente.
  *
  * TODO(auth): cuando Atlas SSO exponga un claim de sesión / header al frontend,
- * leerlo ahí en lugar del env var (sin tocar la precedencia de la sesión).
+ * leerlo ahí (sin tocar la precedencia de la sesión del login).
  */
 function resolveCurrentEmail(): string | null {
   return resolveSessionEmail();

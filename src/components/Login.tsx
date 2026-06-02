@@ -20,6 +20,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { AlertCircle, ArrowRight, Lock } from 'lucide-react';
 import {
   clearAuthSession,
+  getPrefillEmail,
   needsLogin,
   writeAuthSession,
 } from '../contexts/authSession';
@@ -41,13 +42,15 @@ interface LoginScreenProps {
 }
 
 function LoginScreen({ onSignedIn }: LoginScreenProps) {
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => getPrefillEmail());
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
+    inputRef.current?.select();
   }, []);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -59,7 +62,9 @@ function LoginScreen({ onSignedIn }: LoginScreenProps) {
       return;
     }
     setSubmitting(true);
-    writeAuthSession(value);
+    // `remember` decide la durabilidad: marcado → auto-entra la próxima vez
+    // (localStorage); sin marcar → solo dura lo que el navegador esté abierto.
+    writeAuthSession(value, remember);
     // Pequeña pausa para que el sello de "Entrar" se sienta físico antes de
     // ceder el hilo al boot de la app (que es pesado).
     window.setTimeout(onSignedIn, 220);
@@ -134,6 +139,17 @@ function LoginScreen({ onSignedIn }: LoginScreenProps) {
                 aria-invalid={error ? true : undefined}
               />
             </div>
+          </label>
+
+          <label className="flex cursor-pointer select-none items-center gap-2.5 text-[13px] text-[var(--gray-700)]">
+            <input
+              type="checkbox"
+              checked={remember}
+              disabled={submitting}
+              onChange={(event) => setRemember(event.target.checked)}
+              className="h-4 w-4 rounded-[4px] border-[var(--skeuo-paper-edge)] text-[var(--primary)] accent-[var(--primary)] focus:ring-2 focus:ring-[color-mix(in_oklch,var(--skeuo-brass)_28%,transparent)]"
+            />
+            <span>Recordar este equipo</span>
           </label>
 
           {error && (

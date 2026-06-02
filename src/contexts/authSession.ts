@@ -7,11 +7,19 @@
  * (RBAC declarativo, ver `config/roles.ts`) y personalizar la experiencia. No
  * guarda token ni secreto alguno — es una preferencia, no una credencial.
  *
- * Precedencia de la identidad:
- *   1. Sesión guardada en localStorage (lo que el usuario tecleó en el login).
- *   2. `VITE_CURRENT_USER_EMAIL` — identidad inyectada por el entorno
- *      (Atlas/prod o el puente de desarrollo). Si existe, el usuario ya viene
- *      autenticado por el entorno y la pantalla de login NO se muestra.
+ * Regla de acceso ("primero login, después carga"):
+ *   - La pantalla de login SIEMPRE se muestra al entrar, EXCEPTO cuando ya hay
+ *     una sesión iniciada en este equipo.
+ *   - "Recordar este equipo" (checkbox del login) decide la durabilidad:
+ *       · marcado    → la sesión se guarda en localStorage y AUTO-ENTRA en
+ *                      próximas visitas (incluso tras cerrar el navegador).
+ *       · sin marcar → la sesión vive solo en sessionStorage: sobrevive
+ *                      recargas dentro de la misma pestaña/navegador, pero al
+ *                      cerrar el navegador se pierde y se vuelve a pedir login.
+ *
+ * `VITE_CURRENT_USER_EMAIL` YA NO salta el login (era un puente DEV que dejaba
+ * al usuario encerrado sin rol y sin poder cerrar sesión). Ahora solo se usa
+ * para PRE-LLENAR el campo de correo como conveniencia.
  *
  * Helpers puros para que tanto `components/Login.tsx` (gate + pantalla) como
  * `contexts/AuthContext.tsx` (identidad + `can()`) lean/escriban la MISMA key.
@@ -25,18 +33,21 @@ export interface AuthSession {
   email: string;
   /** Marca de tiempo ISO del login. */
   signedInAt: string;
+  /** ¿El usuario pidió recordar este equipo? (auto-entrar en el futuro). */
+  remember: boolean;
 }
 
-/** Email inyectado por el entorno (Atlas/prod o dev bridge), o `null`. */
+/** Email inyectado por el entorno (dev bridge), solo para pre-llenar el campo. */
 function readEnvEmail(): string | null {
   const raw = import.meta.env.VITE_CURRENT_USER_EMAIL;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
-/** Sesión guardada, o `null` si no hay / está corrupta / storage no disponible. */
-export function readAuthSession(): AuthSession | null {
+/** Lee y valida una sesión cruda desde un Storage dado. */
+function readFrom(store: Storage | undefined, remember: boolean): AuthSession | null {
+  if (!store) return null;
   try {
-    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    const raw = store.getItem(AUTH_SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<AuthSession>;
     if (parsed && typeof parsed.email === 'string' && parsed.email.trim()) {
@@ -44,6 +55,7 @@ export function readAuthSession(): AuthSession | null {
         email: parsed.email.trim().toLowerCase(),
         signedInAt:
           typeof parsed.signedInAt === 'string' ? parsed.signedInAt : new Date().toISOString(),
+        remember: typeof parsed.remember === 'boolean' ? parsed.remember : remember,
       };
     }
   } catch {
@@ -52,39 +64,90 @@ export function readAuthSession(): AuthSession | null {
   return null;
 }
 
-/** Persiste la sesión. Tolerante a storage lleno/bloqueado (no truena). */
-export function writeAuthSession(email: string): AuthSession {
+function localStore(): Storage | undefined {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionStore(): Storage | undefined {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Sesión vigente, o `null` si no hay / está corrupta / storage no disponible.
+ * Precedencia: la sesión RECORDADA (localStorage) primero, luego la de la
+ * pestaña actual (sessionStorage).
+ */
+export function readAuthSession(): AuthSession | null {
+  return readFrom(localStore(), true) ?? readFrom(sessionStore(), false);
+}
+
+/**
+ * Persiste la sesión. `remember=true` la guarda en localStorage (auto-entra en
+ * el futuro); `remember=false` la guarda solo en sessionStorage (vive lo que
+ * dure el navegador abierto). Limpia el otro almacén para no dejar rastros.
+ * Tolerante a storage lleno/bloqueado (no truena).
+ */
+export function writeAuthSession(email: string, remember: boolean = false): AuthSession {
   const session: AuthSession = {
     email: email.trim().toLowerCase(),
     signedInAt: new Date().toISOString(),
+    remember,
   };
+  const payload = JSON.stringify(session);
+  const target = remember ? localStore() : sessionStore();
+  const other = remember ? sessionStore() : localStore();
   try {
-    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(session));
+    target?.setItem(AUTH_SESSION_KEY, payload);
   } catch {
     // El storage puede estar lleno/bloqueado; la identidad sigue en memoria.
+  }
+  try {
+    other?.removeItem(AUTH_SESSION_KEY);
+  } catch {
+    // Ignorar.
   }
   return session;
 }
 
-/** Borra la sesión guardada (logout / reset). */
+/** Borra la sesión guardada (logout / reset) en AMBOS almacenes. */
 export function clearAuthSession(): void {
   try {
-    localStorage.removeItem(AUTH_SESSION_KEY);
+    localStore()?.removeItem(AUTH_SESSION_KEY);
   } catch {
     // Ignorar — nada que limpiar si el storage no está disponible.
   }
+  try {
+    sessionStore()?.removeItem(AUTH_SESSION_KEY);
+  } catch {
+    // Ignorar.
+  }
 }
 
-/** Correo resuelto: sesión guardada primero, luego el email del entorno. */
+/** Correo resuelto SOLO desde la sesión guardada (NO desde el entorno). */
 export function resolveSessionEmail(): string | null {
-  return readAuthSession()?.email ?? readEnvEmail();
+  return readAuthSession()?.email ?? null;
 }
 
 /**
- * ¿Mostrar la pantalla de login? Solo cuando no hay identidad alguna: ni
- * sesión guardada ni email inyectado por el entorno. Si Atlas/prod inyecta
- * `VITE_CURRENT_USER_EMAIL`, el usuario ya viene autenticado y no se le pide
- * login otra vez ("primero login, después carga" aplica al caso sin entorno).
+ * Correo para PRE-LLENAR el campo de login (conveniencia): el de la última
+ * sesión si existe, o el inyectado por el entorno. Nunca salta el login.
+ */
+export function getPrefillEmail(): string {
+  return readAuthSession()?.email ?? readEnvEmail() ?? '';
+}
+
+/**
+ * ¿Mostrar la pantalla de login? Solo se salta cuando ya hay una sesión
+ * iniciada en este equipo (recordada en localStorage o vigente en la pestaña).
+ * Sin sesión → login ("primero login, después carga").
  */
 export function needsLogin(): boolean {
   return resolveSessionEmail() === null;
