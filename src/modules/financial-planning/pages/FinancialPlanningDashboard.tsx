@@ -11,6 +11,7 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import {
   bucketKeyForDate,
@@ -63,7 +64,14 @@ import {
   saveProjectionSourceToPersistentCache,
   saveScenarioRunToPersistentCache,
 } from '../../financial-projection/services/financialProjectionPersistentCache';
-import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
+import {
+  auxiliarTaxCoverageFingerprint,
+  cxpPaymentCoverageFingerprint,
+  defaultTaxStore,
+  loadTaxStore,
+  TAX_STORE_CHANGED_EVENT,
+  TAX_STORE_KEY,
+} from '../../taxes/services/taxModuleService';
 import {
   loadManualPlanningEntries,
   saveManualPlanningEntries,
@@ -109,6 +117,7 @@ interface Props {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
   /** Cruce AuxiliarContable ↔ banco — alimenta facturas cobradas / CXPs pagadas. */
@@ -416,6 +425,8 @@ async function preloadPlanningScenarioRuns(input: {
       props.bajioStatements ?? [],
       (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
     ),
+    auxiliarTaxCoverageFingerprint(props.auxiliarReconciliation),
+    cxpPaymentCoverageFingerprint(props.cxpPaymentCoverage),
     yearStart,
     yearEnd,
     today,
@@ -669,6 +680,8 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       props.bajioStatements ?? [],
       (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
     );
+    const auxiliarKey = auxiliarTaxCoverageFingerprint(props.auxiliarReconciliation);
+    const cxpCoverageKey = cxpPaymentCoverageFingerprint(props.cxpPaymentCoverage);
     return [
       movementsKey,
       adjustmentsKey,
@@ -677,6 +690,8 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       providerKey,
       cobranzaPaymentsKey,
       bajioKey,
+      auxiliarKey,
+      cxpCoverageKey,
       yearStart,
       yearEnd,
       today,
@@ -693,6 +708,8 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     props.providers,
     props.cobranzaPayments,
     props.bajioStatements,
+    props.auxiliarReconciliation,
+    props.cxpPaymentCoverage,
     yearStart,
     yearEnd,
     today,
@@ -730,6 +747,8 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         providers: props.providers,
         assumptions: props.assumptions,
         cxpRecords: props.cxpRecords,
+        cxpPaymentCoverage: props.cxpPaymentCoverage,
+        auxiliarReconciliation: props.auxiliarReconciliation,
         purchaseReceipts: props.purchaseReceipts,
         paidPurchaseOrderKeys: source.paidPurchaseOrderKeys,
         payrollCosts: props.payrollCosts,

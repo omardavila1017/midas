@@ -91,6 +91,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas.theme', scope: 'localStorage', owner: 'components/ui/DarkModeToggle.tsx', description: 'Tema claro/oscuro.' },
   { key: 'midas.activityFeed', scope: 'localStorage', owner: 'components/ActivityFeed.tsx', description: 'Feed de actividad de la sesión.' },
   { key: 'midas.midasAi.conversations.v1', scope: 'localStorage', owner: 'modules/midas-ai/services/midasStorage.ts', description: 'Conversaciones del bot Midas AI.' },
+  { key: 'midas.runtime.lastTrail.v1', scope: 'localStorage', owner: 'services/runtimeGuardian.ts', description: 'Trail post-mortem: últimas navegaciones + muestras de heap + flag cleanExit. Sobrevive al OOM-kill para diagnosticar "Aw Snap".' },
 
   // ── Legacy (flowsense / versiones previas — purgables) ──────────────────
   { key: 'midas-v11', scope: 'localStorage', owner: 'domain/persistence.ts', description: 'Store v11 previo.', legacy: true },

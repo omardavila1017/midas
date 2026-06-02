@@ -240,7 +240,7 @@ export function mergeNominaBatch(
 }
 
 /**
- * Detecta meses con firma de carga parcial. Dos firmas:
+ * Detecta meses con firma de carga parcial. Tres firmas:
  *
  *  1) Truncamiento total (AWS API Gateway >1MB): records>0 pero ningún
  *     `DEDUCTION` ni `EMPLOYER_TAX`. La response solo trajo Percepciones.
@@ -252,12 +252,29 @@ export function mergeNominaBatch(
  *     por cada CASH_OUT (mínimo IMSS empleado + ISR), así que ratio < 0.3
  *     casi nunca es legítimo. Antes del fix, estos meses se promediaban
  *     con los meses completos y tiraban el TRESS prom 3m varios M.
+ *  3) Aportaciones truncadas: trae percepciones y deducciones pero NINGÚN
+ *     `EMPLOYER_TAX`. El gateway corta el payload >1MB justo en el bloque
+ *     "Obligación Empresa", dejando Aportaciones=$0 (la UI las muestra en
+ *     cero). En el agregado real (todas las empresas) un mes cerrado SIEMPRE
+ *     trae IMSS patronal/INFONAVIT, así que apor=0 == truncamiento. Es el
+ *     espejo, en la capa de cache/boot, de `nominaLacksEmployerTax` en
+ *     `jde.ts` (que ya troceaba el fetch por esta firma): sin esta firma, el
+ *     boot trusteaba el mes poisoned vía `shouldSkip` y el auto-refresh del
+ *     dashboard (`visibleMonthIsPartial`) nunca disparaba → el usuario tenía
+ *     que pulsar "Refrescar TRESS" a mano. EXCEPCIÓN: el mes EN CURSO puede no
+ *     tener aportaciones calculadas aún en TRESS (mismo best-effort que
+ *     `nominaLacksEmployerTax`), así que no se marca — el boot igual lo
+ *     refetchea cada arranque por estar en el fast-path YTD.
+ *
+ * `now` se inyecta para tests; en runtime es la fecha actual y solo se usa
+ * para exentar el mes en curso de la Firma 3.
  *
  * Devuelve la lista de `{year, month}` afectados para que el boot pueda
  * purgar esos records (y su cacheKey) antes de refetch.
  */
 export function findSuspectMonths(
   records: PayrollCostRecord[],
+  now: Date = new Date(),
 ): Array<{ year: number; month: number }> {
   type Entry = {
     year: number;
@@ -298,10 +315,22 @@ export function findSuspectMonths(
   }
   const PARTIAL_RATIO = 0.3;
   const PARTIAL_GROSS_RATIO = 0.25;
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
   const suspect: Array<{ year: number; month: number }> = [];
   for (const e of byMonth.values()) {
     // Firma 1: truncamiento total — sin deducciones ni aportaciones.
     if (e.cashCount > 0 && !e.hasDed && !e.hasTax) {
+      suspect.push({ year: e.year, month: e.month });
+      continue;
+    }
+    // Firma 3: aportaciones truncadas — trae deducciones pero NINGÚN
+    // EMPLOYER_TAX. Solo meses CERRADOS (el mes en curso puede no tenerlas
+    // calculadas aún en TRESS). Ver doc de la función.
+    if (
+      e.cashCount > 0 && e.hasDed && !e.hasTax &&
+      !(e.year === currentYear && e.month === currentMonth)
+    ) {
       suspect.push({ year: e.year, month: e.month });
       continue;
     }

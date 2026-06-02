@@ -29,7 +29,8 @@
       "Bash(npx playwright *)",
       "Bash(awk 'NR==19' /Users/paolo/Documents/GitHub/flujo-senda/src/modules/financial-planning/services/planningRowTaxonomy.ts)",
       "Bash(npx vitest *)",
-      "Bash(find /Users/paulo/Documents/GitHub/flujo-senda/src/modules/financial-planning/services -type f -name \"*.ts\" | head -10)"
+      "Bash(find /Users/paulo/Documents/GitHub/flujo-senda/src/modules/financial-planning/services -type f -name \"*.ts\" | head -10)",
+      "Bash(grep -r \"localStorage\\\\|persistTrail\\\\|trail\" /Users/paulo/Documents/GitHub/flujo-senda/src --include=\"*.ts\" --include=\"*.tsx\" | grep -v test | grep -v node_modules | head -20)"
     ]
   }
 }

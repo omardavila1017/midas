@@ -17,6 +17,7 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import { effectiveAmount, effectiveMovementDate } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
@@ -88,7 +89,14 @@ import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../
 import {
   createQuickMovementAdjustment,
 } from '../services/projectionPredictionEngine';
-import { defaultTaxStore, loadTaxStore, TAX_STORE_CHANGED_EVENT, TAX_STORE_KEY } from '../../taxes/services/taxModuleService';
+import {
+  auxiliarTaxCoverageFingerprint,
+  cxpPaymentCoverageFingerprint,
+  defaultTaxStore,
+  loadTaxStore,
+  TAX_STORE_CHANGED_EVENT,
+  TAX_STORE_KEY,
+} from '../../taxes/services/taxModuleService';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
@@ -122,6 +130,7 @@ interface Props {
   clients: Client[];
   providers: Provider[];
   cxpRecords: CXPRecord[];
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
   cobranzaRecords?: CobranzaRecord[];
   cobranzaPayments?: CobranzaPayment[];
   /** Cruce AuxiliarContable ↔ banco — alimenta facturas cobradas / CXPs pagadas. */
@@ -519,6 +528,8 @@ async function runPreloadProjectionScenarioRuns(input: {
       taxStore.overdueBalance,
     ].join(':'),
     fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? '')),
+    auxiliarTaxCoverageFingerprint(props.auxiliarReconciliation),
+    cxpPaymentCoverageFingerprint(props.cxpPaymentCoverage),
     yearStart,
     yearEnd,
     today,
@@ -553,6 +564,8 @@ async function runPreloadProjectionScenarioRuns(input: {
         providers: props.providers,
         assumptions: props.assumptions,
         cxpRecords: props.cxpRecords,
+        cxpPaymentCoverage: props.cxpPaymentCoverage,
+        auxiliarReconciliation: props.auxiliarReconciliation,
         purchaseReceipts: props.purchaseReceipts,
         paidPurchaseOrderKeys: source.paidPurchaseOrderKeys,
         payrollCosts: props.payrollCosts,
@@ -886,12 +899,16 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       taxStore.overdueBalance,
     ].join(':');
     const providerKey = fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? ''));
+    const auxiliarKey = auxiliarTaxCoverageFingerprint(props.auxiliarReconciliation);
+    const cxpCoverageKey = cxpPaymentCoverageFingerprint(props.cxpPaymentCoverage);
     return [
       movementsKey,
       adjustmentsKey,
       manualKey,
       taxKey,
       providerKey,
+      auxiliarKey,
+      cxpCoverageKey,
       yearStart,
       yearEnd,
       today,
@@ -905,6 +922,8 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     manualEntries,
     taxStore,
     props.providers,
+    props.auxiliarReconciliation,
+    props.cxpPaymentCoverage,
     activeScenarioId,
     yearStart,
     yearEnd,
@@ -967,6 +986,8 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
           providers: props.providers,
           assumptions: props.assumptions,
           cxpRecords: props.cxpRecords,
+          cxpPaymentCoverage: props.cxpPaymentCoverage,
+          auxiliarReconciliation: props.auxiliarReconciliation,
           purchaseReceipts: props.purchaseReceipts,
           paidPurchaseOrderKeys: source.paidPurchaseOrderKeys,
           payrollCosts: props.payrollCosts,

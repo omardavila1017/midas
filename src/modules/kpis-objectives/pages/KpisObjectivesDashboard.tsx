@@ -11,6 +11,7 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { todayISO } from '../../../formatters';
 import {
   buildFinancialProjectionSourceData,
@@ -48,6 +49,7 @@ interface Props {
   cobranzaRecords: CobranzaRecord[];
   cobranzaPayments: CobranzaPayment[];
   cxpRecords: CXPRecord[];
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
   auxiliarReconciliation?: AuxiliarReconResult;
   rolRecords?: RolRecord[];
   viajesEspecialesRecords?: ViajeEspecialRecord[];
@@ -67,6 +69,7 @@ export default function KpisObjectivesDashboard({
   cobranzaRecords,
   cobranzaPayments,
   cxpRecords,
+  cxpPaymentCoverage,
   auxiliarReconciliation,
   rolRecords = [],
   viajesEspecialesRecords = [],
@@ -171,6 +174,8 @@ export default function KpisObjectivesDashboard({
         providers,
         assumptions,
         cxpRecords,
+        cxpPaymentCoverage,
+        auxiliarReconciliation,
         purchaseReceipts,
         payrollCosts,
         cobranzaPayments,
@@ -205,6 +210,7 @@ export default function KpisObjectivesDashboard({
     cobranzaPayments,
     cobranzaRecords,
     companyCode,
+    cxpPaymentCoverage,
     cxpRecords,
     payrollCosts,
     providers,

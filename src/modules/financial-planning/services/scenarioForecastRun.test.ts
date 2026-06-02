@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { CXPRecord } from '../../../domain/persistence';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { defaultTaxStore } from '../../taxes/services/taxModuleService';
 import type {
   CellOverride,
@@ -116,7 +118,112 @@ describe('scenarioForecastRun', () => {
     expect(run.movements.map((item) => item.id).sort()).toEqual(['bank-real', 'cxc:pending-1']);
     expect(run.summary.finalCash).toBe(1_200);
   });
+
+  it('passes CXP payment coverage into forecast taxes to avoid current-period IVA double counting', () => {
+    const cxp = cxpRecord({
+      cia: '00001',
+      noProveedor: 'P-IVA',
+      nombre: 'Proveedor IVA',
+      noFactura: 'F-IVA',
+      fechaProgramacionPago: '2026-05-20',
+      importeSubtotalPesos: 1000,
+      importeImpuestosPesos: 160,
+      importeBrutoPesos: 1160,
+      importePendientePesos: 1160,
+    });
+    const taxStore = {
+      ...defaultTaxStore(),
+      adjustments: [{
+        id: 'adj-iva-caused',
+        taxType: 'IVA' as const,
+        period: '2026-05',
+        kind: 'IVA_CAUSED' as const,
+        amount: 160,
+        source: 'MANUAL' as const,
+        createdAt: '2026-05-01T00:00:00.000Z',
+      }],
+    };
+
+    const args = {
+      scenarioId: 'approved',
+      scenarioName: 'Aprobado',
+      scenarioKind: 'APPROVED' as const,
+      sourceMovements: [],
+      adjustments: [],
+      manualEntries: [],
+      customRows: [],
+      overrides: [],
+      clients: [],
+      providers: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      cxpRecords: [cxp],
+      cxpPaymentCoverage: new Map([[coverageKey(cxp), coverage(cxp, {
+        status: 'PAID',
+        totalPaidPesos: 1160,
+        payments: [{ noPago: 'Auxiliar GL', fechaPago: '2026-04-30', importe: 1160, tier: 'folio-exact' }],
+      })]]),
+      budget: null,
+      companyCode: 'all',
+      taxStore,
+      startDate: '2026-05-01',
+      endDate: '2026-06-30',
+      today: '2026-05-01',
+      initialCash: 0,
+      supplierInitialCash: 0,
+      minimumCash: 0,
+      granularity: 'monthly' as const,
+    };
+
+    const run = buildScenarioForecastRun(args);
+
+    const taxReserve = run.movements.find((item) => item.id === 'tax-reserve:approved:tax-calculated:IVA:2026-05');
+    expect(taxReserve?.projectedAmount).toBe(160);
+  });
 });
+
+function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
+  return {
+    cia: patch.cia ?? '00001',
+    noProveedor: patch.noProveedor ?? 'P-1',
+    nombre: patch.nombre ?? 'Proveedor IVA',
+    noFactura: patch.noFactura ?? 'F-1',
+    fechaFactura: patch.fechaFactura ?? '2026-05-01',
+    fechaVence: patch.fechaVence ?? '2026-05-17',
+    fechaProgramacionPago: patch.fechaProgramacionPago ?? '2026-05-17',
+    diasVencida: patch.diasVencida ?? 0,
+    importeBrutoPesos: patch.importeBrutoPesos ?? 0,
+    importePendientePesos: patch.importePendientePesos ?? 0,
+    importeSubtotalPesos: patch.importeSubtotalPesos ?? 0,
+    importeImpuestosPesos: patch.importeImpuestosPesos ?? 0,
+    importeBrutoDolares: patch.importeBrutoDolares ?? 0,
+    importePendienteDolares: patch.importePendienteDolares ?? 0,
+    moneda: patch.moneda ?? 'MXN',
+    condPago: patch.condPago ?? '',
+    clasifica: patch.clasifica ?? '',
+    clasificacionProveedor: patch.clasificacionProveedor ?? '',
+    edoPago: patch.edoPago ?? '',
+    tipoCambio: patch.tipoCambio ?? 1,
+    porVencer: patch.porVencer ?? 0,
+    v1_30: patch.v1_30 ?? 0,
+    v31_60: patch.v31_60 ?? 0,
+    v61_90: patch.v61_90 ?? 0,
+    v91_120: patch.v91_120 ?? 0,
+    v121_150: patch.v121_150 ?? 0,
+    v151_180: patch.v151_180 ?? 0,
+    mas180: patch.mas180 ?? 0,
+  };
+}
+
+function coverageKey(record: CXPRecord): string {
+  return `${record.cia}::${record.noFactura}::${record.noProveedor}`;
+}
+
+function coverage(record: CXPRecord, patch: Omit<CxpPaymentCoverage, 'cxpKey'>): CxpPaymentCoverage {
+  return {
+    cxpKey: coverageKey(record),
+    ...patch,
+  };
+}
 
 function movement(
   id: string,

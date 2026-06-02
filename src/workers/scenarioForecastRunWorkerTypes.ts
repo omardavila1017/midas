@@ -14,6 +14,8 @@ export type HeavySourceBundle = Pick<
   | 'clients'
   | 'providers'
   | 'cxpRecords'
+  | 'cxpPaymentCoverage'
+  | 'auxiliarReconciliation'
   | 'purchaseReceipts'
   | 'payrollCosts'
   | 'cobranzaPayments'

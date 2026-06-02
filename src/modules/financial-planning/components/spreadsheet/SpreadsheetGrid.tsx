@@ -123,7 +123,8 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
           const id = bucketId(type, label);
           const sortedRows = [...groupRows].sort((a, b) => a.label.localeCompare(b.label, 'es-MX'));
           const header: DisplayRow = { kind: 'bucket', id, label, rows: sortedRows, type };
-          const expanded = expandedBuckets[id] ?? isExpandedByDefault(type, sortedRows);
+          // Los buckets arrancan colapsados; el usuario expande con click.
+          const expanded = expandedBuckets[id] ?? false;
           if (!expanded) return [header];
           return [header, ...sortedRows.map((row) => ({ kind: 'data' as const, row, depth: 1 }))];
         });
@@ -539,7 +540,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   );
 
   const renderBucketRow = (group: Extract<DisplayRow, { kind: 'bucket' }>, rowIndex: number) => {
-    const expanded = expandedBuckets[group.id] ?? isExpandedByDefault(group.type, group.rows);
+    const expanded = expandedBuckets[group.id] ?? false;
     return (
       <div
         key={group.id}
@@ -818,10 +819,6 @@ function displayBucketLabelForRow(row: PlanningRow, type: FinancialMovementType)
   if (type !== 'OUTFLOW' || row.category !== 'AP_PAYMENT') return bucketLabel;
   const category = supplierCategoryGroupLabel(row.providerCategoryLabel ?? row.subgroupLabel);
   return category ? `${bucketLabel} · ${category}` : bucketLabel;
-}
-
-function isExpandedByDefault(type: FinancialMovementType, rows: PlanningRow[]): boolean {
-  return type === 'OUTFLOW' && rows.some((row) => row.category === 'AP_PAYMENT');
 }
 
 function baseOutflowBucketLabel(label: string): string {

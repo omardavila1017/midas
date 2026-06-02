@@ -139,7 +139,10 @@ import {
   markBootComplete,
   purgeReasonMessage,
 } from './services/storageHealthGuard';
-import { trackNavigation } from './services/runtimeGuardian';
+import { trackNavigation, onMemoryPressure, onMemoryEmergency } from './services/runtimeGuardian';
+import { clearProjectionSourceCache } from './modules/financial-projection/services/financialProjectionService';
+import { clearProjectionRunCache } from './modules/financial-projection/services/projectionCache';
+import { resetScenarioRunWorker } from './modules/shared-finance/hooks/useScenarioRunWorker';
 
 // Umbral más laxo que AUTO_ACCEPT_THRESHOLD (0.85) — todo lo que cae aquí se
 // adjunta solo a la cuenta del catálogo, sin pasar por wizard.
@@ -796,6 +799,43 @@ export default function App() {
       prevTabRef.current = activeTab;
     }
   }, [activeTab]);
+
+  // ── Defensa de memoria a nivel app (siempre viva) ─────────────────────────
+  // Hueco que cerramos: los pressure handlers de los dashboards financieros solo
+  // existen mientras esos paneles están montados, y el keep-alive está capado a
+  // UN tab pesado. Al entrar a Nómina (u otro módulo) NO quedaba NADIE
+  // registrado para liberar memoria → el OOM ganaba. Este handler vive en el
+  // shell, así que libera sin importar el tab activo. Se registra una sola vez.
+  const activeTabRef = useRef<TabId>(activeTab);
+  activeTabRef.current = activeTab;
+  useEffect(() => {
+    const releaseRebuildable = () => {
+      // Orden: primero las corridas (más gordas y más baratas de reconstruir),
+      // luego el source canónico, luego el worker (suelta su copia del heavy
+      // bundle ~100k movimientos + pipelines). Todo es rebuildable desde el
+      // state ya hidratado — pagamos un recompute (segundos) y evitamos el OOM.
+      try { clearProjectionRunCache(); } catch { /* ignore */ }
+      try { clearProjectionSourceCache(); } catch { /* ignore */ }
+      try { resetScenarioRunWorker(); } catch { /* ignore */ }
+    };
+    const unsubPressure = onMemoryPressure(releaseRebuildable);
+    const unsubEmergency = onMemoryEmergency(() => {
+      // Última línea de defensa: ya liberamos caches y el heap SIGUE >90%.
+      // Degradamos la UI controladamente — mejor que Chrome mate la pestaña.
+      releaseRebuildable();
+      const HEAVY_TABS = new Set<TabId>(['financialProjection', 'financialPlanning', 'payroll']);
+      if (HEAVY_TABS.has(activeTabRef.current)) {
+        setActiveTab('bancos'); // desmonta el árbol pesado del tab actual
+        try {
+          toast.info(
+            'Liberé memoria para evitar un cierre inesperado. Vuelve al módulo cuando quieras.',
+            { duration: 8000 },
+          );
+        } catch { /* ignore */ }
+      }
+    });
+    return () => { unsubPressure(); unsubEmergency(); };
+  }, [toast]);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   // Flag aparte de catalogLoaded — éste indica que loadStore() (light de
   // localStorage v12 + heavies de IDB) terminó de hidratar el state. Los boot
@@ -3519,8 +3559,16 @@ export default function App() {
               console.info(
                 `[nomina-diag] fetch ${anio}-${String(mes).padStart(2, '0')} OK · recs=${recs.length} · cashOut=${Math.round(cashOut)} · apor=${Math.round(apor)}${apor === 0 && recs.length > 0 ? ' ⚠️TRUNCADO(apor=0)' : ''}`,
               );
+              // Mergeamos best-effort para que algo se pinte, PERO solo marcamos
+              // la llave como cargada si la respuesta NO es parcial. Si llegó
+              // truncada (incl. apor=0, Firma 3), la dejamos sin llave para que
+              // un boot posterior la reintente y `shouldSkip` no la trustee. Sin
+              // esto, una respuesta truncada del boot se persistía como
+              // "cargada" y el usuario tenía que "Refrescar TRESS" a mano.
               mergedBatch = mergeNominaBatch(mergedBatch, recs);
-              keys[cacheKey] = ts;
+              if (fetchedSuspects.length === 0) {
+                keys[cacheKey] = ts;
+              }
             } else {
               console.error(`[nomina] auto-fetch ${anio}-${String(mes).padStart(2, '0')} falló`, res.reason);
             }
@@ -4094,6 +4142,7 @@ export default function App() {
     clients,
     providers,
     cxpRecords,
+    cxpPaymentCoverage: paymentReconciliation.cxpCoverage,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,
@@ -4112,6 +4161,7 @@ export default function App() {
     clients,
     providers,
     cxpRecords,
+    paymentReconciliation.cxpCoverage,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,
@@ -4130,6 +4180,7 @@ export default function App() {
     clients,
     providers,
     cxpRecords,
+    cxpPaymentCoverage: paymentReconciliation.cxpCoverage,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,
@@ -4147,6 +4198,7 @@ export default function App() {
     clients,
     providers,
     cxpRecords,
+    paymentReconciliation.cxpCoverage,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,
@@ -4620,6 +4672,7 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   cobranzaPayments={cobranzaPayments}
                   cxpRecords={cxpRecords}
+                  cxpPaymentCoverage={paymentReconciliation.cxpCoverage}
                   auxiliarReconciliation={auxiliarReconciliation}
                   rolRecords={rolRecords}
                   viajesEspecialesRecords={viajesEspecialesRecords}

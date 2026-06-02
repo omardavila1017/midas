@@ -41,6 +41,50 @@ const REGIMEN_601_IVA_RATE = 16;
 
 export type IvaMode = 'REAL' | 'FORECAST' | 'BOTH';
 
+function foldHash(seed: number, value: string | number | undefined | null): number {
+  if (value === undefined || value === null) return seed;
+  const s = String(value);
+  let hash = seed;
+  for (let i = 0; i < s.length; i += 1) {
+    hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+  }
+  return hash;
+}
+
+export function auxiliarTaxCoverageFingerprint(result: AuxiliarReconResult | undefined): string {
+  if (!result || result.summary.totalLineas === 0) return 'aux:0';
+  let hash = result.summary.totalLineas;
+  for (const line of result.lines) {
+    hash = foldHash(hash, line.cia);
+    hash = foldHash(hash, line.flujo);
+    hash = foldHash(hash, line.matchTier);
+    hash = foldHash(hash, line.source.kind);
+    hash = foldHash(hash, line.source.ref);
+    hash = foldHash(hash, line.bankDate);
+    hash = foldHash(hash, line.fechaContable);
+    hash = foldHash(hash, line.bankAmount ?? line.importe);
+  }
+  return `aux:${result.summary.totalLineas}:${hash}`;
+}
+
+export function cxpPaymentCoverageFingerprint(
+  coverage: Map<string, CxpPaymentCoverage> | undefined,
+): string {
+  if (!coverage || coverage.size === 0) return 'cxpCoverage:0';
+  let hash = coverage.size;
+  for (const [key, value] of coverage) {
+    hash = foldHash(hash, key);
+    hash = foldHash(hash, value.status);
+    hash = foldHash(hash, value.totalPaidPesos);
+    for (const payment of value.payments) {
+      hash = foldHash(hash, payment.noPago);
+      hash = foldHash(hash, payment.fechaPago);
+      hash = foldHash(hash, payment.importe);
+    }
+  }
+  return `cxpCoverage:${coverage.size}:${hash}`;
+}
+
 export interface TaxStore {
   adjustments: TaxManualAdjustment[];
   obligations: TaxObligation[];

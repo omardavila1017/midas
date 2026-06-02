@@ -51,7 +51,7 @@ describe('<SpreadsheetGrid />', () => {
     expect(appearsBefore('Impuestos', 'Egresos bancarios sin identificar')).toBe(true);
   });
 
-  it('separates supplier outflows into category sections and shows providers by default', () => {
+  it('separates supplier outflows into category sections and keeps providers hidden until click', () => {
     renderGrid(vi.fn(), [
       outflowRow('OUTFLOW:AP_PAYMENT:taller-a', 'Taller A', 'Flota', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
       outflowRow('OUTFLOW:AP_PAYMENT:taller-b', 'Taller B', 'Flota', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
@@ -64,9 +64,15 @@ describe('<SpreadsheetGrid />', () => {
     expect(screen.getByText('Flota · Chasis')).toBeTruthy();
     expect(screen.getByText('Flota · Refacciones')).toBeTruthy();
     expect(screen.getByText('Proveedor TI · Tecnologia y Soporte')).toBeTruthy();
+    expect(screen.queryByText('Taller A')).toBeNull();
+    expect(screen.queryByText('Taller B')).toBeNull();
+    expect(screen.queryByText('Chasis Norte')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Flota · Taller/ }));
+
     expect(screen.getByText('Taller A')).toBeTruthy();
     expect(screen.getByText('Taller B')).toBeTruthy();
-    expect(screen.getByText('Chasis Norte')).toBeTruthy();
+    expect(screen.queryByText('Chasis Norte')).toBeNull();
     expect(appearsBefore('Flota · Taller', 'Flota · Refacciones')).toBe(true);
   });
 });

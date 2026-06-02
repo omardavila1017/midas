@@ -272,11 +272,15 @@ describe('findSuspectMonths', () => {
   });
 
   it('detecta quincena suelta por ratio bajo y gross bajo frente a un mes completo', () => {
+    // Ambos meses traen EMPLOYER_TAX (aportaciones) para aislar la Firma 2
+    // (quincena suelta) de la Firma 3 (apor truncadas). El mes completo no
+    // debe marcarse; el parcial sí, por ratio+gross bajos.
     const completeMonth = [
       rec({ year: 2026, month: 4, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 100_000 }),
       rec({ year: 2026, month: 4, conceptName: 'BONO', cashTreatment: 'CASH_OUT', amount: 10_000 }),
       rec({ year: 2026, month: 4, conceptName: 'ISR', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 15_000 }),
       rec({ year: 2026, month: 4, conceptName: 'IMSS', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 4_000 }),
+      rec({ year: 2026, month: 4, conceptName: 'IMSS PATRONAL', cashTreatment: 'EMPLOYER_TAX', amount: 18_000 }),
     ];
     const partialMonth = [
       rec({ year: 2026, month: 3, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 10_000 }),
@@ -284,9 +288,41 @@ describe('findSuspectMonths', () => {
       rec({ year: 2026, month: 3, conceptName: 'DESPENSA', cashTreatment: 'CASH_OUT', amount: 1_000 }),
       rec({ year: 2026, month: 3, conceptName: 'PRIMA', cashTreatment: 'CASH_OUT', amount: 1_000 }),
       rec({ year: 2026, month: 3, conceptName: 'ISR', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 1_000 }),
+      rec({ year: 2026, month: 3, conceptName: 'IMSS PATRONAL', cashTreatment: 'EMPLOYER_TAX', amount: 500 }),
     ];
 
-    expect(findSuspectMonths([...completeMonth, ...partialMonth])).toEqual([{ year: 2026, month: 3 }]);
+    const now = new Date(2026, 5, 1); // junio 2026
+    expect(findSuspectMonths([...completeMonth, ...partialMonth], now)).toEqual([{ year: 2026, month: 3 }]);
+  });
+
+  it('detecta un mes cerrado con aportaciones truncadas (apor=0, Firma 3)', () => {
+    // Trae percepciones y deducciones pero ningún EMPLOYER_TAX → el gateway
+    // cortó el bloque Obligación Empresa. Marzo es mes cerrado en junio.
+    const records = [
+      rec({ year: 2026, month: 3, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 100_000 }),
+      rec({ year: 2026, month: 3, conceptName: 'ISR', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 15_000 }),
+      rec({ year: 2026, month: 3, conceptName: 'IMSS EMPLEADO', cashTreatment: 'DEDUCTION', amount: 4_000 }),
+    ];
+    const now = new Date(2026, 5, 1); // junio 2026 → marzo cerrado
+    expect(findSuspectMonths(records, now)).toEqual([{ year: 2026, month: 3 }]);
+  });
+
+  it('NO marca el mes en curso por apor=0 (puede no estar calculado aún en TRESS)', () => {
+    const records = [
+      rec({ year: 2026, month: 6, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 100_000 }),
+      rec({ year: 2026, month: 6, conceptName: 'ISR', cashTreatment: 'WITHHOLDING_PAYABLE', amount: 15_000 }),
+      rec({ year: 2026, month: 6, conceptName: 'IMSS EMPLEADO', cashTreatment: 'DEDUCTION', amount: 4_000 }),
+    ];
+    const now = new Date(2026, 5, 15); // junio 2026 es el mes en curso
+    expect(findSuspectMonths(records, now)).toEqual([]);
+  });
+
+  it('marca el mes en curso si está totalmente truncado (solo percepciones, Firma 1)', () => {
+    const records = [
+      rec({ year: 2026, month: 6, conceptName: 'SUELDO', cashTreatment: 'CASH_OUT', amount: 100_000 }),
+    ];
+    const now = new Date(2026, 5, 15);
+    expect(findSuspectMonths(records, now)).toEqual([{ year: 2026, month: 6 }]);
   });
 });
 

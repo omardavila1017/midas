@@ -58,6 +58,8 @@ const HEAVY_KEYS = [
   'clients',
   'providers',
   'cxpRecords',
+  'cxpPaymentCoverage',
+  'auxiliarReconciliation',
   'purchaseReceipts',
   'payrollCosts',
   'cobranzaPayments',
@@ -67,11 +69,23 @@ const HEAVY_KEYS = [
 function splitArgs(a: BuildScenarioForecastRunArgs): { heavy: HeavySourceBundle; light: LightRunArgs } {
   const {
     sourceMovements, clients, providers, cxpRecords,
+    cxpPaymentCoverage, auxiliarReconciliation,
     purchaseReceipts, payrollCosts, cobranzaPayments, bajioStatements,
     ...light
   } = a;
   return {
-    heavy: { sourceMovements, clients, providers, cxpRecords, purchaseReceipts, payrollCosts, cobranzaPayments, bajioStatements },
+    heavy: {
+      sourceMovements,
+      clients,
+      providers,
+      cxpRecords,
+      cxpPaymentCoverage,
+      auxiliarReconciliation,
+      purchaseReceipts,
+      payrollCosts,
+      cobranzaPayments,
+      bajioStatements,
+    },
     light: light as LightRunArgs,
   };
 }
@@ -182,6 +196,38 @@ function handleWorkerMessage(data: ScenarioForecastRunWorkerResponse): void {
 /** Seed the universal placeholder from a worker-built or persisted run. */
 export function setScenarioRunPlaceholder(run: ScenarioForecastRun): void {
   universalPlaceholder = run;
+}
+
+/**
+ * Libera la memoria del worker de escenarios bajo presión de memoria. El worker
+ * cachea el heavy bundle (sourceMovements ~100k + catálogos) y hasta 4 pipelines
+ * — terminarlo suelta TODO eso de la heap del worker. En el próximo
+ * `requestScenarioRun` se recrea solo (lazy) y reenvía el heavy (la versión
+ * quedó en -1). Los jobs en vuelo se rechazan con un Error benigno: todos los
+ * callers ya hacen `.catch` (warmup best-effort + el path interno de runCached),
+ * así que no se generan unhandled rejections.
+ */
+export function resetScenarioRunWorker(): void {
+  try {
+    if (sharedWorker) {
+      sharedWorker.terminate();
+      sharedWorker = null;
+    }
+  } catch {
+    /* ignore */
+  }
+  sharedWorkerHeavyVersion = -1;
+  sharedHeavyVersion = 0;
+  sharedPrevHeavy = null;
+  const drain = (job: SharedRunJob | null) => {
+    if (!job) return;
+    pendingJobsByKey.delete(job.cacheKey);
+    try { job.reject(new Error('scenario worker reset under memory pressure')); } catch { /* ignore */ }
+  };
+  drain(activeJob);
+  activeJob = null;
+  while (runQueue.length > 0) drain(runQueue.shift()!);
+  pendingJobsByKey.clear();
 }
 
 export function requestScenarioRun(

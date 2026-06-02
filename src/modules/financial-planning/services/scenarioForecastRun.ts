@@ -1,5 +1,7 @@
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
+import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
+import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
@@ -68,6 +70,8 @@ export interface BuildScenarioForecastRunArgs {
   providers: Provider[];
   assumptions: CashFlowAssumptions;
   cxpRecords: CXPRecord[];
+  cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
+  auxiliarReconciliation?: AuxiliarReconResult;
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
   cobranzaPayments?: CobranzaPayment[];
@@ -144,6 +148,8 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
     providers: args.providers,
     assumptions: args.assumptions,
     cxpRecords: args.cxpRecords,
+    cxpPaymentCoverage: args.cxpPaymentCoverage,
+    auxiliarReconciliation: args.auxiliarReconciliation,
     purchaseReceipts: args.purchaseReceipts,
     paidPurchaseOrderKeys: args.paidPurchaseOrderKeys,
     payrollCosts: args.payrollCosts,
