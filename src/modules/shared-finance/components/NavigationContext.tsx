@@ -8,12 +8,20 @@ export type AppTabId =
   | 'financialProjection'
   | 'financialPlanning'
   | 'taxes'
+  | 'payroll'
+  | 'operating'
   | 'netflow'
   | 'collections'
+  | 'fideicomiso'
   | 'cxp'
+  | 'concursoMercantil'
+  | 'compras'
+  | 'pagos'
   | 'clients'
   | 'providers'
-  | 'bancos';
+  | 'bancos'
+  | 'kpisObjectives'
+  | 'users';
 
 /**
  * Deep-link target for a cross-module jump. The `tab` is required; `focus`

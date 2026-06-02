@@ -24,7 +24,8 @@ export type TabId =
   | 'pagos'
   | 'bancos'
   | 'netflow'
-  | 'kpisObjectives';
+  | 'kpisObjectives'
+  | 'users';
 
 export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 

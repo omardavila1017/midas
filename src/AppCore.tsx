@@ -76,6 +76,7 @@ const TaxDashboard = lazy(() => import('./modules/taxes/pages/TaxDashboard'));
 const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashboard'));
 const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
 const KpisObjectivesDashboard = lazy(() => import('./modules/kpis-objectives/pages/KpisObjectivesDashboard'));
+const UsersDashboard = lazy(() => import('./modules/users/pages/UsersDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
 import DarkModeToggle from './components/ui/DarkModeToggle';
@@ -90,7 +91,7 @@ import type { PayrollCostRecord, FinancialScenario } from './modules/shared-fina
 import { deriveNominaLoadedKeysFromRecords, findSuspectMonths, mergeNominaBatch, nominaCacheKey, refineBatch } from './modules/payroll/services/payrollModuleService';
 import { KeyboardShortcutsModal, useKeyboardShortcuts } from './components/KeyboardShortcuts';
 import {
-  Users, UserSquare,
+  Users, UserSquare, UserCog,
   ChevronDown, Landmark, Check, GitBranch, Lock,
   HandCoins, ChevronRight, BookUser, TrendingUp,
   Receipt, Wallet, FolderOpen,
@@ -132,6 +133,7 @@ import {
   type OrphanNoCliente,
 } from './domain/clientCobranzaMatcher';
 import { useToast } from './components/Toast';
+import { useAuth } from './contexts/AuthContext';
 import {
   consumePurgeNotice,
   markBootComplete,
@@ -315,7 +317,7 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
 const KEEP_ALIVE_TABS = new Set<TabId>(['financialProjection', 'financialPlanning']);
 
 
-type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'objetivos';
+type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'objetivos' | 'admin';
 
 /**
  * Section + tab order is the canonical sidebar ordering, grouped by money flow.
@@ -335,6 +337,7 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: s
   { id: 'cobranza',   label: 'Cobranza',            icon: HandCoins,  description: 'Flujo neto, cobranza y compromisos' },
   { id: 'catalogos',  label: 'Catálogos',           icon: BookUser,   description: 'Clientes, proveedores y bancos' },
   { id: 'objetivos',  label: 'Objetivos',           icon: Target,     description: 'KPIs y metas con seguimiento' },
+  { id: 'admin',      label: 'Administración',      icon: UserCog,    description: 'Usuarios y control de acceso' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
@@ -363,6 +366,9 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   objetivos: [
     { id: 'kpisObjectives', label: 'KPIs y Objetivos', icon: Target },
   ],
+  admin: [
+    { id: 'users', label: 'Usuarios', icon: UserCog },
+  ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
@@ -371,6 +377,7 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   netflow: 'cobranza', collections: 'cobranza', concursoMercantil: 'cobranza', fideicomiso: 'cobranza',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
   kpisObjectives: 'objetivos',
+  users: 'admin',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -379,6 +386,7 @@ const DEFAULT_TAB: Record<SectionId, TabId> = {
   cobranza: 'netflow',
   proyeccion: 'financialProjection',
   objetivos: 'kpisObjectives',
+  admin: 'users',
 };
 
 /**
@@ -673,6 +681,9 @@ export default function App() {
   // marcamos boot complete cuando isBooted se vuelve true para que el
   // watchdog de la próxima sesión sepa que la app cerró bien.
   const toast = useToast();
+  // RBAC: identidad + permisos del usuario actual. `can(tab)` decide qué
+  // módulos se muestran. Ver src/contexts/AuthContext.tsx y src/config/roles.ts.
+  const { can: canAccessTab, role: userRole } = useAuth();
   useEffect(() => {
     const notice = consumePurgeNotice();
     if (notice) {
@@ -4107,14 +4118,52 @@ export default function App() {
   const deleteClient = (id: string) => setClients(prev => prev.filter(x => x.id !== id));
 
   const activeSection = SECTION_FOR_TAB[activeTab] ?? 'proyeccion';
-  const subTabs = SUB_TABS[activeSection];
+
+  // ── RBAC: filtra secciones y sub-tabs por el rol del usuario ──────────────
+  // Un tab no permitido no se renderiza en la navegación; una sección sin
+  // tabs visibles se oculta por completo. La autorización vinculante la hace
+  // el backend (AUTH.md) — esto es solo UX.
+  const visibleSubTabsBySection = useMemo(() => {
+    const out = {} as Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]>;
+    (Object.keys(SUB_TABS) as SectionId[]).forEach((section) => {
+      out[section] = SUB_TABS[section].filter((t) => canAccessTab(t.id as AppTabId));
+    });
+    return out;
+  }, [canAccessTab]);
+
+  const visibleSections = useMemo(
+    () => SECTIONS.filter((s) => visibleSubTabsBySection[s.id].length > 0),
+    [visibleSubTabsBySection],
+  );
+
+  /** Primer tab que el usuario puede ver, recorriendo el orden canónico. */
+  const firstAllowedTab = useMemo<TabId | null>(() => {
+    for (const section of SECTIONS) {
+      const tabs = visibleSubTabsBySection[section.id];
+      if (tabs.length > 0) return tabs[0].id;
+    }
+    return null;
+  }, [visibleSubTabsBySection]);
+
+  const subTabs = visibleSubTabsBySection[activeSection] ?? [];
+
+  // Guard de render: si el usuario navega (deep-link / atajo / cambio de rol)
+  // a un tab no permitido, lo mandamos al primer tab permitido y avisamos.
+  const activeTabAllowed = canAccessTab(activeTab as AppTabId);
+  useEffect(() => {
+    if (activeTabAllowed) return;
+    if (firstAllowedTab && firstAllowedTab !== activeTab) {
+      setActiveTab(firstAllowedTab);
+      toast.warning('No tienes acceso a este módulo.', { duration: 4000 });
+    }
+  }, [activeTabAllowed, firstAllowedTab, activeTab, toast]);
 
   // Atajos 1-N cambian sub-tabs DENTRO de la sección activa
   // (Proyección / Operación / Catálogos). Sección se deriva de activeTab.
   const { shortcutsOpen, setShortcutsOpen } = useKeyboardShortcuts({
     onTabSwitch: (n) => {
       const section = SECTION_FOR_TAB[activeTab] ?? 'proyeccion';
-      const tabs = SUB_TABS[section];
+      const tabs = visibleSubTabsBySection[section] ?? [];
       if (n >= 1 && n <= tabs.length) setActiveTab(tabs[n - 1].id);
     },
   });
@@ -4320,7 +4369,7 @@ export default function App() {
             className="flex items-center rounded-[var(--radius-md)] p-0.5 gap-0.5"
             style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)' }}
           >
-            {SECTIONS.map(s => {
+            {visibleSections.map(s => {
               const isActive = activeSection === s.id;
               return (
                 <button
@@ -4525,6 +4574,21 @@ export default function App() {
             fallbackLabel={subTabs.find(t => t.id === activeTab)?.label ?? activeTab}
             resetKeys={[activeTab]}
           >
+            {!activeTabAllowed ? (
+              <div
+                className="mx-auto mt-12 max-w-md rounded-[var(--radius-lg)] p-8 text-center"
+                style={{ background: 'var(--card)', border: '1px solid var(--gray-200)' }}
+              >
+                <Lock className="mx-auto h-8 w-8" strokeWidth={1.5} style={{ color: 'var(--gray-400)' }} />
+                <h2 className="mt-3 text-[16px] font-semibold" style={{ color: 'var(--gray-950)' }}>
+                  No tienes acceso a este módulo
+                </h2>
+                <p className="mt-1 text-[13px]" style={{ color: 'var(--gray-500)' }}>
+                  Tu rol ({userRole}) no incluye esta sección.
+                </p>
+              </div>
+            ) : (
+              <>
             {renderProjectionKeepAlive && (
               <KeepAlivePanel active={projectionActive}>
                 <Suspense fallback={<LazyTabFallback label="Proyección Financiera" />}>
@@ -4822,7 +4886,14 @@ export default function App() {
                 />
               </Suspense>
             )}
+            {activeTab === 'users' && (
+              <Suspense fallback={<LazyTabFallback label="Usuarios" />}>
+                <UsersDashboard />
+              </Suspense>
+            )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}
+              </>
+            )}
               </>
             )}
           </ErrorBoundary>
