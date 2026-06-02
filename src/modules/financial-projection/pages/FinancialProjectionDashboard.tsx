@@ -32,7 +32,6 @@ import type {
   PurchaseReceiptRecord,
 } from '../../shared-finance/types';
 import {
-  CobranzaKpiCard,
   MinimumExpenseKpi,
   computeRunYtd,
 } from '../components/MergedDashboardKpis';
@@ -1390,11 +1389,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           sublabel={comparisonRun ? 'Comparación activa' : 'vs Base'}
         />
       </div>
-
-      {/* Cobranza ↔ bancos: solo cuando hay datos JDE + abonos cargados. */}
-      {props.auxiliarReconciliation && props.auxiliarReconciliation.summary.totalLineas > 0 && (
-        <CobranzaKpiCard reconciliation={props.auxiliarReconciliation} />
-      )}
 
       <DeferredMount delayMs={60} fallback={<ChartSkeleton />}>
         <Suspense fallback={<ChartSkeleton />}>
