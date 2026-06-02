@@ -31,6 +31,8 @@ import {
 } from '../../taxes/services/taxModuleService';
 import { buildConvenioPaymentMovements } from '../../concurso-mercantil/services/convenioMovements';
 import { buildFideicomisoMovements } from '../../fideicomiso/services/fideicomisoMovements';
+import { buildTrendTopOffMovements } from '../../../domain/predictive';
+import type { PredictionPoint } from '../../../domain/predictive';
 import { expandManualPlanningEntriesToMovements } from './manualPlanningEntries';
 import { buildPlanningRows, conceptKeyForMovement } from './planningRowTaxonomy';
 import { scheduleSupplierPaymentsByScore, type SupplierPaymentPlan } from './supplierPaymentSchedule';
@@ -91,6 +93,17 @@ export interface BuildScenarioForecastRunArgs {
    * compras paid en la proyección de caja.
    */
   paidPurchaseOrderKeys?: Set<string>;
+  /**
+   * Activa la inyección de top-off de tendencia histórica (Holt-Winters) en
+   * escenarios NO base. Opt-in desde Proyección. Default off.
+   */
+  includeTrendTopOff?: boolean;
+  /**
+   * Series MENSUALES del motor predictivo (`canonical.predictive`) usadas para
+   * el top-off de tendencia. Payload ligero (~12 puntos c/u). Sólo se consume
+   * si `includeTrendTopOff` está activo.
+   */
+  trendForecast?: { income: PredictionPoint[]; expense: PredictionPoint[] };
 }
 
 /**
@@ -201,13 +214,29 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
     scenarioId: args.scenarioId,
   });
 
+  // Top-off de tendencia histórica (opt-in, sólo no-base). Se calcula DESPUÉS
+  // del supplier schedule para que el baseline "ya comprometido" incluya todo
+  // (CXC/CXP/nómina/impuestos/convenio/fideicomiso reprogramados) y para que el
+  // scheduler no intente reordenar egresos sintéticos sin proveedor.
+  const trendMovements = !isBase && args.includeTrendTopOff && args.trendForecast
+    ? buildTrendTopOffMovements({
+      incomeMonthly: args.trendForecast.income,
+      expenseMonthly: args.trendForecast.expense,
+      existingMovements: supplierSchedule.movements,
+      scenarioId: args.scenarioId,
+      startDate: args.startDate,
+      endDate: args.endDate,
+      asOfDate: args.today,
+    })
+    : [];
+
   // Base = past/today only. Truncate bucket window at today so empty future
   // buckets don't render (the movement filter already drops > today, but
   // buildBucketDates spans the full window regardless).
   const projectionEndDate = isBase ? args.today : args.endDate;
 
   return {
-    movements: supplierSchedule.movements,
+    movements: [...supplierSchedule.movements, ...trendMovements],
     supplierPlan: supplierSchedule.plan,
     isBase,
     projectionEndDate,

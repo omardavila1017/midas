@@ -19,3 +19,7 @@ export {
   type ModelOutput,
   type SmoothingParams,
 } from './holtWinters';
+export {
+  buildTrendTopOffMovements,
+  type TrendTopOffArgs,
+} from './trendTopOff';

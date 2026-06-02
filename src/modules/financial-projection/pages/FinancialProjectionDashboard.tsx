@@ -152,6 +152,10 @@ const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> =
   { id: 'daily', label: 'Día' },
 ];
 
+// Preferencia del toggle "Proyectar tendencia histórica" (opt-in). Registrada
+// en storageRegistry.ts.
+const TREND_TOPOFF_STORAGE_KEY = 'midas.projection.trendTopOff';
+
 /**
  * Proyección Financiera — centro de escenarios predictivos y edición rápida.
  *
@@ -528,8 +532,11 @@ async function runPreloadProjectionScenarioRuns(input: {
     const scenarioOverrides = bootstrap.cellOverrides.filter((override) => override.scenarioId === scenario.id);
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => override.conceptKey + '@' + override.bucketKey + ':' + override.value);
-    const cacheKey = [sharedInputsKey, scenario.id, 'monthly', customKey, overrideKey].join('||');
-    const pipelineKey = [sharedInputsKey, scenario.id, customKey, overrideKey].join('||');
+    // Warmup siempre con tendencia OFF (default). El key incluye `trend:0`
+    // para empatar con el path interno cuando el toggle está apagado; si el
+    // usuario lo enciende, el key cambia a `trend:1` → recompute.
+    const cacheKey = [sharedInputsKey, scenario.id, 'monthly', customKey, overrideKey, 'trend:0'].join('||');
+    const pipelineKey = [sharedInputsKey, scenario.id, customKey, overrideKey, 'trend:0'].join('||');
     return {
       cacheKey,
       pipelineKey,
@@ -762,6 +769,22 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const [drillMovement, setDrillMovement] = useState<FinancialMovement | null>(null);
   const [drillAnchor, setDrillAnchor] = useState<DOMRect | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // Top-off de tendencia histórica (Holt-Winters): opt-in, persistido.
+  const [trendTopOff, setTrendTopOff] = useState<boolean>(() => {
+    try { return window.localStorage.getItem(TREND_TOPOFF_STORAGE_KEY) === '1'; } catch { return false; }
+  });
+  const toggleTrendTopOff = useCallback((next: boolean) => {
+    setTrendTopOff(next);
+    try { window.localStorage.setItem(TREND_TOPOFF_STORAGE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+  }, []);
+  // Series mensuales del motor predictivo (Holt-Winters) para el top-off.
+  // `undefined` si no hay histórico suficiente → toggle no inyecta nada.
+  const trendForecast = useMemo(() => {
+    const predictive = source.canonical.predictive;
+    if (!predictive) return undefined;
+    return { income: predictive.income.monthly, expense: predictive.expense.monthly };
+  }, [source.canonical.predictive]);
+  const trendAvailable = trendForecast !== undefined;
 
   // Granularity flips run inside a transition so React keeps the previous
   // chart/tables on screen while the new data warms up — no stutter, no
@@ -901,20 +924,28 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       const scenarioOverrides = cellOverridesByScenario.get(scenarioId) ?? [];
       const customKey = fingerprintArray(scenarioCustomRows, (r) => r.id + ':' + (r.updatedAt ?? ''));
       const overrideKey = fingerprintArray(scenarioOverrides, (o) => o.conceptKey + '@' + o.bucketKey + ':' + o.value);
+      // El top-off de tendencia es no-base; en Base nunca aplica (el filtro
+      // isRealShortTermApiMovement lo dropea), así que el key se mantiene en 0
+      // para Base y se reusa la caché de warmup.
+      const trendOn = trendTopOff && trendAvailable && scenario?.kind !== 'BASE';
+      const trendTag = `trend:${trendOn ? 1 : 0}`;
       const cacheKey = [
         sharedInputsKey,
         scenarioId,
         gran,
         customKey,
         overrideKey,
+        trendTag,
       ].join('||');
       // pipelineKey omits granularity so two requests differing only in gran
       // share the worker's pipeline cache → grain flip = aggregator only.
+      // El trendTag SÍ va en pipelineKey: el top-off vive en el pipeline.
       const pipelineKey = [
         sharedInputsKey,
         scenarioId,
         customKey,
         overrideKey,
+        trendTag,
       ].join('||');
 
       const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)
@@ -950,6 +981,8 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
           supplierInitialCash,
           minimumCash,
           granularity: gran,
+          includeTrendTopOff: trendOn,
+          trendForecast,
         }),
         persistRun,
         {
@@ -980,6 +1013,9 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     supplierInitialCash,
     minimumCash,
     runVersion,
+    trendTopOff,
+    trendAvailable,
+    trendForecast,
   ]);
 
   // Eager runs — only the ones the visible UI actually needs to paint:
@@ -1180,6 +1216,23 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
               onChange={setGranularity}
               pending={granularityPending}
             />
+            <button
+              type="button"
+              onClick={() => toggleTrendTopOff(!trendTopOff)}
+              disabled={!trendAvailable}
+              title={trendAvailable
+                ? 'Completa los meses futuros con la tendencia histórica (Holt-Winters), respetando el flujo real ya registrado.'
+                : 'Sin histórico bancario suficiente para estimar la tendencia.'}
+              aria-pressed={trendTopOff && trendAvailable}
+              className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                trendTopOff && trendAvailable
+                  ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)] text-white'
+                  : 'border-[var(--gray-200)] bg-white text-[var(--gray-700)] hover:bg-[var(--gray-50)]'
+              }`}
+            >
+              <TrendingUp className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Tendencia
+            </button>
             <button
               type="button"
               onClick={() => handleCreateDraft()}
