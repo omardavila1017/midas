@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - qa
-
+ 
 jobs:
   deploy:
     runs-on: self-hosted
