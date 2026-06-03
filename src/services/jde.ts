@@ -29,7 +29,8 @@ import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber } from '../domain/bankStatements';
 import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
-import { isAuxiliarAllowlistedCia } from '../domain/auxiliarReconciliationConfig';
+import { isAuxiliarAllowlistedCia, AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
+import { discoverIvaObjetos } from '../domain/ivaLedger';
 import { isNonOperatingDay } from '../domain/bankHolidays';
 
 /**
@@ -1809,9 +1810,16 @@ export async function fetchAuxiliarContableRange(
      */
     onDay?: (records: AuxiliarContableRecord[]) => void;
     config?: JdeClientConfig;
+    /**
+     * Namespace del cache diario IDB. Default `'auxiliarcontable'` (conciliación
+     * banco↔ERP). El fetch de IVA usa uno distinto para no contaminar ese cache
+     * con un set de objetos contables diferente.
+     */
+    cacheNamespace?: string;
   } = {},
 ): Promise<AuxiliarContableRecord[]> {
   const config = options.config ?? {};
+  const cacheNamespace = options.cacheNamespace ?? 'auxiliarcontable';
 
   // Piso duro: nunca pedir auxiliar contable < 2025-01-01 (decisión
   // 2026-05-25). 2024 queda descartado por completo aún si el caller pasa
@@ -1902,7 +1910,7 @@ export async function fetchAuxiliarContableRange(
   };
 
   const all = await fetchRangeWithChunkedDailyCache<AuxiliarContableRecord>(
-    'auxiliarcontable',
+    cacheNamespace,
     {
       from,
       to,
@@ -1925,6 +1933,61 @@ export async function fetchAuxiliarContableRange(
     merged.push(rec);
   }
   return merged;
+}
+
+/**
+ * Fetch de las cuentas de IVA del libro mayor para alimentar el cálculo fiscal
+ * REAL (acreditable + causado) sin estimar. Descubrimiento en dos fases:
+ *
+ *   Fase A (discovery): un mes reciente sobre los rangos candidato
+ *     (`AUX_IVA_PARAMS.discoveryObjetos`). Se identifican por nombre los objetos
+ *     contables que son IVA (`discoverIvaObjetos` → `classifyIvaAccount`).
+ *   Fase B (full): el rango histórico completo SOLO de esos objetos exactos
+ *     (rango angosto → rápido, no revive el timeout del rango completo).
+ *
+ * Cache separado del de la conciliación: discovery → `auxiliarcontable-iva-discovery`,
+ * full → `auxiliarcontable-iva`. NO toca `AUX_RECON_PARAMS` (objeto 1010-1020).
+ *
+ * Falla suave: si discovery no encuentra cuentas de IVA, usa los rangos
+ * candidato directo para la fase B (el diagnóstico revelará si hay que ajustar
+ * `VITE_AUX_IVA_OBJETOS`).
+ */
+export async function fetchAuxiliarContableIvaRange(
+  cia: string,
+  from: string,
+  to: string,
+  options: {
+    /** Inicio de la ventana de discovery (default: primer día del mes de `to`). */
+    discoveryFrom?: string;
+    onDay?: (records: AuxiliarContableRecord[]) => void;
+    config?: JdeClientConfig;
+  } = {},
+): Promise<AuxiliarContableRecord[]> {
+  const { config, onDay } = options;
+  const discoveryFrom = options.discoveryFrom ?? `${to.slice(0, 7)}-01`;
+
+  // Fase A — discovery acotado a un mes sobre rangos candidato.
+  const discoverySample = await fetchAuxiliarContableRange(
+    cia,
+    discoveryFrom,
+    to,
+    { tl: AUX_IVA_PARAMS.tl, nr: AUX_IVA_PARAMS.nr, objetos: AUX_IVA_PARAMS.discoveryObjetos },
+    { config, cacheNamespace: 'auxiliarcontable-iva-discovery' },
+  );
+
+  const discovered = discoverIvaObjetos(discoverySample);
+  const objetos = discovered.size > 0
+    ? Array.from(discovered).sort().map((obj) => ({ ini: obj, fin: obj }))
+    : AUX_IVA_PARAMS.discoveryObjetos;
+
+  // Fase B — rango completo solo de los objetos de IVA descubiertos.
+  return fetchAuxiliarContableRange(
+    cia,
+    from,
+    to,
+    { tl: AUX_IVA_PARAMS.tl, nr: AUX_IVA_PARAMS.nr, objetos },
+    { config, onDay, cacheNamespace: 'auxiliarcontable-iva' },
+  );
 }
 
 /**

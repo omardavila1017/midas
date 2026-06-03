@@ -45,6 +45,7 @@ export const HEAVY_KEYS = [
   'rolRecords',
   'viajesEspecialesRecords',
   'auxiliarContableRecords',
+  'auxiliarIvaRecords',
 ] as const;
 
 export type HeavyKey = (typeof HEAVY_KEYS)[number];
@@ -59,6 +60,8 @@ export interface HeavyStore {
   rolRecords: RolRecord[];
   viajesEspecialesRecords: ViajeEspecialRecord[];
   auxiliarContableRecords: AuxiliarContableRecord[];
+  /** Líneas del libro mayor de cuentas de IVA (acreditable + causado). */
+  auxiliarIvaRecords: AuxiliarContableRecord[];
 }
 
 export function emptyHeavyStore(): HeavyStore {
@@ -72,6 +75,7 @@ export function emptyHeavyStore(): HeavyStore {
     rolRecords: [],
     viajesEspecialesRecords: [],
     auxiliarContableRecords: [],
+    auxiliarIvaRecords: [],
   };
 }
 

@@ -35,6 +35,16 @@ This branch removes long-term cash-flow projection. **Planeación Financiera y P
 
 Los tests obsoletos en `canonicalProjection.test.ts` están marcados `it.skip` con la razón. UI de Escenarios/Propuestas/Adjustments se mantiene intacta — solo cambia la fuente de movimientos.
 
+## IVA REAL desde el libro mayor (2026-06-03)
+
+El IVA REAL (acreditable + causado) del módulo de Impuestos se lee **directo del libro mayor JDE** (`/JDEdwards/AuxiliarContable`), no se estima. Antes el acreditable REAL se inferia cruzando líneas banco↔ERP contra CXP por folio y **salía en ~0** cuando el cruce fallaba.
+
+- **Fetch SEPARADO** con cache propio (`auxiliarcontable-iva`), NUNCA expandir `AUX_RECON_PARAMS.objetos` (1010-1020) — eso rompe la conciliación y revive el timeout de 4 min. `fetchAuxiliarContableIvaRange` (`src/services/jde.ts`) hace **descubrimiento en dos fases**: (A) un mes sobre rangos candidato (`AUX_IVA_PARAMS.discoveryObjetos`, default `1100-1299`/`2100-2299`, override `VITE_AUX_IVA_OBJETOS`) → identifica por nombre los objetos de IVA (`discoverIvaObjetos`/`classifyIvaAccount` en `src/domain/ivaLedger.ts`); (B) rango completo solo de esos objetos.
+- **Agregación:** `buildIvaLedgerByPeriod` (`domain/ivaLedger.ts`) suma `importe` por periodo/lado (el importe del ledger ES el impuesto, no la base). Clasifica por `nombreCuenta`: ACREDITABLE→creditable, TRASLADADO/CAUSADO→caused, RETENIDO→aparte.
+- **Integración:** `buildTaxDashboardView` recibe `auxiliarIvaRecords`. En modo REAL, si hay cobertura (`hasIvaLedger`), `accumulateIvaFromLedger` es **autoritativo** y los estimadores REAL (cobranza/CXP/OC/Auxiliar direccional) se **omiten** para no doble-contar. Sin cobertura → fallback a estimación (comportamiento previo). IVA pagado al SAT sigue desde estados de cuenta. **FORECAST intacto** (reservas en `scenarioForecastRun.ts` usan `ivaMode:'FORECAST'`, no tocan el ledger — las reservas son obligaciones futuras).
+- **Boot:** efecto en `AppCore.tsx` (espejo del de auxiliar, cuelga del dataset `'auxiliar'`, falla suave). Heavy store `auxiliarIvaRecords` (`heavyStoreIDB.ts` + `persistence.ts` MidasStore).
+- **Diagnóstico runtime:** `window.__midas__.ivaLedger` = `{ recordCount, accounts (objeto/nombre/kind/signo), byPeriod }`. Supuestos a confirmar contra datos reales: rango de objeto candidato, patrones de nombre en `classifyIvaAccount`, y el signo de `importe` por lado.
+
 ## Dos motores: MOTOR 1 (Histórico Reconciliado) + MOTOR 2 (Proyección Corto Plazo) (2026-06-03)
 
 El motor canónico está partido en **dos motores nombrados y testeables**, en archivos físicos separados, orquestados por `buildMovements` (que corre el prorrateo Citi una vez sobre la lista compuesta). Ambos son funciones **exportadas** que reciben `{ monthly, inputs }` (tipo `BuildArgs`). Layout (`src/modules/shared-finance/calculation-engine/`):

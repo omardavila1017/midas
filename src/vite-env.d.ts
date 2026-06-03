@@ -27,6 +27,8 @@ interface ImportMetaEnv {
   readonly VITE_DEFAULT_ROLE?: string;
   // DEV ONLY: identidad mock mientras Atlas SSO no expone el email al frontend.
   readonly VITE_CURRENT_USER_EMAIL?: string;
+  // Contraseña de acceso compartida (UX, no seguridad). Default "12345" si no se define.
+  readonly VITE_APP_PASSWORD?: string;
 }
 
 interface ImportMeta {

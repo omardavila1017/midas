@@ -5,7 +5,8 @@ import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
-import type { BankAccountStatement, CobranzaPayment } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, BankAccountStatement, CobranzaPayment } from '../../../services/jdeTypes';
+import { buildIvaLedgerByPeriod, type IvaLedgerLine, type IvaLedgerPeriod } from '../../../domain/ivaLedger';
 import { todayISO } from '../../../formatters';
 import type {
   FinancialMovement,
@@ -459,6 +460,13 @@ export function buildTaxDashboardView(params: {
    * la factura CXP sin depender del motor viejo PagoProveedor.
    */
   auxiliarReconciliation?: AuxiliarReconResult;
+  /**
+   * Líneas del libro mayor JDE de las cuentas de IVA (acreditable + causado).
+   * Cuando hay cobertura, el IVA REAL se lee DIRECTO del ledger (autoritativo,
+   * sin estimar) y los estimadores REAL de causado/acreditable se omiten para
+   * no doble-contar. Ver `domain/ivaLedger.ts`.
+   */
+  auxiliarIvaRecords?: AuxiliarContableRecord[];
   /** REAL = IVA declarable, FORECAST = reserva/proyeccion, BOTH = ambas vistas. */
   ivaMode?: IvaMode;
   budget?: Budget | null;
@@ -484,14 +492,28 @@ export function buildTaxDashboardView(params: {
   const includeRealIva = ivaMode === 'REAL' || ivaMode === 'BOTH';
   const includeForecastIva = ivaMode === 'FORECAST' || ivaMode === 'BOTH';
 
+  // IVA REAL desde el libro mayor (autoritativo). Cuando hay cobertura, el
+  // causado y el acreditable se leen DIRECTO del Auxiliar y los estimadores
+  // REAL (cobranza/CXP/OC/Auxiliar direccional) se omiten para no doble-contar.
+  const ivaLedgerByPeriod = buildIvaLedgerByPeriod(params.auxiliarIvaRecords ?? [], {
+    companyCode: params.companyCode,
+    startDate,
+    endDate,
+  });
+  const hasIvaLedger = ivaLedgerByPeriod.size > 0;
+
   if (includeRealIva) {
-    accumulateCobranzaPaymentIva({
-      payments: params.cobranzaPayments ?? [],
-      companyCode: params.companyCode,
-      startDate,
-      endDate,
-      ensure: ensureReal,
-    });
+    if (hasIvaLedger) {
+      accumulateIvaFromLedger({ ledgerByPeriod: ivaLedgerByPeriod, ensure: ensureReal });
+    } else {
+      accumulateCobranzaPaymentIva({
+        payments: params.cobranzaPayments ?? [],
+        companyCode: params.companyCode,
+        startDate,
+        endDate,
+        ensure: ensureReal,
+      });
+    }
     accumulateHistoricIvaPaidFromBankStatements({
       bankStatements: params.bankStatements ?? [],
       companyCode: params.companyCode,
@@ -546,7 +568,9 @@ export function buildTaxDashboardView(params: {
     mergeCxpPaymentCoverage(auxiliarCoverage, auxiliarPagoCoverage),
   );
 
-  if (includeRealIva) {
+  // Estimadores REAL de IVA acreditable — SOLO cuando NO hay libro mayor de IVA.
+  // Con ledger, el acreditable es autoritativo y estos doble-contarían.
+  if (includeRealIva && !hasIvaLedger) {
     accumulateCxpIva({
       cxpRecords: params.cxpRecords ?? [],
       cxpPaymentCoverage,
@@ -2120,6 +2144,68 @@ function addIvaCreditable(acc: TaxPeriodAccumulator, line: TaxSourceLine, rate: 
   }
   acc.creditableGross += line.amount;
   acc.expenseLines.push(line);
+}
+
+/**
+ * IVA REAL autoritativo desde el libro mayor (`domain/ivaLedger.ts`).
+ *
+ * El `importe` del ledger ES el impuesto (no la base). Por periodo y lado se
+ * agrupan las líneas por tasa detectada en el nombre de cuenta (default 16% si
+ * no hay señal), se suma el neto firmado, se toma su magnitud y se deriva la
+ * base. Reusa `addIvaCaused`/`addIvaCreditable` para que el desglose por tasa,
+ * el neto y las líneas de drilldown queden iguales que en el pipeline estimado.
+ */
+function accumulateIvaFromLedger({
+  ledgerByPeriod,
+  ensure,
+}: {
+  ledgerByPeriod: Map<string, IvaLedgerPeriod>;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  const emitSide = (
+    row: TaxPeriodAccumulator,
+    period: string,
+    lines: IvaLedgerLine[],
+    side: 'creditable' | 'caused',
+  ) => {
+    if (lines.length === 0) return;
+    const byRate = new Map<8 | 16, IvaLedgerLine[]>();
+    for (const line of lines) {
+      const rate: 8 | 16 = line.rate === 8 ? 8 : 16;
+      const bucket = byRate.get(rate) ?? [];
+      bucket.push(line);
+      byRate.set(rate, bucket);
+    }
+    for (const [rate, group] of byRate) {
+      const net = group.reduce((sum, line) => sum + line.signedAmount, 0);
+      const taxAmount = Math.abs(net);
+      if (taxAmount <= 0) continue;
+      const taxBase = taxAmount / (rate / 100);
+      const accounts = Array.from(new Set(group.map((line) => line.cuentaObjeto))).join(', ');
+      const taxLine: TaxSourceLine = {
+        movementId: `iva-ledger:${side}:${period}:${rate}`,
+        date: `${period}-15`,
+        concept: side === 'creditable'
+          ? `IVA acreditable (libro mayor) · ${rate}% · cuenta ${accounts}`
+          : `IVA causado (libro mayor) · ${rate}% · cuenta ${accounts}`,
+        amount: taxBase + taxAmount,
+        taxBase,
+        taxRate: rate,
+        taxAmount,
+        sourceSystem: 'JDE',
+        rateSource: 'JDE',
+        estimated: false,
+      };
+      if (side === 'creditable') addIvaCreditable(row, taxLine, rate);
+      else addIvaCaused(row, taxLine, rate);
+    }
+  };
+
+  for (const [period, detail] of ledgerByPeriod) {
+    const row = ensure(period);
+    emitSide(row, period, detail.causedLines, 'caused');
+    emitSide(row, period, detail.creditableLines, 'creditable');
+  }
 }
 
 function accumulateIsn(acc: TaxPeriodAccumulator, movement: FinancialMovement): void {

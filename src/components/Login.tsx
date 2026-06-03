@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { AlertCircle, ArrowRight, Lock } from 'lucide-react';
+import { AlertCircle, ArrowRight, KeyRound, Lock } from 'lucide-react';
 import {
   clearAuthSession,
   getPrefillEmail,
@@ -26,6 +26,17 @@ import {
 } from '../contexts/authSession';
 
 const sendaLogoUrl = `${import.meta.env.BASE_URL}logos/senda-corporativo.svg`;
+
+/**
+ * Contraseña de acceso compartida (genérica, igual para todos).
+ *
+ * IMPORTANTE: esto NO es seguridad real — los `VITE_*` se embeben en el bundle
+ * y cualquiera puede leerlos desde el JS. Es solo un candado de UX "por
+ * mientras". La autenticación vinculante la hace Atlas SSO / el backend (ver
+ * `AUTH.md`). Editable cambiando `VITE_APP_PASSWORD` en el `.env` (+ redeploy);
+ * si no está definida, el default temporal es "12345".
+ */
+const EXPECTED_PASSWORD = (import.meta.env.VITE_APP_PASSWORD ?? '').trim() || '12345';
 
 /** Borra la sesión de identidad. Usado por logout y por el "cold boot". */
 export function clearAuth() {
@@ -43,6 +54,7 @@ interface LoginScreenProps {
 
 function LoginScreen({ onSignedIn }: LoginScreenProps) {
   const [email, setEmail] = useState(() => getPrefillEmail());
+  const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -59,6 +71,10 @@ function LoginScreen({ onSignedIn }: LoginScreenProps) {
     if (!looksLikeEmail(value)) {
       setError('Escribe un correo válido para entrar.');
       inputRef.current?.focus();
+      return;
+    }
+    if (password !== EXPECTED_PASSWORD) {
+      setError('Contraseña incorrecta.');
       return;
     }
     setSubmitting(true);
@@ -136,6 +152,33 @@ function LoginScreen({ onSignedIn }: LoginScreenProps) {
                 className="h-11 w-full rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] pl-9 pr-3 text-[14px] text-[var(--gray-950)] transition-shadow placeholder:text-[var(--gray-400)] focus:border-[var(--skeuo-brass)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--skeuo-brass)_28%,transparent)] disabled:opacity-60"
                 style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
                 placeholder="usuario@senda.com"
+                aria-invalid={error ? true : undefined}
+              />
+            </div>
+          </label>
+
+          <label className="block">
+            <span className="text-[12px] font-medium uppercase tracking-wide text-[var(--gray-700)]">
+              Contraseña
+            </span>
+            <div className="relative mt-1.5">
+              <KeyRound
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--gray-400)]"
+                strokeWidth={1.75}
+                aria-hidden
+              />
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                disabled={submitting}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  if (error) setError(null);
+                }}
+                className="h-11 w-full rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] pl-9 pr-3 text-[14px] text-[var(--gray-950)] transition-shadow placeholder:text-[var(--gray-400)] focus:border-[var(--skeuo-brass)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--skeuo-brass)_28%,transparent)] disabled:opacity-60"
+                style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
+                placeholder="••••••"
                 aria-invalid={error ? true : undefined}
               />
             </div>

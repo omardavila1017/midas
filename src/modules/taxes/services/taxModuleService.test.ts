@@ -4,7 +4,7 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import type { AuxiliarReconLine, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
-import type { BankAccountStatement, BankStatementLine, CobranzaPayment, PagoProveedorRecord } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, BankAccountStatement, BankStatementLine, CobranzaPayment, PagoProveedorRecord } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, PurchaseReceiptRecord, TaxObligation } from '../../shared-finance/types';
 import {
@@ -103,6 +103,83 @@ describe('taxModuleService', () => {
       concept: 'Pago IVA · PAGO REFERENCIADO IVA',
       sourceSystem: 'BANK',
     });
+  });
+
+  it('reads REAL IVA (creditable + caused) authoritatively from the ledger and skips estimators', () => {
+    const view = buildTaxDashboardView({
+      // Estos estimadores producirían números distintos — deben ignorarse
+      // porque hay libro mayor de IVA (autoritativo).
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-X',
+          fechaCobro: '2026-05-08',
+          importeRecibo: 99999,
+          applications: [{
+            noFactura: 'C-X',
+            importeCobrado: 99999,
+            importeOriginalFactura: 99999,
+            importeIvaFacturaOriginal: 13793,
+            tasaIva: '16',
+          }],
+        }),
+      ],
+      cxpRecords: [
+        cxpRecord({
+          noFactura: 'F-X',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 50000,
+          importeImpuestosPesos: 8000,
+          importeBrutoPesos: 58000,
+          importePendientePesos: 58000,
+        }),
+      ],
+      auxiliarIvaRecords: [
+        auxIvaRecord({ nombreCuenta: 'IVA ACREDITABLE PAGADO', cuentaObjeto: '1180', importe: 1600, fechaContable: '2026-05-10' }),
+        auxIvaRecord({ nombreCuenta: 'IVA TRASLADADO', cuentaObjeto: '2160', importe: 3200, fechaContable: '2026-05-12' }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCreditable).toBeCloseTo(1600);
+    expect(may.realIva.ivaCaused).toBeCloseTo(3200);
+    expect(may.realIva.payable).toBeCloseTo(1600);
+    expect(may.realIva.expenseLines[0].concept).toContain('libro mayor');
+    expect(may.realIva.incomeLines[0].concept).toContain('libro mayor');
+  });
+
+  it('falls back to estimators when there is no IVA ledger coverage', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-IVA',
+          fechaCobro: '2026-05-08',
+          importeRecibo: 1160,
+          applications: [{
+            noFactura: 'C-IVA',
+            importeCobrado: 1160,
+            importeOriginalFactura: 1160,
+            importeIvaFacturaOriginal: 160,
+            tasaIva: '16',
+          }],
+        }),
+      ],
+      auxiliarIvaRecords: [],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCaused).toBeCloseTo(160);
   });
 
   it('calculates forecast IVA from projected CXC and scheduled JDE CXP invoice fields', () => {
@@ -1613,5 +1690,39 @@ function movement(
     lockState: 'UNLOCKED',
     createdAt: '2026-05-01T00:00:00.000Z',
     updatedAt: '2026-05-01T00:00:00.000Z',
+  };
+}
+
+function auxIvaRecord(patch: Partial<AuxiliarContableRecord>): AuxiliarContableRecord {
+  return {
+    cia: '00011',
+    cuentaContable: '11.1180.0000',
+    idCuenta: `id-${Math.random().toString(36).slice(2, 8)}`,
+    cuentaObjeto: '1180',
+    nombreCuenta: 'IVA ACREDITABLE PAGADO',
+    cuentaBanco: '',
+    tipoDocto: 'PV',
+    noDocto: Math.floor(Math.random() * 1e6),
+    noFactura: '',
+    noOrdenCompra: '',
+    fechaContable: '2026-05-10',
+    tipoLibro: 'AA',
+    noBatch: 0,
+    tipoBatch: 'V',
+    estatusConciliado: '',
+    importe: 1600,
+    moneda: 'MXP',
+    tipoCambio: 1,
+    posteo: 'P',
+    reversa: '',
+    concepto: '',
+    explicacion: '',
+    nombre: '',
+    tipoPago: '',
+    noPago: '',
+    fechaPago: '',
+    documentoOriginal: '',
+    importeOriginal: 0,
+    ...patch,
   };
 }

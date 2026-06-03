@@ -216,6 +216,8 @@ export interface MidasStore {
    * histórica. Una row por (cia, idCuenta, noDocto, tipoDocto). Heavy → IDB.
    */
   auxiliarContableRecords: AuxiliarContableRecord[];
+  /** Libro mayor de cuentas de IVA (acreditable + causado). Heavy → IDB. */
+  auxiliarIvaRecords: AuxiliarContableRecord[];
   /**
    * Per-cia ISO timestamp del último refresh de AuxiliarContable. Mismo
    * patrón que `comprasLoadedCias` — UNA compañía por request.
@@ -293,6 +295,7 @@ export function getDefaultStore(): MidasStore {
     viajesEspecialesRecords: [],
     viajesEspecialesLoadedKeys: {},
     auxiliarContableRecords: [],
+    auxiliarIvaRecords: [],
     auxiliarContableLoadedCias: {},
     cashFlowOverrides: {},
     lastSaved: isoNow(),
@@ -482,6 +485,9 @@ function normalizeStore(raw: unknown): MidasStore {
   const auxiliarContableRecords = Array.isArray(o.auxiliarContableRecords)
     ? (o.auxiliarContableRecords.filter((r) => !!r && typeof r === 'object') as AuxiliarContableRecord[])
     : [];
+  const auxiliarIvaRecords = Array.isArray(o.auxiliarIvaRecords)
+    ? (o.auxiliarIvaRecords.filter((r) => !!r && typeof r === 'object') as AuxiliarContableRecord[])
+    : [];
   const auxiliarContableLoadedCias: Record<string, string> = {};
   if (o.auxiliarContableLoadedCias && typeof o.auxiliarContableLoadedCias === 'object') {
     for (const [k, val] of Object.entries(o.auxiliarContableLoadedCias as Record<string, unknown>)) {
@@ -512,6 +518,7 @@ function normalizeStore(raw: unknown): MidasStore {
     viajesEspecialesRecords,
     viajesEspecialesLoadedKeys,
     auxiliarContableRecords,
+    auxiliarIvaRecords,
     auxiliarContableLoadedCias,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
     assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
@@ -605,6 +612,7 @@ function pickHeavy(store: MidasStore): HeavyStore {
     rolRecords: store.rolRecords,
     viajesEspecialesRecords: store.viajesEspecialesRecords,
     auxiliarContableRecords: store.auxiliarContableRecords,
+    auxiliarIvaRecords: store.auxiliarIvaRecords,
   };
 }
 

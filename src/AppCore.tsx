@@ -38,6 +38,7 @@ import {
   fetchRolRange,
   fetchViajesEspecialesRange,
   fetchAuxiliarContableRange,
+  fetchAuxiliarContableIvaRange,
   type Company,
   type AuxiliarContableRecord,
   type BankAccountStatement,
@@ -50,6 +51,7 @@ import {
   type ViajeEspecialRecord,
 } from './services/jde';
 import { AUX_RECON_PARAMS, isAuxiliarAllowlistedCia } from './domain/auxiliarReconciliationConfig';
+import { summarizeIvaAccounts, buildIvaLedgerByPeriod } from './domain/ivaLedger';
 import {
   reconcileAuxiliar,
   emptyAuxiliarReconResult,
@@ -757,6 +759,11 @@ export default function App() {
   // boot, desde 1° de enero del año en curso (misma ventana que bancos).
   const [auxiliarContableRecords, setAuxiliarContableRecords] = useState<AuxiliarContableRecord[]>([]);
   const [auxiliarContableLoadedCias, setAuxiliarContableLoadedCias] = useState<Record<string, string>>({});
+  // Libro mayor de cuentas de IVA (acreditable + causado) — fetch SEPARADO con
+  // descubrimiento por nombre de cuenta (ver fetchAuxiliarContableIvaRange).
+  // Fuente del IVA REAL autoritativo del módulo de Impuestos.
+  const [auxiliarIvaRecords, setAuxiliarIvaRecords] = useState<AuxiliarContableRecord[]>([]);
+  const [auxiliarIvaLoadedCias, setAuxiliarIvaLoadedCias] = useState<Record<string, string>>({});
   // Status del auto/manual fetch de cobranza — se muestra en la pestaña
   // Cobranza para que el usuario sepa qué pasó si la lista llega vacía.
   // Antes los errores eran silenciados y resultaba imposible diagnosticar
@@ -1720,8 +1727,12 @@ export default function App() {
             }));
           }
         } else if (dataset === 'auxiliar') {
-          const records = await loadHeavyRecords('auxiliarContableRecords');
+          const [records, ivaRecords] = await Promise.all([
+            loadHeavyRecords('auxiliarContableRecords'),
+            loadHeavyRecords('auxiliarIvaRecords'),
+          ]);
           if (records.length > 0) setAuxiliarContableRecords(records);
+          if (ivaRecords.length > 0) setAuxiliarIvaRecords(ivaRecords);
         }
         hydratedDatasetsRef.current.add(dataset);
         setDatasetSlot(dataset, 'ready');
@@ -2168,6 +2179,7 @@ export default function App() {
       rolRecords, rolLoadedKeys,
       viajesEspecialesRecords, viajesEspecialesLoadedKeys,
       auxiliarContableRecords, auxiliarContableLoadedCias,
+      auxiliarIvaRecords,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
@@ -2207,6 +2219,7 @@ export default function App() {
     rolRecords,
     viajesEspecialesRecords,
     auxiliarContableRecords,
+    auxiliarIvaRecords,
   });
   latestHeavyRecordsRef.current = {
     cxpRecords,
@@ -2218,6 +2231,7 @@ export default function App() {
     rolRecords,
     viajesEspecialesRecords,
     auxiliarContableRecords,
+    auxiliarIvaRecords,
   };
   const useHeavySaver = (key: HeavyKey, records: unknown[]) => {
     useEffect(() => {
@@ -2251,6 +2265,7 @@ export default function App() {
   useHeavySaver('rolRecords', rolRecords);
   useHeavySaver('viajesEspecialesRecords', viajesEspecialesRecords);
   useHeavySaver('auxiliarContableRecords', auxiliarContableRecords);
+  useHeavySaver('auxiliarIvaRecords', auxiliarIvaRecords);
 
   useEffect(() => {
     const flush = () => {
@@ -2893,6 +2908,154 @@ export default function App() {
       }
     })();
   }, [requestedDatasets, storeHydrated, companies, auxiliarContableLoadedCias, auxiliarContableRecords.length, idbHydratedDatasets, setBootSlot, setDatasetSlot]);
+
+  // ── Auto-load cuentas de IVA del libro mayor durante el boot ──
+  // Fetch SEPARADO (cache `auxiliarcontable-iva`) con descubrimiento por nombre
+  // de cuenta — alimenta el IVA REAL autoritativo del módulo de Impuestos. NO
+  // toca la conciliación banco↔ERP (objeto 1010-1020). Corre en segundo plano,
+  // falla suave (no gatea splash ni boot slot — cuelga del dataset 'auxiliar').
+  const auxiliarIvaAutoFetchDone = useRef(false);
+  useEffect(() => {
+    if (auxiliarIvaAutoFetchDone.current) return;
+    if (!requestedDatasets.has('auxiliar')) return;
+    if (!storeHydrated) return;
+    if (companies.length === 0) return;
+    if (!idbHydratedDatasets.has('auxiliar')) return;
+    const activeCias = companies
+      .filter(c => c.activa !== false && isAuxiliarAllowlistedCia(c.cia))
+      .map(c => c.cia);
+    if (activeCias.length === 0) {
+      auxiliarIvaAutoFetchDone.current = true;
+      return;
+    }
+    const hasHydrated = auxiliarIvaRecords.length > 0;
+    const now = new Date();
+    const expectedFloorDate = `${now.getUTCFullYear()}-01-01`;
+    const expectedTopDate = now.toISOString().slice(0, 10);
+    const minDateByCia = new Map<string, string>();
+    const maxDateByCia = new Map<string, string>();
+    for (const r of auxiliarIvaRecords) {
+      const minP = minDateByCia.get(r.cia);
+      if (!minP || r.fechaContable < minP) minDateByCia.set(r.cia, r.fechaContable);
+      const maxP = maxDateByCia.get(r.cia);
+      if (!maxP || r.fechaContable > maxP) maxDateByCia.set(r.cia, r.fechaContable);
+    }
+    const ciasToFetch = hasHydrated
+      ? activeCias.filter(cia => {
+          if (!isFreshTimestamp(auxiliarIvaLoadedCias[cia], COMPRAS_AUTO_REFRESH_TTL_MS)) return true;
+          const minDate = minDateByCia.get(cia);
+          const maxDate = maxDateByCia.get(cia);
+          if (!minDate || !maxDate) return true;
+          if (minDate > expectedFloorDate) return true;
+          if (maxDate < expectedTopDate) return true;
+          return false;
+        })
+      : activeCias;
+    if (ciasToFetch.length === 0) {
+      auxiliarIvaAutoFetchDone.current = true;
+      return;
+    }
+    auxiliarIvaAutoFetchDone.current = true;
+    const fechaFinal = expectedTopDate;
+    const AUX_HARD_FLOOR = '2025-01-01';
+    const bootClampStart = expectedFloorDate < AUX_HARD_FLOOR ? AUX_HARD_FLOOR : expectedFloorDate;
+
+    const publishDiagnostic = (snapshot: AuxiliarContableRecord[]) => {
+      try {
+        const w = window as unknown as { __midas__?: Record<string, unknown> };
+        w.__midas__ = {
+          ...(w.__midas__ ?? {}),
+          ivaLedger: {
+            recordCount: snapshot.length,
+            accounts: summarizeIvaAccounts(snapshot),
+            byPeriod: Object.fromEntries(buildIvaLedgerByPeriod(snapshot)),
+          },
+        };
+      } catch { /* diagnóstico best-effort */ }
+    };
+
+    (async () => {
+      try {
+        await primeDailyCache();
+        const maxStateByCia = new Map<string, string>();
+        for (const r of auxiliarIvaRecords) {
+          const prev = maxStateByCia.get(r.cia);
+          if (!prev || r.fechaContable > prev) maxStateByCia.set(r.cia, r.fechaContable);
+        }
+        const perCiaFechaInicial = new Map<string, string>();
+        for (const cia of ciasToFetch) {
+          const maxCached = getMaxCachedDay('auxiliarcontable-iva', cia);
+          const maxState = maxStateByCia.get(cia) ?? null;
+          const lastSeen = maxCached && maxState
+            ? (maxCached > maxState ? maxCached : maxState)
+            : (maxCached ?? maxState);
+          const candidateFrom = lastSeen ? nextIsoDay(lastSeen) : bootClampStart;
+          perCiaFechaInicial.set(cia, candidateFrom < bootClampStart ? bootClampStart : candidateFrom);
+        }
+
+        const mergedByKey = new Map<string, AuxiliarContableRecord>();
+        const keyOf = (r: AuxiliarContableRecord) =>
+          `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
+        for (const r of auxiliarIvaRecords) mergedByKey.set(keyOf(r), r);
+        let dirty = false;
+        let lastFlushedSize = mergedByKey.size;
+        const flush = () => {
+          if (!dirty) return;
+          dirty = false;
+          const snapshot = Array.from(mergedByKey.values());
+          if (snapshot.length === lastFlushedSize) return;
+          lastFlushedSize = snapshot.length;
+          setAuxiliarIvaRecords(snapshot);
+          void saveHeavyRecords('auxiliarIvaRecords', snapshot);
+          publishDiagnostic(snapshot);
+        };
+        const flushInterval = window.setInterval(flush, 3000);
+        const onDay = (batch: AuxiliarContableRecord[]) => {
+          for (const r of batch) {
+            const k = keyOf(r);
+            if (!mergedByKey.has(k)) {
+              mergedByKey.set(k, r);
+              dirty = true;
+            }
+          }
+        };
+
+        let cursor = 0;
+        const concurrency = Math.min(6, ciasToFetch.length);
+        const worker = async () => {
+          while (true) {
+            const idx = cursor++;
+            if (idx >= ciasToFetch.length) return;
+            const cia = ciasToFetch[idx];
+            const fechaInicial = perCiaFechaInicial.get(cia) ?? bootClampStart;
+            if (fechaInicial > fechaFinal) {
+              setAuxiliarIvaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+              continue;
+            }
+            try {
+              await fetchAuxiliarContableIvaRange(cia, fechaInicial, fechaFinal, { onDay });
+              setAuxiliarIvaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+            } catch (err) {
+              console.warn(`[iva-ledger] ${cia} fail: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        };
+        try {
+          await Promise.all(Array.from({ length: concurrency }, worker));
+        } finally {
+          window.clearInterval(flushInterval);
+          dirty = true;
+          flush();
+          publishDiagnostic(Array.from(mergedByKey.values()));
+        }
+        // eslint-disable-next-line no-console
+        console.info(`[iva-ledger] boot sync · ${ciasToFetch.length} cías · total=${mergedByKey.size} · window.__midas__.ivaLedger`);
+      } catch (err) {
+        auxiliarIvaAutoFetchDone.current = false;
+        console.warn('[iva-ledger] auto-fetch falló', err);
+      }
+    })();
+  }, [requestedDatasets, storeHydrated, companies, auxiliarIvaLoadedCias, auxiliarIvaRecords.length, idbHydratedDatasets]);
 
   // ── Auto-load PagoProveedor durante el boot ──
   // Endpoint global (no filtra por cia, igual que /compras). Mismo lookback
@@ -4629,6 +4792,7 @@ export default function App() {
                   cxpPaymentCoverage={paymentReconciliation.cxpCoverage}
                   paymentMatches={paymentReconciliation.paymentMatches}
                   auxiliarReconciliation={auxiliarReconciliation}
+                  auxiliarIvaRecords={auxiliarIvaRecords}
                   purchaseReceipts={purchaseReceiptsForTaxes}
                   projectionPurchaseReceipts={purchaseReceiptsFromCompras}
                   payrollCosts={nominaRecords}

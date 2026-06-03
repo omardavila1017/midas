@@ -14,7 +14,7 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../../../formatters';
@@ -70,6 +70,8 @@ interface Props {
   cobranzaPayments?: CobranzaPayment[];
   /** Cruce AuxiliarContable ↔ banco — alimenta la fuente de proyección. */
   auxiliarReconciliation?: AuxiliarReconResult;
+  /** Libro mayor de cuentas de IVA (acreditable + causado) — IVA REAL autoritativo. */
+  auxiliarIvaRecords?: AuxiliarContableRecord[];
   /** Cobertura PagoProveedor → CXP para fechar IVA acreditable con pagos reales. */
   cxpPaymentCoverage?: Map<string, CxpPaymentCoverage>;
   /** PagoProveedor completo para resolver Auxiliar `pago` contra CXP/Compras. */
@@ -152,6 +154,7 @@ export default function TaxDashboard(props: Props) {
       cxpPaymentCoverage: props.cxpPaymentCoverage,
       paymentMatches: props.paymentMatches,
       auxiliarReconciliation: props.auxiliarReconciliation,
+      auxiliarIvaRecords: props.auxiliarIvaRecords,
       purchaseReceipts: props.purchaseReceipts,
       paidPurchaseOrderKeys: source?.paidPurchaseOrderKeys,
       payrollCosts: props.payrollCosts,
@@ -166,7 +169,7 @@ export default function TaxDashboard(props: Props) {
       today,
       ivaMode: 'REAL',
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.paymentMatches, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.auxiliarIvaRecords, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.paymentMatches, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 

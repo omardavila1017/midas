@@ -113,6 +113,39 @@ To activate live data connections in Atlas:
 
 Production builds must not set token/password/API-key values with `VITE_` prefixes. Run `npm run security:secrets` before pushing; teams with `gitleaks` installed can also run `npm run security:gitleaks` or wire that command into a local pre-commit hook.
 
+## Gestión de accesos (RBAC) — procedimiento QA
+
+El mapeo **correo → rol** y la **contraseña de acceso** son variables de entorno (`VITE_*`), horneadas en el bundle **al hacer build**. No hay base de datos: cambiar accesos = editar env + redeploy. El panel de Usuarios (módulo "Usuarios", solo `admin` / `mesa_ayuda`) es **solo lectura / vista previa** — refleja lo que dicen las env, no las escribe.
+
+**Dónde vive en QA:** el `.env` del despliegue de QA se mantiene en el repo `midas` (rama `qa`), no en `flujo-senda` (aquí `.env*` está gitignored, solo sube `.env.example`). El workflow `.github/workflows/sync.yml` sincroniza código a `midas:qa` con `rsync` **sin `--delete`**, así que ese `.env` persiste entre syncs.
+
+**Para cambiar accesos:**
+
+1. Edita el `.env` en `midas` rama `qa` (o el panel de Environment Variables de Atlas, lo que use el deploy):
+
+   | VARIABLE | EJEMPLO | NOTA |
+   |----------|---------|------|
+   | `VITE_USER_ROLES` | `email:rol,email:rol,…` (CSV) | Roles válidos: `admin \| abastos \| contaduria \| fiscal \| cobranza \| mesa_ayuda`. `admin` = todo. |
+   | `VITE_DEFAULT_ROLE` | `none` | Rol para correos NO listados. `none` = sin acceso. |
+   | `VITE_APP_PASSWORD` | `12345` | Contraseña de acceso compartida (igual para todos). Default `12345` si no se define. |
+
+2. **Redeploy** del artefacto (las `VITE_*` se hornean en build — sin redeploy no aplican).
+3. Quita `VITE_CURRENT_USER_EMAIL` del `.env` de QA: ya no salta el login, solo **pre-llena** el campo de correo, así que dejarla hace que a todos les aparezca el correo de esa persona.
+
+**Matriz rol → módulos** (catálogo declarativo, en código): ver `src/config/roles.ts`.
+
+| Rol | Módulos visibles |
+|-----|------------------|
+| `admin` | Todos |
+| `abastos` | Antigüedad de Saldo · Órdenes de Compras · Proveedores |
+| `contaduria` | Cobranza · Pagos · Bancos |
+| `cobranza` | Cobranza · Clientes · Bancos |
+| `fiscal` | Impuestos |
+| `mesa_ayuda` | Solo Usuarios |
+| `none` | Ninguno |
+
+> **No es frontera de seguridad** (ver `AUTH.md`). RBAC y `VITE_APP_PASSWORD` solo ajustan la UI; como son `VITE_*`, viajan en el bundle y se pueden leer desde el JS. La autorización vinculante la hace el backend/proxy `/api/*`. La edición editable-en-vivo desde el panel (sin redeploy, compartida entre usuarios) requeriría un backend con almacén, que hoy no existe.
+
 ## Business Rules
 
 - The **Base Scenario** (`id === 'base'`) is always present, locked, non-deletable, and represents the original forecast. No propuestas, no overrides, no manual edits. It is the comparison anchor for every other scenario.

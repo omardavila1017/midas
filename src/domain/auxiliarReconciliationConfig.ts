@@ -42,6 +42,54 @@ export const AUX_RECON_PARAMS = {
 } as const;
 
 /**
+ * Parámetros del fetch SEPARADO de cuentas de IVA del libro mayor
+ * (`fetchAuxiliarContableIvaRange` en jde.ts), con cache independiente
+ * (`auxiliarcontable-iva`). NO se mezcla con `AUX_RECON_PARAMS` ni se expande
+ * su rango — eso rompe la conciliación banco↔ERP y revive el timeout de 4 min.
+ *
+ * Descubrimiento en dos fases:
+ *   - Fase A (discovery): un mes reciente sobre rangos candidato acotados
+ *     (`discoveryObjetos`) para identificar por nombre qué objetos contables
+ *     son IVA (ver `classifyIvaAccount` en domain/ivaLedger.ts).
+ *   - Fase B (full): el rango histórico completo SOLO de esos objetos exactos.
+ *
+ * El IVA acreditable vive en ACTIVOS (11xx) y el IVA trasladado/causado en
+ * PASIVOS (21xx). Si el diagnóstico (`window.__midas__.ivaLedger`) no encuentra
+ * cuentas de IVA, ampliar los rangos vía env `VITE_AUX_IVA_OBJETOS`
+ * (CSV de pares `ini-fin`, p.ej. "1100-1299,2100-2299").
+ */
+function parseObjetoRanges(
+  raw: string | undefined,
+  fallback: readonly { ini: string; fin: string }[],
+): readonly { ini: string; fin: string }[] {
+  if (!raw) return fallback;
+  const parsed = raw
+    .split(',')
+    .map((pair) => pair.trim())
+    .filter(Boolean)
+    .map((pair) => {
+      const [ini, fin] = pair.split('-').map((s) => s.trim());
+      return ini && fin ? { ini, fin } : null;
+    })
+    .filter((r): r is { ini: string; fin: string } => r !== null);
+  return parsed.length > 0 ? parsed : fallback;
+}
+
+export const AUX_IVA_PARAMS = {
+  tl: 'AA',
+  nr: 999,
+  // Rangos candidato para la fase de discovery (un mes). Acotados a la zona
+  // donde vive el IVA: circulante activo (acreditable) + pasivo (trasladado).
+  discoveryObjetos: parseObjetoRanges(
+    typeof import.meta !== 'undefined' ? import.meta.env?.VITE_AUX_IVA_OBJETOS : undefined,
+    [
+      { ini: '1100', fin: '1299' },
+      { ini: '2100', fin: '2299' },
+    ],
+  ),
+} as const;
+
+/**
  * Allowlist de cías a fetchear para AuxiliarContable (decisión 2026-05-25).
  *
  *   00001 TAMAULIPAS · 00011 SIR · 00033 MULTICARGA · 00038 STDN
