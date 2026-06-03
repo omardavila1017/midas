@@ -63,8 +63,8 @@ export const ROLES: Record<Role, RoleDefinition> = {
   },
   cobranza: {
     label: 'Cobranza',
-    description: 'Cobranza / cartera, calendario de cobros, cruce de cobranza y bancos.',
-    allowedTabs: ['collections', 'bancos'],
+    description: 'Cobranza / cartera, calendario de cobros, catálogo de clientes, cruce de cobranza y bancos.',
+    allowedTabs: ['collections', 'clients', 'bancos'],
   },
   mesa_ayuda: {
     label: 'Mesa de Ayuda',

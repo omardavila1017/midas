@@ -572,6 +572,17 @@ export function buildTaxDashboardView(params: {
       endDate,
       ensure: ensureReal,
     });
+    accumulateDirectionalAuxiliarIvaEstimate({
+      auxiliarReconciliation: params.auxiliarReconciliation,
+      cxpRecords: params.cxpRecords ?? [],
+      purchaseReceipts: params.purchaseReceipts ?? [],
+      cobranzaPayments: params.cobranzaPayments ?? [],
+      companyCode: params.companyCode,
+      startDate,
+      endDate,
+      rateContext,
+      ensure: ensureReal,
+    });
   }
 
   const handledForecastCxpKeys = includeForecastIva
@@ -1903,6 +1914,98 @@ function accumulatePaidPurchaseReceiptIvaFromAuxiliar({
   }
 }
 
+function accumulateDirectionalAuxiliarIvaEstimate({
+  auxiliarReconciliation,
+  cxpRecords,
+  purchaseReceipts,
+  cobranzaPayments,
+  companyCode,
+  startDate,
+  endDate,
+  rateContext,
+  ensure,
+}: {
+  auxiliarReconciliation?: AuxiliarReconResult;
+  cxpRecords: CXPRecord[];
+  purchaseReceipts: PurchaseReceiptRecord[];
+  cobranzaPayments: CobranzaPayment[];
+  companyCode?: string;
+  startDate: string;
+  endDate: string;
+  rateContext: TaxRateContext;
+  ensure: (period: string) => TaxPeriodAccumulator;
+}): void {
+  if (!auxiliarReconciliation) return;
+
+  const knownCxpInvoices = new Set<string>();
+  for (const cxp of cxpRecords) {
+    if (cxp.noFactura) knownCxpInvoices.add(auxiliarDocKey(cxp.cia, cxp.noFactura));
+  }
+
+  const knownCobranzaInvoices = new Set<string>();
+  for (const payment of cobranzaPayments) {
+    for (const app of payment.applications) {
+      if (app.noFactura) knownCobranzaInvoices.add(auxiliarDocKey(app.cia || payment.cia, app.noFactura));
+      if (app.noFacturaNormalizada) knownCobranzaInvoices.add(auxiliarDocKey(app.cia || payment.cia, app.noFacturaNormalizada));
+    }
+  }
+
+  const knownPurchaseOrders = new Set<string>();
+  const knownPurchaseDocs = new Set<string>();
+  for (const receipt of purchaseReceipts) {
+    if (receipt.purchaseOrderNo) knownPurchaseOrders.add(purchaseOrderKey(receipt.cia, receipt.purchaseOrderNo));
+    if (receipt.invoiceNo) knownPurchaseDocs.add(auxiliarDocKey(receipt.cia, receipt.invoiceNo));
+    if (receipt.receiptNo) knownPurchaseDocs.add(auxiliarDocKey(receipt.cia, receipt.receiptNo));
+  }
+
+  const emitted = new Set<string>();
+  for (const line of auxiliarReconciliation.lines) {
+    if (!isConfirmedAuxiliarLine(line)) continue;
+    if (line.flujo !== 'ingreso' && line.flujo !== 'egreso') continue;
+    if (companyCode && companyCode !== 'all' && line.cia !== companyCode) continue;
+
+    const date = cleanIsoDate(line.bankDate) ?? cleanIsoDate(line.fechaContable);
+    if (!date || date < startDate || date > endDate) continue;
+
+    const amount = positiveNumber(Math.abs(line.bankAmount ?? line.importe));
+    if (amount <= 0) continue;
+
+    if (line.source.kind === 'pago') continue;
+    if (line.source.kind === 'factura') {
+      const key = auxiliarDocKey(line.cia, line.source.ref);
+      if (line.flujo === 'egreso' && (knownCxpInvoices.has(key) || knownPurchaseDocs.has(key))) continue;
+      if (line.flujo === 'ingreso' && knownCobranzaInvoices.has(key)) continue;
+    }
+    if (line.source.kind === 'oc' && knownPurchaseOrders.has(purchaseOrderKey(line.cia, line.source.ref))) continue;
+    if (!isDirectionalAuxiliarIvaCandidate(line)) continue;
+
+    const target = auxiliarRateTarget(line);
+    const resolution = resolveTaxRate(rateContext, target);
+    const breakdown = grossToIvaBreakdown(amount, resolution.rate);
+    const dedupeKey = `${line.glKey}::${date}::${line.flujo}::${Math.round(amount * 100)}`;
+    if (emitted.has(dedupeKey)) continue;
+    emitted.add(dedupeKey);
+
+    const taxLine: TaxSourceLine = {
+      movementId: `aux-iva-estimate:${dedupeKey}`,
+      date,
+      concept: `IVA estimado Auxiliar · ${auxiliarLineLabel(line)}`,
+      counterpartyName: line.source.contraparte || line.nombreCuenta,
+      amount,
+      taxBase: breakdown.taxBase,
+      taxRate: breakdown.taxRate,
+      taxAmount: breakdown.taxAmount,
+      sourceSystem: 'JDE',
+      rateTarget: target,
+      rateSource: resolution.source,
+      estimated: true,
+    };
+    const row = ensure(date.slice(0, 7));
+    if (line.flujo === 'ingreso') addIvaCaused(row, taxLine, breakdown.taxRate);
+    else addIvaCreditable(row, taxLine, breakdown.taxRate);
+  }
+}
+
 function accumulateBudgetIvaComplement({
   budget,
   startDate,
@@ -2580,6 +2683,90 @@ function cxpCoverageKey(record: CXPRecord): string {
 
 function purchaseOrderKey(cia: string, purchaseOrderNo: string): string {
   return `${normalizeText(cia)}::${purchaseOrderNo.trim()}`;
+}
+
+function auxiliarDocKey(cia: string, ref: string): string {
+  return `${normalizeText(cia)}::${normalizeText(ref)}`;
+}
+
+function auxiliarLineLabel(line: AuxiliarReconLine): string {
+  return [
+    line.tipoDoctoDesc || line.tipoDocto || 'GL',
+    line.source.ref,
+    line.source.contraparte || line.nombreCuenta,
+  ].filter(Boolean).join(' · ');
+}
+
+function auxiliarRateTarget(line: AuxiliarReconLine): TaxRateTarget {
+  if (line.flujo === 'egreso' && line.source.contraparte) {
+    return providerRateTarget(line.source.contraparte);
+  }
+  return conceptRateTarget(auxiliarLineLabel(line));
+}
+
+function isDirectionalAuxiliarIvaCandidate(line: AuxiliarReconLine): boolean {
+  const text = normalizeText([
+    line.tipoDoctoDesc,
+    line.tipoDocto,
+    line.source.kind,
+    line.source.ref,
+    line.source.contraparte,
+    line.nombreCuenta,
+  ].filter(Boolean).join(' '));
+  if (!text) return false;
+
+  const classification = classifyBankConcept({ concepto: text });
+  if (classification.category === 'TAX' || classification.category === 'PAYROLL' || classification.category === 'DEBT') {
+    return false;
+  }
+
+  if (isNonTaxableAuxiliarText(text)) return false;
+  if (line.flujo === 'ingreso') {
+    return line.source.kind === 'factura';
+  }
+  if (line.source.kind === 'factura' || line.source.kind === 'oc') return true;
+  return isOperationalAuxiliarExpenseText(text);
+}
+
+function isNonTaxableAuxiliarText(text: string): boolean {
+  return [
+    'NOMINA',
+    'SUELDO',
+    'SALARIO',
+    'FINIQUITO',
+    'IMSS',
+    'INFONAVIT',
+    'ISR',
+    'IMPUESTO',
+    'TESORERIA',
+    'SAT',
+    'IVA',
+    'PRESTAMO',
+    'CREDITO',
+    'DEUDA',
+    'PASIVO',
+    'TRASPASO',
+    'TRANSFERENCIA',
+    'INTERCOMPANIA',
+    'INTERCOMPAN',
+    'COMISION',
+    'INTERES',
+  ].some((token) => text.includes(token));
+}
+
+function isOperationalAuxiliarExpenseText(text: string): boolean {
+  return [
+    'PROVEEDOR',
+    'FLETE',
+    'DIESEL',
+    'COMBUSTIBLE',
+    'MANTENIMIENTO',
+    'REFACCION',
+    'RENTA',
+    'SERVICIO',
+    'COMPRA',
+    'GASTO',
+  ].some((token) => text.includes(token));
 }
 
 function isHandledCxpMovement(movement: FinancialMovement, keys: Set<string>): boolean {

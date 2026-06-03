@@ -449,6 +449,91 @@ describe('taxModuleService', () => {
     });
   });
 
+  it('estimates real IVA from confirmed Auxiliar income and operational expense flows when no fiscal document resolved them', () => {
+    const view = buildTaxDashboardView({
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'RI-AUX-ONLY',
+          contraparte: 'Cliente Auxiliar',
+          bankDate: '2026-05-10',
+          importe: 1160,
+          bankAmount: 1160,
+          flujo: 'ingreso',
+          sourceKind: 'factura',
+          tipoDoctoDesc: 'Recibo factura',
+        }),
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'SERV-AUX-ONLY',
+          contraparte: 'Proveedor Servicio Diesel',
+          bankDate: '2026-05-12',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'otro',
+          tipoDoctoDesc: 'Servicio operativo',
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCaused).toBeCloseTo(160);
+    expect(may.realIva.ivaCreditable).toBeCloseTo(160);
+    expect(may.realIva.incomeLines[0]).toMatchObject({
+      concept: 'IVA estimado Auxiliar · Recibo factura · RI-AUX-ONLY · Cliente Auxiliar',
+      estimated: true,
+    });
+    expect(may.realIva.incomeLines[0].taxBase).toBeCloseTo(1000);
+    expect(may.realIva.incomeLines[0].taxAmount).toBeCloseTo(160);
+    expect(may.realIva.expenseLines[0]).toMatchObject({
+      concept: 'IVA estimado Auxiliar · Servicio operativo · SERV-AUX-ONLY · Proveedor Servicio Diesel',
+      estimated: true,
+    });
+    expect(may.realIva.expenseLines[0].taxBase).toBeCloseTo(1000);
+    expect(may.realIva.expenseLines[0].taxAmount).toBeCloseTo(160);
+  });
+
+  it('does not estimate Auxiliar IVA for SAT, payroll or debt-like flows', () => {
+    const view = buildTaxDashboardView({
+      auxiliarReconciliation: auxiliarResult([
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'PAGO-IVA',
+          contraparte: 'SAT',
+          bankDate: '2026-05-17',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'otro',
+          tipoDoctoDesc: 'Pago IVA SAT',
+        }),
+        auxiliarLine({
+          cia: '00011',
+          noFactura: 'NOMINA',
+          contraparte: 'Nomina semanal',
+          bankDate: '2026-05-18',
+          importe: -1160,
+          bankAmount: -1160,
+          sourceKind: 'otro',
+          tipoDoctoDesc: 'Nomina',
+        }),
+      ]),
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
+
+    expect(view.periods).toHaveLength(0);
+  });
+
   it('keeps Auxiliar pago without fiscal document unclassified instead of inventing IVA', () => {
     const payment = pagoProveedor({
       cia: '00011',
@@ -1392,20 +1477,22 @@ function auxiliarLine(patch: {
   bankDate: string;
   importe: number;
   bankAmount?: number;
+  flujo?: AuxiliarReconLine['flujo'];
   sourceKind?: AuxiliarReconLine['source']['kind'];
+  tipoDoctoDesc?: string;
 }): AuxiliarReconLine {
   return {
     glKey: `${patch.cia}::aux::PV::${patch.noFactura}`,
     cia: patch.cia,
     cuentaBanco: '70144758151',
     nombreCuenta: 'BANAMEX CTA',
-    flujo: 'egreso',
+    flujo: patch.flujo ?? 'egreso',
     esCaja: false,
     fechaContable: patch.bankDate,
     importe: patch.importe,
     moneda: 'MXP',
     tipoDocto: 'PV',
-    tipoDoctoDesc: 'Pago',
+    tipoDoctoDesc: patch.tipoDoctoDesc ?? 'Pago',
     estatusConciliado: '',
     matchTier: 'exact',
     confidence: 0.97,
