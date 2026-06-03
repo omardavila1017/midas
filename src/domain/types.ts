@@ -246,6 +246,13 @@ export interface Provider {
     riesgoLegal: number;
     diasCredito: number;
   };
+  /**
+   * Empleado disfrazado de proveedor JDE (nómina / reembolsos / vales). Se
+   * deriva de la señal autoritativa del API (`PagoProveedorRecord.tipoBusqueda
+   * === 'Employees'`) o del texto de clasificación. Sirve para sacarlos del
+   * sesgo "proveedores sin catálogo" — no son proveedores comerciales reales.
+   */
+  isEmployee?: boolean;
   /** Número de proveedor JDE de la plantilla. */
   numProveedorJDE?: string;
   /** Frecuencia de pago observada en el histórico 2025 (Semanal, Mensual…). */

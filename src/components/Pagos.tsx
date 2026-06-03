@@ -44,6 +44,7 @@ import { fmtCompact, fmtCurrency, fmtDate } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import ProviderBadge from './ProviderBadge';
 import { buildProviderIndex } from '../domain/providerIdentity';
+import { isEmployeeSearchType } from '../domain/providerDerivation';
 import type { Provider } from '../domain/types';
 import type { PaymentMatch, PaymentStatus, CxpMatchTier, CargoMatchTier } from '../domain/paymentReconciliationEngine';
 import type { CXPRecord } from '../domain/persistence';
@@ -137,7 +138,7 @@ const CARGO_TIER_LABEL: Record<CargoMatchTier, string> = {
 };
 
 function isEmployeePayment(r: PagoProveedorRecord): boolean {
-  return r.tipoBusqueda.trim().toLowerCase().startsWith('employee');
+  return isEmployeeSearchType(r.tipoBusqueda);
 }
 
 /**

@@ -235,6 +235,9 @@ export function reportUnmatchedProviders(
       continue;
     }
     const match = findProviderByRef(index, ref);
+    // Empleados disfrazados de proveedor (nómina/reembolsos) no son proveedores
+    // comerciales — se excluyen del reporte de "sin catálogo" para no sesgarlo.
+    if (match.provider?.isEmployee) continue;
     seen.set(key, {
       jdeCode: jdeKey,
       name: (ref.name ?? '').toString().trim(),

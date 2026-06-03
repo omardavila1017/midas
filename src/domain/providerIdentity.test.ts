@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Provider } from './types';
-import { providerBusinessClassification, provierClassificationLabel } from './providerIdentity';
+import {
+  buildProviderIndex,
+  providerBusinessClassification,
+  provierClassificationLabel,
+  reportUnmatchedProviders,
+} from './providerIdentity';
 
 function provider(patch: Partial<Provider>): Provider {
   return {
@@ -36,5 +41,23 @@ describe('providerBusinessClassification', () => {
     expect(providerBusinessClassification(null)).toEqual({ key: 'SIN_CLASIFICAR', label: 'Sin clasificar' });
     expect(providerBusinessClassification(provider({}))).toEqual({ key: 'SIN_CLASIFICAR', label: 'Sin clasificar' });
     expect(provierClassificationLabel(provider({}))).toBeNull();
+  });
+});
+
+describe('reportUnmatchedProviders', () => {
+  it('excluye empleados (isEmployee) del reporte de sin catálogo', () => {
+    const index = buildProviderIndex([
+      provider({ id: 'real', name: 'DIESEL SA', numProveedorJDE: '107671', type: 'DIESEL' }),
+      provider({ id: 'emp', name: 'JUAN PEREZ', numProveedorJDE: '200500', isEmployee: true, type: 'Prestaciones' }),
+    ]);
+    const report = reportUnmatchedProviders(index, [
+      { jdeCode: '107671', name: 'DIESEL SA' },
+      { jdeCode: '200500', name: 'JUAN PEREZ' },   // empleado → excluido
+      { jdeCode: '999999', name: 'PROVEEDOR FANTASMA' }, // sin catálogo real
+    ]);
+    expect(report.totalRefs).toBe(2);
+    expect(report.matched).toBe(1);
+    expect(report.unmatched).toBe(1);
+    expect(report.unmatchedSamples.map((s) => s.jdeCode)).toEqual(['999999']);
   });
 });

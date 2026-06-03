@@ -18,6 +18,29 @@ import type { ComprasRecord, PagoProveedorRecord } from '../services/jdeTypes';
 import { normalizeJdeKey, normalizeProviderName } from './providerIdentity';
 
 /**
+ * Tipo/categoría canónica asignada a los "proveedores" que en realidad son
+ * empleados (nómina / reembolsos / vales). Permite segmentarlos en la UI y
+ * sacarlos del conteo de proveedores sin catálogo.
+ */
+export const EMPLOYEE_PROVIDER_TYPE = 'Prestaciones';
+
+/** Patrones de clasificación textual que delatan un pago a empleado. */
+const EMPLOYEE_CLASS_RE = /\b(N[OÓ]MINA|REEMBOLSO|VALE|VI[AÁ]TIC|FINIQUITO|AGUINALDO)/i;
+
+/**
+ * Señal autoritativa del API: `PagoProveedorRecord.tipoBusqueda === 'Employees'`
+ * marca reembolsos/nómina. Helper compartido (ver `Pagos.tsx::isEmployeePayment`).
+ */
+export function isEmployeeSearchType(tipoBusqueda?: string | null): boolean {
+  return (tipoBusqueda ?? '').trim().toLowerCase().startsWith('employee');
+}
+
+/** Fallback por texto de clasificación cuando no hay `tipoBusqueda` (p.ej. CXP). */
+export function isEmployeeClassificationText(...texts: Array<string | undefined | null>): boolean {
+  return texts.some((t) => !!t && EMPLOYEE_CLASS_RE.test(t));
+}
+
+/**
  * Subset shared por `CXPRecord` (persistence) y `AgedBalanceRecord` (jdeTypes).
  * El derivador sólo necesita estos campos para clasificar.
  */
@@ -94,6 +117,8 @@ interface ProviderAccumulator {
   diasCreditoHint?: number;
   /** Most recent activity ISO. */
   lastSeen?: string;
+  /** Empleado disfrazado de proveedor (nómina/reembolsos) según señal del API. */
+  isEmployee?: boolean;
 }
 
 type CategorySource =
@@ -241,6 +266,10 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
     pushName(acc, rec.nombre, 1);
     pushSignal(acc, 'cxp-clasificacion', rec.clasificacionProveedor);
     pushSignal(acc, 'cxp-clasifica', rec.clasifica);
+    // CXP no trae `tipoBusqueda`; detectamos empleados sólo por texto.
+    if (isEmployeeClassificationText(rec.clasificacionProveedor, rec.clasifica)) {
+      acc.isEmployee = true;
+    }
     acc.volume += Math.abs(rec.importePendientePesos || 0);
     acc.txCount += 1;
     updateLastSeen(acc, rec.fechaFactura);
@@ -275,6 +304,10 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
     pushName(acc, rec.nombreProveedor, 1);
     pushSignal(acc, 'pp-clasificacion', rec.clasificacionProveedor);
     pushSignal(acc, 'pp-financiera', rec.clasificacionProveedorFinanciera);
+    // Señal autoritativa del API: tipoBusqueda 'Employees' o texto de clasificación.
+    if (isEmployeeSearchType(rec.tipoBusqueda) || isEmployeeClassificationText(rec.clasificacionProveedor)) {
+      acc.isEmployee = true;
+    }
     acc.volume += Math.abs(rec.importePesos || 0);
     acc.txCount += 1;
     updateLastSeen(acc, rec.fechaPago);
@@ -288,6 +321,11 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
     const rawName = pickBestName(acc.names) || `Proveedor ${acc.numProveedor}`;
     const categoriaRaw = pickCategorySignal(acc.categorySignals);
     const categoria = applyBusinessRules(rawName, categoriaRaw);
+    // Empleados disfrazados de proveedor: tipo canónico propio para sacarlos
+    // del bucket "Sin clasificar" / del conteo de proveedores sin catálogo.
+    const resolvedType = acc.isEmployee
+      ? EMPLOYEE_PROVIDER_TYPE
+      : (categoria || 'Sin categoría');
 
     // Score overlay match: by JDE key first, fallback to normalized name.
     let overlayEntry: ScoreEntry | undefined;
@@ -307,7 +345,8 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
     providers.push({
       id: `derived-${acc.jdeKey}`,
       name: rawName,
-      type: categoria || 'Sin categoría',
+      type: resolvedType,
+      isEmployee: acc.isEmployee || undefined,
       risk,
       flexibility,
       paymentPeriod: paymentPeriodFromDays(acc.diasCreditoHint),
