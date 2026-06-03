@@ -32,7 +32,7 @@ jobs:
           VITE_USER_ROLES: ${{ secrets.VITE_USER_ROLES }}
           VITE_DEFAULT_ROLE: ${{ secrets.VITE_DEFAULT_ROLE }}
           VITE_CURRENT_USER_EMAIL: ${{ secrets.VITE_CURRENT_USER_EMAIL }}
-
+ 
       - name: Copiar a IIS - QA
         run: |
           xcopy /E /Y /I dist\* C:\desarrollo\sitios\midas-qa\
