@@ -9,6 +9,7 @@ import {
 } from './cashFlowEngine';
 import {
   buildMonthlyProjection,
+  type MonthlyProjection,
   type ProjectionOverrides,
   type ProjectionResult,
 } from './projectionEngine';
@@ -83,6 +84,86 @@ export interface ComputeOutput {
 
 export function computeBankStartingBalance(statements: BankAccountStatement[]): number {
   return statements.reduce((s, acc) => s + (acc.saldoInicial ?? 0), 0);
+}
+
+/**
+ * MOTOR 1 — encadena los meses históricos del Dashboard re-sourceando los
+ * brutos REPORTADOS (`income`/`expense`) a la conciliación Auxiliar Contable ×
+ * Bancos cuando `reconciledByYm` cubre el mes cerrado. El encadenado de caja
+ * (`closingCash`) SIGUE anclado al banco real (`actualIncome`/`actualExpense`),
+ * nunca a los reconciliados — eso desanclaría la caja del saldo bancario.
+ * `reconciledByYm` vacío → brutos = banco (Σ ABONO/CARGO), comportamiento
+ * byte-idéntico al previo. El mes en curso se modela como el máximo entre el
+ * real acumulado, la proyección operativa y la predicción.
+ */
+export function buildReconciledHistoricalMonths(args: {
+  historical: CashFlowMonth[];
+  baseStart: number;
+  todayYm: string;
+  overrides: ProjectionOverrides;
+  projectionByYm: Map<string, MonthlyProjection>;
+  predIncomeByYm: Map<string, number>;
+  predExpenseByYm: Map<string, number>;
+  reconciledByYm: Map<string, { income: number; expense: number }>;
+}): CashFlowMonth[] {
+  const {
+    historical,
+    baseStart,
+    todayYm,
+    overrides,
+    projectionByYm,
+    predIncomeByYm,
+    predExpenseByYm,
+    reconciledByYm,
+  } = args;
+  const historicalChained: CashFlowMonth[] = [];
+  let runningHist = baseStart;
+  for (const m of historical) {
+    const actualIncome = m.income;
+    const actualExpense = m.expense;
+    // `income`/`expense` ENCADENAN la caja: banco real (meses cerrados) o la
+    // proyección del mes en curso. Nunca los brutos reconciliados — eso
+    // desanclaría `closingCash` del saldo bancario real.
+    let income = actualIncome;
+    let expense = actualExpense;
+    // Brutos REPORTADOS (lo que ve el chart/KPIs): banco por default; los
+    // meses cerrados con cobertura reconciliada (MOTOR 1) reportan la verdad
+    // Auxiliar Contable × Bancos.
+    let reportedIncome = actualIncome;
+    let reportedExpense = actualExpense;
+    if (m.yearMonth === todayYm) {
+      const ov = overrides[todayYm];
+      const projected = projectionByYm.get(todayYm);
+      income = ov?.income ?? Math.max(
+        actualIncome,
+        projected?.income.total ?? 0,
+        predIncomeByYm.get(todayYm) ?? 0,
+      );
+      expense = ov?.expense ?? Math.max(
+        actualExpense,
+        projected?.expense.total ?? 0,
+        predExpenseByYm.get(todayYm) ?? 0,
+      );
+      reportedIncome = income;
+      reportedExpense = expense;
+    } else {
+      const rec = reconciledByYm.get(m.yearMonth);
+      if (rec) {
+        reportedIncome = rec.income;
+        reportedExpense = rec.expense;
+      }
+    }
+    runningHist = runningHist + income - expense;
+    historicalChained.push({
+      ...m,
+      income: reportedIncome,
+      expense: reportedExpense,
+      actualIncome,
+      actualExpense,
+      closingCash: runningHist,
+    });
+  }
+  return historicalChained;
 }
 
 export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
@@ -228,53 +309,16 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   const baseStart = typeof startingBalance === 'number'
     ? startingBalance
     : computeBankStartingBalance(filtered);
-  const historicalChained: CashFlowMonth[] = [];
-  let runningHist = baseStart;
-  for (const m of historical) {
-    const actualIncome = m.income;
-    const actualExpense = m.expense;
-    // `income`/`expense` ENCADENAN la caja: banco real (meses cerrados) o la
-    // proyección del mes en curso. Nunca los brutos reconciliados — eso
-    // desanclaría `closingCash` del saldo bancario real.
-    let income = actualIncome;
-    let expense = actualExpense;
-    // Brutos REPORTADOS (lo que ve el chart/KPIs): banco por default; los
-    // meses cerrados con cobertura reconciliada (MOTOR 1) reportan la verdad
-    // Auxiliar Contable × Bancos.
-    let reportedIncome = actualIncome;
-    let reportedExpense = actualExpense;
-    if (m.yearMonth === todayYm) {
-      const ov = overrides[todayYm];
-      const projected = projectionByYm.get(todayYm);
-      income = ov?.income ?? Math.max(
-        actualIncome,
-        projected?.income.total ?? 0,
-        predIncomeByYm.get(todayYm) ?? 0,
-      );
-      expense = ov?.expense ?? Math.max(
-        actualExpense,
-        projected?.expense.total ?? 0,
-        predExpenseByYm.get(todayYm) ?? 0,
-      );
-      reportedIncome = income;
-      reportedExpense = expense;
-    } else {
-      const rec = reconciledByYm.get(m.yearMonth);
-      if (rec) {
-        reportedIncome = rec.income;
-        reportedExpense = rec.expense;
-      }
-    }
-    runningHist = runningHist + income - expense;
-    historicalChained.push({
-      ...m,
-      income: reportedIncome,
-      expense: reportedExpense,
-      actualIncome,
-      actualExpense,
-      closingCash: runningHist,
-    });
-  }
+  const historicalChained = buildReconciledHistoricalMonths({
+    historical,
+    baseStart,
+    todayYm,
+    overrides,
+    projectionByYm,
+    predIncomeByYm,
+    predExpenseByYm,
+    reconciledByYm,
+  });
 
   const months: CashFlowMonth[] = [...historicalChained];
   let running = historicalChained.length > 0

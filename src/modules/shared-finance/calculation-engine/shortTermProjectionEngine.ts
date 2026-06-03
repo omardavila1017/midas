@@ -1,0 +1,848 @@
+// ─────────────────────────────────────────────────────────────────────────
+// shortTermProjectionEngine — MOTOR 2 (Proyección de corto plazo, > hoy).
+// Emite SOLO datos reales de corto plazo, cada uno fechado por SU regla:
+//   • Cobranza/CXC abierto + ROL CITI (viaje ejecutado aún no facturado) +
+//     Viajes Especiales — ingresos.
+//   • CXP abierto + compras (OC `F_Recepcion`+`D_Credito`) + nómina TRESS
+//     real — egresos.
+// Sin balanceo a totales canónicos, sin proyecciones rule-based genéricas
+// (`client:`), sin recurrentes, sin reserva de presupuesto, sin sintéticos.
+// NO corre el prorrateo Citi — lo hace el orquestador (`canonicalProjection`).
+// ─────────────────────────────────────────────────────────────────────────
+
+import { compareYearMonth, toYearMonth } from '../../../domain/cashFlowEngine';
+import { isNonOperatingDay } from '../../../domain/bankHolidays';
+import {
+  buildClientLookup,
+  clientRuleLabel,
+  findClientForCobranza,
+  resolveCobranzaApiPaymentDate,
+  resolveCobranzaRuleDate,
+  type CollectionCalendarClientMatch,
+} from '../../../domain/collectionCalendarEngine';
+import { isInternalCounterparty } from '../../../domain/netCashFlowEngine';
+import { getConcursoProviderIds, isConcursoMercantil, normalizeProviderId } from '../../../domain/concursoMercantil';
+import type { Client, Provider } from '../../../domain/types';
+import type { CobranzaRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
+import type { CXPRecord } from '../../../domain/persistence';
+import { buildViajesEspecialesCobranzaCross, buildViajesEspecialesFacturaKeys } from '../../../domain/viajesEspecialesCobranzaMatch';
+import { buildRolProjectedInflows, type RolProjectedInflow } from '../../../domain/rolProjectionEngine';
+import { todayISO } from '../../../formatters';
+import { enrichFromCatalog } from '../../../domain/providerCatalog';
+import { calculateConfidenceBand } from './financialProjectionEngine';
+import type {
+  FinancialMovement,
+  FinancialMovementCategory,
+  FinancialTaxRate,
+} from '../types';
+import {
+  buildPayrollCostMovements,
+  buildPurchaseReceiptMovements,
+} from '../sourceRecords';
+import {
+  cleanDate,
+  clientDisplayCounterparty,
+  cxcFacturaKey,
+  filterCobranzaByCompany,
+  INCOME_SUBCAT_CITI,
+  INCOME_SUBCAT_VIAJES_ESPECIALES,
+  usableJdeProviderCategory,
+  type BuildArgs,
+  type CanonicalMonthlyPoint,
+  type CanonicalProjectionInputs,
+} from './canonicalProjectionShared';
+
+const DAY_MS = 86_400_000;
+
+/**
+ * MOTOR 2 — Proyección de corto plazo (> hoy). Emite SOLO datos reales de
+ * corto plazo, cada uno fechado por SU regla. Sin balanceo a totales
+ * canónicos, sin proyecciones rule-based genéricas (`client:`), sin
+ * recurrentes, sin reserva de presupuesto, sin sintéticos. NO corre el
+ * prorrateo Citi — lo hace el orquestador.
+ */
+export function buildShortTermProjectionMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
+  const out: FinancialMovement[] = [];
+  const todayYm = toYearMonth(inputs.asOfDate);
+  const inflowContext = buildInflowContext(inputs);
+  // Proveedores en Concurso Mercantil: cualquier proveedor con AL MENOS una
+  // factura ≤ CONCURSO_MERCANTIL_CUTOFF (deuda congelada). Sus pagos viven en
+  // el módulo Concurso; aquí se excluyen para que su deuda fresca no entre dos
+  // veces al flujo. Set indexado por noProveedor (trim + upper) — misma
+  // normalización que `normalizeProviderId`.
+  const concursoProviderIds = getConcursoProviderIds(inputs.cxpRecords);
+
+  // 2) Meses futuros: SOLO datos reales de corto plazo.
+  //    Inflows: CXC abierto (cobranza JDE pendiente) + ROL CITI (viajes
+  //    ejecutados aún no facturados, fechados por catálogo).
+  //    Outflows: CXP abierto + compras (OC con F_Recepcion+D_Credito) +
+  //    nómina TRESS real (sin replicar). Sin balanceo a totales canónicos,
+  //    sin proyecciones rule-based (`client:`), sin recurrentes, sin
+  //    reserva de presupuesto, sin sintéticos de balance.
+  const futureMonths = monthly.filter((m) => !m.isHistorical);
+  const horizonYm = monthly[monthly.length - 1]?.yearMonth;
+  const purchaseMovementsByYm = groupMovementsByYearMonth(buildPurchaseReceiptMovements({
+    purchaseReceipts: inputs.purchaseReceipts ?? [],
+    cxpRecords: inputs.cxpRecords,
+    companyCode: inputs.companyCode,
+    asOfDate: inputs.asOfDate,
+    excludeProviderIds: concursoProviderIds,
+    paidPurchaseOrderKeys: inputs.paidPurchaseOrderKeys,
+    providers: inputs.providers,
+  }));
+  for (const month of futureMonths) {
+    const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
+    out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
+
+    const outflowLines = collectOutflowLines(month, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? [], concursoProviderIds);
+    out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
+  }
+
+  // 3) Mes en curso (parcial). Días pasados ya están como REAL desde el
+  //    banco. Para los días que faltan: SOLO líneas reales (CXC/ROL/CXP/
+  //    compras/payroll TRESS), sin rellenar al target operativo.
+  const currentYm = todayYm;
+  const currentHistorical = monthly.find((m) => m.isHistorical && m.yearMonth === currentYm);
+  if (currentHistorical) {
+    const inflowLines = collectInflowLines(currentHistorical, inputs, todayYm, inflowContext)
+      .filter((line) => line.date >= inputs.asOfDate);
+    out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
+
+    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(currentYm) ?? [], concursoProviderIds)
+      .filter((line) => line.date >= inputs.asOfDate);
+    out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
+  }
+
+  return out;
+}
+
+function groupMovementsByYearMonth(movements: FinancialMovement[]): Map<string, FinancialMovement[]> {
+  const out = new Map<string, FinancialMovement[]>();
+  for (const m of movements) {
+    const ym = m.projectedDate.slice(0, 7);
+    const arr = out.get(ym);
+    if (arr) arr.push(m);
+    else out.set(ym, [m]);
+  }
+  return out;
+}
+
+/**
+ * Convierte `RawLine[]` directamente a `FinancialMovement[]` sin
+ * escalar contra un total canónico. Se usa para el mes en curso, donde
+ * los días pasados ya están cubiertos por movimientos REAL del banco
+ * y los días futuros son proyecciones genuinas que no deben "balancear"
+ * a nada — sólo sumarse.
+ */
+function emitRawLines(
+  lines: RawLine[],
+  type: FinancialMovement['type'],
+  asOfDate: string,
+): FinancialMovement[] {
+  return lines.map((line) => ({
+    id: line.id,
+    sourceSystem: line.sourceSystem,
+    sourceObjectId: line.sourceObjectId,
+    type,
+    category: line.category,
+    subcategory: line.subcategory,
+    companyId: line.companyId,
+    counterpartyId: line.counterpartyId,
+    counterpartyName: line.counterpartyName,
+    counterpartyType: line.counterpartyType,
+    providerCategory: line.providerCategory,
+    concept: line.concept,
+    currency: 'MXN',
+    originalAmount: line.amount,
+    baseAmount: line.amount,
+    projectedAmount: line.amount,
+    issueDate: line.issueDate,
+    dueDate: line.dueDate,
+    projectedDate: line.date,
+    confidenceScore: line.confidenceScore,
+    confidenceBand: calculateConfidenceBand(line.confidenceScore),
+    forecastMethod: line.forecastMethod,
+    ruleApplied: line.ruleApplied,
+    taxTreatment: line.taxTreatment,
+    taxRate: line.taxRate,
+    ...scaleTaxMeta(line, line.amount),
+    status: 'PROJECTED_BASE',
+    lockState: line.lockState,
+    comments: [line.comment],
+    createdAt: `${asOfDate}T00:00:00.000Z`,
+    updatedAt: `${asOfDate}T00:00:00.000Z`,
+  }));
+}
+
+interface RawLine {
+  id: string;
+  amount: number;
+  date: string;
+  concept: string;
+  category: FinancialMovementCategory;
+  subcategory?: string;
+  providerCategory?: string;
+  counterpartyId?: string;
+  counterpartyName?: string;
+  counterpartyType?: FinancialMovement['counterpartyType'];
+  ruleApplied: string;
+  sourceSystem: FinancialMovement['sourceSystem'];
+  sourceObjectId?: string;
+  companyId?: string;
+  issueDate?: string;
+  dueDate?: string;
+  forecastMethod: FinancialMovement['forecastMethod'];
+  confidenceScore: number;
+  lockState: FinancialMovement['lockState'];
+  comment: string;
+  taxTreatment?: FinancialMovement['taxTreatment'];
+  taxRate?: FinancialTaxRate;
+  taxBaseAmount?: number;
+  taxAmount?: number;
+  amountLocked?: boolean;
+}
+
+interface InflowContext {
+  cxcRecords: CobranzaRecord[];
+  cxcCoverageByClientMonth: Map<string, Set<string>>;
+  clientMatchByFactura: Map<string, CollectionCalendarClientMatch | null>;
+  /** Líneas ROL proyectadas agrupadas por `yyyy-mm` de cobro. */
+  rolInflowsByYm: Map<string, RolProjectedInflow[]>;
+  /** clientId → set `yyyy-mm` de cobro cubierto por ROL (suprime `client:`). */
+  rolCoverageByClientMonth: Map<string, Set<string>>;
+  /**
+   * `${cia}::${noFactura}` de facturas que pertenecen a viajes especiales.
+   * Cuando una línea cxc: tiene su factura en este set, se reetiqueta
+   * subcategory='Viajes Especiales' y el id pasa a `cxc:especial:`.
+   */
+  viajesEspFacturaKeys: Set<string>;
+  /**
+   * Viajes facturados con factura que cobranza JDE aún no expone. Se
+   * agrupan por `yyyy-mm` del cobro proyectado (Fecha_Factura + Dias_Credito)
+   * para emitir movimientos sintéticos `cxc:especial:` en `collectInflowLines`.
+   */
+  viajesEspUnmatchedByYm: Map<string, ViajeEspecialRecord[]>;
+}
+
+function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
+  const clientLookup = buildClientLookup(inputs.clients);
+  const cxcRecords = filterCobranzaByCompany(inputs.cobranzaRecords ?? [], inputs.companyCode);
+  const cxcCoverageByClientMonth = new Map<string, Set<string>>();
+  const clientMatchByFactura = new Map<string, CollectionCalendarClientMatch | null>();
+
+  for (const record of cxcRecords) {
+    const match = findClientForCobranza(record, clientLookup);
+    clientMatchByFactura.set(cxcFacturaKey(record), match);
+    if (match && record.fechaFactura) {
+      addCoveredMonth(cxcCoverageByClientMonth, match.client.id, record.fechaFactura.slice(0, 7));
+    }
+  }
+
+  // ROL: viajes ejecutados aún no facturados → ingreso futuro real fechado
+  // por la regla del catálogo. Reusa el clientLookup ya armado. Solo cruza
+  // contra la cobranza de la misma empresa para no marcar como "predicho"
+  // un viaje ya facturado en otra cía del cruce.
+  const rol = buildRolProjectedInflows({
+    rolRecords: inputs.rolRecords ?? [],
+    cobranzaRecords: cxcRecords,
+    clients: inputs.clients,
+    assumptions: inputs.assumptions,
+    asOfDate: inputs.asOfDate,
+    clientLookup,
+  });
+  const rolInflowsByYm = new Map<string, RolProjectedInflow[]>();
+  for (const inflow of rol.inflows) {
+    const ym = inflow.date.slice(0, 7);
+    const arr = rolInflowsByYm.get(ym);
+    if (arr) arr.push(inflow);
+    else rolInflowsByYm.set(ym, [inflow]);
+  }
+  // TODO(rol-diag): instrumentación temporal — quitar tras confirmar mapeo ROL.
+  if (typeof console !== 'undefined') {
+    const dates = rol.inflows.map((i) => i.date).sort();
+    const gross = rol.inflows.reduce((s, i) => s + i.grossAmount, 0);
+    // eslint-disable-next-line no-console
+    console.info(
+      `[rol-diag] rolRecords=${(inputs.rolRecords ?? []).length} → líneas rol:=${rol.inflows.length} `
+      + `bruto=${Math.round(gross)} fechas ${dates[0] ?? '—'}..${dates[dates.length - 1] ?? '—'} `
+      + `· sin cliente catálogo: viajes=${rol.unmatchedTrips} monto=${Math.round(rol.unmatchedAmount)} `
+      + `· asOf=${inputs.asOfDate}`,
+    );
+  }
+
+  // Viajes Especiales: cruce factura/UUID vs cobranza. Unmatched (factura
+  // emitida pero cobranza aún no la tiene) se proyectan más abajo como
+  // `cxc:especial:` con Fecha_Factura + Dias_Credito del API. Matched solo
+  // sirve para re-etiquetar el cxc: existente con subcategory Viajes Especiales.
+  const viajesRecords = (inputs.viajesEspecialesRecords ?? []).filter((v) =>
+    inputs.companyCode === 'all' || !inputs.companyCode || v.cia === inputs.companyCode,
+  );
+  const viajesCross = buildViajesEspecialesCobranzaCross(viajesRecords, cxcRecords);
+  const viajesEspFacturaKeys = buildViajesEspecialesFacturaKeys(viajesRecords);
+  const viajesEspUnmatchedByYm = new Map<string, ViajeEspecialRecord[]>();
+  for (const v of [...viajesCross.unmatched, ...viajesCross.withoutInvoice]) {
+    const projectedDate = projectViajeEspecialDate(v, inputs.asOfDate);
+    if (!projectedDate) continue;
+    const ym = projectedDate.slice(0, 7);
+    const arr = viajesEspUnmatchedByYm.get(ym);
+    if (arr) arr.push(v);
+    else viajesEspUnmatchedByYm.set(ym, [v]);
+  }
+  if (typeof console !== 'undefined' && viajesRecords.length > 0) {
+    // eslint-disable-next-line no-console
+    console.info(
+      `[viajes-esp-diag] viajes=${viajesRecords.length} matched=${viajesCross.matched.length} `
+      + `unmatched=${viajesCross.unmatched.length} sinFactura=${viajesCross.withoutInvoice.length} `
+      + `· líneas cxc:especial: proyectadas=${Array.from(viajesEspUnmatchedByYm.values()).reduce((s, a) => s + a.length, 0)}`,
+    );
+  }
+
+  return {
+    cxcRecords,
+    cxcCoverageByClientMonth,
+    clientMatchByFactura,
+    rolInflowsByYm,
+    rolCoverageByClientMonth: rol.coverageByClientMonth,
+    viajesEspFacturaKeys,
+    viajesEspUnmatchedByYm,
+  };
+}
+
+/**
+ * Fecha de cobro proyectada para un Viaje Especial sin match en cobranza.
+ * Usa Fecha_Factura + Dias_Credito (regla del API, no del catálogo).
+ * Si no hay Fecha_Factura, cae a fSalidaPrimera (fecha del servicio).
+ * Si ya venció (< asOfDate) se reagenda al siguiente día operativo.
+ */
+function projectViajeEspecialDate(
+  viaje: ViajeEspecialRecord,
+  asOfDate: string,
+): string | null {
+  const base = viaje.fechaFactura || viaje.fSalidaPrimera;
+  if (!base) return null;
+  const credit = Number.isFinite(viaje.diasCredito) && viaje.diasCredito > 0
+    ? viaje.diasCredito
+    : 30;
+  const start = new Date(base + 'T00:00:00Z');
+  if (Number.isNaN(start.getTime())) return null;
+  start.setUTCDate(start.getUTCDate() + credit);
+  const projected = start.toISOString().slice(0, 10);
+  // Si ya venció, jala al siguiente día desde asOf (mismo trato que cxc:).
+  if (projected < asOfDate) {
+    const next = new Date(asOfDate + 'T00:00:00Z');
+    next.setUTCDate(next.getUTCDate() + 1);
+    return next.toISOString().slice(0, 10);
+  }
+  return projected;
+}
+
+/**
+ * Inflows: primero mete facturas CXC abiertas de JDE a valor nominal y
+ * luego completa el resto del mes con `projectClientMonth` para clientes.
+ * Cada evento tiene fecha real que respeta:
+ *   - frecuencia (semanal, quincenal, mensual, contado)
+ *   - días de crédito del cliente
+ *   - patrón de pago (DOM, DOW, etc.) o factoraje
+ *
+ * Las facturas CXC emitidas bloquean su monto y cubren el ciclo del cliente
+ * para no duplicar la misma venta como forecast genérico.
+ * Esto produce muchos puntos en distintos días → la vista semanal/diaria
+ * se ve poblada en lugar de un solo bloque a mediados de mes.
+ */
+function collectInflowLines(
+  month: CanonicalMonthlyPoint,
+  inputs: CanonicalProjectionInputs,
+  _todayYm: string,
+  context: InflowContext,
+): RawLine[] {
+  const lines: RawLine[] = collectCxcInflowLines(month, inputs, context);
+
+  // ROL: viajes ejecutados aún no facturados. Monto real ejecutado, fechado
+  // por la regla de pago del catálogo (overlay /cobranza). `amountLocked` →
+  // no se escala al total del Dashboard (mismo trato que `cxc:`).
+  for (const inflow of context.rolInflowsByYm.get(month.yearMonth) ?? []) {
+    // ROL proyectado siempre cae a Citi. Federal sólo aplica a ABONOs reales
+    // no ligados a cliente/factura que caen en cuenta Federal.
+    const rolSubcat = INCOME_SUBCAT_CITI;
+    // Si el cliente ROL tiene grupo comercial, agrupa el ROL al grupo padre.
+    const rolClient = inputs.clients.find((c) => c.id === inflow.clientId);
+    const rolDisplay = rolClient ? clientDisplayCounterparty(rolClient) : { id: inflow.clientId, name: inflow.clientName };
+    lines.push({
+      id: `rol:${inflow.clientId}:${inflow.date}`,
+      amount: inflow.grossAmount,
+      date: inflow.date,
+      concept: `Viajes ejecutados ${inflow.clientName} (${inflow.tripCount} viaje${inflow.tripCount === 1 ? '' : 's'})`,
+      category: 'AR_COLLECTION',
+      subcategory: rolSubcat,
+      counterpartyId: rolDisplay.id,
+      counterpartyName: rolDisplay.name,
+      counterpartyType: 'CUSTOMER',
+      ruleApplied: `ROL CITI · ${inflow.ruleReason}`,
+      sourceSystem: 'FORECAST',
+      sourceObjectId: inflow.clientId,
+      forecastMethod: 'RULE',
+      confidenceScore: 70,
+      lockState: 'RESTRICTED',
+      taxTreatment: 'IVA_CAUSED',
+      taxRate: 16,
+      taxBaseAmount: inflow.subTotal,
+      taxAmount: inflow.grossAmount - inflow.subTotal,
+      comment: `Viajes ejecutados (ROL CITI) aún no facturados; ingreso proyectado por la regla de pago del catálogo. ${inflow.ruleReason}`,
+      amountLocked: true,
+    });
+  }
+
+  // Proyección genérica `client:` por regla de catálogo eliminada en esta
+  // branch — solo aparecen ingresos reales (CXC abierto + ROL ejecutado).
+
+  // Viajes Especiales sin match en cobranza: proyectar el cobro con
+  // Fecha_Factura + Dias_Credito DEL API (regla por viaje, no por catálogo).
+  // Si una factura aparece después en cobranza, el cruce en el siguiente
+  // boot moverá ese viaje a `matched` y aquí dejará de emitirse — el cxc:
+  // de cobranza lo cubrirá (reetiquetado como Viajes Especiales).
+  for (const viaje of context.viajesEspUnmatchedByYm.get(month.yearMonth) ?? []) {
+    const projectedDate = projectViajeEspecialDate(viaje, inputs.asOfDate);
+    if (!projectedDate || projectedDate.slice(0, 7) !== month.yearMonth) continue;
+    const subTotal = viaje.totalNegociado;
+    const grossAmount = subTotal * 1.16;
+    const facturaLabel = viaje.facturaJDE || `K_Renta ${viaje.kRenta}`;
+    lines.push({
+      id: `cxc:especial:viaje:${viaje.cia}:${viaje.kRenta}`,
+      amount: grossAmount,
+      date: projectedDate,
+      concept: `Viaje especial ${facturaLabel} · ${viaje.dCliente || 'Cliente sin nombre'}`,
+      category: 'AR_COLLECTION',
+      subcategory: INCOME_SUBCAT_VIAJES_ESPECIALES,
+      companyId: viaje.cia,
+      counterpartyId: viaje.claveJDE || String(viaje.kCliente),
+      counterpartyName: viaje.dCliente || undefined,
+      counterpartyType: 'CUSTOMER',
+      ruleApplied: viaje.fechaFactura
+        ? `Viajes Especiales · Fecha_Factura + ${viaje.diasCredito || 30}d crédito`
+        : `Viajes Especiales · viaje + ${viaje.diasCredito || 30}d crédito`,
+      sourceSystem: 'JDE',
+      sourceObjectId: viaje.facturaJDE || String(viaje.kRenta),
+      issueDate: viaje.fechaFactura,
+      forecastMethod: 'RULE',
+      confidenceScore: viaje.facturaJDE ? 78 : 64,
+      lockState: 'RESTRICTED',
+      taxTreatment: 'IVA_CAUSED',
+      taxRate: 16,
+      taxBaseAmount: subTotal,
+      taxAmount: grossAmount - subTotal,
+      comment: `Viaje especial reportado por API ${viaje.facturaJDE ? 'con factura' : 'sin factura'} y aún no presente en cobranza JDE. Crédito y fecha provienen del API de Viajes Especiales.`,
+      amountLocked: true,
+    });
+  }
+
+  return lines;
+}
+
+function collectCxcInflowLines(
+  month: CanonicalMonthlyPoint,
+  inputs: CanonicalProjectionInputs,
+  context: InflowContext,
+): RawLine[] {
+  if (context.cxcRecords.length === 0) return [];
+  const lines: RawLine[] = [];
+  const seen = new Set<string>();
+  // Facturas que el reconciliation engine ya cruzó al céntimo con un
+  // ABONO bancario: el dinero ya está en los movimientos históricos del
+  // banco. Si las re-proyectamos, queda doblada. Sólo las descartamos
+  // cuando el cruce fue automático (status='cobrada-banco'); facturas en
+  // revisión manual o sin cruce siguen como pendiente proyectada.
+  const cobradaBancoKeys = inputs.cobradaBancoKeys ?? new Set<string>();
+
+  for (const record of context.cxcRecords) {
+    if (record.importePendientePesos <= 0) continue;
+    // Factura intercompañía (empresa propia del grupo): traspaso, no
+    // cobranza real. No proyectar como entrada de caja.
+    if (isInternalCounterparty(record.rfc, record.nombreCliente)) continue;
+    const key = cxcFacturaKey(record);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (cobradaBancoKeys.has(key)) continue;
+
+    const clientMatch = context.clientMatchByFactura.get(key) ?? null;
+    const resolved = clientMatch
+      ? resolveCobranzaRuleDate(record, clientMatch.client, inputs.assumptions)
+      : resolveCobranzaApiPaymentDate(record);
+    const rawDate = resolved?.calendarDate
+      ?? cleanDate(record.fechaVence)
+      ?? cleanDate(record.fechaFactura)
+      ?? inputs.asOfDate;
+    const dateInfo = moveOpenReceivableIntoProjection(rawDate, inputs.asOfDate);
+    if (dateInfo.date.slice(0, 7) !== month.yearMonth) continue;
+
+    const taxMeta = cxcTaxMeta(record, clientMatch?.client);
+    const confidenceScore = clientMatch
+      ? Math.round(Math.min(92, 72 + clientMatch.confidence * 18))
+      : 62;
+    const dateReason = resolved
+      ? resolved.reason
+      : record.fechaVence
+        ? 'Sin regla confiable; se usa vencimiento JDE.'
+        : 'Sin regla confiable; se usa fecha de factura JDE.';
+
+    // CXC proyectado: Citi por defecto, Viajes Especiales si la factura está
+    // en el set de viajes especiales (cruce factura/UUID vs API).
+    const isViajeEspecialCxc = context.viajesEspFacturaKeys.has(
+      `${record.cia}::${(record.noFactura ?? '').trim().toUpperCase()}`,
+    );
+    const cxcSubcat = isViajeEspecialCxc
+      ? INCOME_SUBCAT_VIAJES_ESPECIALES
+      : INCOME_SUBCAT_CITI;
+    const cxcIdPrefix = isViajeEspecialCxc ? 'cxc:especial' : 'cxc';
+    lines.push({
+      id: `${cxcIdPrefix}:${record.cia}:${record.noCliente}:${record.noFactura}`,
+      amount: record.importePendientePesos,
+      date: dateInfo.date,
+      concept: `Factura CXC ${record.noFactura || 'sin folio'} · ${record.nombreCliente || 'Cliente sin nombre'}`,
+      category: 'AR_COLLECTION',
+      subcategory: cxcSubcat,
+      companyId: record.cia,
+      counterpartyId: clientMatch ? clientDisplayCounterparty(clientMatch.client).id : record.noCliente,
+      counterpartyName: clientMatch
+        ? clientDisplayCounterparty(clientMatch.client).name
+        : (record.nombreCliente || undefined),
+      counterpartyType: 'CUSTOMER',
+      ruleApplied: clientMatch
+        ? clientRuleLabel(clientMatch.client)
+        : record.nombreDiaPagoCc13 || record.claveDiaPagoCc13
+          ? 'Día de pago CC13 /cobranza'
+          : 'Fecha vencimiento JDE',
+      sourceSystem: 'JDE',
+      sourceObjectId: record.noFactura,
+      issueDate: cleanDate(record.fechaFactura),
+      dueDate: cleanDate(record.fechaVence),
+      forecastMethod: 'RULE',
+      confidenceScore,
+      lockState: 'RESTRICTED',
+      taxTreatment: 'IVA_CAUSED',
+      taxRate: taxMeta.taxRate,
+      taxBaseAmount: taxMeta.taxBaseAmount,
+      taxAmount: taxMeta.taxAmount,
+      comment: [
+        'Factura CXC abierta en JDE; se proyecta sólo el saldo pendiente.',
+        dateReason,
+        dateInfo.moved ? 'La fecha esperada ya venció; se agenda al siguiente día operativo de la proyección.' : '',
+      ].filter(Boolean).join(' '),
+      amountLocked: true,
+    });
+  }
+
+  return lines;
+}
+
+/**
+ * Outflows: SOLO datos reales de corto plazo — CXP abierto (JDE), compras
+ * (OC con F_Recepcion+D_Credito) y nómina TRESS real. Sin proyecciones
+ * por patrón ni reserva presupuestal.
+ */
+function collectOutflowLines(
+  month: CanonicalMonthlyPoint,
+  inputs: CanonicalProjectionInputs,
+  todayYm: string,
+  _unused?: unknown,
+  _projectThrough?: string,
+  /**
+   * Movimientos de compras (PurchaseReceipt) ya filtrados para `month.yearMonth`.
+   */
+  purchaseMovementsForMonth: FinancialMovement[] = [],
+  /**
+   * Set de `noProveedor` (trim + upper) de proveedores en Concurso Mercantil.
+   * Sus pagos viven en el módulo Concurso.
+   */
+  concursoProviderIds: Set<string> = new Set(),
+): RawLine[] {
+  const lines: RawLine[] = [];
+  const providerByName = new Map(inputs.providers.map((p) => [supplierLookupKey(p.name), p]));
+  const providerByJde = new Map<string, Provider>();
+  for (const provider of inputs.providers) {
+    const jdeKey = providerJdeKey(provider.numProveedorJDE);
+    if (jdeKey) providerByJde.set(jdeKey, provider);
+  }
+  const filteredCxp = inputs.companyCode === 'all' || !inputs.companyCode
+    ? inputs.cxpRecords
+    : inputs.cxpRecords.filter((r) => r.cia === inputs.companyCode);
+
+  // 1) CXP abierta de JDE. Si ya venció, se trae al día operativo actual
+  // para que el scheduler decida si se paga hoy, se recorre o queda pendiente.
+  filteredCxp.forEach((record, index) => {
+    if (record.importePendientePesos <= 0) return;
+    // Factura intercompañía (empresa propia del grupo): traspaso, no egreso
+    // real. Espejo del filtro CXC (collectCxcInflowLines) para que un payable
+    // entre empresas del grupo no infle los egresos de Planeación. CXPRecord
+    // no trae RFC — se matchea por nombre/código de empresa propia.
+    if (isInternalCounterparty(undefined, record.nombre)) return;
+    // Concurso Mercantil: facturas con `fechaFactura` ≤ 2022-12-31 son deuda
+    // congelada que vive en su propio módulo. No se proyecta como egreso —
+    // el flujo no se ve afectado por estos saldos.
+    if (isConcursoMercantil(record)) return;
+    // Y además: cualquier factura nueva de un proveedor que ya tenga deuda en
+    // Concurso también se excluye. Sus pagos están bloqueados a nivel legal
+    // y se manejan dentro del módulo Concurso, no en el modelo predictivo.
+    if (concursoProviderIds.has(normalizeProviderId(record.noProveedor))) return;
+    // PagoProveedor: si la CXP ya fue pagada (match en PagoProveedor),
+    // omítela del egreso proyectado. El cargo bancario real ya cubrió el
+    // movimiento. Si está parcial NO se omite — se proyecta el residuo.
+    if (inputs.paidCxpKeys?.has(`${record.cia}::${record.noFactura}::${record.noProveedor}`)) return;
+    const scheduledDate = cleanDate(record.fechaProgramacionPago)
+      ?? cleanDate(record.fechaVence)
+      ?? cleanDate(record.fechaFactura)
+      ?? inputs.asOfDate;
+    const dueDate = cleanDate(record.fechaVence);
+    const rawDate = dueDate && scheduledDate < dueDate ? dueDate : scheduledDate;
+    const dateInfo = moveOpenPayableIntoProjection(rawDate, inputs.asOfDate);
+    if (dateInfo.date.slice(0, 7) !== month.yearMonth) return;
+    if (compareYearMonth(dateInfo.date.slice(0, 7), todayYm) < 0) return;
+    const provider = (record.noProveedor ? providerByJde.get(providerJdeKey(record.noProveedor)) : undefined)
+      ?? providerByName.get(supplierLookupKey(record.nombre));
+    const catalog = enrichFromCatalog({
+      supplier: record.nombre,
+      classification: record.clasificacionProveedor || record.clasifica,
+    });
+    const providerType = usableJdeProviderCategory(
+      provider?.type,
+      catalog.providerType,
+      record.clasificacionProveedor,
+      record.clasifica,
+    ) || 'Sin clasificar';
+    const score = provider?.score != null
+      ? Math.max(0, Math.min(100, Math.round(provider.score)))
+      : (record.edoPago ?? '').toUpperCase().includes('APROB')
+        ? 90
+        : 76;
+    const taxBreakdown = taxBreakdownFromCxp(record);
+    lines.push({
+      id: `cxp:${record.cia}:${record.noProveedor}:${record.noFactura}:${index}`,
+      amount: record.importePendientePesos,
+      date: dateInfo.date,
+      concept: `Factura ${record.noFactura || 'sin folio'} · ${record.nombre}`,
+      category: 'AP_PAYMENT',
+      subcategory: providerType,
+      providerCategory: providerType,
+      counterpartyId: provider?.id ?? record.noProveedor,
+      counterpartyName: record.nombre,
+      counterpartyType: 'SUPPLIER',
+      ruleApplied: provider?.flexibility ? `Proveedor ${provider.flexibility}` : 'Fecha programada JDE',
+      sourceSystem: 'JDE',
+      sourceObjectId: record.noFactura,
+      companyId: record.cia,
+      issueDate: cleanDate(record.fechaFactura),
+      dueDate: cleanDate(record.fechaVence),
+      forecastMethod: 'RULE',
+      confidenceScore: score,
+      lockState: provider?.flexibility === 'inamovible' ? 'LOCKED' : 'RESTRICTED',
+      taxTreatment: taxBreakdown.taxRate ? 'IVA_CREDITABLE' : 'UNCLASSIFIED',
+      taxRate: taxBreakdown.taxRate,
+      taxBaseAmount: taxBreakdown.taxBaseAmount,
+      taxAmount: taxBreakdown.taxAmount,
+      comment: [
+        'Factura abierta en JDE.',
+        dateInfo.moved ? `Fecha original ${rawDate}; se agenda desde ${dateInfo.date} para decisión diaria.` : '',
+      ].filter(Boolean).join(' '),
+      amountLocked: true,
+    });
+  });
+
+  // 2) Compras activas sin CXP matcheada. Son compromisos tempranos:
+  // se emiten como locked para no perderlos al balancear el mes.
+  // `purchaseMovementsForMonth` ya fue precomputado en buildMovements,
+  // así que el dedup contra CXP corre una sola vez (no por mes).
+  for (const movement of purchaseMovementsForMonth) {
+    if (movement.projectedDate.slice(0, 7) !== month.yearMonth) continue;
+    lines.push({
+      id: movement.id,
+      amount: movement.projectedAmount,
+      date: movement.projectedDate,
+      concept: movement.concept,
+      category: movement.category,
+      subcategory: movement.subcategory,
+      providerCategory: movement.providerCategory,
+      counterpartyId: movement.counterpartyId,
+      counterpartyName: movement.counterpartyName,
+      counterpartyType: movement.counterpartyType,
+      ruleApplied: movement.ruleApplied ?? 'Recibo de compras',
+      sourceSystem: movement.sourceSystem,
+      sourceObjectId: movement.sourceObjectId,
+      companyId: movement.companyId,
+      issueDate: movement.issueDate,
+      dueDate: movement.dueDate,
+      forecastMethod: movement.forecastMethod,
+      confidenceScore: movement.confidenceScore,
+      lockState: movement.lockState,
+      taxTreatment: movement.taxTreatment,
+      taxRate: movement.taxRate,
+      taxBaseAmount: movement.taxBaseAmount,
+      taxAmount: movement.taxAmount,
+      comment: movement.comments?.join(' ') ?? 'Compromiso temprano desde Recibo de Compras.',
+      amountLocked: true,
+    });
+  }
+
+  // 3) Nómina TRESS REAL solamente (sin replicación a futuro en esta branch).
+  for (const movement of buildPayrollCostMovements({
+    payrollCosts: inputs.payrollCosts ?? [],
+    companyCode: inputs.companyCode,
+    asOfDate: inputs.asOfDate,
+    targetYearMonth: month.yearMonth,
+  })) {
+    if (movement.projectedDate.slice(0, 7) !== month.yearMonth) continue;
+    lines.push({
+      id: movement.id,
+      amount: movement.projectedAmount,
+      date: movement.projectedDate,
+      concept: movement.concept,
+      category: movement.category,
+      subcategory: movement.subcategory,
+      counterpartyName: movement.counterpartyName,
+      counterpartyType: movement.counterpartyType,
+      ruleApplied: movement.ruleApplied ?? 'TRESS',
+      sourceSystem: movement.sourceSystem,
+      sourceObjectId: movement.sourceObjectId,
+      companyId: movement.companyId,
+      issueDate: movement.issueDate,
+      dueDate: movement.dueDate,
+      forecastMethod: movement.forecastMethod,
+      confidenceScore: movement.confidenceScore,
+      lockState: movement.lockState,
+      taxTreatment: movement.taxTreatment,
+      taxRate: movement.taxRate,
+      taxBaseAmount: movement.taxBaseAmount,
+      taxAmount: movement.taxAmount,
+      comment: movement.comments?.join(' ') ?? 'Costo de nómina desde TRESS.',
+      amountLocked: true,
+    });
+  }
+
+  // Recurrentes / `recurring-provider:` / `recurring-operating:` /
+  // `budget-opex-gap:` eliminados en esta branch — sin proyección a largo
+  // plazo, solo egresos reales de corto plazo (CXP, OC compras, payroll TRESS).
+
+  return lines;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function addCoveredMonth(map: Map<string, Set<string>>, clientId: string, yearMonth: string): void {
+  const set = map.get(clientId) ?? new Set<string>();
+  set.add(yearMonth);
+  map.set(clientId, set);
+}
+
+function moveOpenReceivableIntoProjection(
+  rawDate: string,
+  asOfDate: string,
+): { date: string; moved: boolean } {
+  const safeDate = cleanDate(rawDate) ?? asOfDate;
+  if (safeDate > asOfDate) return { date: safeDate, moved: false };
+
+  let next = parseIsoDate(asOfDate);
+  next = new Date(next.getTime() + DAY_MS);
+  while (isNonOperatingDay(next)) next = new Date(next.getTime() + DAY_MS);
+  return { date: dateToIso(next), moved: true };
+}
+
+function moveOpenPayableIntoProjection(
+  rawDate: string,
+  asOfDate: string,
+): { date: string; moved: boolean } {
+  const safeDate = cleanDate(rawDate) ?? asOfDate;
+  if (safeDate >= asOfDate) return { date: safeDate, moved: false };
+
+  let next = parseIsoDate(asOfDate);
+  while (isNonOperatingDay(next)) next = new Date(next.getTime() + DAY_MS);
+  return { date: dateToIso(next), moved: true };
+}
+
+function parseIsoDate(value: string): Date {
+  const safe = cleanDate(value) ?? todayISO();
+  const [year, month, day] = safe.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function dateToIso(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+function supplierLookupKey(value: string | undefined): string {
+  if (!value) return '';
+  return value
+    .toUpperCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function providerJdeKey(value: string | undefined): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  const numeric = trimmed.replace(/\D/g, '');
+  if (numeric) return String(Number(numeric));
+  return supplierLookupKey(trimmed);
+}
+
+function cxcTaxMeta(
+  record: CobranzaRecord,
+  client?: Client,
+): { taxRate: FinancialTaxRate; taxBaseAmount: number; taxAmount: number } {
+  const rate = client?.ivaRate === 8 ? 8 : 16;
+  return grossToIvaTaxMeta(record.importePendientePesos, rate);
+}
+
+function taxBreakdownFromCxp(record: CXPRecord): {
+  taxRate?: FinancialTaxRate;
+  taxBaseAmount?: number;
+  taxAmount?: number;
+} {
+  const gross = positiveNumber(record.importeBrutoPesos);
+  const pending = positiveNumber(record.importePendientePesos);
+  const subtotal = positiveNumber(record.importeSubtotalPesos);
+  const tax = positiveNumber(record.importeImpuestosPesos);
+  if (pending <= 0) return {};
+  if (gross <= 0 || subtotal <= 0 || tax <= 0) return grossToIvaTaxMeta(pending, 16);
+  const scale = Math.min(1, pending / gross);
+  const taxBaseAmount = subtotal * scale;
+  const taxAmount = tax * scale;
+  const taxRate = taxRateFromAmounts(taxBaseAmount, taxAmount);
+  return taxRate ? { taxRate, taxBaseAmount, taxAmount } : grossToIvaTaxMeta(pending, 16);
+}
+
+function taxRateFromAmounts(base: number, taxAmount: number): FinancialTaxRate | undefined {
+  if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(taxAmount) || taxAmount <= 0) return undefined;
+  const pct = Math.round((taxAmount / base) * 100);
+  if (Math.abs(pct - 16) <= 1) return 16;
+  if (Math.abs(pct - 8) <= 1) return 8;
+  return undefined;
+}
+
+function grossToIvaTaxMeta(
+  amount: number,
+  rate: 8 | 16,
+): { taxRate: FinancialTaxRate; taxBaseAmount: number; taxAmount: number } {
+  const taxBaseAmount = amount / (1 + rate / 100);
+  return {
+    taxRate: rate,
+    taxBaseAmount,
+    taxAmount: amount - taxBaseAmount,
+  };
+}
+
+function scaleTaxMeta(
+  line: Pick<RawLine, 'amount' | 'taxBaseAmount' | 'taxAmount'>,
+  projectedAmount: number,
+): Pick<FinancialMovement, 'taxBaseAmount' | 'taxAmount'> {
+  if (line.taxBaseAmount == null || line.taxAmount == null || line.amount <= 0) return {};
+  const scale = projectedAmount / line.amount;
+  return {
+    taxBaseAmount: line.taxBaseAmount * scale,
+    taxAmount: line.taxAmount * scale,
+  };
+}
+
+function positiveNumber(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
