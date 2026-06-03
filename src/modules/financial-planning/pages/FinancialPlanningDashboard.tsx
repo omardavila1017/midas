@@ -832,6 +832,37 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     } catch {
       /* window no disponible (SSR/tests) — ignorar */
     }
+    // Atribución SIEMPRE (no solo en divergencia): permite leer en consola de
+    // qué se compone la brecha caja Planeación (C) vs. banco. `bankKpiClosing`
+    // (A = Σ saldoFinal reportado, el KPI de Bancos) vs. `bankClosingCash`
+    // (B = saldoInicial+Σneto) aísla la "definición de saldo"; el desglose por
+    // familia + `internalReconNet` + `initialCashVsBankInitial` aíslan el motor.
+    /* eslint-disable no-console */
+    console.info(
+      '[planning.bank-recon] scope', report.scope,
+      '| bankKpiClosing(A)', report.bankKpiClosing,
+      '| initialCashVsBankInitial', report.initialCashVsBankInitial,
+    );
+    console.table(report.months.map((m) => ({
+      ym: m.yearMonth,
+      planIncome: m.planningIncome,
+      bankIncome: m.bankIncome,
+      dInc: m.incomeDiff,
+      planExp: m.planningExpense,
+      bankExp: m.bankExpense,
+      dExp: m.expenseDiff,
+      planCash: m.planningClosingCash,
+      bankCash: m.bankClosingCash,
+      dCash: m.closingCashDiff,
+      internalReconNet: m.internalReconNet,
+    })));
+    console.table(report.months.map((m) => ({
+      ym: m.yearMonth,
+      ...Object.fromEntries(
+        Object.entries(m.componentBreakdown).map(([fam, t]) => [fam, t.net]),
+      ),
+    })));
+    /* eslint-enable no-console */
     if (!report.reconciled) {
       console.warn(
         `[planning.bank-recon] caja/ingresos/egresos NO cuadran con banco en ${report.divergentMonths.join(', ')} `

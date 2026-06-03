@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { GL_FLOW_RULES, __resetGlFlowWarnings } from '../../../config/glAccountFlowCatalog';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -1277,6 +1278,159 @@ describe('two-engine seam (MOTOR 1 histórico / MOTOR 2 corto plazo)', () => {
   });
 });
 
+describe('canonicalProjection · categorización por cuenta contable (GL)', () => {
+  // Limpia las reglas inyectadas tras cada caso (GL_FLOW_RULES es módulo-global).
+  afterEach(() => {
+    GL_FLOW_RULES.length = 0;
+    __resetGlFlowWarnings();
+  });
+
+  it('re-categoriza un CARGO TRANSFER por su cuenta contable SIN alterar montos ni el set de movimientos', () => {
+    const cargo = bankMovement({
+      cia: '00001',
+      cuenta: 'CTA-1',
+      tipoMovimiento: 'CARGO',
+      importe: 1234,
+      fechaOperacion: '2026-02-10',
+      referencia: 'R-77',
+      concepto: 'CARGO GENERICO SIN PATRON',
+    });
+    const abono = bankMovement({
+      cia: '00001',
+      cuenta: 'CTA-1',
+      tipoMovimiento: 'ABONO',
+      importe: 5000,
+      fechaOperacion: '2026-02-05',
+      referencia: 'R-10',
+      concepto: 'DEPOSITO',
+    });
+    const inputs = {
+      companyCode: '00001',
+      bankStatements: [bankStatement({ cia: '00001', cuenta: 'CTA-1', saldoInicial: 0, movimientos: [abono, cargo] })],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [],
+      assumptions,
+      budget: null,
+      startingBalance: undefined,
+      asOfDate: '2026-03-01',
+      // Línea del mayor cruzada al CARGO por `bankMovementKey`, con cuenta
+      // contable mapeable. La presencia de la línea no cambia nada hasta que
+      // exista una regla en el catálogo.
+      auxiliarReconLines: [{
+        glKey: '00001::aux::PV::1',
+        cia: '00001',
+        cuentaBanco: 'CTA-1',
+        nombreCuenta: 'BANCO',
+        cuentaContable: '60.1020.0060001',
+        cuentaObjeto: '1020',
+        idCuenta: '60001',
+        flujo: 'egreso',
+        esCaja: false,
+        fechaContable: '2026-02-10',
+        importe: -1234,
+        moneda: 'MXN',
+        // tipo_docto NO mapeado en DOC_TYPE_FLOW → aísla la prueba al catálogo GL.
+        tipoDocto: 'JX',
+        tipoDoctoDesc: 'Revaluación FX',
+        estatusConciliado: 'R',
+        matchTier: 'exact',
+        confidence: 1,
+        bankMovementKey: bankMovementKey(cargo),
+        source: { kind: 'otro', cia: '00001', ref: '', contraparte: '' },
+      } satisfies AuxiliarReconLine],
+    };
+
+    const monthly = buildCanonicalProjection(inputs).monthly;
+
+    // Run 1: catálogo vacío → el CARGO cae al genérico TRANSFER.
+    const before = buildHistoricalReconciledMovements({ monthly, inputs });
+    const cargoBefore = before.find((m) => m.id.startsWith('bank:') && m.type === 'OUTFLOW' && m.projectedAmount === 1234);
+    expect(cargoBefore?.category).toBe('TRANSFER');
+
+    // Run 2: una regla mapea esa cuenta contable a OPEX.
+    GL_FLOW_RULES.push({
+      cuentaObjeto: '1020',
+      idCuentaFrom: 60000,
+      idCuentaTo: 60002,
+      mapping: { category: 'OPEX', label: 'Servicios operativos (test)' },
+    });
+    const after = buildHistoricalReconciledMovements({ monthly, inputs });
+    const cargoAfter = after.find((m) => m.id === cargoBefore!.id);
+    expect(cargoAfter?.category).toBe('OPEX');
+
+    // Invariante de totales: ingresos/egresos por monto NO cambian.
+    const sum = (list: typeof before, type: 'INFLOW' | 'OUTFLOW') =>
+      list.filter((m) => m.type === type).reduce((s, m) => s + m.projectedAmount, 0);
+    expect(sum(after, 'OUTFLOW')).toBe(sum(before, 'OUTFLOW'));
+    expect(sum(after, 'INFLOW')).toBe(sum(before, 'INFLOW'));
+
+    // Mismo set de movimientos (no se crea ni se borra ninguno).
+    expect(after.map((m) => m.id).sort()).toEqual(before.map((m) => m.id).sort());
+
+    // Sólo category/subcategory difieren — el resto del movimiento es idéntico.
+    const strip = (m: (typeof before)[number]) => {
+      const { category: _c, subcategory: _s, ...rest } = m;
+      return rest;
+    };
+    const beforeById = new Map(before.map((m) => [m.id, m]));
+    for (const m of after) {
+      expect(strip(m)).toEqual(strip(beforeById.get(m.id)!));
+    }
+  });
+
+  it('categoriza CARGOs por tipo_docto (P*→AP, QD→OPEX con fila por concepto) sin cambiar montos', () => {
+    const pago = bankMovement({ cia: '00001', cuenta: 'CTA-1', tipoMovimiento: 'CARGO', importe: 700, fechaOperacion: '2026-02-11', referencia: 'R-PK', concepto: 'CARGO SIN PATRON' });
+    const arrend = bankMovement({ cia: '00001', cuenta: 'CTA-1', tipoMovimiento: 'CARGO', importe: 300, fechaOperacion: '2026-02-12', referencia: 'R-QD', concepto: 'CARGO SIN PATRON' });
+    const mkLine = (mov: typeof pago, glKey: string, tipoDocto: string): AuxiliarReconLine => ({
+      glKey, cia: '00001', cuentaBanco: 'CTA-1', nombreCuenta: 'BANCO',
+      cuentaContable: '00.1020.0000000', cuentaObjeto: '1020', idCuenta: '0',
+      flujo: 'egreso', esCaja: false, fechaContable: '2026-02-11', importe: -1, moneda: 'MXN',
+      tipoDocto, tipoDoctoDesc: '', estatusConciliado: 'R', matchTier: 'exact', confidence: 1,
+      bankMovementKey: bankMovementKey(mov), source: { kind: 'otro', cia: '00001', ref: '', contraparte: '' },
+    });
+    const inputs = {
+      companyCode: '00001',
+      bankStatements: [bankStatement({ cia: '00001', cuenta: 'CTA-1', saldoInicial: 0, movimientos: [pago, arrend] })],
+      clients: [], providers: [], cxpRecords: [], cobranzaRecords: [],
+      assumptions, budget: null, startingBalance: undefined, asOfDate: '2026-03-01',
+      auxiliarReconLines: [mkLine(pago, 'gl-pago', 'PK'), mkLine(arrend, 'gl-arr', 'QD')],
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const mv = buildHistoricalReconciledMovements({ monthly, inputs });
+
+    const pk = mv.find((m) => m.type === 'OUTFLOW' && m.projectedAmount === 700);
+    const qd = mv.find((m) => m.type === 'OUTFLOW' && m.projectedAmount === 300);
+    // PK (Cheques automatizados) → pago a proveedor (sale de "sin identificar").
+    expect(pk?.category).toBe('AP_PAYMENT');
+    // QD (ARRENDAMIENTO) → OPEX con su propia fila/etiqueta por concepto.
+    expect(qd?.category).toBe('OPEX');
+    expect(qd?.subcategory).toBe('Arrendamiento');
+    expect(qd?.counterpartyName).toBe('Arrendamiento');
+    // Montos preservados (categorización invariante en totales).
+    expect(mv.filter((m) => m.type === 'OUTFLOW').reduce((s, m) => s + m.projectedAmount, 0)).toBe(1000);
+  });
+
+  it('categoriza egresos por el rol de la cuenta de banco (pagadora/proveedores → AP) sin GL ni tipo_docto', () => {
+    // Cuenta real del catálogo (pagadora/proveedores, flow egreso).
+    const cuenta = '7014 1027881';
+    const cargo = bankMovement({ cia: '00001', cuenta, tipoMovimiento: 'CARGO', importe: 555, fechaOperacion: '2026-02-14', referencia: 'R-PROV', concepto: 'CARGO SIN PATRON' });
+    const inputs = {
+      companyCode: '00001',
+      bankStatements: [bankStatement({ cia: '00001', cuenta, saldoInicial: 0, movimientos: [cargo] })],
+      clients: [], providers: [], cxpRecords: [], cobranzaRecords: [],
+      assumptions, budget: null, startingBalance: undefined, asOfDate: '2026-03-01',
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const mv = buildHistoricalReconciledMovements({ monthly, inputs });
+    const prov = mv.find((m) => m.type === 'OUTFLOW' && m.projectedAmount === 555);
+    // Sin cruce a proveedor/GL/tipo_docto, el rol de la cuenta (pagadora de
+    // proveedores) lo saca de "sin identificar" hacia Proveedores.
+    expect(prov?.category).toBe('AP_PAYMENT');
+  });
+});
+
 function client(patch: Partial<Client> = {}): Client {
   const monthlyBilling = Array.from({ length: 12 }, () => 0);
   monthlyBilling[4] = 1000;
@@ -1560,6 +1714,9 @@ function auxiliarLine(patch: {
     cia: '00001',
     cuentaBanco: 'CTA-1',
     nombreCuenta: 'BANCO',
+    cuentaContable: '42.1020.0010409',
+    cuentaObjeto: '1020',
+    idCuenta: '0010409',
     flujo: 'egreso',
     esCaja: false,
     fechaContable: patch.fechaContable,

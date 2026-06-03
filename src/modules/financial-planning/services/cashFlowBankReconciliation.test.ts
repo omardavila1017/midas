@@ -22,8 +22,9 @@ import type {
 import { buildCanonicalProjection } from '../../shared-finance/calculation-engine/canonicalProjection';
 import { calculateInitialCash } from '../../financial-projection/services/financialProjectionService';
 import { defaultTaxStore } from '../../taxes/services/taxModuleService';
+import { sumBankStatementBalances } from '../../../domain/bankStatements';
 import { buildScenarioForecastRun } from './scenarioForecastRun';
-import { reconcilePlanningAgainstBank } from './cashFlowBankReconciliation';
+import { movementFamily, reconcilePlanningAgainstBank } from './cashFlowBankReconciliation';
 
 const ASSUMPTIONS: CashFlowAssumptions = {
   year: 2026,
@@ -177,6 +178,48 @@ describe('Planning ↔ Banco · histórico cerrado cuadra al peso', () => {
     // Caja final Feb = 1850 + (1000 − 400) = 2450.
     expect(feb.bankClosingCash).toBe(2450);
     expect(feb.planningClosingCash).toBe(2450);
+
+    // ── Diagnóstico (Fase 1): campos aditivos, no afectan el cuadre ──────────
+    // A (KPI Bancos) = Σ saldoFinal reportado; en el fixture saldoFinal no viene
+    // → cae a saldoInicial+Σneto = 2450 (igual a B del último mes cerrado).
+    expect(report.bankKpiClosing).toBe(sumBankStatementBalances(bankStatements));
+    expect(report.bankKpiClosing).toBe(2450);
+    // initialCash (1500) == Σ saldoInicial (1000+500) → sin offset.
+    expect(report.initialCashVsBankInitial).toBe(0);
+    expect(report.scope).toEqual({ accountCount: 2, companyCount: 1, monthsCovered: 2 });
+
+    // Residuo de traspasos: el plug INTERNAL_RECON de Ene = −150 (CARGO 150 por
+    // leyenda sin pareja; el par 250/250 se anula). Feb sin internos.
+    expect(ene.internalReconNet).toBe(-150);
+    expect(feb.internalReconNet).toBe(0);
+
+    // Desglose por familia: el real va en `bank`, el plug en `internal-recon`.
+    expect(ene.componentBreakdown.bank.net).toBe(500); // 800 − 300
+    expect(ene.componentBreakdown['internal-recon'].net).toBe(-150);
+
+    // Invariante: Σ neto por familia == ingreso − egreso + internalReconNet
+    // (el mismo neto que encadena la caja). Guarda que el diagnóstico no derive.
+    for (const m of report.months) {
+      const familyNet = Object.values(m.componentBreakdown)
+        .reduce((sum, t) => sum + t.net, 0);
+      expect(familyNet).toBeCloseTo(
+        m.planningIncome - m.planningExpense + m.internalReconNet,
+        6,
+      );
+    }
+  });
+
+  it('movementFamily agrupa las variantes de id por su prefijo', () => {
+    expect(movementFamily('bank:00001:CTA-A:2026-01-10')).toBe('bank');
+    expect(movementFamily('internal-recon:00001:2026-01')).toBe('internal-recon');
+    expect(movementFamily('cxc:especial:viaje:123')).toBe('cxc');
+    expect(movementFamily('po:00001:OC-99')).toBe('purchase');
+    expect(movementFamily('purchase:00001:REC-1')).toBe('purchase');
+    expect(movementFamily('citi-prorrateo:00001')).toBe('citi-prorrateo');
+    expect(movementFamily('rol:00001:viaje')).toBe('citi-prorrateo');
+    expect(movementFamily('payroll:00001:2026-01')).toBe('payroll');
+    expect(movementFamily('weird-id-without-colon')).toBe('weird-id-without-colon');
+    expect(movementFamily('')).toBe('other');
   });
 
   it('el mes en curso (parcial) NO se reconcilia como histórico cerrado', () => {

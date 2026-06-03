@@ -132,6 +132,12 @@ export interface AuxiliarReconLine {
   cia: string;
   cuentaBanco: string;
   nombreCuenta: string;
+  /** Cuenta contable completa (BU.Objeto.Subsidiaria — p.ej. "42.1020.0010409"). */
+  cuentaContable: string;
+  /** Objeto contable ("1010" caja | "1020" bancos). */
+  cuentaObjeto: string;
+  /** Id de cuenta — usado para categorizar el flujo por rango (ver glAccountFlowCatalog). */
+  idCuenta: string;
   flujo: AuxiliarFlujo;
   /** true si la línea es de objeto caja (1010), sin contraparte bancaria. */
   esCaja: boolean;
@@ -567,6 +573,9 @@ export function reconcileAuxiliar(
       cia: rec.cia,
       cuentaBanco: rec.cuentaBanco,
       nombreCuenta: rec.nombreCuenta,
+      cuentaContable: rec.cuentaContable,
+      cuentaObjeto: rec.cuentaObjeto,
+      idCuenta: rec.idCuenta,
       flujo,
       esCaja,
       fechaContable: rec.fechaContable,

@@ -23,6 +23,10 @@ import {
 import { bankMovementKey } from '../../../domain/bankMovementKey';
 import { isCorningAbono } from '../../../domain/bankStatements';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
+import { resolveCategoryForGlAccount } from '../../../config/glAccountFlowCatalog';
+import { resolveCategoryForDocType } from '../../../config/jdeDocTypeFlowCatalog';
+import { resolveCategoryForBankAccountRole } from '../../../config/bankAccountFlowCatalog';
+import type { AuxiliarReconLine } from '../../../domain/auxiliarReconciliationEngine';
 import { buildCargoProviderIndex, matchCargoToProvider } from '../../../domain/cargoProviderMatch';
 import { enrichMovementWithCatalog, findBankAccount } from '../../../domain/bankAccountsCatalog';
 import type { Client } from '../../../domain/types';
@@ -104,6 +108,15 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
     abonoEnrichmentByKey.set(enrichment.movementKey, enrichment);
   }
   const cargoEnrichmentByKey = inputs.cargoEnrichments ?? new Map();
+  // Join banco → línea del mayor por `bankMovementKey`. Permite categorizar un
+  // movimiento bancario histórico por su CUENTA CONTABLE (verdad contable del
+  // Auxiliar) en vez de sólo por la leyenda del banco. Mismo key que usan
+  // cargoEnrichments/abonoEnrichments. Sólo redistribuye categoría/subcategoría
+  // — NO toca monto ni fecha, así que los totales y la caja quedan intactos.
+  const glByBankKey = new Map<string, AuxiliarReconLine>();
+  for (const l of inputs.auxiliarReconLines ?? []) {
+    if (l.bankMovementKey) glByBankKey.set(l.bankMovementKey, l);
+  }
   // Índice para identificar CARGOs sin cruce a PagoProveedor: nombre del
   // proveedor en el concepto bancario + monto contra compras (OCs).
   const cargoProviderIndex = buildCargoProviderIndex(
@@ -254,6 +267,27 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
             index: cargoProviderIndex,
           })
         : null;
+      // Categorización por CUENTA CONTABLE: si esta línea bancaria está cruzada
+      // a una línea del mayor, su cuenta contable es verdad contable y decide la
+      // categoría/fila (Nómina, Impuestos, OPEX, …). Gana sobre el clasificador
+      // de concepto bancario y sobre el fallback TRANSFER, pero NO sobre una
+      // contraparte identificada (cobranza/pagoProveedor/proveedor por monto),
+      // que es más específica. Ver precedencia abajo. Sólo cambia categoría —
+      // nunca monto/fecha.
+      const glLine = glByBankKey.get(movementKey);
+      // Tres señales de ledger en orden de especificidad:
+      //   1. tipo_docto (P*/R*/T1/JT/Q*) — el *tipo* de transacción, lo más limpio.
+      //   2. cuenta contable (GL) — rangos del plan de cuentas (hoy vacío).
+      //   3. rol de la cuenta de banco — el propósito de la cuenta (pagadora de
+      //      proveedores → AP). Aplica a EGRESOS aunque NO haya cruce a GL,
+      //      porque el catálogo de bancos enriquece toda línea bancaria.
+      const ledgerMapping = (glLine
+        ? (resolveCategoryForDocType(glLine.tipoDocto)
+            ?? resolveCategoryForGlAccount(glLine.cuentaContable, glLine.cuentaObjeto, glLine.idCuenta))
+        : undefined)
+        ?? (!isInflow
+          ? resolveCategoryForBankAccountRole(catalogEnrich?.entry.role, catalogEnrich?.entry.subRole)
+          : undefined);
       // Si el ABONO se cruzó a una factura y el cliente está en catálogo con
       // grupo comercial, colapsa al grupo padre en lugar de la subsidiaria
       // individual. Mismo display para name e id.
@@ -310,25 +344,58 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
           ?? (catalogEnrich && !isInflow
             ? catalogEnrich.entry.subRole ?? catalogEnrich.entry.role
             : undefined);
+      // Precedencia de categorización (decidida): cobranza-factura >
+      // pagoProveedor > proveedor por monto/nombre > **cuenta contable (GL)** >
+      // impuesto-por-concepto > TRANSFER. Las contrapartes identificadas
+      // (cobranza/proveedor) son más específicas que el bucket de la cuenta
+      // contable; ésta gana sobre el regex de concepto y el genérico.
+      const resolvedCategory: FinancialMovementCategory = isCobranzaInflow
+        ? 'AR_COLLECTION'
+        : isMatchedAp
+          ? 'AP_PAYMENT'
+          : (!isInflow && cargoProviderHit)
+            ? 'AP_PAYMENT'
+            : ledgerMapping
+              ? ledgerMapping.category
+              : isInflow
+                ? 'TRANSFER'
+                : cargoCategory;
+      // La subcategoría sigue a quien decidió la categoría. Si fue el ledger
+      // (tipo_docto o cuenta contable), usamos su `subcategory` (si la trae) y
+      // si no, conservamos la resuelta por concepto/catálogo.
+      const ledgerDecidedCategory = !isCobranzaInflow
+        && !isMatchedAp
+        && !(!isInflow && cargoProviderHit)
+        && !!ledgerMapping;
+      const baseSubcategory = isInflow ? inflowSubcategory : cargoSubcategory;
+      const resolvedSubcategory = ledgerDecidedCategory
+        ? (ledgerMapping!.subcategory ?? baseSubcategory)
+        : baseSubcategory;
+      // Cuando el ledger clasifica un EGRESO no-proveedor con concepto propio
+      // (OPEX/PAYROLL/TAX por tipo_docto, ej. Arrendamiento/Nómina), la fila se
+      // agrupa por ese concepto en vez de por la cuenta de banco ("Sin
+      // identificar · …"). Para AP/AR la contraparte sigue mandando.
+      const ledgerConceptLabel = ledgerDecidedCategory
+        && !isInflow
+        && resolvedCategory !== 'AP_PAYMENT'
+        && resolvedCategory !== 'AR_COLLECTION'
+        && ledgerMapping!.subcategory
+        ? ledgerMapping!.subcategory
+        : undefined;
+      const resolvedCounterpartyName = ledgerConceptLabel ?? counterpartyName;
       out.push({
         id: `bank:${statement.cia}:${statement.cuenta}:${line.referencia ?? ''}:${line.fechaOperacion}:${out.length}`,
         sourceSystem: 'BANK',
         sourceObjectId: line.referencia,
         type: isInflow ? 'INFLOW' : 'OUTFLOW',
-        category: isCobranzaInflow
-          ? 'AR_COLLECTION'
-          : isMatchedAp
-            ? 'AP_PAYMENT'
-            : isInflow
-              ? 'TRANSFER'
-              : cargoCategory,
-        subcategory: isInflow ? inflowSubcategory : cargoSubcategory,
+        category: resolvedCategory,
+        subcategory: resolvedSubcategory,
         providerCategory: !isInflow ? (matchedPaymentProviderCategory ?? cargoProviderHit?.providerType ?? undefined) : undefined,
         companyId: statement.cia,
         businessUnitId: catalogEnrich?.entry.unidadNegocio,
         bankAccountId: statement.cuenta,
         counterpartyId,
-        counterpartyName,
+        counterpartyName: resolvedCounterpartyName,
         counterpartyType: isCobranzaInflow
           ? 'CUSTOMER'
           : (isMatchedAp || cargoProviderHit)
@@ -533,25 +600,64 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
           isRolCollection: line.source.kind === 'factura',
         })
       : undefined;
+    // Categorización por ledger (verdad contable). Sin contraparte bancaria
+    // (mes sin estado de cuenta) categorizamos directo de los campos de la
+    // línea: tipo_docto (señal de tipo, prioritaria) y, si no, cuenta contable.
+    // Precedencia: factura/tax/documento-fuente identificados > **tipo_docto /
+    // cuenta contable** > TRANSFER. Sólo cambia categoría — no monto/fecha.
+    const auxLedgerMapping = resolveCategoryForDocType(line.tipoDocto)
+      ?? resolveCategoryForGlAccount(line.cuentaContable, line.cuentaObjeto, line.idCuenta)
+      ?? (!isInflow
+        ? (() => {
+            const e = findBankAccount(line.cuentaBanco);
+            return e ? resolveCategoryForBankAccountRole(e.role, e.subRole) : undefined;
+          })()
+        : undefined);
+    const auxResolvedCategory: FinancialMovementCategory = isInflow
+      ? (line.source.kind === 'factura'
+          ? 'AR_COLLECTION'
+          : auxLedgerMapping
+            ? auxLedgerMapping.category
+            : 'TRANSFER')
+      : auxiliarTaxClassification?.category === 'TAX'
+        ? 'TAX'
+        : (line.source.kind === 'pago' || line.source.kind === 'factura')
+          ? 'AP_PAYMENT'
+          : auxLedgerMapping
+            ? auxLedgerMapping.category
+            : 'TRANSFER';
+    // El ledger decidió sólo cuando ningún identificador previo aplicó (mismas
+    // condiciones que arriba); en ese caso su subcategoría manda.
+    const auxLedgerDecided = auxLedgerMapping
+      ? (isInflow
+          ? line.source.kind !== 'factura'
+          : auxiliarTaxClassification?.category !== 'TAX'
+            && line.source.kind !== 'pago'
+            && line.source.kind !== 'factura')
+      : false;
+    const auxBaseSubcategory = isInflow ? inflowSubcategory : auxiliarTaxClassification?.subcategory;
+    // Egreso no-proveedor clasificado por ledger con concepto propio
+    // (OPEX/PAYROLL/TAX) → la fila se etiqueta por el concepto.
+    const auxConceptLabel = auxLedgerDecided
+      && !isInflow
+      && auxResolvedCategory !== 'AP_PAYMENT'
+      && auxResolvedCategory !== 'AR_COLLECTION'
+      && auxLedgerMapping!.subcategory
+      ? auxLedgerMapping!.subcategory
+      : undefined;
     out.push({
       id: `auxiliar-historic:${line.glKey}`,
       sourceSystem: 'JDE',
       sourceObjectId: line.source.ref || line.glKey,
       type: isInflow ? 'INFLOW' : 'OUTFLOW',
-      category: isInflow
-        ? (line.source.kind === 'factura' ? 'AR_COLLECTION' : 'TRANSFER')
-        : auxiliarTaxClassification?.category === 'TAX'
-          ? 'TAX'
-          : (line.source.kind === 'pago' || line.source.kind === 'factura'
-            ? 'AP_PAYMENT'
-            : 'TRANSFER'),
-      subcategory: isInflow ? inflowSubcategory : auxiliarTaxClassification?.subcategory,
+      category: auxResolvedCategory,
+      subcategory: auxLedgerDecided ? (auxLedgerMapping!.subcategory ?? auxBaseSubcategory) : auxBaseSubcategory,
       companyId: line.cia,
       bankAccountId: line.cuentaBanco,
       counterpartyId: undefined,
       counterpartyName: auxiliarTaxClassification?.category === 'TAX'
         ? auxiliarTaxClassification.counterpartyName
-        : counterpartyName,
+        : (auxConceptLabel ?? counterpartyName),
       counterpartyType: isInflow
         ? 'CUSTOMER'
         : auxiliarTaxClassification?.category === 'TAX'

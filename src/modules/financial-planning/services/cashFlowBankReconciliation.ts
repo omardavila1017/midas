@@ -30,6 +30,7 @@ import {
   compareYearMonth,
   toYearMonth,
 } from '../../../domain/cashFlowEngine';
+import { sumBankStatementBalances } from '../../../domain/bankStatements';
 import {
   effectiveAmount,
   effectiveMovementDate,
@@ -54,6 +55,17 @@ export interface MonthBankReconciliation {
   /** Saldo final bancario real del mes. */
   bankClosingCash: number;
   closingCashDiff: number;
+  /** Σ neto de los movimientos `INTERNAL_RECON` del mes (ancla de traspasos,
+   *  signed: +INFLOW / −OUTFLOW). Diagnóstico — fuera de los brutos económicos. */
+  internalReconNet: number;
+  /**
+   * Neto de Planeación del mes desglosado por familia de `movement.id` (prefijo
+   * antes del primer `:`). Σ de los `.net` reconcilia con el neto que encadena
+   * la caja. Atribuye de qué familia (bank / internal-recon / cobranza-historic
+   * / auxiliar-historic / cxc / purchase / payroll / citi-prorrateo / other)
+   * sale la divergencia. Diagnóstico, no afecta el cuadre.
+   */
+  componentBreakdown: Record<string, { income: number; expense: number; net: number }>;
   /** true si los tres diffs caen dentro de la tolerancia. */
   reconciled: boolean;
 }
@@ -67,10 +79,53 @@ export interface BankReconciliationReport {
   maxClosingCashDiff: number;
   /** Meses (YYYY-MM) que NO cuadraron. */
   divergentMonths: string[];
+  /**
+   * Definición **A** del saldo: `sumBankStatementBalances` = Σ `saldoFinal`
+   * REPORTADO por el estado de cuenta (el número que muestra el KPI de la
+   * pestaña Bancos). Difiere de la verdad reconstruida B (`bankClosingCash` =
+   * `saldoInicial + Σ neto`) cuando `saldoFinal` no cuadra (centinela en 0,
+   * movimientos fuera de la ventana cargada). Atribuye la brecha "definición de
+   * saldo" del último mes cerrado, separada de la del motor de Planeación (C).
+   */
+  bankKpiClosing: number;
+  /**
+   * `initialCash` (caja inicial del run) − Σ `saldoInicial` de los estados de
+   * cuenta scopeados. ≈0 esperado; un offset constante aquí desancla TODA la
+   * serie de caja de Planeación respecto al banco.
+   */
+  initialCashVsBankInitial: number;
+  /** Alcance del cruce, para delatar diferencias de scope (Bajío/empresa 33). */
+  scope: { accountCount: number; companyCount: number; monthsCovered: number };
 }
 
 /** Tolerancia de ruido de punto flotante, en pesos. */
 const DEFAULT_TOLERANCE = 1;
+
+/**
+ * Familia de un movimiento a partir del prefijo de su `id` (antes del primer
+ * `:`). Agrupa las variantes (`cxc:especial:` → `cxc`, `po:`/`purchase:` →
+ * `purchase`, `rol:`/`citi-prorrateo:` → `citi-prorrateo`) para el desglose.
+ */
+export function movementFamily(id: string): string {
+  const head = (id.split(':', 1)[0] ?? '').trim();
+  switch (head) {
+    case 'bank':
+    case 'internal-recon':
+    case 'cobranza-historic':
+    case 'auxiliar-historic':
+    case 'cxc':
+    case 'payroll':
+      return head;
+    case 'po':
+    case 'purchase':
+      return 'purchase';
+    case 'rol':
+    case 'citi-prorrateo':
+      return 'citi-prorrateo';
+    default:
+      return head || 'other';
+  }
+}
 
 interface MonthAggregate {
   /** Σ INFLOW económico (excluye INTERNAL_RECON). */
@@ -79,6 +134,10 @@ interface MonthAggregate {
   expense: number;
   /** Neto que mueve la caja: incluye INTERNAL_RECON (ancla al banco). */
   net: number;
+  /** Σ neto de INTERNAL_RECON del mes (diagnóstico, signed). */
+  internalReconNet: number;
+  /** Neto por familia de `movement.id` (diagnóstico). Σ .net == `net`. */
+  byFamily: Map<string, { income: number; expense: number; net: number }>;
 }
 
 export interface ReconcilePlanningAgainstBankArgs {
@@ -118,16 +177,31 @@ export function reconcilePlanningAgainstBank(
   for (const movement of args.movements) {
     const ym = toYearMonth(effectiveMovementDate(movement));
     if (ym.length !== 7) continue;
-    const agg = planningByYm.get(ym) ?? { income: 0, expense: 0, net: 0 };
+    const agg = planningByYm.get(ym) ?? {
+      income: 0,
+      expense: 0,
+      net: 0,
+      internalReconNet: 0,
+      byFamily: new Map<string, { income: number; expense: number; net: number }>(),
+    };
     const amount = effectiveAmount(movement);
     const isInternalRecon = movement.category === 'INTERNAL_RECON';
+    const family = movementFamily(movement.id);
+    const fam = agg.byFamily.get(family) ?? { income: 0, expense: 0, net: 0 };
     if (movement.type === 'INFLOW') {
       if (!isInternalRecon) agg.income += amount;
       agg.net += amount;
+      fam.net += amount;
+      if (!isInternalRecon) fam.income += amount;
+      if (isInternalRecon) agg.internalReconNet += amount;
     } else {
       if (!isInternalRecon) agg.expense += amount;
       agg.net -= amount;
+      fam.net -= amount;
+      if (!isInternalRecon) fam.expense += amount;
+      if (isInternalRecon) agg.internalReconNet -= amount;
     }
+    agg.byFamily.set(family, fam);
     planningByYm.set(ym, agg);
   }
 
@@ -143,27 +217,38 @@ export function reconcilePlanningAgainstBank(
   const months: MonthBankReconciliation[] = [];
   for (const bank of sortedBankMonths) {
     const ym = bank.yearMonth;
-    const agg = planningByYm.get(ym) ?? { income: 0, expense: 0, net: 0 };
-    running += agg.net;
+    const agg = planningByYm.get(ym);
+    const income = agg?.income ?? 0;
+    const expense = agg?.expense ?? 0;
+    const net = agg?.net ?? 0;
+    running += net;
     if (compareYearMonth(ym, currentYm) >= 0) continue;
-    const incomeDiff = agg.income - bank.income;
-    const expenseDiff = agg.expense - bank.expense;
+    const incomeDiff = income - bank.income;
+    const expenseDiff = expense - bank.expense;
     const closingCashDiff = running - bank.closingCash;
     const reconciled =
       Math.abs(incomeDiff) <= tolerance &&
       Math.abs(expenseDiff) <= tolerance &&
       Math.abs(closingCashDiff) <= tolerance;
+    const componentBreakdown: Record<string, { income: number; expense: number; net: number }> = {};
+    if (agg) {
+      for (const [family, totals] of agg.byFamily) {
+        componentBreakdown[family] = { ...totals };
+      }
+    }
     months.push({
       yearMonth: ym,
-      planningIncome: agg.income,
+      planningIncome: income,
       bankIncome: bank.income,
       incomeDiff,
-      planningExpense: agg.expense,
+      planningExpense: expense,
       bankExpense: bank.expense,
       expenseDiff,
       planningClosingCash: running,
       bankClosingCash: bank.closingCash,
       closingCashDiff,
+      internalReconNet: agg?.internalReconNet ?? 0,
+      componentBreakdown,
       reconciled,
     });
   }
@@ -176,10 +261,23 @@ export function reconcilePlanningAgainstBank(
     0,
   );
 
+  // Diagnóstico a nivel reporte: A (KPI Bancos), offset de caja inicial y scope.
+  const bankKpiClosing = sumBankStatementBalances(scopedStatements);
+  const bankInitial = scopedStatements.reduce((sum, s) => sum + (s.saldoInicial ?? 0), 0);
+  const initialCashVsBankInitial = args.initialCash - bankInitial;
+  const companyCount = new Set(scopedStatements.map((s) => s.cia)).size;
+
   return {
     months,
     reconciled: divergentMonths.length === 0,
     maxClosingCashDiff,
     divergentMonths,
+    bankKpiClosing,
+    initialCashVsBankInitial,
+    scope: {
+      accountCount: scopedStatements.length,
+      companyCount,
+      monthsCovered: bankMonths.length,
+    },
   };
 }

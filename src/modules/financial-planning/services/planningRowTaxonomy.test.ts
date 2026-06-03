@@ -184,6 +184,47 @@ describe('planning row taxonomy', () => {
     expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros');
     expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros egresos');
   });
+
+  it('routes GL-derived categories/subcategories to the correct row buckets', () => {
+    // Egreso re-categorizado a TAX por su cuenta contable → fila "Impuestos".
+    const glTax = movement({
+      id: 'bank:gl-tax',
+      sourceSystem: 'BANK',
+      type: 'OUTFLOW',
+      category: 'TAX',
+      counterpartyName: 'Sin identificar · BANAMEX CTA-1',
+      counterpartyType: 'TAX_AUTHORITY',
+      projectedAmount: 9_000,
+    });
+    // Egreso re-categorizado a OPEX → fila OPEX (no "sin identificar").
+    const glOpex = movement({
+      id: 'bank:gl-opex',
+      sourceSystem: 'BANK',
+      type: 'OUTFLOW',
+      category: 'OPEX',
+      counterpartyName: 'Sin identificar · BANAMEX CTA-1',
+      projectedAmount: 3_000,
+    });
+    // Ingreso con subcategoría GL dentro de INCOME_BUCKETS → su fila de ingreso.
+    const glInflow = movement({
+      id: 'bank:gl-inflow',
+      sourceSystem: 'BANK',
+      type: 'INFLOW',
+      category: 'AR_COLLECTION',
+      subcategory: 'Federal',
+      counterpartyName: 'Concentradora Federal',
+      counterpartyType: 'CUSTOMER',
+      projectedAmount: 12_000,
+    });
+
+    const rows = buildPlanningRows({ movements: [glTax, glOpex, glInflow], customRows: [], overrides: [] });
+
+    expect(rows.find((r) => r.category === 'TAX')?.bucketLabel).toBe('Impuestos');
+    expect(rows.find((r) => r.category === 'OPEX')?.bucketLabel).toBe('OPEX');
+    const inflowRow = rows.find((r) => r.type === 'INFLOW');
+    expect(inflowRow?.group).toBe('Ingresos · Federal');
+    expect(inflowRow?.bucketLabel).toBe('Federal');
+  });
 });
 
 function movement(patch: Partial<FinancialMovement>): FinancialMovement {
