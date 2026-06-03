@@ -24,14 +24,14 @@ jobs:
       - name: Compilar
         run: npm run build
         env:
-          VITE_JDE_BASE_URL: ${{ secrets.QA_VITE_JDE_BASE_URL }}
-          VITE_JDE_TOKEN: ${{ secrets.QA_VITE_JDE_TOKEN }}
-          VITE_JDE_ENVIRONMENT: ${{ secrets.QA_VITE_JDE_ENVIRONMENT }}
-          VITE_ADMIN_PASSWORD: ${{ secrets.QA_VITE_ADMIN_PASSWORD }}
-          VITE_PAOLO_PASSWORD: ${{ secrets.QA_VITE_PAOLO_PASSWORD }}
-          VITE_USER_ROLES: ${{ secrets.QA_VITE_USER_ROLES }}
-          VITE_DEFAULT_ROLE: ${{ secrets.QA_VITE_DEFAULT_ROLE }}
-          VITE_CURRENT_USER_EMAIL: ${{ secrets.QA_VITE_CURRENT_USER_EMAIL }}
+          VITE_JDE_BASE_URL: ${{ secrets.VITE_JDE_BASE_URL }}
+          VITE_JDE_TOKEN: ${{ secrets.VITE_JDE_TOKEN }}
+          VITE_JDE_ENVIRONMENT: ${{ secrets.VITE_JDE_ENVIRONMENT }}
+          VITE_ADMIN_PASSWORD: ${{ secrets.VITE_ADMIN_PASSWORD }}
+          VITE_PAOLO_PASSWORD: ${{ secrets.VITE_PAOLO_PASSWORD }}
+          VITE_USER_ROLES: ${{ secrets.VITE_USER_ROLES }}
+          VITE_DEFAULT_ROLE: ${{ secrets.VITE_DEFAULT_ROLE }}
+          VITE_CURRENT_USER_EMAIL: ${{ secrets.VITE_CURRENT_USER_EMAIL }}
 
       - name: Copiar a IIS - QA
         run: |
