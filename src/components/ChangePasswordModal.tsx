@@ -17,6 +17,14 @@ function errorMessage(error: unknown): string {
     if (error.code === 'rate_limited') return 'Demasiados intentos. Intenta de nuevo más tarde.';
     if (error.code === 'forbidden') return 'Tu sesión no permite cambiar esta contraseña.';
     if (error.code === 'network') return 'No se pudo conectar con autenticación.';
+    // El backend es la autoridad final de la política: si rechaza la contraseña
+    // (débil, reutilizada, etc.) mostramos su motivo en vez de un genérico.
+    if (error.code === 'validation') {
+      return error.message || 'La contraseña nueva no cumple los requisitos del servidor.';
+    }
+    if (error.code === 'unknown' && error.message && error.message !== 'No se pudo completar la solicitud.') {
+      return error.message;
+    }
   }
   return 'No se pudo cambiar la contraseña.';
 }

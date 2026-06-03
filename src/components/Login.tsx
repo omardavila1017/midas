@@ -42,6 +42,12 @@ function authErrorMessage(error: unknown): string {
     if (error.code === 'rate_limited') return 'Demasiados intentos. Intenta de nuevo más tarde.';
     if (error.code === 'invalid_token') return 'La liga ya expiró o no es válida.';
     if (error.code === 'network') return 'No se pudo conectar con autenticación.';
+    if (error.code === 'validation') {
+      return error.message || 'Los datos enviados no son válidos.';
+    }
+    if (error.code === 'unknown' && error.message && error.message !== 'No se pudo completar la solicitud.') {
+      return error.message;
+    }
   }
   return 'No se pudo completar la solicitud.';
 }

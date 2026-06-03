@@ -8,6 +8,7 @@ import {
   requestPasswordReset,
   sendUserPasswordReset,
 } from './authApi';
+import { __setLocalAuthEnabledForTests } from './localAuth';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -18,10 +19,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('authApi', () => {
   beforeEach(() => {
+    // Estas pruebas ejercitan el path de BACKEND; desactivamos el modo local
+    // para que no lo intercepte (independiente del flag del JSON).
+    __setLocalAuthEnabledForTests(false);
     vi.stubGlobal('fetch', vi.fn());
   });
 
   afterEach(() => {
+    __setLocalAuthEnabledForTests(null);
     vi.unstubAllGlobals();
   });
 
@@ -90,6 +95,35 @@ describe('authApi', () => {
 
     await expect(completePasswordReset('bad-token', 'Password123!')).rejects.toMatchObject({
       code: 'invalid_token',
+    });
+  });
+
+  it.each([400, 422] as const)('surfaces the backend message for a %s validation error', async (status) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ message: 'No puedes reutilizar una contraseña anterior.' }, status),
+    );
+
+    await expect(changePassword('Current123!', 'NewPassword123!')).rejects.toMatchObject({
+      code: 'validation',
+      message: 'No puedes reutilizar una contraseña anterior.',
+    });
+  });
+
+  it('falls back to a generic validation message when the backend body is empty', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}, 400));
+
+    await expect(changePassword('Current123!', 'NewPassword123!')).rejects.toMatchObject({
+      code: 'validation',
+      message: 'Los datos enviados no son válidos.',
+    });
+  });
+
+  it('surfaces a backend message on an otherwise-unknown status', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ error: 'Servicio en mantenimiento.' }, 503));
+
+    await expect(changePassword('Current123!', 'NewPassword123!')).rejects.toMatchObject({
+      code: 'unknown',
+      message: 'Servicio en mantenimiento.',
     });
   });
 

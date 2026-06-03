@@ -18,6 +18,11 @@ const DEFAULT_CITI_BASE_URL = '/api/citi';
 // + UUID + Dias_Credito + K_Cliente). Endpoint productivo pendiente; cuando
 // se publique, ajustar el default o configurarlo vía proxy igual que CITI.
 const DEFAULT_VIAJES_ESPECIALES_BASE_URL = '/api/viajes-especiales';
+// Autenticación real (`/api/auth/*`): sesión + login + cambio/reset de
+// contraseña. La base es configurable por entorno (`VITE_AUTH_BASE_URL`) porque
+// el backend de auth NO necesariamente vive bajo `/api` (puede ser un SSO u
+// otro host). Default `/api/auth` para dev con proxy/backend local.
+const DEFAULT_AUTH_BASE_URL = '/api/auth';
 
 export const apiConfig = {
   jde: {
@@ -49,6 +54,12 @@ export const apiConfig = {
   viajesEspeciales: {
     baseUrl: import.meta.env.VITE_VIAJES_ESPECIALES_BASE_URL || DEFAULT_VIAJES_ESPECIALES_BASE_URL,
     authValue: '',
+  },
+  // Autenticación: la base se resuelve desde `VITE_AUTH_BASE_URL` (igual que el
+  // resto de servicios). El trailing slash se normaliza en `authApi.ts` para no
+  // generar `//` al concatenar los paths (`/login`, `/session`, …).
+  auth: {
+    baseUrl: import.meta.env.VITE_AUTH_BASE_URL || DEFAULT_AUTH_BASE_URL,
   },
   atlas: {
     artifactId: import.meta.env.VITE_ATLAS_ARTIFACT_ID ?? 'midas',

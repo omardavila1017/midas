@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AuthGate from './Login';
 import { clearAuthSession } from '../contexts/authSession';
+import { __setLocalAuthEnabledForTests } from '../services/localAuth';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -13,6 +14,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('<AuthGate />', () => {
   beforeEach(() => {
+    // Estos tests ejercitan el path de BACKEND del Login; desactivamos el modo
+    // auth local (activo por JSON) para que no intercepte las llamadas.
+    __setLocalAuthEnabledForTests(false);
     localStorage.clear();
     sessionStorage.clear();
     clearAuthSession();
@@ -21,6 +25,7 @@ describe('<AuthGate />', () => {
   });
 
   afterEach(() => {
+    __setLocalAuthEnabledForTests(null);
     cleanup();
     vi.unstubAllGlobals();
     localStorage.clear();
