@@ -65,7 +65,7 @@ import { bankMovementKey } from '../../../domain/bankMovementKey';
 import { todayISO } from '../../../formatters';
 import { isCorningAbono } from '../../../domain/bankStatements';
 import type { BankInflowEnrichment } from '../../../domain/auxiliarProjectionAdapter';
-import type { AuxiliarReconLine } from '../../../domain/auxiliarReconciliationEngine';
+import type { AuxiliarReconLine, ReconciledMonthTotals } from '../../../domain/auxiliarReconciliationEngine';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
 import { buildCargoProviderIndex, matchCargoToProvider } from '../../../domain/cargoProviderMatch';
@@ -166,6 +166,13 @@ export interface CanonicalProjectionInputs {
    * cobranza JDE). Líneas caja/interno se omiten.
    */
   auxiliarReconLines?: AuxiliarReconLine[];
+  /**
+   * MOTOR 1: ingreso/egreso reconciliado Auxiliar Contable × Bancos por
+   * (cía, `yyyy-mm`). Cuando se provee, los brutos históricos REPORTADOS
+   * (`monthly[].income/expense`) se re-sourcean a esta verdad contable; la
+   * caja sigue anclada al banco. Ausente → brutos = Σ ABONO/CARGO bancario.
+   */
+  reconciledByCompanyMonth?: Map<string, ReconciledMonthTotals>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   /**
@@ -231,6 +238,7 @@ export function buildCanonicalProjection(
     purchaseReceipts: inputs.purchaseReceipts,
     cobranzaRecords: inputs.cobranzaRecords,
     enablePredictive: inputs.enablePredictive !== false,
+    reconciledByCompanyMonth: inputs.reconciledByCompanyMonth,
   };
   const { base, predictive } = computeBaseCashFlow(computeInputs);
 
@@ -246,8 +254,15 @@ export function buildCanonicalProjection(
 
   const movements = buildMovements({ monthly, inputs });
 
+  // Caja inicial = saldo de apertura real del banco. Derivada del PRIMER mes
+  // restando sus brutos que ENCADENAN la caja. Con MOTOR 1, `income/expense`
+  // del mes pueden ser los reconciliados (verdad contable), pero la caja se
+  // encadenó desde el banco (`actualIncome/actualExpense`); por eso restamos
+  // los brutos bancarios reales, no los reportados — así `initialCash` queda
+  // anclado al saldo bancario de apertura y la caja de Planeación cuadra.
+  const first = base[0];
   const initialCash = base.length > 0
-    ? base[0].closingCash - base[0].income + base[0].expense
+    ? first.closingCash - (first.actualIncome ?? first.income) + (first.actualExpense ?? first.expense)
     : (inputs.startingBalance ?? 0);
 
   return {
@@ -369,11 +384,20 @@ function resolveInflowSubcategory(args: {
   return INCOME_SUBCAT_CITI;
 }
 
-function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
+/**
+ * MOTOR 1 — Histórico reconciliado (≤ hoy). Emite la verdad histórica del
+ * efectivo: estado de cuenta bancario (`bank:`), el neto de traspasos internos
+ * (`internal-recon:`, ancla la caja al saldo bancario real), y los rellenos
+ * sintéticos para meses sin banco desde cobranza JDE (`cobranza-historic:`) y
+ * el libro mayor AuxiliarContable (`auxiliar-historic:`). Los brutos del
+ * `monthly[]` ya vienen re-sourceados a la conciliación Auxiliar×Bancos (ver
+ * `computeBaseCashFlow` + `reconciledByCompanyMonth`); este motor produce los
+ * movimientos a nivel línea. NO corre el prorrateo Citi — eso lo hace el
+ * orquestador sobre la lista compuesta.
+ */
+export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   const out: FinancialMovement[] = [];
-  const todayYm = toYearMonth(inputs.asOfDate);
   const monthlyByYm = new Map(monthly.map((m) => [m.yearMonth, m]));
-  const inflowContext = buildInflowContext(inputs);
   // clientById debe resolver tanto por client.id (slug del catálogo) como
   // por noCliente JDE (numérico). Los ABONOs de cobranza pasan `noCliente`
   // crudo cuando el enriquecimiento no encontró el catalogClientId — sin
@@ -410,13 +434,6 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   // solo debe rellenar cía/meses SIN estado de cuenta; si no, el cobro se
   // cuenta dos veces (ABONO real + sintético) e infla `realIncome` ~2×.
   const bankCoverage = new Set<string>();
-
-  // Proveedores en Concurso Mercantil: cualquier proveedor con AL MENOS una
-  // factura ≤ CONCURSO_MERCANTIL_CUTOFF (deuda congelada). Sus pagos viven
-  // en el módulo Concurso; aquí se excluyen del modelo predictivo para que
-  // su deuda fresca no entre dos veces al flujo. Set indexado por noProveedor
-  // (trim + upper) — la misma normalización que usa `normalizeProviderId`.
-  const concursoProviderIds = getConcursoProviderIds(inputs.cxpRecords);
 
   // Mapa movementKey → AbonoEnrichment. Permite reclasificar un ABONO
   // histórico como cobranza por cliente cuando el cruce contra cobranza JDE
@@ -900,6 +917,32 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     });
   }
 
+  return out;
+}
+
+/**
+ * MOTOR 2 — Proyección de corto plazo (> hoy). Emite SOLO datos reales de
+ * corto plazo, cada uno fechado por SU regla:
+ *   • Cobranza/CXC abierto + ROL CITI (viaje ejecutado aún no facturado →
+ *     ingreso futuro fechado por la regla del cliente: días de crédito +
+ *     día de pago + frecuencia) + Viajes Especiales — ingresos.
+ *   • CXP abierto + compras (OC `F_Recepcion`+`D_Credito`, regla del
+ *     proveedor) + nómina TRESS real — egresos.
+ * Sin balanceo a totales canónicos, sin proyecciones rule-based genéricas
+ * (`client:`), sin recurrentes, sin reserva de presupuesto, sin sintéticos.
+ * NO corre el prorrateo Citi — lo hace el orquestador.
+ */
+export function buildShortTermProjectionMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
+  const out: FinancialMovement[] = [];
+  const todayYm = toYearMonth(inputs.asOfDate);
+  const inflowContext = buildInflowContext(inputs);
+  // Proveedores en Concurso Mercantil: cualquier proveedor con AL MENOS una
+  // factura ≤ CONCURSO_MERCANTIL_CUTOFF (deuda congelada). Sus pagos viven en
+  // el módulo Concurso; aquí se excluyen para que su deuda fresca no entre dos
+  // veces al flujo. Set indexado por noProveedor (trim + upper) — misma
+  // normalización que `normalizeProviderId`.
+  const concursoProviderIds = getConcursoProviderIds(inputs.cxpRecords);
+
   // 2) Meses futuros: SOLO datos reales de corto plazo.
   //    Inflows: CXC abierto (cobranza JDE pendiente) + ROL CITI (viajes
   //    ejecutados aún no facturados, fechados por catálogo).
@@ -941,7 +984,21 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
     out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
   }
 
-  return prorateCitiConcentradoraByClient(out, inputs);
+  return out;
+}
+
+/**
+ * Orquestador: compone MOTOR 1 (histórico reconciliado, ≤ hoy) + MOTOR 2
+ * (proyección corto plazo, > hoy) y corre el prorrateo Citi UNA vez sobre la
+ * lista compuesta. El prorrateo sólo re-etiqueta líneas históricas `bank:`
+ * TRANSFER de la CONCENTRADORA CLIENTES CITI por cliente, así que correrlo
+ * sobre la concatenación es equivalente a hacerlo sobre el `out` monolítico
+ * previo.
+ */
+function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
+  const historical = buildHistoricalReconciledMovements({ monthly, inputs });
+  const future = buildShortTermProjectionMovements({ monthly, inputs });
+  return prorateCitiConcentradoraByClient([...historical, ...future], inputs);
 }
 
 /** subRole del catálogo de las cuentas concentradoras de clientes comerciales Citi. */

@@ -333,11 +333,21 @@ export function buildScenarioForecastRun(args: BuildScenarioForecastRunArgs): Sc
 }
 
 /**
- * Base remains a narrow operational baseline: real short-term API records only.
+ * Base ≈ MOTOR 1 (histórico reconciliado): real short-term API records only.
  * The Base run additionally cuts any movement whose effective date is in the
- * future (see buildScenarioForecastRun) — Base shows past/today only; future
- * dates belong to Approved/proposals, which use the full predictive canonical
- * source plus treasury rules.
+ * future (see buildScenarioForecastRun) — Base shows past/today only.
+ *
+ * Bajo el modelo de dos motores: los movimientos de MOTOR 1 (`bank:`,
+ * `internal-recon:`, `cobranza-historic:`, `auxiliar-historic:`,
+ * `citi-prorrateo:`) llevan `status:'REAL'` y fecha ≤ hoy → pasan ambos
+ * filtros y son la base. Los de MOTOR 2 (proyección corto plazo:
+ * `cxc:`/`purchase:`/`po:`/`payroll:`) pasan este filtro de id pero su
+ * porción FUTURA la corta el límite de fecha; `rol:` es FORECAST → se cae.
+ * Resultado: Base = MOTOR 1. El futuro (MOTOR 2) pertenece a Approved/
+ * proposals, que usan la fuente canónica completa + reglas de tesorería.
+ *
+ * NO mover este corte a `canonicalProjection.ts` — debe vivir en el run de
+ * Base para que Dashboard/Proyección conserven la proyección completa.
  */
 export const isRealShortTermApiMovement = (movement: FinancialMovement): boolean => {
   if (movement.status === 'REAL') return true;

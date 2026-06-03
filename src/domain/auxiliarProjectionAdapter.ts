@@ -19,7 +19,7 @@
  * `paymentReconciliationEngine`.
  */
 
-import type { AuxiliarReconResult } from './auxiliarReconciliationEngine';
+import type { AuxiliarReconResult, ReconciledMonthTotals } from './auxiliarReconciliationEngine';
 import type { CXPRecord } from './persistence';
 import type { CobranzaRecord } from '../services/jdeTypes';
 
@@ -62,6 +62,13 @@ export interface AuxiliarProjectionBridge {
   cargoEnrichments: Map<string, BankOutflowEnrichment>;
   /** Enriquecimiento de cada ABONO cruzado a una factura. */
   abonoEnrichments: BankInflowEnrichment[];
+  /**
+   * Ingreso/egreso reconciliado por (cía, `yyyy-mm`) — verdad histórica de
+   * MOTOR 1. La proyección la usa para re-sourcear los brutos históricos
+   * (income/expense del `monthly[]`) desde Auxiliar Contable × Bancos en vez
+   * de sólo Σ ABONO/CARGO bancario. Llave `${cia}::${yyyy-mm}`.
+   */
+  reconciledByCompanyMonth: Map<string, ReconciledMonthTotals>;
 }
 
 const FACTURA_PREFIX = 'factura:';
@@ -74,6 +81,7 @@ export function emptyAuxiliarProjectionBridge(): AuxiliarProjectionBridge {
     paidPurchaseOrderKeys: new Set(),
     cargoEnrichments: new Map(),
     abonoEnrichments: [],
+    reconciledByCompanyMonth: new Map(),
   };
 }
 
@@ -84,6 +92,9 @@ export function adaptAuxiliarForProjection(
 ): AuxiliarProjectionBridge {
   const bridge = emptyAuxiliarProjectionBridge();
   if (!result) return bridge;
+
+  // Totales reconciliados por (cía, mes) — verdad histórica de MOTOR 1.
+  bridge.reconciledByCompanyMonth = result.reconciledByCompanyMonth ?? new Map();
 
   // Documentos confirmados contra banco, separados por dirección de flujo.
   const confirmedEgresoFacturas = new Set<string>();

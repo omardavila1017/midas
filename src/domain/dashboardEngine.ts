@@ -23,6 +23,7 @@ import type {
 } from '../services/jde';
 import type { CobranzaRecord } from '../services/jdeTypes';
 import type { PurchaseReceiptRecord } from '../modules/shared-finance/types';
+import type { ReconciledMonthTotals } from './auxiliarReconciliationEngine';
 
 // Pure cash-flow engine extracted from Dashboard.tsx so that callers in the
 // projection / planning pipeline can import it without pulling Recharts,
@@ -52,6 +53,15 @@ export interface ComputeInputs {
   predictiveHorizonMonths?: number;
   /** Si es false, no se ejecuta el predictor (para tests / callers viejos). */
   enablePredictive?: boolean;
+  /**
+   * Totales reconciliados Auxiliar Contable × Bancos por (cía, `yyyy-mm`)
+   * (MOTOR 1). Si se proveen, los brutos REPORTADOS (`income`/`expense`) de los
+   * meses históricos CERRADOS se re-sourcean a la verdad reconciliada. El
+   * encadenado de caja (`closingCash`) SIGUE anclado al banco real
+   * (Σ ABONO/CARGO) — nunca a los reconciliados. Ausente = comportamiento
+   * byte-idéntico al previo (Dashboard no cambia salvo que su caller opte).
+   */
+  reconciledByCompanyMonth?: Map<string, ReconciledMonthTotals>;
 }
 
 export interface ComputeOutput {
@@ -103,6 +113,21 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
     : filteredCxp as unknown as AgedBalanceRecord[];
 
   const historical = buildHistoricalMonths(filtered);
+
+  // MOTOR 1: pre-agregar el reconciliado Auxiliar×Bancos por mes dentro del
+  // scope de cía. Vacío si el caller no lo pasó → override no-op (comportamiento
+  // previo byte-idéntico).
+  const allCia = companyCode === 'all' || !companyCode;
+  const reconciledByYm = new Map<string, { income: number; expense: number }>();
+  if (inputs.reconciledByCompanyMonth) {
+    for (const t of inputs.reconciledByCompanyMonth.values()) {
+      if (!allCia && t.cia !== companyCode) continue;
+      const cur = reconciledByYm.get(t.yearMonth) ?? { income: 0, expense: 0 };
+      cur.income += t.ingresoCruzado;
+      cur.expense += t.egresoCruzado;
+      reconciledByYm.set(t.yearMonth, cur);
+    }
+  }
 
   const todayYm = toYearMonth(today);
 
@@ -208,8 +233,16 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
   for (const m of historical) {
     const actualIncome = m.income;
     const actualExpense = m.expense;
+    // `income`/`expense` ENCADENAN la caja: banco real (meses cerrados) o la
+    // proyección del mes en curso. Nunca los brutos reconciliados — eso
+    // desanclaría `closingCash` del saldo bancario real.
     let income = actualIncome;
     let expense = actualExpense;
+    // Brutos REPORTADOS (lo que ve el chart/KPIs): banco por default; los
+    // meses cerrados con cobertura reconciliada (MOTOR 1) reportan la verdad
+    // Auxiliar Contable × Bancos.
+    let reportedIncome = actualIncome;
+    let reportedExpense = actualExpense;
     if (m.yearMonth === todayYm) {
       const ov = overrides[todayYm];
       const projected = projectionByYm.get(todayYm);
@@ -223,12 +256,20 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
         projected?.expense.total ?? 0,
         predExpenseByYm.get(todayYm) ?? 0,
       );
+      reportedIncome = income;
+      reportedExpense = expense;
+    } else {
+      const rec = reconciledByYm.get(m.yearMonth);
+      if (rec) {
+        reportedIncome = rec.income;
+        reportedExpense = rec.expense;
+      }
     }
     runningHist = runningHist + income - expense;
     historicalChained.push({
       ...m,
-      income,
-      expense,
+      income: reportedIncome,
+      expense: reportedExpense,
       actualIncome,
       actualExpense,
       closingCash: runningHist,

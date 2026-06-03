@@ -257,6 +257,25 @@ export interface AuxiliarReconSummary {
   inconsistencyCounts: Record<AuxiliarInconsistencyKind, number>;
 }
 
+/**
+ * Totales de flujo económico reconciliado por (cía, mes). Es la unidad de
+ * verdad histórica sobre la que MOTOR 1 (histórico reconciliado) re-sourcea
+ * los brutos de ingreso/egreso. `*Cruzado` cuenta sólo las líneas que cruzaron
+ * a banco (jde-reconciled|exact|tolerance|cross-account); `*Total` incluye
+ * además las líneas económicas sin cruce (gl-orphan) para poder medir cobertura.
+ * Excluye buckets estructurales (caja, interno, asientos, timing, gaps). Llave
+ * `${cia}::${yyyy-mm}`. El mes se bucketea por `bankDate` (verdad de caja)
+ * cuando existe, con fallback a `fechaContable`.
+ */
+export interface ReconciledMonthTotals {
+  cia: string;
+  yearMonth: string;
+  ingresoCruzado: number;
+  egresoCruzado: number;
+  ingresoTotal: number;
+  egresoTotal: number;
+}
+
 export interface AuxiliarReconResult {
   lines: AuxiliarReconLine[];
   bankOrphans: AuxiliarBankOrphan[];
@@ -267,6 +286,11 @@ export interface AuxiliarReconResult {
    */
   sourceConfirmation: Map<string, AuxiliarSourceConfirmation>;
   summary: AuxiliarReconSummary;
+  /**
+   * Ingreso/egreso reconciliado por (cía, mes) — la verdad histórica de MOTOR 1.
+   * Aditivo: no altera el cruce ni el summary, sólo lo agrega por mes.
+   */
+  reconciledByCompanyMonth: Map<string, ReconciledMonthTotals>;
   /**
    * Inconsistencias detectadas para auditoría (no alteran el cruce, sólo lo
    * anotan). La UI puede mostrarlas como alertas críticas previo a cierre.
@@ -824,8 +848,78 @@ export function reconcileAuxiliar(
     bankOrphans,
     sourceConfirmation,
     summary: buildSummary(lines, bankOrphans, inconsistencies, { min: auxMin, max: auxMax }),
+    reconciledByCompanyMonth: buildReconciledByCompanyMonth(lines),
     inconsistencies,
   };
+}
+
+/** Tiers estructurales que NO cuentan como flujo económico (excluidos del
+ *  denominador del % cruce y de los totales reconciliados por mes). Coincide
+ *  con los `continue` de `buildSummary`; `gl-orphan` NO está aquí (es flujo
+ *  económico sin cruce). */
+const STRUCTURAL_NON_FLOW_TIERS: ReadonlySet<AuxiliarMatchTier> = new Set([
+  'caja',
+  'interno',
+  'asiento-interno',
+  'asiento-contable',
+  'pendiente-revision',
+  'sin-banco',
+  'sin-cuenta-aux',
+  'cuenta-no-en-banco',
+  'timing-pendiente',
+]);
+
+/** Una línea cruzó a banco — mismo predicado que `buildSummary` usa para
+ *  `ingresoMontoCruzado`/`egresoMontoCruzado`. */
+function isCruzadaTier(tier: AuxiliarMatchTier): boolean {
+  return (
+    tier === 'jde-reconciled' ||
+    tier === 'exact' ||
+    tier === 'tolerance' ||
+    tier === 'cross-account'
+  );
+}
+
+/**
+ * Agrega ingreso/egreso económico por (cía, mes). La suma de `ingresoCruzado`
+ * (resp. `egresoCruzado`) sobre todos los meses iguala `summary.ingresoMontoCruzado`
+ * (resp. `egresoMontoCruzado`), porque usa el mismo conjunto de líneas y el
+ * mismo predicado de cruce. Mes por `bankDate` cuando existe (cruce real a
+ * banco), fallback `fechaContable`.
+ */
+function buildReconciledByCompanyMonth(
+  lines: AuxiliarReconLine[],
+): Map<string, ReconciledMonthTotals> {
+  const map = new Map<string, ReconciledMonthTotals>();
+  for (const line of lines) {
+    if (STRUCTURAL_NON_FLOW_TIERS.has(line.matchTier)) continue;
+    const bucketDate = line.bankDate || line.fechaContable;
+    if (!bucketDate || bucketDate.length < 7) continue;
+    const ym = bucketDate.slice(0, 7);
+    const key = `${line.cia}::${ym}`;
+    let totals = map.get(key);
+    if (!totals) {
+      totals = {
+        cia: line.cia,
+        yearMonth: ym,
+        ingresoCruzado: 0,
+        egresoCruzado: 0,
+        ingresoTotal: 0,
+        egresoTotal: 0,
+      };
+      map.set(key, totals);
+    }
+    const monto = Math.abs(line.importe);
+    const cruzada = isCruzadaTier(line.matchTier);
+    if (line.flujo === 'ingreso') {
+      totals.ingresoTotal += monto;
+      if (cruzada) totals.ingresoCruzado += monto;
+    } else {
+      totals.egresoTotal += monto;
+      if (cruzada) totals.egresoCruzado += monto;
+    }
+  }
+  return map;
 }
 
 function buildSummary(
@@ -1040,6 +1134,7 @@ export function emptyAuxiliarReconResult(): AuxiliarReconResult {
         'non-bank-batch-in-1020': 0,
       },
     },
+    reconciledByCompanyMonth: new Map(),
     inconsistencies: [],
   };
 }

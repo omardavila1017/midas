@@ -225,6 +225,9 @@ export function buildFinancialProjectionSourceData(
     // emitir `auxiliar-historic:*` cuando un mes no tiene banco cargado
     // (cubre egresos pasados que cobranza-historic no rellena).
     auxiliarReconLines: input.auxiliarReconciliation?.lines,
+    // MOTOR 1: totales reconciliados Auxiliar×Bancos por (cía, mes) — re-sourcean
+    // los brutos históricos del `monthly[]` a la verdad contable.
+    reconciledByCompanyMonth: bridge.reconciledByCompanyMonth,
     assumptions: input.assumptions,
     budget: input.budget,
     startingBalance: input.startingBalance,

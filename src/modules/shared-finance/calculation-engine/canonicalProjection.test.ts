@@ -9,7 +9,11 @@ import { isRealShortTermApiMovement } from '../../financial-planning/services/sc
 import { buildHistoricalMonths } from '../../../domain/cashFlowEngine';
 import { bankMovementKey } from '../../../domain/bankMovementKey';
 import type { PayrollCostRecord, PurchaseReceiptRecord } from '../types';
-import { buildCanonicalProjection } from './canonicalProjection';
+import {
+  buildCanonicalProjection,
+  buildHistoricalReconciledMovements,
+  buildShortTermProjectionMovements,
+} from './canonicalProjection';
 
 const assumptions: CashFlowAssumptions = {
   year: 2026,
@@ -1213,6 +1217,63 @@ describe('canonicalProjection ROL projection (modelo corregido)', () => {
     });
 
     expect(canonical.movements.some((m) => m.id.startsWith('rol:'))).toBe(true);
+  });
+});
+
+describe('two-engine seam (MOTOR 1 histórico / MOTOR 2 corto plazo)', () => {
+  it('particiona por fecha: MOTOR 1 ≤ hoy (incluye bank:), MOTOR 2 > hoy (incluye cxc:)', () => {
+    const asOfDate = '2026-04-22';
+    const inputs = {
+      companyCode: 'all',
+      bankStatements: [bankStatement({
+        cia: '00001',
+        cuenta: 'CTA-A',
+        movimientos: [
+          bankMovement({ cia: '00001', cuenta: 'CTA-A', tipoMovimiento: 'ABONO', importe: 10_000, fechaOperacion: '2026-03-15', concepto: 'Cobro cliente' }),
+        ],
+      })],
+      clients: [client()],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [
+        cobranzaRecord({
+          noCliente: '1',
+          nombreCliente: 'Cliente IVA',
+          noFactura: 'CXC-1',
+          fechaFactura: '2026-05-01',
+          fechaVence: '2026-05-15',
+          importeBrutoPesos: 1160,
+          importePendientePesos: 580,
+        }),
+      ],
+      assumptions,
+      budget: budget({}),
+      startingBalance: 0,
+      asOfDate,
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const historical = buildHistoricalReconciledMovements({ monthly, inputs });
+    const future = buildShortTermProjectionMovements({ monthly, inputs });
+
+    // MOTOR 1: histórico ≤ hoy; incluye el `bank:`, sin proyecciones `cxc:`.
+    expect(historical.some((m) => m.id.startsWith('bank:'))).toBe(true);
+    expect(historical.some((m) => m.id.startsWith('cxc:'))).toBe(false);
+    for (const m of historical) {
+      expect((m.actualDate ?? m.projectedDate ?? '') <= asOfDate).toBe(true);
+    }
+
+    // MOTOR 2: corto plazo > hoy; incluye el `cxc:`, sin `bank:` histórico.
+    expect(future.some((m) => m.id.startsWith('cxc:'))).toBe(true);
+    expect(future.some((m) => m.id.startsWith('bank:'))).toBe(false);
+    for (const m of future) {
+      expect((m.projectedDate ?? '') >= asOfDate).toBe(true);
+    }
+
+    // Invariante: ningún movimiento futuro de MOTOR 2 entra al Escenario Base
+    // (Base = MOTOR 1: real corto plazo ≤ hoy).
+    expect(
+      future.every((m) => !(isRealShortTermApiMovement(m) && (m.projectedDate ?? '') <= asOfDate)),
+    ).toBe(true);
   });
 });
 

@@ -1423,6 +1423,7 @@ function auxiliarResult(lines: AuxiliarReconLine[]): AuxiliarReconResult {
     bankOrphans: [],
     inconsistencies: [],
     sourceConfirmation: new Map(),
+    reconciledByCompanyMonth: new Map(),
     summary: {
       totalLineas: lines.length,
       ingresoLineas: 0,

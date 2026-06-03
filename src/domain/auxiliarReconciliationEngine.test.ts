@@ -315,3 +315,55 @@ describe('adaptAuxiliarForProjection', () => {
     expect(enr.payments?.[0].nombreProveedor).toBe('Proveedor Z');
   });
 });
+
+describe('reconciledByCompanyMonth (MOTOR 1)', () => {
+  it('aggregates crossed ingreso/egreso per (cia, month) keyed by bankDate', () => {
+    const res = reconcileAuxiliar(
+      [
+        glLine({ importe: 1000, fechaContable: '2026-04-13' }),
+        glLine({ importe: -500, tipoDocto: 'PK', idCuenta: '0165', fechaContable: '2026-04-20' }),
+      ],
+      [statement([
+        bankLine({ importe: 1000, fechaOperacion: '2026-04-13' }),
+        bankLine({ tipoMovimiento: 'CARGO', importe: 500, fechaOperacion: '2026-04-20', referencia: 'R2' }),
+      ])],
+    );
+    const totals = res.reconciledByCompanyMonth.get('00042::2026-04');
+    expect(totals).toBeTruthy();
+    expect(totals!.ingresoCruzado).toBe(1000);
+    expect(totals!.egresoCruzado).toBe(500);
+  });
+
+  it('Σ per month equals summary.ingresoMontoCruzado / egresoMontoCruzado', () => {
+    const res = reconcileAuxiliar(
+      [
+        glLine({ importe: 1000, fechaContable: '2026-04-13' }),
+        glLine({ importe: 700, idCuenta: '0166', fechaContable: '2026-05-09' }),
+        glLine({ importe: -500, tipoDocto: 'PK', idCuenta: '0167', fechaContable: '2026-05-09' }),
+      ],
+      [statement([
+        bankLine({ importe: 1000, fechaOperacion: '2026-04-13' }),
+        bankLine({ importe: 700, fechaOperacion: '2026-05-09', referencia: 'R3' }),
+        bankLine({ tipoMovimiento: 'CARGO', importe: 500, fechaOperacion: '2026-05-09', referencia: 'R4' }),
+      ])],
+    );
+    let ingreso = 0;
+    let egreso = 0;
+    for (const t of res.reconciledByCompanyMonth.values()) {
+      ingreso += t.ingresoCruzado;
+      egreso += t.egresoCruzado;
+    }
+    expect(ingreso).toBe(res.summary.ingresoMontoCruzado);
+    expect(egreso).toBe(res.summary.egresoMontoCruzado);
+  });
+
+  it('surfaces the per-month totals through the projection bridge', () => {
+    const res = reconcileAuxiliar([glLine()], [statement([bankLine()])]);
+    const bridge = adaptAuxiliarForProjection(res, [], []);
+    expect(bridge.reconciledByCompanyMonth.get('00042::2026-04')?.ingresoCruzado).toBe(1000);
+  });
+
+  it('empty result has an empty reconciledByCompanyMonth map', () => {
+    expect(emptyAuxiliarReconResult().reconciledByCompanyMonth.size).toBe(0);
+  });
+});

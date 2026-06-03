@@ -35,6 +35,22 @@ This branch removes long-term cash-flow projection. **Planeación Financiera y P
 
 Los tests obsoletos en `canonicalProjection.test.ts` están marcados `it.skip` con la razón. UI de Escenarios/Propuestas/Adjustments se mantiene intacta — solo cambia la fuente de movimientos.
 
+## Dos motores: MOTOR 1 (Histórico Reconciliado) + MOTOR 2 (Proyección Corto Plazo) (2026-06-03)
+
+El motor canónico (`src/modules/shared-finance/calculation-engine/canonicalProjection.ts`) ahora está partido en **dos motores nombrados y testeables**, orquestados por `buildMovements` (que corre el prorrateo Citi una vez sobre la lista compuesta). Ambos son funciones **exportadas** que reciben `{ monthly, inputs }`:
+
+- **`buildHistoricalReconciledMovements` — MOTOR 1 (≤ hoy).** La verdad histórica del efectivo: `bank:` (estado de cuenta), `internal-recon:` (neto de traspasos internos, **ancla la caja al saldo bancario real** — no borrar), y rellenos sin-banco `cobranza-historic:` / `auxiliar-historic:`. Owns el filtrado de traspasos internos + cuentas neutras del catálogo.
+- **`buildShortTermProjectionMovements` — MOTOR 2 (> hoy).** Datos reales de corto plazo, cada uno fechado por **su regla**: Cobranza/CXC abierto + **ROL** (viaje ejecutado aún no facturado → ingreso futuro fechado por la **regla del cliente**: días de crédito + día de pago + frecuencia; ROL se CONSERVA, es la señal temprana) + Viajes Especiales (ingresos); CXP + Órdenes de Compra (`F_Recepcion`+`D_Credito`, regla del proveedor) + Nómina TRESS (egresos). Sin balanceo a totales canónicos, sin `client:`, sin recurrentes.
+
+**Histórico re-sourceado a la conciliación (cambio de comportamiento).** Los brutos históricos REPORTADOS (`monthly[].income/expense`) ya NO salen solo del banco (Σ ABONO/CARGO): se re-sourcean a la **conciliación Auxiliar Contable × Bancos** (verdad contable, 100% cruzado). Pipeline:
+
+1. `auxiliarReconciliationEngine.ts` agrega `reconciledByCompanyMonth: Map<`${cia}::${yyyy-mm}`, ReconciledMonthTotals>` (ingreso/egreso cruzado por mes; Σ por mes == `summary.*MontoCruzado`). Aditivo — no toca la lógica de match.
+2. `auxiliarProjectionAdapter.ts` (`adaptAuxiliarForProjection`) lo expone en el bridge.
+3. `financialProjectionService.ts` lo pasa a `CanonicalProjectionInputs.reconciledByCompanyMonth` (la cache ya re-keya por `refId(auxiliarReconciliation)`).
+4. `computeBaseCashFlow` (`dashboardEngine.ts`): si está presente, los meses CERRADOS reportan `income/expense = Σ ingresoCruzado/egresoCruzado`; **el `closingCash` SIGUE encadenado desde el banco real** (`actualIncome/actualExpense`), nunca desde los reconciliados — eso desanclaría la caja. `initialCash` (canonicalProjection) se deriva con `actualIncome/actualExpense` para preservar el saldo de apertura bancario. Ausente → comportamiento previo byte-idéntico (Dashboard no cambia salvo que su caller opte).
+
+**Base = MOTOR 1.** El Escenario Base (`isRealShortTermApiMovement` + corte `≤ hoy` en `scenarioForecastRun.ts`) queda naturalmente igual a MOTOR 1: los ids históricos (`bank:`/`internal-recon:`/`cobranza-historic:`/`auxiliar-historic:`/`citi-prorrateo:`) son `status:'REAL'` ≤ hoy → pasan; el futuro de MOTOR 2 lo corta la fecha; `rol:` (FORECAST) se cae. **No mover el filtro al motor** (Dashboard/Proyección necesitan la proyección completa).
+
 ## Stack
 
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)

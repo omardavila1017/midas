@@ -172,6 +172,38 @@ describe('computeBaseCashFlow — horizonte y proyección operativa', () => {
     expect(baseline.avgExpense).toBe(0);
   });
 
+  it('MOTOR 1: re-sourcea los brutos históricos a la conciliación sin desanclar la caja', () => {
+    const statements = [
+      mkStmt('2026-01', 100, 40),
+      mkStmt('2026-02', 100, 40),
+      mkStmt('2026-03', 100, 40),
+      mkStmt('2026-04', 100, 40),
+    ];
+    // Sin conciliación: caja bancaria de referencia.
+    const sinRecon = computeBaseCashFlow({ ...BASE_INPUTS, bankStatements: statements });
+    const ene0 = sinRecon.base.find((m) => m.yearMonth === '2026-01')!;
+    expect(ene0.income).toBe(100);
+    expect(ene0.expense).toBe(40);
+    expect(ene0.closingCash).toBe(60); // 0 + 100 - 40
+
+    // Con conciliación: enero reporta la verdad Auxiliar×Bancos (≠ banco crudo).
+    const reconciledByCompanyMonth = new Map([
+      ['00011::2026-01', { cia: '00011', yearMonth: '2026-01', ingresoCruzado: 70, egresoCruzado: 10, ingresoTotal: 70, egresoTotal: 10 }],
+    ]);
+    const conRecon = computeBaseCashFlow({ ...BASE_INPUTS, bankStatements: statements, reconciledByCompanyMonth });
+    const ene1 = conRecon.base.find((m) => m.yearMonth === '2026-01')!;
+    // Brutos REPORTADOS = reconciliados.
+    expect(ene1.income).toBe(70);
+    expect(ene1.expense).toBe(10);
+    // Σ ABONO/CARGO bancario preservado en actual*.
+    expect(ene1.actualIncome).toBe(100);
+    expect(ene1.actualExpense).toBe(40);
+    // Caja ANCLADA al banco: idéntica con o sin conciliación.
+    expect(ene1.closingCash).toBe(ene0.closingCash);
+    // Un mes SIN cobertura reconciliada conserva el bruto bancario.
+    expect(conRecon.base.find((m) => m.yearMonth === '2026-02')!.income).toBe(100);
+  });
+
   it('proyecta egresos futuros desde el piso operativo de proveedores críticos', () => {
     const { base, projection } = computeBaseCashFlow({
       ...BASE_INPUTS,
