@@ -8,6 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+    environment: qa          
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
