@@ -112,10 +112,6 @@ import {
 import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
 
-// Top-off de tendencia histórica (Holt-Winters): opt-in, persistido. Key propia
-// de Planeación (independiente de la de Proyección) — ver storageRegistry.ts.
-const TREND_TOPOFF_STORAGE_KEY = 'midas.planning.trendTopOff';
-
 interface Props {
   companyCode: string;
   bankStatements: BankAccountStatement[];
@@ -600,19 +596,12 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const [mergeOpen, setMergeOpen] = useState<string | null>(null);
   const [addRowFor, setAddRowFor] = useState<FinancialMovementType | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  // Top-off de tendencia histórica (Holt-Winters): opt-in, persistido. Sólo
-  // inyecta en escenarios no-base (ver buildScenarioRun). Mismo mecanismo que
-  // Proyección; aquí las líneas `forecast:trend:` caen como filas propias
-  // ("Tendencia histórica") editables por celda.
-  const [trendTopOff, setTrendTopOff] = useState<boolean>(() => {
-    try { return window.localStorage.getItem(TREND_TOPOFF_STORAGE_KEY) === '1'; } catch { return false; }
-  });
-  const toggleTrendTopOff = useCallback((next: boolean) => {
-    setTrendTopOff(next);
-    try { window.localStorage.setItem(TREND_TOPOFF_STORAGE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-  }, []);
+  // Tendencia histórica (Holt-Winters): SIEMPRE activa en escenarios no-base
+  // (ver buildScenarioRun). Las líneas `forecast:trend:` caen como filas propias
+  // ("Tendencia histórica") editables por celda, por encima de ROL, OC y deudas.
+  // El Escenario Base la excluye por definición. Ya no es opt-in.
   // Series mensuales del motor predictivo para el top-off. `undefined` si no
-  // hay histórico suficiente → el toggle no inyecta nada.
+  // hay histórico suficiente → no se inyecta nada.
   const trendForecast = useMemo(() => {
     const predictive = source.canonical.predictive;
     if (!predictive) return undefined;
@@ -749,11 +738,11 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
     const scenario = scenarios.find((s) => s.id === scenarioId);
-    // El top-off de tendencia es no-base; en Base nunca aplica (además
-    // `forecast:trend:` falla isRealShortTermApiMovement, así que Base lo
-    // descartaría igual). El trendTag va en cacheKey Y pipelineKey: el top-off
-    // vive en el pipeline (mismo contrato que Proyección).
-    const trendOn = trendTopOff && trendAvailable && scenario?.kind !== 'BASE';
+    // La tendencia es no-base y siempre activa cuando hay histórico; en Base
+    // nunca aplica (además `forecast:trend:` falla isRealShortTermApiMovement,
+    // así que Base lo descartaría igual). El trendTag va en cacheKey Y
+    // pipelineKey: el top-off vive en el pipeline (mismo contrato que Proyección).
+    const trendOn = trendAvailable && scenario?.kind !== 'BASE';
     const trendTag = `trend:${trendOn ? 1 : 0}`;
     const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|${trendTag}|g=${granularity}`;
     // pipelineKey omits granularity so flips reuse the worker's pipeline cache.
@@ -811,7 +800,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows, runVersion, trendTopOff],
+    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows, runVersion],
   );
 
   const baseRun = useMemo(
@@ -862,7 +851,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       return buildScenarioRun(activeScenario.id, true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows, runVersion, trendTopOff],
+    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows, runVersion],
   );
 
   const activeOverrides = useMemo(
@@ -938,15 +927,19 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   }, [activeOverrides]);
 
   const columns: BucketColumn[] = useMemo(() => {
-    const dates = buildBucketDates(yearStart, yearEnd, granularity);
     const todayKey = bucketKeyForDate(today, granularity);
+    // El Escenario Base es sólo histórico: su run se recorta a hoy
+    // (projectionEndDate = today). No mostrar columnas futuras vacías — la
+    // tabla termina en el período en curso.
+    const windowEnd = activeScenario.kind === 'BASE' ? today : yearEnd;
+    const dates = buildBucketDates(yearStart, windowEnd, granularity);
     return dates.map((date) => ({
       key: date,
       label: engineBucketLabel(date, granularity),
       isPast: date < todayKey,
       isCurrent: date === todayKey,
     }));
-  }, [granularity, yearStart, yearEnd, today]);
+  }, [granularity, yearStart, yearEnd, today, activeScenario.kind]);
 
   const totalsForKind = (kind: 'inflows' | 'outflows' | 'net' | 'closingCash', bucketKey: string): number => {
     const bucket = activeRun.buckets.find((b) => b.date === bucketKey);
@@ -1356,23 +1349,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
             />
             <button
               type="button"
-              onClick={() => toggleTrendTopOff(!trendTopOff)}
-              disabled={!trendAvailable}
-              title={trendAvailable
-                ? 'Completa los meses futuros con la tendencia histórica (mejor modelo), por encima de ROL, OC y deudas. Sólo aplica fuera del Base; las líneas resultantes son editables.'
-                : 'Sin histórico bancario suficiente para estimar la tendencia.'}
-              aria-pressed={trendTopOff && trendAvailable}
-              className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                trendTopOff && trendAvailable
-                  ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)] text-white'
-                  : 'border-[var(--gray-200)] bg-white text-[var(--gray-700)] hover:bg-[var(--gray-50)]'
-              }`}
-            >
-              <TrendingUp className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Tendencia
-            </button>
-            <button
-              type="button"
               onClick={openProposalPicker}
               className="inline-flex h-10 items-center gap-2 rounded-[var(--radius)] bg-[var(--primary)] px-3 text-[12px] font-bold text-white transition-colors hover:bg-[var(--primary-hover)]"
             >
@@ -1417,11 +1393,13 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard
-          label="Caja final"
+          label={activeScenario.kind === 'BASE' ? 'Caja actual' : 'Caja final'}
           value={fmtCurrency(summary.finalCash)}
           icon={<Wallet className="w-4 h-4" />}
           color={toneByFloor(summary.finalCash, summary.minimumCashRequired)}
-          sublabel={`12 meses · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          sublabel={activeScenario.kind === 'BASE'
+            ? 'Al corte de hoy · sólo histórico'
+            : `12 meses · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
           onClick={() => goTo({ tab: 'financialProjection', focus: 'caja-final' })}
           navHint="Ver en Proyección"
         />
@@ -1472,6 +1450,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onClickRow={(conceptKey) => setSelectedCell({ conceptKey, bucketKey: columns.find((column) => column.isCurrent)?.key ?? columns[0]?.key ?? yearStart })}
         onInspectCell={(conceptKey, bucketKey) => setInspectedCell({ conceptKey, bucketKey })}
         onReadOnlyAttempt={() => setStatusMessage('Solo lectura. Crea una propuesta para editar.')}
+        closingCashLabel={activeScenario.kind === 'BASE' ? 'Caja actual' : 'Caja final'}
       />
 
       {drawerOpen && selectedCell ? (

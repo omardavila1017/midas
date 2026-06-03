@@ -160,10 +160,6 @@ const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> =
   { id: 'daily', label: 'Día' },
 ];
 
-// Preferencia del toggle "Proyectar tendencia histórica" (opt-in). Registrada
-// en storageRegistry.ts.
-const TREND_TOPOFF_STORAGE_KEY = 'midas.projection.trendTopOff';
-
 /**
  * Proyección Financiera — centro de escenarios predictivos y edición rápida.
  *
@@ -781,16 +777,12 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const [drillMovement, setDrillMovement] = useState<FinancialMovement | null>(null);
   const [drillAnchor, setDrillAnchor] = useState<DOMRect | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  // Top-off de tendencia histórica (Holt-Winters): opt-in, persistido.
-  const [trendTopOff, setTrendTopOff] = useState<boolean>(() => {
-    try { return window.localStorage.getItem(TREND_TOPOFF_STORAGE_KEY) === '1'; } catch { return false; }
-  });
-  const toggleTrendTopOff = useCallback((next: boolean) => {
-    setTrendTopOff(next);
-    try { window.localStorage.setItem(TREND_TOPOFF_STORAGE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-  }, []);
+  // Tendencia histórica (Holt-Winters): SIEMPRE activa en escenarios no-base
+  // (Aprobado/propuestas). El motor completa los meses futuros con la tendencia
+  // por encima del flujo real ya comprometido (ROL, OC, deudas). El Escenario
+  // Base la excluye por definición (sólo histórico real). Ya no es opt-in.
   // Series mensuales del motor predictivo (Holt-Winters) para el top-off.
-  // `undefined` si no hay histórico suficiente → toggle no inyecta nada.
+  // `undefined` si no hay histórico suficiente → no se inyecta nada.
   const trendForecast = useMemo(() => {
     const predictive = source.canonical.predictive;
     if (!predictive) return undefined;
@@ -942,10 +934,10 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       const scenarioOverrides = cellOverridesByScenario.get(scenarioId) ?? [];
       const customKey = fingerprintArray(scenarioCustomRows, (r) => r.id + ':' + (r.updatedAt ?? ''));
       const overrideKey = fingerprintArray(scenarioOverrides, (o) => o.conceptKey + '@' + o.bucketKey + ':' + o.value);
-      // El top-off de tendencia es no-base; en Base nunca aplica (el filtro
-      // isRealShortTermApiMovement lo dropea), así que el key se mantiene en 0
-      // para Base y se reusa la caché de warmup.
-      const trendOn = trendTopOff && trendAvailable && scenario?.kind !== 'BASE';
+      // La tendencia es no-base y siempre activa cuando hay histórico; en Base
+      // nunca aplica (el filtro isRealShortTermApiMovement lo dropea), así que
+      // el key se mantiene en 0 para Base y se reusa la caché de warmup.
+      const trendOn = trendAvailable && scenario?.kind !== 'BASE';
       const trendTag = `trend:${trendOn ? 1 : 0}`;
       const cacheKey = [
         sharedInputsKey,
@@ -1033,7 +1025,6 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     supplierInitialCash,
     minimumCash,
     runVersion,
-    trendTopOff,
     trendAvailable,
     trendForecast,
   ]);
@@ -1238,23 +1229,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
             />
             <button
               type="button"
-              onClick={() => toggleTrendTopOff(!trendTopOff)}
-              disabled={!trendAvailable}
-              title={trendAvailable
-                ? 'Completa los meses futuros con la tendencia histórica (Holt-Winters), respetando el flujo real ya registrado.'
-                : 'Sin histórico bancario suficiente para estimar la tendencia.'}
-              aria-pressed={trendTopOff && trendAvailable}
-              className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                trendTopOff && trendAvailable
-                  ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)] text-white'
-                  : 'border-[var(--gray-200)] bg-white text-[var(--gray-700)] hover:bg-[var(--gray-50)]'
-              }`}
-            >
-              <TrendingUp className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Tendencia
-            </button>
-            <button
-              type="button"
               onClick={() => handleCreateDraft()}
               className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
             >
@@ -1364,11 +1338,13 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
       {/* KPIs forward propios de Proyección. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <KpiCard
-          label="Caja final"
+          label={activeScenario.kind === 'BASE' ? 'Caja actual' : 'Caja final'}
           value={fmtCurrency(summary.finalCash)}
           icon={<Wallet className="w-4 h-4" strokeWidth={1.5} />}
           color={toneByFloor(summary.finalCash, summary.minimumCashRequired)}
-          sublabel={`12 meses · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
+          sublabel={activeScenario.kind === 'BASE'
+            ? 'Al corte de hoy · sólo histórico'
+            : `12 meses · mínimo ${fmtCompact(summary.minimumCashRequired)}`}
           onClick={() => goTo({ tab: 'financialPlanning', focus: 'caja-final' })}
           navHint="Abrir Planeación"
         />

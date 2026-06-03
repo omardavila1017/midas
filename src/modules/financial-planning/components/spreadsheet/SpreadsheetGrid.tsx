@@ -37,6 +37,12 @@ export interface SpreadsheetGridProps {
   onClickRow?: (conceptKey: string) => void;
   onInspectCell?: (conceptKey: string, bucketKey: string) => void;
   onReadOnlyAttempt?: () => void;
+  /**
+   * Etiqueta de la fila footer de caja. Default 'Caja final'. En vistas sólo
+   * históricas (Escenario Base, sin futuro) pasar 'Caja actual': la última
+   * columna es el período en curso, no un cierre futuro.
+   */
+  closingCashLabel?: string;
 }
 
 interface CellCoord {
@@ -94,6 +100,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     onClickRow,
     onInspectCell,
     onReadOnlyAttempt,
+    closingCashLabel = 'Caja final',
   } = props;
 
   const inflowRows = useMemo(() => rows.filter((row) => row.type === 'INFLOW'), [rows]);
@@ -783,7 +790,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
       {/* Footer */}
       {renderFooterRow('Neto', 'net', 'neutral')}
-      {renderFooterRow('Caja final', 'closingCash', 'highlight')}
+      {renderFooterRow(closingCashLabel, 'closingCash', 'highlight')}
 
       {isReadOnly && (
         <div className="pointer-events-none sticky top-2 z-40 flex justify-end px-3">

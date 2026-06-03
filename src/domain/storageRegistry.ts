@@ -59,13 +59,11 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas.activeScenarioId', scope: 'localStorage', owner: 'modules/shared-finance/components/ScenarioSelectionContext.tsx', description: 'Escenario activo seleccionado en el shell.' },
   { key: 'midas.firstSimulationNudge.dismissed.v1', scope: 'localStorage', owner: 'modules/financial-planning/components/FirstSimulationNudge.tsx', description: 'Flag: nudge de primera simulación descartado.' },
   { key: 'midas.troughBannerDismissed.v1', scope: 'localStorage', owner: 'modules/financial-planning', description: 'Flag: banner de alerta de valle de caja descartado.' },
-  { key: 'midas.planning.trendTopOff', scope: 'localStorage', owner: 'modules/financial-planning/pages/FinancialPlanningDashboard.tsx', description: 'Flag: toggle "Tendencia" (top-off del mejor modelo) en Planeación, escenarios no-base.' },
 
   // ── Financial projection ────────────────────────────────────────────────
   { key: 'midas.financialProjection.cache.index.v1', scope: 'localStorage', owner: 'modules/financial-projection/services/financialProjectionPersistentCache.ts', description: 'Índice del cache persistente de proyección.' },
   { key: 'midas.financialProjection.taxAdjustments.v1', scope: 'localStorage', owner: 'modules/financial-projection/services/taxPlanningService.ts', description: 'Ajustes de impuestos de proyección (legacy de IVA — ver midas.taxes.v1).' },
   { key: 'midas.dashboard.projectionOverrides.v1', scope: 'localStorage', owner: 'modules/shared-finance/calculation-engine/canonicalProjection.ts', description: 'Overrides de proyección del Dashboard.' },
-  { key: 'midas.projection.trendTopOff', scope: 'localStorage', owner: 'modules/financial-projection/pages/FinancialProjectionDashboard.tsx', description: 'Flag: toggle "Proyectar tendencia histórica" (top-off Holt-Winters) activo.' },
 
   // ── KPIs y Objetivos ────────────────────────────────────────────────────
   { key: 'midas.kpisObjectives.customKpis.v1', scope: 'localStorage', owner: 'modules/kpis-objectives/services/customKpisStorage.ts', description: 'CustomKpi[] — KPIs definidos por el usuario con valor manual.' },
