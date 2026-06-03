@@ -31,6 +31,7 @@ jobs:
           VITE_PAOLO_PASSWORD: ${{ secrets.QA_VITE_PAOLO_PASSWORD }}
           VITE_USER_ROLES: ${{ secrets.QA_VITE_USER_ROLES }}
           VITE_DEFAULT_ROLE: ${{ secrets.QA_VITE_DEFAULT_ROLE }}
+          VITE_CURRENT_USER_EMAIL: ${{ secrets.QA_VITE_CURRENT_USER_EMAIL }}
 
       - name: Copiar a IIS - QA
         run: |
