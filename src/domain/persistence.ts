@@ -118,6 +118,12 @@ export interface CXPRecord {
   mas180: number;
 }
 
+export interface AuxiliarIvaLoadedCiaMeta {
+  version: string;
+  loadedThrough: string;
+  refreshedAt: string;
+}
+
 export interface MidasStore {
   providers: Provider[];
   clients: Client[];
@@ -223,6 +229,11 @@ export interface MidasStore {
    * patrón que `comprasLoadedCias` — UNA compañía por request.
    */
   auxiliarContableLoadedCias: Record<string, string>;
+  /**
+   * Cursor por cía del ledger de IVA. Versionado porque el cache diario depende
+   * del set de objetos contables incluidos; v1 podía quedar incompleto.
+   */
+  auxiliarIvaLoadedCias: Record<string, AuxiliarIvaLoadedCiaMeta>;
   cashFlowOverrides: CashFlowOverrides;
   lastSaved: string;
 }
@@ -297,6 +308,7 @@ export function getDefaultStore(): MidasStore {
     auxiliarContableRecords: [],
     auxiliarIvaRecords: [],
     auxiliarContableLoadedCias: {},
+    auxiliarIvaLoadedCias: {},
     cashFlowOverrides: {},
     lastSaved: isoNow(),
   };
@@ -494,6 +506,24 @@ function normalizeStore(raw: unknown): MidasStore {
       if (typeof val === 'string') auxiliarContableLoadedCias[k] = val;
     }
   }
+  const auxiliarIvaLoadedCias: Record<string, AuxiliarIvaLoadedCiaMeta> = {};
+  if (o.auxiliarIvaLoadedCias && typeof o.auxiliarIvaLoadedCias === 'object') {
+    for (const [k, val] of Object.entries(o.auxiliarIvaLoadedCias as Record<string, unknown>)) {
+      if (!val || typeof val !== 'object') continue;
+      const meta = val as Record<string, unknown>;
+      if (
+        typeof meta.version === 'string' &&
+        typeof meta.loadedThrough === 'string' &&
+        typeof meta.refreshedAt === 'string'
+      ) {
+        auxiliarIvaLoadedCias[k] = {
+          version: meta.version,
+          loadedThrough: meta.loadedThrough,
+          refreshedAt: meta.refreshedAt,
+        };
+      }
+    }
+  }
 
   return {
     providers,
@@ -520,6 +550,7 @@ function normalizeStore(raw: unknown): MidasStore {
     auxiliarContableRecords,
     auxiliarIvaRecords,
     auxiliarContableLoadedCias,
+    auxiliarIvaLoadedCias,
     cashFlowOverrides: normalizeOverrides(o.cashFlowOverrides),
     assumptions: normalizeAssumptions(o.assumptions, base.assumptions),
     lastSaved: typeof o.lastSaved === 'string' ? o.lastSaved : base.lastSaved,

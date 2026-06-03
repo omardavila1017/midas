@@ -501,11 +501,30 @@ export function buildTaxDashboardView(params: {
     endDate,
   });
   const hasIvaLedger = ivaLedgerByPeriod.size > 0;
+  let ledgerCreditable = 0;
+  let ledgerCaused = 0;
+  if (hasIvaLedger) {
+    for (const detail of ivaLedgerByPeriod.values()) {
+      ledgerCreditable += detail.creditable;
+      ledgerCaused += detail.caused;
+    }
+    if (ledgerCreditable > 0 && ledgerCaused === 0) {
+      console.warn('[taxes] IVA ledger trae acreditable pero cero causado; usando fallback de cobranza real para IVA causado. Revisar discovery/cache de AuxiliarContable IVA y window.__midas__.ivaLedger.');
+    }
+  }
+  const hasLedgerCreditable = ledgerCreditable > 0;
+  const hasLedgerCaused = ledgerCaused > 0;
 
   if (includeRealIva) {
     if (hasIvaLedger) {
-      accumulateIvaFromLedger({ ledgerByPeriod: ivaLedgerByPeriod, ensure: ensureReal });
-    } else {
+      accumulateIvaFromLedger({
+        ledgerByPeriod: ivaLedgerByPeriod,
+        ensure: ensureReal,
+        includeCreditable: hasLedgerCreditable,
+        includeCaused: hasLedgerCaused,
+      });
+    }
+    if (!hasLedgerCaused) {
       accumulateCobranzaPaymentIva({
         payments: params.cobranzaPayments ?? [],
         companyCode: params.companyCode,
@@ -568,9 +587,10 @@ export function buildTaxDashboardView(params: {
     mergeCxpPaymentCoverage(auxiliarCoverage, auxiliarPagoCoverage),
   );
 
-  // Estimadores REAL de IVA acreditable — SOLO cuando NO hay libro mayor de IVA.
-  // Con ledger, el acreditable es autoritativo y estos doble-contarían.
-  if (includeRealIva && !hasIvaLedger) {
+  // Estimadores REAL de IVA acreditable — SOLO cuando el ledger no trae ese lado.
+  // Con ledger acreditable, estos doble-contarían. El causado tiene su propio
+  // fallback de cobranza arriba si el ledger no trae cuentas causadas.
+  if (includeRealIva && !hasLedgerCreditable) {
     accumulateCxpIva({
       cxpRecords: params.cxpRecords ?? [],
       cxpPaymentCoverage,
@@ -606,6 +626,8 @@ export function buildTaxDashboardView(params: {
       endDate,
       rateContext,
       ensure: ensureReal,
+      includeCreditable: !hasLedgerCreditable,
+      includeCaused: !hasLedgerCaused,
     });
   }
 
@@ -1948,6 +1970,8 @@ function accumulateDirectionalAuxiliarIvaEstimate({
   endDate,
   rateContext,
   ensure,
+  includeCreditable = true,
+  includeCaused = true,
 }: {
   auxiliarReconciliation?: AuxiliarReconResult;
   cxpRecords: CXPRecord[];
@@ -1958,6 +1982,8 @@ function accumulateDirectionalAuxiliarIvaEstimate({
   endDate: string;
   rateContext: TaxRateContext;
   ensure: (period: string) => TaxPeriodAccumulator;
+  includeCreditable?: boolean;
+  includeCaused?: boolean;
 }): void {
   if (!auxiliarReconciliation) return;
 
@@ -1993,6 +2019,8 @@ function accumulateDirectionalAuxiliarIvaEstimate({
 
     const amount = positiveNumber(Math.abs(line.bankAmount ?? line.importe));
     if (amount <= 0) continue;
+    if (line.flujo === 'ingreso' && !includeCaused) continue;
+    if (line.flujo === 'egreso' && !includeCreditable) continue;
 
     if (line.source.kind === 'pago') continue;
     if (line.source.kind === 'factura') {
@@ -2158,9 +2186,13 @@ function addIvaCreditable(acc: TaxPeriodAccumulator, line: TaxSourceLine, rate: 
 function accumulateIvaFromLedger({
   ledgerByPeriod,
   ensure,
+  includeCreditable = true,
+  includeCaused = true,
 }: {
   ledgerByPeriod: Map<string, IvaLedgerPeriod>;
   ensure: (period: string) => TaxPeriodAccumulator;
+  includeCreditable?: boolean;
+  includeCaused?: boolean;
 }): void {
   const emitSide = (
     row: TaxPeriodAccumulator,
@@ -2203,8 +2235,8 @@ function accumulateIvaFromLedger({
 
   for (const [period, detail] of ledgerByPeriod) {
     const row = ensure(period);
-    emitSide(row, period, detail.causedLines, 'caused');
-    emitSide(row, period, detail.creditableLines, 'creditable');
+    if (includeCaused) emitSide(row, period, detail.causedLines, 'caused');
+    if (includeCreditable) emitSide(row, period, detail.creditableLines, 'creditable');
   }
 }
 

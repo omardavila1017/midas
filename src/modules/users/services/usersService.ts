@@ -50,6 +50,10 @@ export interface UserRow {
   tabLabels: string[];
 }
 
+export function canManagePasswordReset(role: Role): boolean {
+  return role === 'admin' || role === 'mesa_ayuda';
+}
+
 function tabsForRole(role: Role): AppTabId[] {
   const def = ROLES[role];
   if (def.allowedTabs === '*') return [...ALL_TABS];

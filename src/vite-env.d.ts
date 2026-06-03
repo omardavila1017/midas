@@ -21,14 +21,11 @@ interface ImportMetaEnv {
   readonly VITE_CITI_UPSTREAM?: string;
   readonly VITE_OPENAI_BASE_URL?: string;
   readonly VITE_OPENAI_MODEL?: string;
-  readonly VITE_ENABLE_LOCAL_AUTH_GATE?: string;
   // RBAC — mapeo correo:rol (CSV) + rol por defecto. Ver src/config/userRoles.ts.
   readonly VITE_USER_ROLES?: string;
   readonly VITE_DEFAULT_ROLE?: string;
   // DEV ONLY: identidad mock mientras Atlas SSO no expone el email al frontend.
   readonly VITE_CURRENT_USER_EMAIL?: string;
-  // Contraseña de acceso compartida (UX, no seguridad). Default "12345" si no se define.
-  readonly VITE_APP_PASSWORD?: string;
 }
 
 interface ImportMeta {

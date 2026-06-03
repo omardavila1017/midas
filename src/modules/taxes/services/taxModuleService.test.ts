@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
@@ -151,6 +151,46 @@ describe('taxModuleService', () => {
     expect(may.realIva.payable).toBeCloseTo(1600);
     expect(may.realIva.expenseLines[0].concept).toContain('libro mayor');
     expect(may.realIva.incomeLines[0].concept).toContain('libro mayor');
+  });
+
+  it('falls back to real cobranza caused IVA when the ledger has creditable but no caused side', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const view = buildTaxDashboardView({
+        cobranzaPayments: [
+          cobranzaPayment({
+            idPago: 'PAY-IVA-CAUSED',
+            fechaCobro: '2026-05-12',
+            importeRecibo: 1160,
+            applications: [{
+              noFactura: 'C-IVA',
+              importeCobrado: 1160,
+              importeOriginalFactura: 1160,
+              importeIvaFacturaOriginal: 160,
+              tasaIva: '16',
+            }],
+          }),
+        ],
+        auxiliarIvaRecords: [
+          auxIvaRecord({ nombreCuenta: 'IVA ACREDITABLE PAGADO', cuentaObjeto: '1180', importe: 1600, fechaContable: '2026-05-10' }),
+        ],
+        companyCode: 'all',
+        startDate: '2026-05-01',
+        endDate: '2026-05-31',
+        store: defaultTaxStore(),
+        today: '2026-05-01',
+        ivaMode: 'REAL',
+      });
+
+      const may = view.periods.find((period) => period.period === '2026-05')!;
+      expect(may.realIva.ivaCreditable).toBeCloseTo(1600);
+      expect(may.realIva.ivaCaused).toBeCloseTo(160);
+      expect(may.realIva.expenseLines).toHaveLength(1);
+      expect(may.realIva.incomeLines[0].concept).toContain('Cobro PAY-IVA-CAUSED');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('usando fallback de cobranza real'));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('falls back to estimators when there is no IVA ledger coverage', () => {

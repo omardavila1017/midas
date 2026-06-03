@@ -62,6 +62,14 @@ test('modules: click through every section + subtab without crashing', async ({ 
   test.setTimeout(360_000);
   const errors = attachErrorListeners(page);
 
+  await page.route(/\/api\/auth\/session$/, route =>
+    route.fulfill({
+      status: 200,
+      body: JSON.stringify({ authenticated: true, email: 'admin@senda.com', role: 'admin' }),
+      contentType: 'application/json',
+    }),
+  );
+
   // Stub upstream APIs con 200 + payload vacío para que los boot tasks
   // converjan rápido sin disparar el pause-on-failure del splash.
   // /companies devuelve un array vacío de cías — boot sigue, no hay fetches

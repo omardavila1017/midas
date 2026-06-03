@@ -17,9 +17,8 @@ export default defineConfig({
     launchOptions: { args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] },
   },
   webServer: {
-    command: 'python3 -m http.server 5173',
-    cwd: './dist',
-    url: 'http://localhost:5173/',
+    command: 'npx vite preview --host 127.0.0.1 --port 5173',
+    url: 'http://127.0.0.1:5173/midas/',
     timeout: 15_000,
     reuseExistingServer: true,
     stdout: 'ignore',

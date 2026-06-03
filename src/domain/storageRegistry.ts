@@ -87,7 +87,8 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'flujo-senda::minimum-expense-overrides', scope: 'localStorage', owner: 'domain/minimumOperatingExpense.ts', description: 'Overrides del gasto operativo mínimo.' },
 
   // ── UI / misc ───────────────────────────────────────────────────────────
-  { key: 'midas.auth.session.v1', scope: 'localStorage', owner: 'contexts/authSession.ts', description: 'Sesión de identidad del login UX (correo + signedInAt + remember). En localStorage si "Recordar este equipo" está marcado (auto-entra); en sessionStorage si no. NO es credencial; solo resuelve el rol de UI. La auth vinculante la hace Atlas/backend.' },
+  { key: 'midas.auth.lastEmail.v1', scope: 'localStorage', owner: 'contexts/authSession.ts', description: 'Último correo usado para prellenar el login. No es sesión, token ni credencial.' },
+  { key: 'midas.auth.session.v1', scope: 'localStorage', owner: 'contexts/authSession.ts', description: 'Sesión UX legacy previa a /api/auth; se purga en logout/reset.', legacy: true },
   { key: 'midas.theme', scope: 'localStorage', owner: 'components/ui/DarkModeToggle.tsx', description: 'Tema claro/oscuro.' },
   { key: 'midas.activityFeed', scope: 'localStorage', owner: 'components/ActivityFeed.tsx', description: 'Feed de actividad de la sesión.' },
   { key: 'midas.midasAi.conversations.v1', scope: 'localStorage', owner: 'modules/midas-ai/services/midasStorage.ts', description: 'Conversaciones del bot Midas AI.' },

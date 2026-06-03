@@ -1,66 +1,58 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  AUTH_SESSION_KEY,
+  AUTH_LAST_EMAIL_KEY,
+  LEGACY_AUTH_SESSION_KEY,
   clearAuthSession,
-  needsLogin,
-  readAuthSession,
-  resolveSessionEmail,
-  writeAuthSession,
+  getCurrentAuthSession,
+  getPrefillEmail,
+  rememberLastEmail,
+  setCurrentAuthSession,
 } from './authSession';
 
 describe('authSession', () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
+    clearAuthSession();
   });
   afterEach(() => {
     localStorage.clear();
     sessionStorage.clear();
-  });
-
-  it('pide login cuando no hay sesión guardada', () => {
-    expect(needsLogin()).toBe(true);
-    expect(resolveSessionEmail()).toBeNull();
-  });
-
-  it('con "Recordar este equipo" persiste en localStorage y auto-entra', () => {
-    writeAuthSession('Ana@Senda.com', true);
-
-    // Recordada → vive en localStorage (sobrevive cerrar el navegador).
-    expect(localStorage.getItem(AUTH_SESSION_KEY)).not.toBeNull();
-    expect(sessionStorage.getItem(AUTH_SESSION_KEY)).toBeNull();
-
-    expect(needsLogin()).toBe(false);
-    expect(resolveSessionEmail()).toBe('ana@senda.com'); // normalizado
-    expect(readAuthSession()?.remember).toBe(true);
-  });
-
-  it('sin recordar vive solo en sessionStorage (no auto-entra tras cerrar navegador)', () => {
-    writeAuthSession('beto@senda.com', false);
-
-    expect(sessionStorage.getItem(AUTH_SESSION_KEY)).not.toBeNull();
-    expect(localStorage.getItem(AUTH_SESSION_KEY)).toBeNull();
-
-    // Dentro de la misma sesión sí entra...
-    expect(needsLogin()).toBe(false);
-
-    // ...pero al cerrar el navegador (sessionStorage se vacía) vuelve a login.
-    sessionStorage.clear();
-    expect(needsLogin()).toBe(true);
-  });
-
-  it('cambiar de "recordar" a "no recordar" no deja rastro en el otro almacén', () => {
-    writeAuthSession('ana@senda.com', true);
-    writeAuthSession('ana@senda.com', false);
-    expect(localStorage.getItem(AUTH_SESSION_KEY)).toBeNull();
-    expect(sessionStorage.getItem(AUTH_SESSION_KEY)).not.toBeNull();
-  });
-
-  it('clearAuthSession (logout) borra ambos almacenes y vuelve a pedir login', () => {
-    writeAuthSession('ana@senda.com', true);
     clearAuthSession();
-    expect(localStorage.getItem(AUTH_SESSION_KEY)).toBeNull();
-    expect(sessionStorage.getItem(AUTH_SESSION_KEY)).toBeNull();
-    expect(needsLogin()).toBe(true);
+  });
+
+  it('solo persiste el último correo para prellenar el login', () => {
+    rememberLastEmail('Ana@Senda.com');
+
+    expect(localStorage.getItem(AUTH_LAST_EMAIL_KEY)).toBe('ana@senda.com');
+    expect(sessionStorage.length).toBe(0);
+    expect(getPrefillEmail()).toBe('ana@senda.com');
+  });
+
+  it('mantiene la sesión real solo en memoria', () => {
+    setCurrentAuthSession({
+      email: 'Admin@Senda.com',
+      role: 'admin',
+      expiresAt: '2026-06-03T18:00:00.000Z',
+    });
+
+    expect(getCurrentAuthSession()).toEqual({
+      email: 'admin@senda.com',
+      role: 'admin',
+      expiresAt: '2026-06-03T18:00:00.000Z',
+    });
+    expect(localStorage.getItem(AUTH_LAST_EMAIL_KEY)).toBe('admin@senda.com');
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it('clearAuthSession limpia la sesión en memoria y una key legacy si existía', () => {
+    localStorage.setItem(LEGACY_AUTH_SESSION_KEY, JSON.stringify({ email: 'legacy@senda.com' }));
+    setCurrentAuthSession({ email: 'ana@senda.com', role: 'admin' });
+
+    clearAuthSession();
+
+    expect(getCurrentAuthSession()).toBeNull();
+    expect(localStorage.getItem(LEGACY_AUTH_SESSION_KEY)).toBeNull();
+    expect(localStorage.getItem(AUTH_LAST_EMAIL_KEY)).toBe('ana@senda.com');
   });
 });

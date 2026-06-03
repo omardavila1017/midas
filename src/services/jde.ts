@@ -30,7 +30,7 @@ import { canonicalBankAccountNumber } from '../domain/bankStatements';
 import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
 import { isAuxiliarAllowlistedCia, AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
-import { discoverIvaObjetos } from '../domain/ivaLedger';
+import { discoverIvaObjetosByKind } from '../domain/ivaLedger';
 import { isNonOperatingDay } from '../domain/bankHolidays';
 
 /**
@@ -77,6 +77,9 @@ import type {
 // ───────────────────────────────────────────────────────────────
 
 type RawRecord = Record<string, unknown>;
+type AuxObjetoRange = { ini: string; fin: string };
+
+export const AUX_IVA_LEDGER_VERSION = 'iva-ledger-v3';
 
 const LONG_RUNNING_TIMEOUT_MS = 240_000;
 const LONG_RUNNING_RETRIES = 1;
@@ -1935,6 +1938,66 @@ export async function fetchAuxiliarContableRange(
   return merged;
 }
 
+function rangeKey(range: AuxObjetoRange): string {
+  return `${range.ini.trim()}-${range.fin.trim()}`;
+}
+
+function rangeSide(range: AuxObjetoRange): 'creditable' | 'caused' | 'other' {
+  const ini = Number.parseInt(range.ini, 10);
+  const fin = Number.parseInt(range.fin, 10);
+  if (!Number.isFinite(ini) || !Number.isFinite(fin)) return 'other';
+  if (fin < 2000) return 'creditable';
+  if (ini >= 2000 && fin < 3000) return 'caused';
+  return 'other';
+}
+
+function sortObjetoRanges(ranges: AuxObjetoRange[]): AuxObjetoRange[] {
+  return [...ranges].sort((a, b) =>
+    a.ini.localeCompare(b.ini) || a.fin.localeCompare(b.fin),
+  );
+}
+
+function uniqueObjetoRanges(ranges: AuxObjetoRange[]): AuxObjetoRange[] {
+  const out = new Map<string, AuxObjetoRange>();
+  for (const range of ranges) {
+    const clean = { ini: range.ini.trim(), fin: range.fin.trim() };
+    if (!clean.ini || !clean.fin) continue;
+    out.set(rangeKey(clean), clean);
+  }
+  return sortObjetoRanges(Array.from(out.values()));
+}
+
+function ivaCacheNamespace(ranges: readonly AuxObjetoRange[]): string {
+  const fingerprint = uniqueObjetoRanges([...ranges])
+    .map(rangeKey)
+    .join('_')
+    .replace(/[^A-Za-z0-9_-]+/g, '_');
+  return `auxiliarcontable-iva-${AUX_IVA_LEDGER_VERSION}:${fingerprint || 'none'}`;
+}
+
+function selectIvaFullObjetoRanges(
+  discoverySample: AuxiliarContableRecord[],
+  discoveryObjetos: readonly AuxObjetoRange[] = AUX_IVA_PARAMS.discoveryObjetos,
+): AuxObjetoRange[] {
+  const discovered = discoverIvaObjetosByKind(discoverySample);
+  const exact: AuxObjetoRange[] = [
+    ...Array.from(discovered.creditable).map((obj) => ({ ini: obj, fin: obj })),
+    ...Array.from(discovered.caused).map((obj) => ({ ini: obj, fin: obj })),
+    ...Array.from(discovered.withheld).map((obj) => ({ ini: obj, fin: obj })),
+  ];
+  const hasCreditable = discovered.creditable.size > 0;
+  const hasCaused = discovered.caused.size > 0;
+  const activeCandidates = discoveryObjetos.filter((range) => rangeSide(range) === 'creditable');
+  const passiveCandidates = discoveryObjetos.filter((range) => rangeSide(range) === 'caused');
+  const otherCandidates = discoveryObjetos.filter((range) => rangeSide(range) === 'other');
+
+  if (!hasCreditable) exact.push(...activeCandidates);
+  if (!hasCaused) exact.push(...passiveCandidates);
+  if (!hasCreditable && !hasCaused) exact.push(...otherCandidates);
+
+  return uniqueObjetoRanges(exact.length > 0 ? exact : [...discoveryObjetos]);
+}
+
 /**
  * Fetch de las cuentas de IVA del libro mayor para alimentar el cálculo fiscal
  * REAL (acreditable + causado) sin estimar. Descubrimiento en dos fases:
@@ -1945,8 +2008,8 @@ export async function fetchAuxiliarContableRange(
  *   Fase B (full): el rango histórico completo SOLO de esos objetos exactos
  *     (rango angosto → rápido, no revive el timeout del rango completo).
  *
- * Cache separado del de la conciliación: discovery → `auxiliarcontable-iva-discovery`,
- * full → `auxiliarcontable-iva`. NO toca `AUX_RECON_PARAMS` (objeto 1010-1020).
+ * Cache separado del de la conciliación: discovery/full usan namespaces v2
+ * parametrizados por objetos contables. NO toca `AUX_RECON_PARAMS` (1010-1020).
  *
  * Falla suave: si discovery no encuentra cuentas de IVA, usa los rangos
  * candidato directo para la fase B (el diagnóstico revelará si hay que ajustar
@@ -1965,6 +2028,7 @@ export async function fetchAuxiliarContableIvaRange(
 ): Promise<AuxiliarContableRecord[]> {
   const { config, onDay } = options;
   const discoveryFrom = options.discoveryFrom ?? `${to.slice(0, 7)}-01`;
+  const discoveryNamespace = ivaCacheNamespace(AUX_IVA_PARAMS.discoveryObjetos);
 
   // Fase A — discovery acotado a un mes sobre rangos candidato.
   const discoverySample = await fetchAuxiliarContableRange(
@@ -1972,13 +2036,11 @@ export async function fetchAuxiliarContableIvaRange(
     discoveryFrom,
     to,
     { tl: AUX_IVA_PARAMS.tl, nr: AUX_IVA_PARAMS.nr, objetos: AUX_IVA_PARAMS.discoveryObjetos },
-    { config, cacheNamespace: 'auxiliarcontable-iva-discovery' },
+    { config, cacheNamespace: `${discoveryNamespace}:discovery` },
   );
 
-  const discovered = discoverIvaObjetos(discoverySample);
-  const objetos = discovered.size > 0
-    ? Array.from(discovered).sort().map((obj) => ({ ini: obj, fin: obj }))
-    : AUX_IVA_PARAMS.discoveryObjetos;
+  const objetos = selectIvaFullObjetoRanges(discoverySample, AUX_IVA_PARAMS.discoveryObjetos);
+  const cacheNamespace = ivaCacheNamespace(objetos);
 
   // Fase B — rango completo solo de los objetos de IVA descubiertos.
   return fetchAuxiliarContableRange(
@@ -1986,7 +2048,7 @@ export async function fetchAuxiliarContableIvaRange(
     from,
     to,
     { tl: AUX_IVA_PARAMS.tl, nr: AUX_IVA_PARAMS.nr, objetos },
-    { config, onDay, cacheNamespace: 'auxiliarcontable-iva' },
+    { config, onDay, cacheNamespace },
   );
 }
 
@@ -2397,6 +2459,8 @@ export const __internal = {
   mapNominaRow,
   inferCashTreatment,
   normalizeBankAccountNumber,
+  selectIvaFullObjetoRanges,
+  ivaCacheNamespace,
 };
 
 // ───────────────────────────────────────────────────────────────

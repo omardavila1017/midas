@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearDailyCache, primeDailyCache } from './dailyApiCache';
 import {
   __internal,
+  type AuxiliarContableRecord,
   fetchBankStatements,
   fetchIndicadoresCobranza,
   fetchIndicadoresCobranzaRange,
@@ -9,8 +11,90 @@ import {
   normalizeInvoiceRef,
 } from './jde';
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllGlobals();
+  await primeDailyCache();
+  await clearDailyCache('banks.SWIFT');
+});
+
+function auxRecord(partial: Partial<AuxiliarContableRecord>): AuxiliarContableRecord {
+  return {
+    cia: '00011',
+    cuentaContable: '11.1180.0000',
+    idCuenta: 'id-1',
+    cuentaObjeto: '1180',
+    nombreCuenta: 'IVA ACREDITABLE',
+    cuentaBanco: '',
+    tipoDocto: 'PV',
+    noDocto: 1,
+    noFactura: '',
+    noOrdenCompra: '',
+    fechaContable: '2026-05-10',
+    tipoLibro: 'AA',
+    noBatch: 0,
+    tipoBatch: 'V',
+    estatusConciliado: '',
+    importe: 1600,
+    moneda: 'MXP',
+    tipoCambio: 1,
+    posteo: 'P',
+    reversa: '',
+    concepto: '',
+    explicacion: '',
+    nombre: '',
+    tipoPago: '',
+    noPago: '',
+    fechaPago: '',
+    documentoOriginal: '',
+    importeOriginal: 0,
+    ...partial,
+  };
+}
+
+describe('AuxiliarContable IVA discovery', () => {
+  const candidates = [
+    { ini: '1000', fin: '1999' },
+    { ini: '2000', fin: '2999' },
+  ];
+
+  it('incluye el rango pasivo cuando discovery encuentra solo acreditable', () => {
+    const objetos = __internal.selectIvaFullObjetoRanges([
+      auxRecord({ cuentaObjeto: '1180', nombreCuenta: 'IVA ACREDITABLE' }),
+    ], candidates);
+
+    expect(objetos).toEqual([
+      { ini: '1180', fin: '1180' },
+      { ini: '2000', fin: '2999' },
+    ]);
+  });
+
+  it('incluye el rango activo cuando discovery encuentra solo causado', () => {
+    const objetos = __internal.selectIvaFullObjetoRanges([
+      auxRecord({ cuentaObjeto: '2360', nombreCuenta: 'IVA POR ENTERAR' }),
+    ], candidates);
+
+    expect(objetos).toEqual([
+      { ini: '1000', fin: '1999' },
+      { ini: '2360', fin: '2360' },
+    ]);
+  });
+
+  it('usa objetos exactos cuando discovery encuentra acreditable y causado', () => {
+    const objetos = __internal.selectIvaFullObjetoRanges([
+      auxRecord({ cuentaObjeto: '1180', nombreCuenta: 'IVA ACREDITABLE' }),
+      auxRecord({ cuentaObjeto: '2160', nombreCuenta: 'IVA TRASLADADO' }),
+    ], candidates);
+
+    expect(objetos).toEqual([
+      { ini: '1180', fin: '1180' },
+      { ini: '2160', fin: '2160' },
+    ]);
+  });
+
+  it('genera namespaces distintos para sets de objetos distintos', () => {
+    expect(__internal.ivaCacheNamespace([{ ini: '1180', fin: '1180' }]))
+      .not.toBe(__internal.ivaCacheNamespace([{ ini: '1180', fin: '1180' }, { ini: '2000', fin: '2999' }]));
+  });
 });
 
 describe('normalizeCobranzaPayments', () => {

@@ -1,24 +1,34 @@
 /**
  * Tabla de usuarios: correo, rol y módulos visibles.
  *
- * Read-only por defecto. Cuando `canEdit` es `true` (solo `admin`), el rol se
- * vuelve un `<select>` editable. La edición es SOLO de sesión — el mapeo
- * durable vive en `.env` (`VITE_USER_ROLES`); ver aviso en `UsersDashboard`.
+ * Read-only por defecto. Admin puede previsualizar cambios de rol en sesión;
+ * admin y mesa de ayuda pueden enviar una liga de restablecimiento.
  */
 
-import { ShieldCheck } from 'lucide-react';
+import { Mail, ShieldCheck } from 'lucide-react';
 import { ROLES, ROLE_IDS, type Role } from '../../../config/roles';
 import type { UserRow } from '../services/usersService';
 
 interface UsersTableProps {
   rows: UserRow[];
   canEdit: boolean;
+  canSendReset: boolean;
+  resettingEmail: string | null;
   /** Correo del usuario actual, para destacar su propia fila. */
   currentEmail: string | null;
   onRoleChange?: (email: string, role: Role) => void;
+  onSendReset?: (email: string) => void;
 }
 
-export default function UsersTable({ rows, canEdit, currentEmail, onRoleChange }: UsersTableProps) {
+export default function UsersTable({
+  rows,
+  canEdit,
+  canSendReset,
+  resettingEmail,
+  currentEmail,
+  onRoleChange,
+  onSendReset,
+}: UsersTableProps) {
   if (rows.length === 0) {
     return (
       <div
@@ -42,6 +52,7 @@ export default function UsersTable({ rows, canEdit, currentEmail, onRoleChange }
             <th className="px-4 py-3 font-medium">Correo</th>
             <th className="px-4 py-3 font-medium">Rol</th>
             <th className="px-4 py-3 font-medium">Módulos visibles</th>
+            {canSendReset && <th className="px-4 py-3 text-right font-medium">Contraseña</th>}
           </tr>
         </thead>
         <tbody>
@@ -118,6 +129,23 @@ export default function UsersTable({ rows, canEdit, currentEmail, onRoleChange }
                     </div>
                   )}
                 </td>
+                {canSendReset && (
+                  <td className="px-4 py-3 align-top">
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => onSendReset?.(row.email)}
+                        disabled={!onSendReset || resettingEmail !== null}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)] disabled:cursor-not-allowed disabled:opacity-60"
+                        style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
+                        aria-label={`Enviar reset de contraseña a ${row.email}`}
+                      >
+                        <Mail className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+                        {resettingEmail === row.email ? 'Enviando...' : 'Enviar reset'}
+                      </button>
+                    </div>
+                  </td>
+                )}
               </tr>
             );
           })}

@@ -51,8 +51,13 @@ describe('classifyIvaAccount', () => {
   });
   it('clasifica causado/trasladado', () => {
     expect(classifyIvaAccount('IVA TRASLADADO')).toBe('caused');
+    expect(classifyIvaAccount('I.V.A. TRASLADADO')).toBe('caused');
+    expect(classifyIvaAccount('IVA TRASLADADO COBRADO')).toBe('caused');
     expect(classifyIvaAccount('IVA causado por pagar')).toBe('caused');
     expect(classifyIvaAccount('IVA cobrado')).toBe('caused');
+    expect(classifyIvaAccount('IVA por enterar')).toBe('caused');
+    expect(classifyIvaAccount('IVA devengado')).toBe('caused');
+    expect(classifyIvaAccount('Impuesto al Valor Agregado trasladado')).toBe('caused');
   });
   it('clasifica retenido aparte', () => {
     expect(classifyIvaAccount('IVA RETENIDO')).toBe('withheld');
@@ -99,9 +104,11 @@ describe('buildIvaLedgerByPeriod', () => {
 
   it('toma la magnitud del neto (signo agnóstico)', () => {
     const byPeriod = buildIvaLedgerByPeriod([
+      rec({ cuentaObjeto: '1180', nombreCuenta: 'IVA ACREDITABLE', importe: -1600, fechaContable: '2026-03-10' }),
       rec({ cuentaObjeto: '2160', nombreCuenta: 'IVA TRASLADADO', importe: -3200, fechaContable: '2026-03-15' }),
       rec({ cuentaObjeto: '2160', nombreCuenta: 'IVA TRASLADADO', importe: -800, fechaContable: '2026-03-16' }),
     ]);
+    expect(byPeriod.get('2026-03')?.creditable).toBe(1600);
     expect(byPeriod.get('2026-03')?.caused).toBe(4000);
   });
 

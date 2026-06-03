@@ -2,7 +2,7 @@ import { startTransition, useState, useEffect, useRef, useCallback, useMemo, use
 import { TabId, CashFlowOverrides } from './types';
 import { todayISO } from './formatters';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
-import { MidasStore, loadLightStore, saveLightStore, CXPRecord } from './domain/persistence';
+import { MidasStore, loadLightStore, saveLightStore, CXPRecord, type AuxiliarIvaLoadedCiaMeta } from './domain/persistence';
 import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
@@ -39,6 +39,7 @@ import {
   fetchViajesEspecialesRange,
   fetchAuxiliarContableRange,
   fetchAuxiliarContableIvaRange,
+  AUX_IVA_LEDGER_VERSION,
   type Company,
   type AuxiliarContableRecord,
   type BankAccountStatement,
@@ -51,7 +52,12 @@ import {
   type ViajeEspecialRecord,
 } from './services/jde';
 import { AUX_RECON_PARAMS, isAuxiliarAllowlistedCia } from './domain/auxiliarReconciliationConfig';
-import { summarizeIvaAccounts, buildIvaLedgerByPeriod } from './domain/ivaLedger';
+import {
+  summarizeIvaAccounts,
+  buildIvaLedgerByPeriod,
+  groupIvaAccountsByKind,
+  missingIvaKindsByCia,
+} from './domain/ivaLedger';
 import {
   reconcileAuxiliar,
   emptyAuxiliarReconResult,
@@ -81,6 +87,7 @@ const KpisObjectivesDashboard = lazy(() => import('./modules/kpis-objectives/pag
 const UsersDashboard = lazy(() => import('./modules/users/pages/UsersDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
+import ChangePasswordModal from './components/ChangePasswordModal';
 import DarkModeToggle from './components/ui/DarkModeToggle';
 import { ActivityFeedPanel } from './components/ActivityFeed';
 import { useCommandPalette } from './components/CommandPalette';
@@ -98,7 +105,7 @@ import {
   HandCoins, ChevronRight, BookUser, TrendingUp,
   Receipt, Wallet, FolderOpen,
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
-  Snowflake, AlertTriangle, Target,
+  Snowflake, AlertTriangle, Target, KeyRound,
   type LucideIcon,
 } from 'lucide-react';
 import { clearAllMidasStorage } from './domain/storageRegistry';
@@ -685,7 +692,8 @@ export default function App() {
   const toast = useToast();
   // RBAC: identidad + permisos del usuario actual. `can(tab)` decide qué
   // módulos se muestran. Ver src/contexts/AuthContext.tsx y src/config/roles.ts.
-  const { can: canAccessTab, role: userRole } = useAuth();
+  const { can: canAccessTab, role: userRole, email: userEmail } = useAuth();
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   useEffect(() => {
     const notice = consumePurgeNotice();
     if (notice) {
@@ -763,7 +771,7 @@ export default function App() {
   // descubrimiento por nombre de cuenta (ver fetchAuxiliarContableIvaRange).
   // Fuente del IVA REAL autoritativo del módulo de Impuestos.
   const [auxiliarIvaRecords, setAuxiliarIvaRecords] = useState<AuxiliarContableRecord[]>([]);
-  const [auxiliarIvaLoadedCias, setAuxiliarIvaLoadedCias] = useState<Record<string, string>>({});
+  const [auxiliarIvaLoadedCias, setAuxiliarIvaLoadedCias] = useState<Record<string, AuxiliarIvaLoadedCiaMeta>>({});
   // Status del auto/manual fetch de cobranza — se muestra en la pestaña
   // Cobranza para que el usuario sepa qué pasó si la lista llega vacía.
   // Antes los errores eran silenciados y resultaba imposible diagnosticar
@@ -1600,6 +1608,7 @@ export default function App() {
           if (stored.nominaLoadedKeys) safeSet(setNominaLoadedKeys, stored.nominaLoadedKeys, 'nominaLoadedKeys');
           if (stored.rolLoadedKeys) safeSet(setRolLoadedKeys, stored.rolLoadedKeys, 'rolLoadedKeys');
           if (stored.auxiliarContableLoadedCias) safeSet(setAuxiliarContableLoadedCias, stored.auxiliarContableLoadedCias, 'auxiliarContableLoadedCias');
+          if (stored.auxiliarIvaLoadedCias) safeSet(setAuxiliarIvaLoadedCias, stored.auxiliarIvaLoadedCias, 'auxiliarIvaLoadedCias');
           if (stored.cashFlowOverrides) safeSet(setCashFlowOverrides, stored.cashFlowOverrides, 'cashFlowOverrides');
           safeSet(setAssumptions, stored.assumptions, 'assumptions');
           // eslint-disable-next-line no-console
@@ -2179,7 +2188,7 @@ export default function App() {
       rolRecords, rolLoadedKeys,
       viajesEspecialesRecords, viajesEspecialesLoadedKeys,
       auxiliarContableRecords, auxiliarContableLoadedCias,
-      auxiliarIvaRecords,
+      auxiliarIvaRecords, auxiliarIvaLoadedCias,
       cashFlowOverrides,
       lastSaved: new Date().toISOString(),
     };
@@ -2203,7 +2212,7 @@ export default function App() {
     cxpLoadedCias, cobranzaLoadedCias, cobranzaPaymentsLoadedCias,
     comprasLoadedCias, pagoProveedorLoadedCias,
     companies, companiesLoadedAt, nominaLoadedKeys, rolLoadedKeys,
-    auxiliarContableLoadedCias, cashFlowOverrides,
+    auxiliarContableLoadedCias, auxiliarIvaLoadedCias, cashFlowOverrides,
   ]);
 
   // Per-heavy saves: cada uno solo dispara cuando su key cambia. saveHeavyRecords
@@ -2928,29 +2937,15 @@ export default function App() {
       auxiliarIvaAutoFetchDone.current = true;
       return;
     }
-    const hasHydrated = auxiliarIvaRecords.length > 0;
     const now = new Date();
     const expectedFloorDate = `${now.getUTCFullYear()}-01-01`;
     const expectedTopDate = now.toISOString().slice(0, 10);
-    const minDateByCia = new Map<string, string>();
-    const maxDateByCia = new Map<string, string>();
-    for (const r of auxiliarIvaRecords) {
-      const minP = minDateByCia.get(r.cia);
-      if (!minP || r.fechaContable < minP) minDateByCia.set(r.cia, r.fechaContable);
-      const maxP = maxDateByCia.get(r.cia);
-      if (!maxP || r.fechaContable > maxP) maxDateByCia.set(r.cia, r.fechaContable);
-    }
-    const ciasToFetch = hasHydrated
-      ? activeCias.filter(cia => {
-          if (!isFreshTimestamp(auxiliarIvaLoadedCias[cia], COMPRAS_AUTO_REFRESH_TTL_MS)) return true;
-          const minDate = minDateByCia.get(cia);
-          const maxDate = maxDateByCia.get(cia);
-          if (!minDate || !maxDate) return true;
-          if (minDate > expectedFloorDate) return true;
-          if (maxDate < expectedTopDate) return true;
-          return false;
-        })
-      : activeCias;
+    const ciasToFetch = activeCias.filter(cia => {
+      const meta = auxiliarIvaLoadedCias[cia];
+      if (!meta || meta.version !== AUX_IVA_LEDGER_VERSION) return true;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(meta.loadedThrough)) return true;
+      return meta.loadedThrough < expectedTopDate;
+    });
     if (ciasToFetch.length === 0) {
       auxiliarIvaAutoFetchDone.current = true;
       return;
@@ -2962,13 +2957,28 @@ export default function App() {
 
     const publishDiagnostic = (snapshot: AuxiliarContableRecord[]) => {
       try {
+        const accounts = summarizeIvaAccounts(snapshot);
+        const byPeriod = buildIvaLedgerByPeriod(snapshot);
+        const periodsWithCaused = Array.from(byPeriod.values())
+          .filter((period) => period.caused > 0)
+          .map((period) => period.period)
+          .sort();
+        const periodsWithCreditable = Array.from(byPeriod.values())
+          .filter((period) => period.creditable > 0)
+          .map((period) => period.period)
+          .sort();
         const w = window as unknown as { __midas__?: Record<string, unknown> };
         w.__midas__ = {
           ...(w.__midas__ ?? {}),
           ivaLedger: {
             recordCount: snapshot.length,
-            accounts: summarizeIvaAccounts(snapshot),
-            byPeriod: Object.fromEntries(buildIvaLedgerByPeriod(snapshot)),
+            version: AUX_IVA_LEDGER_VERSION,
+            accounts,
+            accountsByKind: groupIvaAccountsByKind(accounts),
+            missingKindsByCia: missingIvaKindsByCia(accounts),
+            periodsWithCaused,
+            periodsWithCreditable,
+            byPeriod: Object.fromEntries(byPeriod),
           },
         };
       } catch { /* diagnóstico best-effort */ }
@@ -2977,18 +2987,10 @@ export default function App() {
     (async () => {
       try {
         await primeDailyCache();
-        const maxStateByCia = new Map<string, string>();
-        for (const r of auxiliarIvaRecords) {
-          const prev = maxStateByCia.get(r.cia);
-          if (!prev || r.fechaContable > prev) maxStateByCia.set(r.cia, r.fechaContable);
-        }
         const perCiaFechaInicial = new Map<string, string>();
         for (const cia of ciasToFetch) {
-          const maxCached = getMaxCachedDay('auxiliarcontable-iva', cia);
-          const maxState = maxStateByCia.get(cia) ?? null;
-          const lastSeen = maxCached && maxState
-            ? (maxCached > maxState ? maxCached : maxState)
-            : (maxCached ?? maxState);
+          const meta = auxiliarIvaLoadedCias[cia];
+          const lastSeen = meta?.version === AUX_IVA_LEDGER_VERSION ? meta.loadedThrough : null;
           const candidateFrom = lastSeen ? nextIsoDay(lastSeen) : bootClampStart;
           perCiaFechaInicial.set(cia, candidateFrom < bootClampStart ? bootClampStart : candidateFrom);
         }
@@ -3029,12 +3031,26 @@ export default function App() {
             const cia = ciasToFetch[idx];
             const fechaInicial = perCiaFechaInicial.get(cia) ?? bootClampStart;
             if (fechaInicial > fechaFinal) {
-              setAuxiliarIvaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+              setAuxiliarIvaLoadedCias(prev => ({
+                ...prev,
+                [cia]: {
+                  version: AUX_IVA_LEDGER_VERSION,
+                  loadedThrough: fechaFinal,
+                  refreshedAt: new Date().toISOString(),
+                },
+              }));
               continue;
             }
             try {
               await fetchAuxiliarContableIvaRange(cia, fechaInicial, fechaFinal, { onDay });
-              setAuxiliarIvaLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
+              setAuxiliarIvaLoadedCias(prev => ({
+                ...prev,
+                [cia]: {
+                  version: AUX_IVA_LEDGER_VERSION,
+                  loadedThrough: fechaFinal,
+                  refreshedAt: new Date().toISOString(),
+                },
+              }));
             } catch (err) {
               console.warn(`[iva-ledger] ${cia} fail: ${err instanceof Error ? err.message : String(err)}`);
             }
@@ -3050,6 +3066,14 @@ export default function App() {
         }
         // eslint-disable-next-line no-console
         console.info(`[iva-ledger] boot sync · ${ciasToFetch.length} cías · total=${mergedByKey.size} · window.__midas__.ivaLedger`);
+        const accounts = summarizeIvaAccounts(Array.from(mergedByKey.values()));
+        const hasCreditableByCia = new Set(accounts.filter((account) => account.kind === 'creditable').map((account) => account.cia));
+        const missing = missingIvaKindsByCia(accounts);
+        for (const [cia, kinds] of Object.entries(missing)) {
+          if (hasCreditableByCia.has(cia) && kinds.includes('caused')) {
+            console.warn(`[iva-ledger] ${cia} tiene IVA acreditable/otros pero cero cuentas de IVA causado detectadas; revisar window.__midas__.ivaLedger.accountsByKind y VITE_AUX_IVA_OBJETOS.`);
+          }
+        }
       } catch (err) {
         auxiliarIvaAutoFetchDone.current = false;
         console.warn('[iva-ledger] auto-fetch falló', err);
@@ -4570,6 +4594,16 @@ export default function App() {
             >
               <Snowflake className="w-4 h-4" strokeWidth={1.5} />
             </button>
+            {userEmail && (
+              <button
+                onClick={() => setChangePasswordOpen(true)}
+                title="Cambiar contraseña"
+                aria-label="Cambiar contraseña"
+                className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
+              >
+                <KeyRound className="w-4 h-4" strokeWidth={1.5} />
+              </button>
+            )}
             <button
               onClick={() => {
                 clearAuth();
@@ -4691,6 +4725,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <ChangePasswordModal
+        open={changePasswordOpen}
+        onClose={() => setChangePasswordOpen(false)}
+        onChanged={() => toast.success('Contraseña actualizada.')}
+      />
 
       {/* ─── SUB-TABS with context breadcrumb (light shell) ─── */}
       {subTabs.length > 0 && (

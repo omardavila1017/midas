@@ -53,10 +53,12 @@ export const AUX_RECON_PARAMS = {
  *     son IVA (ver `classifyIvaAccount` en domain/ivaLedger.ts).
  *   - Fase B (full): el rango histórico completo SOLO de esos objetos exactos.
  *
- * El IVA acreditable vive en ACTIVOS (11xx) y el IVA trasladado/causado en
- * PASIVOS (21xx). Si el diagnóstico (`window.__midas__.ivaLedger`) no encuentra
+ * El IVA acreditable vive en ACTIVOS y el IVA trasladado/causado en PASIVOS.
+ * El fetch de IVA es separado y cacheado por namespace versionado, así que
+ * puede usar rangos más amplios sin tocar la conciliación 1010-1020. Si el
+ * diagnóstico (`window.__midas__.ivaLedger`) no encuentra
  * cuentas de IVA, ampliar los rangos vía env `VITE_AUX_IVA_OBJETOS`
- * (CSV de pares `ini-fin`, p.ej. "1100-1299,2100-2299").
+ * (CSV de pares `ini-fin`, p.ej. "1000-1999,2000-2999").
  */
 function parseObjetoRanges(
   raw: string | undefined,
@@ -79,12 +81,14 @@ export const AUX_IVA_PARAMS = {
   tl: 'AA',
   nr: 999,
   // Rangos candidato para la fase de discovery (un mes). Acotados a la zona
-  // donde vive el IVA: circulante activo (acreditable) + pasivo (trasladado).
+  // donde vive el IVA: activos (acreditable) + pasivos (trasladado/causado).
+  // v2 usaba 1100-1299/2100-2299 y dejó fuera cuentas pasivas reales de IVA
+  // causado en algunos catálogos JDE. NO toca AUX_RECON_PARAMS.
   discoveryObjetos: parseObjetoRanges(
     typeof import.meta !== 'undefined' ? import.meta.env?.VITE_AUX_IVA_OBJETOS : undefined,
     [
-      { ini: '1100', fin: '1299' },
-      { ini: '2100', fin: '2299' },
+      { ini: '1000', fin: '1999' },
+      { ini: '2000', fin: '2999' },
     ],
   ),
 } as const;

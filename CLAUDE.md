@@ -6,15 +6,17 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 `README.md` covers the deploy / env / business surface. This file covers the code layout, the data flow, and the rules that bite if you ignore them.
 
-## RBAC / módulo de Usuarios (2026-06-02)
+## Auth / RBAC / módulo de Usuarios (2026-06-03)
 
-Control de acceso por roles **a nivel UI** (NO es frontera de seguridad — ver `AUTH.md`; la autorización vinculante la hace el backend/proxy `/api/*`).
+Autenticación real vía backend `/api/auth/*`; control de acceso por roles **a nivel UI** (NO es frontera de seguridad — ver `AUTH.md`; la autorización vinculante la hace el backend/proxy `/api/*`).
 
 - **Catálogo declarativo (en código, no secreto):** `src/config/roles.ts` — `Role` union (`admin | abastos | contaduria | fiscal | cobranza | mesa_ayuda | none`) + `ROLES: Record<Role, { label; description; allowedTabs: AppTabId[] | '*' }>` (`'*'` = admin todo). Helpers `roleCanAccess`, `isRole`, `allowedTabsForRole`. **Cero correos/identidades aquí.**
 - **Mapeo correo→rol (sensible, en `.env`):** `VITE_USER_ROLES` (CSV `email:rol`) + `VITE_DEFAULT_ROLE`. Parser tolerante en `src/config/userRoles.ts` (`getRoleForEmail`, valida roles, `console.warn` los desconocidos). `.env` ignorado por git — los `VITE_*` igual se embeben en el bundle, así que el `.env` solo evita el leak en git.
-- **Identidad:** `src/contexts/AuthContext.tsx` (`useAuth → { email, role, can(tab) }`). Hoy el email sale de `VITE_CURRENT_USER_EMAIL` (DEV bridge con `TODO(auth)`) porque Atlas no expone el claim al frontend. `AuthProvider` se monta en `AppCoreWithProviders.tsx`.
+- **Sesión:** `src/components/Login.tsx` (`AuthGate`) consulta `GET /api/auth/session` antes de montar la app y hace `POST /api/auth/login` con `credentials:'include'`. El backend mantiene cookie `HttpOnly`; Midas no guarda tokens ni contraseñas. `src/contexts/authSession.ts` solo guarda `midas.auth.lastEmail.v1` para prellenar correo y conserva la sesión actual en memoria hasta que monta `AuthProvider`.
+- **Contraseñas:** `src/services/authApi.ts` expone `changePassword`, `requestPasswordReset`, `completePasswordReset`, `sendUserPasswordReset`. Política UI mínima en `src/services/passwordPolicy.ts` (12+, mayúscula, minúscula, número, símbolo); backend es autoridad final. No reintroducir contraseñas en variables `VITE_*`.
+- **Identidad UI:** `src/contexts/AuthContext.tsx` (`useAuth → { email, role, expiresAt, can(tab) }`) lee la sesión backend ya resuelta. Si el rol backend no viene válido, cae al parser de `VITE_USER_ROLES` para compatibilidad de UI.
 - **Gating en `AppCore.tsx`:** `visibleSections`/`visibleSubTabsBySection` filtran nav por `can()`; una sección sin tabs visibles se oculta. Guard effect redirige al primer tab permitido (+ toast) si `activeTab` no está permitido; el render muestra un panel "sin acceso" mientras tanto. Nuevo `SectionId 'admin'` → tab `users`.
-- **Módulo:** `src/modules/users/` (pages/components/services). Tab `users`, solo `admin` + `mesa_ayuda`. `mesa_ayuda` NO ve módulos financieros. Edición de rol solo `admin` y **solo de sesión** (no persiste — el mapeo durable vive en `.env`). `AppTabId` (NavigationContext) ahora es el superset canónico de `TabId` + `'users'`.
+- **Módulo:** `src/modules/users/` (pages/components/services). Tab `users`, solo `admin` + `mesa_ayuda`. `mesa_ayuda` NO ve módulos financieros. Edición de rol solo `admin` y **solo de sesión** (no persiste — el mapeo durable vive en `.env`/backend). `admin` y `mesa_ayuda` pueden enviar liga de reset; no definen contraseñas. `AppTabId` (NavigationContext) ahora es el superset canónico de `TabId` + `'users'`.
 
 ## Branch: `no-long-term-projection` (2026-05-20)
 

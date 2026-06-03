@@ -59,10 +59,14 @@ export interface IvaLedgerPeriod {
 const normalize = (value: string | undefined): string =>
   (value ?? '')
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase()
+    .replace(/[^A-Z0-9%]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+const hasAny = (value: string, patterns: readonly string[]): boolean =>
+  patterns.some((pattern) => value.includes(pattern));
 
 /**
  * Clasifica una cuenta contable por su nombre. Patrones tolerantes a
@@ -70,27 +74,39 @@ const normalize = (value: string | undefined): string =>
  */
 export function classifyIvaAccount(nombreCuenta: string | undefined): IvaAccountKind {
   const name = normalize(nombreCuenta);
-  if (!name.includes('IVA')) return 'other';
+  const compact = name.replace(/\s+/g, '');
+  const mentionsIva = compact.includes('IVA')
+    || name.includes('IMPUESTO AL VALOR AGREGADO')
+    || name.includes('IMP AL VALOR AGREGADO');
+  if (!mentionsIva) return 'other';
   // Retenido (IVA retenido a terceros) no es acreditable ni causado normal.
   if (name.includes('RETEN')) return 'withheld';
   // Acreditable: IVA sobre compras/gastos (a favor).
   if (
-    name.includes('ACREDITABLE')
-    || name.includes('POR ACREDITAR')
-    || name.includes('ACREDITAR')
-    || name.includes('PAGADO')
-    || name.includes('PENDIENTE DE PAGO')
+    hasAny(name, [
+      'ACREDITABLE',
+      'POR ACREDITAR',
+      'ACREDITAR',
+      'PAGADO',
+      'PENDIENTE DE PAGO',
+    ])
   ) {
     return 'creditable';
   }
   // Causado/Trasladado: IVA sobre ventas (a cargo).
   if (
-    name.includes('TRASLADADO')
-    || name.includes('CAUSADO')
-    || name.includes('POR PAGAR')
-    || name.includes('COBRADO')
-    || name.includes('POR COBRAR')
-    || name.includes('PENDIENTE DE COBRO')
+    hasAny(name, [
+      'TRASLAD',
+      'CAUSADO',
+      'POR PAGAR',
+      'POR ENTERAR',
+      'ENTERAR',
+      'COBRADO',
+      'COBRAR',
+      'POR COBRAR',
+      'PENDIENTE DE COBRO',
+      'DEVENGADO',
+    ])
   ) {
     return 'caused';
   }
@@ -116,6 +132,22 @@ export function discoverIvaObjetos(records: AuxiliarContableRecord[]): Set<strin
     }
   }
   return objetos;
+}
+
+/** Objetos contables descubiertos, separados por lado fiscal. */
+export function discoverIvaObjetosByKind(records: AuxiliarContableRecord[]): Record<IvaAccountKind, Set<string>> {
+  const out: Record<IvaAccountKind, Set<string>> = {
+    creditable: new Set<string>(),
+    caused: new Set<string>(),
+    withheld: new Set<string>(),
+    other: new Set<string>(),
+  };
+  for (const rec of records) {
+    const obj = rec.cuentaObjeto?.trim();
+    if (!obj) continue;
+    out[classifyIvaAccount(rec.nombreCuenta)].add(obj);
+  }
+  return out;
 }
 
 /** Resumen por cuenta (para el diagnóstico `window.__midas__.ivaLedger`). */
@@ -146,6 +178,32 @@ export function summarizeIvaAccounts(records: AuxiliarContableRecord[]): IvaLedg
   return Array.from(byKey.values()).sort((a, b) =>
     a.cia.localeCompare(b.cia) || a.cuentaObjeto.localeCompare(b.cuentaObjeto),
   );
+}
+
+export function groupIvaAccountsByKind(accounts: IvaLedgerAccount[]): Record<IvaAccountKind, IvaLedgerAccount[]> {
+  return {
+    creditable: accounts.filter((account) => account.kind === 'creditable'),
+    caused: accounts.filter((account) => account.kind === 'caused'),
+    withheld: accounts.filter((account) => account.kind === 'withheld'),
+    other: accounts.filter((account) => account.kind === 'other'),
+  };
+}
+
+export function missingIvaKindsByCia(accounts: IvaLedgerAccount[]): Record<string, Array<'creditable' | 'caused'>> {
+  const byCia = new Map<string, Set<IvaAccountKind>>();
+  for (const account of accounts) {
+    const bucket = byCia.get(account.cia) ?? new Set<IvaAccountKind>();
+    bucket.add(account.kind);
+    byCia.set(account.cia, bucket);
+  }
+  const out: Record<string, Array<'creditable' | 'caused'>> = {};
+  for (const [cia, kinds] of byCia) {
+    const missing: Array<'creditable' | 'caused'> = [];
+    if (!kinds.has('creditable')) missing.push('creditable');
+    if (!kinds.has('caused')) missing.push('caused');
+    if (missing.length > 0) out[cia] = missing;
+  }
+  return out;
 }
 
 /**

@@ -6,17 +6,15 @@
  * qué módulos MOSTRAR para una UX limpia. La autorización vinculante sobre los
  * datos vive en el proxy `/api/*`.
  *
- * Fuente de identidad: hoy NO hay un claim de sesión expuesto al frontend
- * (revisado `api/_lib/atlasProxy.ts` — solo inyecta tokens server-side, no
- * devuelve el email del usuario). El correo sale de la SESIÓN del login UX
- * (`authSession.ts`), que el usuario captura en `Login.tsx`. Reemplazar por la
- * identidad real cuando Atlas la exponga (ver TODO abajo).
+ * Fuente de identidad: sesión resuelta por `/api/auth/session` o
+ * `/api/auth/login` antes de montar AppCore. No guarda tokens en el cliente;
+ * el backend mantiene la cookie HttpOnly.
  */
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { getRoleForEmail } from '../config/userRoles';
-import { roleCanAccess, type Role } from '../config/roles';
-import { resolveSessionEmail } from './authSession';
+import { isRole, roleCanAccess, type Role } from '../config/roles';
+import { getCurrentAuthSession } from './authSession';
 import type { AppTabId } from '../modules/shared-finance/components/NavigationContext';
 
 interface AuthContextValue {
@@ -24,41 +22,40 @@ interface AuthContextValue {
   email: string | null;
   /** Rol resuelto a partir del correo (default si no está mapeado). */
   role: Role;
+  /** Expiración reportada por backend, si existe. */
+  expiresAt?: string;
   /** ¿Puede el usuario actual ver este tab/módulo? */
   can: (tab: AppTabId) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-/**
- * Resuelve el correo del usuario actual desde la sesión del login (lo que el
- * usuario tecleó y, según "Recordar este equipo", quedó en local/sessionStorage).
- * La lógica vive en `authSession.ts` para que el gate (`Login.tsx`) y este
- * contexto compartan exactamente la misma fuente.
- *
- * TODO(auth): cuando Atlas SSO exponga un claim de sesión / header al frontend,
- * leerlo ahí (sin tocar la precedencia de la sesión del login).
- */
-function resolveCurrentEmail(): string | null {
-  return resolveSessionEmail();
-}
-
 export function AuthProvider({
   children,
   /** Override explícito de correo (tests / Storybook). */
   email: emailOverride,
+  role: roleOverride,
 }: {
   children: ReactNode;
   email?: string | null;
+  role?: Role;
 }) {
-  const [email] = useState<string | null>(
-    () => (emailOverride !== undefined ? emailOverride : resolveCurrentEmail()),
-  );
+  const [session] = useState(() => getCurrentAuthSession());
+  const [email] = useState<string | null>(() => (
+    emailOverride !== undefined ? emailOverride : session?.email ?? null
+  ));
 
-  const role = useMemo<Role>(() => getRoleForEmail(email), [email]);
+  const role = useMemo<Role>(() => {
+    if (roleOverride) return roleOverride;
+    if (session?.role && isRole(session.role)) return session.role;
+    return getRoleForEmail(email);
+  }, [email, roleOverride, session?.role]);
   const can = useCallback((tab: AppTabId) => roleCanAccess(role, tab), [role]);
 
-  const value = useMemo<AuthContextValue>(() => ({ email, role, can }), [email, role, can]);
+  const value = useMemo<AuthContextValue>(
+    () => ({ email, role, expiresAt: session?.expiresAt, can }),
+    [email, role, session?.expiresAt, can],
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
@@ -73,6 +70,7 @@ export function useAuth(): AuthContextValue {
   return {
     email: null,
     role: 'none',
+    expiresAt: undefined,
     can: () => false,
   };
 }

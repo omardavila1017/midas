@@ -1,14 +1,8 @@
 /**
  * Módulo de Usuarios — visible solo para `admin` y `mesa_ayuda`.
  *
- * Muestra el mapeo correo → rol → módulos visibles leído de `.env`
- * (`VITE_USER_ROLES`, parseado en `userRoles.ts`). `admin` puede editar el rol
- * de cada usuario; `mesa_ayuda` es solo lectura.
- *
- * Nota de honestidad: la edición es SOLO de sesión (estado local). El mapeo
- * durable vive en `.env` / backend — esta UI no escribe a `.env` (los `VITE_*`
- * se embeben en build-time). Sirve para inspección y para previsualizar el
- * efecto de un cambio de rol antes de aplicarlo en configuración.
+ * Muestra el mapeo correo → rol → módulos visibles. `admin` puede previsualizar
+ * cambios de rol en sesión; `mesa_ayuda` solo puede enviar ligas de reset.
  */
 
 import { useMemo, useState } from 'react';
@@ -16,12 +10,17 @@ import { Info, UserCog } from 'lucide-react';
 import PageHeader from '../../../components/ui/PageHeader';
 import { useAuth } from '../../../contexts/AuthContext';
 import type { Role } from '../../../config/roles';
-import { buildUserRow, buildUsersView } from '../services/usersService';
+import { buildUserRow, buildUsersView, canManagePasswordReset } from '../services/usersService';
 import UsersTable from '../components/UsersTable';
+import { sendUserPasswordReset } from '../../../services/authApi';
+import { useToast } from '../../../components/Toast';
 
 export default function UsersDashboard() {
   const { role, email } = useAuth();
+  const toast = useToast();
   const canEdit = role === 'admin';
+  const canSendReset = canManagePasswordReset(role);
+  const [resettingEmail, setResettingEmail] = useState<string | null>(null);
 
   // Filas base derivadas de `.env`. Las ediciones de admin se guardan como
   // overrides de sesión (no se persisten — ver nota del módulo).
@@ -40,6 +39,18 @@ export default function UsersDashboard() {
     setOverrides((prev) => ({ ...prev, [targetEmail]: nextRole }));
   };
 
+  const handleSendReset = async (targetEmail: string) => {
+    setResettingEmail(targetEmail);
+    try {
+      await sendUserPasswordReset(targetEmail);
+      toast.success('Liga de restablecimiento enviada.');
+    } catch {
+      toast.error('No se pudo enviar la liga de restablecimiento.');
+    } finally {
+      setResettingEmail(null);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -52,7 +63,7 @@ export default function UsersDashboard() {
             style={{ background: 'var(--gray-100)', color: 'var(--gray-600)' }}
           >
             <UserCog className="h-4 w-4" strokeWidth={1.75} />
-            {canEdit ? 'Edición habilitada' : 'Solo lectura'}
+            {canEdit ? 'Edición habilitada' : canSendReset ? 'Mesa de ayuda' : 'Solo lectura'}
           </span>
         }
       />
@@ -63,18 +74,21 @@ export default function UsersDashboard() {
       >
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
         <p className="leading-relaxed">
-          El mapeo durable de correos a roles vive en <code className="font-mono">.env</code>{' '}
-          (<code className="font-mono">VITE_USER_ROLES</code>), fuera del repositorio. Los cambios
-          que hagas aquí son solo de esta sesión y no se guardan. La autorización vinculante la
-          aplica el backend; este módulo controla qué se muestra en la interfaz.
+          La sesión, contraseñas y ligas de restablecimiento viven en el backend de autenticación.
+          El mapeo correo→rol visible aquí sigue siendo una vista de RBAC para la interfaz; la
+          autorización vinculante la aplica el backend. Mesa de ayuda puede enviar ligas de reset,
+          pero no definir contraseñas.
         </p>
       </div>
 
       <UsersTable
         rows={rows}
         canEdit={canEdit}
+        canSendReset={canSendReset}
+        resettingEmail={resettingEmail}
         currentEmail={email}
         onRoleChange={canEdit ? handleRoleChange : undefined}
+        onSendReset={canSendReset ? handleSendReset : undefined}
       />
     </div>
   );
