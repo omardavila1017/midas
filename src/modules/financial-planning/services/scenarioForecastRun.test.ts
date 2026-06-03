@@ -167,6 +167,66 @@ describe('scenarioForecastRun', () => {
     expect(ids).not.toContain('proj-prev');
   });
 
+  it('injects trend top-off in a non-base run (visible as its own editable row) but never in Base', () => {
+    // Predicción mensual: agosto 2026 con un ingreso esperado por encima de lo
+    // ya comprometido en el mes. El top-off debe rellenar el hueco.
+    const trendForecast = {
+      income: [trendPoint('2026-08', 120_000)],
+      expense: [],
+    };
+    const sharedArgs = {
+      scenarioName: 'X',
+      sourceMovements: [
+        // Comprometido en agosto: ingreso real de 20k. Top-off = 120k - 20k = 100k.
+        movement('cxc:exec-1', 'INFLOW', 'AR_COLLECTION', 'Cliente exec', 20_000, {
+          projectedDate: '2026-08-15',
+        }),
+      ],
+      adjustments: [],
+      manualEntries: [],
+      customRows: [],
+      overrides: [],
+      clients: [],
+      providers: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      cxpRecords: [],
+      budget: null,
+      companyCode: 'all',
+      taxStore: defaultTaxStore(),
+      startDate: '2026-06-01',
+      endDate: '2026-12-31',
+      today: '2026-06-02',
+      initialCash: 0,
+      supplierInitialCash: 0,
+      minimumCash: 0,
+      granularity: 'monthly' as const,
+      includeTrendTopOff: true,
+      trendForecast,
+    };
+
+    const approvedRun = buildScenarioForecastRun({
+      ...sharedArgs,
+      scenarioId: 'approved',
+      scenarioKind: 'APPROVED',
+    });
+    const trendMovements = approvedRun.movements.filter((m) => m.id.startsWith('forecast:trend:'));
+    expect(trendMovements.length).toBeGreaterThan(0);
+    // El hueco total (100k) se conserva a través del schedule + aggregator.
+    expect(trendMovements.reduce((s, m) => s + m.projectedAmount, 0)).toBeCloseTo(100_000, 5);
+    // La tendencia cae en su propia fila editable "Tendencia histórica".
+    expect(
+      approvedRun.rows.some((row) => row.conceptKey === 'INFLOW:AR_COLLECTION:tendencia-historica'),
+    ).toBe(true);
+
+    // Base: aun con el toggle on y el forecast presente, nunca inyecta tendencia.
+    const baseRun = buildScenarioForecastRun({
+      ...sharedArgs,
+      scenarioId: 'base',
+      scenarioKind: 'BASE',
+    });
+    expect(baseRun.movements.some((m) => m.id.startsWith('forecast:trend:'))).toBe(false);
+  });
+
   it('passes CXP payment coverage into forecast taxes to avoid current-period IVA double counting', () => {
     const cxp = cxpRecord({
       cia: '00001',
@@ -228,6 +288,21 @@ describe('scenarioForecastRun', () => {
     expect(taxReserve?.projectedAmount).toBe(160);
   });
 });
+
+function trendPoint(ym: string, expected: number) {
+  return {
+    date: `${ym}-01`,
+    bucket: 'monthly' as const,
+    expected,
+    stdDev: 0,
+    ci80Low: expected,
+    ci80High: expected,
+    ci95Low: expected,
+    ci95High: expected,
+    isHistorical: false,
+    isPartial: false,
+  };
+}
 
 function cxpRecord(patch: Partial<CXPRecord>): CXPRecord {
   return {

@@ -112,6 +112,10 @@ import {
 import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
 
+// Top-off de tendencia histórica (Holt-Winters): opt-in, persistido. Key propia
+// de Planeación (independiente de la de Proyección) — ver storageRegistry.ts.
+const TREND_TOPOFF_STORAGE_KEY = 'midas.planning.trendTopOff';
+
 interface Props {
   companyCode: string;
   bankStatements: BankAccountStatement[];
@@ -596,6 +600,25 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const [mergeOpen, setMergeOpen] = useState<string | null>(null);
   const [addRowFor, setAddRowFor] = useState<FinancialMovementType | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // Top-off de tendencia histórica (Holt-Winters): opt-in, persistido. Sólo
+  // inyecta en escenarios no-base (ver buildScenarioRun). Mismo mecanismo que
+  // Proyección; aquí las líneas `forecast:trend:` caen como filas propias
+  // ("Tendencia histórica") editables por celda.
+  const [trendTopOff, setTrendTopOff] = useState<boolean>(() => {
+    try { return window.localStorage.getItem(TREND_TOPOFF_STORAGE_KEY) === '1'; } catch { return false; }
+  });
+  const toggleTrendTopOff = useCallback((next: boolean) => {
+    setTrendTopOff(next);
+    try { window.localStorage.setItem(TREND_TOPOFF_STORAGE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+  }, []);
+  // Series mensuales del motor predictivo para el top-off. `undefined` si no
+  // hay histórico suficiente → el toggle no inyecta nada.
+  const trendForecast = useMemo(() => {
+    const predictive = source.canonical.predictive;
+    if (!predictive) return undefined;
+    return { income: predictive.income.monthly, expense: predictive.expense.monthly };
+  }, [source.canonical.predictive]);
+  const trendAvailable = trendForecast !== undefined;
   const [detailMovement, setDetailMovement] = useState<FinancialMovement | null>(null);
   const [detailAnchor, setDetailAnchor] = useState<DOMRect | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedPlanningCell>(null);
@@ -725,10 +748,16 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     const scenarioOverrides = cellOverrides.filter((override) => override.scenarioId === scenarioId);
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
-    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|g=${granularity}`;
-    // pipelineKey omits granularity so flips reuse the worker's pipeline cache.
-    const pipelineKey = `planning-pipeline:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
     const scenario = scenarios.find((s) => s.id === scenarioId);
+    // El top-off de tendencia es no-base; en Base nunca aplica (además
+    // `forecast:trend:` falla isRealShortTermApiMovement, así que Base lo
+    // descartaría igual). El trendTag va en cacheKey Y pipelineKey: el top-off
+    // vive en el pipeline (mismo contrato que Proyección).
+    const trendOn = trendTopOff && trendAvailable && scenario?.kind !== 'BASE';
+    const trendTag = `trend:${trendOn ? 1 : 0}`;
+    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|${trendTag}|g=${granularity}`;
+    // pipelineKey omits granularity so flips reuse the worker's pipeline cache.
+    const pipelineKey = `planning-pipeline:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|${trendTag}`;
     const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)
       ? (key: string, run: PlanningScenarioRun) => saveScenarioRunToPersistentCache(key, run)
       : undefined;
@@ -766,6 +795,8 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         minimumCash,
         granularity,
         includeManualEntries,
+        includeTrendTopOff: trendOn,
+        trendForecast,
       }),
       persistRun,
       {
@@ -780,7 +811,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   const approvedRun = useMemo(
     () => buildScenarioRun(approvedScenario.id, true),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows, runVersion],
+    [approvedScenario.id, sharedRunInputsKey, cellOverrides, customRows, runVersion, trendTopOff],
   );
 
   const baseRun = useMemo(
@@ -831,7 +862,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       return buildScenarioRun(activeScenario.id, true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows, runVersion],
+    [activeScenario.id, approvedScenario.id, baseScenario.id, approvedRun, baseRun, sharedRunInputsKey, cellOverrides, customRows, runVersion, trendTopOff],
   );
 
   const activeOverrides = useMemo(
@@ -1323,6 +1354,23 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
                 { value: 'daily', label: 'Día' },
               ]}
             />
+            <button
+              type="button"
+              onClick={() => toggleTrendTopOff(!trendTopOff)}
+              disabled={!trendAvailable}
+              title={trendAvailable
+                ? 'Completa los meses futuros con la tendencia histórica (mejor modelo), por encima de ROL, OC y deudas. Sólo aplica fuera del Base; las líneas resultantes son editables.'
+                : 'Sin histórico bancario suficiente para estimar la tendencia.'}
+              aria-pressed={trendTopOff && trendAvailable}
+              className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                trendTopOff && trendAvailable
+                  ? 'border-[var(--accent-blue)] bg-[var(--accent-blue)] text-white'
+                  : 'border-[var(--gray-200)] bg-white text-[var(--gray-700)] hover:bg-[var(--gray-50)]'
+              }`}
+            >
+              <TrendingUp className="h-3.5 w-3.5" strokeWidth={1.75} />
+              Tendencia
+            </button>
             <button
               type="button"
               onClick={openProposalPicker}
