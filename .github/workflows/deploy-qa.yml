@@ -24,9 +24,6 @@ jobs:
       - name: Compilar
         run: npm run build
         env:
-          VITE_JDE_BASE_URL: ${{ secrets.VITE_JDE_BASE_URL }}
-          VITE_JDE_TOKEN: ${{ secrets.VITE_JDE_TOKEN }}
-          VITE_JDE_ENVIRONMENT: ${{ secrets.VITE_JDE_ENVIRONMENT }}
           VITE_USER_ROLES: ${{ secrets.VITE_USER_ROLES }}
           VITE_DEFAULT_ROLE: ${{ secrets.VITE_DEFAULT_ROLE }}
           VITE_CURRENT_USER_EMAIL: ${{ secrets.VITE_CURRENT_USER_EMAIL }}
