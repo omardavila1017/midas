@@ -12,11 +12,13 @@ function mov(concepto: string, tipoMovimiento: 'ABONO' | 'CARGO' = 'ABONO') {
   };
 }
 
-describe('classifyMovement — opaque income filter', () => {
-  // CONSERVA folios numéricos puros: pueden ser refs CIE legítimas de
-  // cobranza corporativa. La versión agresiva filtraba estos y
-  // subvaluaba ingresos ~3x. Si en el futuro se quiere filtrar, debe
-  // cruzar contra `noCliente` del catálogo primero.
+describe('classifyMovement — conceptos opacos en ABONOs (regla retirada)', () => {
+  // La regla `opaque-income` fue RETIRADA por decisión de negocio: los ABONOs
+  // con conceptos genéricos (ABONO PTE, SPEI sin detalle, BCO BENEFIC) ya NO
+  // se tratan como traspasos internos; vuelven a contar como ingreso real.
+  // Las otras señales de "interno" (leyenda TRASPASO/REF, RFC/beneficiario del
+  // grupo, cuenta-destino propia, pair-matched) siguen vigentes.
+
   it('CONSERVA ABONOs con concepto numérico puro (posibles refs CIE)', () => {
     expect(classifyMovement(mov('44423')).kind).toBe('real');
     expect(classifyMovement(mov('521838225')).kind).toBe('real');
@@ -27,19 +29,19 @@ describe('classifyMovement — opaque income filter', () => {
     expect(classifyMovement(mov('56 GUIAS')).kind).toBe('real');
   });
 
-  it('filtra ABONOs tipo "ABONO PTE..."', () => {
-    expect(classifyMovement(mov('ABONO PTE. TRANSACCIONES')).kind).toBe('internal');
-    expect(classifyMovement(mov('ABONO PTE')).kind).toBe('internal');
+  it('CONSERVA ABONOs tipo "ABONO PTE..." (regla retirada)', () => {
+    expect(classifyMovement(mov('ABONO PTE. TRANSACCIONES')).kind).toBe('real');
+    expect(classifyMovement(mov('ABONO PTE')).kind).toBe('real');
   });
 
-  it('filtra ABONOs SPEI genérico sin detalle', () => {
-    expect(classifyMovement(mov('ABONO TRANSFERENCIA SPEI')).kind).toBe('internal');
-    expect(classifyMovement(mov('ABONO TRANSFERENCIA SPEI.')).kind).toBe('internal');
+  it('CONSERVA ABONOs SPEI genérico sin detalle (regla retirada)', () => {
+    expect(classifyMovement(mov('ABONO TRANSFERENCIA SPEI')).kind).toBe('real');
+    expect(classifyMovement(mov('ABONO TRANSFERENCIA SPEI.')).kind).toBe('real');
   });
 
-  it('filtra ABONOs BCO BENEFIC interbancarios', () => {
-    expect(classifyMovement(mov('BCO 40012 BENEFIC GOB EDO MEXICO')).kind).toBe('internal');
-    expect(classifyMovement(mov('BCO 40156 BENEFIC SABCAPI')).kind).toBe('internal');
+  it('CONSERVA ABONOs BCO BENEFIC interbancarios (regla retirada)', () => {
+    expect(classifyMovement(mov('BCO 40012 BENEFIC GOB EDO MEXICO')).kind).toBe('real');
+    expect(classifyMovement(mov('BCO 40156 BENEFIC SABCAPI')).kind).toBe('real');
   });
 
   it('CONSERVA ABONOs con nombres claros de clientes', () => {
@@ -48,15 +50,9 @@ describe('classifyMovement — opaque income filter', () => {
     expect(classifyMovement(mov('PAGO CLIENTE COCA COLA SA')).kind).toBe('real');
   });
 
-  it('NO filtra los mismos conceptos cuando son CARGOs', () => {
+  it('CONSERVA los mismos conceptos cuando son CARGOs', () => {
     // CARGOs con esos conceptos pueden ser pagos legítimos a proveedores
     expect(classifyMovement(mov('BCO 40012 BENEFIC GOB EDO', 'CARGO')).kind).toBe('real');
     expect(classifyMovement(mov('ABONO TRANSFERENCIA SPEI', 'CARGO')).kind).toBe('real');
-  });
-
-  it('reason = "opaque-income" cuando se filtra patrón conservado', () => {
-    const result = classifyMovement(mov('ABONO PTE. TRANSACCIONES'));
-    expect(result.kind).toBe('internal');
-    expect(result.reason).toBe('opaque-income');
   });
 });

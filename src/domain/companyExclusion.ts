@@ -31,13 +31,16 @@ export interface ExclusionRules {
 }
 
 /**
- * Locked from the roadmap decision: exclude empresa 33 + multicarga, all three
- * match modes, blanket (no date boundary — historical records dropped too).
+ * Reglas de exclusión global. **Vacías por decisión de negocio (2026-06-04):
+ * ya NO se excluye nada — Multicarga / empresa 33 y BanBajío vuelven a contar
+ * en todo el sistema.** El mecanismo se conserva intacto (tres modos de match)
+ * para poder reactivar exclusiones a futuro: basta agregar un número de cia,
+ * un substring de nombre, o una unidadNegocio al arreglo correspondiente.
  */
 export const EXCLUSION_RULES: ExclusionRules = {
-  ciaNumbers: [33],
-  namePatterns: ['multicarga'],
-  unidadesNegocio: ['MULTICARGA'],
+  ciaNumbers: [],
+  namePatterns: [],
+  unidadesNegocio: [],
 };
 
 /** Parse a cia value to its numeric form, padding-agnostic. "00033" → 33. */

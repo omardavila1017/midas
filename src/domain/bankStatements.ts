@@ -61,6 +61,28 @@ export function canonicalBankAccountNumber(raw: string | null | undefined): stri
   return digits || s;
 }
 
+/**
+ * Algunos estados de cuenta etiquetan la misma institución con un sufijo
+ * regional (p.ej. "BANORTE TAMPS" = sucursal Tamaulipas de Banorte). Para la
+ * agrupación por banco en la UI son la MISMA institución, así que colapsamos
+ * el alias a su nombre canónico. La llave se compara en mayúsculas y con
+ * espacios normalizados.
+ *
+ * Defensivo: igual que `canonicalBankAccountNumber`, se aplica tanto al mapear
+ * (jde.ts) como al consumir (Bancos.tsx) para que los statements ya
+ * persistidos en IDB/uploads se reagrupen sin necesidad de re-fetch.
+ */
+const BANK_NAME_ALIASES: Record<string, string> = {
+  'BANORTE TAMPS': 'BANORTE',
+};
+
+export function canonicalBankName(raw: string | null | undefined): string {
+  const s = (raw ?? '').trim();
+  if (!s) return s;
+  const key = s.toUpperCase().replace(/\s+/g, ' ');
+  return BANK_NAME_ALIASES[key] ?? s;
+}
+
 function accountKey(statement: Pick<BankAccountStatement, 'cia' | 'cuenta' | 'moneda'>): string {
   return `${statement.cia}::${statement.cuenta}::${statement.moneda}`;
 }

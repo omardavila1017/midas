@@ -26,7 +26,7 @@ import {
 } from './dailyApiCache';
 import { apiConfig } from '../config/api.config';
 import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
-import { canonicalBankAccountNumber } from '../domain/bankStatements';
+import { canonicalBankAccountNumber, canonicalBankName } from '../domain/bankStatements';
 import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
 import { isAuxiliarAllowlistedCia, AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
@@ -339,13 +339,17 @@ function extractCiaFromCuentaContable(cuentaContable: unknown): string {
  *   "BANAMEX  877732401"        → "BANAMEX"
  *   "BANAMEX - 7014 350840"     → "BANAMEX"
  *   "BANORTE 0123456789"        → "BANORTE"
+ *   "BANORTE TAMPS 0123456789"  → "BANORTE"  (alias regional colapsado)
+ *
+ * Colapsa alias regionales vía `canonicalBankName` (dominio) para que el
+ * mapeo (aquí) y el consumo (Bancos.tsx) compartan la misma lógica.
  */
 function extractBankName(raw: unknown): string {
   const s = toStr(raw);
   if (!s) return '';
   // Tomar solo la parte alfabética inicial (el nombre del banco)
   const match = s.match(/^([A-Za-zÁÉÍÓÚáéíóúÑñ]+(?:\s+[A-Za-zÁÉÍÓÚáéíóúÑñ]+)*)/);
-  return match ? match[1].trim() : s;
+  return canonicalBankName(match ? match[1].trim() : s);
 }
 
 /**

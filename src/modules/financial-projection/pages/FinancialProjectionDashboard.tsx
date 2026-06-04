@@ -39,6 +39,8 @@ import { computeMinimumOperatingExpense } from '../../../domain/minimumOperating
 import { ScenarioComparisonBar } from '../components/ScenarioComparisonBar';
 import { DeferredMount } from '../components/DeferredMount';
 import { ChartSkeleton } from '../components/SectionSkeletons';
+import { CollapsibleSection } from '../components/CollapsibleSection';
+import { InternalTransfersDebugPanel } from '../components/InternalTransfersDebugPanel';
 import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../services/projectionCache';
 import { clearProjectionSourceCache } from '../services/financialProjectionService';
 import { onMemoryPressure } from '../../../services/runtimeGuardian';
@@ -1378,6 +1380,21 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           />
         </Suspense>
       </DeferredMount>
+
+      {/* TEMPORAL — depuración de traspasos internos. Cerrado + lazy: no corre
+          hasta que se abre. Se puede borrar sin afectar la proyección. */}
+      <CollapsibleSection
+        title="🔧 Traspasos internos (depuración temporal)"
+        description="Bruto mensual de traspasos internos (Σ ABONO vs Σ CARGO) con detalle por movimiento, para depurar la asimetría que no empata."
+        storageKey="proj.debug.internal-transfers"
+        defaultOpen={false}
+        lazy
+      >
+        <InternalTransfersDebugPanel
+          bankStatements={props.bankStatements}
+          companyCode={props.companyCode}
+        />
+      </CollapsibleSection>
       </>}
 
       <Suspense fallback={null}>

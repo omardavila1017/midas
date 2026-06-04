@@ -113,7 +113,6 @@ import { filterActiveCompanies, matchesExclusionIdentity } from './domain/compan
 import { applyViajesEspecialesGroup } from './domain/viajesEspecialesCatalog';
 import {
   attachImportedStatementsToKnownCompanies,
-  excludeBajio,
   isBajioStatement,
   latestStatementDate,
   mergeBankStatements,
@@ -1035,14 +1034,13 @@ export default function App() {
     },
     [bankJdeStatementsDeferred, bankSupplementalStatementsDeferred],
   );
-  // BAJIO se exhibe en la pestaña Bancos pero no se contabiliza ni se proyecta:
-  // el excedente cae siempre en Banamex, así que incluirlo duplica flujo.
-  const accountableBankStatements = useMemo(
-    () => excludeBajio(bankStatements),
-    [bankStatements],
-  );
-  // Bajío se separa aquí (no entra a accountable) pero el módulo de
-  // planeación lo necesita para re-inyectar el flujo del fideicomiso Dina.
+  // BAJIO ahora SÍ se contabiliza y se proyecta (decisión 2026-06-04): el
+  // barrido Bajío→Banamex trae su propio egreso, que empata con el ingreso en
+  // Banamex, así que incluir ambos lados netea solo. `accountableBankStatements`
+  // == todos los estados (ya sin Multicarga/empresa 33 vía EXCLUSION_RULES).
+  const accountableBankStatements = bankStatements;
+  // Bajío se separa aquí (además de contar en accountable) porque el módulo de
+  // planeación lo sigue usando para re-inyectar el flujo del fideicomiso Dina.
   const bajioStatements = useMemo(
     () => bankStatements.filter(isBajioStatement),
     [bankStatements],

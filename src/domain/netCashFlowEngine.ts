@@ -175,37 +175,6 @@ const INTERNAL_RFC_PATTERN = buildSubstringPattern(INTERNAL_RFCS);
 const INTERNAL_BENEFICIARY_PATTERN = buildSubstringPattern(INTERNAL_BENEFICIARIES);
 const INTERNAL_COMPANY_CODE_PATTERN = buildWordPattern(INTERNAL_COMPANY_CODES);
 
-// ─────────────────────────────────────────────────────────────────────────
-// Patrones de "ruido" en ABONOs (ingresos) — conceptos opacos que
-// históricamente eran transferencias internas o referencias bancarias sin
-// contraparte identificable.
-//
-// Sólo se aplican a movimientos ABONO. Los CARGO con los mismos conceptos
-// pueden ser pagos reales (SPEI a proveedor, etc.) y NO deben filtrarse.
-//
-// IMPORTANT: la versión original incluía dos regex agresivos
-// (`PURE_NUMERIC` y `NUMERIC_SHORT_TOKEN`) que también atrapaban refs CIE
-// legítimas de cobranza corporativa (típicamente folios numéricos puros
-// 8-12 dígitos). Resultado: ingresos YTD subvaluados ~3x. Por eso esos
-// dos patrones quedaron desactivados — sólo conservamos los tres
-// patrones específicos cuyo texto literal es inequívocamente bancario.
-//
-// Si en el futuro queremos volver a filtrar folios puros, hay que
-// cruzarlos contra `noCliente` del catálogo antes de marcar como interno.
-// ─────────────────────────────────────────────────────────────────────────
-const OPAQUE_INCOME_ABONO_PTE = /^\s*ABONO\s+PTE\b/i;
-const OPAQUE_INCOME_ABONO_SPEI = /^\s*ABONO\s+TRANSFERENCIA\s+SPEI\s*\.?\s*$/i;
-const OPAQUE_INCOME_BCO_BENEFIC = /\bBCO\b[^\n]*\bBENEFIC\w*\b/i;
-
-function isOpaqueIncomeConcept(concepto: string): boolean {
-  if (!concepto) return false;
-  return (
-    OPAQUE_INCOME_ABONO_PTE.test(concepto)
-    || OPAQUE_INCOME_ABONO_SPEI.test(concepto)
-    || OPAQUE_INCOME_BCO_BENEFIC.test(concepto)
-  );
-}
-
 /**
  * Longitud mínima que debe tener un número de cuenta para considerarse en el
  * detector de "cuenta destino interna". Evita falsos positivos con códigos
@@ -389,9 +358,10 @@ export function movementHashKey(
  * empujan la contraparte al lunes, y los cortes de mes desfasan la
  * operación. Con el criterio anterior (mismo día exacto) esas patas
  * quedaban huérfanas: el CARGO se contaba como "Egreso bancario sin
- * identificar" y su ABONO lo absorbía el filtro `opaque-income`. Resultado:
- * egresos inflados sin su ingreso compensatorio → la caja proyectada se iba
- * a negativo artificialmente. Ampliar la ventana cierra esa asimetría.
+ * identificar" y su ABONO quedaba como ingreso real sin su egreso
+ * compensatorio. Resultado: egresos inflados sin su ingreso compensatorio →
+ * la caja proyectada se iba a negativo artificialmente. Ampliar la ventana
+ * cierra esa asimetría pareando ambas patas dentro del rango de días.
  *
  * Seguridad: el pareo es SIMÉTRICO — sólo marca un CARGO como interno si
  * existe un ABONO del MISMO importe (al centavo) en OTRA cuenta del grupo
@@ -516,8 +486,7 @@ export type InternalReason =
   | 'rfc'              // RFC de empresa del grupo embebido en concepto/referencia
   | 'beneficiary'      // nombre de empresa del grupo como beneficiario
   | 'own-account'      // cuenta destino es otra cuenta del grupo
-  | 'pair-matched'     // CARGO-ABONO simétrico el mismo día en cuentas distintas
-  | 'opaque-income';   // ABONO con concepto opaco (folios, ABONO PTE, BCO BENEFIC)
+  | 'pair-matched';    // CARGO-ABONO simétrico el mismo día en cuentas distintas
 
 export interface MovementClassification {
   kind: 'real' | 'internal';
@@ -531,7 +500,6 @@ export const INTERNAL_REASON_LABELS: Record<InternalReason, string> = {
   beneficiary: 'Beneficiario es una empresa del grupo',
   'own-account': 'Cuenta destino pertenece al grupo',
   'pair-matched': 'CARGO y ABONO simétricos el mismo día en otra cuenta del grupo',
-  'opaque-income': 'Concepto opaco (folio bancario, ABONO PTE, BCO BENEFIC, SPEI sin detalle)',
 };
 
 export interface ClassificationContext {
@@ -580,17 +548,6 @@ export function classifyMovement(
     if (ctx.pairedKeys.has(key)) {
       return { kind: 'internal', reason: 'pair-matched' };
     }
-  }
-  // ABONOs con conceptos opacos (puros numéricos, ABONO PTE, BCO BENEFIC,
-  // SPEI genérico, folios cortos) se tratan como transferencias internas
-  // para no ensuciar la trayectoria de ingresos del Dashboard / Planeación.
-  // SÓLO aplica a ABONO — los CARGO con los mismos conceptos pueden ser
-  // pagos legítimos (SPEI a proveedor, etc.) y siguen siendo 'real'.
-  if (
-    mov.tipoMovimiento === 'ABONO'
-    && (isOpaqueIncomeConcept(concepto) || isOpaqueIncomeConcept(referencia))
-  ) {
-    return { kind: 'internal', reason: 'opaque-income' };
   }
   return { kind: 'real' };
 }

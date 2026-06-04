@@ -41,6 +41,7 @@ import {
   attachImportedStatementsToKnownCompanies,
   bankStatementBalance,
   canonicalBankAccountNumber,
+  canonicalBankName,
   currentBankStatements,
   latestStatementDate,
   mergeBankStatements,
@@ -454,7 +455,7 @@ const BancosDashboard = ({
     return statements.filter(s => {
       const catalogEntry = accountCatalogEntry(s);
       if (selectedCia !== 'all' && s.cia && s.cia !== selectedCia) return false;
-      if (bancoFilter !== 'all' && (s.nombreBanco ?? s.banco) !== bancoFilter) return false;
+      if (bancoFilter !== 'all' && canonicalBankName(s.nombreBanco ?? s.banco) !== bancoFilter) return false;
       if (monedaFilter !== 'all' && s.moneda !== monedaFilter) return false;
       if (unidadFilter !== 'all' && (catalogEntry?.unidadNegocio ?? '__uncatalogued__') !== unidadFilter) return false;
       if (roleFilter !== 'all' && (catalogEntry?.role ?? '__uncatalogued__') !== roleFilter) return false;
@@ -506,7 +507,7 @@ const BancosDashboard = ({
     type Acc = typeof accountsView[number];
     const m = new Map<string, Acc[]>();
     for (const acc of accountsView) {
-      const k = acc.nombreBanco || acc.banco || 'Sin banco';
+      const k = canonicalBankName(acc.nombreBanco || acc.banco) || 'Sin banco';
       const list = m.get(k);
       if (list) list.push(acc); else m.set(k, [acc]);
     }
@@ -559,7 +560,7 @@ const BancosDashboard = ({
   }, [statements]);
 
   const bancoOptions = useMemo(
-    () => Array.from(new Set(statements.map(s => s.nombreBanco ?? s.banco).filter(Boolean))).sort(),
+    () => Array.from(new Set(statements.map(s => canonicalBankName(s.nombreBanco ?? s.banco)).filter(Boolean))).sort(),
     [statements],
   );
   const monedaOptions = useMemo(
