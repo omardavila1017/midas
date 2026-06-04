@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
@@ -105,20 +105,22 @@ describe('taxModuleService', () => {
     });
   });
 
-  it('reads REAL IVA (creditable + caused) authoritatively from the ledger and skips estimators', () => {
+  it('reads REAL IVA acreditable from the ledger and causado from real cobranza (not the ledger trasladado accounts)', () => {
     const view = buildTaxDashboardView({
-      // Estos estimadores producirían números distintos — deben ignorarse
-      // porque hay libro mayor de IVA (autoritativo).
+      // El acreditable sale del ledger (autoritativo, los estimadores CXP/OC se
+      // omiten). El causado sale de la cobranza aplicada (base-cobro), NO de la
+      // cuenta de IVA trasladado del ledger: ese lado mezcla devengado/no-cobrado
+      // e infla el causado.
       cobranzaPayments: [
         cobranzaPayment({
           idPago: 'PAY-X',
           fechaCobro: '2026-05-08',
-          importeRecibo: 99999,
+          importeRecibo: 1160,
           applications: [{
             noFactura: 'C-X',
-            importeCobrado: 99999,
-            importeOriginalFactura: 99999,
-            importeIvaFacturaOriginal: 13793,
+            importeCobrado: 1160,
+            importeOriginalFactura: 1160,
+            importeIvaFacturaOriginal: 160,
             tasaIva: '16',
           }],
         }),
@@ -135,6 +137,7 @@ describe('taxModuleService', () => {
       ],
       auxiliarIvaRecords: [
         auxIvaRecord({ nombreCuenta: 'IVA ACREDITABLE PAGADO', cuentaObjeto: '1180', importe: 1600, fechaContable: '2026-05-10' }),
+        // La cuenta de IVA trasladado del ledger NO debe alimentar el causado.
         auxIvaRecord({ nombreCuenta: 'IVA TRASLADADO', cuentaObjeto: '2160', importe: 3200, fechaContable: '2026-05-12' }),
       ],
       companyCode: 'all',
@@ -147,50 +150,46 @@ describe('taxModuleService', () => {
 
     const may = view.periods.find((period) => period.period === '2026-05')!;
     expect(may.realIva.ivaCreditable).toBeCloseTo(1600);
-    expect(may.realIva.ivaCaused).toBeCloseTo(3200);
-    expect(may.realIva.payable).toBeCloseTo(1600);
+    // Causado = IVA de la cobranza (160), NO el 3200 de la cuenta trasladado.
+    expect(may.realIva.ivaCaused).toBeCloseTo(160);
+    expect(may.realIva.payable).toBeCloseTo(0);
+    expect(may.realIva.balanceInFavor).toBeCloseTo(1440);
     expect(may.realIva.expenseLines[0].concept).toContain('libro mayor');
-    expect(may.realIva.incomeLines[0].concept).toContain('libro mayor');
+    expect(may.realIva.incomeLines[0].concept).toContain('Cobro PAY-X');
   });
 
-  it('falls back to real cobranza caused IVA when the ledger has creditable but no caused side', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const view = buildTaxDashboardView({
-        cobranzaPayments: [
-          cobranzaPayment({
-            idPago: 'PAY-IVA-CAUSED',
-            fechaCobro: '2026-05-12',
-            importeRecibo: 1160,
-            applications: [{
-              noFactura: 'C-IVA',
-              importeCobrado: 1160,
-              importeOriginalFactura: 1160,
-              importeIvaFacturaOriginal: 160,
-              tasaIva: '16',
-            }],
-          }),
-        ],
-        auxiliarIvaRecords: [
-          auxIvaRecord({ nombreCuenta: 'IVA ACREDITABLE PAGADO', cuentaObjeto: '1180', importe: 1600, fechaContable: '2026-05-10' }),
-        ],
-        companyCode: 'all',
-        startDate: '2026-05-01',
-        endDate: '2026-05-31',
-        store: defaultTaxStore(),
-        today: '2026-05-01',
-        ivaMode: 'REAL',
-      });
+  it('takes caused IVA from real cobranza while reading creditable from the ledger', () => {
+    const view = buildTaxDashboardView({
+      cobranzaPayments: [
+        cobranzaPayment({
+          idPago: 'PAY-IVA-CAUSED',
+          fechaCobro: '2026-05-12',
+          importeRecibo: 1160,
+          applications: [{
+            noFactura: 'C-IVA',
+            importeCobrado: 1160,
+            importeOriginalFactura: 1160,
+            importeIvaFacturaOriginal: 160,
+            tasaIva: '16',
+          }],
+        }),
+      ],
+      auxiliarIvaRecords: [
+        auxIvaRecord({ nombreCuenta: 'IVA ACREDITABLE PAGADO', cuentaObjeto: '1180', importe: 1600, fechaContable: '2026-05-10' }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL',
+    });
 
-      const may = view.periods.find((period) => period.period === '2026-05')!;
-      expect(may.realIva.ivaCreditable).toBeCloseTo(1600);
-      expect(may.realIva.ivaCaused).toBeCloseTo(160);
-      expect(may.realIva.expenseLines).toHaveLength(1);
-      expect(may.realIva.incomeLines[0].concept).toContain('Cobro PAY-IVA-CAUSED');
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('usando fallback de cobranza real'));
-    } finally {
-      warn.mockRestore();
-    }
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    expect(may.realIva.ivaCreditable).toBeCloseTo(1600);
+    expect(may.realIva.ivaCaused).toBeCloseTo(160);
+    expect(may.realIva.expenseLines).toHaveLength(1);
+    expect(may.realIva.incomeLines[0].concept).toContain('Cobro PAY-IVA-CAUSED');
   });
 
   it('falls back to estimators when there is no IVA ledger coverage', () => {

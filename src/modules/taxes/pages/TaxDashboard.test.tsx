@@ -93,6 +93,53 @@ describe('<TaxDashboard />', () => {
     expect(screen.getByText(/Pagos registrados/i)).toBeTruthy();
   });
 
+  it('does not create an adjustment (no duplication) when an inline edit is opened and blurred without changes', () => {
+    render(
+      <TaxDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        cobranzaPayments={[cobranzaPayment()]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={20_000}
+      />,
+    );
+
+    // Period 2026-05 has IVA caused 160 from the default cobranza payment.
+    const row = screen.getByText('2026-05').closest('tr') as HTMLElement;
+    const ivaCell = within(row).getAllByText('$160.00')[0];
+    fireEvent.click(ivaCell);
+
+    const input = within(row).getByRole('spinbutton') as HTMLInputElement;
+    expect(input.value).toBe('160');
+    // Open + blur with no change must be a no-op — previously this appended an
+    // additive IVA_PAYABLE equal to the full value and doubled the cell.
+    fireEvent.blur(input);
+
+    const afterNoop = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
+    expect(afterNoop.adjustments ?? []).toHaveLength(0);
+    expect(within(row).getAllByText('$160.00').length).toBeGreaterThan(0);
+
+    // An actual change applies the DELTA so the cell becomes exactly the typed
+    // value (160 → 500 stores +340), not 160 stacked on top of 160.
+    fireEvent.click(within(row).getAllByText('$160.00')[0]);
+    const input2 = within(row).getByRole('spinbutton') as HTMLInputElement;
+    fireEvent.change(input2, { target: { value: '500' } });
+    fireEvent.blur(input2);
+
+    const afterEdit = JSON.parse(localStorage.getItem('midas.taxes.v1') ?? '{}');
+    expect(afterEdit.adjustments).toHaveLength(1);
+    expect(afterEdit.adjustments[0]).toMatchObject({
+      taxType: 'IVA',
+      period: '2026-05',
+      kind: 'IVA_PAYABLE',
+      amount: 340,
+    });
+  });
+
   it('shows approved tax payments as connected cash outflows for planning and projection', () => {
     render(
       <TaxDashboard

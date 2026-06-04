@@ -313,7 +313,10 @@ export function createTaxManualAdjustment(input: {
   source?: TaxSource;
 }): TaxManualAdjustment {
   if (!/^\d{4}-\d{2}$/.test(input.period)) throw new Error('Periodo fiscal inválido.');
-  if (!Number.isFinite(input.amount) || input.amount < 0) throw new Error('Monto fiscal inválido.');
+  // Los ajustes son correcciones FIRMADAS (el motor acumula con `+=`): un ajuste
+  // negativo reduce el monto calculado. La edición inline de la tabla manda el
+  // delta contra el valor mostrado, que es negativo al bajar una celda.
+  if (!Number.isFinite(input.amount)) throw new Error('Monto fiscal inválido.');
   return {
     id: `tax-adjustment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     taxType: input.taxType,
@@ -492,9 +495,15 @@ export function buildTaxDashboardView(params: {
   const includeRealIva = ivaMode === 'REAL' || ivaMode === 'BOTH';
   const includeForecastIva = ivaMode === 'FORECAST' || ivaMode === 'BOTH';
 
-  // IVA REAL desde el libro mayor (autoritativo). Cuando hay cobertura, el
-  // causado y el acreditable se leen DIRECTO del Auxiliar y los estimadores
-  // REAL (cobranza/CXP/OC/Auxiliar direccional) se omiten para no doble-contar.
+  // IVA REAL desde el libro mayor: SOLO el IVA acreditable es autoritativo desde
+  // el ledger (cruzaba en ~0 con los estimadores y el ledger lo resuelve bien).
+  //
+  // El IVA CAUSADO NO se toma del ledger: las cuentas de "IVA trasladado" del
+  // mayor mezclan el devengado/no-cobrado (por cobrar, pendiente de cobro) con
+  // el cobrado, así que sumarlas infla el causado muy por encima del impuesto
+  // fiscal del periodo (que es base-cobro). El causado REAL se lee de la
+  // cobranza realmente aplicada (`accumulateCobranzaPaymentIva`, base-cobro),
+  // que es la fuente que venía correcta antes de introducir el ledger.
   const ivaLedgerByPeriod = buildIvaLedgerByPeriod(params.auxiliarIvaRecords ?? [], {
     companyCode: params.companyCode,
     startDate,
@@ -502,37 +511,31 @@ export function buildTaxDashboardView(params: {
   });
   const hasIvaLedger = ivaLedgerByPeriod.size > 0;
   let ledgerCreditable = 0;
-  let ledgerCaused = 0;
   if (hasIvaLedger) {
     for (const detail of ivaLedgerByPeriod.values()) {
       ledgerCreditable += detail.creditable;
-      ledgerCaused += detail.caused;
-    }
-    if (ledgerCreditable > 0 && ledgerCaused === 0) {
-      console.warn('[taxes] IVA ledger trae acreditable pero cero causado; usando fallback de cobranza real para IVA causado. Revisar discovery/cache de AuxiliarContable IVA y window.__midas__.ivaLedger.');
     }
   }
   const hasLedgerCreditable = ledgerCreditable > 0;
-  const hasLedgerCaused = ledgerCaused > 0;
 
   if (includeRealIva) {
-    if (hasIvaLedger) {
+    if (hasLedgerCreditable) {
       accumulateIvaFromLedger({
         ledgerByPeriod: ivaLedgerByPeriod,
         ensure: ensureReal,
-        includeCreditable: hasLedgerCreditable,
-        includeCaused: hasLedgerCaused,
+        includeCreditable: true,
+        includeCaused: false,
       });
     }
-    if (!hasLedgerCaused) {
-      accumulateCobranzaPaymentIva({
-        payments: params.cobranzaPayments ?? [],
-        companyCode: params.companyCode,
-        startDate,
-        endDate,
-        ensure: ensureReal,
-      });
-    }
+    // Causado REAL siempre desde cobranza aplicada (base-cobro). Es la fuente
+    // autoritativa del causado; el ledger no se usa para este lado.
+    accumulateCobranzaPaymentIva({
+      payments: params.cobranzaPayments ?? [],
+      companyCode: params.companyCode,
+      startDate,
+      endDate,
+      ensure: ensureReal,
+    });
     accumulateHistoricIvaPaidFromBankStatements({
       bankStatements: params.bankStatements ?? [],
       companyCode: params.companyCode,
@@ -587,9 +590,11 @@ export function buildTaxDashboardView(params: {
     mergeCxpPaymentCoverage(auxiliarCoverage, auxiliarPagoCoverage),
   );
 
-  // Estimadores REAL de IVA acreditable — SOLO cuando el ledger no trae ese lado.
-  // Con ledger acreditable, estos doble-contarían. El causado tiene su propio
-  // fallback de cobranza arriba si el ledger no trae cuentas causadas.
+  // Estimadores REAL de IVA acreditable — SOLO cuando el ledger no trae ese lado
+  // (con ledger acreditable doble-contarían). El estimador direccional de
+  // Auxiliar también complementa el causado de flujos de ingreso confirmados que
+  // la cobranza no cubrió (deduplica contra cobranza, no doble-cuenta). El causado
+  // NUNCA sale del ledger: ese lado infla el devengado/no-cobrado.
   if (includeRealIva && !hasLedgerCreditable) {
     accumulateCxpIva({
       cxpRecords: params.cxpRecords ?? [],
@@ -626,8 +631,8 @@ export function buildTaxDashboardView(params: {
       endDate,
       rateContext,
       ensure: ensureReal,
-      includeCreditable: !hasLedgerCreditable,
-      includeCaused: !hasLedgerCaused,
+      includeCreditable: true,
+      includeCaused: true,
     });
   }
 
@@ -3116,7 +3121,9 @@ function normalizeAdjustment(value: unknown): TaxManualAdjustment | null {
   const period = typeof raw.period === 'string' && /^\d{4}-\d{2}$/.test(raw.period) ? raw.period : null;
   const kind = normalizeAdjustmentKind(raw.kind);
   const amount = readAmount(raw.amount);
-  if (!taxType || !period || !kind || !Number.isFinite(amount) || amount < 0) return null;
+  // Ajustes admiten monto negativo (corrección que reduce el calculado); ver
+  // createTaxManualAdjustment. Sólo se descartan los no-finitos.
+  if (!taxType || !period || !kind || !Number.isFinite(amount)) return null;
   return {
     id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `tax-adjustment-${period}-${kind}`,
     taxType,

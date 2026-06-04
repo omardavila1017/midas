@@ -913,12 +913,13 @@ function TaxPeriodTable({
   onSelectPeriod: (period: string) => void;
   onInlineEdit: (period: string, taxType: TaxType, kind: TaxManualAdjustment['kind'], amount: number) => void;
 }) {
-  const [editingCell, setEditingCell] = useState<{ period: string; field: 'iva' | 'isr' | 'isn' | 'imss' } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ period: string; field: 'iva' | 'isr' | 'isn' | 'imss'; original: number } | null>(null);
   const [editValue, setEditValue] = useState('');
 
   const startEdit = (period: string, field: 'iva' | 'isr' | 'isn' | 'imss', currentValue: number) => {
-    setEditingCell({ period, field });
-    setEditValue(String(Math.round(currentValue)));
+    const rounded = Math.round(currentValue);
+    setEditingCell({ period, field, original: rounded });
+    setEditValue(String(rounded));
   };
 
   const commitEdit = () => {
@@ -928,14 +929,25 @@ function TaxPeriodTable({
       setEditingCell(null);
       return;
     }
-    const kindMap: Record<string, { taxType: TaxType; kind: TaxManualAdjustment['kind'] }> = {
-      iva: { taxType: 'IVA', kind: 'IVA_PAYABLE' },
-      isr: { taxType: 'ISR', kind: 'ISR_MANUAL' },
-      isn: { taxType: 'ISN', kind: 'ISN_OVERRIDE' },
-      imss: { taxType: 'IMSS', kind: 'IMSS_MANUAL' },
+    // No-op si el valor no cambió: abrir el editor y salir (blur) NO debe crear
+    // un ajuste — antes esto duplicaba el monto al sumar el valor sobre sí mismo.
+    if (val === editingCell.original) {
+      setEditingCell(null);
+      return;
+    }
+    // `mode` distingue ajustes aditivos (delta) de overrides absolutos. Para los
+    // aditivos (IVA por pagar / ISR / IMSS) el ajuste es el DELTA contra el valor
+    // mostrado, así la celda queda EXACTAMENTE en el monto tecleado en vez de
+    // sumar el valor completo encima del calculado. ISN ya es un override.
+    const kindMap: Record<string, { taxType: TaxType; kind: TaxManualAdjustment['kind']; mode: 'delta' | 'absolute' }> = {
+      iva: { taxType: 'IVA', kind: 'IVA_PAYABLE', mode: 'delta' },
+      isr: { taxType: 'ISR', kind: 'ISR_MANUAL', mode: 'delta' },
+      isn: { taxType: 'ISN', kind: 'ISN_OVERRIDE', mode: 'absolute' },
+      imss: { taxType: 'IMSS', kind: 'IMSS_MANUAL', mode: 'delta' },
     };
     const target = kindMap[editingCell.field];
-    onInlineEdit(editingCell.period, target.taxType, target.kind, val);
+    const amount = target.mode === 'absolute' ? val : val - editingCell.original;
+    onInlineEdit(editingCell.period, target.taxType, target.kind, amount);
     setEditingCell(null);
   };
 
