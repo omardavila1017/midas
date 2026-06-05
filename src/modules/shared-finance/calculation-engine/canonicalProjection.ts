@@ -182,18 +182,18 @@ function prorateCitiConcentradoraByClient(
   // 1) Total real depositado + fecha representativa por (cía, mes).
   interface Group { cia: string; ym: string; total: number; repDate: string; repAmount: number; }
   const groups = new Map<string, Group>();
-  for (const m of targets) {
-    const date = m.actualDate ?? m.projectedDate;
+  for (const movement of targets) {
+    const date = movement.actualDate ?? movement.projectedDate;
     if (!date) continue;
-    const amt = Math.abs(m.projectedAmount ?? m.baseAmount ?? 0);
-    if (!(amt > 0)) continue;
-    const key = groupKeyOf(m);
-    const g = groups.get(key);
-    if (g) {
-      g.total += amt;
-      if (amt > g.repAmount) { g.repAmount = amt; g.repDate = date; }
+    const amount = Math.abs(movement.projectedAmount ?? movement.baseAmount ?? 0);
+    if (!(amount > 0)) continue;
+    const key = groupKeyOf(movement);
+    const group = groups.get(key);
+    if (group) {
+      group.total += amount;
+      if (amount > group.repAmount) { group.repAmount = amount; group.repDate = date; }
     } else {
-      groups.set(key, { cia: m.companyId ?? '', ym: date.slice(0, 7), total: amt, repDate: date, repAmount: amt });
+      groups.set(key, { cia: movement.companyId ?? '', ym: date.slice(0, 7), total: amount, repDate: date, repAmount: amount });
     }
   }
 
@@ -217,42 +217,42 @@ function prorateCitiConcentradoraByClient(
       : { id: rec.noCliente, name: rec.nombreCliente || 'Cliente sin nombre' };
     if (!display.id) continue;
     if (isPersonName(display.name ?? '')) continue;
-    let w = weightsByGroup.get(key);
-    if (!w) { w = new Map(); weightsByGroup.set(key, w); }
-    const e = w.get(display.id);
-    if (e) e.amount += amount;
-    else w.set(display.id, { name: display.name ?? 'Cliente', amount });
+    let clientWeights = weightsByGroup.get(key);
+    if (!clientWeights) { clientWeights = new Map(); weightsByGroup.set(key, clientWeights); }
+    const existing = clientWeights.get(display.id);
+    if (existing) existing.amount += amount;
+    else clientWeights.set(display.id, { name: display.name ?? 'Cliente', amount });
     cobranzaTotalByGroup.set(key, (cobranzaTotalByGroup.get(key) ?? 0) + amount);
   }
 
   // 3) Emitir líneas por cliente y marcar los grupos prorrateados.
   const proratedGroups = new Set<string>();
   const synthetic: FinancialMovement[] = [];
-  for (const [key, g] of groups) {
-    const weights = weightsByGroup.get(key);
-    const cobTotal = cobranzaTotalByGroup.get(key) ?? 0;
-    if (!weights || weights.size === 0 || !(cobTotal > 0)) continue; // fallback: deja el lump
+  for (const [key, group] of groups) {
+    const clientWeights = weightsByGroup.get(key);
+    const cobranzaTotal = cobranzaTotalByGroup.get(key) ?? 0;
+    if (!clientWeights || clientWeights.size === 0 || !(cobranzaTotal > 0)) continue; // fallback: deja el lump
     proratedGroups.add(key);
-    for (const [clientId, info] of weights) {
-      const amount = g.total * (info.amount / cobTotal);
+    for (const [clientId, info] of clientWeights) {
+      const amount = group.total * (info.amount / cobranzaTotal);
       if (!(amount > 0)) continue;
       synthetic.push({
-        id: `citi-prorrateo:${g.cia}:${clientId}:${g.ym}`,
+        id: `citi-prorrateo:${group.cia}:${clientId}:${group.ym}`,
         sourceSystem: 'BANK',
         type: 'INFLOW',
         category: 'AR_COLLECTION',
         subcategory: INCOME_SUBCAT_CITI,
-        companyId: g.cia,
+        companyId: group.cia,
         counterpartyId: clientId,
         counterpartyName: info.name,
         counterpartyType: 'CUSTOMER',
-        concept: `Cobro Citi ${info.name} (prorrateo depósito concentradora ${g.ym})`,
+        concept: `Cobro Citi ${info.name} (prorrateo depósito concentradora ${group.ym})`,
         currency: 'MXN',
         originalAmount: amount,
         baseAmount: amount,
         projectedAmount: amount,
-        actualDate: g.repDate,
-        projectedDate: g.repDate,
+        actualDate: group.repDate,
+        projectedDate: group.repDate,
         confidenceScore: 100,
         confidenceBand: calculateConfidenceBand(100),
         forecastMethod: 'RULE',
@@ -260,8 +260,8 @@ function prorateCitiConcentradoraByClient(
         status: 'REAL',
         lockState: 'LOCKED',
         comments: ['Atribución por cliente del depósito real a la concentradora Citi, prorrateada según la cobranza JDE del periodo. El total mensual del banco se conserva exacto.'],
-        createdAt: `${g.repDate}T00:00:00.000Z`,
-        updatedAt: `${g.repDate}T00:00:00.000Z`,
+        createdAt: `${group.repDate}T00:00:00.000Z`,
+        updatedAt: `${group.repDate}T00:00:00.000Z`,
       });
     }
   }

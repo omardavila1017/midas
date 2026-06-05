@@ -731,6 +731,17 @@ function addCoveredMonth(map: Map<string, Set<string>>, clientId: string, yearMo
   map.set(clientId, set);
 }
 
+/**
+ * Trae una factura CXC abierta a la ventana de proyección. Una fecha de cobro
+ * estrictamente futura (> hoy) se respeta tal cual. Si la fecha esperada ya
+ * pasó o cae HOY (≤ hoy), el cobro no se pierde: se reagenda al SIGUIENTE día
+ * operativo después de hoy (saltando fines de semana y festivos bancarios).
+ *
+ * Espejo del payable (`moveOpenPayableIntoProjection`), pero con el corte en
+ * `> asOfDate` y objetivo hoy+1: un cobro esperado para hoy se empuja a mañana
+ * (el dinero aún no entró), mientras que un pago que vence hoy sí puede
+ * liquidarse hoy mismo.
+ */
 function moveOpenReceivableIntoProjection(
   rawDate: string,
   asOfDate: string,
@@ -744,6 +755,15 @@ function moveOpenReceivableIntoProjection(
   return { date: dateToIso(next), moved: true };
 }
 
+/**
+ * Trae una CXP vencida a la ventana de proyección. Un pago cuya fecha
+ * programada/vencimiento es HOY o futura (≥ hoy) se respeta. Si ya venció
+ * (< hoy) se reagenda al PRIMER día operativo a partir de hoy (hoy mismo si es
+ * hábil) para que el scheduler decida si se paga, se recorre o queda pendiente.
+ *
+ * Diferencia con el receivable: el corte es `< asOfDate` (un pago que vence hoy
+ * todavía puede liquidarse hoy) y el objetivo es hoy, no hoy+1.
+ */
 function moveOpenPayableIntoProjection(
   rawDate: string,
   asOfDate: string,
@@ -766,6 +786,12 @@ function dateToIso(date: Date): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
 }
 
+/**
+ * Normaliza el nombre de un proveedor a una llave estable para emparejar el
+ * registro JDE con el proveedor del catálogo: mayúsculas, sin acentos, sin
+ * puntuación y con espacios colapsados. Así "Pemex, S.A." y "PEMEX SA" caen en
+ * la misma llave.
+ */
 function supplierLookupKey(value: string | undefined): string {
   if (!value) return '';
   return value
@@ -785,6 +811,10 @@ function providerJdeKey(value: string | undefined): string {
   return supplierLookupKey(trimmed);
 }
 
+/**
+ * Desglosa el saldo pendiente de una factura CXC en base gravable + IVA,
+ * eligiendo la tasa 8% (región fronteriza) o 16% según el cliente del catálogo.
+ */
 function cxcTaxMeta(
   record: CobranzaRecord,
   client?: Client,
@@ -793,6 +823,12 @@ function cxcTaxMeta(
   return grossToIvaTaxMeta(record.importePendientePesos, rate);
 }
 
+/**
+ * Desglosa el IVA acreditable de una CXP. Prefiere los importes que JDE ya
+ * reporta (subtotal + impuestos) escalados al saldo pendiente cuando la factura
+ * está parcialmente pagada. Si JDE no trae esos campos o la tasa inferida no es
+ * 8%/16%, cae a asumir 16% de IVA sobre el pendiente.
+ */
 function taxBreakdownFromCxp(record: CXPRecord): {
   taxRate?: FinancialTaxRate;
   taxBaseAmount?: number;
@@ -811,6 +847,11 @@ function taxBreakdownFromCxp(record: CXPRecord): {
   return taxRate ? { taxRate, taxBaseAmount, taxAmount } : grossToIvaTaxMeta(pending, 16);
 }
 
+/**
+ * Infiere la tasa de IVA (8% o 16%) a partir de la base y el impuesto, con ±1
+ * punto de tolerancia para redondeos. Devuelve undefined si no encaja en
+ * ninguna de las dos tasas conocidas.
+ */
 function taxRateFromAmounts(base: number, taxAmount: number): FinancialTaxRate | undefined {
   if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(taxAmount) || taxAmount <= 0) return undefined;
   const pct = Math.round((taxAmount / base) * 100);
@@ -819,6 +860,10 @@ function taxRateFromAmounts(base: number, taxAmount: number): FinancialTaxRate |
   return undefined;
 }
 
+/**
+ * Parte un monto BRUTO (IVA incluido) en su base gravable y el IVA, a la tasa
+ * dada. Es la inversa de "base × (1 + tasa)": base = bruto / (1 + tasa).
+ */
 function grossToIvaTaxMeta(
   amount: number,
   rate: 8 | 16,
@@ -831,6 +876,11 @@ function grossToIvaTaxMeta(
   };
 }
 
+/**
+ * Reescala la base y el IVA de una línea cuando el monto proyectado difiere del
+ * monto base (proporción lineal). Mantiene coherente el desglose fiscal si el
+ * motor ajustó el monto de la línea antes de emitir el movimiento.
+ */
 function scaleTaxMeta(
   line: Pick<RawLine, 'amount' | 'taxBaseAmount' | 'taxAmount'>,
   projectedAmount: number,

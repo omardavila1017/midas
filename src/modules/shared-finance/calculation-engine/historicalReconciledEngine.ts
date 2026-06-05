@@ -67,17 +67,17 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
   // este alias, resolveInflowSubcategory no puede detectar grupos como
   // Viajes Especiales antes del default comercial Citi.
   const clientById = new Map<string, Client>();
-  for (const c of inputs.clients) {
-    clientById.set(c.id, c);
-    for (const acc of c.jdeAccounts ?? []) {
-      const nc = (acc?.noCliente ?? '').trim();
-      if (nc && !clientById.has(nc)) clientById.set(nc, c);
+  for (const client of inputs.clients) {
+    clientById.set(client.id, client);
+    for (const jdeAccount of client.jdeAccounts ?? []) {
+      const noCliente = (jdeAccount?.noCliente ?? '').trim();
+      if (noCliente && !clientById.has(noCliente)) clientById.set(noCliente, client);
     }
     // Indexar también por commercialGroupId. Cuando un movimiento se colapsa
     // al grupo padre como counterparty, `resolveInflowSubcategory` debe poder
     // resolver el grupo y aplicar reglas comerciales como Viajes Especiales.
-    if (c.commercialGroupId && !clientById.has(c.commercialGroupId)) {
-      clientById.set(c.commercialGroupId, c);
+    if (client.commercialGroupId && !clientById.has(client.commercialGroupId)) {
+      clientById.set(client.commercialGroupId, client);
     }
   }
 
@@ -114,8 +114,8 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
   // cargoEnrichments/abonoEnrichments. Sólo redistribuye categoría/subcategoría
   // — NO toca monto ni fecha, así que los totales y la caja quedan intactos.
   const glByBankKey = new Map<string, AuxiliarReconLine>();
-  for (const l of inputs.auxiliarReconLines ?? []) {
-    if (l.bankMovementKey) glByBankKey.set(l.bankMovementKey, l);
+  for (const reconLine of inputs.auxiliarReconLines ?? []) {
+    if (reconLine.bankMovementKey) glByBankKey.set(reconLine.bankMovementKey, reconLine);
   }
   // Índice para identificar CARGOs sin cruce a PagoProveedor: nombre del
   // proveedor en el concepto bancario + monto contra compras (OCs).
@@ -137,15 +137,15 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
   // ya hace lo equivalente en su `closingCash` (suma todos los movimientos).
   const internalReconByKey = new Map<string, { net: number; cia: string; lastDate: string }>();
   const accrueInternalResidual = (cia: string, ym: string, tipo: string, importe: number, fecha: string) => {
-    const amt = Math.abs(importe || 0);
-    if (!(amt > 0)) return;
-    const signed = tipo === 'ABONO' ? amt : -amt;
+    const amount = Math.abs(importe || 0);
+    if (!(amount > 0)) return;
+    const signed = tipo === 'ABONO' ? amount : -amount;
     const key = `${cia}::${ym}`;
     const date = fecha || `${ym}-01`;
-    const cur = internalReconByKey.get(key);
-    if (cur) {
-      cur.net += signed;
-      if (date > cur.lastDate) cur.lastDate = date;
+    const current = internalReconByKey.get(key);
+    if (current) {
+      current.net += signed;
+      if (date > current.lastDate) current.lastDate = date;
     } else {
       internalReconByKey.set(key, { net: signed, cia, lastDate: date });
     }
@@ -609,8 +609,8 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
       ?? resolveCategoryForGlAccount(line.cuentaContable, line.cuentaObjeto, line.idCuenta)
       ?? (!isInflow
         ? (() => {
-            const e = findBankAccount(line.cuentaBanco);
-            return e ? resolveCategoryForBankAccountRole(e.role, e.subRole) : undefined;
+            const bankEntry = findBankAccount(line.cuentaBanco);
+            return bankEntry ? resolveCategoryForBankAccountRole(bankEntry.role, bankEntry.subRole) : undefined;
           })()
         : undefined);
     const auxResolvedCategory: FinancialMovementCategory = isInflow

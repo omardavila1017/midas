@@ -199,9 +199,9 @@ export function buildOwnAccountsIndex(
 ): Set<string> {
   const out = new Set<string>();
   if (!statements) return out;
-  for (const s of statements) {
-    const c = (s.cuenta ?? '').trim();
-    if (c.length >= MIN_ACCOUNT_LENGTH) out.add(c);
+  for (const statement of statements) {
+    const cuenta = (statement.cuenta ?? '').trim();
+    if (cuenta.length >= MIN_ACCOUNT_LENGTH) out.add(cuenta);
   }
   return out;
 }
@@ -665,10 +665,10 @@ export function computeBankOnlyCashFlow(
   const daily: DailyFlow[] = [];
   let cumulative = startingBalance;
   for (const date of sortedDates) {
-    const ab = abonosByDate.get(date) ?? [];
-    const ca = cargosByDate.get(date) ?? [];
-    const inflows = ab.reduce((s, m) => s + m.amount, 0);
-    const outflows = ca.reduce((s, m) => s + m.amount, 0);
+    const dayAbonos = abonosByDate.get(date) ?? [];
+    const dayCargos = cargosByDate.get(date) ?? [];
+    const inflows = dayAbonos.reduce((sum, mov) => sum + mov.amount, 0);
+    const outflows = dayCargos.reduce((sum, mov) => sum + mov.amount, 0);
     const net = inflows - outflows;
     cumulative += net;
     daily.push({
@@ -737,7 +737,7 @@ export interface WeeklyFlow {
 export interface MonthlyFlow {
   /** Month index (0 = January, 11 = December) */
   month: number;
-  /** Month display name (English) */
+  /** Month display name in es-MX (Spanish), matching the UI (e.g. "Enero"). */
   monthName: string;
   /** Total monthly inflows */
   inflows: number;
@@ -942,10 +942,12 @@ function getWeekStartDate(dateStr: string): string {
 }
 
 /**
- * Get month name in English.
+ * Get the month display name in es-MX (Spanish) — the locale the whole UI
+ * renders in. Returns "Enero".."Diciembre" so callers (e.g. MonthlyFlow) show
+ * the same month label the user sees everywhere else in the app.
  *
- * @param monthIndex 0-based month index (0 = Jan, 11 = Dec)
- * @returns Month name
+ * @param monthIndex 0-based month index (0 = Enero, 11 = Diciembre)
+ * @returns Spanish month name, or '' if the index is out of range
  */
 function getMonthName(monthIndex: number): string {
   const months = [
