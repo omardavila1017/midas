@@ -9,7 +9,7 @@ Frontend auth is not a security boundary.
 
 ## Current Model
 
-- Shared deployments must be protected by `/api/auth/*` backed by Atlas SSO or a backend session layer.
+- Shared deployments must be protected by `/api/auth/*` backed by an SSO provider or a backend session layer.
 - API routes under `/api/*` must enforce access before proxying JDE, TRESS, Cognos, or OpenAI.
 - Production secrets must be server-side only: `JDE_TOKEN`, `COGNOS_TOKEN`, `OPENAI_API_KEY`.
 - The React app calls `/api/auth/session`, `/api/auth/login`, `/api/auth/logout`, `/api/auth/password/change`, and password reset endpoints with `credentials: include`.

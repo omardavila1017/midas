@@ -12,7 +12,7 @@ Debe usarla principalmente Tesoreria. Tambien la pueden consultar Finanzas, Cuen
 
 ### Paso 1: Abrir la herramienta
 
-Entra desde Atlas y abre el artefacto Midas. Si no tienes acceso, solicita permiso al equipo de Atlas o a soporte interno.
+Abre Midas en tu navegador con la liga que te compartió el equipo responsable. Si no tienes acceso, solicítalo a soporte interno.
 
 ### Paso 2: Revisar el plan de flujo
 
@@ -45,10 +45,10 @@ Compara caja final, caja minima, flujo neto, cobranza y pagos a proveedores. Si 
 ## Preguntas frecuentes
 
 **Que hago si los datos no cargan?**
-Verifica tu conexion a la red corporativa y vuelve a cargar la herramienta. Si el problema continua, contacta a soporte interno o al equipo Atlas.
+Verifica tu conexion a la red corporativa y vuelve a cargar la herramienta. Si el problema continua, contacta a soporte interno.
 
 **Los datos se actualizan solos?**
-La herramienta consulta datos al abrir o refrescar las vistas. La frecuencia final depende de la configuracion de Atlas y de los sistemas de contabilidad y reportes.
+La herramienta consulta datos al abrir o refrescar las vistas. La frecuencia final depende de la configuracion del despliegue y de los sistemas de contabilidad y reportes.
 
 **Puedo exportar los datos?**
 Si. Algunas vistas permiten descargar o exportar informacion para analisis fuera de la herramienta. Usa solo las opciones visibles en pantalla.
@@ -64,4 +64,4 @@ Porque el proveedor requiere validacion adicional antes de mover o priorizar el 
 
 ## A quien contacto si tengo problemas
 
-Contacta a la mesa de ayuda interna o al equipo Atlas/SWAT responsable de Midas.
+Contacta a la mesa de ayuda interna o al equipo responsable de Midas.

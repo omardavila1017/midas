@@ -106,7 +106,7 @@ export function MidasChatPanel({ open, onClose, cia, scenarioId, buildContext, o
             <div className="font-bold text-[#4338CA]">MIDAS no configurado</div>
             <p className="mt-1">
               Falta configurar el proxy <code className="rounded bg-white px-1">/api/openai</code>. La llave debe
-              vivir server-side en Atlas/backend.
+              vivir server-side en el backend.
             </p>
           </div>
         )}

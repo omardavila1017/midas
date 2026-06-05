@@ -1,5 +1,7 @@
 # Auditoría Técnica de Integración de Módulos — Midas
 
+> **Nota de estado (2026-06-05):** este es un snapshot del 2026-05-19 que se conserva como mapa de integración y de riesgos. Parte de su "Fase 1 — Documentación" ya se atendió: `API.md` (reporte de migración Cognos obsoleto) se **eliminó**, `ARCHITECTURE.md` se **reescribió** al estado real, y se limpiaron referencias de despliegue obsoletas. Las menciones a `API.md` más abajo quedan como contexto histórico. El mapa de módulos/APIs y los pendientes (ROL → caja, desacoplar `App.tsx`, registry como fuente oficial) siguen vigentes.
+
 > Fecha: 2026-05-19  
 > Alcance: revisión del código fuente real (`src/`, `api/`) para mapear comunicación entre módulos, APIs, persistencia y oportunidades de optimización.
 

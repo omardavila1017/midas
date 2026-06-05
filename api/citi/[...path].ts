@@ -1,10 +1,10 @@
-import { createAtlasProxy } from '../_lib/atlasProxy';
+import { createApiProxy } from '../_lib/apiProxy';
 
 export const config = {
   maxDuration: 300,
 };
 
-export default createAtlasProxy({
+export default createApiProxy({
   label: 'citi',
   upstreamEnvVar: 'CITI_UPSTREAM',
   defaultUpstream: 'http://srv-desarrollo:92/CITI',

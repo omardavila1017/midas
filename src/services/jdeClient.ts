@@ -5,7 +5,7 @@
  *   VITE_JDE_BASE_URL   — base URL (default: "/api/jde" via apiConfig)
  *   VITE_JDE_TOKEN      — local-dev fallback only. For `/api/jde` and
  *                         `/api/tress`, the browser delegates auth to the
- *                         Atlas/backend proxy.
+ *                         backend proxy.
  *
  * El `base` default ("/api/jde") es reescrito por el proxy configurado en
  * vite.config.ts hacia https://api.gruposenda.com/JDEdwards.

@@ -6,6 +6,18 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 `README.md` covers the deploy / env / business surface. This file covers the code layout, the data flow, and the rules that bite if you ignore them.
 
+## Delivery / handoff state (2026-06-05)
+
+This is the handoff snapshot for delivering Midas in its current state. **`CLAUDE.md` is the single source of truth** for code/architecture; `AGENTS.md` intentionally points here (no second copy to drift). `DOCS.md` is the index of every doc in the repo (what is current vs. an archived historical snapshot under `docs/archive/`).
+
+- **Verified baseline (run after `npm install`):** `npm run typecheck` clean · `npm test` → 866 passed / 12 skipped / 0 failed (99 files) · `npm run build` passes with the expected ~845 kB main-chunk warning. See "Before you ship".
+- **Auth posture:** real backend session at `/api/auth/*` (HttpOnly cookie); the frontend RBAC is **UX only, not a security boundary** — the proxy/backend authorizes `/api/*`. No tokens/passwords in the bundle. See `AUTH.md` + `SECURITY-AUDIT.md` (rotate any historically-exposed secret + purge git history before going live — that operational step is still owned by the deploying team).
+- **Known intentional artifacts shipped (not bugs):**
+  - `InternalTransfersDebugPanel.tsx` — a collapsed `TEMPORAL` debug panel in Proyección. Safe to delete once internal-transfer recon is signed off (see Performance/merge section).
+  - Company exclusion catalog is **empty** (nothing excluded; mechanism preserved). See Risk #9 + `EXCLUSION_RULES.md`.
+  - `/api/cognos` proxy exists but the frontend no longer calls Cognos (catalogs are bundled JSON). See `AUDITORIA-INTEGRACION-MODULOS.md`.
+- **Top open follow-ups (documented, not blocking delivery):** ROL CITI is fetched + cross-matched in the Cobranza tab but **not yet projected into cash** (blocked on a reliable client column from `/citi/roldiario`); `App.tsx`/`AppCore.tsx` still hold all-company raw records in state (heap floor — on-demand-per-tab loading deferred); legacy reconciliation engines still back a few display tabs. Details inline below and in `AUDITORIA-INTEGRACION-MODULOS.md`.
+
 ## Auth / RBAC / módulo de Usuarios (2026-06-03)
 
 Autenticación real vía backend `/api/auth/*`; control de acceso por roles **a nivel UI** (NO es frontera de seguridad — ver `AUTH.md`; la autorización vinculante la hace el backend/proxy `/api/*`).
@@ -83,7 +95,7 @@ El motor canónico está partido en **dos motores nombrados y testeables**, en a
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)
 - Charts: Recharts 2.12
 - Icons: `lucide-react`
-- Excel I/O: previously `exceljs`; package is currently in `dependencies` but **not imported anywhere** (verified 2026-05-14). Safe to remove with `npm uninstall exceljs`.
+- Excel I/O: none at runtime. `exceljs`/`xlsx` were removed from `package.json` (verified 2026-06-05 — no spreadsheet parser remains in `src`). Any Excel→code data (convenio concursal, TRESS/compras field mappings) is baked into TS at build time, not parsed at runtime.
 - Tests: Vitest + Testing Library + jsdom; Playwright available for e2e
 - IndexedDB cache for daily JDE responses (`src/services/dailyApiCache.ts`); falls back to memory-only after 5s open timeout if locked by another tab.
 
@@ -102,7 +114,8 @@ Always run `npm test` and `npm run build` before declaring a change done. As of 
 
 ```text
 src/
-├── App.tsx                      # Top-level shell, routing, store load/save, boot orchestrator
+├── App.tsx                      # Boot orchestrator + providers (auth gate, store load/save, splash, dataset fetch wiring)
+├── AppCore.tsx                  # The mounted app: nav/routing, tab gating by role, per-dataset boot effects, runtime pressure handler
 ├── main.tsx                     # Entry
 ├── index.css                    # Senda DS tokens (OKLCH light + dark), keyframes, a11y, Tailwind dark-mode overrides
 ├── theme.ts                     # Token + motion config
@@ -148,6 +161,7 @@ src/
 │   ├── fideicomiso/             # Fideicomiso DINA: re-inyecta el flujo Bajío (excluido de la proyección por excludeBajio) en escenarios no-base. services/fideicomisoMovements → egreso fijo `fideicomiso-dina:` (DEBT, LOCKED, $14.4M/mes día 15 por src/config/fideicomiso.config.ts, override VITE_DINA_*) + ingreso real CORNING desde estados Bajío (`fideicomiso-corning:`). Parte del baseline que la tendencia respeta.
 │   ├── payroll/                 # TRESS nómina loader + dashboard analítico (sub-tabs: Resumen/Comparativo/Conceptos/Tendencia/Predictivo/Alertas/Detalle, services/payrollAnalyticsService + payrollForecastAdapter + payrollAnomalyService; ver README.md). API agregado (empresa×concepto×periodo×mes) — SIN empleado/puesto/CC → análisis por empleado/CC bloqueado, ver "API gaps" en README. Expansion to movements happens INSIDE canonicalProjection
 │   ├── kpis-objectives/         # KPIs autocalculados (bancos + cobranza + CXP) + KPIs custom + objetivos con seguimiento (sección "Objetivos")
+│   ├── users/                   # Módulo Usuarios (pages/components/services). Tab `users`, solo admin + mesa_ayuda. Ver sección Auth/RBAC.
 │   └── midas-ai/                # MidasBubble proposal suggestion bot
 ├── components/                  # Treasury UI: CXP, Bancos, Clients, Providers, etc. (Dashboard.tsx removed — merged into Proyección 2026-05-18)
 ├── workers/                     # Web workers (reconciliation)
@@ -200,6 +214,8 @@ FinancialPlanningDashboard.tsx
 ```
 
 Dashboard → Proyección merge (2026-05-18): the standalone **Dashboard** tab was removed and folded into **Proyección Financiera**, which is now the daily landing surface (`DEFAULT_TAB.proyeccion = 'financialProjection'`). `Dashboard.tsx`, `MonthDrilldown.tsx`, `DashboardMonthlyChart.tsx`, `CashFlowTable.tsx` were deleted. Rescued pieces live in `src/modules/financial-projection/components/MergedDashboardKpis.tsx` (`CobranzaKpiCard`, `MinimumExpenseKpi`, `computeRunYtd`). Proyección's forecast window now starts `${year}-01-01` (was `today`) so it shows historical months like the old Dashboard, keeping the `today+364` forward horizon — change applied in BOTH `ProjectionDashboardInner` and `preloadProjectionScenarioRuns` (must stay in sync for cache-key parity). `CashFlowChart` gained an `operatingFloor` line, rendered only at monthly granularity. Note: `deficitDays`/risk KPIs now include historical buckets (accepted tradeoff).
+
+**Temporary debug surface (safe to delete).** `src/modules/financial-projection/components/InternalTransfersDebugPanel.tsx` is a collapsed, lazy diagnostic panel rendered at the bottom of Proyección (`FinancialProjectionDashboard.tsx`) for inspecting internal-transfer detection against `bankStatements`. It is explicitly marked `TEMPORAL` in-file and computes nothing until expanded. It is the only intentional debug artifact shipped in the UI; remove it (component + the import/render in `FinancialProjectionDashboard.tsx`) once the internal-transfer reconciliation is signed off — nothing else depends on it.
 
 Open integration questions / known gaps:
 - `cashFlowEngine.ts` exports `toYearMonth`/`compareYearMonth`/`buildHistoricalMonths`, consumed by `dashboardEngine.ts`, `projectionEngine.ts`, `canonicalProjection.ts`, `expensePerProvider.ts` and the predictive engine. Not dead — don't delete with the old Dashboard.
@@ -365,7 +381,7 @@ Crash/perf pass landed 2026-05-19. These are load-bearing; re-check before touch
 6. **Duplicate adjustment calls.** `applyAdjustmentsToMovements` is deterministic; calling it twice on the same input is wasted CPU per scenario eval. The fix landed 2026-05-14 — don't reintroduce.
 7. **JDE timeout creep.** 120s is the current ceiling. If you raise it, document why; longer hangs make the boot orchestrator feel broken.
 8. **Removing the global dark-mode CSS overrides.** ~40 components rely on the `html.dark .bg-white` family of rules in `index.css`. Removing them without migrating each callsite to `bg-card` / token variables will visibly break dark mode.
-9. **Re-implementing the global exclusion filter.** Empresa 33 / multicarga exclusion lives ONLY in `src/domain/companyExclusion.ts`, applied at the JDE normalize layer of **every** base fetch in `src/services/jde.ts` (`fetchAgedBalances`, `fetchCobranza`, `normalizeCobranzaPayments`, `fetchCompras`, `fetchPagoProveedor`, `fetchNomina`, `fetchBankStatements`, `fetchRol` — via `dropExcludedByCia`; `*Range` variants delegate to these) and the company-selector sites (`filterActiveCompanies` in `App.tsx`), plus the `bankStatements` display memo in `App.tsx` (filters excluded accounts next to `excludeBajio` — required because persisted IDB bank caches / daily-cache / manual uploads bypass `fetchBankStatements`). It is **blanket — no date boundary** (historical records dropped too; the predicate is `matchesExclusionIdentity`). Do NOT apply it inside `canonicalProjection.ts` (double-filter bug — the cut is upstream, downstream inherits it). See `EXCLUSION_RULES.md`.
+9. **Re-implementing the global exclusion filter.** As of **2026-06-04 the exclusion catalog is EMPTY** — `EXCLUSION_RULES` in `src/domain/companyExclusion.ts` has empty `ciaNumbers`/`namePatterns`/`unidadesNegocio`, so **nothing is excluded** (Multicarga / empresa 33 and BanBajío now count everywhere: bancos, gastos, proyección, KPIs, histórico). BanBajío was a *separate* switch (`excludeBajio`/`isBajioStatement` in `src/domain/bankStatements.ts`, applied in `AppCore.tsx`'s `accountableBankStatements`); that too now **includes** Bajío — `isBajioStatement` survives only to feed the Fideicomiso DINA module. The **matching mechanism is preserved** so exclusions can be re-enabled by adding values to the arrays. If you re-enable: the single predicate is `matchesExclusionIdentity` (identity-only, **blanket — no date boundary**, drops historical rows too); it lives ONLY in `companyExclusion.ts` and is applied at the JDE normalize layer of every base fetch in `src/services/jde.ts` (`fetchAgedBalances`, `fetchCobranza`, `normalizeCobranzaPayments`, `fetchCompras`, `fetchPagoProveedor`, `fetchNomina`, `fetchBankStatements`, `fetchRol` — via `dropExcludedByCia`; `*Range` variants delegate), the company-selector sites (`filterActiveCompanies` in `App.tsx`), and the `bankStatements` display memo in `AppCore.tsx` (covers persisted IDB / daily-cache / manual uploads that bypass `fetchBankStatements`). Do NOT apply it inside `canonicalProjection.ts` (double-filter bug — the cut is upstream, downstream inherits it). See `EXCLUSION_RULES.md`.
 
 ## Spanish vs English
 
@@ -375,9 +391,10 @@ Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you eve
 
 ## Before you ship
 
-- `npm test` (13 pre-existing failures on main as of 2026-05-15, all in `CollectionProjection.test.tsx` + `MidasSplash.test.tsx` — verify count didn't grow)
-- `npm run typecheck` (clean as of 2026-05-15 — any error is yours)
-- `npm run build` (clean as of 2026-05-15)
+- `npm install` first — the repo ships no `node_modules`. (Note: invoking a *global* `tsc`/`vitest` instead of the project's pinned ones can produce false errors, e.g. `TS5101 baseUrl deprecated` from a TS 7.x preview — the project pins TypeScript `^5.5.2` + `ignoreDeprecations` in `tsconfig.json`, so always run via `npm`/`npx` against installed deps.)
+- `npm test` — **baseline 2026-06-05: 99 files, 866 passed, 12 skipped, 0 failed** (~32s). The 12 skips are the obsolete `it.skip` cases in `canonicalProjection.test.ts` (long-term projection removed). Any new failure is yours.
+- `npm run typecheck` — clean as of 2026-06-05. Any error is yours.
+- `npm run build` — passes as of 2026-06-05, with one expected warning: the `AppCoreWithProviders` chunk is ~845 kB (>500 kB Vite threshold). Code is already split into vendor-react / vendor-charts / per-tab chunks; the main app chunk is the remaining floor. Not a blocker.
 - Smoke `npm run dev` against real JDE data (or empty store) for the path you touched.
 - For visual changes, toggle dark mode (add `dark` class to `<html>` via DevTools) and verify your component reads correctly. The splash, dashboard, planning grid, charts, CommandPalette (⌘K), modals, and form inputs should all be coherent.
 - Update this file if you changed the architecture.

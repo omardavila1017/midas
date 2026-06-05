@@ -4,21 +4,25 @@
 
 ## Overview
 
-Midas is an Atlas-ready treasury workbench for consolidated cash-flow review, scenario planning, collections, accounts payable, bank movements, KPIs, and forecasts. It is used by treasury and finance users who need to compare expected receipts, scheduled payments, current bank position, and scenario impact before making liquidity decisions. Live data is read from JDE and Cognos-facing service layers, with deterministic mock fallbacks for local development and staging.
+Midas is a treasury workbench for consolidated cash-flow review, scenario planning, collections, accounts payable, bank movements, KPIs, and forecasts. It is used by treasury and finance users who need to compare expected receipts, scheduled payments, current bank position, and scenario impact before making liquidity decisions. Live data is read from JDE (companies, CXP, cobranza, compras, pagos, bank statements), TRESS (nómina) and CITI (ROL / viajes) via same-origin `/api/*` proxies; client/provider catalogs are bundled JSON, so the UI runs locally without live access.
 
 ## Architecture
 
 ```text
-JDE F0911 / Cognos Reports
+JDE / TRESS / CITI (REST)   +   bundled JSON catalogs
         ↓
-src/services/*.service.ts  (API layer)
+api/[jde|tress|citi|openai|auth]/*   (serverless proxies — inject bearer server-side)
         ↓
-src/config/api.config.ts   (env var config)
+src/services/* (jde.ts, jdeClient.ts, tress*, catalog.service.ts)   (API layer)
         ↓
-React Components           (UI layer)
+src/domain/* + src/modules/*/calculation-engine   (treasury / cash-flow engines)
         ↓
-Atlas (hosting)
+React components + module dashboards   (UI layer)
+        ↓
+localStorage (midas-v12) + IndexedDB (heavy store, daily cache, projection cache)
 ```
+
+Hosting is platform-agnostic: a static SPA build (`dist/`) plus the `api/*` serverless functions. See `CLAUDE.md` for the full code map and `ARCHITECTURE.md` for the layered view.
 
 ## Tech Stack
 
@@ -38,46 +42,57 @@ src/
 ├── config/
 │   └── api.config.ts                # Runtime API configuration from env vars
 ├── services/
-│   ├── catalog.service.ts           # Cognos client/provider catalog
+│   ├── catalog.service.ts           # Bundled client/provider catalog (local JSON, no remote fetch)
 │   ├── jde.ts                       # JDE companies, CXP, cobranza, bank statements
 │   ├── jdeClient.ts                 # Fetch client for JDE endpoints
 │   └── jdeTypes.ts                  # JDE request/response types
 ├── domain/                          # Treasury / cash-flow engines
-│   ├── persistence.ts               # midas-v8 store + migrations + normalizers
-│   ├── netCashFlowEngine.ts
-│   ├── collectionEngine.ts
-│   ├── reconciliationEngine.ts      # Projected events vs bank ABONOs
-│   ├── realReconciliationEngine.ts  # Real cobranza vs bank (4-layer match)
-│   ├── operatingProjectionModule.ts # + scenarios + taxes + manual events
-│   └── ...                          # forecast, budget, calendar, providers
+│   ├── persistence.ts               # midas-v12 store + migrations + normalizers
+│   ├── storageRegistry.ts           # Central inventory of all localStorage + IDB keys
+│   ├── netCashFlowEngine.ts         # Internal-transfer detection + bank-only cash flow
+│   ├── collectionEngine.ts          # Collection projection rules
+│   ├── auxiliarReconciliationEngine.ts # GL (AuxiliarContable) × bank reconciliation (current)
+│   ├── reconciliationEngine.ts      # Projected events vs bank ABONOs (forecast)
+│   ├── realReconciliationEngine.ts  # Legacy cobranza vs bank match (display tabs only)
+│   └── ...                          # ivaLedger, predictive (Holt-Winters), budget, calendar, providers
 ├── modules/
-│   ├── financial-planning/          # Scenarios + propuestas + spreadsheet
-│   ├── financial-projection/        # KPIs + alerts + forward projection
-│   ├── shared-finance/              # Shared types, audit, calc engine
-│   └── taxes/                       # Tax dashboard
-├── components/                      # Treasury UI
-│   ├── Dashboard.tsx, CXP.tsx, Bancos.tsx, Clients.tsx, Providers.tsx
-│   ├── CommandPalette.tsx, KeyboardShortcuts.tsx
-│   └── ...
-└── workers/                         # Web workers for heavy compute
+│   ├── financial-planning/          # Scenarios + propuestas + spreadsheet (Planeación)
+│   ├── financial-projection/        # KPIs + alerts + forward projection (Proyección, daily landing)
+│   ├── shared-finance/              # Shared types + calculation-engine (canonicalProjection, 2 engines)
+│   ├── taxes/                       # Tax dashboard (IVA real from GL + reserves/payments)
+│   ├── concurso-mercantil/          # Convenio concursal (locked DEBT egresos)
+│   ├── fideicomiso/                 # Fideicomiso DINA (Bajío re-injection in non-base)
+│   ├── payroll/                     # TRESS nómina loader + analytics
+│   ├── kpis-objectives/             # Auto + custom KPIs and objectives
+│   ├── users/                       # User admin (RBAC, admin + mesa_ayuda only)
+│   └── midas-ai/                    # MidasBubble proposal suggestion bot
+├── components/                      # Treasury UI: CXP, Bancos, Clients, Providers, Compras, Pagos,
+│   │                                #   CollectionProjection, CommandPalette, KeyboardShortcuts, …
+│   └── ...                          # (Dashboard.tsx was removed 2026-05-18, merged into Proyección)
+└── workers/                         # Web workers (scenario run, auxiliar reconciliation)
 ```
 
 ## Environment Variables
 
-All sensitive configuration is injected server-side by Atlas/backend. See `.env.example` for placeholders only; never commit real tokens or passwords.
+**`.env.example` is the authoritative, fully-commented template** — copy it to `.env.local` and fill local-only values. The table below is a summary. All production secrets are injected server-side by the backend/proxy; never commit real tokens or passwords, and never give a secret a `VITE_` prefix (those are baked into the public bundle).
+
+The browser only ever talks to same-origin proxy paths under `/api/*` (`api/[jde|tress|citi|cognos|openai|auth]/*`); the proxy injects the bearer credential server-side so it never reaches the client.
 
 | VARIABLE | REQUIRED | DESCRIPTION | WHERE TO GET |
 |----------|----------|-------------|--------------|
-| `VITE_ATLAS_ARTIFACT_ID` | Yes | Atlas artifact identifier | Atlas admin |
-| `VITE_JDE_BASE_URL` | Yes | Browser path, default `/api/jde` | Atlas admin |
-| `VITE_TRESS_BASE_URL` | Yes | Browser path, default `/api/tress` | Atlas admin |
-| `VITE_COGNOS_BASE_URL` | Yes for live data | Browser path, default `/api/cognos` | Atlas admin |
-| `VITE_OPENAI_BASE_URL` | Yes for MIDAS AI | Browser path, default `/api/openai` | Atlas admin |
-| `VITE_JDE_ENVIRONMENT` | Yes | JDE environment code, for example `PD920` | JDE admin |
-| `JDE_TOKEN` | Server-side only | JDE/TRESS bearer credential injected by backend | JDE admin |
-| `COGNOS_TOKEN` | Server-side only | Cognos bearer credential injected by backend | Cognos admin |
-| `OPENAI_API_KEY` | Server-side only | OpenAI key injected by backend | OpenAI admin |
-| `JDE_UPSTREAM` / `TRESS_UPSTREAM` / `COGNOS_UPSTREAM` | Server-side only | Upstream API base URLs | SWAT engineer |
+| `VITE_JDE_BASE_URL` | Yes | Browser path, default `/api/jde` | DevOps / infra |
+| `VITE_JDE_ENVIRONMENT` | Yes | JDE environment code (`PD920` prod, `PY920` test, `DV920` dev) | JDE admin |
+| `VITE_TRESS_BASE_URL` | Yes (nómina) | Browser path, default `/api/tress` (shares the JDE token) | DevOps / infra |
+| `VITE_CITI_BASE_URL` | Yes (ROL) | Browser path, default `/api/citi` (CITI roldiario) | DevOps / infra |
+| `VITE_OPENAI_BASE_URL` | Yes (MIDAS AI) | Browser path, default `/api/openai` | DevOps / infra |
+| `VITE_AUTH_BASE_URL` | Yes (auth) | Auth backend base, default `/api/auth` | Auth / SSO admin |
+| `VITE_USER_ROLES` / `VITE_DEFAULT_ROLE` | Yes (RBAC UI) | CSV `email:rol` + fallback role for UI gating (not a security boundary) | Deploying team |
+| `JDE_TOKEN` / `CITI_TOKEN` / `OPENAI_API_KEY` | Server-side only | Bearer credentials injected by the proxy | Respective admin |
+| `JDE_UPSTREAM` / `TRESS_UPSTREAM` / `CITI_UPSTREAM` / `OPENAI_UPSTREAM` | Server-side only | Upstream API base URLs | SWAT engineer |
+
+> **Cognos is legacy/optional.** The `/api/cognos` proxy and `*COGNOS*` vars still exist, but the current frontend no longer calls Cognos — client/provider catalogs are bundled JSON (`catalog.service.ts`). You can leave Cognos unset. See `AUDITORIA-INTEGRACION-MODULOS.md`.
+>
+> **Local auth mode (dev/internal).** When `src/config/authLocalUsers.json` has `"enabled": true`, logins validate against that JSON (passwords as SHA-256 hashes, never plaintext) instead of `VITE_AUTH_BASE_URL`. This is **not** a security boundary — see `AUTH.md`.
 
 ## Local Development Setup
 
@@ -87,29 +102,32 @@ All sensitive configuration is injected server-side by Atlas/backend. See `.env.
 4. Install dependencies: `npm install`.
 5. Start the dev server: `npm run dev`.
 
-If env vars are not set, Cognos-backed services return mock data automatically. This allows UI development without live JDE/Cognos access.
+If env vars are not set, the bundled JSON catalogs still load and live JDE/TRESS/CITI calls fail gracefully (empty results), so the UI runs against an empty/cached store. This allows UI development without live backend access.
 
-## Atlas Deployment
+## Deployment
 
-To activate live data connections in Atlas:
+The app deploys as a static SPA build (`dist/`) plus the serverless functions in `api/*` (Vercel-style `[...path].ts` handlers that proxy to the upstreams and inject bearer tokens server-side). To activate live data:
 
-1. Go to Atlas -> Midas -> Environment Variables
-2. Configure the following variables:
+1. Configure the following environment variables in your hosting / serverless platform.
+2. Provide the server-side secrets and upstreams (never as `VITE_*`).
 
 | VARIABLE | VALUE | WHERE TO GET IT |
 |----------|-------|-----------------|
-| `VITE_ATLAS_ARTIFACT_ID` | `midas` | Atlas admin |
-| `VITE_JDE_BASE_URL` | `/api/jde` | Atlas admin |
-| `VITE_TRESS_BASE_URL` | `/api/tress` | Atlas admin |
-| `VITE_COGNOS_BASE_URL` | `/api/cognos` | Atlas admin |
-| `VITE_OPENAI_BASE_URL` | `/api/openai` | Atlas admin |
+| `VITE_JDE_BASE_URL` | `/api/jde` | DevOps / infra |
 | `VITE_JDE_ENVIRONMENT` | `PD920` for production | JDE admin |
-| `JDE_TOKEN` | Server-side JDE bearer credential | JDE admin |
-| `COGNOS_TOKEN` | Server-side Cognos bearer credential | Cognos admin |
+| `VITE_TRESS_BASE_URL` | `/api/tress` | DevOps / infra |
+| `VITE_CITI_BASE_URL` | `/api/citi` | DevOps / infra |
+| `VITE_OPENAI_BASE_URL` | `/api/openai` | DevOps / infra |
+| `VITE_AUTH_BASE_URL` | `/api/auth` (or SSO/auth host) | Auth / SSO admin |
+| `VITE_USER_ROLES` / `VITE_DEFAULT_ROLE` | `email:rol` CSV / `none` | Deploying team |
+| `JDE_TOKEN` | Server-side JDE bearer credential (also used by TRESS) | JDE admin |
+| `CITI_TOKEN` | Server-side CITI bearer credential | CITI admin |
 | `OPENAI_API_KEY` | Server-side OpenAI credential | OpenAI admin |
-| `JDE_UPSTREAM` / `TRESS_UPSTREAM` / `COGNOS_UPSTREAM` | Upstream API base URLs | SWAT engineer |
+| `JDE_UPSTREAM` / `TRESS_UPSTREAM` / `CITI_UPSTREAM` / `OPENAI_UPSTREAM` | Upstream API base URLs | SWAT engineer |
 
-3. Redeploy the artifact after setting variables.
+> Cognos (`VITE_COGNOS_BASE_URL` / `COGNOS_TOKEN` / `COGNOS_UPSTREAM`) is optional/legacy — the current frontend does not call it. Leave unset unless a future Cognos integration is reintroduced.
+
+3. Redeploy the artifact after setting variables. `VITE_*` values are baked at build time — a redeploy is required for them to take effect.
 
 Production builds must not set token/password/API-key values with `VITE_` prefixes. Run `npm run security:secrets` before pushing; teams with `gitleaks` installed can also run `npm run security:gitleaks` or wire that command into a local pre-commit hook.
 
@@ -123,7 +141,7 @@ El mapeo **correo → rol** visible en el frontend sigue siendo configuración `
 
 **Para cambiar roles visibles en QA:**
 
-1. Edita el `.env` en `midas` rama `qa` (o el panel de Environment Variables de Atlas, lo que use el deploy):
+1. Edita el `.env` en `midas` rama `qa` (o el panel de variables de entorno del hosting que use el deploy):
 
    | VARIABLE | EJEMPLO | NOTA |
    |----------|---------|------|
@@ -171,19 +189,39 @@ Full detail is documented in `RULES.md`.
 
 ## Known Limitations / TODOs
 
-- `src/domain/collectionEngine.ts:75`: invoice dates are currently assumed as the first day of the month; per-event invoice dates are a documented follow-up.
-- Cognos report paths must be confirmed by Atlas/Cognos admins:
-  - `/reports/midas/cash-flow-plan`
-  - `/reports/midas/clientes`
-  - `/reports/midas/proveedores`
-- The production bundle still exceeds Vite's 500 kB chunk warning threshold.
-- `src/services/jde.ts` is imported both statically and dynamically, so Vite cannot split it into a separate chunk.
+These are documented follow-ups, not blockers for delivery. See `CLAUDE.md` ("Delivery / handoff state") and `AUDITORIA-INTEGRACION-MODULOS.md` for the full risk map.
+
+- **ROL (CITI) not yet projected into cash.** Executed trips are fetched and cross-matched against cobranza in the Cobranza tab, but they do not feed the projection — blocked on a reliable client column from `/citi/roldiario`. *Viajes Especiales* (which do carry the client) already project.
+- **`App.tsx`/`AppCore.tsx` hold all-company raw records in memory.** This is the renderer's heap floor; loading them on-demand per tab is the durable fix (deferred). A runtime guardian (`runtimeGuardian.ts`) defends against OOM in the meantime.
+- **Legacy reconciliation engines** (`realReconciliationEngine.ts`, `paymentReconciliationEngine.ts`) still back a few display tabs (Pagos/CXP/Bancos/Cobranza badges); the projection/Conciliación already moved to `auxiliarReconciliationEngine.ts`.
+- **Temporary debug panel** `InternalTransfersDebugPanel.tsx` ships (collapsed) in Proyección; remove once internal-transfer recon is signed off.
+- **Bundle size:** the main `AppCoreWithProviders` chunk is ~845 kB (>500 kB Vite warning). Vendor and per-tab chunks are already split; the app chunk is the remaining floor.
+
+## Documentation
+
+`DOCS.md` is the index of every document in this repo (what is current vs. an archived historical snapshot). The load-bearing docs:
+
+| Doc | For | Audience |
+|-----|-----|----------|
+| `CLAUDE.md` | Code layout, data flow, engines, invariants, "rules that bite" — **the source of truth** | Devs / agents |
+| `README.md` (this file) | Deploy, env, tech stack, business surface | Devs / DevOps |
+| `MANUAL.md` | How to use the tool (Spanish, non-technical) | End users (treasury) |
+| `RULES.md` | Business rules behind the numbers | Users / audit |
+| `AUTH.md` + `SECURITY-AUDIT.md` | Auth model and security posture / pre-deploy gate | Security / DevOps |
+| `EXCLUSION_RULES.md` | Company exclusion filter (currently empty) | Devs |
+| `AUDITORIA-INTEGRACION-MODULOS.md` | Module/API integration map and risks | Devs / architects |
+| `AGENTS.md` | Pointer to `CLAUDE.md` (single source of truth) | Agents |
+
+Historical snapshots (SendaStack pipeline reports, prior handoffs, superseded plans) live under `docs/archive/` — keep them for provenance, do not treat them as current.
 
 ## Scripts
 
 ```bash
-npm run dev
-npm test
-npm run build
-npm run preview
+npm install        # required first — the repo ships no node_modules
+npm run dev        # vite dev server
+npm test           # vitest run
+npm run typecheck  # tsc --noEmit
+npm run build      # tsc && vite build
+npm run preview    # serve the production build
+npm run security:secrets   # scan for committed secrets (run before pushing)
 ```

@@ -2,7 +2,7 @@
  * AuthContext — identidad del usuario actual + helper de autorización `can()`.
  *
  * IMPORTANTE (ver `AUTH.md`): el frontend NO es una frontera de seguridad. La
- * autenticación real la hace Atlas SSO / el backend; este contexto solo decide
+ * autenticación real la hace el backend / SSO; este contexto solo decide
  * qué módulos MOSTRAR para una UX limpia. La autorización vinculante sobre los
  * datos vive en el proxy `/api/*`.
  *

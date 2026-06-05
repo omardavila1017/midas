@@ -7,7 +7,7 @@ Auditoria actualizada: 2026-05-14
 | # | Hallazgo | Severidad | Estado |
 |---|----------|-----------|--------|
 | F1 | Secretos reales en `.env.example` e historial git | Critica | Repo sanitizado; rotacion e historial pendientes de operacion |
-| F2 | OpenAI/JDE/Cognos tokens enviados desde el browser | Alta | Migrado a rutas internas `/api/*`; Atlas/backend debe inyectar secretos |
+| F2 | OpenAI/JDE/Cognos tokens enviados desde el browser | Alta | Migrado a rutas internas `/api/*`; el backend/proxy debe inyectar secretos |
 | F3 | Gate de login client-side bypaseable | Alta | Removido como control de seguridad; queda solo gate local opcional |
 | F4 | Falta de escaneo preventivo de secretos | Media | Agregados scripts `security:secrets` y `security:gitleaks` |
 | F5 | Dependencias con advisories moderados | Media | Documentado; actualizar Vite/Vitest/PostCSS en entrega separada |
@@ -18,7 +18,7 @@ Auditoria actualizada: 2026-05-14
 - El frontend usa rutas internas estables: `/api/jde`, `/api/tress`, `/api/cognos`, `/api/openai`.
 - Los secretos productivos deben vivir en variables server-side: `JDE_TOKEN`, `COGNOS_TOKEN`, `OPENAI_API_KEY`.
 - El browser no debe configurar valores `VITE_*` para tokens, passwords o API keys en produccion.
-- El gate `Login.tsx` no protege datos. La proteccion real debe estar en Atlas SSO/backend y en los endpoints `/api/*`.
+- El gate `Login.tsx` no protege datos. La proteccion real debe estar en el backend/SSO y en los endpoints `/api/*`.
 
 ## Acciones operativas obligatorias
 
@@ -44,4 +44,4 @@ npm run security:gitleaks
 - `npm test`
 - `npm run build`
 - Buscar en `dist/` patrones de secretos: OpenAI keys, JWTs, valores `VITE_*` sensibles y bearer headers literales.
-- Confirmar que Atlas/backend protege `/api/*` con SSO/sesion y que inyecta secretos server-side.
+- Confirmar que el backend/proxy protege `/api/*` con SSO/sesion y que inyecta secretos server-side.

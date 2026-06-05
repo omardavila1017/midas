@@ -331,4 +331,4 @@ Definida por tesoreria para comparacion de escenarios.
 - Confirmar con Tesoreria si el supuesto de factura el dia 1 de cada mes debe mantenerse o reemplazarse por fechas reales por evento.
 - Confirmar con Cuentas por Pagar la fuente oficial y periodicidad de actualizacion del catalogo de flexibilidad.
 - Confirmar con DTI el propietario del catalogo de criticidad y el proceso para cambios de Alta, Media o Baja.
-- Confirmar con Atlas/Cognos las rutas finales de reportes de flujo, clientes y proveedores.
+- Los catalogos de clientes y proveedores viven como JSON local (`catalog.service.ts`); no dependen de un servicio externo de reportes.

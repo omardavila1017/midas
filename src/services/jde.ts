@@ -1281,7 +1281,7 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
  * Notas:
  *   • Como /antiguedadsaldos, una compañía por request. Para múltiples
  *     compañías llamar en serie y mergear.
- *   • El browser llama a `/api/jde`; Atlas/backend o el proxy de Vite local
+ *   • El browser llama a `/api/jde`; el proxy/backend o el proxy de Vite local
  *     inyectan el token server-side.
  */
 export async function fetchCobranza(

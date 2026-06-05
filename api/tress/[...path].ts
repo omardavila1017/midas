@@ -1,6 +1,6 @@
-import { createAtlasProxy } from '../_lib/atlasProxy';
+import { createApiProxy } from '../_lib/apiProxy';
 
-export default createAtlasProxy({
+export default createApiProxy({
   label: 'tress',
   upstreamEnvVar: 'TRESS_UPSTREAM',
   defaultUpstream: 'https://api.gruposenda.com/v1/erp/tress',

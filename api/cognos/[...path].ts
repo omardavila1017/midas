@@ -1,6 +1,6 @@
-import { createAtlasProxy } from '../_lib/atlasProxy';
+import { createApiProxy } from '../_lib/apiProxy';
 
-export default createAtlasProxy({
+export default createApiProxy({
   label: 'cognos',
   upstreamEnvVar: 'COGNOS_UPSTREAM',
   defaultUpstream: '',
