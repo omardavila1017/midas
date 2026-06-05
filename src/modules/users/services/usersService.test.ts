@@ -3,13 +3,12 @@ import { canManagePasswordReset } from './usersService';
 import type { Role } from '../../../config/roles';
 
 describe('usersService password reset permissions', () => {
-  it('allows admin and mesa_ayuda to send reset links', () => {
+  it('allows only admin to send reset links', () => {
     expect(canManagePasswordReset('admin')).toBe(true);
-    expect(canManagePasswordReset('mesa_ayuda')).toBe(true);
   });
 
-  it('blocks financial roles from sending reset links', () => {
-    for (const role of ['abastos', 'contaduria', 'fiscal', 'cobranza', 'none'] as Role[]) {
+  it('blocks user and none from sending reset links', () => {
+    for (const role of ['user', 'none'] as Role[]) {
       expect(canManagePasswordReset(role)).toBe(false);
     }
   });

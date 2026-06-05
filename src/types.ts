@@ -15,6 +15,7 @@ export type TabId =
   | 'payroll'
   | 'operating'
   | 'providers'
+  | 'venta'
   | 'collections'
   | 'fideicomiso'
   | 'clients'
@@ -25,7 +26,8 @@ export type TabId =
   | 'bancos'
   | 'netflow'
   | 'kpisObjectives'
-  | 'users';
+  | 'users'
+  | 'permisos';
 
 export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 

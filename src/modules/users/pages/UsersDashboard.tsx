@@ -1,19 +1,36 @@
 /**
- * Módulo de Usuarios — visible solo para `admin` y `mesa_ayuda`.
+ * Módulo de Usuarios — registro de usuarios (correos) y su rol (admin/user).
  *
- * Muestra el mapeo correo → rol → módulos visibles. `admin` puede previsualizar
- * cambios de rol en sesión; `mesa_ayuda` solo puede enviar ligas de reset.
+ * Solo registro: los permisos por módulo de un `user` se gestionan en el módulo
+ * de **Permisos**. Visible solo para `admin`.
+ *
+ * Nota de provisión: registrar un correo aquí define su rol y permisos en la
+ * capa UX. El alta real para INICIAR SESIÓN la sigue haciendo el backend de
+ * autenticación (o el JSON local en dev) — esto no crea credenciales.
  */
 
-import { useMemo, useState } from 'react';
-import { Info, UserCog } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Info, UserCog, UserPlus } from 'lucide-react';
 import PageHeader from '../../../components/ui/PageHeader';
 import { useAuth } from '../../../contexts/AuthContext';
-import type { Role } from '../../../config/roles';
-import { buildUserRow, buildUsersView, canManagePasswordReset } from '../services/usersService';
+import { ASSIGNABLE_ROLE_IDS, ROLES } from '../../../config/roles';
+import { canManagePasswordReset } from '../services/usersService';
+import {
+  listManagedUsers,
+  removeUser,
+  setUserRole,
+  subscribeAccessChanged,
+  upsertUser,
+  type ManagedRole,
+  type ManagedUser,
+} from '../services/accessControlStore';
 import UsersTable from '../components/UsersTable';
 import { sendUserPasswordReset } from '../../../services/authApi';
 import { useToast } from '../../../components/Toast';
+
+function looksLikeEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
 
 export default function UsersDashboard() {
   const { role, email } = useAuth();
@@ -22,21 +39,43 @@ export default function UsersDashboard() {
   const canSendReset = canManagePasswordReset(role);
   const [resettingEmail, setResettingEmail] = useState<string | null>(null);
 
-  // Filas base derivadas de `.env`. Las ediciones de admin se guardan como
-  // overrides de sesión (no se persisten — ver nota del módulo).
-  const baseRows = useMemo(() => buildUsersView(), []);
-  const [overrides, setOverrides] = useState<Record<string, Role>>({});
+  const [users, setUsers] = useState<ManagedUser[]>(() => listManagedUsers());
+  const reload = useCallback(() => setUsers(listManagedUsers()), []);
+  useEffect(() => subscribeAccessChanged(reload), [reload]);
 
-  const rows = useMemo(
-    () =>
-      baseRows.map((row) =>
-        overrides[row.email] ? buildUserRow(row.email, overrides[row.email]) : row,
-      ),
-    [baseRows, overrides],
-  );
+  const [newEmail, setNewEmail] = useState('');
+  const [newRole, setNewRole] = useState<ManagedRole>('user');
 
-  const handleRoleChange = (targetEmail: string, nextRole: Role) => {
-    setOverrides((prev) => ({ ...prev, [targetEmail]: nextRole }));
+  const existingEmails = useMemo(() => new Set(users.map((u) => u.email)), [users]);
+
+  const handleAdd = (event: FormEvent) => {
+    event.preventDefault();
+    if (!canEdit) return;
+    const value = newEmail.trim().toLowerCase();
+    if (!looksLikeEmail(value)) {
+      toast.error('Escribe un correo válido.');
+      return;
+    }
+    if (existingEmails.has(value)) {
+      toast.info('Ese correo ya está registrado.');
+      return;
+    }
+    upsertUser(value, newRole);
+    reload();
+    setNewEmail('');
+    setNewRole('user');
+    toast.success(`Usuario ${value} registrado.`);
+  };
+
+  const handleRoleChange = (targetEmail: string, nextRole: ManagedRole) => {
+    setUserRole(targetEmail, nextRole);
+    reload();
+  };
+
+  const handleRemove = (targetEmail: string) => {
+    removeUser(targetEmail);
+    reload();
+    toast.success(`Usuario ${targetEmail} eliminado.`);
   };
 
   const handleSendReset = async (targetEmail: string) => {
@@ -56,14 +95,14 @@ export default function UsersDashboard() {
       <PageHeader
         meta="Administración"
         title="Usuarios"
-        subtitle="Mapeo de correos a roles y módulos visibles (RBAC)."
+        subtitle="Registra usuarios y su rol. Los permisos por módulo se definen en Permisos."
         actions={
           <span
             className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-3 py-1.5 text-[12px] font-medium"
             style={{ background: 'var(--gray-100)', color: 'var(--gray-600)' }}
           >
             <UserCog className="h-4 w-4" strokeWidth={1.75} />
-            {canEdit ? 'Edición habilitada' : canSendReset ? 'Mesa de ayuda' : 'Solo lectura'}
+            {canEdit ? 'Edición habilitada' : 'Solo lectura'}
           </span>
         }
       />
@@ -74,20 +113,68 @@ export default function UsersDashboard() {
       >
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
         <p className="leading-relaxed">
-          La sesión, contraseñas y ligas de restablecimiento viven en el backend de autenticación.
-          El mapeo correo→rol visible aquí sigue siendo una vista de RBAC para la interfaz; la
-          autorización vinculante la aplica el backend. Mesa de ayuda puede enviar ligas de reset,
-          pero no definir contraseñas.
+          Hay dos roles: <strong>Administrador</strong> (acceso total) y <strong>Usuario</strong> (acceso
+          por permisos). Para un usuario, prende o apaga el acceso a cada módulo en{' '}
+          <strong>Permisos</strong>. El alta para iniciar sesión la realiza el backend de autenticación;
+          aquí defines rol y permisos.
         </p>
       </div>
 
+      {canEdit && (
+        <form
+          onSubmit={handleAdd}
+          className="flex flex-wrap items-end gap-3 rounded-[var(--radius-lg)] p-4"
+          style={{ background: 'var(--card)', border: '1px solid var(--gray-200)' }}
+        >
+          <label className="flex min-w-[240px] flex-1 flex-col gap-1.5">
+            <span className="text-[12px] font-medium text-[var(--gray-600)]">Correo</span>
+            <input
+              type="email"
+              inputMode="email"
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              placeholder="usuario@gruposenda.com"
+              className="h-10 rounded-[var(--radius-md)] border px-3 text-[13px]"
+              style={{ borderColor: 'var(--gray-200)', background: 'var(--input)', color: 'var(--gray-950)' }}
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[12px] font-medium text-[var(--gray-600)]">Rol</span>
+            <select
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value as ManagedRole)}
+              className="h-10 rounded-[var(--radius-md)] border px-2 text-[13px]"
+              style={{ borderColor: 'var(--gray-200)', background: 'var(--input)', color: 'var(--gray-950)' }}
+            >
+              {ASSIGNABLE_ROLE_IDS.map((r) => (
+                <option key={r} value={r}>
+                  {ROLES[r].label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="submit"
+            className="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-md)] px-4 text-[13px] font-semibold text-white transition-colors"
+            style={{ background: 'var(--primary)' }}
+          >
+            <UserPlus className="h-4 w-4" strokeWidth={2} aria-hidden />
+            Agregar
+          </button>
+        </form>
+      )}
+
       <UsersTable
-        rows={rows}
+        users={users}
         canEdit={canEdit}
         canSendReset={canSendReset}
         resettingEmail={resettingEmail}
         currentEmail={email}
         onRoleChange={canEdit ? handleRoleChange : undefined}
+        onRemove={canEdit ? handleRemove : undefined}
         onSendReset={canSendReset ? handleSendReset : undefined}
       />
     </div>

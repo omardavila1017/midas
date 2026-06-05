@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ROLES, ROLE_IDS, isRole, roleCanAccess, allowedTabsForRole } from './roles';
+import {
+  ROLES,
+  ROLE_IDS,
+  ASSIGNABLE_ROLE_IDS,
+  LEGACY_ROLE_TABS,
+  isRole,
+  coerceRole,
+  roleCanAccess,
+  allowedTabsForRole,
+} from './roles';
 import type { AppTabId } from '../modules/shared-finance/components/NavigationContext';
 
 // Conjunto canónico de tabs usado para expandir el acceso de `admin`.
@@ -10,6 +19,7 @@ const ALL_TABS: AppTabId[] = [
   'payroll',
   'operating',
   'netflow',
+  'venta',
   'collections',
   'fideicomiso',
   'cxp',
@@ -21,36 +31,32 @@ const ALL_TABS: AppTabId[] = [
   'bancos',
   'kpisObjectives',
   'users',
+  'permisos',
 ];
 
-describe('roles catalog', () => {
-  it('marks every catalog id as a valid role', () => {
+describe('roles catalog (admin/user/none)', () => {
+  it('only admin, user and none are valid roles', () => {
     for (const id of ROLE_IDS) {
       expect(isRole(id)).toBe(true);
     }
+    expect(ROLE_IDS.sort()).toEqual(['admin', 'none', 'user']);
+    expect(isRole('cobranza')).toBe(false);
     expect(isRole('not-a-role')).toBe(false);
     expect(isRole(42)).toBe(false);
   });
 
-  it('admin can see every tab, including users', () => {
+  it('admin can see every tab', () => {
     for (const tab of ALL_TABS) {
       expect(roleCanAccess('admin', tab)).toBe(true);
     }
     expect(allowedTabsForRole('admin', ALL_TABS)).toEqual(ALL_TABS);
   });
 
-  it('mesa_ayuda can ONLY see the users module', () => {
-    expect(roleCanAccess('mesa_ayuda', 'users')).toBe(true);
-    const forbidden = ALL_TABS.filter((t) => t !== 'users');
-    for (const tab of forbidden) {
-      expect(roleCanAccess('mesa_ayuda', tab)).toBe(false);
+  it('user has NO access by role — access comes from the permissions layer', () => {
+    for (const tab of ALL_TABS) {
+      expect(roleCanAccess('user', tab)).toBe(false);
     }
-    expect(allowedTabsForRole('mesa_ayuda', ALL_TABS)).toEqual(['users']);
-  });
-
-  it('the users module is visible ONLY to admin and mesa_ayuda', () => {
-    const canSeeUsers = ROLE_IDS.filter((r) => roleCanAccess(r, 'users'));
-    expect(canSeeUsers.sort()).toEqual(['admin', 'mesa_ayuda']);
+    expect(allowedTabsForRole('user', ALL_TABS)).toEqual([]);
   });
 
   it('none has no access to anything', () => {
@@ -60,18 +66,41 @@ describe('roles catalog', () => {
     expect(allowedTabsForRole('none', ALL_TABS)).toEqual([]);
   });
 
-  it('financial roles never expose the users module', () => {
-    for (const role of ['abastos', 'contaduria', 'fiscal', 'cobranza'] as const) {
-      expect(roleCanAccess(role, 'users')).toBe(false);
-      expect(ROLES[role].allowedTabs).not.toBe('*');
+  it('exposes only admin and user as assignable roles', () => {
+    expect(ASSIGNABLE_ROLE_IDS).toEqual(['admin', 'user']);
+  });
+
+  it('labels exist for each role', () => {
+    expect(ROLES.admin.label).toBeTruthy();
+    expect(ROLES.user.label).toBeTruthy();
+    expect(ROLES.none.label).toBeTruthy();
+  });
+});
+
+describe('coerceRole', () => {
+  it('preserves admin and user', () => {
+    expect(coerceRole('admin')).toBe('admin');
+    expect(coerceRole('user')).toBe('user');
+  });
+
+  it('collapses legacy granular roles to user', () => {
+    for (const legacy of ['abastos', 'contaduria', 'fiscal', 'cobranza', 'mesa_ayuda']) {
+      expect(coerceRole(legacy)).toBe('user');
     }
   });
 
-  it('every non-admin role only lists known tabs', () => {
-    for (const id of ROLE_IDS) {
-      const def = ROLES[id];
-      if (def.allowedTabs === '*') continue;
-      for (const tab of def.allowedTabs) {
+  it('maps unknown/empty values to none', () => {
+    expect(coerceRole('wizard')).toBe('none');
+    expect(coerceRole('')).toBe('none');
+    expect(coerceRole(undefined)).toBe('none');
+    expect(coerceRole(null)).toBe('none');
+  });
+});
+
+describe('LEGACY_ROLE_TABS (migration seed)', () => {
+  it('only lists known tabs', () => {
+    for (const tabs of Object.values(LEGACY_ROLE_TABS)) {
+      for (const tab of tabs) {
         expect(ALL_TABS).toContain(tab);
       }
     }

@@ -11,6 +11,7 @@ export type AppTabId =
   | 'payroll'
   | 'operating'
   | 'netflow'
+  | 'venta'
   | 'collections'
   | 'fideicomiso'
   | 'cxp'
@@ -21,7 +22,8 @@ export type AppTabId =
   | 'providers'
   | 'bancos'
   | 'kpisObjectives'
-  | 'users';
+  | 'users'
+  | 'permisos';
 
 /**
  * Deep-link target for a cross-module jump. The `tab` is required; `focus`

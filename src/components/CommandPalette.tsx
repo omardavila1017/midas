@@ -24,6 +24,7 @@ import {
   ClipboardList,
   GitBranch,
   Zap,
+  ShoppingCart,
 } from 'lucide-react';
 
 type TabId =
@@ -34,11 +35,13 @@ type TabId =
   | 'forecast'
   | 'operating'
   | 'providers'
+  | 'venta'
   | 'collections'
   | 'clients'
   | 'cxp'
   | 'bancos'
-  | 'netflow';
+  | 'netflow'
+  | 'permisos';
 
 export interface CommandPaletteAction {
   id: string;
@@ -84,11 +87,13 @@ const NAVIGATION_ITEMS: NavigationItem[] = [
   { tabId: 'forecast', label: 'Pronóstico', icon: <LineChart size={18} /> },
   { tabId: 'operating', label: 'Proyección operativa', icon: <CalendarDays size={18} /> },
   { tabId: 'providers', label: 'Proveedores', icon: <Users size={18} /> },
+  { tabId: 'venta', label: 'Venta', icon: <ShoppingCart size={18} /> },
   { tabId: 'collections', label: 'Cobros', icon: <HandCoins size={18} /> },
   { tabId: 'clients', label: 'Clientes', icon: <UserSquare size={18} /> },
   { tabId: 'cxp', label: 'Antigüedad de Saldo', icon: <Receipt size={18} /> },
   { tabId: 'bancos', label: 'Bancos', icon: <Landmark size={18} /> },
   { tabId: 'netflow', label: 'Flujo Neto', icon: <Wallet size={18} /> },
+  { tabId: 'permisos', label: 'Permisos', icon: <Sliders size={18} /> },
 ];
 
 const CommandPalette: React.FC<CommandPaletteProps> = ({

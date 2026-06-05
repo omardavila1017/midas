@@ -6,21 +6,30 @@
  * qué módulos MOSTRAR para una UX limpia. La autorización vinculante sobre los
  * datos vive en el proxy `/api/*`.
  *
+ * Modelo de acceso (2026-06-05): dos roles (`admin` / `user`). `admin` ve todo;
+ * `user` ve solo los tabs que un admin le habilita en el módulo de Permisos
+ * (`accessControlStore`). `can()` se reevalúa en vivo cuando cambian permisos.
+ *
  * Fuente de identidad: sesión resuelta por `/api/auth/session` o
  * `/api/auth/login` antes de montar AppCore. No guarda tokens en el cliente;
  * el backend mantiene la cookie HttpOnly.
  */
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getRoleForEmail } from '../config/userRoles';
-import { isRole, roleCanAccess, type Role } from '../config/roles';
+import { isRole, type Role } from '../config/roles';
+import {
+  canAccess,
+  getRegistryRole,
+  subscribeAccessChanged,
+} from '../modules/users/services/accessControlStore';
 import { getCurrentAuthSession } from './authSession';
 import type { AppTabId } from '../modules/shared-finance/components/NavigationContext';
 
 interface AuthContextValue {
   /** Correo del usuario actual (o `null` si no hay identidad resuelta). */
   email: string | null;
-  /** Rol resuelto a partir del correo (default si no está mapeado). */
+  /** Rol efectivo (override del registro si existe, si no el de la sesión). */
   role: Role;
   /** Expiración reportada por backend, si existe. */
   expiresAt?: string;
@@ -45,12 +54,32 @@ export function AuthProvider({
     emailOverride !== undefined ? emailOverride : session?.email ?? null
   ));
 
-  const role = useMemo<Role>(() => {
+  // Rol de la sesión backend (sin considerar el registro local de permisos).
+  const sessionRole = useMemo<Role>(() => {
     if (roleOverride) return roleOverride;
     if (session?.role && isRole(session.role)) return session.role;
     return getRoleForEmail(email);
   }, [email, roleOverride, session?.role]);
-  const can = useCallback((tab: AppTabId) => roleCanAccess(role, tab), [role]);
+
+  // Bump al cambiar el registro/permisos → recomputa rol efectivo y `can()`.
+  const [accessVersion, setAccessVersion] = useState(0);
+  useEffect(() => subscribeAccessChanged(() => setAccessVersion((v) => v + 1)), []);
+
+  // Rol efectivo: el override del registro (p.ej. admin promovió al usuario)
+  // gana sobre el rol de la sesión; si no hay override, el de la sesión.
+  const role = useMemo<Role>(() => {
+    const registryRole = email ? getRegistryRole(email) : null;
+    return registryRole ?? sessionRole;
+    // accessVersion fuerza recálculo cuando cambia el registro.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [email, sessionRole, accessVersion]);
+
+  const can = useCallback(
+    (tab: AppTabId) => canAccess(email, sessionRole, tab),
+    // accessVersion fuerza un closure nuevo cuando cambian los permisos.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [email, sessionRole, accessVersion],
+  );
 
   const value = useMemo<AuthContextValue>(
     () => ({ email, role, expiresAt: session?.expiresAt, can }),

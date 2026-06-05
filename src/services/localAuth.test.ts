@@ -39,9 +39,11 @@ describe('localAuth', () => {
     expect(localStorage.getItem(LOCAL_SESSION_KEY)).toBeTruthy();
   });
 
-  it('resolves the role from the JSON per user', async () => {
+  it('resolves the role from the JSON per user, collapsing legacy roles to user', async () => {
+    // El JSON trae a este usuario con rol granular legacy "cobranza"; el modelo
+    // nuevo lo colapsa a "user".
     const session = await localLogin(COBRANZA, '12345');
-    expect(session.role).toBe('cobranza');
+    expect(session.role).toBe('user');
   });
 
   it('normalizes the email (case-insensitive) on login', async () => {

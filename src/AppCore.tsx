@@ -85,6 +85,8 @@ const PayrollDashboard = lazy(() => import('./modules/payroll/pages/PayrollDashb
 const ConcursoMercantilDashboard = lazy(() => import('./modules/concurso-mercantil/pages/ConcursoMercantilDashboard'));
 const KpisObjectivesDashboard = lazy(() => import('./modules/kpis-objectives/pages/KpisObjectivesDashboard'));
 const UsersDashboard = lazy(() => import('./modules/users/pages/UsersDashboard'));
+const PermissionsDashboard = lazy(() => import('./modules/users/pages/PermissionsDashboard'));
+const SalesCalendarDashboard = lazy(() => import('./modules/sales/pages/SalesCalendarDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
 import ChangePasswordModal from './components/ChangePasswordModal';
@@ -106,6 +108,7 @@ import {
   Receipt, Wallet, FolderOpen,
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
   Snowflake, AlertTriangle, Target, KeyRound,
+  ShoppingCart, SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
 import { clearAllMidasStorage } from './domain/storageRegistry';
@@ -309,6 +312,7 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   bancos: ['banks'],
   cxp: ['cxp', 'pagos'],
   concursoMercantil: ['cxp'],
+  venta: ['cobranza', 'rol'],
   collections: ['cobranza', 'banks', 'rol'],
   fideicomiso: ['cobranza', 'banks'],
   compras: ['compras'],
@@ -330,28 +334,36 @@ type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'objetiv
 /**
  * Section + tab order is the canonical sidebar ordering, grouped by money flow.
  *
- * Mental model:
- *   - Proyección (forecast/escenarios) — landing diario, foco
- *   - Por Pagar (egresos: CXP, OC, pagos, nómina, impuestos)
- *   - Cobranza (ingreso + flujo neto + compromisos de deuda)
- *   - Catálogos (datos maestros)
- * Domain is egreso-heavy (only Cobranza is pure inflow); Concurso/Fideicomiso
- * live under Cobranza as structured commitments to avoid recreating
- * the old 8-tab "Operación" junk drawer.
+ * Mental model (rename 2026-06-05):
+ *   - Dashboard (forecast/escenarios + compromisos estructurados) — landing
+ *     diario; Concurso Mercantil y Fideicomiso Dina viven aquí como
+ *     compromisos contractuales junto a la proyección.
+ *   - Ingresos (venta + cobranza + flujo neto) — va ANTES que Egresos.
+ *   - Egresos (CXP, OC, pagos, nómina, impuestos).
+ *   - Catálogos (datos maestros).
+ * `SectionId` conserva sus ids internos (`proyeccion`/`cobranza`/`porPagar`)
+ * para no romper consumidores; solo cambian las etiquetas visibles y el orden.
  */
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: string }[] = [
-  { id: 'proyeccion', label: 'Proyección',          icon: TrendingUp, description: 'Pronóstico y escenarios' },
-  { id: 'porPagar',   label: 'Por Pagar',           icon: CreditCard, description: 'CXP, órdenes, pagos, nómina e impuestos' },
-  { id: 'cobranza',   label: 'Cobranza',            icon: HandCoins,  description: 'Flujo neto, cobranza y compromisos' },
+  { id: 'proyeccion', label: 'Dashboard',           icon: TrendingUp, description: 'Pronóstico, escenarios y compromisos' },
+  { id: 'cobranza',   label: 'Ingresos',            icon: HandCoins,  description: 'Venta, cobranza y flujo neto' },
+  { id: 'porPagar',   label: 'Egresos',             icon: CreditCard, description: 'CXP, órdenes, pagos, nómina e impuestos' },
   { id: 'catalogos',  label: 'Catálogos',           icon: BookUser,   description: 'Clientes, proveedores y bancos' },
   { id: 'objetivos',  label: 'Objetivos',           icon: Target,     description: 'KPIs y metas con seguimiento' },
-  { id: 'admin',      label: 'Administración',      icon: UserCog,    description: 'Usuarios y control de acceso' },
+  { id: 'admin',      label: 'Administración',      icon: UserCog,    description: 'Usuarios y permisos' },
 ];
 
 const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }[]> = {
   proyeccion: [
     { id: 'financialProjection', label: 'Proyección Financiera', icon: BarChart3 },
     { id: 'financialPlanning',   label: 'Planeación Financiera', icon: ClipboardList },
+    { id: 'concursoMercantil',   label: 'Concurso Mercantil',    icon: Scale },
+    { id: 'fideicomiso',         label: 'Fideicomiso Dina',      icon: ShieldCheck },
+  ],
+  cobranza: [
+    { id: 'netflow',     label: 'Flujo Neto', icon: Wallet },
+    { id: 'venta',       label: 'Venta',      icon: ShoppingCart },
+    { id: 'collections', label: 'Cobranza',   icon: HandCoins },
   ],
   porPagar: [
     { id: 'cxp',     label: 'Antigüedad de Saldo', icon: Receipt },
@@ -359,12 +371,6 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'pagos',   label: 'Pagos',               icon: CreditCard },
     { id: 'payroll', label: 'Nómina',              icon: Users },
     { id: 'taxes',   label: 'Impuestos', icon: Landmark },
-  ],
-  cobranza: [
-    { id: 'netflow',           label: 'Flujo Neto',        icon: Wallet },
-    { id: 'collections',       label: 'Cobranza',          icon: HandCoins },
-    { id: 'concursoMercantil', label: 'Concurso Mercantil', icon: Scale },
-    { id: 'fideicomiso',       label: 'Fideicomiso Dina',  icon: ShieldCheck },
   ],
   catalogos: [
     { id: 'clients',   label: 'Clientes',     icon: UserSquare },
@@ -375,17 +381,19 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
     { id: 'kpisObjectives', label: 'KPIs y Objetivos', icon: Target },
   ],
   admin: [
-    { id: 'users', label: 'Usuarios', icon: UserCog },
+    { id: 'users',    label: 'Usuarios', icon: UserCog },
+    { id: 'permisos', label: 'Permisos', icon: SlidersHorizontal },
   ],
 };
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
   cxp: 'porPagar', compras: 'porPagar', pagos: 'porPagar', payroll: 'porPagar', taxes: 'porPagar',
-  netflow: 'cobranza', collections: 'cobranza', concursoMercantil: 'cobranza', fideicomiso: 'cobranza',
+  netflow: 'cobranza', venta: 'cobranza', collections: 'cobranza',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
+  concursoMercantil: 'proyeccion', fideicomiso: 'proyeccion',
   kpisObjectives: 'objetivos',
-  users: 'admin',
+  users: 'admin', permisos: 'admin',
 };
 
 const DEFAULT_TAB: Record<SectionId, TabId> = {
@@ -4929,6 +4937,16 @@ export default function App() {
                 />
               </Suspense>
             )}
+            {activeTab === 'venta' && (
+              <Suspense fallback={<LazyTabFallback label="Venta" />}>
+                <SalesCalendarDashboard
+                  cobranzaRecords={cobranzaRecords}
+                  rolRecords={rolRecords}
+                  viajesEspecialesRecords={viajesEspecialesRecords}
+                  companies={companies}
+                />
+              </Suspense>
+            )}
             {activeTab === 'collections' && (
               <Suspense fallback={<LazyTabFallback label="Cobranza" />}>
                 <CollectionProjection
@@ -5093,6 +5111,11 @@ export default function App() {
                 <UsersDashboard />
               </Suspense>
             )}
+            {activeTab === 'permisos' && (
+              <Suspense fallback={<LazyTabFallback label="Permisos" />}>
+                <PermissionsDashboard />
+              </Suspense>
+            )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}
               </>
             )}
@@ -5131,9 +5154,10 @@ export default function App() {
 
 /**
  * Global scenario picker — replaces the old company filter in the header.
- * Visible only in the Proyección section. Selecting here drives every
- * Proyección tab (Dashboard, Proyección Financiera, Planeación, Impuestos)
- * because they all read `activeScenarioId` from the same provider.
+ * Visible only in the Dashboard section (SectionId `proyeccion`). Selecting
+ * here drives every tab in that section (Proyección Financiera, Planeación,
+ * Concurso Mercantil, Fideicomiso) because they read `activeScenarioId` from
+ * the same provider.
  */
 function GlobalScenarioSelector() {
   const ctx = useScenarioSelection();
@@ -5207,7 +5231,7 @@ function GlobalScenarioSelector() {
           color: 'var(--shell-text)',
           border: '1px solid var(--shell-border)',
         }}
-        title="Escenario activo — aplica a Dashboard, Proyección Financiera, Planeación e Impuestos"
+        title="Escenario activo — aplica a los módulos del Dashboard (Proyección, Planeación, Concurso, Fideicomiso)"
       >
         <ActiveIcon
           className="w-4 h-4 flex-shrink-0"

@@ -14,7 +14,7 @@
  */
 
 import rawConfig from '../config/authLocalUsers.json';
-import { isRole, type Role } from '../config/roles';
+import { coerceRole, isRole, type Role } from '../config/roles';
 import { AuthApiError } from './authError';
 
 interface LocalUser {
@@ -107,7 +107,19 @@ function findUser(email: string): LocalUser | undefined {
 }
 
 function roleForUser(user: LocalUser): Role {
-  return isRole(user.role) ? user.role : 'none';
+  // El JSON puede traer roles granulares legacy (`cobranza`, `fiscal`, …);
+  // `coerceRole` los colapsa al modelo admin/user.
+  return coerceRole(user.role);
+}
+
+/**
+ * Lista cruda de usuarios del JSON local (correo + rol tal cual viene en el
+ * archivo, que puede ser granular legacy). Solo para SEMBRAR el registro de
+ * usuarios/permisos cuando el modo local está activo. Vacío si está deshabilitado.
+ */
+export function listLocalUsers(): { email: string; role: string }[] {
+  if (!isLocalAuthEnabled()) return [];
+  return config.users.map((u) => ({ email: normalizeEmail(u.email), role: u.role }));
 }
 
 /** Hash vigente del usuario: overlay del cliente si existe, si no el del JSON. */

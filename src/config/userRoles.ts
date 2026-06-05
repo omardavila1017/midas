@@ -15,7 +15,7 @@
  * Si el correo logueado no está en la lista → `VITE_DEFAULT_ROLE` (o `'none'`).
  */
 
-import { isRole, type Role } from './roles';
+import { coerceRole, type Role } from './roles';
 
 /** Rol por defecto seguro cuando no hay configuración. */
 const FALLBACK_ROLE: Role = 'none';
@@ -46,14 +46,17 @@ export function parseUserRoles(raw: string | undefined | null): Map<string, Role
     }
 
     const email = normalizeEmail(trimmed.slice(0, sep));
-    const role = trimmed.slice(sep + 1).trim();
+    const rawRole = trimmed.slice(sep + 1).trim();
 
     if (!email) {
       console.warn(`[userRoles] entrada con correo vacío ignorada: "${trimmed}"`);
       continue;
     }
-    if (!isRole(role)) {
-      console.warn(`[userRoles] rol desconocido "${role}" para "${email}" — ignorado.`);
+    // Tolera roles granulares legacy (`cobranza`, `fiscal`, …): `coerceRole`
+    // los colapsa a `user`. Solo lo verdaderamente desconocido cae a `none`.
+    const role = coerceRole(rawRole);
+    if (role === 'none') {
+      console.warn(`[userRoles] rol desconocido "${rawRole}" para "${email}" — ignorado.`);
       continue;
     }
 
@@ -67,7 +70,10 @@ export function parseUserRoles(raw: string | undefined | null): Map<string, Role
 export function resolveDefaultRole(raw: string | undefined | null): Role {
   if (!raw) return FALLBACK_ROLE;
   const trimmed = raw.trim();
-  if (isRole(trimmed)) return trimmed;
+  // `none` explícito es un default válido (no concede acceso), no un error.
+  if (trimmed === 'none') return 'none';
+  const role = coerceRole(trimmed);
+  if (role !== 'none') return role;
   console.warn(`[userRoles] VITE_DEFAULT_ROLE "${raw}" inválido — se usa "${FALLBACK_ROLE}".`);
   return FALLBACK_ROLE;
 }

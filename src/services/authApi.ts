@@ -1,5 +1,5 @@
 import { apiConfig } from '../config/api.config';
-import { isRole, type Role } from '../config/roles';
+import { coerceRole, type Role } from '../config/roles';
 import { AuthApiError, type AuthErrorCode } from './authError';
 import {
   clearLocalSession,
@@ -39,7 +39,8 @@ function normalizeEmail(value: unknown): string | null {
 }
 
 function normalizeRole(value: unknown): Role {
-  return isRole(value) ? value : 'none';
+  // Colapsa roles granulares legacy del backend (`cobranza`, …) a admin/user.
+  return coerceRole(value);
 }
 
 // Extrae un mensaje legible del cuerpo de error del backend (claves comunes en

@@ -1,0 +1,259 @@
+/**
+ * salesCalendarService — agrega "lo VENDIDO" para el calendario de Venta.
+ *
+ * Mide cuánto se VENDIÓ, no cuánto se cobró/ingresó. Dos capas que NO se
+ * doble-cuentan:
+ *   1. Facturado: facturas de cobranza (CXC) fechadas por su `fechaFactura`.
+ *      Toda venta termina en factura → es la verdad contable de la venta.
+ *   2. Por facturar: viajes YA ejecutados pero AÚN sin factura — ROL CITI
+ *      (`efectuado` && sin `factura`) + Viajes Especiales (sin `facturaJDE`).
+ *      Se excluye lo ya facturado, así que no se solapa con la capa 1.
+ *
+ * Importes en venta NETA (sin IVA) para que las tres fuentes sean comparables
+ * (ROL/Especiales reportan subtotal sin IVA).
+ */
+
+import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
+
+export type SaleStatus = 'facturado' | 'por-facturar';
+export type SaleSource = 'cobranza' | 'rol' | 'especial';
+
+export interface SaleEntry {
+  /** Fecha de la venta (YYYY-MM-DD): fecha de factura, o de viaje si no facturado. */
+  date: string;
+  /** Importe de venta SIN IVA, en pesos. */
+  amount: number;
+  status: SaleStatus;
+  cliente: string;
+  /** Folio de factura o identificador del viaje. */
+  referencia: string;
+  cia: string;
+  source: SaleSource;
+}
+
+export interface DayTotal {
+  date: string;
+  facturado: number;
+  porFacturar: number;
+  total: number;
+  count: number;
+}
+
+export interface MonthTotal {
+  /** "YYYY-MM". */
+  ym: string;
+  facturado: number;
+  porFacturar: number;
+  total: number;
+  count: number;
+}
+
+/** Normaliza a YYYY-MM-DD; acepta fechas con hora ("...T..."). `null` si inválida. */
+export function toISODate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length < 10) return null;
+  const candidate = trimmed.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return null;
+  // Rechaza fechas centinela JDE ("1899-12-31", "0001-01-01").
+  const year = Number(candidate.slice(0, 4));
+  if (year < 1990 || year > 2100) return null;
+  const time = Date.parse(candidate);
+  return Number.isFinite(time) ? candidate : null;
+}
+
+function cleanString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isFinitePositive(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Venta NETA (sin IVA) de una factura de cobranza, con fallbacks tolerantes:
+ *   1. `subTotal` directo si viene poblado.
+ *   2. `importeBrutoPesos - importeIVA` cuando el IVA viene explícito (incluye
+ *      el caso exento, IVA=0 → regresa el bruto, que ya es sin IVA).
+ *   3. Sin dato de IVA: estima asumiendo 16% (estándar MX) — `bruto / 1.16`.
+ * Mantener todo en base sin-IVA para que las tres fuentes sean comparables.
+ */
+function cobranzaVenta(r: CobranzaRecord): number {
+  if (isFinitePositive(r.subTotal)) return r.subTotal;
+  const bruto = Number.isFinite(r.importeBrutoPesos) ? r.importeBrutoPesos : 0;
+  if (typeof r.importeIVA === 'number' && Number.isFinite(r.importeIVA)) {
+    const net = bruto - r.importeIVA;
+    return net > 0 ? net : bruto;
+  }
+  return bruto > 0 ? bruto / 1.16 : 0;
+}
+
+export interface SaleSourceInputs {
+  cobranza: CobranzaRecord[];
+  rol: RolRecord[];
+  viajesEspeciales: ViajeEspecialRecord[];
+}
+
+/**
+ * Construye la lista de ventas (facturado + por facturar) sin doble conteo.
+ */
+export function buildSaleEntries({ cobranza, rol, viajesEspeciales }: SaleSourceInputs): SaleEntry[] {
+  const entries: SaleEntry[] = [];
+
+  // 1. Facturado — cada factura de cobranza es una venta, fechada por fechaFactura.
+  for (const r of cobranza) {
+    const date = toISODate(r.fechaFactura);
+    if (!date) continue;
+    const amount = cobranzaVenta(r);
+    if (!(amount > 0)) continue;
+    entries.push({
+      date,
+      amount,
+      status: 'facturado',
+      cliente: cleanString(r.nombreClientePadre) || cleanString(r.nombreCliente) || cleanString(r.noCliente),
+      referencia: cleanString(r.noFactura),
+      cia: cleanString(r.cia),
+      source: 'cobranza',
+    });
+  }
+
+  // 2a. Por facturar — ROL: viaje ejecutado sin factura emitida todavía.
+  for (const r of rol) {
+    if (!r.efectuado) continue;
+    if (cleanString(r.factura)) continue; // ya facturado → vive en cobranza
+    const date = toISODate(r.fechaViaje);
+    if (!date) continue;
+    if (!isFinitePositive(r.subTotal)) continue;
+    entries.push({
+      date,
+      amount: r.subTotal,
+      status: 'por-facturar',
+      cliente: cleanString(r.dCliente) || cleanString(r.cCliente) || cleanString(r.claveJDE),
+      referencia: cleanString(r.ruta),
+      cia: cleanString(r.cia),
+      source: 'rol',
+    });
+  }
+
+  // 2b. Por facturar — Viajes Especiales sin factura.
+  for (const v of viajesEspeciales) {
+    if (cleanString(v.facturaJDE)) continue; // ya facturado → vive en cobranza
+    const date = toISODate(v.fSalidaPrimera) ?? toISODate(v.fRegresoUltima);
+    if (!date) continue;
+    if (!isFinitePositive(v.totalNegociado)) continue;
+    entries.push({
+      date,
+      amount: v.totalNegociado,
+      status: 'por-facturar',
+      cliente: cleanString(v.dCliente) || cleanString(v.claveJDE),
+      referencia: `Viaje ${v.kRenta}`,
+      cia: cleanString(v.cia),
+      source: 'especial',
+    });
+  }
+
+  return entries;
+}
+
+function emptyDay(date: string): DayTotal {
+  return { date, facturado: 0, porFacturar: 0, total: 0, count: 0 };
+}
+
+function addToDay(day: DayTotal, entry: SaleEntry): void {
+  if (entry.status === 'facturado') day.facturado += entry.amount;
+  else day.porFacturar += entry.amount;
+  day.total += entry.amount;
+  day.count += 1;
+}
+
+/** Suma por día (YYYY-MM-DD). */
+export function aggregateByDay(entries: SaleEntry[]): Map<string, DayTotal> {
+  const map = new Map<string, DayTotal>();
+  for (const entry of entries) {
+    let day = map.get(entry.date);
+    if (!day) {
+      day = emptyDay(entry.date);
+      map.set(entry.date, day);
+    }
+    addToDay(day, entry);
+  }
+  return map;
+}
+
+/** Suma por mes (YYYY-MM). */
+export function aggregateByMonth(entries: SaleEntry[]): Map<string, MonthTotal> {
+  const map = new Map<string, MonthTotal>();
+  for (const entry of entries) {
+    const ym = entry.date.slice(0, 7);
+    let month = map.get(ym);
+    if (!month) {
+      month = { ym, facturado: 0, porFacturar: 0, total: 0, count: 0 };
+      map.set(ym, month);
+    }
+    if (entry.status === 'facturado') month.facturado += entry.amount;
+    else month.porFacturar += entry.amount;
+    month.total += entry.amount;
+    month.count += 1;
+  }
+  return map;
+}
+
+/** Entradas de un mes (YYYY-MM), ordenadas por fecha asc. */
+export function entriesForMonth(entries: SaleEntry[], ym: string): SaleEntry[] {
+  return entries
+    .filter((e) => e.date.slice(0, 7) === ym)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.amount - a.amount));
+}
+
+export interface CompanyTotal {
+  cia: string;
+  facturado: number;
+  porFacturar: number;
+  total: number;
+  count: number;
+}
+
+/** Suma por compañía (cia), ordenada por total desc. */
+export function aggregateByCompany(entries: SaleEntry[]): CompanyTotal[] {
+  const map = new Map<string, CompanyTotal>();
+  for (const entry of entries) {
+    const cia = entry.cia || '—';
+    let row = map.get(cia);
+    if (!row) {
+      row = { cia, facturado: 0, porFacturar: 0, total: 0, count: 0 };
+      map.set(cia, row);
+    }
+    if (entry.status === 'facturado') row.facturado += entry.amount;
+    else row.porFacturar += entry.amount;
+    row.total += entry.amount;
+    row.count += 1;
+  }
+  return Array.from(map.values()).sort((a, b) => b.total - a.total);
+}
+
+function csvCell(value: string | number): string {
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Serializa entradas a CSV (es-MX: encabezados legibles, importe con 2 decimales). */
+export function toCsv(entries: SaleEntry[]): string {
+  const header = ['Fecha', 'Estatus', 'Cliente', 'Referencia', 'Compañía', 'Fuente', 'Importe sin IVA'];
+  const rows = entries
+    .slice()
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .map((e) =>
+      [
+        e.date,
+        e.status === 'facturado' ? 'Facturado' : 'Por facturar',
+        e.cliente,
+        e.referencia,
+        e.cia,
+        e.source,
+        e.amount.toFixed(2),
+      ]
+        .map(csvCell)
+        .join(','),
+    );
+  return [header.map(csvCell).join(','), ...rows].join('\n');
+}

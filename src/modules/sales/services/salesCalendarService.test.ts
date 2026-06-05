@@ -1,0 +1,248 @@
+import { describe, expect, it } from 'vitest';
+import {
+  toISODate,
+  buildSaleEntries,
+  aggregateByDay,
+  aggregateByMonth,
+  aggregateByCompany,
+  entriesForMonth,
+  toCsv,
+} from './salesCalendarService';
+import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
+
+function cobranza(partial: Partial<CobranzaRecord>): CobranzaRecord {
+  return {
+    cia: '00011',
+    noCliente: '1',
+    nombreCliente: 'Cliente A',
+    noFactura: 'RI-1',
+    fechaFactura: '2026-03-10',
+    fechaVence: '',
+    fechaCobro: '',
+    diasVencida: 0,
+    importeBrutoPesos: 1160,
+    importePendientePesos: 0,
+    importeBrutoDolares: 0,
+    importePendienteDolares: 0,
+    moneda: 'MXP',
+    condPago: '',
+    estatus: '',
+    tipoCambio: 1,
+    ...partial,
+  } as CobranzaRecord;
+}
+
+function rol(partial: Partial<RolRecord>): RolRecord {
+  return {
+    cia: '00011',
+    empresa: '',
+    kCliente: 1,
+    cCliente: 'ABB',
+    dCliente: 'ABB MEXICO',
+    rfc: '',
+    claveJDE: '40317168',
+    facturacionTipo: 'MENSUAL',
+    iva: 16,
+    tipoViaje: 'SENCILL',
+    ruta: 'RUTA-1',
+    costoRuta: 100,
+    viajes: 1,
+    subTotal: 1000,
+    despachado: true,
+    efectuado: true,
+    anio: 2026,
+    semana: 11,
+    fechaViaje: '2026-03-09',
+    ...partial,
+  } as RolRecord;
+}
+
+function especial(partial: Partial<ViajeEspecialRecord>): ViajeEspecialRecord {
+  return {
+    cia: '00011',
+    empresaCodigo: 'SIRS2',
+    kRenta: 722862,
+    kCliente: 27756,
+    dCliente: 'INSTITUTO X',
+    rfc: '',
+    claveJDE: '1270361',
+    totalNegociado: 2000,
+    diasCredito: 30,
+    fSalidaPrimera: '2026-03-15',
+    ...partial,
+  } as ViajeEspecialRecord;
+}
+
+describe('toISODate', () => {
+  it('accepts plain dates and datetimes', () => {
+    expect(toISODate('2026-03-10')).toBe('2026-03-10');
+    expect(toISODate('2026-03-10T13:40:00')).toBe('2026-03-10');
+  });
+  it('rejects sentinels and garbage', () => {
+    expect(toISODate('1899-12-31')).toBeNull();
+    expect(toISODate('')).toBeNull();
+    expect(toISODate('not-a-date')).toBeNull();
+    expect(toISODate(undefined)).toBeNull();
+  });
+});
+
+describe('buildSaleEntries — facturado (cobranza)', () => {
+  it('uses subtotal when present, dated by fechaFactura', () => {
+    const entries = buildSaleEntries({
+      cobranza: [cobranza({ subTotal: 1000, importeBrutoPesos: 1160 })],
+      rol: [],
+      viajesEspeciales: [],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'facturado', amount: 1000, date: '2026-03-10', source: 'cobranza' });
+  });
+
+  it('falls back to gross minus IVA when subtotal missing', () => {
+    const entries = buildSaleEntries({
+      cobranza: [cobranza({ subTotal: undefined, importeBrutoPesos: 1160, importeIVA: 160 })],
+      rol: [],
+      viajesEspeciales: [],
+    });
+    expect(entries[0].amount).toBe(1000);
+  });
+});
+
+describe('buildSaleEntries — por facturar (ROL + especiales) without double counting', () => {
+  it('includes executed ROL trips that are NOT yet invoiced', () => {
+    const entries = buildSaleEntries({
+      cobranza: [],
+      rol: [rol({ efectuado: true, factura: '' })],
+      viajesEspeciales: [],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'por-facturar', amount: 1000, source: 'rol' });
+  });
+
+  it('excludes ROL trips already invoiced (avoids double count with cobranza)', () => {
+    const entries = buildSaleEntries({
+      cobranza: [],
+      rol: [rol({ efectuado: true, factura: 'RI-99' })],
+      viajesEspeciales: [],
+    });
+    expect(entries).toHaveLength(0);
+  });
+
+  it('excludes non-executed ROL trips', () => {
+    const entries = buildSaleEntries({
+      cobranza: [],
+      rol: [rol({ efectuado: false, factura: '' })],
+      viajesEspeciales: [],
+    });
+    expect(entries).toHaveLength(0);
+  });
+
+  it('includes special trips without a JDE invoice, dated by departure', () => {
+    const entries = buildSaleEntries({
+      cobranza: [],
+      rol: [],
+      viajesEspeciales: [especial({ facturaJDE: '', fSalidaPrimera: '2026-03-15' })],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'por-facturar', amount: 2000, source: 'especial', date: '2026-03-15' });
+  });
+
+  it('excludes invoiced special trips', () => {
+    const entries = buildSaleEntries({
+      cobranza: [],
+      rol: [],
+      viajesEspeciales: [especial({ facturaJDE: 'RI-305588' })],
+    });
+    expect(entries).toHaveLength(0);
+  });
+});
+
+describe('aggregation', () => {
+  const entries = buildSaleEntries({
+    cobranza: [cobranza({ fechaFactura: '2026-03-10', subTotal: 1000 })],
+    rol: [rol({ fechaViaje: '2026-03-10', subTotal: 500, factura: '' })],
+    viajesEspeciales: [especial({ fSalidaPrimera: '2026-04-01', totalNegociado: 2000, facturaJDE: '' })],
+  });
+
+  it('sums by day, splitting facturado vs por facturar', () => {
+    const byDay = aggregateByDay(entries);
+    const march10 = byDay.get('2026-03-10')!;
+    expect(march10.facturado).toBe(1000);
+    expect(march10.porFacturar).toBe(500);
+    expect(march10.total).toBe(1500);
+    expect(march10.count).toBe(2);
+  });
+
+  it('sums by month', () => {
+    const byMonth = aggregateByMonth(entries);
+    expect(byMonth.get('2026-03')!.total).toBe(1500);
+    expect(byMonth.get('2026-04')!.total).toBe(2000);
+  });
+
+  it('filters entries for a month', () => {
+    expect(entriesForMonth(entries, '2026-04')).toHaveLength(1);
+    expect(entriesForMonth(entries, '2026-03')).toHaveLength(2);
+  });
+});
+
+describe('cobranzaVenta IVA derivation', () => {
+  it('strips IVA when explicit, even without a subtotal', () => {
+    const [e] = buildSaleEntries({
+      cobranza: [cobranza({ subTotal: undefined, importeBrutoPesos: 1160, importeIVA: 160 })],
+      rol: [],
+      viajesEspeciales: [],
+    });
+    expect(e.amount).toBe(1000);
+  });
+
+  it('estimates 16% when neither subtotal nor IVA is present', () => {
+    const [e] = buildSaleEntries({
+      cobranza: [cobranza({ subTotal: undefined, importeBrutoPesos: 1160, importeIVA: undefined })],
+      rol: [],
+      viajesEspeciales: [],
+    });
+    expect(e.amount).toBeCloseTo(1000, 2);
+  });
+
+  it('treats an explicit IVA of 0 (exento) as already net', () => {
+    const [e] = buildSaleEntries({
+      cobranza: [cobranza({ subTotal: undefined, importeBrutoPesos: 1000, importeIVA: 0 })],
+      rol: [],
+      viajesEspeciales: [],
+    });
+    expect(e.amount).toBe(1000);
+  });
+});
+
+describe('aggregateByCompany', () => {
+  it('groups by cia and sorts by total desc', () => {
+    const result = aggregateByCompany(
+      buildSaleEntries({
+        cobranza: [
+          cobranza({ cia: '00011', subTotal: 1000 }),
+          cobranza({ cia: '00038', subTotal: 3000, noFactura: 'RI-2' }),
+        ],
+        rol: [],
+        viajesEspeciales: [],
+      }),
+    );
+    expect(result.map((r) => r.cia)).toEqual(['00038', '00011']);
+    expect(result[0].total).toBe(3000);
+  });
+});
+
+describe('toCsv', () => {
+  it('emits a header and one row per entry, escaping commas', () => {
+    const csv = toCsv(
+      buildSaleEntries({
+        cobranza: [cobranza({ nombreCliente: 'ACME, S.A.', subTotal: 1000, fechaFactura: '2026-03-10' })],
+        rol: [],
+        viajesEspeciales: [],
+      }),
+    );
+    const lines = csv.split('\n');
+    expect(lines[0]).toContain('Fecha');
+    expect(lines[0]).toContain('Importe sin IVA');
+    expect(lines[1]).toContain('"ACME, S.A."'); // coma escapada
+    expect(lines[1]).toContain('1000.00');
+  });
+});

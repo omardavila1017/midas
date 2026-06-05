@@ -3,16 +3,16 @@ import { parseUserRoles, resolveDefaultRole, normalizeEmail } from './userRoles'
 import type { Role } from './roles';
 
 describe('parseUserRoles', () => {
-  it('parses a well-formed CSV into a Map', () => {
+  it('parses a well-formed CSV into a Map, collapsing legacy roles to user', () => {
     const map = parseUserRoles('a@x.com:admin,b@x.com:cobranza');
     expect(map.get('a@x.com')).toBe('admin');
-    expect(map.get('b@x.com')).toBe('cobranza');
+    expect(map.get('b@x.com')).toBe('user'); // cobranza → user (modelo nuevo)
     expect(map.size).toBe(2);
   });
 
   it('normalizes emails (trim + lowercase)', () => {
     const map = parseUserRoles('  Ana@X.COM :fiscal');
-    expect(map.get('ana@x.com')).toBe('fiscal');
+    expect(map.get('ana@x.com')).toBe('user'); // fiscal → user
   });
 
   it('ignores empty/whitespace entries and trailing commas', () => {
@@ -24,7 +24,7 @@ describe('parseUserRoles', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const map = parseUserRoles('a@x.com:wizard,b@x.com:fiscal');
     expect(map.has('a@x.com')).toBe(false);
-    expect(map.get('b@x.com')).toBe('fiscal');
+    expect(map.get('b@x.com')).toBe('user');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -51,8 +51,10 @@ describe('parseUserRoles', () => {
 });
 
 describe('resolveDefaultRole', () => {
-  it('returns the configured default when valid', () => {
-    expect(resolveDefaultRole('cobranza')).toBe<Role>('cobranza');
+  it('returns the configured default, collapsing legacy roles to user', () => {
+    expect(resolveDefaultRole('cobranza')).toBe<Role>('user');
+    expect(resolveDefaultRole('admin')).toBe<Role>('admin');
+    expect(resolveDefaultRole('user')).toBe<Role>('user');
   });
 
   it('falls back to "none" for invalid or missing values', () => {

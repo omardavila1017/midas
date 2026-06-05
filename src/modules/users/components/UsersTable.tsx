@@ -1,45 +1,48 @@
 /**
- * Tabla de usuarios: correo, rol y módulos visibles.
+ * Tabla del registro de usuarios: correo, rol (admin/user) y acciones.
  *
- * Read-only por defecto. Admin puede previsualizar cambios de rol en sesión;
- * admin y mesa de ayuda pueden enviar una liga de restablecimiento.
+ * Solo registro: el detalle de permisos por módulo se gestiona en el módulo de
+ * Permisos. Admin puede cambiar rol, quitar usuario y enviar liga de reset.
  */
 
-import { Mail, ShieldCheck } from 'lucide-react';
-import { ROLES, ROLE_IDS, type Role } from '../../../config/roles';
-import type { UserRow } from '../services/usersService';
+import { Mail, ShieldCheck, Trash2, User as UserIcon } from 'lucide-react';
+import { ASSIGNABLE_ROLE_IDS, ROLES } from '../../../config/roles';
+import type { ManagedRole, ManagedUser } from '../services/accessControlStore';
 
 interface UsersTableProps {
-  rows: UserRow[];
+  users: ManagedUser[];
   canEdit: boolean;
   canSendReset: boolean;
   resettingEmail: string | null;
   /** Correo del usuario actual, para destacar su propia fila. */
   currentEmail: string | null;
-  onRoleChange?: (email: string, role: Role) => void;
+  onRoleChange?: (email: string, role: ManagedRole) => void;
+  onRemove?: (email: string) => void;
   onSendReset?: (email: string) => void;
 }
 
 export default function UsersTable({
-  rows,
+  users,
   canEdit,
   canSendReset,
   resettingEmail,
   currentEmail,
   onRoleChange,
+  onRemove,
   onSendReset,
 }: UsersTableProps) {
-  if (rows.length === 0) {
+  if (users.length === 0) {
     return (
       <div
         className="rounded-[var(--radius-lg)] p-8 text-center text-[13px]"
         style={{ background: 'var(--card)', border: '1px solid var(--gray-200)', color: 'var(--gray-500)' }}
       >
-        No hay usuarios configurados. Define el mapeo correo:rol en{' '}
-        <code className="font-mono">VITE_USER_ROLES</code> (archivo <code className="font-mono">.env</code>).
+        No hay usuarios registrados todavía. Agrega un correo arriba para empezar.
       </div>
     );
   }
+
+  const normalizedCurrent = currentEmail ? currentEmail.trim().toLowerCase() : null;
 
   return (
     <div
@@ -51,13 +54,13 @@ export default function UsersTable({
           <tr style={{ borderBottom: '1px solid var(--gray-200)', color: 'var(--gray-500)' }}>
             <th className="px-4 py-3 font-medium">Correo</th>
             <th className="px-4 py-3 font-medium">Rol</th>
-            <th className="px-4 py-3 font-medium">Módulos visibles</th>
-            {canSendReset && <th className="px-4 py-3 text-right font-medium">Contraseña</th>}
+            {(canSendReset || canEdit) && <th className="px-4 py-3 text-right font-medium">Acciones</th>}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
-            const isCurrent = currentEmail !== null && row.email === currentEmail.trim().toLowerCase();
+          {users.map((row) => {
+            const isCurrent = normalizedCurrent !== null && row.email === normalizedCurrent;
+            const isAdmin = row.role === 'admin';
             return (
               <tr
                 key={row.email}
@@ -66,7 +69,7 @@ export default function UsersTable({
                   background: isCurrent ? 'var(--gray-50)' : 'transparent',
                 }}
               >
-                <td className="px-4 py-3 align-top">
+                <td className="px-4 py-3 align-middle">
                   <div className="flex items-center gap-2">
                     <span className="font-medium" style={{ color: 'var(--gray-950)' }}>
                       {row.email}
@@ -81,16 +84,16 @@ export default function UsersTable({
                     )}
                   </div>
                 </td>
-                <td className="px-4 py-3 align-top">
+                <td className="px-4 py-3 align-middle">
                   {canEdit && onRoleChange ? (
                     <select
                       value={row.role}
-                      onChange={(e) => onRoleChange(row.email, e.target.value as Role)}
+                      onChange={(e) => onRoleChange(row.email, e.target.value as ManagedRole)}
                       className="h-9 rounded-[var(--radius-md)] border px-2 text-[13px]"
                       style={{ borderColor: 'var(--gray-200)', background: 'var(--input)', color: 'var(--gray-950)' }}
                       aria-label={`Rol de ${row.email}`}
                     >
-                      {ROLE_IDS.map((r) => (
+                      {ASSIGNABLE_ROLE_IDS.map((r) => (
                         <option key={r} value={r}>
                           {ROLES[r].label}
                         </option>
@@ -101,48 +104,45 @@ export default function UsersTable({
                       className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium"
                       style={{ background: 'var(--gray-100)', color: 'var(--gray-700)' }}
                     >
-                      {row.fullAccess && <ShieldCheck className="h-3.5 w-3.5" strokeWidth={1.75} />}
-                      {row.roleLabel}
+                      {isAdmin ? (
+                        <ShieldCheck className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      ) : (
+                        <UserIcon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      )}
+                      {ROLES[row.role].label}
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 align-top">
-                  {row.fullAccess ? (
-                    <span className="text-[12px] font-medium" style={{ color: 'var(--primary)' }}>
-                      Todos los módulos
-                    </span>
-                  ) : row.tabLabels.length === 0 ? (
-                    <span className="text-[12px]" style={{ color: 'var(--gray-400)' }}>
-                      Sin acceso
-                    </span>
-                  ) : (
-                    <div className="flex flex-wrap gap-1.5">
-                      {row.tabLabels.map((label) => (
-                        <span
-                          key={label}
-                          className="rounded-md px-2 py-0.5 text-[11px]"
-                          style={{ background: 'var(--gray-100)', color: 'var(--gray-600)' }}
+                {(canSendReset || canEdit) && (
+                  <td className="px-4 py-3 align-middle">
+                    <div className="flex justify-end gap-2">
+                      {canSendReset && (
+                        <button
+                          type="button"
+                          onClick={() => onSendReset?.(row.email)}
+                          disabled={!onSendReset || resettingEmail !== null}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)] disabled:cursor-not-allowed disabled:opacity-60"
+                          style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
+                          aria-label={`Enviar reset de contraseña a ${row.email}`}
                         >
-                          {label}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </td>
-                {canSendReset && (
-                  <td className="px-4 py-3 align-top">
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => onSendReset?.(row.email)}
-                        disabled={!onSendReset || resettingEmail !== null}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)] disabled:cursor-not-allowed disabled:opacity-60"
-                        style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
-                        aria-label={`Enviar reset de contraseña a ${row.email}`}
-                      >
-                        <Mail className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
-                        {resettingEmail === row.email ? 'Enviando...' : 'Enviar reset'}
-                      </button>
+                          <Mail className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+                          {resettingEmail === row.email ? 'Enviando...' : 'Enviar reset'}
+                        </button>
+                      )}
+                      {canEdit && onRemove && (
+                        <button
+                          type="button"
+                          onClick={() => onRemove(row.email)}
+                          disabled={isCurrent}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--danger-muted)] hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40"
+                          style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-600)' }}
+                          aria-label={`Quitar a ${row.email}`}
+                          title={isCurrent ? 'No puedes quitarte a ti mismo' : 'Quitar usuario'}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+                          Quitar
+                        </button>
+                      )}
                     </div>
                   </td>
                 )}
