@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Lock, Plus, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronRight, Lock, Plus, Sparkles, TrendingDown, TrendingUp } from 'lucide-react';
 import { fmtCompact } from '../../../../formatters';
 import type {
   CellOverride,
@@ -16,6 +16,7 @@ import {
   ROW_HEIGHT,
   colWidthForGranularity,
 } from './gridGeometry';
+import { bucketVisual } from './bucketVisuals';
 import {
   OUTFLOW_BUCKET_ORDER,
   UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
@@ -76,10 +77,12 @@ function providerScoreChipStyle(bucket: 'CRITICO' | 'ALTO' | 'MEDIO' | 'BAJO'): 
 }
 
 // Column overscan: extra columns rendered each side of the viewport so fast
-// horizontal scroll/keyboard nav never shows a blank edge.
-const COL_OVERSCAN = 3;
+// horizontal scroll/keyboard nav never shows a blank edge. Scroll-driven
+// virtualization lags the native paint by ~1 frame, so a slightly wider band
+// hides the gutter on fast flings without bloating the DOM (a few extra cells).
+const COL_OVERSCAN = 5;
 // Row overscan: extra rows above/below the viewport per virtualized section.
-const ROW_OVERSCAN = 6;
+const ROW_OVERSCAN = 8;
 // Two sticky footer rows (Neto + Caja final) reserve space at the bottom so
 // keyboard scroll-into-view never parks the selected cell behind them.
 const FOOTER_RESERVE = ROW_HEIGHT * 2;
@@ -155,12 +158,23 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   );
 
   const colWidth = colWidthForGranularity(granularity);
+  // Ancho total scrolleable (label sticky + todas las columnas). Cada fila lo
+  // toma como `minWidth` para que su fondo/borde/hover cubra TODO el ancho al
+  // hacer scroll horizontal — sin esto, la fila es `width:auto` (= ancho del
+  // viewport) y sus columnas a la derecha quedan sin fondo ni borde ("jala mal").
+  const contentWidth = LABEL_COL_WIDTH + columns.length * colWidth;
 
   const [selection, setSelection] = useState<CellCoord | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [draftValue, setDraftValue] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Sólo auto-scrolleamos la celda a la vista cuando el usuario navega por
+  // teclado. Un click ya la deja visible, y los recomputes en background
+  // (cambio de granularidad, expandir bucket, refetch que cambia el conteo de
+  // filas) NO deben jalar la vista de regreso a la selección — esa era la causa
+  // del "scroll jala mal".
+  const scrollSelectionIntoView = useRef(false);
 
   // ---- Virtualization scaffolding -----------------------------------------
   // Column width and row height are uniform, so windowing is exact arithmetic
@@ -228,6 +242,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const outflowTopRef = useRef(0);
 
   const moveSelection = useCallback((dr: number, dc: number) => {
+    scrollSelectionIntoView.current = true;
     setSelection((current) => {
       const baseRow = current?.rowIndex ?? 0;
       const baseCol = current?.colIndex ?? 0;
@@ -329,6 +344,12 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   // re-disparar scroll listeners cuando no cambia el valor.
   useEffect(() => {
     if (!measured || !selection) return;
+    // Sólo seguir a la celda cuando la selección la movió el teclado. Sin este
+    // guard, un cambio de granularidad (colWidth) o del conteo de filas
+    // (visibleInflowDisplayRows.length) re-disparaba el efecto y jalaba el
+    // scroll a la selección de golpe.
+    if (!scrollSelectionIntoView.current) return;
+    scrollSelectionIntoView.current = false;
     const el = containerRef.current;
     if (!el) return;
     const scrollLeft = el.scrollLeft;
@@ -435,7 +456,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       key={row.conceptKey}
       role="row"
       className="flex border-b border-[var(--gray-100)] hover:bg-[var(--gray-50)]/40"
-      style={{ height: ROW_HEIGHT }}
+      style={{ height: ROW_HEIGHT, minWidth: contentWidth }}
     >
       <StickyLeftCell width={LABEL_COL_WIDTH} left={0} shadow>
         <button
@@ -548,12 +569,13 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
   const renderBucketRow = (group: Extract<DisplayRow, { kind: 'bucket' }>, rowIndex: number) => {
     const expanded = expandedBuckets[group.id] ?? false;
+    const visual = bucketVisual(group.label, group.type);
     return (
       <div
         key={group.id}
         role="row"
         className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/70 hover:bg-[var(--gray-100)]/70"
-        style={{ height: ROW_HEIGHT }}
+        style={{ height: ROW_HEIGHT, minWidth: contentWidth }}
       >
         <StickyLeftCell width={LABEL_COL_WIDTH} left={0} shadow className="bg-[var(--gray-50)]/70">
           <button
@@ -565,6 +587,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             {expanded
               ? <ChevronDown className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
               : <ChevronRight className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />}
+            <visual.Icon className="h-3.5 w-3.5 shrink-0" style={{ color: visual.color }} strokeWidth={1.75} />
             <span className="truncate">{group.label}</span>
             <span className="ml-auto rounded bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--gray-500)]">
               {group.rows.length}
@@ -608,7 +631,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const renderAddRow = (type: FinancialMovementType) => {
     if (isReadOnly) return null;
     return (
-      <div className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/40">
+      <div className="flex border-b border-[var(--gray-100)] bg-[var(--gray-50)]/40" style={{ minWidth: contentWidth }}>
         <div
           className="sticky left-0 z-20 flex items-center bg-[var(--gray-50)]/40"
           style={{ width: LABEL_COL_WIDTH, paddingLeft: 8 }}
@@ -629,14 +652,16 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
   const renderFooterRow = (label: string, kind: 'inflows' | 'outflows' | 'net' | 'closingCash', tone: 'neutral' | 'positive' | 'negative' | 'highlight') => (
     <div
-      className="flex border-t border-[var(--gray-200)] bg-white sticky bottom-0"
-      style={{ height: ROW_HEIGHT, zIndex: 5 }}
+      className="flex border-t border-[var(--gray-200)] sticky bottom-0"
+      style={{ height: ROW_HEIGHT, zIndex: 5, minWidth: contentWidth, background: tone === 'highlight' ? 'var(--gray-50)' : 'white' }}
       role="row"
     >
       <StickyLeftCell
         width={LABEL_COL_WIDTH}
         left={0}
         className="text-[12px] font-bold text-[var(--gray-950)]"
+        style={{ background: tone === 'highlight' ? 'var(--gray-50)' : undefined }}
+        accent={tone === 'highlight' ? 'var(--primary)' : undefined}
         shadow
       >
         {label}
@@ -645,7 +670,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       {visibleColumns.map((column) => {
         const value = totalsFor(kind, column.key);
         const color = tone === 'highlight'
-          ? 'var(--gray-950)'
+          ? (value < 0 ? 'var(--danger)' : 'var(--gray-950)')
           : value > 0
             ? 'var(--success)'
             : value < 0
@@ -665,38 +690,45 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     </div>
   );
 
-  const renderSubtotalRow = (label: string, kind: 'inflows' | 'outflows') => (
-    <div
-      className="flex border-b-2 border-[var(--gray-300)] bg-[var(--primary)]/5"
-      style={{ height: ROW_HEIGHT }}
-      role="row"
-    >
-      <StickyLeftCell
-        width={LABEL_COL_WIDTH}
-        left={0}
-        className="text-[12px] font-bold uppercase tracking-[0.04em] text-[var(--gray-950)] bg-[var(--primary)]/5"
-        shadow
+  const renderSubtotalRow = (label: string, kind: 'inflows' | 'outflows') => {
+    const isIncome = kind === 'inflows';
+    const accent = isIncome ? 'var(--success)' : 'var(--danger)';
+    const tint = isIncome ? 'var(--success-muted)' : 'var(--danger-muted)';
+    return (
+      <div
+        className="flex border-b-2 border-[var(--gray-300)]"
+        style={{ height: ROW_HEIGHT, minWidth: contentWidth, background: tint }}
+        role="row"
       >
-        {label}
-      </StickyLeftCell>
-      {leftSpacer}
-      {visibleColumns.map((column) => {
-        const value = totalsFor(kind, column.key);
-        return (
-          <div
-            key={column.key}
-            className="flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)] text-[var(--gray-950)]"
-            style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
-          >
-            <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
-              {value === 0 ? '—' : fmtCompact(value)}
-            </span>
-          </div>
-        );
-      })}
-      {rightSpacer}
-    </div>
-  );
+        <StickyLeftCell
+          width={LABEL_COL_WIDTH}
+          left={0}
+          className="text-[12px] font-bold uppercase tracking-[0.04em]"
+          style={{ background: tint, color: accent }}
+          accent={accent}
+          shadow
+        >
+          {label}
+        </StickyLeftCell>
+        {leftSpacer}
+        {visibleColumns.map((column) => {
+          const value = totalsFor(kind, column.key);
+          return (
+            <div
+              key={column.key}
+              className="flex h-full items-center justify-end px-2 text-[12px] font-bold tabular-nums border-l border-[var(--gray-100)]"
+              style={{ width: colWidth, flex: `0 0 ${colWidth}px`, color: accent }}
+            >
+              <span className={value === 0 ? 'text-[var(--gray-300)]' : ''}>
+                {value === 0 ? '—' : fmtCompact(value)}
+              </span>
+            </div>
+          );
+        })}
+        {rightSpacer}
+      </div>
+    );
+  };
 
   const renderDisplayRow = (displayRow: DisplayRow, rowIndex: number) =>
     displayRow.kind === 'data'
@@ -712,11 +744,11 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       role="grid"
       aria-readonly={isReadOnly}
       aria-rowcount={displayRows.length}
-      className="relative overflow-auto rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
+      className="relative overflow-auto overscroll-contain rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
       style={{ maxHeight: 560 }}
     >
       {/* Header row */}
-      <div className="sticky top-0 z-30 flex border-b border-[var(--gray-200)] bg-[var(--gray-50)]" style={{ height: HEADER_HEIGHT }}>
+      <div className="sticky top-0 z-30 flex border-b border-[var(--gray-200)] bg-[var(--gray-50)]" style={{ height: HEADER_HEIGHT, minWidth: contentWidth }}>
         <StickyLeftCell width={LABEL_COL_WIDTH} left={0} className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)]" header shadow>
           Concepto
         </StickyLeftCell>
@@ -743,6 +775,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         collapsed={collapsed.INFLOW}
         onToggle={() => toggleSection('INFLOW')}
         width={LABEL_COL_WIDTH}
+        type="INFLOW"
       />
       {!collapsed.INFLOW && (inflowRows.length === 0 ? (
         <EmptyRow message="Sin ingresos en este escenario." />
@@ -769,6 +802,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         collapsed={collapsed.OUTFLOW}
         onToggle={() => toggleSection('OUTFLOW')}
         width={LABEL_COL_WIDTH}
+        type="OUTFLOW"
       />
       {!collapsed.OUTFLOW && (outflowRows.length === 0 ? (
         <EmptyRow message="Sin egresos en este escenario." />
@@ -941,6 +975,8 @@ function StickyLeftCell({
   className = '',
   header = false,
   shadow = false,
+  accent,
+  style,
 }: {
   width: number;
   left: number;
@@ -948,7 +984,17 @@ function StickyLeftCell({
   className?: string;
   header?: boolean;
   shadow?: boolean;
+  /** Barra de acento (inset) en el borde izquierdo, p.ej. para subtotales. */
+  accent?: string;
+  /** Estilos extra (background/color). El boxShadow lo gobierna shadow+accent. */
+  style?: CSSProperties;
 }) {
+  const boxShadow = [
+    accent ? `inset 3px 0 0 ${accent}` : null,
+    shadow ? '4px 0 6px -4px rgba(15,23,42,0.18)' : null,
+  ]
+    .filter(Boolean)
+    .join(', ') || undefined;
   return (
     <div
       className={`sticky flex h-full items-center px-3 ${header ? 'bg-[var(--gray-50)]' : 'bg-white'} border-r border-[var(--gray-200)] ${className}`}
@@ -957,7 +1003,8 @@ function StickyLeftCell({
         flex: `0 0 ${width}px`,
         left,
         zIndex: header ? 25 : 15,
-        boxShadow: shadow ? '4px 0 6px -4px rgba(15,23,42,0.18)' : undefined,
+        ...style,
+        boxShadow,
       }}
     >
       {children}
@@ -971,13 +1018,18 @@ function SectionHeader({
   collapsed,
   onToggle,
   width,
+  type,
 }: {
   label: string;
   count: number;
   collapsed: boolean;
   onToggle: () => void;
   width: number;
+  type: FinancialMovementType;
 }) {
+  const isIncome = type === 'INFLOW';
+  const accent = isIncome ? 'var(--success)' : 'var(--danger)';
+  const TrendIcon = isIncome ? TrendingUp : TrendingDown;
   return (
     <div
       className="sticky left-0 flex border-b border-[var(--gray-200)] bg-[var(--gray-50)]"
@@ -988,14 +1040,18 @@ function SectionHeader({
         type="button"
         onClick={onToggle}
         aria-expanded={!collapsed}
-        className="sticky left-0 flex h-full items-center gap-1.5 px-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--gray-700)] bg-[var(--gray-50)] hover:bg-[var(--gray-100)] transition-colors"
-        style={{ width, zIndex: 18, boxShadow: '4px 0 6px -4px rgba(15,23,42,0.18)' }}
+        className="sticky left-0 flex h-full items-center gap-1.5 pr-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--gray-700)] bg-[var(--gray-50)] hover:bg-[var(--gray-100)] transition-colors"
+        style={{ width, zIndex: 18, paddingLeft: 8, boxShadow: `inset 3px 0 0 ${accent}, 4px 0 6px -4px rgba(15,23,42,0.18)` }}
       >
         {collapsed
-          ? <ChevronRight className="h-3 w-3" strokeWidth={1.5} />
-          : <ChevronDown className="h-3 w-3" strokeWidth={1.5} />}
-        <span>{label}</span>
-        <span className="ml-1 rounded bg-[var(--gray-200)] px-1.5 py-0.5 text-[9px] font-bold tabular-nums text-[var(--gray-600)]">
+          ? <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={1.5} />
+          : <ChevronDown className="h-3 w-3 shrink-0" strokeWidth={1.5} />}
+        <TrendIcon className="h-3.5 w-3.5 shrink-0" style={{ color: accent }} strokeWidth={2} />
+        <span style={{ color: accent }}>{label}</span>
+        <span
+          className="ml-1 rounded px-1.5 py-0.5 text-[9px] font-bold tabular-nums"
+          style={{ background: isIncome ? 'var(--success-muted)' : 'var(--danger-muted)', color: accent }}
+        >
           {count}
         </span>
       </button>
