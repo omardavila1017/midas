@@ -157,6 +157,36 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     [visibleInflowDisplayRows, visibleOutflowDisplayRows],
   );
 
+  // Pre-aggregated bucket header totals: bucketId → (colKey → Σ of child cells).
+  // The bucket header row used to reduce over ALL child rows × the visible
+  // columns on EVERY scroll frame (renderBucketRow). That froze the grid the
+  // moment a huge bucket entered the viewport — "Proveedores sin categoría"
+  // can hold thousands of one-row-per-person movements. Computing the sums once
+  // per run / override change (off the scroll path) keeps the header render
+  // O(visibleCols) regardless of bucket size. Honors overrides exactly like the
+  // previous inline reduce. The window for daily/weekly is bounded
+  // (projectionWindowFor), so iterating every column once is cheap.
+  const bucketColumnTotals = useMemo(() => {
+    const totals = new Map<string, Map<string, number>>();
+    const accumulate = (list: DisplayRow[]) => {
+      for (const entry of list) {
+        if (entry.kind !== 'bucket') continue;
+        const colSums = new Map<string, number>();
+        for (const child of entry.rows) {
+          for (const column of columns) {
+            const override = overrideFor(child.conceptKey, column.key);
+            const value = override ? override.value : baseValueFor(child.conceptKey, column.key);
+            if (value) colSums.set(column.key, (colSums.get(column.key) ?? 0) + value);
+          }
+        }
+        totals.set(entry.id, colSums);
+      }
+    };
+    accumulate(visibleInflowDisplayRows);
+    accumulate(visibleOutflowDisplayRows);
+    return totals;
+  }, [visibleInflowDisplayRows, visibleOutflowDisplayRows, columns, baseValueFor, overrideFor]);
+
   const colWidth = colWidthForGranularity(granularity);
   // Ancho total scrolleable (label sticky + todas las columnas). Cada fila lo
   // toma como `minWidth` para que su fondo/borde/hover cubra TODO el ancho al
@@ -570,6 +600,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   const renderBucketRow = (group: Extract<DisplayRow, { kind: 'bucket' }>, rowIndex: number) => {
     const expanded = expandedBuckets[group.id] ?? false;
     const visual = bucketVisual(group.label, group.type);
+    const colSums = bucketColumnTotals.get(group.id);
     return (
       <div
         key={group.id}
@@ -597,10 +628,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         {leftSpacer}
         {visibleColumns.map((column, vi) => {
           const colIndex = colStart + vi;
-          const value = group.rows.reduce((sum, child) => {
-            const override = overrideFor(child.conceptKey, column.key);
-            return sum + (override ? override.value : baseValueFor(child.conceptKey, column.key));
-          }, 0);
+          const value = colSums?.get(column.key) ?? 0;
           const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;
           return (
             <div
@@ -895,6 +923,10 @@ function supplierSubcategoryPart(label: string): string {
 function supplierCategoryGroupLabel(raw: string | undefined): string | null {
   const value = raw?.trim().replace(/\s+/g, ' ');
   if (!value || value === 'Sin clasificar') return null;
+  // Roles de cuenta de banco (`proveedores_nomina`, `nomina_operadores`, …) NO
+  // son categorías de proveedor: llegan como subcategory de pagos rescatados a
+  // "Personal y nómina" y no deben crear sub-buckets "· proveedores_nomina".
+  if (value.includes('_')) return null;
   if (/taller/i.test(value)) return 'Taller';
   if (/chasis/i.test(value)) return 'Chasis';
   if (/refacc/i.test(value)) return 'Refacciones';

@@ -14,6 +14,7 @@
 
 import type { Provider } from '../../../domain/types';
 import { normalizeJdeKey, normalizeProviderName } from '../../../domain/providerIdentity';
+import { isPersonName } from '../../../domain/personNameHeuristic';
 
 interface CategoryIndex {
   byJde: Map<string, string>;   // normalized JDE key → categoria cruda
@@ -79,6 +80,13 @@ export function lookupProviderCategoria(opts: {
 }
 
 /**
+ * Bucket de personal/nómina. Reutilizado por la regla de rescate de
+ * `macroBucketForSupplier` (pagos a personas físicas / cuentas pagadoras de
+ * nómina) y como `label` del patrón de nómina abajo, para que ambos coincidan.
+ */
+export const PERSONAL_NOMINA_BUCKET = 'Personal y nómina';
+
+/**
  * Generalización: ~85 `categoria` crudas → 7 macro-buckets. Orden importa
  * (primero el patrón más específico). Sin match → proveedor conocido pero
  * pendiente de clasificar.
@@ -107,7 +115,7 @@ const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   {
     pattern:
       /n[óo]mina|sueldo|pension\s*aliment|sindicato|imss|infonavit|\bisn\b|embargo\s*salario|caja\s*y\s*fondo|reclut|practicant|uniformes?|colegiatura|investigaciones?\s*labor|enfermer[íi]a|atenci[óo]n\s*m[ée]dica|material\s*depto\s*medico|comedor|insumos?\s*aliment|licencias?\s*operadores|funerales|certificac|capacitac|outsourc|lesiones?\s*por\s*accident|indemnizaci[óo]n|reembolso|honorarios?\s*rh\b/i,
-    label: 'Personal y nómina',
+    label: PERSONAL_NOMINA_BUCKET,
   },
   {
     pattern:
@@ -129,12 +137,24 @@ export function generalizeCategoria(raw: string | undefined | null): string {
 
 /**
  * Bucket macro para un movimiento de proveedor: cruza con catálogo y
- * generaliza. Sin cruce → proveedor conocido pero pendiente de clasificar.
+ * generaliza. Sin categoría resoluble, en vez de dejar el pago como una de
+ * cientos de filas "Proveedores sin categoría", lo rescatamos hacia "Personal y
+ * nómina" cuando hay evidencia de que es un pago a una PERSONA (no a un
+ * proveedor formal) — JDE liquida finiquitos, honorarios, reembolsos y demás
+ * por la vía de cuentas por pagar. Dos señales:
+ *   1. EXACTA: la cuenta de banco pagadora es de nómina (subRole
+ *      `proveedores_nomina` / `nomina_operadores`), que llega en `subcategory`
+ *      y generaliza a "Personal y nómina".
+ *   2. HEURÍSTICA: la contraparte es un nombre de persona física
+ *      (`isPersonName`), sin razón social / dígitos.
+ * Es re-bucketing de presentación — NO toca monto ni fecha.
  */
 export function macroBucketForSupplier(opts: {
   counterpartyId?: string;
   counterpartyName?: string;
   providerCategory?: string;
+  /** Subcategoría del movimiento; puede traer el subRole de la cuenta de banco. */
+  subcategory?: string;
 }): string {
   // Regla de negocio: Busbud es proveedor de Federal aunque la categoría JDE
   // diga otra cosa (caso bidireccional cliente+proveedor del mismo grupo).
@@ -142,6 +162,12 @@ export function macroBucketForSupplier(opts: {
     return 'Federal';
   }
   const categoria = opts.providerCategory || lookupProviderCategoria(opts);
-  if (!categoria) return UNCATEGORIZED_PROVIDER_BUCKET;
-  return generalizeCategoria(categoria);
+  const bucket = generalizeCategoria(categoria);
+  if (bucket !== UNCATEGORIZED_PROVIDER_BUCKET) return bucket;
+  // Rescate de pagos a personas → "Personal y nómina".
+  if (opts.subcategory && generalizeCategoria(opts.subcategory) === PERSONAL_NOMINA_BUCKET) {
+    return PERSONAL_NOMINA_BUCKET;
+  }
+  if (isPersonName(opts.counterpartyName)) return PERSONAL_NOMINA_BUCKET;
+  return UNCATEGORIZED_PROVIDER_BUCKET;
 }

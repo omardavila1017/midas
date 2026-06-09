@@ -151,16 +151,18 @@ describe('planning row taxonomy', () => {
   it('separates uncategorized suppliers from unidentified bank outflows', () => {
     const rows = buildPlanningRows({
       movements: [
+        // Razón social (marcador COMERCIALIZADORA) sin categoría mapeada: se
+        // queda en "Proveedores sin categoría", no se rescata como persona.
         movement({
           id: 'supplier-unknown-category',
-          counterpartyName: 'Proveedor conocido',
+          counterpartyName: 'Comercializadora del Norte',
           providerCategory: 'GIRO NO MAPEADO',
           subcategory: 'GIRO NO MAPEADO',
           projectedAmount: 900,
         }),
         movement({
           id: 'supplier-without-category',
-          counterpartyName: 'Proveedor sin catalogo',
+          counterpartyName: 'Distribuidora Sin Catalogo',
           subcategory: undefined,
           projectedAmount: 700,
         }),
@@ -178,11 +180,45 @@ describe('planning row taxonomy', () => {
       overrides: [],
     });
 
-    expect(rows.find((row) => row.label === 'Proveedor conocido')?.bucketLabel).toBe('Proveedores sin categoría');
-    expect(rows.find((row) => row.label === 'Proveedor sin catalogo')?.bucketLabel).toBe('Proveedores sin categoría');
+    expect(rows.find((row) => row.label === 'Comercializadora del Norte')?.bucketLabel).toBe('Proveedores sin categoría');
+    expect(rows.find((row) => row.label === 'Distribuidora Sin Catalogo')?.bucketLabel).toBe('Proveedores sin categoría');
     expect(rows.find((row) => row.label === 'Sin identificar · BANCO 123')?.bucketLabel).toBe('Egresos bancarios sin identificar');
     expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros');
     expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros egresos');
+  });
+
+  it('rescues person-name and payroll-account AP payments into Personal y nómina', () => {
+    const rows = buildPlanningRows({
+      movements: [
+        // Persona física pagada por cuentas por pagar (finiquito/honorario/
+        // reembolso) sin categoría de proveedor → rescatada por la heurística
+        // de nombre de persona, en vez de quedar como "sin categoría".
+        movement({
+          id: 'bank:person',
+          sourceSystem: 'BANK',
+          counterpartyName: 'Juan Pérez López',
+          providerCategory: undefined,
+          subcategory: undefined,
+          projectedAmount: 1_000,
+        }),
+        // Pago desde cuenta pagadora de nómina (subRole proveedores_nomina) sin
+        // categoría y SIN nombre de persona → rescatado por la señal exacta de
+        // la cuenta de banco, no por la heurística.
+        movement({
+          id: 'bank:nomina-account',
+          sourceSystem: 'BANK',
+          counterpartyName: 'Pago folio 8842',
+          providerCategory: undefined,
+          subcategory: 'proveedores_nomina',
+          projectedAmount: 2_000,
+        }),
+      ],
+      customRows: [],
+      overrides: [],
+    });
+
+    expect(rows.find((row) => row.label === 'Juan Pérez López')?.bucketLabel).toBe('Personal y nómina');
+    expect(rows.find((row) => row.label === 'Pago folio 8842')?.bucketLabel).toBe('Personal y nómina');
   });
 
   it('routes GL-derived categories/subcategories to the correct row buckets', () => {

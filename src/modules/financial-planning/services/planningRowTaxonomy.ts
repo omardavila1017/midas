@@ -215,6 +215,7 @@ export function bucketForMovement(movement: FinancialMovement): string {
       counterpartyId: movement.counterpartyId,
       counterpartyName: movement.counterpartyName,
       providerCategory: movement.providerCategory,
+      subcategory: movement.subcategory,
     });
   }
   if (movement.category === 'TRANSFER') return UNIDENTIFIED_BANK_OUTFLOW_BUCKET;
