@@ -58,9 +58,8 @@ describe('localAuth', () => {
     expect(localStorage.getItem(LOCAL_SESSION_KEY)).toBeTruthy();
   });
 
-  it('resolves the role from the JSON per user, collapsing legacy roles to user', async () => {
-    // El JSON trae a este usuario con rol granular legacy "cobranza"; el modelo
-    // nuevo lo colapsa a "user".
+  it('resolves the role from the JSON per user (admin vs user)', async () => {
+    // El roster del JSON está hardcodeado con roles admin/user; este correo es `user`.
     await setLocalPassword(COBRANZA, PWD);
     const session = await localLogin(COBRANZA, PWD);
     expect(session.role).toBe('user');

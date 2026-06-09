@@ -22,7 +22,11 @@ import { GRANTABLE_TABS, isAdminOnlyTab } from '../../../config/appTabs';
 import { listLocalUsers } from '../../../services/localAuth';
 import { listConfiguredUsers } from '../../../config/userRoles';
 
-export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v1';
+// v2 (2026-06-09): re-siembra forzada tras hardcodear el roster + roles en
+// `authLocalUsers.json`. Subir la versión abandona el registro `v1` previo para
+// que TODOS los navegadores vuelvan a sembrar del JSON nuevo (correos + roles
+// admin/user actualizados) en vez de quedarse con el roster viejo en cache.
+export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v2';
 const ACCESS_CHANGED_EVENT = 'midas:access-changed';
 
 /** Rol del registro: nunca `none` (un usuario registrado es admin o user). */
@@ -250,6 +254,24 @@ export function setPermissions(email: string, tabs: AppTabId[]): void {
   if (!prev) return;
   registry[key] = { role: prev.role, permissions: sanitizePermissions(tabs) };
   writeRegistry(registry);
+}
+
+/**
+ * Serializa el registro completo (correo → rol + permisos) a JSON legible.
+ *
+ * Pensado para el flujo "configura en el portal → exporta → hardcodea": un admin
+ * arma todos los permisos con los switches, exporta este JSON y se vuelve la
+ * semilla hardcodeada. Mismo shape que el almacén interno (`Registry`), con
+ * correos y permisos ordenados para un diff estable.
+ */
+export function exportRegistryJson(): string {
+  const registry = loadRegistry();
+  const ordered: Registry = {};
+  for (const email of Object.keys(registry).sort()) {
+    const { role, permissions } = registry[email];
+    ordered[email] = { role, permissions: [...permissions].sort() };
+  }
+  return JSON.stringify(ordered, null, 2);
 }
 
 // ── Reactividad ───────────────────────────────────────────────────────────────

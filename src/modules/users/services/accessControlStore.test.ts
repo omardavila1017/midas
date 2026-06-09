@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   __resetAccessRegistryForTests,
   canAccess,
+  exportRegistryJson,
   getGrantedTabs,
   getManagedUser,
   listManagedUsers,
@@ -11,8 +12,9 @@ import {
   upsertUser,
 } from './accessControlStore';
 
-// Sembrado desde el JSON local (authLocalUsers.json, enabled): este usuario
-// trae rol granular legacy "cobranza" → user con permisos por defecto.
+// Sembrado desde el JSON local (authLocalUsers.json, enabled). El roster está
+// hardcodeado con roles admin/user: este usuario arranca como `user` SIN
+// permisos (un admin se los prende desde el portal).
 const ADMIN = 'agustin.blanco@gruposenda.com';
 const SEEDED_USER = 'blanca.reyes@gruposenda.com';
 
@@ -32,8 +34,8 @@ describe('accessControlStore seeding', () => {
     expect(getManagedUser(ADMIN)?.role).toBe('admin');
     const seeded = getManagedUser(SEEDED_USER);
     expect(seeded?.role).toBe('user');
-    // El rol legacy "cobranza" sembró estos tabs por defecto.
-    expect(seeded?.permissions).toEqual(expect.arrayContaining(['collections', 'venta', 'clients', 'bancos']));
+    // Roster hardcodeado: arranca como `user` sin permisos (se otorgan en el portal).
+    expect(seeded?.permissions).toEqual([]);
   });
 });
 
@@ -49,6 +51,9 @@ describe('canAccess', () => {
   });
 
   it('limits a user to granted tabs and blocks admin-only tabs', () => {
+    // Arranca sin permisos; un admin le prende `collections` desde el portal.
+    expect(canAccess(SEEDED_USER, 'user', 'collections')).toBe(false);
+    setPermission(SEEDED_USER, 'collections', true);
     expect(canAccess(SEEDED_USER, 'user', 'collections')).toBe(true);
     expect(canAccess(SEEDED_USER, 'user', 'taxes')).toBe(false);
     expect(canAccess(SEEDED_USER, 'user', 'users')).toBe(false);
@@ -101,5 +106,18 @@ describe('mutations', () => {
     expect(getManagedUser('temp@x.com')).not.toBeNull();
     removeUser('temp@x.com');
     expect(getManagedUser('temp@x.com')).toBeNull();
+  });
+});
+
+describe('exportRegistryJson', () => {
+  it('serializes role + permissions in a stable, hardcodeable shape', () => {
+    upsertUser('export@x.com', 'user');
+    setPermission('export@x.com', 'bancos', true);
+    const parsed = JSON.parse(exportRegistryJson()) as Record<
+      string,
+      { role: string; permissions: string[] }
+    >;
+    expect(parsed['export@x.com']).toEqual({ role: 'user', permissions: ['bancos'] });
+    expect(parsed[ADMIN]).toEqual({ role: 'admin', permissions: [] });
   });
 });
