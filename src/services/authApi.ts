@@ -1,12 +1,17 @@
 import { apiConfig } from '../config/api.config';
 import { coerceRole, type Role } from '../config/roles';
+import { getRegistryRole } from '../modules/users/services/accessControlStore';
 import { AuthApiError, type AuthErrorCode } from './authError';
 import {
   clearLocalSession,
+  getLocalUserRole,
+  hasLocalPassword,
   isLocalAuthEnabled,
   localChangePassword,
-  localLogin,
+  openLocalSession,
   readLocalSession,
+  setLocalPassword,
+  verifyLocalPassword,
 } from './localAuth';
 
 // Re-export para no romper a los consumidores que importan `AuthApiError` /
@@ -137,10 +142,77 @@ export async function getAuthSession(): Promise<AuthSessionResponse> {
   }
 }
 
+// ── Modo auth LOCAL: identidad combinada JSON + registro de usuarios ──────────
+// El JSON (`authLocalUsers.json`) trae usuarios semilla; el registro
+// (`accessControlStore`) trae además los que da de alta un admin. Un correo es
+// "conocido" si está en cualquiera de los dos. El rol efectivo lo manda el
+// registro (un admin pudo promover/asignar) y, si no hay, el del JSON.
+
+function localNormalize(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function isKnownLocalUser(email: string): boolean {
+  const normalized = localNormalize(email);
+  return getLocalUserRole(normalized) !== null || getRegistryRole(normalized) !== null;
+}
+
+function resolveLocalRole(email: string): Role {
+  const normalized = localNormalize(email);
+  return getRegistryRole(normalized) ?? getLocalUserRole(normalized) ?? 'none';
+}
+
+function localLoginResponse(email: string, role: Role): LoginResponse {
+  const session = openLocalSession(email, role);
+  return { email: session.email, role: session.role, expiresAt: session.expiresAt, passwordExpired: false };
+}
+
+/**
+ * ¿El correo necesita definir su contraseña en el primer ingreso? Solo en modo
+ * local: es un usuario conocido (registrado por un admin / sembrado) que aún no
+ * tiene contraseña. En modo backend siempre `false` (el backend gestiona su
+ * propio primer ingreso). Síncrono: la UI lo usa para enrutar el login.
+ */
+export function requiresPasswordSetup(email: string): boolean {
+  if (!isLocalAuthEnabled()) return false;
+  const normalized = localNormalize(email);
+  return isKnownLocalUser(normalized) && !hasLocalPassword(normalized);
+}
+
+/**
+ * Primer ingreso "tipo register": un usuario registrado sin contraseña define la
+ * suya y queda con sesión iniciada. Solo modo local (el backend lo resuelve por
+ * su cuenta vía la liga de restablecimiento).
+ */
+export async function completeFirstLogin(email: string, newPassword: string): Promise<LoginResponse> {
+  if (!isLocalAuthEnabled()) {
+    throw new AuthApiError('validation', 'El primer ingreso se completa con el backend de autenticación.', 400);
+  }
+  const normalized = localNormalize(email);
+  if (!isKnownLocalUser(normalized)) {
+    throw new AuthApiError('invalid_credentials', 'Tu cuenta no está registrada. Pide a un administrador que te dé de alta.', 401);
+  }
+  if (hasLocalPassword(normalized)) {
+    throw new AuthApiError('validation', 'Tu cuenta ya tiene contraseña. Inicia sesión normalmente.', 409);
+  }
+  await setLocalPassword(normalized, newPassword);
+  return localLoginResponse(normalized, resolveLocalRole(normalized));
+}
+
 export async function login(email: string, password: string): Promise<LoginResponse> {
   if (isLocalAuthEnabled()) {
-    const session = await localLogin(email, password);
-    return { email: session.email, role: session.role, expiresAt: session.expiresAt, passwordExpired: false };
+    const normalized = localNormalize(email);
+    if (!isKnownLocalUser(normalized)) {
+      throw new AuthApiError('invalid_credentials', 'Credenciales incorrectas.', 401);
+    }
+    if (!hasLocalPassword(normalized)) {
+      // Registrado pero sin contraseña: la UI debe mandarlo a definirla.
+      throw new AuthApiError('password_setup_required', 'Define tu contraseña para activar tu cuenta.', 409);
+    }
+    if (!(await verifyLocalPassword(normalized, password))) {
+      throw new AuthApiError('invalid_credentials', 'Credenciales incorrectas.', 401);
+    }
+    return localLoginResponse(normalized, resolveLocalRole(normalized));
   }
   const payload = await request('/login', {
     method: 'POST',
@@ -199,6 +271,21 @@ export async function completePasswordReset(token: string, newPassword: string):
   await request('/password/reset/complete', {
     method: 'POST',
     body: JSON.stringify({ token, newPassword }),
+  });
+}
+
+/**
+ * Un admin fija directamente la contraseña de otro usuario (sin liga de correo).
+ * En modo local escribe el overlay; en backend hace POST al endpoint de admin.
+ */
+export async function adminSetPassword(email: string, newPassword: string): Promise<void> {
+  if (isLocalAuthEnabled()) {
+    await setLocalPassword(localNormalize(email), newPassword);
+    return;
+  }
+  await request(`/users/${encodeURIComponent(email)}/password`, {
+    method: 'POST',
+    body: JSON.stringify({ newPassword }),
   });
 }
 

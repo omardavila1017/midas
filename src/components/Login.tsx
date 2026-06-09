@@ -3,24 +3,25 @@ import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, KeyRound, Lock, Mail 
 import PasswordPolicyChecklist from './PasswordPolicyChecklist';
 import {
   AuthApiError,
+  completeFirstLogin,
   completePasswordReset,
   getAuthSession,
   login,
   logout,
   requestPasswordReset,
+  requiresPasswordSetup,
   type LoginResponse,
 } from '../services/authApi';
 import { passwordMeetsPolicy } from '../services/passwordPolicy';
 import {
   clearAuthSession,
-  getPrefillEmail,
   rememberLastEmail,
   setCurrentAuthSession,
 } from '../contexts/authSession';
 
 const sendaLogoUrl = `${import.meta.env.BASE_URL}logos/senda-corporativo.svg`;
 
-type LoginMode = 'login' | 'forgot' | 'reset';
+type LoginMode = 'login' | 'forgot' | 'reset' | 'setup';
 
 export function clearAuth() {
   clearAuthSession();
@@ -40,6 +41,7 @@ function authErrorMessage(error: unknown): string {
     if (error.code === 'forbidden') return 'Tu cuenta no tiene acceso asignado a Midas.';
     if (error.code === 'password_expired') return 'Tu contraseña expiró. Solicita una liga para restablecerla.';
     if (error.code === 'rate_limited') return 'Demasiados intentos. Intenta de nuevo más tarde.';
+    if (error.code === 'password_setup_required') return 'Tu cuenta aún no tiene contraseña. Defínela para activarla.';
     if (error.code === 'invalid_token') return 'La liga ya expiró o no es válida.';
     if (error.code === 'network') return 'No se pudo conectar con autenticación.';
     if (error.code === 'validation') {
@@ -179,8 +181,16 @@ function PasswordInput({
   );
 }
 
-function LoginForm({ onSignedIn, onForgot }: { onSignedIn: (session: LoginResponse) => void; onForgot: () => void }) {
-  const [email, setEmail] = useState(() => getPrefillEmail());
+function LoginForm({
+  onSignedIn,
+  onForgot,
+  onNeedsSetup,
+}: {
+  onSignedIn: (session: LoginResponse) => void;
+  onForgot: () => void;
+  onNeedsSetup: (email: string) => void;
+}) {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -188,7 +198,6 @@ function LoginForm({ onSignedIn, onForgot }: { onSignedIn: (session: LoginRespon
 
   useEffect(() => {
     inputRef.current?.focus();
-    inputRef.current?.select();
   }, []);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -197,6 +206,11 @@ function LoginForm({ onSignedIn, onForgot }: { onSignedIn: (session: LoginRespon
     if (!looksLikeEmail(value)) {
       setError('Escribe un correo válido para entrar.');
       inputRef.current?.focus();
+      return;
+    }
+    // Usuario registrado que aún no define su contraseña → primer ingreso.
+    if (requiresPasswordSetup(value)) {
+      onNeedsSetup(value);
       return;
     }
     if (!password) {
@@ -218,6 +232,12 @@ function LoginForm({ onSignedIn, onForgot }: { onSignedIn: (session: LoginRespon
       rememberLastEmail(session.email);
       onSignedIn(session);
     } catch (err) {
+      // El backend/local puede señalar "falta definir contraseña" en una carrera
+      // con el chequeo síncrono de arriba: enrutamos al primer ingreso.
+      if (err instanceof AuthApiError && err.code === 'password_setup_required') {
+        onNeedsSetup(value);
+        return;
+      }
       setError(authErrorMessage(err));
     } finally {
       setSubmitting(false);
@@ -322,7 +342,7 @@ function LoginForm({ onSignedIn, onForgot }: { onSignedIn: (session: LoginRespon
 }
 
 function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
-  const [email, setEmail] = useState(() => getPrefillEmail());
+  const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
@@ -481,6 +501,101 @@ function ResetPasswordForm({ token, onDone }: { token: string; onDone: () => voi
   );
 }
 
+function FirstLoginForm({
+  email,
+  onActivated,
+  onBack,
+}: {
+  email: string;
+  onActivated: (session: LoginResponse) => void;
+  onBack: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canSubmit = useMemo(
+    () => passwordMeetsPolicy(password) && password === confirm && !submitting,
+    [password, confirm, submitting],
+  );
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!passwordMeetsPolicy(password)) {
+      setError('La contraseña no cumple la política mínima.');
+      return;
+    }
+    if (password !== confirm) {
+      setError('Las contraseñas no coinciden.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const session = await completeFirstLogin(email, password);
+      rememberLastEmail(session.email);
+      onActivated(session);
+    } catch (err) {
+      setError(authErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-4 inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-900)]"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+        Volver al acceso
+      </button>
+      <h1 className="text-[22px] font-bold leading-tight text-[var(--gray-950)] skeuo-letterpress">
+        Primer ingreso
+      </h1>
+      <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--gray-500)]">
+        Tu cuenta <span className="font-medium text-[var(--gray-700)]">{email}</span> está registrada pero aún
+        no tiene contraseña. Defínela para activarla.
+      </p>
+      <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+        <PasswordInput
+          label="Crea tu contraseña"
+          value={password}
+          onChange={(next) => {
+            setPassword(next);
+            if (error) setError(null);
+          }}
+          disabled={submitting}
+          autoComplete="new-password"
+        />
+        <PasswordPolicyChecklist password={password} />
+        <PasswordInput
+          label="Confirmar contraseña"
+          value={confirm}
+          onChange={(next) => {
+            setConfirm(next);
+            if (error) setError(null);
+          }}
+          disabled={submitting}
+          autoComplete="new-password"
+        />
+        {confirm && password !== confirm && <AlertBox tone="info" message="Las contraseñas deben coincidir." />}
+        {error && <AlertBox message={error} />}
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--primary)] text-[14px] font-semibold text-white transition-[background,transform] hover:bg-[var(--primary-hover)] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-80"
+          style={{ boxShadow: 'var(--skeuo-emboss-md)', border: '1px solid var(--skeuo-brass-deep)' }}
+        >
+          {submitting ? <><Spinner /> Activando...</> : 'Activar cuenta'}
+        </button>
+      </form>
+    </>
+  );
+}
+
 function CheckingSession() {
   return (
     <LoginShell>
@@ -502,6 +617,7 @@ export default function AuthGate({ children }: AuthGateProps) {
   const [checking, setChecking] = useState(true);
   const [mode, setMode] = useState<LoginMode>(() => (readResetToken() ? 'reset' : 'login'));
   const [notice, setNotice] = useState<string | null>(null);
+  const [setupEmail, setSetupEmail] = useState('');
   const resetToken = useMemo(() => readResetToken(), []);
 
   useEffect(() => {
@@ -562,8 +678,24 @@ export default function AuthGate({ children }: AuthGateProps) {
             setMode('login');
           }}
         />
+      ) : mode === 'setup' && setupEmail ? (
+        <FirstLoginForm
+          email={setupEmail}
+          onActivated={handleSignedIn}
+          onBack={() => {
+            setSetupEmail('');
+            setMode('login');
+          }}
+        />
       ) : (
-        <LoginForm onSignedIn={handleSignedIn} onForgot={() => setMode('forgot')} />
+        <LoginForm
+          onSignedIn={handleSignedIn}
+          onForgot={() => setMode('forgot')}
+          onNeedsSetup={(em) => {
+            setSetupEmail(em);
+            setMode('setup');
+          }}
+        />
       )}
     </LoginShell>
   );

@@ -12,8 +12,29 @@ Frontend auth is not a security boundary.
 - Shared deployments must be protected by `/api/auth/*` backed by an SSO provider or a backend session layer.
 - API routes under `/api/*` must enforce access before proxying JDE, TRESS, Cognos, or OpenAI.
 - Production secrets must be server-side only: `JDE_TOKEN`, `COGNOS_TOKEN`, `OPENAI_API_KEY`.
-- The React app calls `/api/auth/session`, `/api/auth/login`, `/api/auth/logout`, `/api/auth/password/change`, and password reset endpoints with `credentials: include`.
-- The React app stores no session token or password. It may remember the last email only to prefill the login.
+- The React app calls `/api/auth/session`, `/api/auth/login`, `/api/auth/logout`, `/api/auth/password/change`, and password reset endpoints with `credentials: include`. The admin "set a user's password directly" action posts to `/api/auth/users/:email/password` (`{ newPassword }`) in backend mode.
+- The React app stores no session token or password. The login form starts with an **empty** email (no prefill); the last-used email is still remembered in `localStorage` but is no longer injected into the field.
+
+## Local auth mode (dev / internal — not a security boundary)
+
+`src/config/authLocalUsers.json` (`enabled: true`) runs auth fully client-side
+(see `src/services/localAuth.ts`). It is obfuscation, not security: the user
+list and code are public in the bundle. In this mode:
+
+- `localAuth.ts` is the credential authority. Passwords are `SHA-256(salt:pwd)`;
+  JSON entries seed them, and a `localStorage` overlay
+  (`midas.auth.localOverrides.v1`) holds passwords that were changed, set by an
+  admin, or defined on first login. It works for any email (JSON-seeded or
+  registered by an admin).
+- **First login = register.** A user an admin registered in the Usuarios module
+  (registry entry, no password yet) sets their own password on first login:
+  `requiresPasswordSetup(email)` routes them to a set-password screen, and
+  `completeFirstLogin` fixes the password and opens the session.
+- **Admin sets passwords** directly via `adminSetPassword` (writes the overlay).
+- **Per-browser limitation:** the registry and password overlay live in
+  `localStorage`, so an admin registering a user / setting a password on their
+  own device does **not** propagate to that user on another device. For
+  multi-device user management, use the real `/api/auth/*` backend.
 
 ## Required Runtime Controls
 

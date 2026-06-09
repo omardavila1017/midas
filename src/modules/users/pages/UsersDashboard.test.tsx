@@ -45,4 +45,12 @@ describe('<UsersDashboard />', () => {
     expect(getManagedUser('nuevo@gruposenda.com')?.role).toBe('user');
     expect(screen.getByText('nuevo@gruposenda.com')).toBeTruthy();
   });
+
+  it('opens the set-password modal for a user from the admin (local mode)', () => {
+    // El modo local está activo por el JSON embebido; el admin cambia
+    // contraseñas directamente en vez de enviar liga.
+    renderAsAdmin();
+    fireEvent.click(screen.getByLabelText('Cambiar contraseña de agustin.blanco@gruposenda.com'));
+    expect(screen.getByText(/Defines la contraseña de agustin\.blanco@gruposenda\.com/)).toBeTruthy();
+  });
 });

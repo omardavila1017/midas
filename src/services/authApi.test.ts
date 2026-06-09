@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AuthApiError,
+  adminSetPassword,
   changePassword,
   completePasswordReset,
   getAuthSession,
@@ -140,6 +141,17 @@ describe('authApi', () => {
     expect(fetch).toHaveBeenNthCalledWith(1, '/api/auth/password/change', expect.objectContaining({ method: 'POST' }));
     expect(fetch).toHaveBeenNthCalledWith(2, '/api/auth/password/reset/request', expect.objectContaining({ method: 'POST' }));
     expect(fetch).toHaveBeenNthCalledWith(3, '/api/auth/users/ana%40senda.com/password-reset', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('admin sets a password directly through the backend endpoint', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({}));
+
+    await adminSetPassword('ana@senda.com', 'NewPassword123!');
+
+    expect(fetch).toHaveBeenCalledWith('/api/auth/users/ana%40senda.com/password', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ newPassword: 'NewPassword123!' }),
+    }));
   });
 
   it('returns a network error without exposing internals', async () => {

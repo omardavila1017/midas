@@ -14,6 +14,9 @@ export type AuthErrorCode =
   | 'password_expired'
   | 'rate_limited'
   | 'invalid_token'
+  // Usuario registrado que aún no define su contraseña (primer ingreso /
+  // "register"): la UI debe mandarlo a definirla en vez de tratarlo como error.
+  | 'password_setup_required'
   | 'validation'
   | 'network'
   | 'unknown';

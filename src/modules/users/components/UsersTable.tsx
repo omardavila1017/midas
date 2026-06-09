@@ -5,7 +5,7 @@
  * Permisos. Admin puede cambiar rol, quitar usuario y enviar liga de reset.
  */
 
-import { Mail, ShieldCheck, Trash2, User as UserIcon } from 'lucide-react';
+import { KeyRound, Mail, ShieldCheck, Trash2, User as UserIcon } from 'lucide-react';
 import { ASSIGNABLE_ROLE_IDS, ROLES } from '../../../config/roles';
 import type { ManagedRole, ManagedUser } from '../services/accessControlStore';
 
@@ -19,6 +19,8 @@ interface UsersTableProps {
   onRoleChange?: (email: string, role: ManagedRole) => void;
   onRemove?: (email: string) => void;
   onSendReset?: (email: string) => void;
+  /** Admin fija directamente la contraseña del usuario (sin liga). */
+  onSetPassword?: (email: string) => void;
 }
 
 export default function UsersTable({
@@ -30,6 +32,7 @@ export default function UsersTable({
   onRoleChange,
   onRemove,
   onSendReset,
+  onSetPassword,
 }: UsersTableProps) {
   if (users.length === 0) {
     return (
@@ -43,6 +46,7 @@ export default function UsersTable({
   }
 
   const normalizedCurrent = currentEmail ? currentEmail.trim().toLowerCase() : null;
+  const hasActions = Boolean(onSetPassword || onSendReset || (canEdit && onRemove));
 
   return (
     <div
@@ -54,7 +58,7 @@ export default function UsersTable({
           <tr style={{ borderBottom: '1px solid var(--gray-200)', color: 'var(--gray-500)' }}>
             <th className="px-4 py-3 font-medium">Correo</th>
             <th className="px-4 py-3 font-medium">Rol</th>
-            {(canSendReset || canEdit) && <th className="px-4 py-3 text-right font-medium">Acciones</th>}
+            {hasActions && <th className="px-4 py-3 text-right font-medium">Acciones</th>}
           </tr>
         </thead>
         <tbody>
@@ -113,14 +117,26 @@ export default function UsersTable({
                     </span>
                   )}
                 </td>
-                {(canSendReset || canEdit) && (
+                {hasActions && (
                   <td className="px-4 py-3 align-middle">
                     <div className="flex justify-end gap-2">
-                      {canSendReset && (
+                      {onSetPassword && (
                         <button
                           type="button"
-                          onClick={() => onSendReset?.(row.email)}
-                          disabled={!onSendReset || resettingEmail !== null}
+                          onClick={() => onSetPassword(row.email)}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)]"
+                          style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
+                          aria-label={`Cambiar contraseña de ${row.email}`}
+                        >
+                          <KeyRound className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+                          Cambiar contraseña
+                        </button>
+                      )}
+                      {canSendReset && onSendReset && (
+                        <button
+                          type="button"
+                          onClick={() => onSendReset(row.email)}
+                          disabled={resettingEmail !== null}
                           className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)] disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
                           aria-label={`Enviar reset de contraseña a ${row.email}`}

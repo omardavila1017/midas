@@ -113,6 +113,17 @@ function roleForUser(user: LocalUser): Role {
 }
 
 /**
+ * Rol del usuario tal como vive en el JSON local (coaccionado a admin/user), o
+ * `null` si el correo NO está en el JSON. Los usuarios dados de alta por un
+ * admin (registro en `accessControlStore`) no están aquí — su rol lo resuelve
+ * el registro, no este archivo.
+ */
+export function getLocalUserRole(email: string): Role | null {
+  const user = findUser(email);
+  return user ? roleForUser(user) : null;
+}
+
+/**
  * Lista cruda de usuarios del JSON local (correo + rol tal cual viene en el
  * archivo, que puede ser granular legacy). Solo para SEMBRAR el registro de
  * usuarios/permisos cuando el modo local está activo. Vacío si está deshabilitado.
@@ -122,10 +133,41 @@ export function listLocalUsers(): { email: string; role: string }[] {
   return config.users.map((u) => ({ email: normalizeEmail(u.email), role: u.role }));
 }
 
-/** Hash vigente del usuario: overlay del cliente si existe, si no el del JSON. */
-function currentHashFor(user: LocalUser): string {
-  const overlay = readOverrides()[normalizeEmail(user.email)];
-  return overlay ?? user.passwordHash;
+/**
+ * Hash de contraseña vigente para un correo: overlay del cliente (contraseña
+ * cambiada / definida en el primer ingreso / fijada por un admin) si existe; si
+ * no, el del JSON. `null` si el usuario no está en el JSON y no tiene overlay
+ * (p.ej. un usuario registrado por un admin que aún no define su contraseña).
+ */
+function currentHashForEmail(email: string): string | null {
+  const overlay = readOverrides()[normalizeEmail(email)];
+  if (overlay) return overlay;
+  return findUser(email)?.passwordHash ?? null;
+}
+
+/**
+ * ¿El correo tiene una contraseña local definida? `true` para usuarios del JSON
+ * (traen hash semilla) o para cualquier correo con overlay. `false` para un
+ * usuario registrado por un admin que todavía no completa su primer ingreso.
+ */
+export function hasLocalPassword(email: string): boolean {
+  return currentHashForEmail(email) !== null;
+}
+
+/** Compara una contraseña en claro contra el hash vigente del correo. */
+export async function verifyLocalPassword(email: string, password: string): Promise<boolean> {
+  const expected = currentHashForEmail(email);
+  if (!expected) return false;
+  return (await hashLocalPassword(password)) === expected;
+}
+
+/**
+ * Fija la contraseña de un correo (overlay en `localStorage`). Sirve para tres
+ * caminos: el usuario cambia la suya, un admin la fija, o un usuario registrado
+ * la define en su primer ingreso. No exige que el correo esté en el JSON.
+ */
+export async function setLocalPassword(email: string, newPassword: string): Promise<void> {
+  writeOverride(email, await hashLocalPassword(newPassword));
 }
 
 function computeExpiry(): string {
@@ -159,6 +201,13 @@ function writeLocalSession(session: LocalSession): void {
   }
 }
 
+/** Abre (persiste) una sesión local para un correo + rol ya resueltos. */
+export function openLocalSession(email: string, role: Role): LocalSession {
+  const session: LocalSession = { email: normalizeEmail(email), role, expiresAt: computeExpiry() };
+  writeLocalSession(session);
+  return session;
+}
+
 export function clearLocalSession(): void {
   try {
     localStorageSafe()?.removeItem(LOCAL_SESSION_KEY);
@@ -175,17 +224,15 @@ export async function localLogin(email: string, password: string): Promise<Local
   const user = findUser(email);
   // Mismo mensaje para usuario inexistente o contraseña incorrecta (no revelar
   // si el correo existe). En dev igual es público, pero mantenemos el contrato.
+  // Nota: este path es JSON-only; el login que también admite usuarios
+  // registrados por un admin (sin entrada en el JSON) vive en `authApi.login`.
   if (!user) throw new AuthApiError('invalid_credentials', 'Credenciales incorrectas.', 401);
 
-  const incoming = await hashLocalPassword(password);
-  if (incoming !== currentHashFor(user)) {
+  if (!(await verifyLocalPassword(email, password))) {
     throw new AuthApiError('invalid_credentials', 'Credenciales incorrectas.', 401);
   }
 
-  const role = roleForUser(user);
-  const session: LocalSession = { email: normalizeEmail(user.email), role, expiresAt: computeExpiry() };
-  writeLocalSession(session);
-  return session;
+  return openLocalSession(user.email, roleForUser(user));
 }
 
 /** Cambia la contraseña del usuario en sesión (overlay en localStorage). */
@@ -193,13 +240,9 @@ export async function localChangePassword(currentPassword: string, newPassword: 
   const session = readLocalSession();
   if (!session) throw new AuthApiError('forbidden', 'No hay una sesión local activa.', 403);
 
-  const user = findUser(session.email);
-  if (!user) throw new AuthApiError('forbidden', 'El usuario en sesión ya no existe.', 403);
-
-  const incoming = await hashLocalPassword(currentPassword);
-  if (incoming !== currentHashFor(user)) {
+  if (!(await verifyLocalPassword(session.email, currentPassword))) {
     throw new AuthApiError('invalid_credentials', 'La contraseña actual no es correcta.', 401);
   }
 
-  writeOverride(user.email, await hashLocalPassword(newPassword));
+  await setLocalPassword(session.email, newPassword);
 }

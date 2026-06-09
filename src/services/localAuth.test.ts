@@ -3,10 +3,13 @@ import {
   LOCAL_OVERRIDES_KEY,
   LOCAL_SESSION_KEY,
   clearLocalSession,
+  hasLocalPassword,
   hashLocalPassword,
   localChangePassword,
   localLogin,
   readLocalSession,
+  setLocalPassword,
+  verifyLocalPassword,
 } from './localAuth';
 
 // El JSON embebido (authLocalUsers.json) trae a estos usuarios con password
@@ -91,5 +94,22 @@ describe('localAuth', () => {
     await expect(localChangePassword('wrong', 'NuevaClave2026!')).rejects.toMatchObject({
       code: 'invalid_credentials',
     });
+  });
+
+  it('reports a JSON user as having a password, an unknown email as not', () => {
+    // Usuario del JSON: trae hash semilla. Correo desconocido: sin contraseña.
+    expect(hasLocalPassword(ADMIN)).toBe(true);
+    expect(hasLocalPassword('nuevo@gruposenda.com')).toBe(false);
+  });
+
+  it('sets a password for an email outside the JSON (admin / first login)', async () => {
+    const NEW = 'nuevo@gruposenda.com';
+    expect(hasLocalPassword(NEW)).toBe(false);
+
+    await setLocalPassword(NEW, 'PrimeraClave2026!');
+
+    expect(hasLocalPassword(NEW)).toBe(true);
+    await expect(verifyLocalPassword(NEW, 'PrimeraClave2026!')).resolves.toBe(true);
+    await expect(verifyLocalPassword(NEW, 'otra')).resolves.toBe(false);
   });
 });

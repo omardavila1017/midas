@@ -25,7 +25,9 @@ import {
   type ManagedUser,
 } from '../services/accessControlStore';
 import UsersTable from '../components/UsersTable';
-import { sendUserPasswordReset } from '../../../services/authApi';
+import SetPasswordModal from '../components/SetPasswordModal';
+import { adminSetPassword, sendUserPasswordReset } from '../../../services/authApi';
+import { isLocalAuthEnabled } from '../../../services/localAuth';
 import { useToast } from '../../../components/Toast';
 
 function looksLikeEmail(value: string): boolean {
@@ -36,8 +38,14 @@ export default function UsersDashboard() {
   const { role, email } = useAuth();
   const toast = useToast();
   const canEdit = role === 'admin';
-  const canSendReset = canManagePasswordReset(role);
+  // En modo local (sin backend de correo) la "liga de reset" es no-op, así que
+  // ofrecemos el cambio directo de contraseña en su lugar; en backend mostramos
+  // ambos: cambio directo + envío de liga.
+  const localMode = isLocalAuthEnabled();
+  const canSendReset = canManagePasswordReset(role) && !localMode;
   const [resettingEmail, setResettingEmail] = useState<string | null>(null);
+  const [passwordTarget, setPasswordTarget] = useState<string | null>(null);
+  const [savingPassword, setSavingPassword] = useState(false);
 
   const [users, setUsers] = useState<ManagedUser[]>(() => listManagedUsers());
   const reload = useCallback(() => setUsers(listManagedUsers()), []);
@@ -87,6 +95,20 @@ export default function UsersDashboard() {
       toast.error('No se pudo enviar la liga de restablecimiento.');
     } finally {
       setResettingEmail(null);
+    }
+  };
+
+  const handleSetPassword = async (newPassword: string) => {
+    if (!passwordTarget) return;
+    setSavingPassword(true);
+    try {
+      await adminSetPassword(passwordTarget, newPassword);
+      toast.success(`Contraseña actualizada para ${passwordTarget}.`);
+      setPasswordTarget(null);
+    } catch {
+      toast.error('No se pudo actualizar la contraseña.');
+    } finally {
+      setSavingPassword(false);
     }
   };
 
@@ -176,6 +198,14 @@ export default function UsersDashboard() {
         onRoleChange={canEdit ? handleRoleChange : undefined}
         onRemove={canEdit ? handleRemove : undefined}
         onSendReset={canSendReset ? handleSendReset : undefined}
+        onSetPassword={canEdit ? (targetEmail) => setPasswordTarget(targetEmail) : undefined}
+      />
+
+      <SetPasswordModal
+        email={passwordTarget}
+        submitting={savingPassword}
+        onClose={() => setPasswordTarget(null)}
+        onSubmit={handleSetPassword}
       />
     </div>
   );

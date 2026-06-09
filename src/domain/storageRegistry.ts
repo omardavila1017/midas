@@ -87,10 +87,10 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'flujo-senda::minimum-expense-overrides', scope: 'localStorage', owner: 'domain/minimumOperatingExpense.ts', description: 'Overrides del gasto operativo mínimo.' },
 
   // ── UI / misc ───────────────────────────────────────────────────────────
-  { key: 'midas.auth.lastEmail.v1', scope: 'localStorage', owner: 'contexts/authSession.ts', description: 'Último correo usado para prellenar el login. No es sesión, token ni credencial.' },
+  { key: 'midas.auth.lastEmail.v1', scope: 'localStorage', owner: 'contexts/authSession.ts', description: 'Último correo usado tras iniciar sesión. No es sesión/token/credencial; el login ya NO lo usa para prellenar (campo inicia vacío).' },
   { key: 'midas.auth.session.v1', scope: 'localStorage', owner: 'contexts/authSession.ts', description: 'Sesión UX legacy previa a /api/auth; se purga en logout/reset.', legacy: true },
   { key: 'midas.auth.localSession.v1', scope: 'localStorage', owner: 'services/localAuth.ts', description: 'Sesión del modo auth LOCAL (dev/interno, JSON de usuarios). Sustituye la cookie HttpOnly del backend; se limpia en logout.' },
-  { key: 'midas.auth.localOverrides.v1', scope: 'localStorage', owner: 'services/localAuth.ts', description: 'Overlay de contraseñas cambiadas en cliente (email → hash) en modo auth LOCAL.' },
+  { key: 'midas.auth.localOverrides.v1', scope: 'localStorage', owner: 'services/localAuth.ts', description: 'Overlay de contraseñas (email → hash) en modo auth LOCAL: cambio propio, contraseña fijada por un admin, o definida por un usuario en su primer ingreso.' },
   { key: 'midas.users.registry.v1', scope: 'localStorage', owner: 'modules/users/services/accessControlStore.ts', description: 'Registro de usuarios (correo → rol admin/user + permisos por módulo). Capa UX de RBAC; se siembra del JSON local / VITE_USER_ROLES.' },
   { key: 'midas.theme', scope: 'localStorage', owner: 'components/ui/DarkModeToggle.tsx', description: 'Tema claro/oscuro.' },
   { key: 'midas.activityFeed', scope: 'localStorage', owner: 'components/ActivityFeed.tsx', description: 'Feed de actividad de la sesión.' },
